@@ -355,7 +355,7 @@ public sealed class ContractsCitationCensus
             (
                 "G",
                 "## PR G — marks: mark-then-act, the marks list, and the bulk verbs",
-                "## §W-G canonical-consumption audit",
+                "## PR G2 — the verb residue: front doors for §E's verbs, and the parity extras",
                 // A young section pins below its honest size and
                 // rises with its records, as §F's did.
                 6_000,
@@ -401,6 +401,58 @@ public sealed class ContractsCitationCensus
                 // above the pre-task population of 42 — an eighth
                 // time.
                 45),
+            (
+                "G2",
+                "## PR G2 — the verb residue: front doors for §E's verbs, and the parity extras",
+                "## §W-G canonical-consumption audit",
+                // A young section pins below its honest size and
+                // rises with its records, as §G's did.
+                6_000,
+                // A DESIGN floor, the standing convention: revision 1's
+                // citations are EXISTING names (§E's verbs, the prompt
+                // hierarchy, the FFI shapes); 4 sits above the empty
+                // pre-section population and below the landed count;
+                // each task raises it.
+                //
+                // TG2-0 bound the front-door substrate, taking the
+                // section to 114; 113 sits above the pre-task
+                // population of 96 — a first time.
+                //
+                // TG2-1 bound the prompt lifecycle and the first sheets,
+                // taking the section to 123; 122 sits above the
+                // pre-task population of 114 — a second time.
+                //
+                // TG2-2 bound the choices pickers, taking the section to
+                // 134; 133 sits above the pre-task population of 123
+                // — a third time.
+                //
+                // TG2-3 bound the vault file picker, taking the section to
+                // 146; 145 sits above the pre-task population of 134
+                // — a fourth time.
+                //
+                // TG2-4 bound Remove from Group, Create Connected Card and
+                // the editor receipt, taking the section to 159; 158
+                // sits above the pre-task population of 146 — a fifth time.
+                //
+                // TG2-5 bound Duplicate, taking the section to 165; 164
+                // sits above the pre-task population of 159 — a sixth time.
+                //
+                // TG2-6 bound Convert Card to Note, taking the section to 181;
+                // 180 sits above the pre-task population of 165 — a seventh
+                // time.
+                //
+                // TG2-7 bound the context plan over (surface, target), taking
+                // the section to 184; 183 sits above the pre-task population
+                // of 181 — an eighth time.
+                //
+                // TG2-8 bound the matrix, taking the
+                // section to 204; 203 sits above the pre-task population
+                // of 184 — a ninth time.
+                //
+                // TG2-9 bound the journey and the sweep, taking the
+                // section to 222; 221 sits above the pre-task population
+                // of 204 — a tenth time.
+                221),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -1067,6 +1119,10 @@ public sealed class ContractsCitationCensus
         (
             "§G",
             "## PR G — marks: mark-then-act, the marks list, and the bulk verbs",
+            "## PR G2 — the verb residue: front doors for §E's verbs, and the parity extras"),
+        (
+            "§G2",
+            "## PR G2 — the verb residue: front doors for §E's verbs, and the parity extras",
             "## §W-G canonical-consumption audit"),
         (
             "divergences",

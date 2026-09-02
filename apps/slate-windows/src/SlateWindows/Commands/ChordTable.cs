@@ -279,6 +279,25 @@ internal static class ChordTable
             "slate.canvas.followConnectionBack";
         public const string CanvasTracePath = "slate.canvas.tracePath";
         public const string CanvasToggleMark = "slate.canvas.toggleMark";
+        public const string CanvasDelete = "slate.canvas.delete";
+        public const string CanvasEditCard = "slate.canvas.editCard";
+        public const string CanvasRenameGroup = "slate.canvas.renameGroup";
+        public const string CanvasSetColor = "slate.canvas.setColor";
+        public const string CanvasClearColor = "slate.canvas.clearColor";
+        public const string CanvasNewGroup = "slate.canvas.newGroup";
+        public const string CanvasAddLink = "slate.canvas.addLink";
+        public const string CanvasMoveIntoGroup = "slate.canvas.moveIntoGroup";
+        public const string CanvasEditConnection = "slate.canvas.editConnection";
+        public const string CanvasDeleteConnection = "slate.canvas.deleteConnection";
+        public const string CanvasAddNote = "slate.canvas.addNote";
+        public const string CanvasAddMedia = "slate.canvas.addMedia";
+        public const string CanvasLocateFile = "slate.canvas.locateFile";
+        public const string CanvasRemoveFromGroup = "slate.canvas.removeFromGroup";
+        public const string CanvasCreateConnectedCard = "slate.canvas.createConnectedCard";
+        public const string CanvasCreateConnectedCardDirectional =
+            "slate.canvas.createConnectedCardDirectional";
+        public const string CanvasDuplicate = "slate.canvas.duplicate";
+        public const string CanvasConvertToNote = "slate.canvas.convertToNote";
 
         public const string CanvasClearMarks = "slate.canvas.clearMarks";
 
@@ -1025,6 +1044,66 @@ internal static class ChordTable
                 "Set every marked card's color at once - one action, one undo."),
             Reg(Ids.CanvasClearMarks, "Canvas: Clear All Marks", CommandSection.Canvas,
                 "Unmark every marked card."),
+            // §G2 TG2-0 (G2-1): the front doors over §E's shipped verbs —
+            // labels byte-identical to mac (P3), hints mac's with the
+            // undo chord spelled for Windows. No chords: mac allocates
+            // none (R1 — a chord is a convenience, never the only path).
+            Reg(Ids.CanvasDelete, "Canvas: Delete Selection", CommandSection.Canvas,
+                "Delete the selected card, or ungroup the selected group keeping its "
+                + "cards. Undo with Ctrl+Z."),
+            Reg(Ids.CanvasEditCard, "Canvas: Edit Card Text…", CommandSection.Canvas,
+                "Open the selected text card in the editor. Escape saves and returns."),
+            Reg(Ids.CanvasRenameGroup, "Canvas: Rename Group…", CommandSection.Canvas,
+                "Rename the selected group — group labels are the skeleton of the "
+                + "reading order."),
+            Reg(Ids.CanvasSetColor, "Canvas: Set Color…", CommandSection.Canvas,
+                "Color the selected card by name: red, orange, yellow, green, cyan, "
+                + "or purple."),
+            Reg(Ids.CanvasClearColor, "Canvas: Clear Color", CommandSection.Canvas,
+                "Remove the selected card's color."),
+            // §G2 TG2-1: the two text prompts' front doors.
+            Reg(Ids.CanvasNewGroup, "Canvas: New Group…", CommandSection.Canvas,
+                "Create a labeled group next to the selection."),
+            Reg(Ids.CanvasAddLink, "Canvas: Add Link Card…", CommandSection.Canvas,
+                "Paste or type a URL; a link card is placed next to your selection."),
+            // §G2 TG2-2: the choices pickers' front doors.
+            Reg(Ids.CanvasMoveIntoGroup, "Canvas: Move into Group…", CommandSection.Canvas,
+                "Move the selected card inside a group by name — no dragging or "
+                + "coordinates."),
+            Reg(Ids.CanvasEditConnection, "Canvas: Edit Connection…", CommandSection.Canvas,
+                "Change one of the selected card's connection labels or direction."),
+            Reg(Ids.CanvasDeleteConnection, "Canvas: Delete Connection…", CommandSection.Canvas,
+                "Delete one of the selected card's connections. Undo with Ctrl+Z."),
+            // §G2 TG2-3: the vault file picker's front doors.
+            Reg(Ids.CanvasAddNote, "Canvas: Add Note to Canvas…", CommandSection.Canvas,
+                "Pick a vault note; a file card is placed next to your selection."),
+            Reg(Ids.CanvasAddMedia, "Canvas: Add Media…", CommandSection.Canvas,
+                "Pick a vault media file; a file card is placed next to your selection."),
+            Reg(Ids.CanvasLocateFile, "Canvas: Locate File…", CommandSection.Canvas,
+                "Repoint the selected file card at a different vault file."),
+            // §G2 TG2-4: Remove from Group and the connected-card pair. The
+            // series' second verb chord: mac's ⌃⌥⌘N as Ctrl+Alt+Shift+N (the
+            // spec's §7 allocation, free on Windows), delivered by the
+            // navigator's map.
+            Reg(Ids.CanvasRemoveFromGroup, "Canvas: Remove from Group", CommandSection.Canvas,
+                "Move the selected card out of its enclosing group, placed by the engine."),
+            Reg(Ids.CanvasCreateConnectedCard, "Canvas: Create Connected Card",
+                CommandSection.Canvas,
+                "New text card below the selection, already connected, ready to type.",
+                "⌃⌥⌘N", "Ctrl+Alt+Shift+N", ChordScope.Canvas,
+                divergence: "mac's ⌃⌥⌘N; the modifier rule maps it onto Ctrl+Alt+N, "
+                    + "which New Card owns (mac's ⌥⌘N), so Shift disambiguates — the "
+                    + "spec's §7 allocation, free on Windows."),
+            Reg(Ids.CanvasCreateConnectedCardDirectional,
+                "Canvas: Create Connected Card (Choose Direction)…", CommandSection.Canvas,
+                "Pick the side first, then the connected card is created there."),
+            // §G2 TG2-5: Duplicate — the selection or the marked set, one action.
+            Reg(Ids.CanvasDuplicate, "Canvas: Duplicate", CommandSection.Canvas,
+                "Duplicate the selected card or the marked set — one action, one undo."),
+            // §G2 TG2-6: Convert — mac registers it structural; here the
+            // structural half is the sidebar's seam behind the verb.
+            Reg(Ids.CanvasConvertToNote, "Canvas: Convert Card to Note…", CommandSection.Canvas,
+                "Create a vault note from the text card; the card then points at it."),
             Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,
                 "Remember the selected card, navigate to a target with the "
                 + "usual movements, press Return to connect."),

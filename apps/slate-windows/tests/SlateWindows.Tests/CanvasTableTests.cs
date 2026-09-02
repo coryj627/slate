@@ -642,49 +642,60 @@ public sealed class CanvasTableTests : IDisposable
             document.Shutdown();
         });
 
-    /// <summary>
-    /// Contract B6: the row-actions menu lists mac's three verbs, and
-    /// the two whose commands have not shipped stay LISTED and disabled
-    /// with a reason on their HelpText — the mac RowAction contract the
-    /// substrate implements, and the reason a screen-reader user can
-    /// tell "not yet" from "not here".
-    /// </summary>
+    /// <summary>§G2 TG2-7 (G2-12): the grid's row menu equals the
+    /// plan's GRID projection for the row's target — names, enabled
+    /// flags and reasons, the same count both ways, on every row the
+    /// grid shows — a group row's third verb is Ungroup, a card's is
+    /// Delete, from the same plan. Toggle Mark is LIVE: it seats ITS
+    /// row silently, then marks it, wherever the selection stood
+    /// (IG2-60). Open still runs the activation Enter runs (§E
+    /// TE-11b).</summary>
     [Fact]
-    public void TheUnshippedRowActionsAreListedDisabledWithTheirReason() => RunSta(() =>
+    public void TheRowMenuEqualsThePlansGridProjectionAndToggleMarkIsLive() => RunSta(() =>
     {
         (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
+        var kinds = new HashSet<string>();
+        foreach (CanvasTableRow row in grid.Grid.Items.Cast<CanvasTableRow>().ToList())
+        {
+            kinds.Add(row.Kind);
+            MoveReaderTo(grid, row.NodeId);
+            ContextMenu menu = grid.BuildRowActionsMenu()
+                ?? throw new Xunit.Sdk.XunitException($"the canvas table built no row menu on {row.NodeId}");
+            var planned = CanvasContextMenuPlan.RowsFor(
+                CanvasContextSurface.Grid,
+                new CanvasContextTarget.Node(row.NodeId, row.Kind, row.GroupPath.Length > 0));
+            Assert.Equal(
+                planned.Select(p => (p.Name, p.Enabled, p.DisabledReason)),
+                menu.Items.Cast<MenuItem>().Select(
+                    item => ((string)item.Header, item.IsEnabled, (string?)item.ToolTip)));
+        }
+        // The fixture exercises both arms of the third row.
+        Assert.Contains("group", kinds);
+        Assert.Contains("text", kinds);
+        MoveReaderTo(grid, "grp");
+        Assert.Equal(
+            CanvasPhrase.UngroupRowAction,
+            (string)Assert.IsType<MenuItem>(grid.BuildRowActionsMenu()!.Items[2]).Header);
+
+        // Toggle Mark is LIVE. The reader's currency already seats the
+        // row (the grid reads its selection back from currency), so
+        // the dispatch's own seat is a no-op here; its proof is the
+        // document-level fact, where the selection stands elsewhere.
         MoveReaderTo(grid, "zeta");
-        ContextMenu menu = grid.BuildRowActionsMenu()
-            ?? throw new Xunit.Sdk.XunitException("the canvas table built no row menu");
-
-        Assert.Equal(
-            new[] { "Open", "Toggle Mark", "Delete" },
-            menu.Items.Cast<MenuItem>().Select(item => (string)item.Header).ToArray());
-        var open = Assert.IsType<MenuItem>(menu.Items[0]);
-        Assert.True(open.IsEnabled);
-
-        // Toggle Mark stays STAGED with its why (PR G); Delete went
-        // LIVE on card rows in §E TE-8 — the flip this fact once
-        // guarded from the other side.
-        var mark = Assert.IsType<MenuItem>(menu.Items[1]);
-        Assert.False(mark.IsEnabled);
-        Assert.Equal(CanvasPhrase.MarkingArrivesLater, mark.ToolTip);
-        Assert.Equal(
-            CanvasPhrase.MarkingArrivesLater, AutomationProperties.GetHelpText(mark));
-        // …and the tooltip actually SHOWS on the disabled item
-        // (red team m-6).
-        Assert.True(ToolTipService.GetShowOnDisabled(mark));
-
-        var delete = Assert.IsType<MenuItem>(menu.Items[2]);
-        Assert.True(
-            delete.IsEnabled,
-            "Delete stayed staged on a card row after the TE-8 flip.");
+        Assert.Equal("zeta", document.Selection.Selected);
+        ContextMenu zeta = grid.BuildRowActionsMenu()!;
+        var mark = Assert.IsType<MenuItem>(zeta.Items[1]);
+        Assert.Equal(CanvasPhrase.ToggleMarkRowAction, mark.Header);
+        Assert.True(mark.IsEnabled, "Toggle Mark stayed staged after G2-12 made it live.");
+        mark.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        Assert.True(document.Selection.IsMarked("zeta"));
+        Assert.Equal("zeta", document.Selection.Selected);
 
         // Open runs the same activation Enter runs - the editor
-        // request is the observable now (§E TE-11b).
+        // request is the observable (§E TE-11b).
         string? requested = null;
         document.CardEditorRequested += nodeId => requested = nodeId;
-        open.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        Assert.IsType<MenuItem>(zeta.Items[0]).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         Assert.Equal("zeta", requested);
         document.Shutdown();
     });

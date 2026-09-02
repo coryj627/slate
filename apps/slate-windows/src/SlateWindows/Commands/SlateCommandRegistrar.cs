@@ -510,6 +510,34 @@ internal static class SlateCommandRegistrar
                 host => host.Workspace?.CanvasToggleMarkCommand,
             [ChordTable.Ids.CanvasClearMarks] =
                 host => host.Workspace?.CanvasClearMarksCommand,
+            // §G2 TG2-0 (G2-1): the front doors over §E's verbs.
+            [ChordTable.Ids.CanvasDelete] = host => host.Workspace?.CanvasDeleteCommand,
+            [ChordTable.Ids.CanvasEditCard] = host => host.Workspace?.CanvasEditCardCommand,
+            [ChordTable.Ids.CanvasRenameGroup] =
+                host => host.Workspace?.CanvasRenameGroupCommand,
+            [ChordTable.Ids.CanvasSetColor] = host => host.Workspace?.CanvasSetColorCommand,
+            [ChordTable.Ids.CanvasClearColor] =
+                host => host.Workspace?.CanvasClearColorCommand,
+            [ChordTable.Ids.CanvasNewGroup] = host => host.Workspace?.CanvasNewGroupCommand,
+            [ChordTable.Ids.CanvasAddLink] = host => host.Workspace?.CanvasAddLinkCommand,
+            [ChordTable.Ids.CanvasMoveIntoGroup] =
+                host => host.Workspace?.CanvasMoveIntoGroupCommand,
+            [ChordTable.Ids.CanvasEditConnection] =
+                host => host.Workspace?.CanvasEditConnectionCommand,
+            [ChordTable.Ids.CanvasDeleteConnection] =
+                host => host.Workspace?.CanvasDeleteConnectionCommand,
+            [ChordTable.Ids.CanvasAddNote] = host => host.Workspace?.CanvasAddNoteCommand,
+            [ChordTable.Ids.CanvasAddMedia] = host => host.Workspace?.CanvasAddMediaCommand,
+            [ChordTable.Ids.CanvasLocateFile] = host => host.Workspace?.CanvasLocateFileCommand,
+            [ChordTable.Ids.CanvasRemoveFromGroup] =
+                host => host.Workspace?.CanvasRemoveFromGroupCommand,
+            [ChordTable.Ids.CanvasCreateConnectedCard] =
+                host => host.Workspace?.CanvasCreateConnectedCardCommand,
+            [ChordTable.Ids.CanvasCreateConnectedCardDirectional] =
+                host => host.Workspace?.CanvasCreateConnectedCardDirectionalCommand,
+            [ChordTable.Ids.CanvasDuplicate] = host => host.Workspace?.CanvasDuplicateCommand,
+            [ChordTable.Ids.CanvasConvertToNote] =
+                host => host.Workspace?.CanvasConvertToNoteCommand,
             [ChordTable.Ids.CanvasShowMarks] =
                 host => host.Workspace?.CanvasShowMarksCommand,
             [ChordTable.Ids.CanvasGroupMarked] =

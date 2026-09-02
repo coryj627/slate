@@ -80,6 +80,66 @@ internal sealed partial class WorkspaceViewModel
                     CanvasPromptViewModel.RenameGroup(document, groupId, current));
             document.SetColorRequested += () =>
                 _ = TryPresentCanvasPrompt(CanvasPromptViewModel.SetColor(document));
+            // §G2 TG2-1: the New Group and Add Link prompts carry the
+            // invoking tab as the operation's owner; the group Delete's
+            // confirmation is E8's Ungroup-or-Cancel.
+            document.NewGroupRequested += context =>
+                _ = TryPresentCanvasPrompt(CanvasPromptViewModel.NewGroup(document, context));
+            document.AddLinkRequested += context =>
+                _ = TryPresentCanvasPrompt(CanvasPromptViewModel.AddLink(document, context));
+            // §G2 TG2-2: the choices pickers.
+            document.MoveIntoGroupRequested += (context, groups) =>
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.MoveIntoGroup(document, context, groups));
+            document.PickConnectionRequested += (context, neighbors, toDelete) =>
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.PickConnection(document, context, neighbors, toDelete));
+            document.EditConnectionRequested += (context, neighbor) =>
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.EditConnectionDirection(document, context, neighbor));
+            // §G2 TG2-3 (IG2-50): the vault picker presents only for the
+            // owner that is still current; a load that completes for a
+            // tab that moved on presents nothing and says so.
+            // §G2 TG2-4 (G2-9, IG2-23): the created card's editor opens ONLY for
+            // an owner that is still current — the active tab, or the
+            // document itself when the verb was invoked unaddressed and the
+            // document is the active canvas.
+            document.CreatedEditorRequested += (owner, nodeId) =>
+            {
+                bool current = ReferenceEquals(owner, ActiveGroup.ActiveTab)
+                    || (ReferenceEquals(owner, document) && ReferenceEquals(ActiveCanvasDocument, document));
+                if (current && ReferenceEquals(ActiveCanvasDocument, document))
+                {
+                    CanvasCardEditorSheet = document.OpenCardEditor(nodeId);
+                }
+            };
+            // §G2 TG2-6 (IG2-6): the structural-aware route — the sidebar's
+            // note creator rides into the prompt; without one (no sidebar)
+            // the verb cannot write and says so.
+            document.ConvertToNoteRequested += (context, suggested) =>
+            {
+                if (CanvasNoteCreator is not { } creator)
+                {
+                    document.SpeakNoteCreateFailed(suggested, "no vault to write to");
+                    return;
+                }
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.ConvertToNote(document, context, suggested, creator));
+            };
+            document.ConnectedDirectionRequested += context =>
+                _ = TryPresentCanvasPrompt(CanvasPromptViewModel.ConnectedDirection(document, context));
+            document.VaultPickerRequested += request =>
+            {
+                if (!ReferenceEquals(request.Owner, ActiveGroup.ActiveTab))
+                {
+                    document.SpeakPickDifferentTarget();
+                    return;
+                }
+                CanvasCardPickerSheet = new CanvasVaultFilePickerViewModel(document, request);
+            };
+            document.UngroupConfirmRequested += (groupId, title) =>
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.UngroupConfirm(document, groupId, title));
             document.GroupMarkedRequested += () =>
                 _ = TryPresentCanvasPrompt(CanvasPromptViewModel.GroupMarked(document));
             document.ColorMarkedRequested += () =>
@@ -357,9 +417,12 @@ internal sealed partial class WorkspaceViewModel
     /// standing.</summary>
     public void CloseCanvasCardEditor() => CanvasCardEditorSheet = null;
 
-    private CanvasCardPickerViewModel? _canvasCardPickerSheet;
+    private ICanvasPickerSheet? _canvasCardPickerSheet;
 
-    public CanvasCardPickerViewModel? CanvasCardPickerSheet
+    /// <summary>§G2 TG2-3 (G2-6, G2D-1): the ONE picker slot — the card
+    /// picker or the vault file picker, through the shared contract; the
+    /// modal arm is CanvasCardPicker for either.</summary>
+    public ICanvasPickerSheet? CanvasCardPickerSheet
     {
         get => _canvasCardPickerSheet;
         private set => SetField(ref _canvasCardPickerSheet, value);
@@ -371,7 +434,20 @@ internal sealed partial class WorkspaceViewModel
     /// it; a refusal keeps it, filter and highlight intact.</summary>
     public void ConfirmCanvasCardPick()
     {
-        if (CanvasCardPickerSheet is { } sheet && sheet.Confirm())
+        if (CanvasCardPickerSheet is not { } sheet)
+        {
+            return;
+        }
+        // §G2 TG2-3 (IG2-50): the OWNER half of a vault pick's validation —
+        // the invoking tab must still be the active one; a pick from a
+        // tab that moved on is a guess, refused with the sheet kept.
+        if (sheet is CanvasVaultFilePickerViewModel vault
+            && !ReferenceEquals(vault.Request.Owner, ActiveGroup.ActiveTab))
+        {
+            vault.RefuseStale();
+            return;
+        }
+        if (sheet.Confirm())
         {
             CanvasCardPickerSheet = null;
         }
@@ -452,7 +528,15 @@ internal sealed partial class WorkspaceViewModel
             System.Windows.Threading.Dispatcher.CurrentDispatcher;
         CanvasPromptSubmit result = sheet.Submit(
             () => home.BeginInvoke(() => CloseCanvasPromptIfCurrent(sheet)));
-        if (result == CanvasPromptSubmit.Completed)
+        if (result is CanvasPromptSubmit.Advanced advanced)
+        {
+            // §G2 TG2-1 (G2-4, IG2-44): the STAGE transition — one setter
+            // call retires the predecessor (its Closed runs) and seats the
+            // successor; a completion the predecessor captured compares
+            // by reference and closes nothing.
+            CanvasPromptSheet = advanced.Next;
+        }
+        else if (result == CanvasPromptSubmit.Completed)
         {
             CanvasPromptSheet = null;
         }
@@ -637,6 +721,103 @@ internal sealed partial class WorkspaceViewModel
     public System.Windows.Input.ICommand CanvasClearMarksCommand =>
         _canvasClearMarksCommand ??= DocumentCommand(document => document.ClearMarks());
 
+    // §G2 TG2-0 (G2-1/G2-2): the front doors over §E's shipped verbs.
+    // Each resolves to a document seam whose OPENER speaks the refusal
+    // (G2-3's table); the verbs that mint an operation take the invoking
+    // TAB as owner (TE-1's initiating surface, IG2-34).
+    public System.Windows.Input.ICommand CanvasDeleteCommand =>
+        _canvasDeleteCommand ??= DocumentCommand(document => document.CanvasDeleteSelection());
+
+    public System.Windows.Input.ICommand CanvasEditCardCommand =>
+        _canvasEditCardCommand ??= DocumentCommand(
+            document => document.RequestCardEditorForSelection());
+
+    public System.Windows.Input.ICommand CanvasRenameGroupCommand =>
+        _canvasRenameGroupCommand ??= DocumentCommand(
+            document => document.RequestGroupRenameForSelection());
+
+    public System.Windows.Input.ICommand CanvasSetColorCommand =>
+        _canvasSetColorCommand ??= DocumentCommand(document => document.RequestSetColor());
+
+    public System.Windows.Input.ICommand CanvasClearColorCommand =>
+        _canvasClearColorCommand ??= DocumentCommand(
+            (document, owner) => document.CanvasSetColor(null, owner: owner));
+
+    public System.Windows.Input.ICommand CanvasNewGroupCommand =>
+        _canvasNewGroupCommand ??= DocumentCommand(
+            (document, owner) => document.RequestNewGroup(owner));
+
+    public System.Windows.Input.ICommand CanvasAddLinkCommand =>
+        _canvasAddLinkCommand ??= DocumentCommand(
+            (document, owner) => document.RequestAddLink(owner));
+
+    public System.Windows.Input.ICommand CanvasMoveIntoGroupCommand =>
+        _canvasMoveIntoGroupCommand ??= DocumentCommand(
+            (document, owner) => document.RequestMoveIntoGroup(owner));
+
+    public System.Windows.Input.ICommand CanvasEditConnectionCommand =>
+        _canvasEditConnectionCommand ??= DocumentCommand(
+            (document, owner) => document.RequestEditConnection(owner));
+
+    public System.Windows.Input.ICommand CanvasDeleteConnectionCommand =>
+        _canvasDeleteConnectionCommand ??= DocumentCommand(
+            (document, owner) => document.RequestDeleteConnection(owner));
+
+    public System.Windows.Input.ICommand CanvasAddNoteCommand =>
+        _canvasAddNoteCommand ??= DocumentCommand(
+            (document, owner) => document.RequestVaultPick(CanvasVaultPickPurpose.Note, owner));
+
+    public System.Windows.Input.ICommand CanvasAddMediaCommand =>
+        _canvasAddMediaCommand ??= DocumentCommand(
+            (document, owner) => document.RequestVaultPick(CanvasVaultPickPurpose.Media, owner));
+
+    public System.Windows.Input.ICommand CanvasLocateFileCommand =>
+        _canvasLocateFileCommand ??= DocumentCommand(
+            (document, owner) => document.RequestVaultPick(CanvasVaultPickPurpose.Locate, owner));
+
+    public System.Windows.Input.ICommand CanvasRemoveFromGroupCommand =>
+        _canvasRemoveFromGroupCommand ??= DocumentCommand(
+            (document, owner) => document.CanvasRemoveFromGroup(owner: owner));
+
+    public System.Windows.Input.ICommand CanvasCreateConnectedCardCommand =>
+        _canvasCreateConnectedCardCommand ??= DocumentCommand(
+            (document, owner) => document.CanvasCreateConnectedCard(owner: owner));
+
+    /// <summary>§G2 TG2-6: the sidebar as the canvas's note creator — set by
+    /// the vault lifecycle when both exist.</summary>
+    public ICanvasNoteCreator? CanvasNoteCreator { get; set; }
+
+    public System.Windows.Input.ICommand CanvasConvertToNoteCommand =>
+        _canvasConvertToNoteCommand ??= DocumentCommand(
+            (document, owner) => document.RequestConvertToNote(owner));
+
+    public System.Windows.Input.ICommand CanvasDuplicateCommand =>
+        _canvasDuplicateCommand ??= DocumentCommand(
+            (document, owner) => document.CanvasDuplicate(owner: owner));
+
+    public System.Windows.Input.ICommand CanvasCreateConnectedCardDirectionalCommand =>
+        _canvasCreateConnectedCardDirectionalCommand ??= DocumentCommand(
+            (document, owner) => document.RequestCreateConnectedDirection(owner));
+
+    private RelayCommand? _canvasDeleteCommand;
+    private RelayCommand? _canvasEditCardCommand;
+    private RelayCommand? _canvasRenameGroupCommand;
+    private RelayCommand? _canvasSetColorCommand;
+    private RelayCommand? _canvasClearColorCommand;
+    private RelayCommand? _canvasNewGroupCommand;
+    private RelayCommand? _canvasAddLinkCommand;
+    private RelayCommand? _canvasMoveIntoGroupCommand;
+    private RelayCommand? _canvasEditConnectionCommand;
+    private RelayCommand? _canvasDeleteConnectionCommand;
+    private RelayCommand? _canvasAddNoteCommand;
+    private RelayCommand? _canvasAddMediaCommand;
+    private RelayCommand? _canvasLocateFileCommand;
+    private RelayCommand? _canvasRemoveFromGroupCommand;
+    private RelayCommand? _canvasCreateConnectedCardCommand;
+    private RelayCommand? _canvasCreateConnectedCardDirectionalCommand;
+    private RelayCommand? _canvasDuplicateCommand;
+    private RelayCommand? _canvasConvertToNoteCommand;
+
     public System.Windows.Input.ICommand CanvasConnectModeCommand =>
         _canvasConnectModeCommand ??= NavigatorCommand(
             navigator => navigator.EnterConnectMode());
@@ -671,6 +852,21 @@ internal sealed partial class WorkspaceViewModel
         Action<CanvasDocumentViewModel> run) =>
         new RelayCommand(
             _ => { if (ActiveCanvasDocument is { } document) { run(document); } },
+            _ => ActiveCanvasDocument is not null);
+
+    /// <summary>§G2 TG2-0 (G2-2, IG2-34): the owner-carrying shape —
+    /// the invoking TAB rides into the operation as TE-1's initiating
+    /// surface, captured at execution, never at construction.</summary>
+    private RelayCommand DocumentCommand(
+        Action<CanvasDocumentViewModel, object?> run) =>
+        new RelayCommand(
+            _ =>
+            {
+                if (ActiveCanvasDocument is { } document)
+                {
+                    run(document, ActiveGroup.ActiveTab);
+                }
+            },
             _ => ActiveCanvasDocument is not null);
 
     /// <summary>§F TF-4 (F9/M6): the spatial mode verbs for the

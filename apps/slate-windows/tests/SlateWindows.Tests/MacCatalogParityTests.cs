@@ -85,6 +85,111 @@ public sealed class MacCatalogParityTests
             + "byte-identical): " + string.Join("; ", divergences));
     }
 
+    /// <summary>§G2 TG2-0 (G2-1, IG2-2/IG2-33): the Canvas MENU mirrors
+    /// mac's menu ownership over the verb residue, in BOTH directions.
+    /// Mac's Canvas menu is the toolbar command group in
+    /// <c>SlateMacApp.swift</c>; a residue id is mac-menu-owned when its
+    /// registration closure's verb is invoked there. The Windows side is
+    /// the CanvasMenu subtree of <c>MainWindow.xaml</c> resolved through
+    /// the registrar's own map. The census is over the eighteen residue
+    /// ids only: the existing Windows menu's navigation, filter, mode
+    /// and verbosity items are earlier sections' recorded shape.</summary>
+    [Fact]
+    public void TheCanvasMenuMirrorsMacsMenuOwnershipOverTheResidue()
+    {
+        string[] residue =
+        [
+            "delete", "editCard", "renameGroup", "setColor", "clearColor", "newGroup",
+            "moveIntoGroup", "addNote", "addMedia", "addLink", "locateFile",
+            "editConnection", "deleteConnection", "removeFromGroup",
+            "createConnectedCard", "createConnectedCardDirectional", "duplicate",
+            "convertToNote",
+        ];
+        string commands = SwiftSource.WithoutComments(File.ReadAllText(MacCommandsPath()));
+        string app = SwiftSource.WithoutComments(File.ReadAllText(
+            Path.Combine(MacSourceRoot(), "SlateMacApp.swift")));
+
+        // Mac: the toolbar command group is the Canvas menu; every verb it
+        // invokes on appState is a menu-owned verb.
+        int groupStart = app.IndexOf("CommandGroup(after: .toolbar)", StringComparison.Ordinal);
+        Assert.True(groupStart >= 0, "mac's toolbar command group (the Canvas menu) was not found");
+        int groupEnd = app.IndexOf("CommandGroup(", groupStart + 1, StringComparison.Ordinal);
+        string canvasMenu = app[groupStart..(groupEnd < 0 ? app.Length : groupEnd)];
+        HashSet<string> macMenuVerbs = Regex.Matches(canvasMenu, @"appState\.(canvas\w+)\(")
+            .Select(m => m.Groups[1].Value)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("canvasNewCard", macMenuVerbs);
+
+        // Only the ids that HAVE a Windows row are judged — a row lands
+        // with its task, and the census tightens as each one does.
+        HashSet<string> landed = residue
+            .Where(id => typeof(ChordTable.Ids).GetFields()
+                .Any(field => Equals(field.GetValue(null), "slate.canvas." + id)))
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.NotEmpty(landed);
+        var macOwned = new List<string>();
+        foreach (string id in residue.Where(landed.Contains))
+        {
+            string constant = "canvas" + char.ToUpperInvariant(id[0]) + id[1..];
+            Match registration = Regex.Match(
+                commands,
+                @"register(?:Structural)?\(\s*SlateCommandID\." + constant
+                    + @"\b[^{]*\{[^}]*?(canvas\w+)\(",
+                RegexOptions.Singleline);
+            Assert.True(registration.Success, "no mac registration closure for " + constant);
+            if (macMenuVerbs.Contains(registration.Groups[1].Value))
+            {
+                macOwned.Add(id);
+            }
+        }
+
+        // Windows: the CanvasMenu subtree's command bindings, matched to
+        // ids through the registrar's resolver text.
+        var xaml = System.Xml.Linq.XDocument.Load(Path.Combine(
+            RepoRoot(), "apps", "slate-windows", "src", "SlateWindows", "MainWindow.xaml"));
+        System.Xml.Linq.XElement canvasMenuElement = xaml.Descendants()
+            .First(element => element.Attributes().Any(attribute =>
+                attribute.Name.LocalName.EndsWith("AutomationId", StringComparison.Ordinal)
+                && attribute.Value == "CanvasMenu"));
+        HashSet<string> windowsMenuPaths = canvasMenuElement.Descendants()
+            .Where(element => element.Name.LocalName == "MenuItem")
+            .Select(element => element.Attribute("Command")?.Value ?? string.Empty)
+            .Select(command => Regex.Match(command, @"^\{Binding\s+([A-Za-z0-9_.]+)\}$"))
+            .Where(match => match.Success)
+            .Select(match => match.Groups[1].Value)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("Workspace.CanvasNewCardCommand", windowsMenuPaths);
+
+        string registrar = File.ReadAllText(Path.Combine(
+            RepoRoot(), "apps", "slate-windows", "src", "SlateWindows", "Commands",
+            "SlateCommandRegistrar.cs"));
+        var windowsOwned = new List<string>();
+        foreach (string id in residue.Where(landed.Contains))
+        {
+            string fullId = "slate.canvas." + id;
+            string? constant = typeof(ChordTable.Ids).GetFields()
+                .FirstOrDefault(field => Equals(field.GetValue(null), fullId))?.Name;
+            if (constant is null)
+            {
+                continue; // not yet a Windows row — its task lands it
+            }
+            Match resolver = Regex.Match(
+                registrar,
+                @"\[ChordTable\.Ids\." + constant + @"\]\s*=\s*host\s*=>\s*host\.([A-Za-z0-9_?.]+)",
+                RegexOptions.Singleline);
+            Assert.True(resolver.Success, "no resolver for " + constant);
+            string path = resolver.Groups[1].Value.Replace("?", string.Empty);
+            if (windowsMenuPaths.Contains(path))
+            {
+                windowsOwned.Add(id);
+            }
+        }
+
+        Assert.Equal(
+            macOwned.OrderBy(id => id, StringComparer.Ordinal),
+            windowsOwned.OrderBy(id => id, StringComparer.Ordinal));
+    }
+
     /// <summary>
     /// Every Windows-only id is deliberate, and every recorded
     /// Windows-only id still exists.

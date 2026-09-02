@@ -135,6 +135,7 @@ internal sealed class CanvasMutationOperation
         ArgumentNullException.ThrowIfNull(basis);
         Id = id;
         Owner = owner;
+        Receipt = new CanvasOperationCompletion(id);
         Anchor = anchor;
         Basis = basis;
         Effect = effect;
@@ -192,6 +193,11 @@ internal sealed class CanvasMutationOperation
     /// ran on — the consumer marshals itself (the controller does).
     /// Null for ordinary verbs.</summary>
     internal Action<CanvasOperationOutcome>? Completion { get; set; }
+
+    /// <summary>§G2 TG2-4 (IG2-53): TE-4's post-publication completion
+    /// state, kept under THIS operation's identity — the editor-open
+    /// receipt runs at most once however many completions arrive.</summary>
+    internal CanvasOperationCompletion Receipt { get; }
 
     /// <summary>The one currency question, asked at every boundary:
     /// the publication is live and still holds the exact loaded triple

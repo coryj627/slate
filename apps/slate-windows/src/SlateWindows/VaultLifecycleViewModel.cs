@@ -1016,6 +1016,8 @@ internal sealed class VaultLifecycleViewModel
         sidebar.RetargetRequested = (oldPath, newPath) =>
             capturedWorkspace.RetargetPath(oldPath, newPath);
         sidebar.OpenTargetRequested += FileSidebar_OpenTargetRequested;
+        // §G2 TG2-6 (IG2-6): the sidebar is the canvas's note creator.
+        workspace.CanvasNoteCreator = sidebar;
         switcher.OpenRequested += QuickSwitcher_OpenRequested;
         switcher.Dismissed += QuickSwitcher_Dismissed;
 

@@ -637,7 +637,7 @@ W5_4_DELIVERED_COMMANDS = {
 # projection. `showVisual` stays out until PR D ships the renderer,
 # where its resolver stops answering CanExecute false.
 W6_1_STATUS = (
-    "implemented; local gates green 2026-08-25; "
+    "implemented; local gates green 2026-09-02; "
     "interactive CI + human AT pending"
 )
 
@@ -676,6 +676,53 @@ W6_1_DELIVERED_COMMANDS = {
     "slate.canvas.tracePath",
     "slate.canvas.filterCards",
     "slate.canvas.clearFilter",
+    # §G2 TG2-8 (G2-14, IG2-3): every EXECUTABLE canvas id joins in the
+    # PR that made it executable. §E's five verbs shipped without a
+    # front door and §G2 gave them one; the §G2 residue, the card and
+    # canvas creators, §F's thirteen (the modes, the placements, the
+    # resizes — `commitMode` and `cancelMode` return here as promised
+    # above, F being the PR that made them reachable) and §G's six
+    # including `colorMarked`. Evidence groups canvasMutations,
+    # canvasModes and canvasMarks in chords.json carry the anchors.
+    "slate.canvas.delete",
+    "slate.canvas.editCard",
+    "slate.canvas.renameGroup",
+    "slate.canvas.setColor",
+    "slate.canvas.clearColor",
+    "slate.canvas.newGroup",
+    "slate.canvas.addLink",
+    "slate.canvas.moveIntoGroup",
+    "slate.canvas.editConnection",
+    "slate.canvas.deleteConnection",
+    "slate.canvas.addNote",
+    "slate.canvas.addMedia",
+    "slate.canvas.locateFile",
+    "slate.canvas.removeFromGroup",
+    "slate.canvas.createConnectedCard",
+    "slate.canvas.createConnectedCardDirectional",
+    "slate.canvas.duplicate",
+    "slate.canvas.convertToNote",
+    "slate.canvas.newCard",
+    "slate.file.newCanvas",
+    "slate.canvas.moveMode",
+    "slate.canvas.resizeMode",
+    "slate.canvas.connectMode",
+    "slate.canvas.commitMode",
+    "slate.canvas.cancelMode",
+    "slate.canvas.placeBelow",
+    "slate.canvas.placeRightOf",
+    "slate.canvas.placeAbove",
+    "slate.canvas.placeLeftOf",
+    "slate.canvas.alignWith",
+    "slate.canvas.connectTo",
+    "slate.canvas.resizeDefaultSize",
+    "slate.canvas.resizeFitContent",
+    "slate.canvas.toggleMark",
+    "slate.canvas.showMarks",
+    "slate.canvas.clearMarks",
+    "slate.canvas.deleteMarked",
+    "slate.canvas.groupMarked",
+    "slate.canvas.colorMarked",
 }
 
 # W4 delivery, same per-command shape as W3.

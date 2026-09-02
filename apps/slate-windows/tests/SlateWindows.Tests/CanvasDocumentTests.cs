@@ -95,6 +95,756 @@ public sealed class CanvasDocumentTests : IDisposable
             new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
             synchronousForTests);
 
+    /// <summary>§G2 TG2-6 (G2-11, G2D-3): Convert Card to Note… writes the note
+    /// through the seam FIRST, then retargets the card in one canvas
+    /// action; the barrier and refresh land once; the sentence names the
+    /// path; undo restores the TEXT card and the note stays.</summary>
+    [Fact]
+    public void ConvertWritesTheNoteThenRetargetsAndUndoKeepsTheNote()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        var creator = new RecordingNoteCreator(_session);
+        workspace.CanvasNoteCreator = creator;
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        _announced.Clear();
+
+        workspace.CanvasConvertToNoteCommand.Execute(null);
+
+        var sheet = Assert.IsType<CanvasConvertToNotePrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal("Core question.md", sheet.Draft);
+        sheet.Draft = "  Converted question.md  ";
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        string note = Path.Combine(_fixture.Root, "Converted question.md");
+        Assert.True(File.Exists(note));
+        Assert.Contains("Can it be accessible?", File.ReadAllText(note));
+        Assert.Equal("file", document.RowFor("question")!.Kind);
+        Assert.Single(creator.Landed);
+        Assert.Equal("Converted question.md", creator.Landed[0]);
+        Assert.Contains(_announced, a => a.Text.Contains("Converted to note Converted question.md", StringComparison.Ordinal));
+
+        document.CanvasUndo();
+
+        Assert.Equal("text", document.RowFor("question")!.Kind);
+        Assert.True(File.Exists(note));
+    }
+
+    /// <summary>§G2 TG2-6 (G2-3, IG2-41/42/43/56): the openers and the
+    /// submit's refusals — a file card refuses OnlyTextCardsConvert; a
+    /// draft without .md refuses with the sheet kept; a path that exists
+    /// refuses NotePathExists with nothing written and no barrier; the
+    /// shutdown arm refuses NoteCreateFailed; a slashed, padded, empty
+    /// title suggests mac's path.</summary>
+    [Fact]
+    public void ConvertRefusesTheTypedArmsAndSuggestsMacsPath()
+    {
+        Assert.Equal("a - b.md", CanvasDocumentViewModel.SuggestedNotePath("  a / b  "));
+        Assert.Equal("Untitled.md", CanvasDocumentViewModel.SuggestedNotePath("   "));
+
+        using WorkspaceViewModel workspace = NewWorkspace();
+        var creator = new RecordingNoteCreator(_session);
+        workspace.CanvasNoteCreator = creator;
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        document.SeatSelectionSilently("note");
+        _announced.Clear();
+        workspace.CanvasConvertToNoteCommand.Execute(null);
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("text card", StringComparison.OrdinalIgnoreCase));
+
+        document.SeatSelectionSilently("question");
+        workspace.CanvasConvertToNoteCommand.Execute(null);
+        CanvasPromptViewModel sheet = Assert.IsType<CanvasConvertToNotePrompt>(workspace.CanvasPromptSheet);
+        sheet.Draft = "no extension";
+        _announced.Clear();
+        workspace.SubmitCanvasPrompt();
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Contains(_announced, a => a.Text.Contains(".md", StringComparison.Ordinal));
+
+        sheet.Draft = "note0.md";
+        _announced.Clear();
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("note0.md", StringComparison.Ordinal)
+            && a.Text.Contains("already exists", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(creator.Landed);
+        Assert.Equal("text", document.RowFor("question")!.Kind);
+
+        creator.Unavailable = true;
+        sheet.Draft = "fresh.md";
+        _announced.Clear();
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("fresh.md", StringComparison.Ordinal)
+            && a.Text.Contains("closing", StringComparison.OrdinalIgnoreCase));
+        Assert.False(File.Exists(Path.Combine(_fixture.Root, "fresh.md")));
+    }
+
+    /// <summary>§G2 TG2-6 (IG2-57, IG2-58): the note LANDED but the canvas
+    /// did not retarget (the file moved under the operation) — the funnel
+    /// speaks its refusal, the landed-note truth is spoken once after it,
+    /// the barrier still lands, and the sheet is a RECOVERY state: Enter
+    /// re-speaks and writes nothing, Escape closes.</summary>
+    [Fact]
+    public void ConvertAfterALandedNoteIsARecoveryStateNotARetry()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        var creator = new RecordingNoteCreator(_session);
+        workspace.CanvasNoteCreator = creator;
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        workspace.CanvasConvertToNoteCommand.Execute(null);
+        var sheet = Assert.IsType<CanvasConvertToNotePrompt>(workspace.CanvasPromptSheet);
+        sheet.Draft = "landed.md";
+        string canvasPath = Path.Combine(_fixture.Root, "board.canvas");
+        File.WriteAllText(canvasPath, File.ReadAllText(canvasPath) + "\n");
+        _announced.Clear();
+
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.True(sheet.IsRecovery);
+        Assert.True(File.Exists(Path.Combine(_fixture.Root, "landed.md")));
+        Assert.Single(creator.Landed);
+        Assert.Equal("text", document.RowFor("question")!.Kind);
+        Assert.Contains(_announced, a => a.Text.Contains("landed.md", StringComparison.Ordinal)
+            && a.Text.Contains("still points", StringComparison.OrdinalIgnoreCase));
+
+        _announced.Clear();
+        workspace.SubmitCanvasPrompt();
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Single(creator.Landed);
+        Assert.Contains(_announced, a => a.Text.Contains("still points", StringComparison.OrdinalIgnoreCase));
+        workspace.CloseCanvasPrompt();
+        Assert.Null(workspace.CanvasPromptSheet);
+    }
+
+    /// <summary>The seam over the fixture's real session — the sidebar's
+    /// create path in miniature — with the shutdown arm switchable and
+    /// every landing recorded.</summary>
+    private sealed class RecordingNoteCreator(VaultSession session) : ICanvasNoteCreator
+    {
+        public bool Unavailable { get; set; }
+
+        public List<string> Landed { get; } = [];
+
+        public CanvasNoteCreateResult TryCreateNote(string path, string content)
+        {
+            if (Unavailable)
+            {
+                return new CanvasNoteCreateResult.Unavailable();
+            }
+            try
+            {
+                return new CanvasNoteCreateResult.Landed(
+                    CreateOutcomes.CreateReporting(session, path, content, Path.GetFileName(path)));
+            }
+            catch (VaultException.DestinationExists)
+            {
+                return new CanvasNoteCreateResult.Exists();
+            }
+            catch (VaultException exception)
+            {
+                return new CanvasNoteCreateResult.Failed(exception.Message);
+            }
+        }
+
+        public void NoteLanded(string path, string? caveat) => Landed.Add(path);
+    }
+
+    /// <summary>§G2 TG2-4 (E4, G2-9, IG2-23/53): New Card and Create Connected
+    /// Card LAND IN THE EDITOR through TE-4's receipt — for an owner that is
+    /// still current; an operation whose owner is a tab that is not the
+    /// active one opens nothing.</summary>
+    [Fact]
+    public void NewCardAndCreateConnectedCardLandInTheEditorForACurrentOwner()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+
+        workspace.CanvasNewCardCommand.Execute(null);
+        PumpDispatcher();
+        Assert.NotNull(workspace.CanvasCardEditorSheet);
+        workspace.CloseCanvasCardEditor();
+
+        document.SeatSelectionSilently("question");
+        workspace.CanvasCreateConnectedCardCommand.Execute(null);
+        PumpDispatcher();
+        Assert.NotNull(workspace.CanvasCardEditorSheet);
+        Assert.Equal(document.Selection.Selected, workspace.CanvasCardEditorSheet!.NodeId);
+        workspace.CloseCanvasCardEditor();
+
+        // An owner that moved on: the receipt fires, the workspace opens nothing.
+        document.SeatSelectionSilently("question");
+        Assert.NotNull(document.CanvasCreateConnectedCard(owner: new object()));
+        PumpDispatcher();
+        Assert.Null(workspace.CanvasCardEditorSheet);
+    }
+
+    /// <summary>§G2 TG2-4 (G2-5): Create Connected Card (Choose Direction)… —
+    /// four choices named by placement; Left lands the card left of the
+    /// origin and the sheet closes on the landing.</summary>
+    [Fact]
+    public void TheDirectionPromptCreatesOnTheChosenSide()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("link");
+        CanvasSceneNode origin = document.AppliedPublication!.Loaded!.Population.SceneByNode["link"];
+
+        workspace.CanvasCreateConnectedCardDirectionalCommand.Execute(null);
+
+        var sheet = Assert.IsType<CanvasConnectedDirectionPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal(["Below", "Right", "Above", "Left"], sheet.Choices.Select(c => c.Name).ToArray());
+        // Right of the link card is free space; the engine honours the hint
+        // where there is room (Left is occupied in this fixture).
+        sheet.SelectedChoice = sheet.Choices[1];
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        string created = document.Selection.Selected!;
+        Assert.NotEqual("link", created);
+        Assert.True(document.AppliedPublication!.Loaded!.Population.SceneByNode[created].X > origin.X);
+    }
+
+    /// <summary>§G2 TG2-3 (G2-6): Add Note to Canvas… — the vault picker in
+    /// the card picker's slot lists the vault's notes with the path as
+    /// each row's status, the filter narrows, and Enter lands a file
+    /// card next to the selection; Add Media… on a vault with no media
+    /// refuses NoMediaInVault and presents nothing.</summary>
+    [Fact]
+    public void AddNoteListsTheVaultsNotesAndAddMediaRefusesAnEmptySet()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        int filesBefore = document.AppliedPublication!.Loaded!.Population.SceneNodes.Count(n => n.Kind == "file");
+
+        workspace.CanvasAddNoteCommand.Execute(null);
+
+        var sheet = Assert.IsType<CanvasVaultFilePickerViewModel>(workspace.CanvasCardPickerSheet);
+        Assert.Equal("Note picker", sheet.SheetName);
+        Assert.True(sheet.Rows.Length >= 3);
+        Assert.All(sheet.Rows, row => Assert.EndsWith(".md", row.Value));
+        Assert.All(sheet.Rows, row => Assert.Equal(row.Value, row.Status));
+        sheet.Filter = "note1";
+        Assert.Single(sheet.Rows);
+        Assert.Equal("note1.md", sheet.SelectedRow?.Value);
+
+        workspace.ConfirmCanvasCardPick();
+
+        Assert.Null(workspace.CanvasCardPickerSheet);
+        Assert.Equal(
+            filesBefore + 1,
+            document.AppliedPublication!.Loaded!.Population.SceneNodes.Count(n => n.Kind == "file"));
+
+        _announced.Clear();
+        workspace.CanvasAddMediaCommand.Execute(null);
+        Assert.Null(workspace.CanvasCardPickerSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("media", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>§G2 TG2-3 (G2-6, G2D-8): Locate File… refuses a card that is
+    /// not a file card, presents the union of notes and media for a file
+    /// card, and a pick repoints it.</summary>
+    [Fact]
+    public void LocateFileRefusesANonFileCardAndRepointsAFileCard()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        document.SeatSelectionSilently("question");
+        _announced.Clear();
+        workspace.CanvasLocateFileCommand.Execute(null);
+        Assert.Null(workspace.CanvasCardPickerSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("file card", StringComparison.OrdinalIgnoreCase));
+
+        document.SeatSelectionSilently("note");
+        workspace.CanvasLocateFileCommand.Execute(null);
+        var sheet = Assert.IsType<CanvasVaultFilePickerViewModel>(workspace.CanvasCardPickerSheet);
+        Assert.Equal("File picker", sheet.SheetName);
+        sheet.Filter = "note2";
+        Assert.Equal("note2.md", sheet.SelectedRow?.Value);
+
+        workspace.ConfirmCanvasCardPick();
+
+        Assert.Null(workspace.CanvasCardPickerSheet);
+        Assert.Contains("\"file\":\"note2.md\"", File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas")));
+    }
+
+    /// <summary>§G2 TG2-3 (IG2-19/49/50): the request's three checks — a
+    /// superseded generation (a second open replaces the first; the
+    /// first sheet's pick is a guess), a moved loaded identity, and an
+    /// owner that is no longer the active tab — each refuse
+    /// PickDifferentTarget with nothing written.</summary>
+    [Fact]
+    public void AStaleVaultPickRefusesPickDifferentTarget()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        string before = File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas"));
+
+        workspace.CanvasAddNoteCommand.Execute(null);
+        var first = Assert.IsType<CanvasVaultFilePickerViewModel>(workspace.CanvasCardPickerSheet);
+        workspace.CanvasAddNoteCommand.Execute(null);
+        var second = Assert.IsType<CanvasVaultFilePickerViewModel>(workspace.CanvasCardPickerSheet);
+        Assert.NotSame(first, second);
+        _announced.Clear();
+        Assert.False(first.Confirm());
+        Assert.Contains(_announced, a => a.Text.Contains("different", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(before, File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas")));
+
+        document.Load();
+        _announced.Clear();
+        Assert.False(second.Confirm());
+        Assert.Contains(_announced, a => a.Text.Contains("different", StringComparison.OrdinalIgnoreCase));
+        workspace.CloseCanvasCardPicker();
+
+        document.SeatSelectionSilently("question");
+        workspace.CanvasAddNoteCommand.Execute(null);
+        Assert.IsType<CanvasVaultFilePickerViewModel>(workspace.CanvasCardPickerSheet);
+        workspace.OpenPath("note0.md", WorkspaceOpenTarget.NewTab);
+        Assert.NotSame(tab, workspace.ActiveGroup.ActiveTab);
+        _announced.Clear();
+        workspace.ConfirmCanvasCardPick();
+        Assert.NotNull(workspace.CanvasCardPickerSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("different", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(before, File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas")));
+    }
+
+    /// <summary>§G2 TG2-2 (G2-5, IG2-15, IG2-19/35): Move into Group… lists
+    /// EVERY group in reading order and moves the card; a submit against a
+    /// reloaded document refuses PickDifferentTarget with the sheet kept.</summary>
+    [Fact]
+    public void MoveIntoGroupPromptListsEveryGroupAndRefusesAStaleSubmit()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        // A fresh EMPTY group to move into — the fixture's own group is
+        // too crowded for the engine to place a card inside it, which is
+        // the verb's NoFreeSpaceInGroup refusal, not this fact's subject.
+        Assert.NotNull(document.CanvasNewGroup("Zone"));
+        document.SeatSelectionSilently("loose");
+
+        workspace.CanvasMoveIntoGroupCommand.Execute(null);
+
+        var sheet = Assert.IsType<CanvasMoveIntoGroupPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal(2, sheet.Choices.Length);
+        Assert.Equal("grp", sheet.Choices.Single(c => c.Name.Contains("Research", StringComparison.Ordinal)).Value);
+        Assert.Contains(sheet.Choices, c => c.Name.Contains("Zone", StringComparison.Ordinal));
+        Assert.Same(tab, sheet.Context.Owner);
+
+        // A reload between open and submit: the identity moved.
+        document.Load();
+        _announced.Clear();
+        workspace.SubmitCanvasPrompt();
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("different", StringComparison.OrdinalIgnoreCase));
+        workspace.CloseCanvasPrompt();
+
+        document.SeatSelectionSilently("loose");
+        workspace.CanvasMoveIntoGroupCommand.Execute(null);
+        CanvasPromptViewModel again = workspace.CanvasPromptSheet!;
+        again.SelectedChoice = again.Choices.Single(c => c.Name.Contains("Zone", StringComparison.Ordinal));
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Contains("Zone", document.Outline.First(r => r.NodeId == "loose").GroupPath);
+    }
+
+    /// <summary>§G2 TG2-7 (IG2-60, TG-0's rule): a node row's selection
+    /// verb seats ITS row silently before the verb — the mark lands on
+    /// the row the menu was opened on, wherever the selection stood.
+    /// </summary>
+    [Fact]
+    public void ANodeRowsSelectionVerbSeatsItsRowBeforeTheVerb()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        document.SeatSelectionSilently("link");
+        CanvasContextDispatch.Execute(
+            document,
+            new CanvasContextTarget.Node("evidence", "text", false),
+            CanvasContextVerb.ToggleMark,
+            tab,
+            () => { });
+        Assert.True(document.Selection.IsMarked("evidence"));
+        Assert.False(document.Selection.IsMarked("link"));
+        Assert.Equal("evidence", document.Selection.Selected);
+    }
+
+    /// <summary>§G2 TG2-7 (G2-12, IG2-60): a connection row's verbs act
+    /// on the CAPTURED edge from its seated source — Edit opens the
+    /// direction stage for that edge with no picker, Delete removes
+    /// that edge — and the selection lands on the SOURCE, never the
+    /// other endpoint, wherever it stood before the dispatch.</summary>
+    [Fact]
+    public void AConnectionRowsVerbsActOnTheCapturedEdgeFromItsSeatedSource()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        document.SeatSelectionSilently("evidence");
+        CanvasNeighbor captured = Assert.Single(document.NeighborsOf("evidence"));
+        var target = new CanvasContextTarget.Connection("evidence", captured);
+
+        // The selection moved on after the rows were captured: the
+        // dispatch seats the SOURCE, not the other endpoint.
+        document.SeatSelectionSilently("link");
+        CanvasContextDispatch.Execute(document, target, CanvasContextVerb.EditConnection, tab, () => { });
+        Assert.IsType<CanvasEditConnectionDirectionPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal("evidence", document.Selection.Selected);
+        workspace.CloseCanvasPrompt();
+
+        document.SeatSelectionSilently("link");
+        CanvasContextDispatch.Execute(document, target, CanvasContextVerb.DeleteConnection, tab, () => { });
+        Assert.DoesNotContain(
+            document.AppliedPublication!.Loaded!.Population.SceneEdges, e => e.EdgeId == "e1");
+        Assert.Equal("evidence", document.Selection.Selected);
+        Assert.Empty(document.NeighborsOf("evidence"));
+    }
+
+    /// <summary>§G2 TG2-2 (G2-5, IG2-46, IG2-13): the connection verbs follow
+    /// mac's cardinality — none refuses NoConnections and presents
+    /// nothing, ONE routes directly, and the delete sentence names the
+    /// OTHER endpoint as the selected card sees it.</summary>
+    [Fact]
+    public void DeleteConnectionFollowsMacsCardinalityAndNamesTheOtherEndpoint()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        document.SeatSelectionSilently("link");
+        _announced.Clear();
+        workspace.CanvasDeleteConnectionCommand.Execute(null);
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Contains(_announced, a => a.Text.Contains("no connections", StringComparison.OrdinalIgnoreCase));
+
+        // "evidence" is e1's TO node; the selected-relative sentence names
+        // the other endpoint, "Core question", never the to-node itself.
+        document.SeatSelectionSilently("evidence");
+        _announced.Clear();
+        workspace.CanvasDeleteConnectionCommand.Execute(null);
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.DoesNotContain(
+            document.AppliedPublication!.Loaded!.Population.SceneEdges, e => e.EdgeId == "e1");
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Deleted connection", StringComparison.Ordinal)
+                && a.Text.Contains("Core question", StringComparison.Ordinal)
+                && !a.Text.Contains("Evidence so far", StringComparison.Ordinal));
+    }
+
+    /// <summary>§G2 TG2-2 (G2-4, G2-5, G2D-2, IG2-9/12/14/44/47): with MANY
+    /// connections the picker presents rows named by the outline's render
+    /// with the ordinal status; Edit Connection then ADVANCES — the
+    /// picker to the direction stage (a different sheet, preselected
+    /// from the edge), the direction to the label stage (prefilled) —
+    /// and the one write lands the chosen direction and a null label;
+    /// Escape at a stage changes nothing.</summary>
+    [Fact]
+    public void EditConnectionAdvancesThroughItsStagesAndWritesOnce()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.CanvasConnect("question", "loose", "second");
+        document.SeatSelectionSilently("question");
+
+        workspace.CanvasEditConnectionCommand.Execute(null);
+
+        var pick = Assert.IsType<CanvasPickConnectionPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal(2, pick.Choices.Length);
+        Assert.Equal("connection 1 of 2", pick.Choices[0].Status);
+        Assert.Equal("connection 2 of 2", pick.Choices[1].Status);
+        Assert.Contains("Evidence so far", pick.Choices.Single(c => c.Value == "e1").Name);
+        pick.SelectedChoice = pick.Choices.Single(c => c.Value == "e1");
+
+        // Escape at the picker: nothing changes.
+        workspace.CloseCanvasPrompt();
+        Assert.Contains("\"label\":\"supports\"", File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas")));
+
+        workspace.CanvasEditConnectionCommand.Execute(null);
+        pick = Assert.IsType<CanvasPickConnectionPrompt>(workspace.CanvasPromptSheet);
+        pick.SelectedChoice = pick.Choices.Single(c => c.Value == "e1");
+        workspace.SubmitCanvasPrompt();
+
+        var direction = Assert.IsType<CanvasEditConnectionDirectionPrompt>(workspace.CanvasPromptSheet);
+        Assert.NotSame(pick, direction);
+        Assert.Equal(4, direction.Choices.Length);
+        Assert.Equal(nameof(CanvasConnectionDirection.ToTarget), direction.SelectedChoice?.Value);
+        Assert.Equal("Points at the target", direction.SelectedChoice?.Name);
+        direction.SelectedChoice = direction.Choices.Single(c => c.Name == "Both directions");
+        workspace.SubmitCanvasPrompt();
+
+        var label = Assert.IsType<CanvasEditConnectionLabelPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal("supports", label.Draft);
+        Assert.Equal(CanvasConnectionDirection.Both, label.Direction);
+        label.Draft = string.Empty;
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        CanvasSceneEdge edge = document.AppliedPublication!.Loaded!.Population.SceneEdges.Single(e => e.EdgeId == "e1");
+        Assert.Null(edge.Label);
+        Assert.True(edge.FromArrow);
+        Assert.True(edge.ToArrow);
+    }
+
+    /// <summary>§G2 TG2-1 (G2-2, G2D-11): New Group… from the palette — the
+    /// prompt, then mac's label rule: an empty draft is a NULL label the
+    /// verb speaks as "Untitled"; a draft with spaces is written
+    /// untrimmed. Pending closes when the operation lands.</summary>
+    [Fact]
+    public void ANewGroupPromptFollowsMacsLabelRule()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        _announced.Clear();
+
+        workspace.CanvasNewGroupCommand.Execute(null);
+        var sheet = Assert.IsType<CanvasNewGroupPrompt>(workspace.CanvasPromptSheet);
+        Assert.True(sheet.HasTextField);
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Created group \"Untitled\"", StringComparison.Ordinal));
+
+        workspace.CanvasNewGroupCommand.Execute(null);
+        workspace.CanvasPromptSheet!.Draft = "  Q3 ";
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Contains(
+            document.AppliedPublication!.Loaded!.Population.SceneNodes,
+            n => n.Kind == "group" && n.Title == "  Q3 ");
+    }
+
+    /// <summary>§G2 TG2-1 (G2-5, G2D-10): Add Link Card… — a non-URL
+    /// answers Refused through the verb's NotAUrl arm with the sheet and
+    /// draft kept; a URL with surrounding whitespace is TRIMMED and lands
+    /// a link card, the sheet closing on the landing.</summary>
+    [Fact]
+    public void AnAddLinkPromptTrimsAndRefusesANonUrl()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        int linksBefore = document.AppliedPublication!.Loaded!.Population.SceneNodes
+            .Count(n => n.Kind == "link");
+
+        workspace.CanvasAddLinkCommand.Execute(null);
+        CanvasPromptViewModel sheet = Assert.IsType<CanvasAddLinkPrompt>(workspace.CanvasPromptSheet);
+        sheet.Draft = "not a url";
+        _announced.Clear();
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Equal("not a url", sheet.Draft);
+        Assert.Contains(_announced, a => a.Text.Contains("URL", StringComparison.OrdinalIgnoreCase));
+
+        sheet.Draft = "  https://example.org/a  ";
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Equal(
+            linksBefore + 1,
+            document.AppliedPublication!.Loaded!.Population.SceneNodes.Count(n => n.Kind == "link"));
+        // The TRIMMED url is what lands (Uri parsing forgives the spaces;
+        // the file must not carry them).
+        string bytes = File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas"));
+        Assert.Contains("\"url\":\"https://example.org/a\"", bytes);
+        Assert.DoesNotContain("  https://example.org/a", bytes);
+    }
+
+    /// <summary>§G2 TG2-1 (G2-7, IG2-51): a GROUP's palette Delete asks —
+    /// E8's Ungroup-or-Cancel confirmation. Cancel changes nothing and
+    /// closes; Ungroup removes the frame and keeps its cards.</summary>
+    [Fact]
+    public void AGroupsDeleteAsksUngroupOrCancel()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("grp");
+        int nodesBefore = document.AppliedPublication!.Loaded!.Population.SceneNodes.Length;
+
+        workspace.CanvasDeleteCommand.Execute(null);
+
+        var sheet = Assert.IsType<CanvasUngroupConfirmPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal(2, sheet.Choices.Length);
+        Assert.Equal("ungroup", sheet.SelectedChoice?.Value);
+        sheet.SelectedChoice = sheet.Choices[1];
+        workspace.SubmitCanvasPrompt();
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Equal(nodesBefore, document.AppliedPublication!.Loaded!.Population.SceneNodes.Length);
+
+        document.SeatSelectionSilently("grp");
+        workspace.CanvasDeleteCommand.Execute(null);
+        workspace.SubmitCanvasPrompt();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.DoesNotContain(
+            document.AppliedPublication!.Loaded!.Population.SceneNodes, n => n.NodeId == "grp");
+        Assert.Contains(
+            document.AppliedPublication!.Loaded!.Population.SceneNodes, n => n.NodeId == "question");
+    }
+
+    /// <summary>§G2 TG2-1 (G2-4, IG2-44, IG2-47): the submit answer is a
+    /// sealed family — Advanced cannot exist without its successor, the
+    /// three plain answers are values — and a choice carries a status the
+    /// sheet's rows bind onto the item's UIA ItemStatus.</summary>
+    [Fact]
+    public void TheSubmitFamilyAndTheChoiceStatusAreShapedAsFrozen()
+    {
+        Assert.Throws<ArgumentNullException>(() => new CanvasPromptSubmit.Advanced(null!));
+        Assert.Equal(CanvasPromptSubmit.Refused, CanvasPromptSubmit.Refused);
+        Assert.NotEqual(CanvasPromptSubmit.Refused, CanvasPromptSubmit.Completed);
+        Assert.Equal("s", new CanvasPromptChoice("v", "n", "s").Status);
+        Assert.Null(new CanvasPromptChoice("v", "n").Status);
+
+        string xaml = File.ReadAllText(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"));
+        int list = xaml.IndexOf("AutomationProperties.AutomationId=\"CanvasPromptChoices\"", StringComparison.Ordinal);
+        Assert.True(list >= 0);
+        int end = xaml.IndexOf("</ListBox>", list, StringComparison.Ordinal);
+        Assert.Contains(
+            "Property=\"AutomationProperties.ItemStatus\" Value=\"{Binding Status}\"",
+            xaml[list..end]);
+        // §G2 TG2-9: the item's UIA NAME is the choice's Name — a bound
+        // record's container otherwise names itself by ToString, which the
+        // journey heard as "CanvasPromptChoice { Value = … }". The picker's
+        // rows carry their Label the same way.
+        Assert.Contains(
+            "Property=\"AutomationProperties.Name\" Value=\"{Binding Name}\"",
+            xaml[list..end]);
+        int picker = xaml.IndexOf("AutomationProperties.AutomationId=\"CanvasCardPickerRows\"", StringComparison.Ordinal);
+        Assert.True(picker >= 0);
+        int pickerEnd = xaml.IndexOf("</ListBox>", picker, StringComparison.Ordinal);
+        Assert.Contains(
+            "Property=\"AutomationProperties.Name\" Value=\"{Binding Label}\"",
+            xaml[picker..pickerEnd]);
+    }
+
+    /// <summary>§G2 TG2-0 (G2-1): the five front-door commands over §E's
+    /// surfaced verbs reach the document from the workspace — Delete
+    /// removes the seated card, Edit Card Text opens the editor sheet,
+    /// Rename Group and Set Color present their prompts, Clear Color
+    /// runs Set Color's null arm with the TAB as the operation's owner.</summary>
+    [Fact]
+    public void TheFrontDoorCommandsReachTheDocument()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+
+        workspace.CanvasSetColorCommand.Execute(null);
+        Assert.IsType<CanvasSetColorPrompt>(workspace.CanvasPromptSheet);
+        workspace.CloseCanvasPrompt();
+
+        Assert.NotNull(document.CanvasSetColor("2"));
+        Assert.Equal("2", document.AppliedPublication!.Loaded!.Population.SceneByNode["question"].Color);
+        workspace.CanvasClearColorCommand.Execute(null);
+        Assert.Null(document.AppliedPublication!.Loaded!.Population.SceneByNode["question"].Color);
+
+        workspace.CanvasEditCardCommand.Execute(null);
+        Assert.NotNull(workspace.CanvasCardEditorSheet);
+        workspace.CloseCanvasCardEditor();
+
+        document.SeatSelectionSilently("grp");
+        workspace.CanvasRenameGroupCommand.Execute(null);
+        Assert.IsType<CanvasRenameGroupPrompt>(workspace.CanvasPromptSheet);
+        workspace.CloseCanvasPrompt();
+
+        document.SeatSelectionSilently("question");
+        workspace.CanvasDeleteCommand.Execute(null);
+        Assert.DoesNotContain(
+            document.AppliedPublication!.Loaded!.Population.Outline,
+            row => row.NodeId == "question");
+    }
+
     /// <summary>§G PR review round 1: the workspace's mark commands —
     /// the palette's and the chords' targets — REACH the document:
     /// Toggle Mark marks the seated card, Show Marked Cards presents
@@ -4020,6 +4770,48 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Shutdown();
     });
 
+
+    /// <summary>§G2 TG2-9 (CD-33): a group created EMPTY opens by default
+    /// when its first member arrives — the expansion memory records a
+    /// reader's choice, and a group with nothing to expand offered none,
+    /// so the moved card is never hidden behind a collapse nobody asked
+    /// for. A group the reader DID collapse stays collapsed (E15).</summary>
+    [Fact]
+    public void AGroupCreatedEmptyOpensWhenItsFirstMemberArrives() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var view = new CanvasOutlineView { Model = document };
+        document.Selection.ActiveSurface = CanvasSurfaceKind.Outline;
+
+        Assert.NotNull(document.CanvasNewGroup("Zone"));
+        CanvasOutlineRowViewModel zone = Assert.Single(
+            view.RootsForTests, row => row.IsGroup && row.Name.Contains("Zone", StringComparison.Ordinal));
+        Assert.Empty(zone.Children);
+        Assert.False(zone.IsExpanded);
+
+        document.SeatSelectionSilently("loose");
+        Assert.NotNull(document.CanvasMoveIntoGroup(zone.Id));
+        zone = Assert.Single(
+            view.RootsForTests, row => row.IsGroup && row.Name.Contains("Zone", StringComparison.Ordinal));
+        Assert.Contains(zone.Children, row => row.Id == "loose");
+        Assert.True(zone.IsExpanded, "the group that gained its first member stayed collapsed.");
+
+        // The reader's own collapse is remembered across the next republish
+        // — on the fixture's roomy group (a fresh group holds one card; a
+        // second is refused for want of free space, the verb's own arm).
+        CanvasOutlineRowViewModel grp = Assert.Single(view.RootsForTests, row => row.Id == "grp");
+        grp.IsExpanded = false;
+        document.SeatSelectionSilently("link");
+        CanvasOperationOutcome? second = null;
+        Assert.NotNull(document.CanvasMoveIntoGroup("grp", completion: outcome => second = outcome));
+        grp = Assert.Single(view.RootsForTests, row => row.Id == "grp");
+        Assert.True(
+            grp.Children.Count(row => !row.IsConnection) == 4,
+            "second move outcome: " + second + "; children: " + string.Join(", ", grp.Children.Select(row => row.Id)));
+        Assert.False(grp.IsExpanded, "a collapse the reader chose was forgotten (E15).");
+        document.Shutdown();
+    });
 
     /// <summary>
     /// §E TE-9 (E15's cause rule, the §C m-5 sibling): a seat

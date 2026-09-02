@@ -1,3 +1,4 @@
+using System.Windows.Input;
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -2186,6 +2187,337 @@ public sealed class CanvasMutationTests : IDisposable
                 && spoken.Text.Contains(CanvasPhrase.UndoChord));
         Undo(document);
         Assert.Equal(before, DiskBytes());
+    }
+
+    /// <summary>§G2 TG2-5 (G2-10): Duplicate of the SELECTION — a copy with
+    /// the same text and size, no edge copied, the copy seated, the
+    /// single-card sentence, and ONE undo restoring the bytes.</summary>
+    [Fact]
+    public void DuplicateCopiesTheSelectionWithoutItsEdges()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        int edges = document.AppliedPublication!.Loaded!.Population.SceneEdges.Length;
+        document.SeatSelectionSilently("a");
+        _announced.Clear();
+
+        CanvasMutationOperation? operation = document.CanvasDuplicate();
+
+        Assert.NotNull(operation);
+        string copy = Assert.IsType<string>(document.Selection.Selected);
+        Assert.NotEqual("a", copy);
+        CanvasPopulation population = document.AppliedPublication!.Loaded!.Population;
+        Assert.Equal("text", population.SceneByNode[copy].Kind);
+        Assert.Equal(population.SceneByNode["a"].Width, population.SceneByNode[copy].Width);
+        Assert.Equal(edges, population.SceneEdges.Length);
+        Assert.Contains(_announced, s => s.Text.StartsWith("Duplicated \"Alpha\"", StringComparison.Ordinal));
+
+        Undo(document);
+
+        Assert.Equal(before, DiskBytes());
+        document.Shutdown();
+    }
+
+    /// <summary>§G2 TG2-5 (G2-10, G2D-4, IG2-25): Duplicate of the MARKED set
+    /// expands a picked group to its members through core's containment —
+    /// one card moved into the group, only the group marked, two copies
+    /// land with the copied card inside the copied group — the marks are
+    /// kept, the bulk sentence counts, and one undo restores the bytes.</summary>
+    [Fact]
+    public void DuplicateExpandsAMarkedGroupTransitivelyAndKeepsTheMarks()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        Assert.NotNull(document.CanvasMoveIntoGroup("grp"));
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        Assert.Equal(["grp"], document.AppliedPublication!.MarkedIntent.ToArray());
+        string before = DiskBytes();
+        int nodesBefore = document.AppliedPublication!.Loaded!.Population.SceneNodes.Length;
+        _announced.Clear();
+
+        Assert.NotNull(document.CanvasDuplicate());
+
+        CanvasPopulation population = document.AppliedPublication!.Loaded!.Population;
+        Assert.Equal(nodesBefore + 2, population.SceneNodes.Length);
+        CanvasSceneNode copiedGroup = Assert.Single(population.SceneNodes, n => n.Kind == "group" && n.NodeId != "grp" && n.NodeId != "cramped");
+        CanvasOutlineRow copiedCard = Assert.Single(document.Outline, r => r.Kind == "text" && r.Title == "Alpha" && r.NodeId != "a");
+        Assert.Contains(copiedGroup.Title, copiedCard.GroupPath);
+        Assert.Equal(["grp"], document.AppliedPublication!.MarkedIntent.ToArray());
+        Assert.Contains(_announced, s => s.Text.Contains("Duplicated 2 cards", StringComparison.Ordinal));
+
+        Undo(document);
+
+        Assert.Equal(before, DiskBytes());
+        document.Shutdown();
+    }
+
+    /// <summary>§G2 TG2-5 (IG2-38, IG2-39): a marked store of GHOSTS refuses
+    /// NoMarks inside prepare, after admission; a seed of one live card and
+    /// one ghost refuses the typed failure — nothing partial — and the
+    /// bytes stand either way.</summary>
+    [Fact]
+    public void DuplicateRefusesGhostsAndNeverCopiesASubset()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("essay");
+        document.ToggleMark();
+        document.CanvasDeleteSelection();
+        Assert.Contains("essay", document.AppliedPublication!.MarkedIntent);
+        string before = DiskBytes();
+        _announced.Clear();
+
+        CanvasMutationOperation? ghosts = document.CanvasDuplicate();
+
+        Assert.NotNull(ghosts);
+        Assert.Contains(_announced, s => s.Text.Contains("No marks", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(before, DiskBytes());
+
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        _announced.Clear();
+
+        CanvasMutationOperation? mixed = document.CanvasDuplicate();
+
+        Assert.NotNull(mixed);
+        Assert.Contains(_announced, s => s.Text.Contains("resolve", StringComparison.OrdinalIgnoreCase)
+            || s.Text.Contains("duplicate", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(before, DiskBytes());
+        document.Shutdown();
+    }
+
+    /// <summary>§G2 TG2-4 (G2-9, IG2-22): Create Connected Card is ONE
+    /// action carrying the exact tuple — a fresh text card at the engine's
+    /// placement and a fresh edge from the ORIGIN to it with no from-end
+    /// and an arrow to-end, no label — the new card seated, the sentence
+    /// naming the origin, and ONE undo restoring the bytes.</summary>
+    [Fact]
+    public void CreateConnectedCardIsOneActionWithTheExactTuple()
+    {
+        CanvasDocumentViewModel document = Open();
+        string before = DiskBytes();
+        document.SeatSelectionSilently("a");
+        _announced.Clear();
+
+        CanvasMutationOperation? operation = document.CanvasCreateConnectedCard();
+
+        Assert.NotNull(operation);
+        string created = Assert.IsType<string>(document.Selection.Selected);
+        Assert.NotEqual("a", created);
+        CanvasPopulation population = document.AppliedPublication!.Loaded!.Population;
+        Assert.Equal("text", population.SceneByNode[created].Kind);
+        CanvasSceneEdge edge = Assert.Single(population.SceneEdges, e => e.ToNode == created);
+        Assert.Equal("a", edge.FromNode);
+        Assert.False(edge.FromArrow);
+        Assert.True(edge.ToArrow);
+        Assert.Null(edge.Label);
+        Assert.Contains(_announced, s => s.Text.Contains("Alpha", StringComparison.Ordinal));
+
+        Undo(document);
+
+        Assert.Equal(before, DiskBytes());
+        document.Shutdown();
+    }
+
+    /// <summary>§G2 TG2-4 (G2-5/G2-9): the direction is the engine's HINT —
+    /// Left places the new card left of the origin, Above above it.</summary>
+    [Fact]
+    public void CreateConnectedCardHonorsTheDirectionHint()
+    {
+        CanvasDocumentViewModel document = Open();
+        CanvasSceneNode origin = document.AppliedPublication!.Loaded!.Population.SceneByNode["blocker"];
+        document.SeatSelectionSilently("blocker");
+
+        Assert.NotNull(document.CanvasCreateConnectedCard(CanvasPlaceDirection.LeftOf));
+        string left = document.Selection.Selected!;
+        Assert.True(document.AppliedPublication!.Loaded!.Population.SceneByNode[left].X < origin.X);
+
+        document.SeatSelectionSilently("blocker");
+        Assert.NotNull(document.CanvasCreateConnectedCard(CanvasPlaceDirection.Above));
+        string above = document.Selection.Selected!;
+        Assert.True(document.AppliedPublication!.Loaded!.Population.SceneByNode[above].Y < origin.Y);
+        document.Shutdown();
+    }
+
+    /// <summary>§G2 TG2-4 (G2-1, IG2-34): Ctrl+Alt+Shift+N is the navigator's
+    /// chord and the presenter's OWNER rides into the operation — the
+    /// editor receipt names that owner, at most once.</summary>
+    [Fact]
+    public void TheConnectedCardChordCarriesThePresentersOwner()
+    {
+        CanvasDocumentViewModel document = Open();
+        var tab = new object();
+        var pane = new OwnedPane(tab);
+        document.Navigator.AttachPresenter(pane);
+        document.SeatSelectionSilently("a");
+        var receipts = new List<(object Owner, string NodeId)>();
+        document.CreatedEditorRequested += (owner, nodeId) => receipts.Add((owner, nodeId));
+
+        Assert.True(document.Navigator.HandleKey(
+            Key.N, ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift, pane));
+
+        (object owner, string nodeId) = Assert.Single(receipts);
+        Assert.Same(tab, owner);
+        Assert.Equal(document.Selection.Selected, nodeId);
+        document.Shutdown();
+    }
+
+    /// <summary>§G2 TG2-4 (G2-8, R22, IG2-40): Remove from Group places the
+    /// card outside its enclosing group by the engine and speaks the
+    /// group's label; a card in no group refuses NotInAGroup with its
+    /// title; one undo restores the bytes.</summary>
+    [Fact]
+    public void RemoveFromGroupPlacesOutsideAndRefusesACardInNoGroup()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        Assert.NotNull(document.CanvasMoveIntoGroup("grp"));
+        Assert.Contains("Ideas", document.Outline.First(r => r.NodeId == "a").GroupPath);
+        string inside = DiskBytes();
+        _announced.Clear();
+
+        CanvasMutationOperation? removed = document.CanvasRemoveFromGroup();
+
+        Assert.NotNull(removed);
+        Assert.Empty(document.Outline.First(r => r.NodeId == "a").GroupPath);
+        Assert.Contains(_announced, s => s.Text.Contains("Removed from group \"Ideas\"", StringComparison.Ordinal));
+
+        Undo(document);
+        Assert.Equal(inside, DiskBytes());
+
+        document.SeatSelectionSilently("blocker");
+        _announced.Clear();
+        Assert.Null(document.CanvasRemoveFromGroup());
+        Assert.Contains(_announced, s => s.Text.Contains("Blocker", StringComparison.Ordinal)
+            && s.Text.Contains("group", StringComparison.OrdinalIgnoreCase));
+        document.Shutdown();
+    }
+
+    private sealed class OwnedPane(object owner) : ICanvasSurfacePresenter
+    {
+        public CanvasSurfaceKind Projection => CanvasSurfaceKind.Outline;
+
+        public bool ProjectionHasFocus => true;
+
+        public bool CanMoveWithinProjection(bool forward) => true;
+
+        public bool DismissTransientRegion() => false;
+
+        public object? Owner => owner;
+
+        public bool ViewportCommand(CanvasViewportVerb verb) => false;
+
+        public bool FocusRow(string nodeId) => false;
+
+        public bool FocusProjection() => false;
+    }
+
+    /// <summary>§G2 TG2-0 (G2-2, IG2-34): the seven §E verbs answer with
+    /// their OPERATION — minted with the invoking owner when one is
+    /// passed (the document otherwise), carrying the completion, and
+    /// null when the opener refused.</summary>
+    [Fact]
+    public void TheFrontDoorVerbsAnswerWithTheirOperationAndOwner()
+    {
+        CanvasDocumentViewModel document = Open();
+        var tab = new object();
+        var landed = new List<CanvasOperationOutcome>();
+        document.SeatSelectionSilently("a");
+
+        CanvasMutationOperation? group = document.CanvasNewGroup(
+            "Q3", owner: tab, completion: landed.Add);
+
+        Assert.NotNull(group);
+        Assert.Same(tab, group.Owner);
+        Assert.Contains(CanvasOperationOutcome.Installed, landed);
+
+        document.SeatSelectionSilently("a");
+        CanvasMutationOperation? moved = document.CanvasMoveIntoGroup("grp");
+        Assert.NotNull(moved);
+        Assert.Same(document, moved.Owner);
+
+        Assert.NotNull(document.CanvasAddFileCard("note.md", null, owner: tab));
+        Assert.NotNull(document.CanvasAddLinkCard("https://example.org/x", owner: tab));
+        Assert.NotNull(document.CanvasLocateFile("a", "other.md", owner: tab));
+        Assert.NotNull(document.CanvasEditConnection(
+            "e1", "again", CanvasConnectionDirection.Both, owner: tab));
+        Assert.NotNull(document.CanvasDeleteConnection("e1", owner: tab));
+
+        // The openers' refusals answer null, the sentence spoken.
+        _announced.Clear();
+        Assert.Null(document.CanvasDeleteConnection("ghost"));
+        Assert.Contains(_announced, s => s.Text.Contains("no connections", StringComparison.OrdinalIgnoreCase));
+        Assert.Null(document.CanvasMoveIntoGroup("ghost"));
+        document.Shutdown();
+    }
+
+    /// <summary>§G2 TG2-0 (G2-2, IG2-21): every front-door verb whose
+    /// preparation queries the session CATCHES its own refusal inside
+    /// the prepare lambda — the funnel's transaction catches only the
+    /// apply's exception, so a placement or lookup that throws would
+    /// otherwise escape the gate. Pinned as a SOURCE census: no session
+    /// fault is inducible from a real vault (an unknown anchor does not
+    /// throw — core places anyway), so the clause is asserted on the
+    /// verbs' text, the way the chord scrape asserts the navigator's.</summary>
+    [Fact]
+    public void EveryQueryingFrontDoorPrepareCatchesItsOwnRefusal()
+    {
+        CSharpSource source = CSharpSource.Load("Canvas", "CanvasDocumentViewModel.cs");
+        foreach (string verb in (string[])["CanvasNewGroup", "CanvasMoveIntoGroup", "CanvasAddFileCard", "CanvasAddLinkCard"])
+        {
+            Microsoft.CodeAnalysis.SyntaxNode method = source.Method(verb);
+            var catches = method.DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.CatchClauseSyntax>()
+                .Where(c => c.Declaration?.Type.ToString() == "VaultException")
+                .ToArray();
+            Assert.True(catches.Length >= 1, verb + " prepares without catching VaultException");
+            Assert.Contains("CanvasActionFailed", catches[0].Block.ToString());
+            Assert.Contains("return null", catches[0].Block.ToString());
+        }
+    }
+
+    /// <summary>§G2 TG2-0 (G2-3): the surfaced verbs' openers over the
+    /// selection — Set Color and Edit Card Text refuse
+    /// NothingSelected, Rename Group refuses NotAGroup on a card and on
+    /// nothing — each before any sheet.</summary>
+    [Fact]
+    public void TheSurfacedVerbsOpenersRefuseBeforeAnySheet()
+    {
+        CanvasDocumentViewModel document = Open();
+        int colorRequests = 0;
+        int renameRequests = 0;
+        int editorRequests = 0;
+        document.SetColorRequested += () => colorRequests++;
+        document.GroupRenameRequested += (_, _) => renameRequests++;
+        document.CardEditorRequested += _ => editorRequests++;
+        // Load seats the landing selection (A14); the openers are
+        // exercised over NO selection first.
+        document.Selection.Selected = null;
+        _announced.Clear();
+
+        document.RequestSetColor();
+        document.RequestGroupRenameForSelection();
+        document.RequestCardEditorForSelection();
+
+        Assert.Equal(0, colorRequests + renameRequests + editorRequests);
+        Assert.Equal(
+            2, _announced.Count(s => s.Text.Contains("Nothing selected", StringComparison.Ordinal)));
+        Assert.Contains(_announced, s => s.Text.Contains("not a group", StringComparison.OrdinalIgnoreCase));
+
+        document.SeatSelectionSilently("a");
+        _announced.Clear();
+        document.RequestGroupRenameForSelection();
+        Assert.Equal(0, renameRequests);
+        Assert.Contains(_announced, s => s.Text.Contains("not a group", StringComparison.OrdinalIgnoreCase));
+
+        document.RequestSetColor();
+        document.RequestCardEditorForSelection();
+        Assert.Equal(1, colorRequests);
+        Assert.Equal(1, editorRequests);
+        document.SeatSelectionSilently("grp");
+        document.RequestGroupRenameForSelection();
+        Assert.Equal(1, renameRequests);
+        document.Shutdown();
     }
 
     /// <summary>New Group: core's group defaults at the anchor, the

@@ -1089,6 +1089,223 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.delete",
+      "label": "Canvas: Delete Selection",
+      "section": "Canvas",
+      "hint": "Delete the selected card, or ungroup the selected group keeping its cards. Undo with Ctrl+Z.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.editCard",
+      "label": "Canvas: Edit Card Text…",
+      "section": "Canvas",
+      "hint": "Open the selected text card in the editor. Escape saves and returns.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.renameGroup",
+      "label": "Canvas: Rename Group…",
+      "section": "Canvas",
+      "hint": "Rename the selected group — group labels are the skeleton of the reading order.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.setColor",
+      "label": "Canvas: Set Color…",
+      "section": "Canvas",
+      "hint": "Color the selected card by name: red, orange, yellow, green, cyan, or purple.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.clearColor",
+      "label": "Canvas: Clear Color",
+      "section": "Canvas",
+      "hint": "Remove the selected card's color.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.newGroup",
+      "label": "Canvas: New Group…",
+      "section": "Canvas",
+      "hint": "Create a labeled group next to the selection.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.addLink",
+      "label": "Canvas: Add Link Card…",
+      "section": "Canvas",
+      "hint": "Paste or type a URL; a link card is placed next to your selection.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.moveIntoGroup",
+      "label": "Canvas: Move into Group…",
+      "section": "Canvas",
+      "hint": "Move the selected card inside a group by name — no dragging or coordinates.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.editConnection",
+      "label": "Canvas: Edit Connection…",
+      "section": "Canvas",
+      "hint": "Change one of the selected card's connection labels or direction.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.deleteConnection",
+      "label": "Canvas: Delete Connection…",
+      "section": "Canvas",
+      "hint": "Delete one of the selected card's connections. Undo with Ctrl+Z.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.addNote",
+      "label": "Canvas: Add Note to Canvas…",
+      "section": "Canvas",
+      "hint": "Pick a vault note; a file card is placed next to your selection.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.addMedia",
+      "label": "Canvas: Add Media…",
+      "section": "Canvas",
+      "hint": "Pick a vault media file; a file card is placed next to your selection.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.locateFile",
+      "label": "Canvas: Locate File…",
+      "section": "Canvas",
+      "hint": "Repoint the selected file card at a different vault file.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.removeFromGroup",
+      "label": "Canvas: Remove from Group",
+      "section": "Canvas",
+      "hint": "Move the selected card out of its enclosing group, placed by the engine.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.createConnectedCard",
+      "label": "Canvas: Create Connected Card",
+      "section": "Canvas",
+      "hint": "New text card below the selection, already connected, ready to type.",
+      "macChord": "⌃⌥⌘N",
+      "mac": "Control Option Command N",
+      "windows": "Ctrl+Alt+Shift+N",
+      "windowsSpoken": "Control Alt Shift N",
+      "scope": "Canvas",
+      "registered": true,
+      "divergence": "mac's ⌃⌥⌘N; the modifier rule maps it onto Ctrl+Alt+N, which New Card owns (mac's ⌥⌘N), so Shift disambiguates — the spec's §7 allocation, free on Windows."
+    },
+    {
+      "id": "slate.canvas.createConnectedCardDirectional",
+      "label": "Canvas: Create Connected Card (Choose Direction)…",
+      "section": "Canvas",
+      "hint": "Pick the side first, then the connected card is created there.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.duplicate",
+      "label": "Canvas: Duplicate",
+      "section": "Canvas",
+      "hint": "Duplicate the selected card or the marked set — one action, one undo.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.convertToNote",
+      "label": "Canvas: Convert Card to Note…",
+      "section": "Canvas",
+      "hint": "Create a vault note from the text card; the card then points at it.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.connectMode",
       "label": "Canvas: Connect Mode",
       "section": "Canvas",
@@ -2171,6 +2388,57 @@
           "apps/slate-windows/tests/SlateWindows.Tests/CanvasModeControllerTests.cs#TheEscapeLadderConsumesExactlyOneRungPerPress",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean"
         ]
+      },
+      "canvasMutations": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#CanvasDeleteSelection",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#CanvasConvertToNote",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasMutationOperation.cs#CanvasMutationOperation",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasPromptViewModel.cs#CanvasPromptViewModel",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasVaultFilePickerViewModel.cs#CanvasVaultFilePickerViewModel",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasNoteCreation.cs#ICanvasNoteCreator",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasContextMenuPlan.cs#CanvasContextDispatch",
+          "apps/slate-windows/src/SlateWindows/Canvas/WorkspaceViewModel.Canvas.cs#CanvasNewGroupCommand",
+          "apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.cs#CreateCanvasCommand",
+          "apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs#CanvasRows"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#UndoAndRedoVerbsRestoreBytesAndSpeakTheHistorySentence",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#EveryReachableGuardExitSpeaksItsCell",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs#ConvertWritesTheNoteThenRetargetsAndUndoKeepsTheNote",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs#DeleteConnectionFollowsMacsCardinalityAndNamesTheOtherEndpoint",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasContextMenuTests.cs#TheOutlineMenuEqualsThePlan",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasAuthoring_NewCanvasCardEditorAndUndo_AreReachable"
+        ]
+      },
+      "canvasModes": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasModeController.cs#CanvasModeController",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#CanvasPlaceSet",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasNavigator.cs#CanvasNavigator",
+          "apps/slate-windows/src/SlateWindows/Canvas/WorkspaceViewModel.Canvas.cs#CanvasMoveModeCommand",
+          "apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs#CanvasRows"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#ConnectModeConnectsTheReadersCard",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#StagedConnectAppliesOnceWithEveryParameterSpelled",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasModeControllerTests.cs#M2_CommitRunsTheEffectAndSpeaksItsConfirmation",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasModes_MoveResizeAndConnectPicker_AreReachable"
+        ]
+      },
+      "canvasMarks": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#ToggleMark",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#SubmitBulkMarked",
+          "apps/slate-windows/src/SlateWindows/Canvas/WorkspaceViewModel.Canvas.cs#CanvasToggleMarkCommand",
+          "apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs#CanvasRows"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#ToggleMarkPublishesTheAuthorityAndSpeaksTheLiveCount",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#DeleteMarkedIsOneActionAndUndoRestoresIt",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#ColorMarkedKeepsTheMarks",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable"
+        ]
       }
     },
     "commands": {
@@ -2300,7 +2568,46 @@
       "slate.canvas.followConnectionBack": "canvasNavigator",
       "slate.canvas.tracePath": "canvasNavigator",
       "slate.canvas.filterCards": "canvasNavigator",
-      "slate.canvas.clearFilter": "canvasNavigator"
+      "slate.canvas.clearFilter": "canvasNavigator",
+      "slate.canvas.delete": "canvasMutations",
+      "slate.canvas.editCard": "canvasMutations",
+      "slate.canvas.renameGroup": "canvasMutations",
+      "slate.canvas.setColor": "canvasMutations",
+      "slate.canvas.clearColor": "canvasMutations",
+      "slate.canvas.newGroup": "canvasMutations",
+      "slate.canvas.addLink": "canvasMutations",
+      "slate.canvas.moveIntoGroup": "canvasMutations",
+      "slate.canvas.editConnection": "canvasMutations",
+      "slate.canvas.deleteConnection": "canvasMutations",
+      "slate.canvas.addNote": "canvasMutations",
+      "slate.canvas.addMedia": "canvasMutations",
+      "slate.canvas.locateFile": "canvasMutations",
+      "slate.canvas.removeFromGroup": "canvasMutations",
+      "slate.canvas.createConnectedCard": "canvasMutations",
+      "slate.canvas.createConnectedCardDirectional": "canvasMutations",
+      "slate.canvas.duplicate": "canvasMutations",
+      "slate.canvas.convertToNote": "canvasMutations",
+      "slate.canvas.newCard": "canvasMutations",
+      "slate.file.newCanvas": "canvasMutations",
+      "slate.canvas.moveMode": "canvasModes",
+      "slate.canvas.resizeMode": "canvasModes",
+      "slate.canvas.connectMode": "canvasModes",
+      "slate.canvas.commitMode": "canvasModes",
+      "slate.canvas.cancelMode": "canvasModes",
+      "slate.canvas.placeBelow": "canvasModes",
+      "slate.canvas.placeRightOf": "canvasModes",
+      "slate.canvas.placeAbove": "canvasModes",
+      "slate.canvas.placeLeftOf": "canvasModes",
+      "slate.canvas.alignWith": "canvasModes",
+      "slate.canvas.connectTo": "canvasModes",
+      "slate.canvas.resizeDefaultSize": "canvasModes",
+      "slate.canvas.resizeFitContent": "canvasModes",
+      "slate.canvas.toggleMark": "canvasMarks",
+      "slate.canvas.showMarks": "canvasMarks",
+      "slate.canvas.clearMarks": "canvasMarks",
+      "slate.canvas.deleteMarked": "canvasMarks",
+      "slate.canvas.groupMarked": "canvasMarks",
+      "slate.canvas.colorMarked": "canvasMarks"
     },
     "issues": {
       "#720": "vault",

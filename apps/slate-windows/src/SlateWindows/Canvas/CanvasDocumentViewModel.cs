@@ -2288,7 +2288,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// `canvas_constants`, no hint), landing selected. Preparation
     /// runs under the gate and the lease; the confirmation speaks
     /// core's relative phrase.</summary>
-    public void CanvasNewCard()
+    public void CanvasNewCard(object? owner = null)
     {
         if (_slot.Current.Loaded is not { } basis)
         {
@@ -2297,10 +2297,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
         var operation = new CanvasMutationOperation(
             new CanvasOperationId("new card"),
-            this,
+            owner ?? this,
             Selection.Selected,
             basis,
             CanvasMutationEffect.SelectCreated);
+        // §G2 TG2-4 (E4, IG2-53): New Card LANDS IN THE EDITOR through
+        // TE-4's receipt — the promise §E recorded and never wired.
+        OpenEditorOnLanding(operation, null);
         CanvasRelativeDesc? relative = null;
         _ = Funnel.Apply(
             operation,
@@ -2382,11 +2385,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
         if (row.Kind == "group")
         {
-            // UNREACHABLE from the surfaces (§E TE-11c): the grid's
-            // Delete gates on kind, the context-menu plan omits Delete
-            // on groups (ED-3 - the group's one removal is Ungroup),
-            // and the chord path seats through the same rows. A guard,
-            // not a cell.
+            // §G2 TG2-1 (G2-7, IG2-51): the palette's Delete on a group is
+            // E8's and ED-3's Ungroup-or-Cancel confirmation — the row
+            // surfaces keep their own Ungroup row (TE-8), this is the
+            // generic verb's door, never a silent return.
+            UngroupConfirmRequested?.Invoke(selected, row.Title);
             return;
         }
         var operation = new CanvasMutationOperation(
@@ -2413,48 +2416,66 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>§E TE-5c: New Group — the label arrives as a
     /// parameter (the prompt sheet is TE-7's); geometry from core's
     /// group defaults at the selection anchor.</summary>
-    public void CanvasNewGroup(string label)
+    public CanvasMutationOperation? CanvasNewGroup(
+        string? label, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
-        ArgumentNullException.ThrowIfNull(label);
+        // §G2 TG2-1 (G2D-11): a null label is mac's unlabeled group, spoken
+        // "Untitled"; the op carries the null and core names the frame.
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("new group"), this, Selection.Selected,
-            basis, CanvasMutationEffect.SelectCreated);
+            new CanvasOperationId("new group"), owner ?? this, Selection.Selected,
+            basis, CanvasMutationEffect.SelectCreated)
+        {
+            Completion = completion,
+        };
         CanvasRelativeDesc? relative = null;
-        _ = Funnel.Apply(
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             handle =>
             {
-                CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
-                CanvasPlacement placement = _session.CanvasPlaceNew(
-                    handle, operation.Anchor,
-                    constants.DefaultGroupW, constants.DefaultGroupH, null, []);
-                relative = placement.Relative;
-                string id = SlateUniffiMethods.CanvasNewId();
-                operation.CreatedId = id;
-                return new CanvasAction(
-                    $"create group \"{label}\"",
-                    [
-                        new CanvasOp.CreateGroup(
-                            id, label, placement.X, placement.Y,
-                            constants.DefaultGroupW, constants.DefaultGroupH, null),
-                    ]);
+                // §G2 TG2-0 (G2-2): every action-determining query runs
+                // HERE, on the basis, under the gate — and catches its
+                // own refusal, because the funnel's transaction catches
+                // only the apply's.
+                try
+                {
+                    CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                    CanvasPlacement placement = _session.CanvasPlaceNew(
+                        handle, operation.Anchor,
+                        constants.DefaultGroupW, constants.DefaultGroupH, null, []);
+                    relative = placement.Relative;
+                    string id = SlateUniffiMethods.CanvasNewId();
+                    operation.CreatedId = id;
+                    return new CanvasAction(
+                        $"create group \"{label ?? "Untitled"}\"",
+                        [
+                            new CanvasOp.CreateGroup(
+                                id, label, placement.X, placement.Y,
+                                constants.DefaultGroupW, constants.DefaultGroupH, null),
+                        ]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.NewGroup, e.Message));
+                    return null;
+                }
             },
-            $"create group \"{label}\"",
-            confirm: () => new CanvasA11yEvent.CanvasCreated("group", label, relative!));
+            $"create group \"{label ?? "Untitled"}\"",
+            confirm: () => new CanvasA11yEvent.CanvasCreated("group", label ?? "Untitled", relative!));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Rename Group — the real op (IE-23's round-1
     /// catch: never SetNodeContent on a group).</summary>
     public CanvasMutationOperation? CanvasRenameGroup(
-        string groupId, string label, Action<CanvasOperationOutcome>? completion = null)
+        string groupId, string? label, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(groupId);
-        ArgumentNullException.ThrowIfNull(label);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
@@ -2469,10 +2490,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             _ => new CanvasAction(
-                $"rename group to \"{label}\"",
+                $"rename group to \"{label ?? "Untitled"}\"",
                 [new CanvasOp.RenameGroup(groupId, label)]),
-            $"rename group to \"{label}\"",
-            confirm: () => new CanvasA11yEvent.CanvasRenamedGroup(label));
+            $"rename group to \"{label ?? "Untitled"}\"",
+            confirm: () => new CanvasA11yEvent.CanvasRenamedGroup(label ?? "Untitled"));
         return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
@@ -2515,13 +2536,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// — and an occupied inset — refuse audibly with the group's
     /// label, from PREPARATION, inside the gate; nothing
     /// half-happens (the mac twin, verb for verb).</summary>
-    public void CanvasMoveIntoGroup(string groupId)
+    public CanvasMutationOperation? CanvasMoveIntoGroup(
+        string groupId, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(groupId);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         if (Selection.Selected is not { } selected
             || basis.Population.SceneByNode.GetValueOrDefault(selected)
@@ -2529,58 +2551,71 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             Speak(new CanvasA11yEvent.CanvasStatus(
                 new CanvasStatusNote.NothingSelected()));
-            return;
+            return null;
         }
         if (!_rows.TryGetValue(groupId, out CanvasOutlineRow? group))
         {
             Speak(new CanvasA11yEvent.CanvasStatus(
                 new CanvasStatusNote.NotAGroup()));
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("move into group"), this, selected,
-            basis, CanvasMutationEffect.KeepSelection);
-        _ = Funnel.Apply(
+            new CanvasOperationId("move into group"), owner ?? this, selected,
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             handle =>
             {
-                CanvasInsideGroupPlacement placement = _session.CanvasPlaceInsideGroup(
-                    handle, groupId, node.Width, node.Height, [selected]);
-                double x;
-                double y;
-                switch (placement)
+                try
                 {
-                    case CanvasInsideGroupPlacement.Placed placed:
-                        (x, y) = (placed.X, placed.Y);
-                        break;
-                    case CanvasInsideGroupPlacement.TooSmall inset
-                        when _session.CanvasCheckOverlap(
-                            handle,
-                            new CanvasRect(inset.X, inset.Y, node.Width, node.Height),
-                            [selected]).Length == 0:
-                        (x, y) = (inset.X, inset.Y);
-                        break;
-                    default:
-                        Speak(new CanvasA11yEvent.CanvasBlocked(
-                            new CanvasBlockedReason.NoFreeSpaceInGroup(group.Title)));
-                        return null;
+                    CanvasInsideGroupPlacement placement = _session.CanvasPlaceInsideGroup(
+                        handle, groupId, node.Width, node.Height, [selected]);
+                    double x;
+                    double y;
+                    switch (placement)
+                    {
+                        case CanvasInsideGroupPlacement.Placed placed:
+                            (x, y) = (placed.X, placed.Y);
+                            break;
+                        case CanvasInsideGroupPlacement.TooSmall inset
+                            when _session.CanvasCheckOverlap(
+                                handle,
+                                new CanvasRect(inset.X, inset.Y, node.Width, node.Height),
+                                [selected]).Length == 0:
+                            (x, y) = (inset.X, inset.Y);
+                            break;
+                        default:
+                            Speak(new CanvasA11yEvent.CanvasBlocked(
+                                new CanvasBlockedReason.NoFreeSpaceInGroup(group.Title)));
+                            return null;
+                    }
+                    return new CanvasAction(
+                        $"move \"{TitleOf(selected)}\" into \"{group.Title}\"",
+                        [
+                            new CanvasOp.UpdateNodeGeometry(
+                                selected, x, y, node.Width, node.Height),
+                        ]);
                 }
-                return new CanvasAction(
-                    $"move \"{TitleOf(selected)}\" into \"{group.Title}\"",
-                    [
-                        new CanvasOp.UpdateNodeGeometry(
-                            selected, x, y, node.Width, node.Height),
-                    ]);
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.MoveIntoGroup, e.Message));
+                    return null;
+                }
             },
             "move into group",
             confirm: () => new CanvasA11yEvent.CanvasMovedIntoGroup(group.Title));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Set Color — a preset "1".."6", a validated
     /// hex, or null to clear (the picker's field owns the invalid-hex
     /// error surface; an invalid value never reaches the funnel).</summary>
     public CanvasMutationOperation? CanvasSetColor(
-        string? color, Action<CanvasOperationOutcome>? completion = null)
+        string? color, Action<CanvasOperationOutcome>? completion = null, object? owner = null)
     {
         if (_slot.Current.Loaded is not { } basis)
         {
@@ -2600,7 +2635,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("set color"), this, selected,
+            new CanvasOperationId("set color"), owner ?? this, selected,
             basis, CanvasMutationEffect.KeepSelection)
         {
             Completion = completion,
@@ -2676,21 +2711,22 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// end-style mappings ONLY; sides and color PRESERVED from the
     /// scene edge (the mac twin's rule: never recompute what the
     /// author placed).</summary>
-    public void CanvasEditConnection(
-        string edgeId, string? label, CanvasConnectionDirection direction)
+    public CanvasMutationOperation? CanvasEditConnection(
+        string edgeId, string? label, CanvasConnectionDirection direction,
+        object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(edgeId);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         CanvasSceneEdge? edge =
             basis.Population.SceneEdges.FirstOrDefault(e => e.EdgeId == edgeId);
         if (edge is null)
         {
             Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoConnections()));
-            return;
+            return null;
         }
         (CanvasEndStyle fromEnd, CanvasEndStyle toEnd) = direction switch
         {
@@ -2703,9 +2739,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             _ => (CanvasEndStyle.Arrow, CanvasEndStyle.None),
         };
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("edit connection"), this, edgeId,
-            basis, CanvasMutationEffect.KeepSelection);
-        _ = Funnel.Apply(
+            new CanvasOperationId("edit connection"), owner ?? this, edgeId,
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             _ => new CanvasAction(
                 "edit connection",
@@ -2716,28 +2755,80 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 ]),
             "edit connection",
             confirm: () => new CanvasA11yEvent.CanvasConnectionUpdated(label));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
+    /// <summary>§G2 TG2-2 (IG2-13): Delete Connection from the SELECTED-
+    /// RELATIVE neighbor — the sentence names the other endpoint and the
+    /// direction as the reader sees them; the edge is re-validated as
+    /// that card's neighbor before anything applies.</summary>
+    public CanvasMutationOperation? CanvasDeleteConnection(
+        CanvasNeighbor neighbor, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
+    {
+        ArgumentNullException.ThrowIfNull(neighbor);
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        if (Selection.Selected is not { } selected
+            || NeighborsIfKnown(selected)?.Any(n => n.EdgeId == neighbor.EdgeId) != true)
+        {
+            SpeakNoConnections();
+            return null;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("delete connection"), owner ?? this, neighbor.EdgeId,
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            _ => new CanvasAction(
+                "delete connection",
+                [new CanvasOp.DeleteEdge(neighbor.EdgeId)]),
+            "delete connection",
+            confirm: () => new CanvasA11yEvent.CanvasDeleted(
+                new CanvasDeleteTarget.Connection(
+                    neighbor.Direction, neighbor.OtherTitle, neighbor.Label),
+                _verbosity(),
+                CanvasPhrase.UndoChord));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Delete Connection — the lookup runs BEFORE
     /// the apply and a miss refuses AUDIBLY (0a-2's rule: the mac
     /// trailing-space sentence is unreachable by construction).</summary>
-    public void CanvasDeleteConnection(string edgeId)
+    public CanvasMutationOperation? CanvasDeleteConnection(
+        string edgeId, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(edgeId);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
+        }
+        // §G2 TG2-2: the selected card's own connection speaks from the
+        // neighbor; a row-less caller naming another edge keeps the
+        // edge-coordinate sentence.
+        if (Selection.Selected is { } selected
+            && NeighborsIfKnown(selected)?.FirstOrDefault(n => n.EdgeId == edgeId) is { } own)
+        {
+            return CanvasDeleteConnection(own, owner, completion);
         }
         if (basis.Population.SceneEdges.All(e => e.EdgeId != edgeId))
         {
             Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoConnections()));
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("delete connection"), this, edgeId,
-            basis, CanvasMutationEffect.KeepSelection);
-        _ = Funnel.Apply(
+            new CanvasOperationId("delete connection"), owner ?? this, edgeId,
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             _ => new CanvasAction(
                 "delete connection",
@@ -2761,118 +2852,153 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     _verbosity(),
                     CanvasPhrase.UndoChord);
             });
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Add Note / Add Media — a file card at
     /// core's placement; the vault picker (TE-6) supplies the path,
     /// kinds and labels are core's (`media_class` via the row).</summary>
-    public void CanvasAddFileCard(string path, string? subpath)
+    public CanvasMutationOperation? CanvasAddFileCard(
+        string path, string? subpath, object? owner = null,
+        Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(path);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("add file card"), this, Selection.Selected,
-            basis, CanvasMutationEffect.SelectCreated);
+            new CanvasOperationId("add file card"), owner ?? this, Selection.Selected,
+            basis, CanvasMutationEffect.SelectCreated)
+        {
+            Completion = completion,
+        };
         CanvasRelativeDesc? relative = null;
-        _ = Funnel.Apply(
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             handle =>
             {
-                CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
-                CanvasPlacement placement = _session.CanvasPlaceNew(
-                    handle, operation.Anchor,
-                    constants.DefaultCardW, constants.DefaultCardH, null, []);
-                relative = placement.Relative;
-                string id = SlateUniffiMethods.CanvasNewId();
-                operation.CreatedId = id;
-                return new CanvasAction(
-                    $"add \"{path}\"",
-                    [
-                        new CanvasOp.CreateNode(
-                            id, new CanvasNodeContent.File(path, subpath),
-                            placement.X, placement.Y,
-                            constants.DefaultCardW, constants.DefaultCardH, null),
-                    ]);
+                try
+                {
+                    CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                    CanvasPlacement placement = _session.CanvasPlaceNew(
+                        handle, operation.Anchor,
+                        constants.DefaultCardW, constants.DefaultCardH, null, []);
+                    relative = placement.Relative;
+                    string id = SlateUniffiMethods.CanvasNewId();
+                    operation.CreatedId = id;
+                    return new CanvasAction(
+                        $"add \"{path}\"",
+                        [
+                            new CanvasOp.CreateNode(
+                                id, new CanvasNodeContent.File(path, subpath),
+                                placement.X, placement.Y,
+                                constants.DefaultCardW, constants.DefaultCardH, null),
+                        ]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.Create, e.Message));
+                    return null;
+                }
             },
             $"add \"{path}\"",
             confirm: () => new CanvasA11yEvent.CanvasCreated(
                 RowKindOf(operation.CreatedId),
                 PublishedTitleOf(operation.CreatedId),
                 relative!));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Add Link Card — the URL prompt's commit;
     /// an unparseable URL refuses audibly and never reaches the
     /// funnel (the NotAUrl arm).</summary>
-    public void CanvasAddLinkCard(string url)
+    public CanvasMutationOperation? CanvasAddLinkCard(
+        string url, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(url);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? parsed)
             || parsed.Scheme is not ("http" or "https"))
         {
             Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.NotAUrl()));
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("add link card"), this, Selection.Selected,
-            basis, CanvasMutationEffect.SelectCreated);
+            new CanvasOperationId("add link card"), owner ?? this, Selection.Selected,
+            basis, CanvasMutationEffect.SelectCreated)
+        {
+            Completion = completion,
+        };
         CanvasRelativeDesc? relative = null;
-        _ = Funnel.Apply(
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             handle =>
             {
-                CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
-                CanvasPlacement placement = _session.CanvasPlaceNew(
-                    handle, operation.Anchor,
-                    constants.DefaultCardW, constants.DefaultCardH, null, []);
-                relative = placement.Relative;
-                string id = SlateUniffiMethods.CanvasNewId();
-                operation.CreatedId = id;
-                return new CanvasAction(
-                    "add link card",
-                    [
-                        new CanvasOp.CreateNode(
-                            id, new CanvasNodeContent.Link(url),
-                            placement.X, placement.Y,
-                            constants.DefaultCardW, constants.DefaultCardH, null),
-                    ]);
+                try
+                {
+                    CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                    CanvasPlacement placement = _session.CanvasPlaceNew(
+                        handle, operation.Anchor,
+                        constants.DefaultCardW, constants.DefaultCardH, null, []);
+                    relative = placement.Relative;
+                    string id = SlateUniffiMethods.CanvasNewId();
+                    operation.CreatedId = id;
+                    return new CanvasAction(
+                        "add link card",
+                        [
+                            new CanvasOp.CreateNode(
+                                id, new CanvasNodeContent.Link(url),
+                                placement.X, placement.Y,
+                                constants.DefaultCardW, constants.DefaultCardH, null),
+                        ]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.Create, e.Message));
+                    return null;
+                }
             },
             "add link card",
             confirm: () => new CanvasA11yEvent.CanvasCreated(
                 "link", PublishedTitleOf(operation.CreatedId), relative!));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Locate File — repoint a missing-target file
     /// card (the card stayed navigable throughout, t0 §5); the vault
     /// picker (TE-6) supplies the replacement path.</summary>
-    public void CanvasLocateFile(string nodeId, string newPath)
+    public CanvasMutationOperation? CanvasLocateFile(
+        string nodeId, string newPath, object? owner = null,
+        Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(nodeId);
         ArgumentNullException.ThrowIfNull(newPath);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return null;
         }
         if (!_rows.ContainsKey(nodeId))
         {
             Speak(new CanvasA11yEvent.CanvasStatus(
                 new CanvasStatusNote.NothingSelected()));
-            return;
+            return null;
         }
         var operation = new CanvasMutationOperation(
-            new CanvasOperationId("locate file"), this, nodeId,
-            basis, CanvasMutationEffect.KeepSelection);
-        _ = Funnel.Apply(
+            new CanvasOperationId("locate file"), owner ?? this, nodeId,
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             _ => new CanvasAction(
                 $"repoint \"{TitleOf(nodeId)}\"",
@@ -2883,6 +3009,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             $"repoint \"{TitleOf(nodeId)}\"",
             confirm: () => new CanvasA11yEvent.CanvasCardRetargeted(
                 TitleOf(nodeId), newPath));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-7: the editor factory — one locked seed read
@@ -3191,6 +3318,829 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// COMMIT verb shipped in §E; this is its front door.</summary>
     internal event Action<string, string>? GroupRenameRequested;
 
+    /// <summary>§G2 TG2-1 (G2-7): a group's Delete asks — the workspace
+    /// presents the Ungroup-or-Cancel confirmation (group id, title).</summary>
+    internal event Action<string, string>? UngroupConfirmRequested;
+
+    /// <summary>§G2 TG2-1 (G2-2): New Group…'s front door — mac's opener
+    /// admits first, so a document that is not ready speaks that and
+    /// presents nothing.</summary>
+    internal event Action<CanvasPromptContext>? NewGroupRequested;
+
+    internal void RequestNewGroup(object? owner = null)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        NewGroupRequested?.Invoke(new CanvasPromptContext(owner, loaded, Selection.Selected));
+    }
+
+    /// <summary>§G2 TG2-1 (G2-5): Add Link Card…'s front door, the same
+    /// admit-then-present shape (mac's canvasOpenAddLink).</summary>
+    internal event Action<CanvasPromptContext>? AddLinkRequested;
+
+    internal void RequestAddLink(object? owner = null)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        AddLinkRequested?.Invoke(new CanvasPromptContext(owner, loaded, Selection.Selected));
+    }
+
+    /// <summary>§G2 TG2-2 (G2-5): Move into Group…'s front door — not-ready,
+    /// then the selection, then EVERY group in reading order (mac includes
+    /// the current one); none refuses NoGroups and presents nothing.</summary>
+    internal event Action<CanvasPromptContext, IReadOnlyList<CanvasOutlineRow>>? MoveIntoGroupRequested;
+
+    internal void RequestMoveIntoGroup(object? owner = null)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        if (Selection.Selected is not { } selected || !_rows.ContainsKey(selected))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        var groups = Outline.Where(row => row.Kind == "group").ToList();
+        if (groups.Count == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoGroups()));
+            return;
+        }
+        MoveIntoGroupRequested?.Invoke(new CanvasPromptContext(owner, loaded, selected), groups);
+    }
+
+    /// <summary>§G2 TG2-2 (G2-5, IG2-11, IG2-46): the connection verbs'
+    /// front doors — not-ready, the selection, then the NULLABLE neighbor
+    /// read: null (the query could not answer) speaks the read refusal,
+    /// empty speaks NoConnections, ONE routes directly (mac's rule), MANY
+    /// present the picker.</summary>
+    internal event Action<CanvasPromptContext, IReadOnlyList<CanvasNeighbor>, bool>? PickConnectionRequested;
+
+    internal event Action<CanvasPromptContext, CanvasNeighbor>? EditConnectionRequested;
+
+    internal void RequestDeleteConnection(object? owner = null) => RequestConnectionVerb(owner, toDelete: true);
+
+    /// <summary>§G2 TG2-4 (G2-9, IG2-23/IG2-53): the editor-open RECEIPT —
+    /// an addressed post-publication effect, separate from the model-side
+    /// selection effect: on the INSTALLED outcome, at most once per
+    /// operation (TE-4's interlocked mark), the created card's editor is
+    /// requested for the operation's OWNER, marshalled home; the
+    /// workspace opens it only if that owner is still current.</summary>
+    internal event Action<object, string>? CreatedEditorRequested;
+
+    private void OpenEditorOnLanding(
+        CanvasMutationOperation operation, Action<CanvasOperationOutcome>? completion)
+    {
+        operation.Completion = outcome =>
+        {
+            completion?.Invoke(outcome);
+            if (outcome == CanvasOperationOutcome.Installed
+                && operation.CreatedId is { } created
+                && operation.Receipt.TryMarkEditorOpened())
+            {
+                Post(() => RaiseCreatedEditorWhenPresent(operation.Owner, created));
+            }
+        };
+    }
+
+    /// <summary>The request fires only once the created ROW is present —
+    /// the editor factory reads it. On the dispatcher the posted apply
+    /// precedes the marshalled completion, so the row is there; an
+    /// inline host can run the completion first, and then the request
+    /// waits for the next applied publication that carries the row.</summary>
+    private void RaiseCreatedEditorWhenPresent(object owner, string created)
+    {
+        if (IsShutDown)
+        {
+            return;
+        }
+        if (RowFor(created) is not null)
+        {
+            CreatedEditorRequested?.Invoke(owner, created);
+            return;
+        }
+        void Once(CanvasPublication _)
+        {
+            if (IsShutDown || RowFor(created) is null)
+            {
+                return;
+            }
+            PublicationApplied -= Once;
+            CreatedEditorRequested?.Invoke(owner, created);
+        }
+        PublicationApplied += Once;
+    }
+
+    /// <summary>§G2 TG2-4 (G2-8, R22, IG2-40): Remove from Group — the
+    /// enclosing group is core's parent query on the basis inside prepare
+    /// (a null or unresolved parent is NotInAGroup; a THROW is
+    /// NothingSelected, mac's rule), placement is the engine's anchored
+    /// on the parent with the card's own size, one geometry op.</summary>
+    public CanvasMutationOperation? CanvasRemoveFromGroup(
+        object? owner = null, Action<CanvasOperationOutcome>? completion = null)
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        if (Selection.Selected is not { } selected
+            || RowFor(selected) is not { } row
+            || basis.Population.SceneByNode.GetValueOrDefault(selected) is not { } node)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return null;
+        }
+        if (row.GroupPath.Length == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotInAGroup(row.Title)));
+            return null;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("remove from group"), owner ?? this, selected,
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        string parentTitle = string.Empty;
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                string? parentId;
+                try
+                {
+                    parentId = _session.CanvasParentOf(handle, selected);
+                }
+                catch (VaultException)
+                {
+                    // A thrown query is NOT "not in a group" — a fact the
+                    // query never returned (mac's rule at this seam).
+                    Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+                    return null;
+                }
+                if (parentId is null
+                    || basis.Population.SceneByNode.GetValueOrDefault(parentId) is not { } parent)
+                {
+                    Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotInAGroup(row.Title)));
+                    return null;
+                }
+                parentTitle = parent.Title;
+                try
+                {
+                    CanvasPlacement placement = _session.CanvasPlaceNew(
+                        handle, parentId, node.Width, node.Height, null, [selected]);
+                    return new CanvasAction(
+                        $"remove \"{row.Title}\" from \"{parent.Title}\"",
+                        [
+                            new CanvasOp.UpdateNodeGeometry(
+                                selected, placement.X, placement.Y, node.Width, node.Height),
+                        ]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.RemoveFromGroup, e.Message));
+                    return null;
+                }
+            },
+            "remove from group",
+            confirm: () => new CanvasA11yEvent.CanvasRemovedFromGroup(parentTitle));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
+    /// <summary>§G2 TG2-4 (G2-9, IG2-22): Create Connected Card — ONE action
+    /// carrying the exact tuple: a fresh text card at the engine's
+    /// placement (anchored on the origin, the direction as the hint,
+    /// excluding nothing) and a fresh edge from the ORIGIN to the NEW
+    /// card with core's auto sides over the two rects, no from-end, an
+    /// arrow to-end, no label, no color. The new card is seated and the
+    /// editor opens through the receipt — create, then type.</summary>
+    public CanvasMutationOperation? CanvasCreateConnectedCard(
+        CanvasPlaceDirection direction = CanvasPlaceDirection.Below,
+        object? owner = null,
+        Action<CanvasOperationOutcome>? completion = null)
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        if (Selection.Selected is not { } origin
+            || RowFor(origin) is not { } originRow
+            || basis.Population.SceneByNode.GetValueOrDefault(origin) is not { } originNode)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return null;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("create connected card"), owner ?? this, origin,
+            basis, CanvasMutationEffect.SelectCreated);
+        OpenEditorOnLanding(operation, completion);
+        CanvasRelativeDesc? relative = null;
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                try
+                {
+                    CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                    CanvasPlacement placement = _session.CanvasPlaceNew(
+                        handle, origin, constants.DefaultCardW, constants.DefaultCardH,
+                        direction, []);
+                    relative = placement.Relative;
+                    CanvasSidePair sides = SlateUniffiMethods.CanvasAutoSides(
+                        new CanvasRect(originNode.X, originNode.Y, originNode.Width, originNode.Height),
+                        new CanvasRect(
+                            placement.X, placement.Y, constants.DefaultCardW, constants.DefaultCardH));
+                    string id = SlateUniffiMethods.CanvasNewId();
+                    string edgeId = SlateUniffiMethods.CanvasNewId();
+                    operation.CreatedId = id;
+                    return new CanvasAction(
+                        "create connected card",
+                        [
+                            new CanvasOp.CreateNode(
+                                id, new CanvasNodeContent.Text(string.Empty),
+                                placement.X, placement.Y,
+                                constants.DefaultCardW, constants.DefaultCardH, null),
+                            new CanvasOp.AddEdge(
+                                edgeId, origin, sides.From, id, sides.To,
+                                CanvasEndStyle.None, CanvasEndStyle.Arrow, null, null),
+                        ]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.CreateConnectedCard, e.Message));
+                    return null;
+                }
+            },
+            "create connected card",
+            confirm: () => new CanvasA11yEvent.CanvasConnectedCardCreated(relative!, originRow.Title));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
+    /// <summary>§G2 TG2-5 (G2-10, IG2-25/38/39/54): Duplicate — the SEED is
+    /// captured at invocation (the marked store's epochs when non-empty,
+    /// else the selection); inside prepare, under the gate: the seed
+    /// expands TRANSITIVELY through core's children query into a visited
+    /// set, re-projects through core's reading order with EXACT set
+    /// equality demanded (a marked store whose projection is empty is
+    /// NoMarks; any other mismatch is the typed failure — nothing
+    /// partial), places the members as one rigid set with the origins'
+    /// count checked, and mints one CreateGroup or CreateNode per member
+    /// with content by kind; edges are never copied; the marks are kept;
+    /// the first copy is seated; one inverse undoes every copy. A group's
+    /// DERIVED title stands in for its raw label and unknown fields are
+    /// not carried (G2D-7 and its sibling, recorded).</summary>
+    public CanvasMutationOperation? CanvasDuplicate(
+        object? owner = null, Action<CanvasOperationOutcome>? completion = null)
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        ImmutableDictionary<string, long> snapshot = _slot.Current.MarkEpochs;
+        bool marked = snapshot.Count > 0;
+        string[] seed = marked
+            ? [.. snapshot.Keys]
+            : Selection.Selected is { } one && _rows.ContainsKey(one) ? [one] : [];
+        if (seed.Length == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return null;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("duplicate"), owner ?? this, Selection.Selected,
+            basis, CanvasMutationEffect.SelectCreated,
+            capturedMarks: marked ? snapshot : null)
+        {
+            Completion = completion,
+        };
+        int copied = 0;
+        string singleTitle = string.Empty;
+        CanvasRelativeDesc? relative = null;
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                try
+                {
+                    // The visited-set walk: a picked group brings its members,
+                    // and theirs, through core's containment (row D).
+                    // IG2-38/IG2-39: the SEED is projected first — reading order
+                    // drops a ghost silently, and core's children query throws on
+                    // one; a store of ghosts is NoMarks, a shrunk seed is the typed
+                    // failure (nothing partial), and only live ids are walked.
+                    string[] liveSeed = _session.CanvasOrderNodes(handle, seed);
+                    if (liveSeed.Length == 0 && marked)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+                        return null;
+                    }
+                    if (liveSeed.Length != seed.Length)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasActionFailed(
+                            CanvasFailedAction.Duplicate, "a member of the set no longer resolves"));
+                        return null;
+                    }
+                    var visited = new List<string>();
+                    var seen = new HashSet<string>(StringComparer.Ordinal);
+                    var pending = new Stack<string>(liveSeed.Reverse());
+                    while (pending.Count > 0)
+                    {
+                        string id = pending.Pop();
+                        if (!seen.Add(id))
+                        {
+                            continue;
+                        }
+                        visited.Add(id);
+                        foreach (string child in _session.CanvasChildrenOf(handle, id).Reverse())
+                        {
+                            pending.Push(child);
+                        }
+                    }
+                    string[] ordered = _session.CanvasOrderNodes(handle, [.. visited]);
+                    if (ordered.Length == 0 && marked)
+                    {
+                        // IG2-38: a store of ghosts — refused HERE, after admission.
+                        Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+                        return null;
+                    }
+                    if (ordered.Length != visited.Count
+                        || !ordered.ToHashSet(StringComparer.Ordinal).SetEquals(seen))
+                    {
+                        // IG2-39: reading order drops what it cannot resolve; a
+                        // shrunk projection would duplicate a SUBSET — refused.
+                        Speak(new CanvasA11yEvent.CanvasActionFailed(
+                            CanvasFailedAction.Duplicate, "a member of the set no longer resolves"));
+                        return null;
+                    }
+                    var nodes = new CanvasSceneNode[ordered.Length];
+                    var boxes = new CanvasRect[ordered.Length];
+                    for (int i = 0; i < ordered.Length; i++)
+                    {
+                        if (basis.Population.SceneByNode.GetValueOrDefault(ordered[i]) is not { } node)
+                        {
+                            Speak(new CanvasA11yEvent.CanvasActionFailed(
+                                CanvasFailedAction.Duplicate, "a member of the set has no geometry"));
+                            return null;
+                        }
+                        nodes[i] = node;
+                        boxes[i] = new CanvasRect(node.X, node.Y, node.Width, node.Height);
+                    }
+                    CanvasSetPlacement placement = _session.CanvasPlaceSet(
+                        handle, ordered[0], boxes, null, []);
+                    if (placement.Origins.Length != ordered.Length)
+                    {
+                        Speak(new CanvasA11yEvent.CanvasActionFailed(
+                            CanvasFailedAction.Duplicate, "the engine placed a different count"));
+                        return null;
+                    }
+                    relative = placement.Relative;
+                    var ops = new List<CanvasOp>(ordered.Length);
+                    for (int i = 0; i < ordered.Length; i++)
+                    {
+                        CanvasSceneNode node = nodes[i];
+                        CanvasPoint origin = placement.Origins[i];
+                        string id = SlateUniffiMethods.CanvasNewId();
+                        if (i == 0)
+                        {
+                            operation.CreatedId = id;
+                        }
+                        if (node.Kind == "group")
+                        {
+                            ops.Add(new CanvasOp.CreateGroup(
+                                id, node.Title, origin.X, origin.Y, node.Width, node.Height, node.Color));
+                            continue;
+                        }
+                        CanvasNodeContent content = node.Kind switch
+                        {
+                            "file" or "image" => new CanvasNodeContent.File(TargetOf(node.NodeId), node.Subpath),
+                            "link" => new CanvasNodeContent.Link(TargetOf(node.NodeId)),
+                            _ => new CanvasNodeContent.Text(
+                                _session.CanvasNodeText(handle, node.NodeId) ?? string.Empty),
+                        };
+                        ops.Add(new CanvasOp.CreateNode(
+                            id, content, origin.X, origin.Y, node.Width, node.Height, node.Color));
+                    }
+                    copied = ordered.Length;
+                    singleTitle = nodes[0].Title;
+                    string name = copied == 1
+                        ? $"duplicate \"{singleTitle}\""
+                        : "duplicate " + SlateUniffiMethods.CountNoun((ulong)copied, "card", "cards");
+                    return new CanvasAction(name, [.. ops]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.Duplicate, e.Message));
+                    return null;
+                }
+            },
+            "duplicate",
+            confirm: () => copied == 1
+                ? new CanvasA11yEvent.CanvasCardPlaced(CanvasPlaceVerb.Duplicated, singleTitle, relative!)
+                : new CanvasA11yEvent.CanvasBulkDuplicated((uint)copied));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
+    /// <summary>§G2 TG2-6 (G2-11, IG2-43): Convert Card to Note…'s front door
+    /// — not-ready, the selection, a text card only, no held mode; the
+    /// suggested path is mac's: the title with every slash a dash,
+    /// trimmed, "Untitled" when empty, plus .md.</summary>
+    internal event Action<CanvasPromptContext, string>? ConvertToNoteRequested;
+
+    internal void RequestConvertToNote(object? owner = null)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        if (Selection.Selected is not { } selected || RowFor(selected) is not { } row)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        if (row.Kind != "text")
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.OnlyTextCardsConvert()));
+            return;
+        }
+        if (Modes.IsActive)
+        {
+            Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.ModeBusy()));
+            return;
+        }
+        ConvertToNoteRequested?.Invoke(
+            new CanvasPromptContext(owner, loaded, selected), SuggestedNotePath(row.Title));
+    }
+
+    internal static string SuggestedNotePath(string title)
+    {
+        string stem = title.Replace("/", "-", StringComparison.Ordinal).Trim();
+        return (stem.Length == 0 ? "Untitled" : stem) + ".md";
+    }
+
+    /// <summary>§G2 TG2-6 (G2-11, IG2-26/27/41/42/55/56/58): Convert Card to
+    /// Note — ONE operation. Inside prepare, under the canvas gate: the
+    /// card's text (a throw NoteReadFailed with the message, a null the
+    /// fixed detail); the note through the sidebar's seam (Exists is
+    /// NotePathExists on disk, a refusal NoteCreateFailed, the shutdown
+    /// arm NoteCreateFailed with its own detail); a LANDED note returns
+    /// the one retarget op, and the funnel is the one arbiter after it.
+    /// The completion posts the barrier and refresh to the UI once the
+    /// note landed, whatever the canvas outcome, and speaks the
+    /// landed-note truth for every outcome that did not retarget the
+    /// card — displacement included, which the funnel keeps silent.</summary>
+    public CanvasMutationOperation? CanvasConvertToNote(
+        string nodeId,
+        string cleanPath,
+        ICanvasNoteCreator creator,
+        object? owner = null,
+        Action<CanvasOperationOutcome>? completion = null,
+        Action? noteLanded = null)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        ArgumentNullException.ThrowIfNull(cleanPath);
+        ArgumentNullException.ThrowIfNull(creator);
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        if (RowFor(nodeId) is not { } row)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return null;
+        }
+        if (row.Kind != "text")
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.OnlyTextCardsConvert()));
+            return null;
+        }
+        if (!cleanPath.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+        {
+            Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.NotePathMustEndInMd()));
+            return null;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("convert to note"), owner ?? this, nodeId,
+            basis, CanvasMutationEffect.KeepSelection);
+        bool landed = false;
+        string? caveat = null;
+        operation.Completion = outcome =>
+        {
+            completion?.Invoke(outcome);
+            if (!landed)
+            {
+                return;
+            }
+            Post(() =>
+            {
+                // IG2-55: the barrier and the refresh are UI-owned; posted
+                // ONCE the note landed, whatever the canvas outcome.
+                creator.NoteLanded(cleanPath, caveat);
+                if (outcome is not (CanvasOperationOutcome.Installed
+                    or CanvasOperationOutcome.Unindexed
+                    or CanvasOperationOutcome.RefreshRefused))
+                {
+                    // IG2-58: the note exists and the card was not retargeted —
+                    // said once, after whatever the funnel said, or alone
+                    // where the funnel is silent (displacement).
+                    SpeakNoteRetargetFailed(cleanPath);
+                }
+            });
+        };
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                string? text;
+                try
+                {
+                    text = _session.CanvasNodeText(handle, nodeId);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.NoteReadFailed(e.Message)));
+                    return null;
+                }
+                if (text is null)
+                {
+                    Speak(new CanvasA11yEvent.CanvasBlocked(
+                        new CanvasBlockedReason.NoteReadFailed("The card text is unavailable.")));
+                    return null;
+                }
+                switch (creator.TryCreateNote(cleanPath, text))
+                {
+                    case CanvasNoteCreateResult.Exists:
+                        Speak(new CanvasA11yEvent.CanvasBlocked(
+                            new CanvasBlockedReason.NotePathExists(cleanPath, true)));
+                        return null;
+                    case CanvasNoteCreateResult.Failed failed:
+                        Speak(new CanvasA11yEvent.CanvasBlocked(
+                            new CanvasBlockedReason.NoteCreateFailed(cleanPath, failed.Message)));
+                        return null;
+                    case CanvasNoteCreateResult.Unavailable:
+                        Speak(new CanvasA11yEvent.CanvasBlocked(
+                            new CanvasBlockedReason.NoteCreateFailed(cleanPath, "the vault is closing")));
+                        return null;
+                    case CanvasNoteCreateResult.Landed ok:
+                        landed = true;
+                        caveat = ok.Caveat;
+                        noteLanded?.Invoke();
+                        break;
+                }
+                return new CanvasAction(
+                    $"convert \"{row.Title}\" to note",
+                    [new CanvasOp.SetNodeContent(nodeId, new CanvasNodeContent.File(cleanPath, null))]);
+            },
+            "convert to note",
+            confirm: () => new CanvasA11yEvent.CanvasConvertedToNote(cleanPath));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
+    /// <summary>§G2 TG2-4 (G2-5): the directional variant's front door —
+    /// the selection first (mac's canvasPromptConnectedDirection), then
+    /// the direction prompt with the typed context.</summary>
+    internal event Action<CanvasPromptContext>? ConnectedDirectionRequested;
+
+    internal void RequestCreateConnectedDirection(object? owner = null)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        if (Selection.Selected is not { } selected || !_rows.ContainsKey(selected))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        ConnectedDirectionRequested?.Invoke(new CanvasPromptContext(owner, loaded, selected));
+    }
+
+    /// <summary>§G2 TG2-3 (G2-6): the vault file picker's front door for Add
+    /// Note, Add Media and Locate File. The openers speak here; the load
+    /// runs OFF the dispatcher on the document's own scheduler; a later
+    /// request supersedes an earlier load, which never presents; a
+    /// paging throw answers the verb's typed failure and presents
+    /// nothing; an empty classified set answers the purpose's refusal.</summary>
+    internal event Action<CanvasVaultPickRequest>? VaultPickerRequested;
+
+    private int _vaultPickGeneration;
+    private CanvasVaultFilePickerModel? _currentVaultPick;
+
+    internal void RequestVaultPick(CanvasVaultPickPurpose purpose, object? owner = null)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        string? target = null;
+        if (purpose == CanvasVaultPickPurpose.Locate)
+        {
+            if (Selection.Selected is not { } selected || RowFor(selected) is not { } row)
+            {
+                Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+                return;
+            }
+            // §G2 G2D-8: every file or image card (mac's later rule; the
+            // FFI carries no missing-target signal for a card).
+            if (row.Kind is not ("file" or "image"))
+            {
+                Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotAFileCard()));
+                return;
+            }
+            target = selected;
+        }
+        int generation = ++_vaultPickGeneration;
+        StartWork(() =>
+        {
+            CanvasVaultFilePickerModel? model = null;
+            string? failure = null;
+            try
+            {
+                model = BuildVaultFilePickerModel(purpose);
+            }
+            catch (VaultException e)
+            {
+                failure = e.Message;
+            }
+            Post(() =>
+            {
+                // IG2-20/IG2-49: a superseded load never presents.
+                if (generation != _vaultPickGeneration || IsShutDown)
+                {
+                    return;
+                }
+                if (failure is not null || model is null)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        purpose == CanvasVaultPickPurpose.Locate
+                            ? CanvasFailedAction.CanvasAction
+                            : CanvasFailedAction.Create,
+                        failure ?? "the vault listing did not answer"));
+                    return;
+                }
+                if (model.Classified.IsEmpty)
+                {
+                    Speak(new CanvasA11yEvent.CanvasStatus(purpose switch
+                    {
+                        CanvasVaultPickPurpose.Note => new CanvasStatusNote.NoNotesInVault(),
+                        CanvasVaultPickPurpose.Media => new CanvasStatusNote.NoMediaInVault(),
+                        _ => new CanvasStatusNote.NoFilesToPointAt(),
+                    }));
+                    return;
+                }
+                // IG2-49: the identity at load completion must still be the
+                // one the opener saw; a moved document presents nothing.
+                if (!IsCurrentLoaded(loaded))
+                {
+                    SpeakPickDifferentTarget();
+                    return;
+                }
+                _currentVaultPick = model;
+                VaultPickerRequested?.Invoke(
+                    new CanvasVaultPickRequest(purpose, target, loaded, owner, model));
+            });
+        });
+    }
+
+    /// <summary>§G2 TG2-3 (IG2-19/49): route a completed vault pick. The
+    /// request re-validates FIRST — the loaded identity and the model
+    /// generation — and a guess refuses PickDifferentTarget with the
+    /// sheet kept; then the purpose's verb runs with the request's
+    /// owner. True when routed.</summary>
+    internal bool HandleVaultPick(CanvasVaultPickRequest request, string path)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(path);
+        if (IsShutDown
+            || !IsCurrentLoaded(request.Identity)
+            || !ReferenceEquals(_currentVaultPick, request.Model)
+            || !request.Model.Admits(request.Model))
+        {
+            SpeakPickDifferentTarget();
+            return false;
+        }
+        CanvasMutationOperation? operation = request.Purpose == CanvasVaultPickPurpose.Locate
+            ? CanvasLocateFile(request.TargetId!, path, owner: request.Owner)
+            : CanvasAddFileCard(path, null, owner: request.Owner);
+        return operation is not null;
+    }
+
+    internal void RequestEditConnection(object? owner = null) => RequestConnectionVerb(owner, toDelete: false);
+
+    /// <summary>§G2 TG2-7 (G2-12): the edit for a CAPTURED edge — a context
+    /// row's, selected-relative to the seated source — straight to the
+    /// direction stage; no picker.</summary>
+    internal void RequestEditConnection(CanvasNeighbor neighbor, object? owner = null)
+    {
+        ArgumentNullException.ThrowIfNull(neighbor);
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        if (Selection.Selected is not { } selected || !_rows.ContainsKey(selected))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        EditConnectionRequested?.Invoke(new CanvasPromptContext(owner, loaded, selected), neighbor);
+    }
+
+    private void RequestConnectionVerb(object? owner, bool toDelete)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        if (Selection.Selected is not { } selected || !_rows.ContainsKey(selected))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        IReadOnlyList<CanvasNeighbor>? neighbors = NeighborsIfKnown(selected);
+        if (neighbors is null)
+        {
+            // The query could not answer: the state's refusal, else the
+            // typed not-readable — never "no connections" about a list
+            // that never came back (IG2-11).
+            Speak(new CanvasA11yEvent.CanvasStatus(
+                ReadRefusal ?? new CanvasStatusNote.NotReadable()));
+            return;
+        }
+        if (neighbors.Count == 0)
+        {
+            SpeakNoConnections();
+            return;
+        }
+        var context = new CanvasPromptContext(owner, loaded, selected);
+        if (neighbors.Count == 1)
+        {
+            if (toDelete)
+            {
+                _ = CanvasDeleteConnection(neighbors[0], owner);
+            }
+            else
+            {
+                EditConnectionRequested?.Invoke(context, neighbors[0]);
+            }
+            return;
+        }
+        PickConnectionRequested?.Invoke(context, neighbors, toDelete);
+    }
+
+    /// <summary>§G2 TG2-2: the currency half of a prompt's submit — the
+    /// loaded identity the prompt captured is still the one applied.</summary>
+    internal bool IsCurrentLoaded(CanvasLoaded identity) =>
+        ReferenceEquals(_slot.Current.Loaded, identity);
+
+    /// <summary>§G2 TG2-6: the note-path refusals a prompt may need, as
+    /// BOUNDARY methods — the prompt names the typed arm, the document's
+    /// one announcer speaks it (the announcement seam census's rule).</summary>
+    internal void SpeakNoteRetargetFailed(string path) =>
+        Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.NoteRetargetFailed(
+            path, "the note was created; the card still points at its text")));
+
+    internal void SpeakNoteCreateFailed(string path, string detail) =>
+        Speak(new CanvasA11yEvent.CanvasBlocked(new CanvasBlockedReason.NoteCreateFailed(path, detail)));
+
+    internal void SpeakPickDifferentTarget() =>
+        Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.PickDifferentTarget()));
+
+    internal void SpeakNoConnections() =>
+        Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoConnections()));
+
+    /// <summary>§G2 TG2-2 (IG2-14): a connection row's NAME through the pure
+    /// render — the same event the outline row carries and the navigator
+    /// speaks, rendered without posting.</summary>
+    internal string ConnectionRowName(CanvasNeighbor neighbor) =>
+        CanvasAnnouncer.RenderLabel(
+            new CanvasA11yEvent.CanvasConnectionTraversed(
+                Direction: neighbor.Direction,
+                KindLabel: RowFor(neighbor.OtherNode)?.Kind ?? "text",
+                Title: neighbor.OtherTitle,
+                Label: neighbor.Label));
+
+    internal CanvasSceneEdge? SceneEdgeFor(string edgeId) =>
+        _slot.Current.Loaded?.Population.SceneEdges.FirstOrDefault(e => e.EdgeId == edgeId);
+
     internal void RequestGroupRename(string groupId)
     {
         ArgumentNullException.ThrowIfNull(groupId);
@@ -3201,7 +4151,44 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// on the selection, mac's shape.</summary>
     internal event Action? SetColorRequested;
 
-    internal void RequestSetColor() => SetColorRequested?.Invoke();
+    internal void RequestSetColor()
+    {
+        // §G2 TG2-0 (G2-3): the opener refuses before any sheet — mac's
+        // canvasSetColor tests the selection first.
+        if (Selection.Selected is null)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        SetColorRequested?.Invoke();
+    }
+
+    /// <summary>§G2 TG2-0 (G2-3): Rename Group's front door over the
+    /// SELECTION — an absent selection or a non-group answers
+    /// <c>NotAGroup</c> before any sheet (mac's canvasRenameGroup).</summary>
+    internal void RequestGroupRenameForSelection()
+    {
+        if (Selection.Selected is not { } selected
+            || RowFor(selected) is not { Kind: "group" })
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotAGroup()));
+            return;
+        }
+        RequestGroupRename(selected);
+    }
+
+    /// <summary>§G2 TG2-0 (G2-3): Edit Card Text's front door over the
+    /// SELECTION — no selection answers <c>NothingSelected</c>; the
+    /// editor factory answers a non-text card with its own arm.</summary>
+    internal void RequestCardEditorForSelection()
+    {
+        if (Selection.Selected is not { } selected)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        RequestCardEditor(selected);
+    }
 
     /// <summary>§F TF-7 (F5): picker-anchored engine placement, one
     /// action end to end. EVERYTHING against the handle runs inside
@@ -3818,12 +4805,22 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// completion, classified BEFORE the cap (notes = markdown; media
     /// = core's classification over the FFI).</summary>
     internal CanvasVaultFilePickerModel BuildVaultFilePickerModel(bool mediaOnly) =>
+        BuildVaultFilePickerModel(mediaOnly ? CanvasVaultPickPurpose.Media : CanvasVaultPickPurpose.Note);
+
+    /// <summary>§G2 TG2-3 (G2-6, G2D-6): the admission predicate by purpose —
+    /// notes are markdown, media is core's classification over the path,
+    /// Locate admits the union of both.</summary>
+    internal CanvasVaultFilePickerModel BuildVaultFilePickerModel(CanvasVaultPickPurpose purpose) =>
         CanvasVaultFilePickerModel.LoadAll(
             cursor => _session.ListFiles(
                 FileFilter.All, new Paging(cursor, 128)),
-            file => mediaOnly
-                ? SlateUniffiMethods.CanvasMediaClass(file.Path) is not null
-                : file.IsMarkdown);
+            file => purpose switch
+            {
+                CanvasVaultPickPurpose.Note => file.IsMarkdown,
+                CanvasVaultPickPurpose.Media =>
+                    SlateUniffiMethods.CanvasMediaClass(file.Path) is not null,
+                _ => file.IsMarkdown || SlateUniffiMethods.CanvasMediaClass(file.Path) is not null,
+            });
 
     private string PublishedTitleOf(string? nodeId) =>
         PublishedRowOf(nodeId)?.Title ?? nodeId ?? string.Empty;
@@ -4013,25 +5010,35 @@ internal static class CanvasPhrase
 
     public const string SetColorRowAction = "Set Color…";
 
-    /// <summary>The group row's Delete stays disabled with the
-    /// algebra's why: removal of a group IS Ungroup (ED-3).</summary>
-    public const string GroupRemovalIsUngroup =
-        "A group is removed by Ungroup — its cards stay.";
+    /// <summary>§G2 TG2-7 (G2-12): the residue's rows, mac's labels
+    /// verbatim.</summary>
+    public const string ConvertToNoteRowAction = "Convert to Note…";
+
+    public const string CreateConnectedCardRowAction = "Create Connected Card";
+
+    public const string DuplicateRowAction = "Duplicate";
+
+    public const string LocateFileRowAction = "Locate File…";
+
+    public const string ConnectToRowAction = "Connect To…";
+
+    public const string MoveIntoGroupRowAction = "Move into Group…";
+
+    public const string RemoveFromGroupRowAction = "Remove from Group";
+
+    /// <summary>The connection row's three, on the row's edge
+    /// directly (G2-12).</summary>
+    public const string JumpToCardRowAction = "Jump to Card";
+
+    public const string EditConnectionRowAction = "Edit Connection…";
+
+    public const string DeleteConnectionRowAction = "Delete Connection";
 
     /// <summary>§E TE-8: verbs whose COMMIT path shipped but whose
     /// prompt sheet has not — visible with the why, mac's
     /// temporarily-unavailable shape, never a dead click.</summary>
     public const string PromptArrivesLater =
         "Its prompt arrives with a later slice.";
-
-    /// <summary>The reason the Toggle Mark row action is listed but
-    /// disabled: the marking verbs are PR G's. Carried as the action's
-    /// <c>DisabledReason</c>, which the substrate exposes as HelpText —
-    /// the mac RowAction contract's "retain the relevant action with its
-    /// reason".</summary>
-    public const string MarkingArrivesLater = "Marking cards arrives in a later slice.";
-
-    /// <summary>The same, for Delete: the mutation funnel is PR E's.</summary>
 
     /// <summary>
     /// The table's summary line — mac's sentence verbatim, including its

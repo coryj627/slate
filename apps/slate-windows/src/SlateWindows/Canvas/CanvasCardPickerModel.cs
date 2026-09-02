@@ -7,7 +7,7 @@ namespace SlateWindows.Canvas;
 
 /// <summary>One picker row: the node and the palette-style label the
 /// sheet renders and the filter searches.</summary>
-internal sealed record CanvasCardPickerRow(string NodeId, string Label);
+internal sealed record CanvasCardPickerRow(string NodeId, string Label, string? Status = null);
 
 /// <summary>
 /// W6-1 §E TE-6 (IE-21 consumed): the card picker's MODEL — core owns

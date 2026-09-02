@@ -1946,7 +1946,10 @@ can tell "not yet" from "not here". The reasons are label-class copy in
 because that sentence belongs to command rows and a row action is not
 one. Pinned by
 `ActivationRunsTheSameSeamTheOutlineDoesIncludingTheMediaGate` and
-`TheUnshippedRowActionsAreListedDisabledWithTheirReason`.
+`TheRowMenuEqualsThePlansGridProjectionAndToggleMarkIsLive` (§G2 TG2-7
+renamed it from TheUnshippedRowActionsAreListedDisabledWithTheirReason
+when the last staged row went live; the visible-with-reason shape is
+now pinned from the plan's side).
 
 **B7 — The announce seam is swapped onto the canvas relay (DoD §H).**
 The substrate raises CANONICAL grid events — `GridSorted` on a sort,
@@ -10331,6 +10334,1339 @@ for the wrong reason. The three sites now test the condition first
 and build the evidence — statuses, names, the row count, the log
 tail — only inside the failure branch, the shape the first canvas
 wait already had.
+
+## PR G2 — the verb residue: front doors for §E's verbs, and the parity extras
+
+The close-out census (PR H's opening sweep, 2026-09-02) found that
+mac registers 56 canvas commands and the Windows chord table 39, with
+eighteen mac ids carrying no Windows row. Counted honestly (IG2-1):
+FOUR are already reachable from a surface and lack only their catalog
+wiring (Delete Selection, Edit Card Text, Rename Group, Set Color —
+the context menu, the grid's row actions, Enter); NINE are command
+front doors owed over §E methods that exist and have no production
+caller (Clear Color, New Group, Move into Group, Add Note, Add Media,
+Add Link, Locate File, Edit Connection, Delete Connection); FIVE are
+verbs the series plan assigned to §E and §G that were never built
+(Remove from Group, Create Connected Card in both forms, Duplicate,
+Convert Card to Note). The owner ruled (2026-09-02) that the residue
+ships BEFORE the close-out, as a stacked PR of its own, so that PR H's
+matrix flips rows rather than waiving a third of the verb set. This
+section is that PR; it is at revision 2 after round 1's thirty-two
+findings. Contract numbering is per-wave: G2-1 onward, decisions
+G2D-1 onward.
+
+The eighteen, by what each needs:
+
+| Mac id | Windows today | What G2 lands |
+|---|---|---|
+| `slate.canvas.delete` | `CanvasDeleteSelection` (context row, grid row action) | row, resolver |
+| `slate.canvas.editCard` | `RequestCardEditor` (context row, Enter) | row, resolver |
+| `slate.canvas.renameGroup` | `CanvasRenameGroup` + its prompt (context row) | row, resolver |
+| `slate.canvas.setColor` | `CanvasSetColor` + its prompt (context row) | row, resolver, the group arm |
+| `slate.canvas.clearColor` | `CanvasSetColor` with no color (no caller) | row, resolver |
+| `slate.canvas.newGroup` | `CanvasNewGroup` (no caller) | row, a label prompt, resolver |
+| `slate.canvas.moveIntoGroup` | `CanvasMoveIntoGroup` (no caller) | row, the group prompt, resolver, context row |
+| `slate.canvas.addNote` | `CanvasAddFileCard` + `CanvasVaultFilePickerModel` (no caller) | row, the vault file picker sheet, resolver |
+| `slate.canvas.addMedia` | the same, media-classified | row, the same sheet, resolver |
+| `slate.canvas.addLink` | `CanvasAddLinkCard` (no caller) | row, a URL prompt, resolver |
+| `slate.canvas.locateFile` | `CanvasLocateFile` (no caller) | row, the vault file picker sheet, resolver, context row |
+| `slate.canvas.editConnection` | `CanvasEditConnection` (no caller) | row, the connection prompt (two stages), resolver, connection-row context row |
+| `slate.canvas.deleteConnection` | `CanvasDeleteConnection` (no caller) | row, the connection prompt, resolver, connection-row context row |
+| `slate.canvas.removeFromGroup` | — | the verb, row, resolver, context row |
+| `slate.canvas.createConnectedCard` | — | the verb, row with Ctrl+Alt+Shift+N, resolver, the Canvas-menu item, context row |
+| `slate.canvas.createConnectedCardDirectional` | — | the verb through a direction prompt, row, resolver |
+| `slate.canvas.duplicate` | — | the verb, row, resolver, context row |
+| `slate.canvas.convertToNote` | — | the verb with its note write, row, a name prompt, resolver, context row |
+
+`slate.file.newCanvas` has its row, resolver and File-menu item
+(TE-10/TE-11a) and joins the delivered set HERE with every other
+executable canvas id (G2-14). `slate.canvas.colorMarked` stays the one
+Windows-only id (GD-5).
+
+### Contracts
+
+**G2-1 — Every residue id is a table row with a resolver and a
+palette row by derivation; the Canvas menu mirrors mac's menu
+exactly.** Each of the eighteen becomes a `ChordTable` entry in the
+Canvas section through `Reg`, listed by `CanvasRows`, with a resolver
+in `SlateCommandRegistrar` so `ResolvableIds` covers every id and the
+palette derives every row; `chords.json` regenerates through
+`ChordsJson_IsExactlyTheTablesProjection` and `MacCatalogParityTests`
+sees no new Windows-only id. Of the eighteen, mac's application menu
+invokes ONE — Create Connected Card (`SlateMacApp.swift`, the Canvas
+menu's `canvasCreateConnectedCard` call); the other seventeen are
+palette, context or chord only on mac and stay so here (IG2-2). A
+new census, TheCanvasMenuMirrorsMacsMenuOwnership, scrapes the
+canvas verbs mac's app menu invokes from `SlateMacApp.swift` and
+asserts the Windows Canvas menu's canvas items equal that set in
+BOTH directions — the one-way `CommandDriftTests` stays as it is and
+is not cited for ownership. The chord: mac ⌃⌥⌘N is Ctrl+Alt+Shift+N
+in `ChordScope.Canvas`, DELIVERED by the navigator's own map — an
+`AddChord` in `CanvasNavigator` beside Ctrl+Alt+N — and recorded on
+the row, so `EveryScopeIsEitherScrapedFromProductionOrDispositioned`
+holds in both directions (IG2-4); the resolver is the palette's
+path, never the key path. R1 stands: a chord is a convenience, never
+the only path. The new sheet occupies an existing modal arm (G2-6),
+so `Window_PreviewKeyDown`'s sheet fence (`sheetOwnsKeys`) covers it
+without a new cell.
+
+**G2-2 — Every prompt- or picker-backed verb answers with its
+operation, and every action-determining read runs inside
+`prepare`.** The seven §E verbs that return nothing — `CanvasNewGroup`,
+`CanvasMoveIntoGroup`, `CanvasAddFileCard`, `CanvasAddLinkCard`,
+`CanvasLocateFile`, `CanvasEditConnection`, `CanvasDeleteConnection` —
+take the shape `CanvasRenameGroup` and `CanvasSetColor` already have:
+they return `CanvasMutationOperation?` (null when the opener refused,
+the refusal spoken) and accept an optional completion (IG2-8), so a
+sheet can answer TG-1's Refused / Pending / Completed and close on
+ITS operation's landing. Every residue operation is minted with the
+invoking TAB as its owner (TE-1's initiating surface — the workspace
+command captures `ActiveGroup.ActiveTab`; a context row captures the
+row's surface's tab) and the source row as its anchor (IG2-5). The
+shared prepare clause (IG2-21): every lookup that determines the
+action — `CanvasParentOf`, `CanvasChildrenOf`, `CanvasOrderNodes`,
+`CanvasNodeText`, `CanvasPlaceNew`, `CanvasPlaceSet`,
+`CanvasPlaceInsideGroup`, `CanvasAutoSides` — runs inside the
+operation's `prepare` on the operation's basis under the funnel's
+gate and lease (E1), and `prepare` CATCHES its own `VaultException`,
+speaks the verb's typed failure with the exception's message as
+detail, and returns null (the funnel's Transact catches only the
+apply's exception, never the preparation's). Nothing determined
+outside the hold reaches an action.
+
+**G2-3 — The refusal precedence, per command, per stage.** IG2-7's
+table replaces the marks verbs' order, which was G1's, not mac's.
+Stage 1 is the OPENER (the command, before any sheet); stage 2 is the
+SHEET's submit; stage 3 is `prepare` under the gate; stages 4–5 (apply,
+refresh) are the funnel's frozen outcomes, spoken by the funnel alone.
+The not-ready sentence (`SpeakNotReady`, C9's mapping) precedes every
+row's opener refusals. "sel" = the selected node resolved in the
+basis; "mac" names the Swift verb whose order is mirrored.
+
+| Id | Opener refusals, in order (stage 1) | Submit (stage 2) | Prepare refusals (stage 3) | Effect |
+|---|---|---|---|---|
+| delete | sel absent → `NothingSelected` (mac `canvasDeleteSelection`) | — | — | `ClearSelection`; group → `Ungroup`, spoken `CanvasDeleted` with `Group` (G2-7) |
+| editCard | sel absent → `NothingSelected`; kind ≠ text → `NotATextCard` (mac `canvasEditCard`) | — | — | the editor (TE-7) |
+| renameGroup | sel absent or kind ≠ group → `NotAGroup` (mac `canvasRenameGroup`) | empty → null label (G2D-11) | — | `KeepSelection` |
+| setColor | sel absent → `NothingSelected` (mac `canvasSetColor`); groups admitted | — | — | `KeepSelection` |
+| clearColor | as setColor | — | — | `KeepSelection`; `CanvasColorSet` with a null color |
+| newGroup | none (mac `canvasNewGroup` needs no selection) | empty → null label | placement throw → `CanvasActionFailed(NewGroup)` | `SelectCreated` |
+| moveIntoGroup | sel absent → `NothingSelected`; no groups → `NoGroups` (mac `canvasPromptMoveIntoGroup`) | chosen id not a group in the basis → `NotAGroup` | `NoFreeSpaceInGroup` (shipped) ; throw → `CanvasActionFailed(MoveIntoGroup)` | `KeepSelection` |
+| addNote / addMedia | listing failure → `CanvasActionFailed(Create)`; empty → `NoNotesInVault` / `NoMediaInVault` (mac `canvasAddFileCard`'s openers) | stale request → `PickDifferentTarget` | placement throw → `CanvasActionFailed(Create)` | `SelectCreated` |
+| addLink | none | not a URL → `NotAUrl` (`CanvasBlocked`) | placement throw → `CanvasActionFailed(Create)` | `SelectCreated` |
+| locateFile | sel absent → `NothingSelected`; kind ∉ {file, image} → `NotAFileCard`; listing failure → `CanvasActionFailed(CanvasAction)`; empty → `NoFilesToPointAt` (mac `canvasOpenLocate`) | stale request → `PickDifferentTarget` | — | `KeepSelection` |
+| editConnection / deleteConnection | sel absent → `NothingSelected`; neighbors unreadable → the frozen read refusal (`ReadRefusalFor`); none → `NoConnections` | edge no longer sel's neighbor → `NoConnections` | — | `KeepSelection` |
+| removeFromGroup | sel absent → `NothingSelected`; group path empty → `NotInAGroup` (mac `canvasRemoveFromGroup`) | — | parent query throw → `NothingSelected` (mac's rule); placement throw → `CanvasActionFailed(RemoveFromGroup)` | `KeepSelection` |
+| createConnectedCard (both) | sel absent → `NothingSelected` (mac `canvasCreateConnectedCard`) | — | placement or sides throw → `CanvasActionFailed(CreateConnectedCard)` | SelectCreatedAndEdit (G2-9) |
+| duplicate | seed empty → `NothingSelected`; marked store non-empty but projection empty → `NoMarks` (mac `canvasDuplicate`) | — | any query throw or count mismatch → `CanvasActionFailed(Duplicate)` | `SelectCreated` (the first copy) |
+| convertToNote | sel absent → `NothingSelected`; kind ≠ text → `OnlyTextCardsConvert`; a held mode → `ModeBusy` (mac `canvasConvertToNote`) | path not `.md` → `NotePathMustEndInMd` | G2-11's table | `KeepSelection` |
+
+**G2-4 — The prompt lifecycle gains one arm: Advanced.** TG-1's
+three answers stay; a STAGED prompt answers
+CanvasPromptSubmit.Advanced and exposes its successor through a
+Next property, and the workspace's `SubmitCanvasPrompt` swaps the
+sheet ATOMICALLY — the successor becomes `CanvasPromptSheet` in the
+same setter call that retires the predecessor (`Closed()` runs on the
+old one), never through `TryPresentCanvasPrompt`'s re-entrancy
+refusal (IG2-9). A completion captured by the predecessor closes
+nothing (it compares by reference and the successor is another
+object); Escape at any stage closes the current sheet and changes
+nothing; focus lands on the successor's first focusable (its text
+field or its rows); Refused keeps the current stage and its draft.
+The Connect To… flow keeps its shape (the card picker's slot to the
+prompt's slot); Edit Connection is the first two-stage prompt inside
+the prompt slot.
+
+**G2-5 — The three pickers are choices prompts, truthfully sourced.**
+No new modal surface (GD-1's rule):
+
+- **Move into Group…** — choices over EVERY group in the outline's
+  reading order (mac includes the current group; a move into the
+  current group re-places inside it — IG2-15), each named by
+  `CanvasPhrase.CardReference`; empty → `NoGroups`, nothing presented;
+  Enter runs `CanvasMoveIntoGroup` with the chosen id (Pending; the
+  verb's `CanvasMovedIntoGroup`).
+- **Delete Connection…** and **Edit Connection…** — choices over
+  `NeighborsIfKnown` for the selected card: a NULL answer (the query
+  unavailable or thrown) speaks the frozen state→response refusal
+  (`ReadRefusalFor`) and presents nothing; an EMPTY list speaks
+  `NoConnections` (IG2-11). Rows are keyed by edge id and named by
+  the PURE render the outline's connection rows use
+  (`CanvasAnnouncer.RenderLabel` over `CanvasConnectionTraversed`)
+  with `CanvasPhrase.ConnectionStatus` as the row's status, so
+  parallel identically-labelled connections stay distinguishable and
+  nothing is announced while rows are built (IG2-14). Delete's Enter
+  re-validates that the edge is still that card's neighbor (else
+  `NoConnections`) and runs the verb with the selected-relative
+  `CanvasNeighbor`, which builds `CanvasDeleteTarget.Connection` from
+  the neighbor's direction, other title and label (IG2-13 — the
+  shipped verb's `TitleOf(gone.ToNode)` is retired). Edit is two
+  stages (G2D-2): stage 1's choices are the four
+  `CanvasConnectionDirection` arms with mac's labels — ToTarget
+  "Points at the target" = (`None`, `Arrow`); FromTarget "Points
+  back at the source" = (`Arrow`, `None`); Both "Both directions" =
+  (`Arrow`, `Arrow`); None "No direction" = (`None`, `None`) — the
+  current one preselected from the edge's arrow flags; stage 2's
+  draft is the current label, an empty draft normalizes to null;
+  the submit runs `CanvasEditConnection` ONCE with sides and color
+  preserved from the scene edge, spoken `CanvasConnectionUpdated`
+  (IG2-12).
+- **Create Connected Card (Choose Direction)…** — choices over the
+  four `CanvasPlaceDirection` arms named by their placement phrases,
+  then G2-9's verb.
+- **Add Link Card…** — a text prompt; the submit TRIMS the draft (mac
+  `canvasAddLinkCard`) and runs `CanvasAddLinkCard`, whose `NotAUrl`
+  arm is the only validation; the accepted schemes are http and
+  https only (G2D-10, a recorded divergence from mac's any-scheme).
+- **New Group…** and **Convert Card to Note…** — text prompts (G2-3,
+  G2-11).
+
+**G2-6 — The vault file picker is the card picker's sibling in the
+card picker's own arm and slot.** CanvasVaultFilePickerViewModel
+occupies `ModalSurface.CanvasCardPicker` and the workspace's
+`CanvasCardPickerSheet` slot through one shared picker contract
+(ICanvasPickerSheet: Title, Filter, Rows with a Label, SelectedRow,
+Confirm) that the slot is retyped to and the existing XAML already
+binds (IG2-18); the modal census (`SheetChordAdmissionTests`,
+`ModalSurfaceTests`) covers the slot whatever object holds it. The
+request is a VALUE, CanvasVaultPickRequest: purpose (Note, Media,
+Locate), the target node for Locate, the exact `CanvasLoaded`
+identity, the invoking owner and the model generation; it is
+checked at presentation and again at submit — a different loaded
+identity or a superseded generation refuses `PickDifferentTarget`
+with the sheet kept — and the mutation is minted against the
+captured loaded reference (IG2-19; `Admits` is the generation half
+of that check, not the currency half). `LoadAll` runs OFF the
+dispatcher on the document's interaction-work seam; a later request
+supersedes an earlier load, which never presents; a paging throw
+answers `CanvasActionFailed` (`Create` for the add verbs,
+`CanvasAction` for Locate) with the message and presents nothing
+(IG2-20). Admission predicates: Note = `FileSummary.IsMarkdown`;
+Media = core's media class over the path (`CanvasMediaClass`, G2D-6);
+Locate = the union of both. Rows are named by `DisplayName`, else
+`Name`, with the path as the status; `Visible` narrows the complete
+classified set and caps at 200 with "type to narrow" (ED-2). Enter
+runs `CanvasAddFileCard` (path, no subpath) or `CanvasLocateFile` on
+the request's target — offered on EVERY file or image card (G2D-8).
+
+**G2-7 — Delete Selection is typed by the selection: a node deletes,
+a group ungroups.** The palette verb runs `CanvasDeleteSelection`,
+which no longer returns silently for a group: a group's removal IS
+`Ungroup`, mac's own op in `canvasDeleteSelection`, spoken
+`CanvasDeleted` with the `Group` target (G2D-9 — ED-3's row shape
+stands, the confirmation E8 once described was never mac's and is
+retired). The verb never targets a connection: connection deletion
+is Delete Connection… (G2-5) and the connection row's own action
+(G2-12); the outline's Delete key on a focused CONNECTION row runs
+that row's Delete Connection with the row's edge (IG2-10).
+
+**G2-8 — Remove from Group is R22's un-reparent, placed by the
+engine.** G2-3's openers; inside `prepare`: the enclosing group is
+`CanvasParentOf` on the basis (a throw is `NothingSelected`, mac's
+rule — never "not in a group"); placement is `CanvasPlaceNew`
+anchored on the PARENT with the card's own size, no hint, the card
+excluded; ONE action of `UpdateNodeGeometry` named
+`remove "⟨title⟩" from "⟨group⟩"`; success speaks
+`CanvasRemovedFromGroup` with the group's label.
+
+**G2-9 — Create Connected Card is one action with a typed
+select-and-edit effect.** Inside `prepare`: `CanvasPlaceNew` anchored
+on the origin with `CanvasConstants`' default card size, the
+direction as the hint (Below for the chord and the plain row),
+excluding nothing; the sides are `CanvasAutoSides` over the origin's
+rect and the placement's rect, in that order; ONE action named
+`create connected card` carrying, in order, `CreateNode` (a fresh
+`CanvasNewId`, `Text` with the empty string, the placement's x and
+y, the default size, null color) and `AddEdge` (a second fresh id,
+from the ORIGIN to the NEW node, the auto sides as from-side and
+to-side, `None` as the from-end and `Arrow` as the to-end, null
+label, null color) (IG2-22). The effect is a NEW typed arm,
+CanvasMutationEffect.SelectCreatedAndEdit: resolved like
+`SelectCreated` against the refreshed population (a missing created
+id is IE-35's committed-unpresented, never a silent drop), and the
+editor opens through the document's `CardEditorRequested` seam ONLY
+after the publication installed and ONLY if the operation's owner is
+still the active tab and the document is not retired — a moved owner
+suppresses the open and keeps the seat (IG2-23). Success speaks
+`CanvasConnectedCardCreated` with the relative phrase and the origin's
+title; the directional variant is G2-5's prompt then this verb.
+
+**G2-10 — Duplicate is a snapshot, expanded transitively, placed as
+one rigid set, all or nothing.** The SEED is captured at invocation:
+the marked store's ids with their epochs when the store is non-empty
+(a non-empty store whose reading-order projection is empty refuses
+`NoMarks`), else the selection (`NothingSelected` when neither).
+Inside `prepare`: expansion walks a VISITED set through
+`CanvasChildrenOf` until no new id appears (a throw → 
+`CanvasActionFailed(Duplicate)`); the union is re-projected through
+`CanvasOrderNodes`; every member resolves in the basis (a missing
+member → the same failure); placement is `CanvasPlaceSet` anchored on
+the first member with the members' rects in order, no hint; the
+origins' count must equal the members' count, else the failure —
+nothing partial (IG2-25). The action carries, per member in order, a
+`CreateGroup` for a group (label and color kept) or a `CreateNode`
+with a fresh id whose content follows the member's kind — `File`
+with the target and subpath, `Link` with the target, `Text` with
+`CanvasNodeText` (a null answer is the empty string) — at the
+engine's origin with the member's size and color; edges are never
+copied. Unknown fields are NOT preserved: the generated
+`CanvasNodeContent` and `CreateNode` carry no opaque payload, so the
+spec's deep-copy clause is unmet here and recorded (G2D-7). The name
+is `duplicate "⟨title⟩"` for one member, else `duplicate` over core's
+`CountNoun`; success seats the first copy and speaks
+`CanvasCardPlaced` with `Duplicated` for one member or
+`CanvasBulkDuplicated` with the count; marks are kept (G2D-4). One
+undo removes every copy — the action's one inverse.
+
+**G2-11 — Convert Card to Note… is one structural-aware operation:
+the note is written inside the canvas gate through the sidebar's
+create path, and the funnel is the one arbiter after it.** The route
+(IG2-6): the workspace command carries the sidebar's note-creation
+seam — ICanvasNoteCreator, implemented by `FilesSidebarViewModel`,
+which runs `CreateOutcomes.CreateReporting` under its own session-work
+lease, then `StructuralHistoryBarrier` and `Refresh` — and the
+document's verb takes it as a parameter. The lock order is fixed:
+the canvas gate first (the operation), the sidebar's session-work
+lease second, inside `prepare`; the sidebar never takes the canvas
+gate, so no cycle exists. The sequence, with its outcomes (IG2-26,
+IG2-27):
+
+| Step (inside `prepare`, gate held) | Outcome | Spoken by | Sheet | Barrier |
+|---|---|---|---|---|
+| `CanvasNodeText` on the basis | null or throw → `NoteReadFailed` with the message | the verb | kept, draft kept | no |
+| the note through the seam | `DestinationExists` → `NotePathExists` (path, on disk: true) | the verb | kept, draft kept | no |
+| | other `VaultException` → `NoteCreateFailed` (path, message) | the verb | kept | no |
+| | `Committed` → landed | — (the confirm speaks) | closes on landing (below) | ONCE, before the action returns |
+| | `PublishedUnindexed` → landed; the caveat is SPOKEN AFTER the confirm, never instead (the #1123 shape) | the verb, after the funnel's confirm | as Committed | ONCE |
+| the action `convert "⟨title⟩" to note` (`SetNodeContent` to `File` at the path) | the funnel's frozen outcomes — Installed, Unindexed, RefreshRefused, Conflict, ModeBusy, ApplyRefused, displacement | the funnel ONLY | closes once the note landed, whatever the canvas outcome (a retry would collide) | already taken |
+
+The verb's completion carries `noteLanded`; the prompt's `Pending`
+closes on ANY completion after a landed note, not only on the landing
+arms — the one place TG-1's close table widens, because a retained
+draft would recreate a note that exists. `NoteRetargetFailed` is
+mac's detached-task arm and is RESERVED here — unreachable, because
+the funnel speaks every post-write outcome. Success speaks
+`CanvasConvertedToNote` with the path; canvas undo restores the text
+card and the note stays (G2D-3).
+
+**G2-12 — The context plan takes a discriminated target, serves
+every consumer from one mapping, and mirrors mac's order.** The plan's
+input is CanvasContextTarget: a NODE (kind, in-a-group) or a
+CONNECTION (edge id, the selected-relative neighbor); `RowsFor`
+takes the target (IG2-28). The rows, in mac's order
+(`CanvasOutlineView.swift`'s menu, IG2-29):
+
+| Surface | Target | Rows in order |
+|---|---|---|
+| Outline | node | Open; Edit Card Text… (text); Convert to Note… (text); Create Connected Card; Duplicate; Rename Group… (group); Locate File… (file, image); Toggle Mark; Connect To…; Set Color… (every kind, groups included); Move into Group…; Remove from Group (in a group); Delete (cards) or Ungroup (group) |
+| Outline | connection | Jump to Card; Edit Connection…; Delete Connection — both on the row's edge directly, no picker |
+| Grid | node | mac's table subset from the SAME plan: Open; Toggle Mark (LIVE — the staged reason retires); Delete or Ungroup |
+| Renderer | — | no context menu (G2D-12): the peers keep Invoke; the palette carries every verb |
+
+One static table maps `CanvasContextVerb` arms onto document verbs
+for ALL consumers (seat the row silently, then the verb — TG-0's
+rule); the grid's hand-listed actions retire in favour of that
+mapping. The census widens to a BIDIRECTIONAL equality per consumer
+and per target kind (node kinds text, file, image, link, group, in
+and out of a group; a connection): the built rows equal the plan's
+rows in names, enabled flags and reasons, and no consumer carries a
+row the plan did not give it.
+
+**G2-13 — The journey, with its seating.** One FlaUI journey, gate
+W-C, through the shared opener: a canvas with two cards; New Group…
+by the palette (a name, the group in the tree); select the FIRST card
+again (the group landed selected — IG2-31); Move into Group… (the
+prompt, Enter; the card's status names the group); Remove from Group
+(the status names the canvas); Create Connected Card by
+Ctrl+Alt+Shift+N (a third card; the editor sheet open; Escape
+commits); select the connected text card; Edit Connection… (stage 1,
+"Both directions", stage 2 a label; the connection row's name carries
+it); Duplicate (a fourth card); Add Link Card… (the URL prompt; a link
+card named by its host); select the connected text card again;
+Convert Card to Note… (the name prompt; the card now a file card; the
+note in the files tree); Delete Connection… (the connection prompt,
+Enter, the connection row gone); then the undo chain to two cards
+(the note stays, G2D-3). Axe over the vault file picker (Add Note to
+Canvas… on a vault with one note) and the group prompt.
+
+**G2-14 — Verification and the matrix.** Named facts pin every row
+of G2-3 (one fact per opener refusal, per stage-2 refusal, per
+prepare failure, per effect), and: CreateConnectedCardIsOneAction
+(two ops, the exact tuple, one inverse restoring the bytes);
+DuplicateExpandsTransitivelyAndRestoresBytes (a nested group,
+origin-count equality, one inverse); DuplicateRefusesOnAnyMismatch
+(a thrown children query, a shrunk placement); ConvertWritesThenRetargets
+(bytes and the note), ConvertBarriersOnceAndKeepsTheNote,
+ConvertRefusesAnExistingPath, ConvertClosesAfterALandedNote
+(every canvas outcome), ConvertReportsUnindexedAfterTheConfirm;
+AStalePickRefusesPickDifferentTarget and
+ASupersededLoadNeverPresents for the vault picker;
+EditConnectionAdvancesAtomically and EscapeAtEitherStageChangesNothing;
+all four direction variants; EveryConsumerEqualsThePlan;
+TheCanvasMenuMirrorsMacsMenuOwnership; the modal keyboard fence and
+axe over the new sheet; and byte-restored production mutations on the
+critical facts (the tuple, the visited set, the barrier, the stale
+refusal, the plan mapping) (IG2-32). The matrix (IG2-3):
+`W6_1_DELIVERED_COMMANDS` gains every EXECUTABLE canvas id — the
+eighteen, `slate.canvas.newCard`, `slate.file.newCanvas`, §F's
+thirteen and §G's six including `colorMarked` — with `chords.json`
+delivery-evidence groups whose implementation and test anchors
+exist, and `parity_matrix.md` regenerates; PR H reconciles evidence
+and flips only the surface row.
+
+### Decisions
+
+- **G2D-1 — The pickers are prompts; the file picker is the card
+  picker's sibling in the card picker's arm.** Move into Group, the
+  connection prompts and the direction prompt ride the TF-8 choices
+  shape; the vault file picker needs a filter over a paged,
+  classified set, so it inhabits `ModalSurface.CanvasCardPicker` and
+  the `CanvasCardPickerSheet` slot through ICanvasPickerSheet. No
+  new modal arm.
+- **G2D-2 — Edit Connection is two stages through Advanced.** Mac's
+  sheet carries a text field and a direction radio together; the
+  Windows prompt shows a text field OR choices, and forking it for
+  one verb would fork the machinery §F and §G share. A divergence of
+  SHAPE, not outcome: one `UpdateEdge`, one sentence.
+- **G2D-3 — Convert's undo is mac's shipped pairing.** The spec asked
+  for one logical undo step removing the file through the structural
+  journal and restoring the card through the canvas stack. Mac never
+  built it: `canvasConvertToNote` makes the note a structural barrier
+  and leaves canvas undo to the card. Windows matches the shipped
+  behaviour, and because a file deleted by an undo the reader did not
+  aim at a file is the destructive surprise t0 forbids. The spec's
+  pairing is future machinery for both hosts.
+- **G2D-4 — Duplicate keeps the marks.** The copies are new ids; the
+  originals stay marked so a second Duplicate duplicates the same set
+  again — mac's behaviour, free under the §G epoch rule.
+- **G2D-5 — Clear Color is Set Color's null arm.** No second verb, no
+  second sentence; its palette row exists because mac's does.
+- **G2D-6 — Add Media's classification is core's** (`CanvasMediaClass`
+  over the FFI, 0b's row); no host extension list.
+- **G2D-7 — Duplicate does not preserve unknown fields.** The spec's
+  deep-copy clause needs a core clone op carrying the node's opaque
+  payload; the generated ABI has none. Recorded as UNMET rather than
+  claimed; the core op (`CanvasOp` gaining a clone arm, mac consuming
+  it per decision 5) is filed as upstream machinery in PR H's
+  reconciliation.
+- **G2D-8 — Locate File… is offered on every file or image card**,
+  mac's later rule with its reason (a "missing" test against the note
+  list false-positives on media targets); this supersedes E8's and
+  the spec's "missing-target" wording.
+- **G2D-9 — A group's Delete is Ungroup, unconfirmed.** Mac's
+  `canvasDeleteSelection` ungroups directly; ED-3's row shape (Delete
+  absent on group rows, Ungroup present) stands; E8's confirmation
+  sentence is retired as never mac's.
+- **G2D-10 — Add Link accepts http and https only, trimmed.** Mac
+  accepts any scheme; the Windows predicate is the one its external
+  link opener honours. A recorded divergence.
+- **G2D-11 — Group labels normalize empty to null, untrimmed.** Mac's
+  rule (`canvasNewGroup`, `canvasRenameGroup`): the empty string
+  becomes a null label announced "Untitled"; whitespace is kept. The
+  shipped Windows verbs wrote the empty string and are corrected.
+- **G2D-12 — The renderer carries no context menu in this PR.** The
+  palette and the outline carry every verb and the peers keep Invoke;
+  recorded as owed with the spec's "renderer card" wording.
+
+### Recorded divergences (owner-recorded; off-limits for re-litigation)
+
+- G2D-2's shape; G2D-3's pairing; G2D-7's unmet deep copy; G2D-10's
+  scheme policy; G2D-12's renderer.
+- Mac's `canvasDuplicate` seats no particular copy after a bulk
+  duplicate; Windows seats the first in reading order.
+- The vault file picker names rows by display name with the path as
+  status; mac lists paths.
+- The Windows grid's row actions are mac's table subset by design
+  (mac's `CanvasTableView` lists Open, Toggle Mark, Delete).
+
+### Accepted risks
+
+- The vault file picker loads the COMPLETE classified set before
+  capping (ED-2); a vault of many thousands of files pays the paging
+  once per open, off the dispatcher.
+- Convert's note write and canvas apply are two writes inside one
+  hold; the window between them is the funnel's, spoken, never silent.
+- The journey budgets one launch for every leg.
+
+### Round 1 — 32 findings, dispositions
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| IG2-1 | minor | taken — the inventory recounted (4 / 9 / 5) |
+| IG2-2 | blocker | taken — menu items for `createConnectedCard` only; the ownership census (G2-1) |
+| IG2-3 | blocker | taken — every executable id joins the delivered set here (G2-14) |
+| IG2-4 | major | taken — the navigator's `AddChord`, the scope scrape, the sheet fence (G2-1) |
+| IG2-5 | blocker | taken — the tab as owner, the row as anchor (G2-2) |
+| IG2-6 | blocker | taken — the structural-aware route through the sidebar's seam (G2-11) |
+| IG2-7 | blocker | taken — the per-command, per-stage table (G2-3) |
+| IG2-8 | blocker | taken — the operation-returning signature (G2-2) |
+| IG2-9 | blocker | taken — the Advanced arm and atomic swap (G2-4) |
+| IG2-10 | blocker | taken with mac's shape — a group's Delete is Ungroup, unconfirmed (G2-7, G2D-9) |
+| IG2-11 | blocker | taken — `NeighborsIfKnown`, the read refusal for null (G2-5) |
+| IG2-12 | major | taken — the four labels and tuples, preselection, empty→null (G2-5) |
+| IG2-13 | major | taken — the neighbor-built delete target (G2-5) |
+| IG2-14 | major | taken — the pure render and the ordinal status (G2-5) |
+| IG2-15 | major | taken — every group, mac's rule (G2-5) |
+| IG2-16 | major | taken — empty→null, untrimmed (G2D-11) |
+| IG2-17 | major | taken — trimmed; the scheme policy recorded (G2D-10) |
+| IG2-18 | blocker | taken — the card picker's arm and slot through one contract (G2-6) |
+| IG2-19 | blocker | taken — the request value and its two checks (G2-6) |
+| IG2-20 | major | taken — off-dispatcher load, supersession, failure arm, Locate's predicate (G2-6) |
+| IG2-21 | blocker | taken — the shared prepare clause (G2-2) |
+| IG2-22 | major | taken — the full tuple (G2-9) |
+| IG2-23 | blocker | taken — SelectCreatedAndEdit (G2-9) |
+| IG2-24 | blocker | taken — unmet and recorded (G2D-7) |
+| IG2-25 | blocker | taken — snapshot, visited set, equality, all-or-nothing (G2-10) |
+| IG2-26 | blocker | taken — the write inside the gate through the sidebar's path, the order (G2-11) |
+| IG2-27 | blocker | taken — the outcome table, the funnel as arbiter, the widened close (G2-11) |
+| IG2-28 | blocker | taken — the discriminated target, one mapping, the bidirectional census (G2-12) |
+| IG2-29 | blocker | taken — mac's order, the group color arm, direct edge routing, the surface matrix (G2-12) |
+| IG2-30 | major | taken — every file card, superseding E8's wording (G2D-8) |
+| IG2-31 | major | taken — the reseating legs (G2-13) |
+| IG2-32 | blocker | taken — the named facts and mutations (G2-14) |
+
+### THE FREEZE — read this first
+
+**This section is CLOSED to further prose revision**, frozen at
+revision 2 after two adversarial rounds, by APPLICATION OF THE
+STANDING PRECEDENT — the owner's ruling that closed §C-unit, §D, §E,
+§F and §G, applied here by the session rather than freshly ruled, and
+recorded as such; the owner may overrule. The trajectory is rule 5's
+signal on the series' schedule: thirty-two findings, then twenty-eight
+with TWELVE of them CREATED by revision 2's own closures — the
+Advanced arm as an enum-and-property pair, the widened close for a
+landed note, the opener-stage NoMarks, the gated barrier and refresh,
+the note seam's missing shutdown arm, the seat-then-verb rule applied
+to connection rows — which is the protocol's own definition of a patch
+over a missing model rather than a repair. Prose cannot close what the
+round found; the findings become the ledger below, each discharged BY
+CODE in the task whose surface it names, each closure recorded with
+its facts and its byte-restored mutations, exactly as the IF and IG
+ledgers were.
+
+Four rows touch frozen text, and each is discharged WITHOUT reopening
+it: the stage transition becomes a sealed RESULT family whose Advanced
+case carries its non-null successor, an extension of TG-1's table
+rather than an enum arm with a side property (IG2-44); a group's
+palette Delete keeps E8's and ED-3's Ungroup-or-Cancel confirmation,
+and revision 2's "retired" is itself retired (IG2-51); a landed note
+whose canvas retarget did not land leaves the sheet in a
+NON-RESUBMITTABLE recovery state that speaks the landed-note truth,
+so TG-1's close table is not widened (IG2-57); and Locate File's
+predicate is the one row the frozen text cannot be honoured on — the
+FFI carries no missing-target signal for a file card (the one
+`Missing` flag in the generated bindings is the dashboards') — so
+mac's every-file-card rule ships with E8's wording recorded as OWED TO
+THE OWNER, not superseded (IG2-52). Where a task finds the frozen text
+and the shipped code in conflict, the shipped frozen sections win and
+the record says so.
+
+The frozen text stands with its known holes NAMED: the menu census
+over the residue subset (IG2-33); the invocation value through every
+route — resolver, navigator chord, context row (IG2-34); a typed
+immutable request per staged flow (IG2-35); the per-verb precedence
+with the not-ready-first rule recorded as a Windows-wide divergence
+(IG2-36); the audible paging failure recorded against mac's partial
+set (IG2-37); Duplicate's ghost-only refusal inside prepare, its exact
+set equality, and its group-label loss (IG2-38, IG2-39, IG2-54);
+Remove from Group's null-parent arm (IG2-40); Convert's trimmed path,
+suggested name, fixed null-text detail, worker/UI split, shutdown arm,
+recovery state and landed-note sentence (IG2-41, IG2-42, IG2-43,
+IG2-55, IG2-56, IG2-57, IG2-58); the stage transition's result family
+and focus delivery (IG2-44, IG2-45); the connection prompts'
+cardinality table and row status (IG2-46, IG2-47); the picker row
+projection, its checkpoint table and its owner validation (IG2-48,
+IG2-49, IG2-50); the confirmation kept and the Locate predicate owed
+(IG2-51, IG2-52); the editor-open receipt separate from the selection
+effect (IG2-53); and the plan's surface dimension with connection
+dispatch that never seats (IG2-59, IG2-60).
+
+### Round record
+
+- **Round 1** (xhigh, conforming): 32 findings — 20 blockers, 11
+  majors, 1 minor — closed by revision 2's text (the table above).
+- **Round 2** (xhigh, conforming): 28 findings — 19 blockers, 9
+  majors — twelve created by revision 2. Rule 5's signal; the
+  precedent applied; the findings are the ledger.
+
+### The ledger — IG2-33 … IG2-60, discharged by code
+
+| Row | Severity | Contracts | Origin | Claim | Rides |
+| --- | --- | --- | --- | --- | --- |
+| IG2-33 | BLOCKER | G2-1 | survived round 1 | The Windows Canvas menu equals mac's menu ownership "in both directions" — over every item, not the residue subset. | TG2-0 |
+| IG2-34 | BLOCKER | G2-2 | survived round 1 | Every operation carries the invoking tab as owner — while the navigator chord discards its presenter and `DocumentCommand` passes only the document. | TG2-0 |
+| IG2-35 | BLOCKER | G2-2/G2-5/G2-6 | survived round 1 | Staged verbs preserve their invocation context — with one typed request defined, and none for Move, the connection flows, the directional create, New Group, Add Link or Convert. | TG2-2 |
+| IG2-36 | MAJOR | G2-3 | survived round 1 | The not-ready sentence precedes every opener refusal while each row "mirrors" mac's order. | TG2-0 |
+| IG2-37 | MAJOR | G2-3/G2-6 | created by revision 2 | Any vault paging failure aborts audibly and presents nothing — where mac keeps the partial set silently. | TG2-3 |
+| IG2-38 | BLOCKER | G2-3/G2-10 | created by revision 2 | A non-empty store whose projection is empty refuses `NoMarks` at the OPENER — before admission, outside the gate. | TG2-5 |
+| IG2-39 | BLOCKER | G2-10/G2-14 | survived round 1 | Duplicate is all-or-nothing — while `CanvasOrderNodes` drops unknown ids silently and no set equality is required. | TG2-5 |
+| IG2-40 | MAJOR | G2-3/G2-8 | survived round 1 | Remove from Group maps a thrown parent query — and nothing for a null or unresolved parent. | TG2-4 |
+| IG2-41 | MAJOR | G2-3/G2-11 | survived round 1 | Convert validates "the path" — with no trimming rule carried through every write and sentence. | TG2-6 |
+| IG2-42 | MAJOR | G2-11 | survived round 1 | A null `CanvasNodeText` produces `NoteReadFailed` "with the message" — which a null has none of. | TG2-6 |
+| IG2-43 | MAJOR | G2-5/G2-11 | created by revision 2 | Convert opens a text prompt — whose initial draft revision 2 no longer derives. | TG2-6 |
+| IG2-44 | BLOCKER | G2-4/G2D-2 | created by revision 2 | The submit enum gains `Advanced` while a separate `Next` property carries the successor. | TG2-1 |
+| IG2-45 | MAJOR | G2-4/G2-14 | created by revision 2 | The atomic swap "lands focus" on the successor's first field — with no focus-delivery seam named and no fact reading the focused element. | TG2-1 |
+| IG2-46 | MAJOR | G2-5 | survived round 1 | The connection verbs always present their prompt — where mac routes a single connection directly. | TG2-2 |
+| IG2-47 | MAJOR | G2-5 | survived round 1 | Connection choices carry `CanvasPhrase.ConnectionStatus` as row status — on a choice row with no status and a list with no ItemStatus binding. | TG2-1 |
+| IG2-48 | BLOCKER | G2-6/G2D-1 | survived round 1 | The picker interface needs only rows "with a Label" and the XAML "already binds" — over raw `FileSummary` rows and card-specific automation names. | TG2-3 |
+| IG2-49 | BLOCKER | G2-6 | created by revision 2 | A mismatch refuses "with the sheet kept" at presentation while a superseded load "never presents" — two states that cannot both hold. | TG2-3 |
+| IG2-50 | BLOCKER | G2-6/TE-1 | survived round 1 | The request captures the owner — and validates only identity and generation. | TG2-3 |
+| IG2-51 | BLOCKER | G2-7/G2D-9 | created by revision 2 | A group's Delete ungroups immediately and the frozen confirmation is "retired." | TG2-1 |
+| IG2-52 | BLOCKER | G2-6/G2D-8 | survived round 1 | Locate File is offered on every file card and "supersedes E8." | TG2-3 |
+| IG2-53 | BLOCKER | G2-9 | survived round 1 | Editor opening belongs in a combined `CanvasMutationEffect` arm — where TE-4 keeps publication effects pure and the receipt separate. | TG2-4 |
+| IG2-54 | BLOCKER | G2-10 | survived round 1 | Duplicating a group "keeps its label" — from a scene node that exposes only the derived title. | TG2-5 |
+| IG2-55 | BLOCKER | G2-11 | created by revision 2 | The barrier and the tree refresh run inside `prepare`, on the worker. | TG2-6 |
+| IG2-56 | BLOCKER | G2-11 | created by revision 2 | The note seam has four outcomes — and no arm for a session-work refusal at shutdown. | TG2-6 |
+| IG2-57 | BLOCKER | G2-11 | created by revision 2 | Convert's Pending closes on any completion after a landed note, "the one place TG-1's table widens." | TG2-6 |
+| IG2-58 | BLOCKER | G2-11 | created by revision 2 | `NoteRetargetFailed` is unreachable because the funnel speaks every post-write outcome — while displacement is silent by contract. | TG2-6 |
+| IG2-59 | BLOCKER | G2-12 | survived round 1 | One `RowsFor` over a target with no surface yields different outline and grid row sets. | TG2-7 |
+| IG2-60 | BLOCKER | G2-12 | created by revision 2 | Every context consumer seats its row silently before the verb — connection rows included. | TG2-7 |
+
+### The task loop
+
+| Task | Slice | Discharges |
+| --- | --- | --- |
+| TG2-0 | The front-door substrate: the seven §E verbs returning their operation with a completion; the invocation value (document, owner, anchor) through the resolver, the navigator's chord and the context row; the shared prepare clause; the eighteen rows and resolvers; the Canvas-menu ownership census over the residue subset; the per-verb precedence facts with the not-ready-first divergence recorded | G2-1, G2-2, G2-3, IG2-33, IG2-34, IG2-36 |
+| TG2-1 | The prompt lifecycle: the sealed result family with a successor-bearing Advanced, the atomic swap, the focus-delivery seam and its real-focus facts, the choice row's status bound to ItemStatus; the label prompts (New Group with empty-to-null untrimmed, Add Link trimmed); the Set Color and Clear Color rows; Edit Card; Delete typed by the selection with the Ungroup-or-Cancel confirmation kept | G2-4, G2-7, G2D-9 restored, G2D-11, IG2-44, IG2-45, IG2-47, IG2-51 |
+| TG2-2 | The choices pickers: the typed request per staged flow; Move into Group over every group; the connection prompts over the nullable neighbor read with the cardinality table and the neighbor-built delete target; the two-stage Edit Connection with mac's labels, the end-style tuples and preselection; the direction prompt | G2-5, IG2-35, IG2-46 |
+| TG2-3 | The vault file picker: the common picker row and sheet contract, the slot retyped, purpose-specific automation names; the request value with its checkpoint table and owner validation; the off-dispatcher load with supersession and the audible-failure divergence recorded; Add Note, Add Media and Locate File end to end with the every-file-card predicate recorded as owed | G2-6, G2D-1, G2D-6, G2D-8, IG2-37, IG2-48, IG2-49, IG2-50, IG2-52 |
+| TG2-4 | Remove from Group with the null-parent arm; Create Connected Card with the exact tuple, the chord in the navigator, and the editor opened through TE-4's operation-keyed receipt — New Card's E4 landing wired through the same receipt | G2-8, G2-9, IG2-40, IG2-53 |
+| TG2-5 | Duplicate: the invocation snapshot, the ghost-only refusal inside prepare, the visited-set expansion with exact set equality, the content resolution, all-or-nothing, the group-label loss recorded beside the unmet deep copy | G2-10, G2D-4, G2D-7, IG2-38, IG2-39, IG2-54 |
+| TG2-6 | Convert Card to Note: the note-creation seam with its discriminated result including the shutdown arm; the trimmed path and the suggested name; the fixed null-text detail; the worker-safe create inside the gate with the barrier and refresh posted to the tree's context in the stated order; the recovery state after a landed note and the landed-note sentence for every non-retargeted outcome | G2-11, G2D-3, IG2-41, IG2-42, IG2-43, IG2-55, IG2-56, IG2-57, IG2-58 |
+| TG2-7 | The context plan over (surface, target) with per-surface projections, mac's order including Create Connected Card, Connect To… and Set Color on groups, the connection rows dispatching their captured edge without seating, the grid's Toggle Mark live, and the bidirectional census per surface | G2-12, G2D-12, IG2-59, IG2-60 |
+| TG2-8 | The matrix: every executable canvas id in the delivered set, the chords.json evidence groups with anchors that exist, the regenerated parity matrix | G2-14 (the matrix), IG2-3 |
+| TG2-9 | The journey with its reseating, axe over the new sheet and the group prompt, and the ledger sweep | G2-13, G2-14 (the sweep) |
+
+Ledger rows not named in a task's row ride the task whose surface
+they touch; the closing record sweeps stragglers. Each task lands
+with its facts, its byte-restored mutations, its record here, and a
+raised citation floor — the §F gauntlet, unchanged.
+
+### Implementation records
+
+### TG2-0 — the front-door substrate: operations with owners, guarded prepares, the first five rows
+
+The seven §E verbs that answered nothing now answer with their
+OPERATION, the shape `CanvasRenameGroup` and `CanvasSetColor` already
+had (G2-2, IG2-8): `CanvasNewGroup`, `CanvasMoveIntoGroup`,
+`CanvasAddFileCard`, `CanvasAddLinkCard`, `CanvasLocateFile`,
+`CanvasEditConnection` and `CanvasDeleteConnection` return the
+`CanvasMutationOperation` the funnel admitted — null when the opener
+refused, the refusal spoken — carry an optional completion, and take
+an optional OWNER minted into the operation in place of the document
+(TE-1's initiating surface, IG2-34); `CanvasSetColor` gains the same
+owner. The workspace's `DocumentCommand` gains an owner-carrying
+overload that hands the verb `ActiveGroup.ActiveTab` at execution,
+never at construction. Every prepare that queries the session —
+placement for New Group and the two add verbs, the inside-group
+placement and overlap check for Move into Group — runs inside a
+`catch (VaultException)` that speaks the verb's `CanvasActionFailed`
+arm with the exception's message and returns no action (G2-2,
+IG2-21): the funnel's transaction catches only the apply's exception,
+so a thrown query would otherwise escape the gate. Locate and the
+two connection verbs prepare from the basis alone and need no catch;
+the record says so rather than decorating them.
+
+Three request seams give the surfaced verbs their G2-3 openers over
+the selection: `RequestSetColor` refuses `NothingSelected` before any
+sheet (mac's order for that verb), `RequestGroupRenameForSelection`
+refuses `NotAGroup` on nothing and on a card, and
+`RequestCardEditorForSelection` refuses `NothingSelected` and lets
+the editor factory speak `NotATextCard`. The rows: FIVE, not
+eighteen — Delete Selection, Edit Card Text…, Rename Group…, Set
+Color… and Clear Color, the verbs a surface already reached — with
+labels byte-identical to mac's registrations and mac's hints (the undo
+chord spelled Ctrl+Z), resolvers over five workspace commands, and
+`chords.json` regenerated. The other thirteen rows ride the tasks
+that land their sheets and verbs: a registered row must be
+EXECUTABLE (B12's rule, the reason PR C withheld commitMode until §F),
+and a row whose sheet is not yet built would be a silent click. The
+task table said eighteen; the loop says five now and the rest with
+their sheets, and this record is where the difference is written.
+
+The Canvas-menu ownership census (G2-1, IG2-2, IG2-33):
+`TheCanvasMenuMirrorsMacsMenuOwnershipOverTheResidue` scrapes the
+verbs mac's toolbar command group invokes in `SlateMacApp.swift`, maps
+each residue id to its registration closure's verb in
+`SlateCommands.swift`, resolves each Windows row to its resolver path
+in `SlateCommandRegistrar` and asks whether the CanvasMenu subtree of
+`MainWindow.xaml` binds it — and asserts the two owned sets equal,
+both ways, over the residue ids that HAVE a Windows row. It tightens
+as rows land: the day TG2-4 registers Create Connected Card, the
+census demands its menu item, because mac's menu has one; today it
+holds over five ids with no menu items on either side. The one-way
+`CommandDriftTests` stays what it is.
+
+Recorded here (IG2-36, G2D-13): every Windows verb speaks the
+not-ready sentence FIRST — the document's own load state precedes the
+verb's selection and kind guards — where mac's verbs interleave
+admission with those guards differently per verb. A Windows-wide
+divergence of ORDER, not of outcome: the same refusal is spoken for
+the same state, one sentence, and a document that is not ready cannot
+answer any other question honestly.
+
+Facts: five — the seven verbs answering with their operation and
+owner (the passed owner kept, the document by default, the completion
+landing Installed, the openers' null-with-sentence); the prepare
+clause as a SOURCE census over the four querying verbs' catch clauses
+(no session fault is inducible from a real vault — an unknown anchor
+does not throw, core places anyway — so the clause is pinned on the
+text, the way the chord scrape pins the navigator's map); the three
+openers over no selection and a card; the five commands reaching the
+document from the workspace; the ownership census. Mutations, each
+byte-restored: M1 New Group's catch narrowed to a foreign exception
+type (the census bit), M2 New Group minted with the document as
+owner (the owner fact bit), M3 Set Color's opener guard removed (the
+openers fact bit), M4 Clear Color's resolver removed (the registrar's
+coverage census bit). All bitten.
+
+### TG2-1 — the prompt lifecycle: the answer as a family, focus delivered, the first sheets
+
+The submit answer stops being an enum. `CanvasPromptSubmit` is a
+sealed record family — Refused, Pending and Completed as values, and
+`Advanced` as a record that CARRIES its successor and refuses to be
+constructed without one (IG2-44): a staged prompt cannot answer
+Advanced with nothing to advance to, and no other answer can smuggle
+a successor. The workspace's `SubmitCanvasPrompt` swaps on it in one
+setter call — the predecessor's `Closed` runs, the successor is
+current — and a completion the predecessor captured compares by
+reference and closes nothing (G2-4). Every existing usage kept its
+spelling; the frozen three answers are the same three.
+
+Focus is DELIVERED, for the first time. No code path moved keyboard
+focus into the prompt or picker overlay when it opened — the journeys
+typed through UIA's Value pattern, which needs no focus, and a reader
+pressing a chord was left where they stood (IG2-45's finding, wider
+than the swap it was raised on). The window now observes the
+workspace's sheet properties: a prompt or picker that becomes current
+— opened, or swapped in by Advanced — takes focus on its first
+focusable after layout, on the dispatcher at Input priority: the text
+field when the sheet has one (selected whole, so a prefilled draft is
+replaced by typing), else the selected choice's container, else the
+list, else its one button; the picker's filter field. The seam is the
+window's, `Workspace_CanvasSheetChanged`, and the journey pins the
+focused element (TG2-9).
+
+A choice carries a STATUS (`CanvasPromptChoice` gains it, null by
+default) and the choices list binds it onto each item's UIA
+ItemStatus through an item-container style (IG2-47) — the connection
+prompts will carry the outline row's ordinal clause there, so two
+identically-labelled parallel connections stay distinct to a reader.
+
+The first sheets: New Group… (`CanvasNewGroupPrompt`, a text kind) and
+Add Link Card… (`CanvasAddLinkPrompt`, a text kind), each with its row,
+resolver and command, each carrying the invoking tab as the
+operation's owner, each opened through a request seam whose opener
+admits first (mac's `canvasPromptNewGroup` and `canvasOpenAddLink`).
+Mac's label rule lands (G2D-11, IG2-16): `NormalizeLabel` turns the
+EMPTY draft into a null label and keeps whitespace untrimmed; the two
+verbs take `string?` labels, pass the null to core's `CreateGroup`
+and `RenameGroup`, and speak "Untitled" for it — the shipped Windows
+verbs wrote the empty string and are corrected, Rename Group's prompt
+included. Add Link TRIMS its draft (mac's rule) and leaves validation
+to the verb's `NotAUrl` arm — Refused keeps the sheet and the draft
+(G2-5, G2D-10). And a GROUP's palette Delete asks: `CanvasDeleteSelection`
+no longer returns silently for a group but raises
+`UngroupConfirmRequested`, and the workspace presents
+`CanvasUngroupConfirmPrompt` — Ungroup first, Cancel second — whose
+Ungroup runs the algebra's one removal and whose Cancel changes
+nothing; either closes now (G2-7, IG2-51: E8's and ED-3's confirmation
+kept, revision 2's "retired" retired). The row surfaces keep their
+direct Ungroup row (TE-8).
+
+Facts: four — New Group's label rule end to end (the empty draft
+spoken "Untitled", a spaced draft written untrimmed); Add Link's
+refusal keeping the sheet and its trim landing the trimmed url on
+disk (Uri parsing forgives the spaces, the file must not carry them);
+the group's Delete asking, Cancel leaving the bytes and Ungroup
+keeping the cards; the family's shape with the choice status and the
+XAML binding read from the window's own text. Mutations, each
+byte-restored: M1 the label rule removed, M2 the trim removed (which
+bit only once the fact read the written url — the first version
+watched the parse, which forgives), M3 the group arm silent again,
+M4 the ItemStatus setter removed. All bitten.
+
+### TG2-2 — the choices pickers: a typed context, mac's cardinality, the two-stage edit
+
+Every prompt-backed flow now captures a typed, immutable CONTEXT at
+open — `CanvasPromptContext`: the invoking owner, the exact
+`CanvasLoaded` identity, the source node — and checks the identity
+half at submit through the document's `IsCurrentLoaded`: a submit
+against a reloaded document is a guess and refuses
+`PickDifferentTarget` with the sheet and its draft kept (IG2-35,
+IG2-19's rule applied to prompts). New Group… and Add Link Card…
+retrofit onto it; the request seams take the owner and mint the
+context with the applied loaded reference, never a later one.
+
+Move into Group… (G2-5, IG2-15) is a choices prompt over EVERY group
+in reading order, mac's rule — the current group included, a move
+into it a re-placement — each named the way every projection names a
+card; none refuses `NoGroups` and presents nothing; Enter runs the
+shipped verb with the context's owner. The connection verbs
+(`RequestDeleteConnection`, `RequestEditConnection`) share one opener
+(IG2-11, IG2-46): not-ready, the selection, then the NULLABLE neighbor
+read — a null answer speaks the state's own refusal, else the typed
+not-readable, never "no connections" about a list that never came
+back; an empty list speaks `NoConnections`; ONE connection routes
+directly (Delete runs; Edit opens the direction stage), mac's
+`canvasPromptDeleteConnection` and `canvasPromptEditConnection`; MANY
+present `CanvasPickConnectionPrompt`, whose rows are keyed by edge,
+named by the SAME pure render the outline's connection rows carry
+(`ConnectionRowName` through `CanvasAnnouncer.RenderLabel`, nothing
+posted) and carry `CanvasPhrase.ConnectionStatus` as the row's status
+onto the item's ItemStatus (IG2-14, IG2-47).
+
+Delete speaks from the SELECTED-RELATIVE neighbor (IG2-13): a new
+`CanvasDeleteConnection` overload takes the `CanvasNeighbor`,
+re-validates the edge is still that card's neighbor, and builds the
+`Connection` target from the neighbor's direction, other title and
+label — so a card standing at an edge's to-end hears the OTHER
+endpoint named, never itself. The string overload delegates to it
+whenever the edge is the selected card's own and keeps its
+edge-coordinate sentence for a row-less caller naming another edge
+(the shipped fact's shape). Edit is two stages through Advanced
+(G2D-2, IG2-12, IG2-44): `CanvasEditConnectionDirectionPrompt` — four
+choices with mac's labels phrased by meaning, "Points at the
+target", "Points back at the source", "Both directions", "No
+direction", the current one preselected from the edge's two arrow
+flags in EDGE coordinates, the frame the verb's four arms share —
+advancing to `CanvasEditConnectionLabelPrompt`, prefilled with the
+current label, whose submit runs the shipped verb ONCE with the
+chosen direction, an empty draft a null label, sides and color
+preserved by the verb. Escape at either stage changes nothing. Three
+rows, resolvers and owner-carrying commands land: Move into Group…,
+Edit Connection…, Delete Connection…; `chords.json` regenerated.
+
+Facts: three — Move into Group listing every group by name (the
+engine's reading order put a fresh group first, so the fact finds
+them by name), refusing a stale submit with the sheet kept, and
+landing into an EMPTY group (the fixture's own group is too crowded
+for the engine, which is the verb's `NoFreeSpaceInGroup` refusal and
+not this fact's subject); Delete Connection's cardinality with the
+sentence naming the other endpoint from the to-end card; Edit
+Connection advancing picker → direction (a different sheet,
+preselected) → label (prefilled) with one write landing Both and a
+null label, Escape at the picker leaving the bytes. Mutations, each
+byte-restored: M1 the single-connection direct route removed, M2 the
+stale check removed, M3 the delete sentence from the to-node again,
+M4 the picker completing instead of advancing. All bitten.
+
+### TG2-3 — the vault file picker: one slot, one contract, a request checked three ways
+
+The card picker's slot becomes ONE picker slot. `ICanvasPickerSheet`
+is the contract both sheets satisfy — Title, Filter, Confirm, and the
+sheet-level UIA names as PROPERTIES (the dialog's, the filter's, the
+rows') — and the workspace's `CanvasCardPickerSheet` is retyped to it,
+so the modal arm `ModalSurface.CanvasCardPicker`, the window's key
+routing and the modal state derivation all serve either sheet without
+a new cell (G2-6, G2D-1, IG2-18). The XAML binds the three names, and
+each row's Status rides the item's ItemStatus through an
+item-container style: the card picker's rows gain a null status, the
+vault picker's carry the path (IG2-48). `CanvasVaultFilePickerViewModel`
+projects `CanvasVaultFilePickerModel`'s classified generation through
+`CanvasPickerRow` — value the path, label the display name else the
+name, status the path — narrowed by the filter over the complete set
+and capped at 200 (ED-2).
+
+The request is a VALUE, `CanvasVaultPickRequest`: purpose (Note,
+Media, Locate), the target card for Locate, the exact loaded
+identity, the invoking owner, and the model generation the sheet
+shows. It is checked THREE ways (IG2-19, IG2-49, IG2-50): at load
+completion, a moved identity presents nothing and speaks
+`PickDifferentTarget`; at submit, the document's `HandleVaultPick`
+refuses a moved identity or a superseded generation (a second open
+replaces the sheet; the first sheet's pick is a guess) with the sheet
+kept; and the workspace's `ConfirmCanvasCardPick` refuses a pick whose
+owner is no longer the active tab, spoken through the SHEET's own
+document because the active tab may no longer be a canvas at all. The
+checkpoint table revision 2 could not write is now the code's: a
+superseded load never presents; a moved identity at completion
+presents nothing and says so; a mismatch at submit refuses and keeps.
+
+The load runs OFF the dispatcher on the document's own scheduler
+(`StartWork`, inline in the synchronous host), posting back through
+`Post`; a later request's generation supersedes an earlier load, which
+never presents; a paging throw answers `CanvasActionFailed` — `Create`
+for the add verbs, `CanvasAction` for Locate — with the message and
+presents nothing; an empty classified set answers `NoNotesInVault`,
+`NoMediaInVault` or `NoFilesToPointAt` (IG2-20). Recorded against
+mac (IG2-37, G2D-13's sibling): mac keeps a silently partial set when
+a page fails; Windows refuses audibly and presents nothing — a
+divergence of policy, chosen because a list with silent holes is the
+never-silent rule's opposite. The admission predicate is the
+purpose's (G2D-6): notes are markdown, media is core's
+`CanvasMediaClass` over the path, Locate admits the union; Locate is
+offered on every file or image card (G2D-8, IG2-52 owed to the owner
+with E8's wording). Three rows, resolvers and owner-carrying commands:
+Add Note to Canvas…, Add Media…, Locate File…; `chords.json`
+regenerated.
+
+Facts: three — Add Note listing the vault's notes with the path as
+status, the filter narrowing to one, the pick landing a file card, and
+Add Media refusing an empty set; Locate refusing a text card and
+repointing a file card; the stale pick's three refusals (a superseded
+generation, a reloaded identity, a tab that moved on — the note
+opened in a NEW tab, since the current-tab default replaces the item
+and keeps the tab). Mutations, each byte-restored: M1 the generation
+check removed, M2 the identity check removed, M3 Locate's file-card
+guard removed, M4 the empty-set refusal removed. All bitten.
+
+### TG2-4 — Remove from Group, Create Connected Card, and the editor through the receipt
+
+Remove from Group (G2-8, R22, IG2-40): the openers over the selection
+— not-ready, `NothingSelected`, a card with an empty group path
+`NotInAGroup` with its title — then, inside `prepare` under the gate,
+the enclosing group from `CanvasParentOf` on the basis: a THROWN query
+is `NothingSelected` (mac's rule at the same seam — a fact the query
+never returned must not become "not in a group"), a null or
+unresolved parent is `NotInAGroup`; placement is `CanvasPlaceNew`
+anchored on the PARENT with the card's own size, no hint, the card
+excluded; one `UpdateNodeGeometry` named `remove "⟨title⟩" from
+"⟨group⟩"`; success speaks `CanvasRemovedFromGroup` with the group's
+label.
+
+Create Connected Card (G2-9, IG2-22): ONE action carrying the exact
+tuple — a fresh id, `Text` with the empty string, the engine's
+placement anchored on the origin with the direction as the hint and
+nothing excluded, the default size, null color; a second fresh id for
+the edge, from the ORIGIN to the NEW card, `CanvasAutoSides` over the
+origin's rect and the placement's rect in that order, `None` from-end,
+`Arrow` to-end, null label and color. Success seats the new card
+(`SelectCreated`) and speaks `CanvasConnectedCardCreated` with the
+relative phrase and the origin's title; one undo removes both ops.
+The directional variant is `CanvasConnectedDirectionPrompt` — Below,
+Right, Above, Left, mac's labels — over the typed context, then the
+same verb. The chord: `Ctrl+Alt+Shift+N` is the navigator's own
+`AddChord`, delivered wherever a canvas surface holds the keys, with
+the presenter's OWNER riding into the operation (IG2-34); the row
+records the divergence the modifier rule demands (mac's ⌃⌥⌘N maps
+onto Ctrl+Alt+N, which New Card owns, so Shift disambiguates — the
+spec's §7 allocation) and the census's pinned list names it. The
+Canvas menu gains the item mac's menu has, so the ownership census now
+holds over one owned id on both sides.
+
+The editor opens through TE-4's receipt (E4, G2-9, IG2-23, IG2-53).
+`CanvasMutationOperation` carries `CanvasOperationCompletion` under its
+own identity; `OpenEditorOnLanding` wraps the completion so that, on
+the INSTALLED outcome, at most once per operation
+(`TryMarkEditorOpened`), the created card's editor is REQUESTED for
+the operation's owner (`CreatedEditorRequested`), and the workspace
+opens it only if that owner is still current — the active tab, or the
+document itself when the verb was invoked unaddressed and the document
+is the active canvas. New Card is wired through the same receipt: E4's
+"lands in the editor" was recorded by §E and never wired (the receipt
+type existed with no caller), and it lands now. One catch the facts
+found: the completion fires inside the transaction's finally, BEFORE
+the applied publication has rebuilt the document's row index in an
+inline host — the editor factory then saw no row and spoke "Nothing
+selected." The request therefore fires only once the created row is
+PRESENT: immediately when it is (the dispatcher's posted apply
+precedes the marshalled completion), else on the next applied
+publication that carries it, through the document's own
+`PublicationApplied` hook. Three rows, resolvers and owner-carrying
+commands: Remove from Group, Create Connected Card, Create Connected
+Card (Choose Direction)…; `chords.json` regenerated.
+
+Facts: six — the exact tuple with one undo restoring the bytes; the
+direction hint honoured (Left and Above of a card with room); the
+chord carrying the presenter's owner into the receipt; Remove from
+Group placing outside, speaking the label, undoing, and refusing a
+card in no group with its title; New Card and Create Connected Card
+landing in the editor for a current owner and NOT for one that moved
+on; the direction prompt creating on the chosen side. Mutations, each
+byte-restored: M1 the edge op dropped, M2 the owner check on the
+landing removed, M3 a card in no group answering NothingSelected, M4
+the navigator chord removed (the scope census bit). All bitten.
+
+### TG2-5 — Duplicate: a snapshot, a visited set, exact equality, nothing partial
+
+`CanvasDuplicate` (G2-10): the SEED is captured at invocation — the
+marked store's epochs when the store is non-empty (carried as the
+operation's captured marks, kept: G2D-4), else the selection; neither
+refuses `NothingSelected`. Inside `prepare`, under the gate, in one
+try: the seed is PROJECTED FIRST through `CanvasOrderNodes` — reading
+order drops a ghost silently, and core's `CanvasChildrenOf` THROWS on
+one, which the first fact found when a store of ghosts answered the
+typed failure instead of `NoMarks` — so a store of ghosts is `NoMarks`
+here, after admission (IG2-38), and a seed that shrank is the typed
+`Duplicate` failure with nothing partial (IG2-39); only live ids are
+walked. The walk is a visited set through core's containment — a
+picked group brings its members and theirs (row D) — re-projected
+through reading order with EXACT set equality demanded again; every
+member's geometry comes from the basis; `CanvasPlaceSet` anchored on
+the first member places the rects as one rigid set and its origins'
+count must equal the members' (IG2-25). One action mints, per member
+in order, a `CreateGroup` (the DERIVED title standing in for the raw
+label the scene does not expose — G2D-7's sibling, recorded: a null
+or blank group label is not preserved, IG2-54) or a `CreateNode` whose
+content follows the kind — `File` with the card's target and subpath,
+`Link` with the target, `Text` with core's node text (null the empty
+string) — at the engine's origin with the member's size and color;
+edges are never copied. The name is `duplicate "⟨title⟩"` for one
+member, else `duplicate` over core's `CountNoun`; success seats the
+FIRST copy (`SelectCreated`) and speaks `CanvasCardPlaced` with
+`Duplicated` for one member or `CanvasBulkDuplicated` with the count;
+one undo removes every copy. A row, a resolver and an owner-carrying
+command; `chords.json` regenerated.
+
+Facts: three — the selection's copy with the same text and size, no
+edge copied, the copy seated, the single sentence, one undo restoring
+the bytes; a marked GROUP expanding to its member (moved in first),
+two copies landing with the copied card inside the copied group, the
+marks kept, the bulk sentence counting two, one undo; a store of
+ghosts refusing `NoMarks` and a live-plus-ghost seed refusing the
+typed failure, the bytes standing. Mutations, each byte-restored: M1
+the seed-equality check removed (the subset copied), M2 the
+transitive walk removed, M3 the ghost arm removed, M4 the first copy
+not seated. All bitten.
+
+### TG2-6 — Convert Card to Note: the note through the sidebar's seam, inside the gate, with a recovery state
+
+The structural-aware route (G2-11, IG2-6): `ICanvasNoteCreator` is the
+seam — `TryCreateNote` (worker-safe) and `NoteLanded` (UI-owned) — and
+`FilesSidebarViewModel` implements it in a partial of its own: the
+create runs under the sidebar's session-work lease through
+`CreateOutcomes.CreateReporting`, the SAME path every sidebar create
+takes, answering a discriminated `CanvasNoteCreateResult` — `Landed`
+with the unindexed caveat, `Exists`, `Failed` with the message, and
+`Unavailable` for a session-work refusal at shutdown (IG2-56); the
+landing runs `StructuralHistoryBarrier`, `Refresh` and the caveat
+through the sidebar's own report path. The vault lifecycle hands the
+sidebar to the workspace as `CanvasNoteCreator` when both exist; the
+prompt carries it; a workspace with none refuses `NoteCreateFailed`
+with "no vault to write to" and presents nothing.
+
+The verb, `CanvasConvertToNote(nodeId, cleanPath, creator, …)`, is ONE
+operation. The openers: not-ready, the row, a text card only
+(`OnlyTextCardsConvert`), a path ending in `.md` — the verb's guard,
+one rule in one place, the prompt's duplicate removed when the gauntlet
+showed two guards for one rule cannot both bite. Inside `prepare`,
+under the canvas gate (IG2-26): the card's text through
+`CanvasNodeText` — a throw `NoteReadFailed` with the message, a null
+the fixed detail "The card text is unavailable." (IG2-42); the note
+through the seam, whose lease nests inside the canvas gate and never
+takes it, so no cycle — `Exists` is `NotePathExists` on disk, `Failed`
+is `NoteCreateFailed` with the message, `Unavailable` is
+`NoteCreateFailed` with "the vault is closing"; a LANDED note returns
+the one retarget op, `SetNodeContent` to `File` at the path, and the
+funnel is the one arbiter after it. The completion (IG2-55, IG2-58):
+once the note landed, whatever the canvas outcome, the barrier, the
+refresh and the caveat are POSTED to the UI through the seam's
+`NoteLanded`; for every outcome that did not retarget the card —
+conflict, refusal, displacement, which the funnel keeps silent — the
+landed-note truth is spoken once, after the funnel's own sentence:
+`NoteRetargetFailed` with the path and "the note was created; the card
+still points at its text". Success speaks `CanvasConvertedToNote`
+with the path; canvas undo restores the text card and the note stays
+(G2D-3).
+
+The prompt, `CanvasConvertToNotePrompt`: prefilled with mac's suggested
+path — the title with every slash a dash, trimmed, "Untitled" when
+empty, plus `.md` (`SuggestedNotePath`, IG2-43) — the submit trims the
+draft ONCE and carries that exact value through the verb, every
+sentence and the file (IG2-41). Once the note landed and the canvas
+did not retarget, the sheet is a RECOVERY state (IG2-57): `IsRecovery`
+stands, Enter re-speaks the landed-note truth through a boundary
+method and writes nothing (a retry would collide with the note that
+exists), Escape closes; TG-1's close table is not widened — Pending
+closes on the landing arms only. The typed sentences a prompt needs
+are BOUNDARY methods on the document (`SpeakNoteRetargetFailed`,
+`SpeakNoteCreateFailed`), because the announcement seam census
+refused the first version's direct reach at the announcer, and it was
+right. A row, a resolver and an owner-carrying command; `chords.json`
+regenerated. `RequestConvertToNote` refuses a held mode with
+`ModeBusy` before any sheet (mac's order).
+
+Facts: three — the note written first with the card's text, the card
+retargeted, the barrier landing once, the sentence naming the path,
+undo restoring the text card with the note kept; the typed arms (a
+file card, a draft without `.md` with the sheet kept, a path that
+exists refusing the "already exists" render with nothing written and
+no barrier, the shutdown arm refusing "the vault is closing" with no
+file) and mac's suggested path for a slashed, padded and empty title;
+the recovery state after a landed note with a moved canvas file — the
+note on disk, the barrier landed, the card still text, the landed-note
+sentence spoken, Enter re-speaking and writing nothing, Escape
+closing. Mutations, each byte-restored: M1 the verb's `.md` guard
+removed, M2 the recovery state removed (a retry re-created), M3 the
+posted landing removed, M4 Exists answered as a create failure. All
+bitten.
+
+### TG2-7 — The context plan over (surface, target): one dispatch, mac's order, the connection rows on their edge
+
+The plan (G2-12, IG2-28, IG2-29, IG2-59): `CanvasContextMenuPlan.RowsFor`
+takes a `CanvasContextSurface` — Outline or Grid; the renderer carries no
+context menu (G2D-12, recorded) and is not a surface here — and a
+discriminated `CanvasContextTarget`: a `Node` with its id, core's kind
+and whether it sits in a group, or a `Connection` with its source node
+and the neighbor captured selected-relative to that source. The
+outline's node projection is mac's order (CanvasOutlineView.swift):
+Open; Edit Card Text… and Convert to Note… (text); Create Connected
+Card; Duplicate; Rename Group… (group); Locate File… (file, image);
+Toggle Mark; Connect To…; Set Color… on EVERY kind, groups included;
+Move into Group…; Remove from Group (in a group); Delete for a card,
+Ungroup for a group (ED-3's one removal). A connection row: Jump to
+Card; Edit Connection…; Delete Connection — the captured edge directly,
+no picker. The grid's projection is mac's table subset from the SAME
+plan — Open; Toggle Mark, LIVE, the last staged reason retired
+(MarkingArrivesLater and GroupRemovalIsUngroup are gone); Delete or
+Ungroup — and a connection target yields no grid rows. Every row is
+live. One label table, `CanvasContextMenuPlan.Label`, names the plan's
+rows and the grid's actions alike; ten `CanvasPhrase` row-action
+constants carry mac's labels verbatim.
+
+The one dispatch (IG2-60): `CanvasContextDispatch.Execute` maps every
+verb onto the document's verb for EVERY consumer. On a node target,
+Open is the surface's own activation (Enter's path); Edit Card, Rename
+Group and Ungroup name their row; every other verb seats the row
+SILENTLY first (TG-0's rule), then runs — Toggle Mark, Convert to Note,
+Create Connected Card, Duplicate, Locate File (the vault pick), Connect
+To (the card picker), Set Color, Move into Group, Remove from Group,
+Delete. On a connection target the dispatch seats the SOURCE silently —
+a no-op when the source already hosts the rows, never the other
+endpoint — then Jump to Card follows the edge, Edit Connection goes
+straight to the direction stage for the captured neighbor through the
+document's new `RequestEditConnection(neighbor, owner)` entry, and
+Delete Connection deletes that edge. The owner an operation carries is
+the surface's DataContext, the tab.
+
+The consumers DERIVE. The outline's `BuildContextMenu` builds the target
+from the row (`TargetOf`: a node row's kind and group path; a connection
+row's `SourceNodeId`, new on the row model, with its neighbor) — so
+connection rows now have a menu where they had none — and
+`BuildMenuFromPlan(target, execute)` remains the one plan-to-menu
+mapping. The grid's hand-list retired: `RowActions` is built from
+`GridVerbs`, each action asking the plan per row whether it applies
+(`IsVisible`) and is live (`IsEnabled`) and executing through the
+dispatch; an action's reason is the first the plan gives that verb over
+any kind, because the substrate carries one reason per action.
+
+Facts: eight — the plan's tables per (surface, target) in mac's order,
+with Locate File… on file and image only, Edit Card Text… and Convert to
+Note… on text only, Remove from Group only inside a group, the
+connection's three rows and the grid's two arms; no silent arm, and none
+staged; every verb placed somewhere under its own label; the outline
+census bidirectional per target (five kinds in and out of a group, a
+connection); the row's target derived from the row; the grid census over
+every fixture row with Toggle Mark live and Open the same activation
+Enter runs; the connection dispatch on the captured edge from its seated
+source (Edit to the direction prompt, Delete to the edge gone, the
+selection landing on the source when it stood elsewhere); a node verb
+seating its row before the verb. §B's citation of the renamed table fact
+updated. Mutations, each byte-restored: M1 the connection dispatch
+seating the other endpoint, M2 the outline projection dropping
+Duplicate, M3 the node seat removed — which the grid's fact could not
+catch, the reader's currency already seating the row, so the seat's
+proof moved to the document level — M4 Set Color withheld from groups.
+All bitten.
+
+### TG2-8 — The matrix: every executable canvas id delivered, the evidence anchored, the matrix regenerated
+
+`W6_1_DELIVERED_COMMANDS` in `scripts/generate-parity-matrix.py` gains
+the thirty-nine ids that became EXECUTABLE after §D — B12's rule, a
+command joins in the PR that makes it executable: §E's five (delete,
+editCard, renameGroup, setColor, clearColor — shipped without a front
+door, given one by §G2), the §G2 residue (newGroup, addLink,
+moveIntoGroup, editConnection, deleteConnection, addNote, addMedia,
+locateFile, removeFromGroup, createConnectedCard,
+createConnectedCardDirectional, duplicate, convertToNote),
+`slate.canvas.newCard` and `slate.file.newCanvas`, §F's thirteen
+(moveMode, resizeMode, connectMode, commitMode and cancelMode —
+returning as the §D entry promised, F being the PR that made them
+reachable — placeBelow, placeRightOf, placeAbove, placeLeftOf,
+alignWith, connectTo, resizeDefaultSize, resizeFitContent) and §G's six
+(toggleMark, showMarks, clearMarks, deleteMarked, groupMarked,
+colorMarked). The set now equals the chord table's canvas inventory
+exactly — fifty-eight ids, none missing, none extra — checked by set
+difference against `ChordTable.cs` before the regeneration. The status
+string's gate date moved to 2026-09-02.
+
+`chords.json`'s `deliveryEvidence` gains three groups, each with
+implementation and test anchors the generator checks file-by-file and
+marker-by-marker: canvasMutations (the delete funnel, the convert verb,
+`CanvasMutationOperation`, the prompt family, `CanvasVaultFilePickerViewModel`,
+`ICanvasNoteCreator`, `CanvasContextDispatch`, the workspace's
+`CanvasNewGroupCommand`, the sidebar's `CreateCanvasCommand`, the chord
+rows; the history facts, `EveryReachableGuardExitSpeaksItsCell`, the
+convert and delete-connection facts, `TheOutlineMenuEqualsThePlan`, the
+authoring journey), canvasModes (`CanvasModeController`, `CanvasPlaceSet`,
+the navigator, `CanvasMoveModeCommand`; `ConnectModeConnectsTheReadersCard`,
+`StagedConnectAppliesOnceWithEveryParameterSpelled`,
+`M2_CommitRunsTheEffectAndSpeaksItsConfirmation`, the modes journey) and
+canvasMarks (`ToggleMark`, `SubmitBulkMarked`, `CanvasToggleMarkCommand`;
+`ToggleMarkPublishesTheAuthorityAndSpeaksTheLiveCount`,
+`DeleteMarkedIsOneActionAndUndoRestoresIt`, `ColorMarkedKeepsTheMarks`,
+the marks journey). The block was re-serialized through the projection
+writer, so the byte-for-byte round-trip `ChordTableTests` makes holds.
+
+`parity_matrix.md` regenerated: fifty-eight canvas command rows now read
+implemented — thirty-nine flipped out of pending, nineteen re-dated. The
+"Accessible canvas (T parity)" surface row stays pending BY CONTRACT:
+PR H reconciles the evidence and flips only that row (G2-14), which is
+why #745 is not added to the generator's expected issue set here.
+Discharges G2-14's matrix clause and IG2-3.
+
+### TG2-9 — The journey with its reseating, the sheets scanned, and the ledger sweep
+
+The journey (G2-13), `CanvasVerbs_GroupConnectDuplicateLinkConvertAndUndo_AreReachable`,
+gate W-C, one launch through the shared opener `OpenNewCanvasFromFileMenu`:
+two cards by chord, each landing committed with Escape (TG2-4's editor
+landing); New Group… by the palette — the group prompt scanned by axe,
+"Research" typed, the group row in the tree; the FIRST card reseated
+(the group landed selected, IG2-31); Move into Group… (the prompt,
+Enter; the row's status reads "in Research"); Remove from Group (the
+status reads "in canvas"); Create Connected Card by Ctrl+Alt+Shift+N
+(the editor sheet on the landing, Escape commits, a third card); the
+connected card selected and its connection row present; Edit
+Connection… — "Both directions" chosen at stage 1, and after the atomic
+swap the FOCUSED ELEMENT is the label field, read from UIA (IG2-45's
+fact, here at the real keyboard), "supports" typed; the connection
+row's name reads "Linked with … labelled \"supports\"" — core's own
+render; Duplicate (a fourth card); Add Link Card… (the URL prompt; a
+link card named "example.com"); the connected card reseated and Convert
+Card to Note… (mac's suggested path prefilled, Enter; a file card; a
+new item in the files tree); Delete Connection on that card (one
+connection, mac's cardinality, no picker; the connection row gone); Add
+Note to Canvas… (the vault file picker listing the vault's note, scanned
+by axe, Escape); then the undo chain — exactly nine chords, one per
+verb, each seated on a row of the outline — back to two cards and no
+group, with the note still in the files tree (G2D-3). The seat helper
+focuses the selected row (with items, the tree container refuses
+SetFocus; the rows are the focusable elements), retrying through the
+journey's foreground re-assert.
+
+Three defects the journey found, each fixed and pinned:
+
+- The outline's expansion memory (E15) recorded a group created EMPTY as
+  "collapsed" — a state the reader never chose, since there was nothing
+  to expand — so the card Move into Group placed in it was rebuilt
+  behind a collapse nobody asked for (CD-33) and had no tree item to
+  read. `CanvasOutlineView` now remembers expansion only for groups that
+  HAD members; a group's first member opens it by default like any
+  other, and a collapse the reader did choose is still kept. Pinned by
+  `AGroupCreatedEmptyOpensWhenItsFirstMemberArrives` (a fresh group's
+  first member; then a reader-collapsed group keeping its collapse
+  across a republish — on the fixture's roomy group, because a fresh
+  group holds one card and refuses a second for want of free space, the
+  verb's own arm).
+- The prompt lists named their items by the bound record's ToString: a
+  screen reader heard "CanvasPromptChoice { Value = ToTarget, Name =
+  Points at the target … }" for a direction row, and the card picker's
+  rows were the same shape. Both container styles now bind the item's
+  UIA Name — the choice's Name, the picker row's Label — beside the
+  ItemStatus they already carried. Pinned in
+  `TheSubmitFamilyAndTheChoiceStatusAreShapedAsFrozen` from the XAML's
+  side, and by this journey from UIA's.
+- The sibling journeys on this branch: `CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable`
+  and `CanvasModes_MoveResizeAndConnectPicker_AreReachable` created their
+  cards by chord and left TG2-4's editor sheet open, so the palette (the
+  marks list) and the mode keys (the resize Escape) landed in the sheet;
+  both now commit each landing with Escape, as this journey does.
+  `CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean` asserted
+  the pre-G2-12 staged Toggle Mark with its reason; it now asserts the
+  live row. All eight canvas journeys pass on the branch.
+
+The ledger sweep — every §G2 row, the task that discharged it, and
+where it is pinned:
+
+- IG2-33 → TG2-0: the two-way ownership census
+  `TheCanvasMenuMirrorsMacsMenuOwnershipOverTheResidue`.
+- IG2-34, IG2-36 → TG2-0: owner-carrying commands and the navigator's
+  presenter owner; the not-ready-first order in the opener facts.
+- IG2-35, IG2-46 → TG2-2: `CanvasPromptContext` on every staged verb;
+  mac's cardinality in `DeleteConnectionFollowsMacsCardinalityAndNamesTheOtherEndpoint`.
+- IG2-37, IG2-48, IG2-49, IG2-50, IG2-52 → TG2-3: the vault picker's
+  abort-audibly rule, `ICanvasPickerSheet` with its own names, the
+  refuse-with-sheet versus never-present split, the owner check, Locate
+  File on every file card with E8 owed to the owner.
+- IG2-38, IG2-39, IG2-54 → TG2-5: the opener's NoMarks before
+  admission, Duplicate's exact set equality, the group label from the
+  scene.
+- IG2-40, IG2-53 → TG2-4: Remove from Group's parent arms; the editor
+  receipt kept out of the effect (`CanvasMutationOperation.Receipt`).
+- IG2-41, IG2-42, IG2-43, IG2-55, IG2-56, IG2-57, IG2-58 → TG2-6:
+  `ConvertWritesTheNoteThenRetargetsAndUndoKeepsTheNote`,
+  `ConvertRefusesTheTypedArmsAndSuggestsMacsPath`,
+  `ConvertAfterALandedNoteIsARecoveryStateNotARetry`.
+- IG2-44, IG2-47, IG2-51 → TG2-1: the sealed submit family, the choice
+  status on ItemStatus, the kept Ungroup confirmation.
+- IG2-45 → TG2-1's seam, read at the keyboard here: the focused element
+  after the swap is the successor's first field.
+- IG2-59, IG2-60 → TG2-7: `TheOutlineMenuEqualsThePlan`,
+  `AConnectionRowsVerbsActOnTheCapturedEdgeFromItsSeatedSource`,
+  `ANodeRowsSelectionVerbSeatsItsRowBeforeTheVerb`.
+- IG2-3 → TG2-8: the delivered set equals the inventory; the evidence
+  anchors checked by the generator.
+
+Discharges G2-13, G2-14's sweep clause, and closes IG2-45's journey
+half. No §G2 ledger row remains open.
+
+### §G2 close-out — the residue shipped, the record closed
+
+Ten tasks, fourteen commits, the ledger swept. What §G2 leaves behind:
+every mac canvas verb with a Windows front door — the eighteen the
+census found without one, each a row on both tables, a resolver and
+an owner-carrying command; operations that carry their invoking tab
+(`DocumentCommand` handing `ActiveGroup.ActiveTab`, the navigator's
+chord handing its presenter's owner) so a landing that opens an
+editor can check currency; the shared prepare clause that catches its
+own vault refusal inside the gate (`EveryQueryingFrontDoorPrepareCatchesItsOwnRefusal`);
+the prompt answer as a sealed family (`CanvasPromptSubmit` — Refused,
+Pending, Completed, and `Advanced` carrying its non-null successor)
+with the workspace's atomic swap and the window's focus seam landing
+on the successor's first field; `CanvasPromptContext` on every staged
+verb, checked against the loaded identity before it applies; mac's
+cardinality on the connection verbs (a refusal read aloud, no
+connections, one edge direct, many through the picker) and the
+two-stage edit; one picker slot typed `ICanvasPickerSheet` serving the
+card picker and the vault file picker alike, the vault pick requested
+off the dispatcher with generation supersession and owner-checked on
+confirm; the editor through the operation's receipt, raised only once
+the row is present; Remove from Group, Create Connected Card (the exact
+two-op tuple, the directional variant, Ctrl+Alt+Shift+N recorded as a
+divergence), Duplicate (a snapshot, a visited set, exact equality,
+edges never copied, marks kept), Convert Card to Note through the
+sidebar's own seam inside the gate with a recovery state after a
+landed note; the context plan over (surface, target) with one dispatch
+for every consumer, connection rows on their edge, the grid's Toggle
+Mark live and the last staged reasons retired; the matrix with every
+executable canvas id delivered and its evidence anchored; and the
+journey driving every verb at a real keyboard.
+
+The section's discoveries, honestly counted: the navigator chord that
+discarded its presenter (TG2-0, IG2-34); the ghost anchor that does not
+throw, which turned a fact into a source census over the prepare
+clause (TG2-0); the reading order that put a new group first, so the
+facts find groups by name (TG2-1); the Uri parser that forgives
+whitespace, so the fact asserts the written bytes (TG2-2); the owner
+refusal with no active document, answered through `RefuseStale`
+(TG2-3); the editor receipt that fired before the rows were rebuilt
+(TG2-4, `RaiseCreatedEditorWhenPresent`), and `OpenPath` replacing the
+current tab where the fact needed a new one; the children query that
+throws on a ghost, so Duplicate projects its seed first (TG2-5); the
+announcement seam census refusing a prompt's direct reach at the
+announcer, and the leaf-name census refusing a forwarded display name
+— both right (TG2-6); two guards for one rule, of which only one could
+bite (TG2-6); the grid's reader currency that already seats the row,
+so the seat's own proof moved to the document level (TG2-7); the
+chords.json projection that must be regenerated LAST (TG2-4's
+follow-up); and the journey's three catches (TG2-9): an empty group
+remembered as collapsed and hiding the card moved into it, the prompt
+lists naming their rows by a record's ToString, and the sibling
+journeys left standing in TG2-4's editor landing.
+
+Owed to the mac lane, restated from the freeze: G2D-1 through G2D-12
+— among them the connected-card chord's divergence, the unmet deep
+copy, the URL scheme policy, the renderer without a context menu, and
+Delete on a group kept as a confirmation. Owed here, recorded: E8's
+missing-target signal for Locate File stays with the owner (the FFI
+has none to report); the "Accessible canvas" surface row of
+`parity_matrix.md` stays pending for PR H, which reconciles the
+evidence and flips only that row; a fresh group holds one card and
+refuses a second for want of free space — mac's placement, recorded
+where the fact met it.
+
+---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 

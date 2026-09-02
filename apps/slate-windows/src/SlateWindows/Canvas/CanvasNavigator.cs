@@ -194,6 +194,12 @@ internal sealed class CanvasNavigator
         // pair - canvas-scoped delivery, live exactly while a canvas
         // surface holds the keys (rule R2).
         AddChord(Key.N, ModifierKeys.Control | ModifierKeys.Alt, NewCardFromKey);
+        // §G2 TG2-4 (G2-1/G2-9): the connected-card chord, mac's ⌃⌥⌘N — the
+        // presenter's owner rides into the operation (IG2-34).
+        AddChord(
+            Key.N,
+            ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift,
+            CreateConnectedCardFromKey);
         // §F TF-4 (F9): the mode front doors. G grabs, R is mac's
         // quick loop — during resize it COMMITS, otherwise it enters.
         AddChord(Key.G, ModifierKeys.Control | ModifierKeys.Alt, MoveModeFromKey);
@@ -222,7 +228,13 @@ internal sealed class CanvasNavigator
     /// refusal, so the key only relays the verb.</summary>
     private bool NewCardFromKey()
     {
-        _document.CanvasNewCard();
+        _document.CanvasNewCard(_presenter?.Owner);
+        return true;
+    }
+
+    private bool CreateConnectedCardFromKey()
+    {
+        _ = _document.CanvasCreateConnectedCard(owner: _presenter?.Owner);
         return true;
     }
 

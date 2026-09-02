@@ -368,49 +368,46 @@ internal sealed class CanvasTableView : UserControl
     }
 
     /// <summary>
-    /// The mac row actions, in mac's order. Mark and Delete are the
-    /// verbs PR G and PR E own; they are listed DISABLED with a reason
-    /// rather than hidden, because the substrate's menu retains a
-    /// temporarily unavailable relevant action with its reason (the mac
-    /// RowAction contract) and a silently absent verb is the harder
-    /// thing for a screen-reader user to notice.
+    /// §G2 TG2-7 (G2-12): the row actions DERIVED from the plan's grid
+    /// projection — the verbs that projection can place, each asking
+    /// the plan per row whether it applies (visible) and is live
+    /// (enabled), each running through the one dispatch table. The
+    /// hand-list retired with the last staged reason: Toggle Mark is
+    /// LIVE, and seats its row silently before marking it (IG2-60).
+    /// The substrate carries one reason per action, so an action's
+    /// reason is the first the plan gives that verb over any kind.
     /// </summary>
     private IReadOnlyList<AccessibleGridRowAction> RowActions() =>
-    [
-        new()
-        {
-            Name = CanvasPhrase.OpenRowAction,
-            Execute = ActivateRow,
-        },
-        new()
-        {
-            Name = CanvasPhrase.ToggleMarkRowAction,
-            Execute = static _ => { },
-            IsEnabled = static _ => false,
-            DisabledReason = CanvasPhrase.MarkingArrivesLater,
-        },
-        new()
-        {
-            // §E TE-8: Delete goes LIVE for card kinds — the row is
-            // seated first (the mac RowAction contract: the action
-            // acts on ITS row), then the funnel verb runs. A GROUP
-            // row's removal is the outline menu's Ungroup (ED-3);
-            // here the row stays visible and disabled with the
-            // algebra's reason, mac's temporarily-unavailable shape.
-            Name = CanvasPhrase.DeleteRowAction,
-            Execute = row =>
+        CanvasContextMenuPlan.GridVerbs
+            .Select(verb => new AccessibleGridRowAction
             {
-                if (Model is { } model && row is CanvasTableRow bound)
+                Name = CanvasContextMenuPlan.Label(verb),
+                Execute = row =>
                 {
-                    model.SeatSelectionSilently(bound.NodeId);
-                    model.CanvasDeleteSelection();
-                }
-            },
-            IsEnabled = static row =>
-                row is CanvasTableRow bound && bound.Kind != "group",
-            DisabledReason = CanvasPhrase.GroupRemovalIsUngroup,
-        },
-    ];
+                    if (Model is { } model && row is CanvasTableRow bound)
+                    {
+                        CanvasContextDispatch.Execute(
+                            model, TargetOf(bound), verb, DataContext, () => ActivateRow(row));
+                    }
+                },
+                IsVisible = row => PlannedRow(row, verb) is not null,
+                IsEnabled = row => PlannedRow(row, verb) is { Enabled: true },
+                DisabledReason = CanvasContextMenuPlan.NodeKinds
+                    .Select(kind => CanvasContextMenuPlan
+                        .RowsFor(CanvasContextSurface.Grid, new CanvasContextTarget.Node("", kind, false))
+                        .FirstOrDefault(planned => planned.Verb == verb)?.DisabledReason)
+                    .FirstOrDefault(reason => reason is not null),
+            })
+            .ToList();
+
+    private static CanvasContextTarget.Node TargetOf(CanvasTableRow row) =>
+        new(row.NodeId, row.Kind, row.GroupPath.Length > 0);
+
+    private static CanvasContextMenuRow? PlannedRow(object row, CanvasContextVerb verb) =>
+        row is CanvasTableRow bound
+            ? CanvasContextMenuPlan.RowsFor(CanvasContextSurface.Grid, TargetOf(bound))
+                .FirstOrDefault(planned => planned.Verb == verb)
+            : null;
 
     /// <summary>
     /// The mac column inventory, in mac's order, with mac's comparators
