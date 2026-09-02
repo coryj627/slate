@@ -10204,6 +10204,46 @@ continuation matrix (IG-53's resolution rows), `WithPresented()`'s
 re-present (no caller), `DisplacedBeforeApply`'s sentence (unpinned
 by design — silent), and the mac-lane divergences GD-1..GD-7.
 
+### §G close-out — the marks shipped, the record closed
+
+Eight tasks, eight commits, the ledger swept. What §G leaves behind:
+one mark authority — the publication's `MarkedIntent`, with
+`CanvasSelection.Marked` as its applied projection seeded at the top
+of every apply and echoed back only for the two one-way seeds; the
+three document verbs (`ToggleMark`, `Unmark`, `ClearMarks`) publishing
+through one `PublishMarks`; per-id mark EPOCHS stamped by
+`CanvasModelCopy.StampMarks` so a bulk verb's `RemoveCaptured` drops
+exactly the marks it captured and never a mark re-placed since; the
+mark effect resolved inside the operation's own republish, once; the
+funnel's outcomes split honestly (`DisplacedBeforeApply` silent,
+`ApplyRefused` spoken, the unpresented receipt kept); the prompt
+hierarchy replacing the prompt kind, each variant owning its submit;
+the marks list as a sheet whose Jump seats silently, clears the
+filter, and lands reader focus through the owner; Delete, Color and
+Group Marked through one `SubmitBulkMarked` frame with core's count
+noun; the chords and palette rows registered on both tables; and the
+journey driving every leg with a real keyboard.
+
+The section's discoveries, honestly counted: the mirror-only write
+healed by the seed arm (TG-0, which is why the mutation had to aim at
+the apply side); the prompt kind that could not carry the variants'
+submits (TG-1, the hierarchy); the Jump that had to clear the filter
+before it could land (TG-2); the resolution verbs that do not exist —
+Terminal has no writer, `WithPresented()` has no caller — found while
+splitting the outcomes (TG-3); the group frame that is null for an
+empty set and the verb that must say NoMarks rather than throw
+(TG-5); the marks that are NOT history, standing across an undo
+(TG-6); the outline's ItemStatus that never gained ", marked" because
+a mark toggle republishes no row (TG-7, the journey's catch —
+invisible to every fact that read the mirror instead of the row).
+Owed to the mac lane, restated from the freeze: GD-1 through GD-7,
+the Windows-only color verb among them. Owed here, recorded: the
+conflict-resolution verbs and their continuation matrix (IG-53's
+resolution rows) await a recovery flow with a writer;
+`WithPresented()`'s re-present awaits its caller; the
+`DisplacedBeforeApply` sentence stays unpinned because the arm is
+silent by design.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
