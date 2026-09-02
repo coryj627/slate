@@ -26,6 +26,16 @@ internal enum CanvasOperationOutcome
     /// <summary>Displaced mid-apply; the receipt is quarantined.</summary>
     Displaced,
 
+    /// <summary>§G TG-3 (IG-49): the currency moved BEFORE the apply —
+    /// the lease refused the write; nothing landed, nothing spoke
+    /// (frozen Stale semantics), the marks and any prompt stand.</summary>
+    DisplacedBeforeApply,
+
+    /// <summary>§G TG-3 (IG-50): the engine refused the apply with a
+    /// non-conflict error — nothing landed; the funnel speaks the
+    /// FD-6 arm with the engine's own dynamic detail.</summary>
+    ApplyRefused,
+
     /// <summary>Applied and recorded, but the refresh could not
     /// present (required target missing).</summary>
     RefreshRefused,
@@ -67,6 +77,20 @@ internal enum CanvasMutationEffect
     ClearSelection,
 }
 
+/// <summary>§G TG-3 (GD-7): the typed model-side MARK effect an
+/// operation carries — applied in the same publication as the
+/// refreshed rows, once, and never by history.</summary>
+internal enum CanvasMarkEffect
+{
+    /// <summary>The marks stand (Color Marked; every ordinary verb).</summary>
+    Keep,
+
+    /// <summary>The CAPTURED marks leave the store — each only if its
+    /// epoch is still the captured one, so a later local write wins
+    /// (IG-45).</summary>
+    RemoveCaptured,
+}
+
 /// <summary>
 /// W6-1 §E TE-1: THE OPERATION — one mutation invocation as a value:
 /// identity (IE-1), the initiating owner and its optional source
@@ -102,7 +126,9 @@ internal sealed class CanvasMutationOperation
         string? anchor,
         CanvasLoaded basis,
         CanvasMutationEffect effect,
-        object? modeToken = null)
+        object? modeToken = null,
+        CanvasMarkEffect markEffect = CanvasMarkEffect.Keep,
+        System.Collections.Immutable.ImmutableDictionary<string, long>? capturedMarks = null)
     {
         ArgumentNullException.ThrowIfNull(id);
         ArgumentNullException.ThrowIfNull(owner);
@@ -113,7 +139,23 @@ internal sealed class CanvasMutationOperation
         Basis = basis;
         Effect = effect;
         ModeToken = modeToken;
+        MarkEffect = markEffect;
+        CapturedMarks = capturedMarks
+            ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty;
     }
+
+    /// <summary>§G TG-3 (GD-7): the typed mark effect.</summary>
+    internal CanvasMarkEffect MarkEffect { get; }
+
+    /// <summary>§G TG-3 (IG-45/IG-46): the immutable snapshot of the
+    /// marks this operation captured — id to epoch — taken at the
+    /// invocation. The operation IS its own receipt: whichever refresh
+    /// finally installs it applies the effect exactly once.</summary>
+    internal System.Collections.Immutable.ImmutableDictionary<string, long> CapturedMarks { get; }
+
+    /// <summary>Once-only: set by the refresh that applied the mark
+    /// effect, read by any continuation that would apply it again.</summary>
+    internal bool MarkEffectApplied { get; set; }
 
     internal CanvasOperationId Id { get; }
 

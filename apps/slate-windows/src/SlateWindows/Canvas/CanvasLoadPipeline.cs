@@ -181,7 +181,8 @@ internal sealed class CanvasLoadPipeline
     internal CanvasRefreshOutcome RefreshAfterMutation(
         CanvasHandleLease lease,
         string basis,
-        Func<CanvasPopulation, CanvasEffectResolution> resolveSeat)
+        Func<CanvasPopulation, CanvasEffectResolution> resolveSeat,
+        Func<CanvasPublication, System.Collections.Immutable.ImmutableHashSet<string>>? resolveMarks = null)
     {
         ArgumentNullException.ThrowIfNull(lease);
         ArgumentNullException.ThrowIfNull(basis);
@@ -220,7 +221,7 @@ internal sealed class CanvasLoadPipeline
             return CanvasRefreshOutcome.RequiredTargetMissing;
         }
         CanvasRepublishOutcome outcome = CanvasLeaseTransfer.Republish(
-            _slot, lease, population, seat.SeatValue);
+            _slot, lease, population, seat.SeatValue, resolveMarks);
         if (!outcome.Installed)
         {
             return CanvasRefreshOutcome.Refused;

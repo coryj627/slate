@@ -9987,6 +9987,61 @@ close, M3 the filter clearance dropped, M4 the successor rule
 dropped, M5 admission on the projection instead of the store. All
 bitten.
 
+### TG-3 — the bulk substrate: mark epochs, the effect as receipt, split outcomes
+
+The publication gains per-id MARK EPOCHS (IG-45) behind the ONE
+transform every mark write already goes through: `WithMarkedIntent`
+stamps a fresh epoch from a monotonic clock on every id newly
+present, drops the epoch of every id no longer present, and leaves an
+id present before and after with the epoch it had — callers never
+stamp anything. The operation carries a typed `CanvasMarkEffect`
+(Keep, RemoveCaptured) and `CapturedMarks`, the immutable id-to-epoch
+snapshot of its invocation, plus a once-only applied flag: THE
+OPERATION IS ITS OWN RECEIPT (IG-46/GD-7). The effect applies in the
+SAME republish as the refreshed rows — `CanvasLeaseTransfer.Republish`
+took a marks transform beside the seat, the pipeline threads it, and
+`RefreshAndPublish` supplies `CanvasMarkEffectPlan.ResolveMarks`,
+which removes a captured id only while its CURRENT epoch is still the
+captured one, so an id unmarked and re-marked after the capture — a
+later local write — survives. History never touches marks (G8).
+
+The outcomes split as the ledger demanded. `DisplacedBeforeApply`
+(IG-49): the lease refused before the write; nothing landed, nothing
+spoke, frozen Stale's own silence. `ApplyRefused` (IG-50): a
+non-conflict, non-unindexed engine refusal is its own arm, and the
+funnel speaks `CanvasActionFailed(CanvasFailedAction.CanvasAction,
+detail)` with the engine's DYNAMIC message — dynamic data, never host
+prose. `RefreshRefused` (IG-47) — and a post-commit read that throws,
+caught at the refresh — now retains the recovery receipt exactly as
+Unindexed does: the write LANDED, the publication names the
+operation, and the funnel holds the operation itself as the receipt
+(`UnpresentedReceiptForTests` reads it back). The ladder's silent arms
+— Stale and the repeated Busy — stay silent as frozen TE-5a says
+(IG-51, the contract's enumeration, no code). Both mode completions
+map the new arms: ApplyRefused resolves Refused, DisplacedBeforeApply
+resolves as Displaced does.
+
+Recorded, not silently dropped: IG-48's continuation matrix and the
+recovery's re-present have NO consumers today — no resolution verb
+writes through `ConflictResolutionToken`, the record's Terminal flag
+has no writer, and `WithPresented` has no caller — so the receipt is
+held on the funnel until that operation's own refresh installs (the
+first attempt or any continuation re-run through the same
+`RefreshAndPublish`), which applies the effect once by the flag. The
+sheet column of those rows is TG-1's landing rule, already
+identity-bound.
+
+Facts: four — the effect landing in the very publication that carries
+the write's new rows (the mark effect assertion is on the carrier
+publication itself); the re-marked id surviving RemoveCaptured with
+the untouched one leaving; the apply refusal as its own spoken
+outcome on the funnel harness; the throwing refresh retaining the
+receipt. DisplacedBeforeApply is reachable only between admission and
+transaction under the asynchronous runner and stands typed but
+unpinned, recorded. Mutations, each byte-restored: M1 the effect
+ignored, M2 the epoch comparison dropped, M3 the refusal silent
+again, M4 the receipt dropped on RefreshRefused. All bitten.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

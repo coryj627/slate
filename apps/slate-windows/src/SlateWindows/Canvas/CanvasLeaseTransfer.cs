@@ -261,7 +261,8 @@ internal static class CanvasLeaseTransfer
         CanvasPublicationSlot slot,
         CanvasHandleLease lease,
         CanvasPopulation population,
-        string? seat)
+        string? seat,
+        Func<CanvasPublication, System.Collections.Immutable.ImmutableHashSet<string>>? marks = null)
     {
         ArgumentNullException.ThrowIfNull(slot);
         ArgumentNullException.ThrowIfNull(lease);
@@ -286,10 +287,14 @@ internal static class CanvasLeaseTransfer
                 needle = snapshot.NeedleIntent;
                 unit = unit.Pending(reseed, snapshot.NeedleIntent);
             }
-            return snapshot
+            CanvasPublication next = snapshot
                 .WithLoaded(lease, population, unit)
                 .WithFilters(snapshot.Filters.Reseeded(reseed))
                 .WithSelectedIntent(seat);
+            // §G TG-3 (GD-7): the mark effect lands in the SAME
+            // publication as the refreshed rows — one install, never a
+            // second write that a later local mark could race.
+            return marks is null ? next : next.WithMarkedIntent(marks(snapshot));
         });
         return new CanvasRepublishOutcome(outcome.Installed, reseed, needle);
     }

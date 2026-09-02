@@ -48,6 +48,37 @@ internal static class CanvasEffectPlan
 
 /// <summary>The resolution: a seat to publish atomically, or IE-35's
 /// typed failure — the commit is real, its presentation is not.</summary>
+internal static class CanvasMarkEffectPlan
+{
+    /// <summary>§G TG-3 (IG-45/GD-7): the pure mark transform — Keep
+    /// answers the current intent; RemoveCaptured removes each
+    /// captured id only when its CURRENT epoch is still the captured
+    /// one, so an id unmarked and re-marked after the capture stays.</summary>
+    internal static System.Collections.Immutable.ImmutableHashSet<string> ResolveMarks(
+        CanvasMarkEffect effect,
+        System.Collections.Immutable.ImmutableDictionary<string, long> captured,
+        System.Collections.Immutable.ImmutableHashSet<string> currentIntent,
+        System.Collections.Immutable.ImmutableDictionary<string, long> currentEpochs)
+    {
+        ArgumentNullException.ThrowIfNull(captured);
+        ArgumentNullException.ThrowIfNull(currentIntent);
+        ArgumentNullException.ThrowIfNull(currentEpochs);
+        if (effect == CanvasMarkEffect.Keep)
+        {
+            return currentIntent;
+        }
+        System.Collections.Immutable.ImmutableHashSet<string>.Builder next = currentIntent.ToBuilder();
+        foreach ((string id, long epoch) in captured)
+        {
+            if (currentEpochs.TryGetValue(id, out long now) && now == epoch)
+            {
+                next.Remove(id);
+            }
+        }
+        return next.ToImmutable();
+    }
+}
+
 internal sealed class CanvasEffectResolution
 {
     private CanvasEffectResolution(bool missing, string? seat)

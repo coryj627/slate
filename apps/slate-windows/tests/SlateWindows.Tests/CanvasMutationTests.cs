@@ -287,6 +287,92 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§G TG-3 (GD-7/IG-16): the mark effect lands in the SAME
+    /// publication as the refreshed rows — the one that carries the
+    /// write's new geometry already carries the removed marks — and
+    /// applies once.</summary>
+    [Fact]
+    public void TheMarkEffectAppliesWithTheRefreshedRows()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        CanvasPublication before = document.AppliedPublication!;
+        Assert.Equal(2, before.MarkedIntent.Count);
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("color captured"),
+            document,
+            "a",
+            before.Loaded!,
+            CanvasMutationEffect.KeepSelection,
+            markEffect: CanvasMarkEffect.RemoveCaptured,
+            capturedMarks: before.MarkEpochs);
+        CanvasPublication? carrier = null;
+        document.PublicationApplied += applied =>
+        {
+            if (carrier is null && !ReferenceEquals(applied.Loaded, before.Loaded))
+            {
+                carrier = applied;
+            }
+        };
+
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted,
+            document.Funnel.Apply(
+                operation,
+                _ => new CanvasAction("color", [new CanvasOp.SetNodeColor("a", "2")]),
+                "color"));
+
+        Assert.NotNull(carrier);
+        Assert.Empty(carrier!.MarkedIntent);
+        Assert.Empty(document.Selection.Marked);
+        Assert.True(operation.MarkEffectApplied);
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-3 (IG-45): epochs — an id unmarked and RE-MARKED
+    /// after the capture is a newer write and survives RemoveCaptured;
+    /// the untouched captured id leaves.</summary>
+    [Fact]
+    public void ARemarkedIdSurvivesRemoveCaptured()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        CanvasPublication captured = document.AppliedPublication!;
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("color captured"),
+            document,
+            "a",
+            captured.Loaded!,
+            CanvasMutationEffect.KeepSelection,
+            markEffect: CanvasMarkEffect.RemoveCaptured,
+            capturedMarks: captured.MarkEpochs);
+
+        // A later local write: "a" unmarked and marked again — a new epoch.
+        _ = document.Unmark("a");
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        Assert.NotEqual(captured.MarkEpochs["a"], document.AppliedPublication!.MarkEpochs["a"]);
+
+        // The basis moved with those publishes? No — mark publishes keep
+        // the loaded triple (IF-1), so the operation is still current.
+        Assert.Equal(
+            CanvasMutationAdmission.Admitted,
+            document.Funnel.Apply(
+                operation,
+                _ => new CanvasAction("color", [new CanvasOp.SetNodeColor("a", "3")]),
+                "color"));
+
+        Assert.True(document.Selection.IsMarked("a"));
+        Assert.False(document.Selection.IsMarked("grp"));
+        document.Shutdown();
+    }
+
     /// <summary>§G TG-0 (G1, IG-31): Toggle Mark transforms the ONE
     /// authority — the publication's marked intent — the mirror
     /// follows in the apply, and the sentence speaks the store's count

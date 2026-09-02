@@ -442,9 +442,16 @@ internal sealed class CanvasMutationFunnel(
                         }
                     }
                 });
-            if (!ran || action is null)
+            if (!ran)
             {
-                return; // displaced, or preparation refused: no write.
+                // §G TG-3 (IG-49): the currency moved before the apply
+                // — its own outcome, silent under frozen Stale semantics.
+                outcome = CanvasOperationOutcome.DisplacedBeforeApply;
+                return;
+            }
+            if (action is null)
+            {
+                return; // preparation refused: its own sentence spoke.
             }
             if (refusal is VaultException.WriteConflict)
             {
@@ -468,7 +475,13 @@ internal sealed class CanvasMutationFunnel(
             }
             if (refusal is not null)
             {
-                return; // rejected whole (InvalidArgument): no motion.
+                // §G TG-3 (IG-50): rejected whole by the engine — its own
+                // outcome, and the FD-6 arm with the engine's DYNAMIC
+                // detail, never silence.
+                outcome = CanvasOperationOutcome.ApplyRefused;
+                announce(new CanvasA11yEvent.CanvasActionFailed(
+                    CanvasFailedAction.CanvasAction, refusal.Message ?? string.Empty));
+                return;
             }
 
             var entry = new CanvasHistoryEntry(
@@ -493,10 +506,26 @@ internal sealed class CanvasMutationFunnel(
                 MarkUnpresented(operation);
                 return;
             }
-            outcome =
-                RefreshAndPublish(operation) == CanvasRefreshOutcome.Installed
-                    ? CanvasOperationOutcome.Installed
-                    : CanvasOperationOutcome.RefreshRefused;
+            CanvasRefreshOutcome refreshed;
+            try
+            {
+                refreshed = RefreshAndPublish(operation);
+            }
+            catch (VaultException)
+            {
+                // §G TG-3 (IG-47): a post-commit read that throws is a
+                // refused refresh — the write landed unpresented.
+                refreshed = CanvasRefreshOutcome.Refused;
+            }
+            outcome = refreshed == CanvasRefreshOutcome.Installed
+                ? CanvasOperationOutcome.Installed
+                : CanvasOperationOutcome.RefreshRefused;
+            if (refreshed == CanvasRefreshOutcome.Refused)
+            {
+                // §G TG-3 (IG-47): RefreshRefused retains the recovery
+                // receipt exactly as Unindexed does — the write LANDED.
+                MarkUnpresented(operation);
+            }
             if (outcome == CanvasOperationOutcome.Installed
                 && confirm is not null)
             {
@@ -513,9 +542,29 @@ internal sealed class CanvasMutationFunnel(
         }
     }
 
-    private void MarkUnpresented(CanvasMutationOperation operation) =>
+    private void MarkUnpresented(CanvasMutationOperation operation)
+    {
+        // §G TG-3 (IG-46): the operation IS the retained receipt — it
+        // carries the mark effect, the captured epochs and the
+        // once-only flag; the publication keeps the identity. Held
+        // until presented, replaced, or dropped with the record.
+        _unpresented = operation;
         _ = slot.Publish(s =>
             s.Retired ? null : s.WithCommittedUnpresented(operation.Id));
+    }
+
+    private CanvasMutationOperation? _unpresented;
+
+    /// <summary>§G TG-3 (IG-46): the retained committed-unpresented
+    /// receipt, or null — the operation whose identity the publication
+    /// names, with its mark effect unapplied until a refresh presents
+    /// it.</summary>
+    internal CanvasMutationOperation? UnpresentedReceiptForTests =>
+        slot.Current.CommittedUnpresented is { } id
+            && _unpresented is { } held
+            && ReferenceEquals(held.Id, id)
+            ? held
+            : null;
 
     private CanvasRefreshOutcome RefreshAndPublish(CanvasMutationOperation operation)
     {
@@ -531,7 +580,21 @@ internal sealed class CanvasMutationFunnel(
                 operation.Effect,
                 population,
                 slot.Current.SelectedIntent,
-                operation.CreatedId));
+                operation.CreatedId),
+            // §G TG-3 (GD-7): the mark effect rides the same publication
+            // as the rows, applied ONCE per operation.
+            operation.MarkEffect == CanvasMarkEffect.Keep || operation.MarkEffectApplied
+                ? null
+                : snapshot => CanvasMarkEffectPlan.ResolveMarks(
+                    operation.MarkEffect,
+                    operation.CapturedMarks,
+                    snapshot.MarkedIntent,
+                    snapshot.MarkEpochs));
+        if (outcome == CanvasRefreshOutcome.Installed
+            && operation.MarkEffect != CanvasMarkEffect.Keep)
+        {
+            operation.MarkEffectApplied = true;
+        }
         if (outcome == CanvasRefreshOutcome.RequiredTargetMissing)
         {
             MarkUnpresented(operation);

@@ -377,9 +377,11 @@ internal sealed class CanvasNavigator
                     _document.Modes.AbandonPendingCommit();
                     break;
                 case CanvasOperationOutcome.RefusedPrepare:
+                case CanvasOperationOutcome.ApplyRefused:
                     _document.Modes.ResolveCommit(
                         operation.Id, CanvasModeCommitResult.Refused());
                     break;
+                case CanvasOperationOutcome.DisplacedBeforeApply:
                 case CanvasOperationOutcome.Displaced:
                     // IF-2's arbiter rule, as in the transient
                     // completion (review round 1).
@@ -744,9 +746,11 @@ internal sealed class CanvasNavigator
                     _document.Modes.AbandonPendingCommit();
                     break;
                 case CanvasOperationOutcome.RefusedPrepare:
+                case CanvasOperationOutcome.ApplyRefused:
                     _document.Modes.ResolveCommit(
                         operation.Id, CanvasModeCommitResult.Refused());
                     break;
+                case CanvasOperationOutcome.DisplacedBeforeApply:
                 case CanvasOperationOutcome.Displaced:
                     // The completion is the one arbiter while pending
                     // (IF-2) — the F1a watcher stood down, so the

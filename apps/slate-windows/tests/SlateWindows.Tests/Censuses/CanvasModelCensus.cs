@@ -607,6 +607,8 @@ public sealed class CanvasModelCensus
             ["ActiveSurface"] = "DOCUMENT intent — CARRIED unchanged, round 5's member",
             ["SelectedIntent"] = "DOCUMENT intent — carried; REBASED into the unit's resolved selection",
             ["MarkedIntent"] = "DOCUMENT intent — carried; resolved per query via the population",
+            ["MarkEpochs"] = "DOCUMENT intent — carried WITH MarkedIntent (§G TG-3, IG-45): the write-epoch of every marked id, moved only by the one mark transform",
+            ["MarkClock"] = "DOCUMENT — carried unchanged; the monotonic clock the mark transform advances",
             ["NeedleIntent"] = "DOCUMENT intent — carried; RESEEDS the filter machine at acceptance",
             ["Loads"] = "schedule — the acceptance publishes consumed in its own swap",
             ["Filters"] = "schedule — retired and reseeded by the acceptance; retired by a failure",

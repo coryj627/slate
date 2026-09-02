@@ -378,7 +378,12 @@ public sealed class ContractsCitationCensus
                 // TG-2 bound the marks list and its landing, taking
                 // the section to 25; 23 sits above the pre-task
                 // population of 22 — a third time.
-                23),
+                //
+                // TG-3 bound the epochs, the effect plan and the split
+                // outcomes, taking the section to 32; 30 sits
+                // above the pre-task population of 25 — a fourth
+                // time.
+                30),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
