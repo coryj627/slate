@@ -11666,6 +11666,323 @@ evidence and flips only that row; a fresh group holds one card and
 refuses a second for want of free space — mac's placement, recorded
 where the fact met it.
 
+## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled
+
+The ninth and last PR of the series delivers spec §4 PR H: the T #365
+analogue on Windows — one end-to-end suite through the real session
+and the document, not mocks — and the W evidence: every gate the wave
+DoD names, recorded rather than presumed, and the issue reconciled row
+by row. Its opening sweep (2026-09-02) read the nine deliverables
+against the tree and found, for each, what exists and what is claimed
+without existing; this section contracts the difference. Contract
+numbering is per-wave: H1 onward, decisions HD-1 onward.
+
+The nine, by what the sweep found:
+
+| Deliverable | What exists | What H lands |
+|---|---|---|
+| E2E suite | `MilestoneTIntegrationTests.swift` (mac, four tests); no Windows twin; per-verb byte facts in `CanvasMutationTests`; the large-fixture budget facts in `CanvasDocumentTests` | CanvasEndToEndTests, four facts in the mac shape, through `VaultSession.OpenFilesystem` and `CanvasDocumentViewModel` |
+| §K | `BENCHMARKS.md` §W6-1 PR A (marshalling) and §W6-1 §D (derivation); `CanvasOpenBenchmarks`, `CanvasRendererBenchmarks` with `--validate-budgets` | the "Milestone W6-1" roll-up section with re-measured numbers, the runner classes, the budgets asserted, one environment line |
+| §W-A | `canvas_read` and `canvas_queries` on both twins by directory scan; the canvas mutation scenarios on Windows only (`CanvasScenarioCensus`), with two comments claiming a Swift twin; five of seven fixtures never scripted | the Swift twin; a scripted-or-excluded tripwire over the fixture directory; the false claims corrected |
+| §W-D | the corpus complete (53 arms, 187 canvas entries, 446 in all — the doc says 51, 179, 438); the residue 30 → 29 on mac; no event × trigger-site table | the counts corrected; the trigger-parity table for every arm; a census that every arm has a Windows trigger site or a recorded designation |
+| §W-C | four canvas rows in `w_c_matrix.md`, each with an eleventh cell that drops the JAWS column on render; no rows for §E, §F, §G, §G2; eight journeys, eleven axe scans, one waiver | the rows repaired and the surfaces added; the evidence column pinned by a census; axe zero across the eight with the one waiver recorded |
+| §W-G | seventeen rows: ten closed, four landed, one resolved, two open by designation; the re-grep clean except one fourth copy of the label class in the card picker's row label | the finding fixed and pinned; rows R and S recorded; the re-grep recorded with its method; the register closed |
+| Matrix | the surface row a hard-coded literal (`pending`); no `#745` in the generator's issue set or `chords.json`'s issue map; every command row delivered | the row derived like its neighbours, `#745` mapped, the twelve validations passing, the matrix regenerated |
+| AT checklist | none; the W7-4 instrument is `w_c_matrix.md`'s ten columns; T's `at_smoke_checklist.md` is ten items in one table | `reports/w6_1_canvas_at_checklist.md` in the instrument's form, every human cell Pending, the automated twin named per item |
+| Reconciliation | none; seven owner decisions recorded, D-4's action unperformed; thirteen upstream items scattered through the registers; `w6_spec.md` §W6-1 has numbered items, not checkboxes; two spec files cite the doc by the wrong number | the final section: contract → evidence, the registers re-listed, D-1…D-7 resolved, the upstream issues filed and numbered, the hand-offs recorded; the spec's rows ticked with dates |
+
+### Contracts
+
+**H1 — The end-to-end suite is the mac shape, through the real seams,
+against the committed bytes.** CanvasEndToEndTests lives in the unit
+project and drives `VaultSession.OpenFilesystem` over a `FixtureVault`
+into which the committed `sample.canvas` is copied from
+`SourceText.RepoRoot()` — never `DemoVaultCanvasDirectory()`, which is
+the accessibility project's output-relative link — and
+`CanvasDocumentViewModel` with `synchronousForTests: true`; no fake
+source, no test seam that the app does not run. Four facts, one per
+mac test:
+
+- *Open*: the outline has nine rows, the table nine, the scene nine
+  nodes; the first row is the group (reading order, groups before
+  members); the colour names include "red" and "purple (custom)"; some
+  title carries the subpath separator " › "; one navigator step seats
+  a selection; Where-am-I renders a readback.
+- *Author, then undo restores the bytes*: the baseline is the
+  committed fixture's bytes — `sample.canvas` is canonical on Windows
+  by construction (the c1 scenario of `CanvasScenarioCensus` round-trips
+  it byte-identically), so mac's canonicalise-first step is not needed
+  and its absence is asserted (the copied file equals the committed
+  bytes before the first verb). Then create a card, edit its text,
+  connect it to the anchor, mark it with the anchor and group the
+  marked set, enter move mode and step and commit: FIVE undo entries;
+  five undos; the file equals the committed bytes, byte for byte.
+- *Large canvas*: `large_2000.canvas` opens to 2,000 outline rows
+  within PR A's 500 ms in the synchronous arm; the peer topology's
+  first windowed derivation over a 1600 × 1200 viewport materialises
+  more than zero and fewer than 600 placements (windowing bounds the
+  UIA tree) under 500 ms; a pan's window hop averages under 100 ms
+  over ten hops; a navigator step averages under 50 ms over fifty
+  steps — the same three budgets `CanvasRendererBenchmarks` asserts,
+  measured here by `Stopwatch` on the derivation the app pays, with
+  the honest scope note that the draw and the UIA re-frame ride the
+  app and the journeys (§D's TD-7 wording).
+- *Grammar per verbosity*: on a row with a connection, the selection
+  sentence at Terse has no " of ", at Standard has " of ", at Verbose
+  has " of " and names a connection; a delete speaks the destructive
+  arm with the platform's undo chord as core renders it; an undo
+  follows.
+
+**H2 — §K is one roll-up section with re-measured numbers and the
+budgets asserted.** `BENCHMARKS.md` gains "Milestone W6-1 — canvas
+through the C# binding" after the two per-PR sections it rolls up,
+never editing them (the repo's close-out convention): the marshalling
+table from `CanvasOpenBenchmarks` re-run at close-out, the derivation
+table from `CanvasRendererBenchmarks --validate-budgets`, the E2E
+large-canvas measurements named by their runner
+(CanvasEndToEndTests and the fact's name — the mac form for a test
+runner), one environment line (machine, Windows build, .NET SDK,
+rustc, configuration), the three budgets and where each is asserted
+(the renderer's in the benchmark runner's exit code, PR A's open
+budget in the unit fact), and the honest scope note. Numbers are
+pasted from the run, never typed from memory; the run's command line
+is the fenced block.
+
+**H3 — §W-A: the canvas mutation scenarios run on both twins, and no
+fixture is skipped in silence.** `canvas_read` and `canvas_queries`
+are already both-twin by directory scan with the one-name exclusion
+list; recorded. The canvas mutation scenarios are not: only
+`CanvasScenarioCensus` executes `scenarios.json` and no Swift test
+reads it, while `CanvasScenarioHarness.cs` and the scenario file's own
+comment claim the Swift twin executes it verbatim. H lands
+CanvasScenarioTests on mac — the driver ported: load the scenario
+file, run each `CanvasAction` sequence through the mac FFI on a copy
+of its fixture, write the artifacts with the same canonical JSON,
+byte-compare every committed golden, refuse the foreign gate the same
+way — so identical action sequences on both platforms are enforced by
+construction as the comment says; the two comments are corrected to
+name the twin that now exists. And a tripwire, in core where both
+platforms inherit it (the corpus-mirror precedent in
+`slate-uniffi`): every `fixtures/canvas/*.canvas` is either named by
+at least one scenario's `fixture` or listed in the scenario file's
+`excluded` map with a reason; the five unscripted fixtures are
+scripted where a scenario is meaningful (`empty` gains a create-first
+scenario, `unknown_fields` a round-trip that preserves what core does
+not model, `groups_nested` already has one) and excluded with a
+reason where it is not (`malformed` and `cycle` cannot open for a
+mutation; `large_2000` is size, the same exclusion the artifact
+already records). Mac's lane arbitrates the Swift twin; this box
+cannot run it (HD-2).
+
+**H4 — §W-D: the counts are corrected, the trigger-parity table is
+recorded, and a census keeps it true.** The doc's "51 variants … 179
+entries … 259 → 438" becomes 53, 187, 446 with the two arms and eight
+entries named that landed after the paragraph was written. A table in
+this section — one row per `CanvasA11yEvent` arm — records the mac
+trigger site(s) and the Windows trigger site(s) as `file:member`, or
+a designation where a platform never fires the arm (with the reason:
+a Windows-only arm, a mac-only arm, a label-class render). A census,
+CanvasTriggerParityCensus, reads the arm list from the generated
+binding and asserts every arm is constructed somewhere under
+`src/SlateWindows/Canvas/` or appears in the section's designated
+list — so an arm added to core without a Windows trigger fails here,
+not in a reader's ear. The residue count is recorded old → new (30 →
+29, `A11yResidueCensusTests.pinnedResidueSites`), and Windows's zero
+host-composed sites under `Canvas/` by the same grep.
+
+**H5 — §W-C: the matrix rows render, the surfaces are all there, the
+evidence column is pinned.** The four canvas rows lose their eleventh
+cell (the anatomy folded into the control-type cell, the data-grid
+row's shape) so Narrator, NVDA and JAWS each render in their own
+column; rows are added for every canvas surface that shipped after
+§D — the card editor sheet, the prompt sheet family (label prompts,
+choices prompts, the marks list), the card picker and the vault file
+picker on their one slot, the mode HUD's visible controls, the
+context menus and the grid's row actions — each with the control
+type, the Name and HelpText source, the patterns, the focus route,
+the notification contract, and the automated evidence by journey and
+fact name with its axe label; every human cell Pending. Axe is zero
+failures across the eight canvas journeys with the one waiver
+(`IsFluentCollapsedScrollBarPart`, pinned both ways in
+`AxeWaiverTests`) recorded as the only one. A census,
+WcMatrixCanvasEvidenceCensus, reads the canvas rows of
+`w_c_matrix.md` and asserts each has exactly ten cells and that every
+backticked test or journey name in its evidence cell exists in the
+Windows test tree — the reconciliation's own failure class, applied
+to the instrument.
+
+**H6 — §W-G: the audit is closed by the re-grep, and its one finding
+is fixed, not designated.** The re-grep over `Canvas/*.cs` is recorded
+with its method and result: no host-side reading-order sort (the one
+`Sort` orders the Escape ladder's rungs), no containment decision
+(the one rect-contains is scroll-into-view), no placement math (every
+placement, side, constant and reading-order reprojection is an FFI
+call; the fit formula is row O's designation; the viewport constants
+are row I's). The one duplication — the card picker's row label
+composed inline from `Title` with its own capitalisation, a fourth
+copy of the P/Q label class — is routed through
+`CanvasPhrase.CardReference` over `SpeakableName` and the container
+clause `CanvasPhrase.RowStatus` owns, pinned against core's own
+render like the other copies; the `", marked"` concatenation in the
+marks list goes through the same helper. Row R records
+`CanvasPhrase.ConnectionStatus` as the label class's third member by
+the same designation; row S records the load-failure banner copy as
+host text with no core twin. A source census,
+TheLabelClassHasNoSecondComposition, asserts no interpolation under
+`Canvas/` outside `CanvasPhrase` composes a card reference or a
+positional status. The register's State column then reads closed,
+landed, resolved or open-by-designation for every row, and the
+section's preamble says "closed (PR H)".
+
+**H7 — The matrix's surface row is derived, and `#745` is evidenced.**
+The generator's hard-coded surface literal becomes an
+`issue_delivery_status` call like its W5 neighbours, with a `#745`
+branch returning the W6-1 status string; `expected_issues` gains
+`#745`; `chords.json`'s issue map gains `#745` → `canvasSurfaces` (the
+group carrying the surface view and the outline and table journeys);
+the twelve validations pass; `parity_matrix.md` regenerates with every
+canvas command row and the surface row reading "implemented; local
+gates green ⟨date⟩; interactive CI + human AT pending" — the human AT
+clause stays because H8's checklist is unexecuted (HD-3). The
+`docs/help/canvas.md` row stays `#756` pending: the hand-off, not this
+PR's. `slate.canvas.colorMarked` has no matrix row because mac's
+registry has no id; the D-4 issue is filed (H9) and the row appears
+when mac registers it.
+
+**H8 — The AT checklist exists in the instrument's form, every human
+cell Pending, every automated twin named.**
+`docs/plans/18_windows_port/reports/w6_1_canvas_at_checklist.md` opens
+with the field-verification form's header lines (Tester, AT, OS,
+Build, Corpus, Method) reading "Pending — release residual" until a
+named tester records a run, then one table — number, check, how (the
+UIA route), the automated twin (the journey or fact that covers the
+automatable half, or "none — human only"), Narrator, NVDA, JAWS —
+over T's ten items re-expressed: the outline walk (names, n-of-m,
+colour names, connection rows with direction and label); the table
+(headers, the sort announcement); the visual board (peer traversal
+pans the window, no dead end, Invoke selects); keyboard-only
+tab-through of header, surfaces and sheets with a visible focus ring;
+Windows Voice Access "show numbers" on the renderer plus five dictated
+commands (D-7; the tool recorded); the switch-access equivalent (the
+mode cycle through the visible controls); braille inspectability
+(mode, marks and filter readable from Values); text scaling 225 %;
+the four Contrast themes plus one customised; Reduce Motion. Narrator
+is smoke scope (D-7). `w_c_matrix.md`'s canvas rows link the file. No
+cell is ever pre-filled green: an unexecuted item is the release
+residual, listed as such in the reconciliation with the owner's
+sign-off as the closing condition (HD-3).
+
+**H9 — The reconciliation is the final section, and it names
+evidence, not intent.** "Issue reconciliation (#745)" is added to the
+doc, scanned by `ContractsCitationCensus` like a PR section so a name
+it cites must exist: (a) the PR ledger — 0a through G2 with PR
+numbers and merge commits; (b) contract → evidence, one row per
+contract id in every section, naming the task record that discharged
+it and the facts, censuses or journeys that pin it, generated from
+the doc's own records by a script committed beside it, so a row
+without evidence reads "unevidenced" rather than being omitted;
+(c) the divergence register CD-1…CD-48 and the accepted-risk register
+CR-1…CR-5 re-listed as an index (id, one line, where recorded);
+(d) owner decisions D-1…D-7 with their resolution and evidence, D-4's
+action performed; (e) the upstream issues FILED, grouped by target
+and numbered — mac (`canvasColorMarked` registration; the stale
+selection after undo; `canvasSelectAdjacent` silent outside ready and
+on an empty canvas; the outline's title where Windows reads
+`speakable_name`; the laxer non-Markdown open), the t0 contract (the
+M4 palette clause that cannot hold with M6; M5's ladder without the
+transient regions; the filter-clear silence; Where-am-I's unfiltered
+fallback; structural movement escaping the filter; group entry and
+exit narration on the arrow path), and core (the clone op Duplicate's
+deep copy needs; the degraded canvas that is announced but not
+navigable); (f) the hand-offs — E13 closed, E14's anchor outcome
+recorded, `docs/help/canvas.md`'s Windows chord column to W8-6 with
+`chords.json` as its source; (g) the residuals — the human AT pass,
+the interactive CI clause, and anything a gate above left Pending.
+`w6_spec.md` §W6-1's seven acceptance items become checkbox rows
+ticked with the date of the evidence, item 7 left unticked with the
+residual named (HD-6); the two spec files' `33_canvas_contracts.md`
+citations are corrected to 34 (HD-6).
+
+**H10 — Verification.** Named facts: the four of H1; H3's Swift twin
+(mac CI) and the core tripwire (both lanes' `cargo test`); H4's
+CanvasTriggerParityCensus; H5's WcMatrixCanvasEvidenceCensus and the
+eight journeys' axe evidence; H6's TheLabelClassHasNoSecondComposition
+and the picker-label pin; H7's generator run (`python
+scripts/generate-parity-matrix.py` exits zero, the twelve validations
+pass) and `ChordsJson_IsExactlyTheTablesProjection`; H9's generated
+table checked by `ContractsCitationCensus` over the new section.
+Byte-restored mutations on the critical facts: the E2E undo chain
+(one undo dropped), the byte baseline (a byte altered), the tripwire
+(a fixture unlisted), the trigger census (an arm removed from the
+designated list), the evidence census (a cell added to a row), the
+label pin (the picker's title restored). The full unit suite, the
+censuses, the eight journeys locally, then the gate: CI green on the
+head and codoki's approval on that head.
+
+### Decisions
+
+- **HD-1 — The byte baseline is the committed fixture, not a
+  canonicalised copy.** Mac canonicalises first because its fixture
+  "may not be byte-canonical"; on Windows the c1 scenario proves
+  `sample.canvas` canonical, so H1 compares against the committed
+  bytes and asserts the copy equals them before the first verb — a
+  stronger claim, and one that fails loudly if the fixture is ever
+  re-saved non-canonically.
+- **HD-2 — The Swift twin is written here and arbitrated by mac's CI
+  lane.** This box has no Xcode; the twin is a test-only mac edit in
+  decision 5's spirit (the same PR that lands the artifact lands both
+  consumers), and the PR's CI on both twins is the gate. A red mac
+  lane is fixed here, not waived.
+- **HD-3 — The human AT pass is the release residual, never green by
+  omission.** Every human cell of the checklist and the matrix stays
+  Pending until a named tester records a run per the field form; the
+  status strings keep "human AT pending"; the issue closes on the
+  owner's sign-off, not on this PR's merge.
+- **HD-4 — Upstream issues are filed, grouped by target.** One issue
+  per mac defect that stands alone, one t0 contract issue carrying
+  the six clauses, and core issues per mechanism — with the doc's
+  register lines as the body and #745 as the reference; the numbers
+  land in the reconciliation. Filing is this PR's action per the spec
+  (§0 item 8, §6's list) and D-4's adopted resolution.
+- **HD-5 — The surface row reads the W6-1 status string.** It flips
+  from `pending` to the same "implemented; local gates green ⟨date⟩;
+  interactive CI + human AT pending" every command row carries — not
+  to a bare "implemented" — because the human AT half is H8's
+  residual.
+- **HD-6 — The spec's acceptance rows and stale citations are fixed
+  in the spec files.** `w6_spec.md` §W6-1's numbered items become
+  checkbox rows (the acceptance clause names "checkbox rows ticked
+  with dates" and there are none), and the `33_canvas_contracts.md`
+  citations in `w6_1_canvas_spec.md` and `w6_spec.md` become 34 — the
+  filename note at the head of this document already records why.
+- **HD-7 — The picker label is fixed, not designated.** A fourth copy
+  of the label class that reads `Title` where the other three read
+  `SpeakableName` is a defect (CD-30's rule), not a designation
+  candidate; it routes through the designated helpers and joins the
+  pin.
+
+### Recorded divergences (owner-recorded; off-limits for re-litigation)
+
+- **HD-D1 — The large-canvas budget measures the derivation, not the
+  draw.** Mac's E2E times `refreshFromDocument` on a real NSView;
+  Windows times the peer topology's derivation with `Stopwatch`, as
+  §D's TD-7 recorded for the benchmarks; the draw and the UIA
+  re-frame are the journeys' and the app's.
+- **HD-D2 — Windows has no residue census.** The Swift census counts
+  host-composed sites mac still has (29); the Windows shell composes
+  none under `Canvas/` (the grep is the record), so the count is
+  recorded as zero by inspection rather than by a mirror census.
+
+### Accepted risks
+
+- **HR-1 — The Swift twin is unrun on this box.** Mac's CI lane is
+  the only executor; a compile error there costs a round trip, not a
+  waiver.
+- **HR-2 — The reconciliation's contract → evidence table is
+  generated from prose.** A record that cites a contract id in
+  passing reads as evidence for it; the table is reviewed by the
+  round, and a row whose evidence is only a mention is marked so.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

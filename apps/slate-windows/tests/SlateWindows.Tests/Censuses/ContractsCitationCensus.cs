@@ -404,7 +404,7 @@ public sealed class ContractsCitationCensus
             (
                 "G2",
                 "## PR G2 — the verb residue: front doors for §E's verbs, and the parity extras",
-                "## §W-G canonical-consumption audit",
+                "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled",
                 // A young section pins below its honest size and
                 // rises with its records, as §G's did.
                 6_000,
@@ -453,6 +453,19 @@ public sealed class ContractsCitationCensus
                 // section to 222; 221 sits above the pre-task population
                 // of 204 — a tenth time.
                 221),
+            (
+                "H",
+                "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled",
+                "## §W-G canonical-consumption audit",
+                // The close-out section: contracts over the nine
+                // deliverables, then the task records; it pins below its
+                // honest size and rises with its records, as §G2's did.
+                6_000,
+                // A DESIGN floor, the standing convention: revision 1's
+                // citations are EXISTING names (the harnesses, the
+                // benchmarks, the matrix generator's seams); 4 sits above
+                // the empty section and below the first record.
+                4),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -1172,10 +1185,14 @@ public sealed class ContractsCitationCensus
         _ = sample;
         string section = Section(
             "## PR C — the navigator, the mode stack",
-            "## §W-G canonical-consumption audit",
+            "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled",
             "C");
         Assert.True(
             section.Contains(replacement, StringComparison.OrdinalIgnoreCase),
+        (
+            "§H",
+            "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled",
+            "## §W-G canonical-consumption audit"),
             $"§C never names {replacement}, which is what replaced {retired} — "
             + "so the guard above is watching for a ghost and the row that "
             + "should say what the mechanism IS now is missing.");
