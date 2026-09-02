@@ -1345,7 +1345,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
             if (created is null)
             {
-                ReportFailure($"Could not create canvas {attempted}: no free name.");
+                ReportFailure(CanvasCreateFailure($"{attempted}: no free name"));
                 return;
             }
 
@@ -1374,9 +1374,16 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not create canvas {attempted}: {exception.Message}");
+            ReportFailure(CanvasCreateFailure($"{attempted}: {exception.Message}"));
         }
     }
+
+    /// <summary>§H TH-4 (H4): a failed canvas creation is core's
+    /// <c>CanvasActionFailed</c> with mac's NewCanvas arm rendered — the
+    /// vocabulary consumed where two host sentences stood.</summary>
+    internal static string CanvasCreateFailure(string detail) =>
+        SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+            new CanvasA11yEvent.CanvasActionFailed(CanvasFailedAction.NewCanvas, detail))).Text;
 
     // RenameSelected moved to FilesSidebarViewModel.FileManagement.cs
     // as TryRenameSelected (W5-4 F3: report consumption, the

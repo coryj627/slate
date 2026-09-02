@@ -1374,6 +1374,23 @@ public sealed class FileManagementTests
     /// create — core's canonical bytes, never a host literal; the new
     /// document gets its OWN tab (mac's rule: replacing the current tab
     /// could destroy an unsaved buffer's only owner); the sentence is
+    /// <summary>§H TH-4 (H4): a failed canvas creation is core's
+    /// <c>CanvasActionFailed</c> with mac's NewCanvas arm — the two host
+    /// sentences the sidebar composed ("Could not create canvas …") are
+    /// gone; the render carries the attempted name and the reason.</summary>
+    [Fact]
+    public void AFailedCanvasCreationIsCoresSentence()
+    {
+        string sentence = FilesSidebarViewModel.CanvasCreateFailure("Untitled Canvas.canvas: no free name");
+        Assert.Equal(
+            SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+                new CanvasA11yEvent.CanvasActionFailed(
+                    CanvasFailedAction.NewCanvas, "Untitled Canvas.canvas: no free name"))).Text,
+            sentence);
+        Assert.Contains("Untitled Canvas.canvas: no free name", sentence);
+        Assert.DoesNotContain("Could not create canvas Untitled", sentence);
+    }
+
     /// <summary>§E TE-10 (IE-21/IE-22): New Canvas is the vault-scoped
     /// create - core's canonical bytes, never a host literal; the new
     /// document gets its OWN tab (mac's rule: replacing the current tab

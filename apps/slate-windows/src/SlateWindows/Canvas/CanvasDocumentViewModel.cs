@@ -2319,29 +2319,41 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             operation,
             handle =>
             {
-                CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
-                CanvasPlacement placement = _session.CanvasPlaceNew(
-                    handle,
-                    operation.Anchor,
-                    constants.DefaultCardW,
-                    constants.DefaultCardH,
-                    null,
-                    []);
-                relative = placement.Relative;
-                string id = SlateUniffiMethods.CanvasNewId();
-                operation.CreatedId = id;
-                return new CanvasAction(
-                    "create card",
-                    [
-                        new CanvasOp.CreateNode(
-                            id,
-                            new CanvasNodeContent.Text(string.Empty),
-                            placement.X,
-                            placement.Y,
-                            constants.DefaultCardW,
-                            constants.DefaultCardH,
-                            null),
-                    ]);
+                // §H TH-4 (H4): the placement query's refusal is New Card's
+                // OWN failed-action arm — mac's .newCard — not the funnel's
+                // generic one (the shared prepare clause, IG2-26).
+                try
+                {
+                    CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                    CanvasPlacement placement = _session.CanvasPlaceNew(
+                        handle,
+                        operation.Anchor,
+                        constants.DefaultCardW,
+                        constants.DefaultCardH,
+                        null,
+                        []);
+                    relative = placement.Relative;
+                    string id = SlateUniffiMethods.CanvasNewId();
+                    operation.CreatedId = id;
+                    return new CanvasAction(
+                        "create card",
+                        [
+                            new CanvasOp.CreateNode(
+                                id,
+                                new CanvasNodeContent.Text(string.Empty),
+                                placement.X,
+                                placement.Y,
+                                constants.DefaultCardW,
+                                constants.DefaultCardH,
+                                null),
+                        ]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.NewCard, e.Message));
+                    return null;
+                }
             },
             "create card",
             confirm: () => new CanvasA11yEvent.CanvasCreated(
@@ -3038,17 +3050,25 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotATextCard()));
             return null;
         }
-        CanvasEditorSeed? seed = null;
-        if (_slot.Current.Lease is { } lease)
+        // §H TH-4 (H4): no lease, or a retired publication, is mac's
+        // CardEditorUnavailable — the document has no handle to seed from;
+        // a handle whose text cannot be read is the blocked arm below. On
+        // Windows rows and lease retire together, so this arm is the
+        // defensive consumer of the vocabulary, not a reachable state.
+        if (_slot.Current.Lease is not { } lease || _slot.Current.Retired)
         {
-            _ = lease.Invoke(
-                () =>
-                {
-                    CanvasPublication now = _slot.Current;
-                    return !now.Retired && now.Names(lease);
-                },
-                handle => seed = _session.CanvasEditorSeed(handle, nodeId));
+            Speak(new CanvasA11yEvent.CanvasMutationRefused(
+                CanvasMutationRefusal.CardEditorUnavailable));
+            return null;
         }
+        CanvasEditorSeed? seed = null;
+        _ = lease.Invoke(
+            () =>
+            {
+                CanvasPublication now = _slot.Current;
+                return !now.Retired && now.Names(lease);
+            },
+            handle => seed = _session.CanvasEditorSeed(handle, nodeId));
         if (seed is null)
         {
             Speak(new CanvasA11yEvent.CanvasBlocked(
