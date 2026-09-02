@@ -1245,6 +1245,42 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.removeFromGroup",
+      "label": "Canvas: Remove from Group",
+      "section": "Canvas",
+      "hint": "Move the selected card out of its enclosing group, placed by the engine.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.createConnectedCard",
+      "label": "Canvas: Create Connected Card",
+      "section": "Canvas",
+      "hint": "New text card below the selection, already connected, ready to type.",
+      "macChord": "⌃⌥⌘N",
+      "mac": "Control Option Command N",
+      "windows": "Ctrl+Alt+Shift+N",
+      "windowsSpoken": "Control Alt Shift N",
+      "scope": "Canvas",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.createConnectedCardDirectional",
+      "label": "Canvas: Create Connected Card (Choose Direction)…",
+      "section": "Canvas",
+      "hint": "Pick the side first, then the connected card is created there.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.connectMode",
       "label": "Canvas: Connect Mode",
       "section": "Canvas",

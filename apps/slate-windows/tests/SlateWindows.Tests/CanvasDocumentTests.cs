@@ -95,6 +95,71 @@ public sealed class CanvasDocumentTests : IDisposable
             new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
             synchronousForTests);
 
+    /// <summary>§G2 TG2-4 (E4, G2-9, IG2-23/53): New Card and Create Connected
+    /// Card LAND IN THE EDITOR through TE-4's receipt — for an owner that is
+    /// still current; an operation whose owner is a tab that is not the
+    /// active one opens nothing.</summary>
+    [Fact]
+    public void NewCardAndCreateConnectedCardLandInTheEditorForACurrentOwner()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+
+        workspace.CanvasNewCardCommand.Execute(null);
+        PumpDispatcher();
+        Assert.NotNull(workspace.CanvasCardEditorSheet);
+        workspace.CloseCanvasCardEditor();
+
+        document.SeatSelectionSilently("question");
+        workspace.CanvasCreateConnectedCardCommand.Execute(null);
+        PumpDispatcher();
+        Assert.NotNull(workspace.CanvasCardEditorSheet);
+        Assert.Equal(document.Selection.Selected, workspace.CanvasCardEditorSheet!.NodeId);
+        workspace.CloseCanvasCardEditor();
+
+        // An owner that moved on: the receipt fires, the workspace opens nothing.
+        document.SeatSelectionSilently("question");
+        Assert.NotNull(document.CanvasCreateConnectedCard(owner: new object()));
+        PumpDispatcher();
+        Assert.Null(workspace.CanvasCardEditorSheet);
+    }
+
+    /// <summary>§G2 TG2-4 (G2-5): Create Connected Card (Choose Direction)… —
+    /// four choices named by placement; Left lands the card left of the
+    /// origin and the sheet closes on the landing.</summary>
+    [Fact]
+    public void TheDirectionPromptCreatesOnTheChosenSide()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("link");
+        CanvasSceneNode origin = document.AppliedPublication!.Loaded!.Population.SceneByNode["link"];
+
+        workspace.CanvasCreateConnectedCardDirectionalCommand.Execute(null);
+
+        var sheet = Assert.IsType<CanvasConnectedDirectionPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal(["Below", "Right", "Above", "Left"], sheet.Choices.Select(c => c.Name).ToArray());
+        // Right of the link card is free space; the engine honours the hint
+        // where there is room (Left is occupied in this fixture).
+        sheet.SelectedChoice = sheet.Choices[1];
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        string created = document.Selection.Selected!;
+        Assert.NotEqual("link", created);
+        Assert.True(document.AppliedPublication!.Loaded!.Population.SceneByNode[created].X > origin.X);
+    }
+
     /// <summary>§G2 TG2-3 (G2-6): Add Note to Canvas… — the vault picker in
     /// the card picker's slot lists the vault's notes with the path as
     /// each row's status, the filter narrows, and Enter lands a file

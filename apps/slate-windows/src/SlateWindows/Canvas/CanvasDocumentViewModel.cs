@@ -2288,7 +2288,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// `canvas_constants`, no hint), landing selected. Preparation
     /// runs under the gate and the lease; the confirmation speaks
     /// core's relative phrase.</summary>
-    public void CanvasNewCard()
+    public void CanvasNewCard(object? owner = null)
     {
         if (_slot.Current.Loaded is not { } basis)
         {
@@ -2297,10 +2297,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
         var operation = new CanvasMutationOperation(
             new CanvasOperationId("new card"),
-            this,
+            owner ?? this,
             Selection.Selected,
             basis,
             CanvasMutationEffect.SelectCreated);
+        // §G2 TG2-4 (E4, IG2-53): New Card LANDS IN THE EDITOR through
+        // TE-4's receipt — the promise §E recorded and never wired.
+        OpenEditorOnLanding(operation, null);
         CanvasRelativeDesc? relative = null;
         _ = Funnel.Apply(
             operation,
@@ -3384,6 +3387,226 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     internal event Action<CanvasPromptContext, CanvasNeighbor>? EditConnectionRequested;
 
     internal void RequestDeleteConnection(object? owner = null) => RequestConnectionVerb(owner, toDelete: true);
+
+    /// <summary>§G2 TG2-4 (G2-9, IG2-23/IG2-53): the editor-open RECEIPT —
+    /// an addressed post-publication effect, separate from the model-side
+    /// selection effect: on the INSTALLED outcome, at most once per
+    /// operation (TE-4's interlocked mark), the created card's editor is
+    /// requested for the operation's OWNER, marshalled home; the
+    /// workspace opens it only if that owner is still current.</summary>
+    internal event Action<object, string>? CreatedEditorRequested;
+
+    private void OpenEditorOnLanding(
+        CanvasMutationOperation operation, Action<CanvasOperationOutcome>? completion)
+    {
+        operation.Completion = outcome =>
+        {
+            completion?.Invoke(outcome);
+            if (outcome == CanvasOperationOutcome.Installed
+                && operation.CreatedId is { } created
+                && operation.Receipt.TryMarkEditorOpened())
+            {
+                Post(() => RaiseCreatedEditorWhenPresent(operation.Owner, created));
+            }
+        };
+    }
+
+    /// <summary>The request fires only once the created ROW is present —
+    /// the editor factory reads it. On the dispatcher the posted apply
+    /// precedes the marshalled completion, so the row is there; an
+    /// inline host can run the completion first, and then the request
+    /// waits for the next applied publication that carries the row.</summary>
+    private void RaiseCreatedEditorWhenPresent(object owner, string created)
+    {
+        if (IsShutDown)
+        {
+            return;
+        }
+        if (RowFor(created) is not null)
+        {
+            CreatedEditorRequested?.Invoke(owner, created);
+            return;
+        }
+        void Once(CanvasPublication _)
+        {
+            if (IsShutDown || RowFor(created) is null)
+            {
+                return;
+            }
+            PublicationApplied -= Once;
+            CreatedEditorRequested?.Invoke(owner, created);
+        }
+        PublicationApplied += Once;
+    }
+
+    /// <summary>§G2 TG2-4 (G2-8, R22, IG2-40): Remove from Group — the
+    /// enclosing group is core's parent query on the basis inside prepare
+    /// (a null or unresolved parent is NotInAGroup; a THROW is
+    /// NothingSelected, mac's rule), placement is the engine's anchored
+    /// on the parent with the card's own size, one geometry op.</summary>
+    public CanvasMutationOperation? CanvasRemoveFromGroup(
+        object? owner = null, Action<CanvasOperationOutcome>? completion = null)
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        if (Selection.Selected is not { } selected
+            || RowFor(selected) is not { } row
+            || basis.Population.SceneByNode.GetValueOrDefault(selected) is not { } node)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return null;
+        }
+        if (row.GroupPath.Length == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotInAGroup(row.Title)));
+            return null;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("remove from group"), owner ?? this, selected,
+            basis, CanvasMutationEffect.KeepSelection)
+        {
+            Completion = completion,
+        };
+        string parentTitle = string.Empty;
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                string? parentId;
+                try
+                {
+                    parentId = _session.CanvasParentOf(handle, selected);
+                }
+                catch (VaultException)
+                {
+                    // A thrown query is NOT "not in a group" — a fact the
+                    // query never returned (mac's rule at this seam).
+                    Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+                    return null;
+                }
+                if (parentId is null
+                    || basis.Population.SceneByNode.GetValueOrDefault(parentId) is not { } parent)
+                {
+                    Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotInAGroup(row.Title)));
+                    return null;
+                }
+                parentTitle = parent.Title;
+                try
+                {
+                    CanvasPlacement placement = _session.CanvasPlaceNew(
+                        handle, parentId, node.Width, node.Height, null, [selected]);
+                    return new CanvasAction(
+                        $"remove \"{row.Title}\" from \"{parent.Title}\"",
+                        [
+                            new CanvasOp.UpdateNodeGeometry(
+                                selected, placement.X, placement.Y, node.Width, node.Height),
+                        ]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.RemoveFromGroup, e.Message));
+                    return null;
+                }
+            },
+            "remove from group",
+            confirm: () => new CanvasA11yEvent.CanvasRemovedFromGroup(parentTitle));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
+    /// <summary>§G2 TG2-4 (G2-9, IG2-22): Create Connected Card — ONE action
+    /// carrying the exact tuple: a fresh text card at the engine's
+    /// placement (anchored on the origin, the direction as the hint,
+    /// excluding nothing) and a fresh edge from the ORIGIN to the NEW
+    /// card with core's auto sides over the two rects, no from-end, an
+    /// arrow to-end, no label, no color. The new card is seated and the
+    /// editor opens through the receipt — create, then type.</summary>
+    public CanvasMutationOperation? CanvasCreateConnectedCard(
+        CanvasPlaceDirection direction = CanvasPlaceDirection.Below,
+        object? owner = null,
+        Action<CanvasOperationOutcome>? completion = null)
+    {
+        if (_slot.Current.Loaded is not { } basis)
+        {
+            SpeakNotReady();
+            return null;
+        }
+        if (Selection.Selected is not { } origin
+            || RowFor(origin) is not { } originRow
+            || basis.Population.SceneByNode.GetValueOrDefault(origin) is not { } originNode)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return null;
+        }
+        var operation = new CanvasMutationOperation(
+            new CanvasOperationId("create connected card"), owner ?? this, origin,
+            basis, CanvasMutationEffect.SelectCreated);
+        OpenEditorOnLanding(operation, completion);
+        CanvasRelativeDesc? relative = null;
+        CanvasMutationAdmission admission = Funnel.Apply(
+            operation,
+            handle =>
+            {
+                try
+                {
+                    CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                    CanvasPlacement placement = _session.CanvasPlaceNew(
+                        handle, origin, constants.DefaultCardW, constants.DefaultCardH,
+                        direction, []);
+                    relative = placement.Relative;
+                    CanvasSidePair sides = SlateUniffiMethods.CanvasAutoSides(
+                        new CanvasRect(originNode.X, originNode.Y, originNode.Width, originNode.Height),
+                        new CanvasRect(
+                            placement.X, placement.Y, constants.DefaultCardW, constants.DefaultCardH));
+                    string id = SlateUniffiMethods.CanvasNewId();
+                    string edgeId = SlateUniffiMethods.CanvasNewId();
+                    operation.CreatedId = id;
+                    return new CanvasAction(
+                        "create connected card",
+                        [
+                            new CanvasOp.CreateNode(
+                                id, new CanvasNodeContent.Text(string.Empty),
+                                placement.X, placement.Y,
+                                constants.DefaultCardW, constants.DefaultCardH, null),
+                            new CanvasOp.AddEdge(
+                                edgeId, origin, sides.From, id, sides.To,
+                                CanvasEndStyle.None, CanvasEndStyle.Arrow, null, null),
+                        ]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.CreateConnectedCard, e.Message));
+                    return null;
+                }
+            },
+            "create connected card",
+            confirm: () => new CanvasA11yEvent.CanvasConnectedCardCreated(relative!, originRow.Title));
+        return admission == CanvasMutationAdmission.Admitted ? operation : null;
+    }
+
+    /// <summary>§G2 TG2-4 (G2-5): the directional variant's front door —
+    /// the selection first (mac's canvasPromptConnectedDirection), then
+    /// the direction prompt with the typed context.</summary>
+    internal event Action<CanvasPromptContext>? ConnectedDirectionRequested;
+
+    internal void RequestCreateConnectedDirection(object? owner = null)
+    {
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        if (Selection.Selected is not { } selected || !_rows.ContainsKey(selected))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        ConnectedDirectionRequested?.Invoke(new CanvasPromptContext(owner, loaded, selected));
+    }
 
     /// <summary>§G2 TG2-3 (G2-6): the vault file picker's front door for Add
     /// Note, Add Media and Locate File. The openers speak here; the load

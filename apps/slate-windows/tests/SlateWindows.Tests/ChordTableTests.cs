@@ -180,6 +180,7 @@ public sealed class ChordTableTests
                 // slate.view.toggleRightPane holds at Global scope — live
                 // while a canvas is focused, so a real collision. Owner
                 // decision D-2 disambiguates with Shift (G18 precedent).
+                "slate.canvas.createConnectedCard",
                 "slate.canvas.whereAmI",
                 "slate.file.cancelImport",
                 "slate.file.rename",

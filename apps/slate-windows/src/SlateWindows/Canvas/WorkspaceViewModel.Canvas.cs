@@ -100,6 +100,21 @@ internal sealed partial class WorkspaceViewModel
             // §G2 TG2-3 (IG2-50): the vault picker presents only for the
             // owner that is still current; a load that completes for a
             // tab that moved on presents nothing and says so.
+            // §G2 TG2-4 (G2-9, IG2-23): the created card's editor opens ONLY for
+            // an owner that is still current — the active tab, or the
+            // document itself when the verb was invoked unaddressed and the
+            // document is the active canvas.
+            document.CreatedEditorRequested += (owner, nodeId) =>
+            {
+                bool current = ReferenceEquals(owner, ActiveGroup.ActiveTab)
+                    || (ReferenceEquals(owner, document) && ReferenceEquals(ActiveCanvasDocument, document));
+                if (current && ReferenceEquals(ActiveCanvasDocument, document))
+                {
+                    CanvasCardEditorSheet = document.OpenCardEditor(nodeId);
+                }
+            };
+            document.ConnectedDirectionRequested += context =>
+                _ = TryPresentCanvasPrompt(CanvasPromptViewModel.ConnectedDirection(document, context));
             document.VaultPickerRequested += request =>
             {
                 if (!ReferenceEquals(request.Owner, ActiveGroup.ActiveTab))
@@ -747,6 +762,18 @@ internal sealed partial class WorkspaceViewModel
         _canvasLocateFileCommand ??= DocumentCommand(
             (document, owner) => document.RequestVaultPick(CanvasVaultPickPurpose.Locate, owner));
 
+    public System.Windows.Input.ICommand CanvasRemoveFromGroupCommand =>
+        _canvasRemoveFromGroupCommand ??= DocumentCommand(
+            (document, owner) => document.CanvasRemoveFromGroup(owner: owner));
+
+    public System.Windows.Input.ICommand CanvasCreateConnectedCardCommand =>
+        _canvasCreateConnectedCardCommand ??= DocumentCommand(
+            (document, owner) => document.CanvasCreateConnectedCard(owner: owner));
+
+    public System.Windows.Input.ICommand CanvasCreateConnectedCardDirectionalCommand =>
+        _canvasCreateConnectedCardDirectionalCommand ??= DocumentCommand(
+            (document, owner) => document.RequestCreateConnectedDirection(owner));
+
     private RelayCommand? _canvasDeleteCommand;
     private RelayCommand? _canvasEditCardCommand;
     private RelayCommand? _canvasRenameGroupCommand;
@@ -760,6 +787,9 @@ internal sealed partial class WorkspaceViewModel
     private RelayCommand? _canvasAddNoteCommand;
     private RelayCommand? _canvasAddMediaCommand;
     private RelayCommand? _canvasLocateFileCommand;
+    private RelayCommand? _canvasRemoveFromGroupCommand;
+    private RelayCommand? _canvasCreateConnectedCardCommand;
+    private RelayCommand? _canvasCreateConnectedCardDirectionalCommand;
 
     public System.Windows.Input.ICommand CanvasConnectModeCommand =>
         _canvasConnectModeCommand ??= NavigatorCommand(

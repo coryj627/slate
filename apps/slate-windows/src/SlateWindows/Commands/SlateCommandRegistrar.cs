@@ -529,6 +529,12 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.CanvasAddNote] = host => host.Workspace?.CanvasAddNoteCommand,
             [ChordTable.Ids.CanvasAddMedia] = host => host.Workspace?.CanvasAddMediaCommand,
             [ChordTable.Ids.CanvasLocateFile] = host => host.Workspace?.CanvasLocateFileCommand,
+            [ChordTable.Ids.CanvasRemoveFromGroup] =
+                host => host.Workspace?.CanvasRemoveFromGroupCommand,
+            [ChordTable.Ids.CanvasCreateConnectedCard] =
+                host => host.Workspace?.CanvasCreateConnectedCardCommand,
+            [ChordTable.Ids.CanvasCreateConnectedCardDirectional] =
+                host => host.Workspace?.CanvasCreateConnectedCardDirectionalCommand,
             [ChordTable.Ids.CanvasShowMarks] =
                 host => host.Workspace?.CanvasShowMarksCommand,
             [ChordTable.Ids.CanvasGroupMarked] =

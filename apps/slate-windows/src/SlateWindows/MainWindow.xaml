@@ -447,6 +447,13 @@
                           AutomationProperties.AutomationId="CanvasNewCardMenuItem"
                           InputGestureText="{cmd:ChordText slate.canvas.newCard}"
                           Command="{Binding Workspace.CanvasNewCardCommand}" />
+                <!-- §G2 TG2-4 (G2-1): mac's Canvas menu owns Create Connected
+                     Card — the one residue verb it owns; the ownership census
+                     demands this item. -->
+                <MenuItem Header="Create Connec_ted Card"
+                          AutomationProperties.AutomationId="CanvasCreateConnectedCardMenuItem"
+                          InputGestureText="{cmd:ChordText slate.canvas.createConnectedCard}"
+                          Command="{Binding Workspace.CanvasCreateConnectedCardCommand}" />
                 <Separator />
                 <MenuItem Header="_Next Card"
                           AutomationProperties.AutomationId="CanvasNextCardMenuItem"

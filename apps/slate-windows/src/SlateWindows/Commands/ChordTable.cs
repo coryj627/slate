@@ -292,6 +292,10 @@ internal static class ChordTable
         public const string CanvasAddNote = "slate.canvas.addNote";
         public const string CanvasAddMedia = "slate.canvas.addMedia";
         public const string CanvasLocateFile = "slate.canvas.locateFile";
+        public const string CanvasRemoveFromGroup = "slate.canvas.removeFromGroup";
+        public const string CanvasCreateConnectedCard = "slate.canvas.createConnectedCard";
+        public const string CanvasCreateConnectedCardDirectional =
+            "slate.canvas.createConnectedCardDirectional";
 
         public const string CanvasClearMarks = "slate.canvas.clearMarks";
 
@@ -1075,6 +1079,22 @@ internal static class ChordTable
                 "Pick a vault media file; a file card is placed next to your selection."),
             Reg(Ids.CanvasLocateFile, "Canvas: Locate File…", CommandSection.Canvas,
                 "Repoint the selected file card at a different vault file."),
+            // §G2 TG2-4: Remove from Group and the connected-card pair. The
+            // series' second verb chord: mac's ⌃⌥⌘N as Ctrl+Alt+Shift+N (the
+            // spec's §7 allocation, free on Windows), delivered by the
+            // navigator's map.
+            Reg(Ids.CanvasRemoveFromGroup, "Canvas: Remove from Group", CommandSection.Canvas,
+                "Move the selected card out of its enclosing group, placed by the engine."),
+            Reg(Ids.CanvasCreateConnectedCard, "Canvas: Create Connected Card",
+                CommandSection.Canvas,
+                "New text card below the selection, already connected, ready to type.",
+                "⌃⌥⌘N", "Ctrl+Alt+Shift+N", ChordScope.Canvas,
+                divergence: "mac's ⌃⌥⌘N; the modifier rule maps it onto Ctrl+Alt+N, "
+                    + "which New Card owns (mac's ⌥⌘N), so Shift disambiguates — the "
+                    + "spec's §7 allocation, free on Windows."),
+            Reg(Ids.CanvasCreateConnectedCardDirectional,
+                "Canvas: Create Connected Card (Choose Direction)…", CommandSection.Canvas,
+                "Pick the side first, then the connected card is created there."),
             Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,
                 "Remember the selected card, navigate to a target with the "
                 + "usual movements, press Return to connect."),

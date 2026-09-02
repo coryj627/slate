@@ -11208,6 +11208,73 @@ and keeps the tab). Mutations, each byte-restored: M1 the generation
 check removed, M2 the identity check removed, M3 Locate's file-card
 guard removed, M4 the empty-set refusal removed. All bitten.
 
+### TG2-4 — Remove from Group, Create Connected Card, and the editor through the receipt
+
+Remove from Group (G2-8, R22, IG2-40): the openers over the selection
+— not-ready, `NothingSelected`, a card with an empty group path
+`NotInAGroup` with its title — then, inside `prepare` under the gate,
+the enclosing group from `CanvasParentOf` on the basis: a THROWN query
+is `NothingSelected` (mac's rule at the same seam — a fact the query
+never returned must not become "not in a group"), a null or
+unresolved parent is `NotInAGroup`; placement is `CanvasPlaceNew`
+anchored on the PARENT with the card's own size, no hint, the card
+excluded; one `UpdateNodeGeometry` named `remove "⟨title⟩" from
+"⟨group⟩"`; success speaks `CanvasRemovedFromGroup` with the group's
+label.
+
+Create Connected Card (G2-9, IG2-22): ONE action carrying the exact
+tuple — a fresh id, `Text` with the empty string, the engine's
+placement anchored on the origin with the direction as the hint and
+nothing excluded, the default size, null color; a second fresh id for
+the edge, from the ORIGIN to the NEW card, `CanvasAutoSides` over the
+origin's rect and the placement's rect in that order, `None` from-end,
+`Arrow` to-end, null label and color. Success seats the new card
+(`SelectCreated`) and speaks `CanvasConnectedCardCreated` with the
+relative phrase and the origin's title; one undo removes both ops.
+The directional variant is `CanvasConnectedDirectionPrompt` — Below,
+Right, Above, Left, mac's labels — over the typed context, then the
+same verb. The chord: `Ctrl+Alt+Shift+N` is the navigator's own
+`AddChord`, delivered wherever a canvas surface holds the keys, with
+the presenter's OWNER riding into the operation (IG2-34); the row
+records the divergence the modifier rule demands (mac's ⌃⌥⌘N maps
+onto Ctrl+Alt+N, which New Card owns, so Shift disambiguates — the
+spec's §7 allocation) and the census's pinned list names it. The
+Canvas menu gains the item mac's menu has, so the ownership census now
+holds over one owned id on both sides.
+
+The editor opens through TE-4's receipt (E4, G2-9, IG2-23, IG2-53).
+`CanvasMutationOperation` carries `CanvasOperationCompletion` under its
+own identity; `OpenEditorOnLanding` wraps the completion so that, on
+the INSTALLED outcome, at most once per operation
+(`TryMarkEditorOpened`), the created card's editor is REQUESTED for
+the operation's owner (`CreatedEditorRequested`), and the workspace
+opens it only if that owner is still current — the active tab, or the
+document itself when the verb was invoked unaddressed and the document
+is the active canvas. New Card is wired through the same receipt: E4's
+"lands in the editor" was recorded by §E and never wired (the receipt
+type existed with no caller), and it lands now. One catch the facts
+found: the completion fires inside the transaction's finally, BEFORE
+the applied publication has rebuilt the document's row index in an
+inline host — the editor factory then saw no row and spoke "Nothing
+selected." The request therefore fires only once the created row is
+PRESENT: immediately when it is (the dispatcher's posted apply
+precedes the marshalled completion), else on the next applied
+publication that carries it, through the document's own
+`PublicationApplied` hook. Three rows, resolvers and owner-carrying
+commands: Remove from Group, Create Connected Card, Create Connected
+Card (Choose Direction)…; `chords.json` regenerated.
+
+Facts: six — the exact tuple with one undo restoring the bytes; the
+direction hint honoured (Left and Above of a card with room); the
+chord carrying the presenter's owner into the receipt; Remove from
+Group placing outside, speaking the label, undoing, and refusing a
+card in no group with its title; New Card and Create Connected Card
+landing in the editor for a current owner and NOT for one that moved
+on; the direction prompt creating on the chosen side. Mutations, each
+byte-restored: M1 the edge op dropped, M2 the owner check on the
+landing removed, M3 a card in no group answering NothingSelected, M4
+the navigator chord removed (the scope census bit). All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

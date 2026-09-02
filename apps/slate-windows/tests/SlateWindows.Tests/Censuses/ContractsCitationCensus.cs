@@ -429,7 +429,11 @@ public sealed class ContractsCitationCensus
                 // TG2-3 bound the vault file picker, taking the section to
                 // 146; 145 sits above the pre-task population of 134
                 // — a fourth time.
-                145),
+                //
+                // TG2-4 bound Remove from Group, Create Connected Card and
+                // the editor receipt, taking the section to 159; 158
+                // sits above the pre-task population of 146 — a fifth time.
+                158),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

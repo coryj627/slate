@@ -189,6 +189,10 @@ internal abstract class CanvasPromptViewModel : System.ComponentModel.INotifyPro
         IReadOnlyList<CanvasNeighbor> neighbors, bool toDelete) =>
         new CanvasPickConnectionPrompt(document, context, neighbors, toDelete);
 
+    internal static CanvasPromptViewModel ConnectedDirection(
+        CanvasDocumentViewModel document, CanvasPromptContext context) =>
+        new CanvasConnectedDirectionPrompt(document, context);
+
     internal static CanvasPromptViewModel EditConnectionDirection(
         CanvasDocumentViewModel document, CanvasPromptContext context, CanvasNeighbor neighbor) =>
         CanvasEditConnectionDirectionPrompt.For(document, context, neighbor);
@@ -680,6 +684,47 @@ internal sealed class CanvasEditConnectionLabelPrompt : CanvasPromptViewModel
         }
         CanvasMutationOperation? operation = Document.CanvasEditConnection(
             Neighbor.EdgeId, NormalizeLabel(Draft), Direction, owner: Context.Owner,
+            completion: outcome => { if (Landed(outcome)) { onLanded(); } });
+        return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
+    }
+}
+
+/// <summary>§G2 TG2-4 (G2-5): Create Connected Card (Choose Direction)… —
+/// four choices named by placement, mac's labels; Enter runs the one
+/// action with the chosen direction as the engine's hint.</summary>
+internal sealed class CanvasConnectedDirectionPrompt : CanvasPromptViewModel
+{
+    internal CanvasConnectedDirectionPrompt(CanvasDocumentViewModel document, CanvasPromptContext context)
+        : base(
+            document,
+            "Create Connected Card",
+            string.Empty,
+            [
+                new(nameof(CanvasPlaceDirection.Below), "Below"),
+                new(nameof(CanvasPlaceDirection.RightOf), "Right"),
+                new(nameof(CanvasPlaceDirection.Above), "Above"),
+                new(nameof(CanvasPlaceDirection.LeftOf), "Left"),
+            ])
+    {
+        Context = context;
+    }
+
+    internal CanvasPromptContext Context { get; }
+
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        if (!Document.IsCurrentLoaded(Context.Identity))
+        {
+            Document.SpeakPickDifferentTarget();
+            return CanvasPromptSubmit.Refused;
+        }
+        if (SelectedChoice?.Value is not { } chosen)
+        {
+            return CanvasPromptSubmit.Refused;
+        }
+        CanvasMutationOperation? operation = Document.CanvasCreateConnectedCard(
+            Enum.Parse<CanvasPlaceDirection>(chosen), owner: Context.Owner,
             completion: outcome => { if (Landed(outcome)) { onLanded(); } });
         return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
     }
