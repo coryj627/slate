@@ -10822,6 +10822,125 @@ and flips only the surface row.
 | IG2-31 | major | taken — the reseating legs (G2-13) |
 | IG2-32 | blocker | taken — the named facts and mutations (G2-14) |
 
+### THE FREEZE — read this first
+
+**This section is CLOSED to further prose revision**, frozen at
+revision 2 after two adversarial rounds, by APPLICATION OF THE
+STANDING PRECEDENT — the owner's ruling that closed §C-unit, §D, §E,
+§F and §G, applied here by the session rather than freshly ruled, and
+recorded as such; the owner may overrule. The trajectory is rule 5's
+signal on the series' schedule: thirty-two findings, then twenty-eight
+with TWELVE of them CREATED by revision 2's own closures — the
+Advanced arm as an enum-and-property pair, the widened close for a
+landed note, the opener-stage NoMarks, the gated barrier and refresh,
+the note seam's missing shutdown arm, the seat-then-verb rule applied
+to connection rows — which is the protocol's own definition of a patch
+over a missing model rather than a repair. Prose cannot close what the
+round found; the findings become the ledger below, each discharged BY
+CODE in the task whose surface it names, each closure recorded with
+its facts and its byte-restored mutations, exactly as the IF and IG
+ledgers were.
+
+Four rows touch frozen text, and each is discharged WITHOUT reopening
+it: the stage transition becomes a sealed RESULT family whose Advanced
+case carries its non-null successor, an extension of TG-1's table
+rather than an enum arm with a side property (IG2-44); a group's
+palette Delete keeps E8's and ED-3's Ungroup-or-Cancel confirmation,
+and revision 2's "retired" is itself retired (IG2-51); a landed note
+whose canvas retarget did not land leaves the sheet in a
+NON-RESUBMITTABLE recovery state that speaks the landed-note truth,
+so TG-1's close table is not widened (IG2-57); and Locate File's
+predicate is the one row the frozen text cannot be honoured on — the
+FFI carries no missing-target signal for a file card (the one
+`Missing` flag in the generated bindings is the dashboards') — so
+mac's every-file-card rule ships with E8's wording recorded as OWED TO
+THE OWNER, not superseded (IG2-52). Where a task finds the frozen text
+and the shipped code in conflict, the shipped frozen sections win and
+the record says so.
+
+The frozen text stands with its known holes NAMED: the menu census
+over the residue subset (IG2-33); the invocation value through every
+route — resolver, navigator chord, context row (IG2-34); a typed
+immutable request per staged flow (IG2-35); the per-verb precedence
+with the not-ready-first rule recorded as a Windows-wide divergence
+(IG2-36); the audible paging failure recorded against mac's partial
+set (IG2-37); Duplicate's ghost-only refusal inside prepare, its exact
+set equality, and its group-label loss (IG2-38, IG2-39, IG2-54);
+Remove from Group's null-parent arm (IG2-40); Convert's trimmed path,
+suggested name, fixed null-text detail, worker/UI split, shutdown arm,
+recovery state and landed-note sentence (IG2-41, IG2-42, IG2-43,
+IG2-55, IG2-56, IG2-57, IG2-58); the stage transition's result family
+and focus delivery (IG2-44, IG2-45); the connection prompts'
+cardinality table and row status (IG2-46, IG2-47); the picker row
+projection, its checkpoint table and its owner validation (IG2-48,
+IG2-49, IG2-50); the confirmation kept and the Locate predicate owed
+(IG2-51, IG2-52); the editor-open receipt separate from the selection
+effect (IG2-53); and the plan's surface dimension with connection
+dispatch that never seats (IG2-59, IG2-60).
+
+### Round record
+
+- **Round 1** (xhigh, conforming): 32 findings — 20 blockers, 11
+  majors, 1 minor — closed by revision 2's text (the table above).
+- **Round 2** (xhigh, conforming): 28 findings — 19 blockers, 9
+  majors — twelve created by revision 2. Rule 5's signal; the
+  precedent applied; the findings are the ledger.
+
+### The ledger — IG2-33 … IG2-60, discharged by code
+
+| Row | Severity | Contracts | Origin | Claim | Rides |
+| --- | --- | --- | --- | --- | --- |
+| IG2-33 | BLOCKER | G2-1 | survived round 1 | The Windows Canvas menu equals mac's menu ownership "in both directions" — over every item, not the residue subset. | TG2-0 |
+| IG2-34 | BLOCKER | G2-2 | survived round 1 | Every operation carries the invoking tab as owner — while the navigator chord discards its presenter and `DocumentCommand` passes only the document. | TG2-0 |
+| IG2-35 | BLOCKER | G2-2/G2-5/G2-6 | survived round 1 | Staged verbs preserve their invocation context — with one typed request defined, and none for Move, the connection flows, the directional create, New Group, Add Link or Convert. | TG2-2 |
+| IG2-36 | MAJOR | G2-3 | survived round 1 | The not-ready sentence precedes every opener refusal while each row "mirrors" mac's order. | TG2-0 |
+| IG2-37 | MAJOR | G2-3/G2-6 | created by revision 2 | Any vault paging failure aborts audibly and presents nothing — where mac keeps the partial set silently. | TG2-3 |
+| IG2-38 | BLOCKER | G2-3/G2-10 | created by revision 2 | A non-empty store whose projection is empty refuses `NoMarks` at the OPENER — before admission, outside the gate. | TG2-5 |
+| IG2-39 | BLOCKER | G2-10/G2-14 | survived round 1 | Duplicate is all-or-nothing — while `CanvasOrderNodes` drops unknown ids silently and no set equality is required. | TG2-5 |
+| IG2-40 | MAJOR | G2-3/G2-8 | survived round 1 | Remove from Group maps a thrown parent query — and nothing for a null or unresolved parent. | TG2-4 |
+| IG2-41 | MAJOR | G2-3/G2-11 | survived round 1 | Convert validates "the path" — with no trimming rule carried through every write and sentence. | TG2-6 |
+| IG2-42 | MAJOR | G2-11 | survived round 1 | A null `CanvasNodeText` produces `NoteReadFailed` "with the message" — which a null has none of. | TG2-6 |
+| IG2-43 | MAJOR | G2-5/G2-11 | created by revision 2 | Convert opens a text prompt — whose initial draft revision 2 no longer derives. | TG2-6 |
+| IG2-44 | BLOCKER | G2-4/G2D-2 | created by revision 2 | The submit enum gains `Advanced` while a separate `Next` property carries the successor. | TG2-1 |
+| IG2-45 | MAJOR | G2-4/G2-14 | created by revision 2 | The atomic swap "lands focus" on the successor's first field — with no focus-delivery seam named and no fact reading the focused element. | TG2-1 |
+| IG2-46 | MAJOR | G2-5 | survived round 1 | The connection verbs always present their prompt — where mac routes a single connection directly. | TG2-2 |
+| IG2-47 | MAJOR | G2-5 | survived round 1 | Connection choices carry `CanvasPhrase.ConnectionStatus` as row status — on a choice row with no status and a list with no ItemStatus binding. | TG2-1 |
+| IG2-48 | BLOCKER | G2-6/G2D-1 | survived round 1 | The picker interface needs only rows "with a Label" and the XAML "already binds" — over raw `FileSummary` rows and card-specific automation names. | TG2-3 |
+| IG2-49 | BLOCKER | G2-6 | created by revision 2 | A mismatch refuses "with the sheet kept" at presentation while a superseded load "never presents" — two states that cannot both hold. | TG2-3 |
+| IG2-50 | BLOCKER | G2-6/TE-1 | survived round 1 | The request captures the owner — and validates only identity and generation. | TG2-3 |
+| IG2-51 | BLOCKER | G2-7/G2D-9 | created by revision 2 | A group's Delete ungroups immediately and the frozen confirmation is "retired." | TG2-1 |
+| IG2-52 | BLOCKER | G2-6/G2D-8 | survived round 1 | Locate File is offered on every file card and "supersedes E8." | TG2-3 |
+| IG2-53 | BLOCKER | G2-9 | survived round 1 | Editor opening belongs in a combined `CanvasMutationEffect` arm — where TE-4 keeps publication effects pure and the receipt separate. | TG2-4 |
+| IG2-54 | BLOCKER | G2-10 | survived round 1 | Duplicating a group "keeps its label" — from a scene node that exposes only the derived title. | TG2-5 |
+| IG2-55 | BLOCKER | G2-11 | created by revision 2 | The barrier and the tree refresh run inside `prepare`, on the worker. | TG2-6 |
+| IG2-56 | BLOCKER | G2-11 | created by revision 2 | The note seam has four outcomes — and no arm for a session-work refusal at shutdown. | TG2-6 |
+| IG2-57 | BLOCKER | G2-11 | created by revision 2 | Convert's Pending closes on any completion after a landed note, "the one place TG-1's table widens." | TG2-6 |
+| IG2-58 | BLOCKER | G2-11 | created by revision 2 | `NoteRetargetFailed` is unreachable because the funnel speaks every post-write outcome — while displacement is silent by contract. | TG2-6 |
+| IG2-59 | BLOCKER | G2-12 | survived round 1 | One `RowsFor` over a target with no surface yields different outline and grid row sets. | TG2-7 |
+| IG2-60 | BLOCKER | G2-12 | created by revision 2 | Every context consumer seats its row silently before the verb — connection rows included. | TG2-7 |
+
+### The task loop
+
+| Task | Slice | Discharges |
+| --- | --- | --- |
+| TG2-0 | The front-door substrate: the seven §E verbs returning their operation with a completion; the invocation value (document, owner, anchor) through the resolver, the navigator's chord and the context row; the shared prepare clause; the eighteen rows and resolvers; the Canvas-menu ownership census over the residue subset; the per-verb precedence facts with the not-ready-first divergence recorded | G2-1, G2-2, G2-3, IG2-33, IG2-34, IG2-36 |
+| TG2-1 | The prompt lifecycle: the sealed result family with a successor-bearing Advanced, the atomic swap, the focus-delivery seam and its real-focus facts, the choice row's status bound to ItemStatus; the label prompts (New Group with empty-to-null untrimmed, Add Link trimmed); the Set Color and Clear Color rows; Edit Card; Delete typed by the selection with the Ungroup-or-Cancel confirmation kept | G2-4, G2-7, G2D-9 restored, G2D-11, IG2-44, IG2-45, IG2-47, IG2-51 |
+| TG2-2 | The choices pickers: the typed request per staged flow; Move into Group over every group; the connection prompts over the nullable neighbor read with the cardinality table and the neighbor-built delete target; the two-stage Edit Connection with mac's labels, the end-style tuples and preselection; the direction prompt | G2-5, IG2-35, IG2-46 |
+| TG2-3 | The vault file picker: the common picker row and sheet contract, the slot retyped, purpose-specific automation names; the request value with its checkpoint table and owner validation; the off-dispatcher load with supersession and the audible-failure divergence recorded; Add Note, Add Media and Locate File end to end with the every-file-card predicate recorded as owed | G2-6, G2D-1, G2D-6, G2D-8, IG2-37, IG2-48, IG2-49, IG2-50, IG2-52 |
+| TG2-4 | Remove from Group with the null-parent arm; Create Connected Card with the exact tuple, the chord in the navigator, and the editor opened through TE-4's operation-keyed receipt — New Card's E4 landing wired through the same receipt | G2-8, G2-9, IG2-40, IG2-53 |
+| TG2-5 | Duplicate: the invocation snapshot, the ghost-only refusal inside prepare, the visited-set expansion with exact set equality, the content resolution, all-or-nothing, the group-label loss recorded beside the unmet deep copy | G2-10, G2D-4, G2D-7, IG2-38, IG2-39, IG2-54 |
+| TG2-6 | Convert Card to Note: the note-creation seam with its discriminated result including the shutdown arm; the trimmed path and the suggested name; the fixed null-text detail; the worker-safe create inside the gate with the barrier and refresh posted to the tree's context in the stated order; the recovery state after a landed note and the landed-note sentence for every non-retargeted outcome | G2-11, G2D-3, IG2-41, IG2-42, IG2-43, IG2-55, IG2-56, IG2-57, IG2-58 |
+| TG2-7 | The context plan over (surface, target) with per-surface projections, mac's order including Create Connected Card, Connect To… and Set Color on groups, the connection rows dispatching their captured edge without seating, the grid's Toggle Mark live, and the bidirectional census per surface | G2-12, G2D-12, IG2-59, IG2-60 |
+| TG2-8 | The matrix: every executable canvas id in the delivered set, the chords.json evidence groups with anchors that exist, the regenerated parity matrix | G2-14 (the matrix), IG2-3 |
+| TG2-9 | The journey with its reseating, axe over the new sheet and the group prompt, and the ledger sweep | G2-13, G2-14 (the sweep) |
+
+Ledger rows not named in a task's row ride the task whose surface
+they touch; the closing record sweeps stragglers. Each task lands
+with its facts, its byte-restored mutations, its record here, and a
+raised citation floor — the §F gauntlet, unchanged.
+
+### Implementation records
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
