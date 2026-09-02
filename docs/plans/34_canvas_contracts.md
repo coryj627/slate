@@ -11460,6 +11460,52 @@ catch, the reader's currency already seating the row, so the seat's
 proof moved to the document level — M4 Set Color withheld from groups.
 All bitten.
 
+### TG2-8 — The matrix: every executable canvas id delivered, the evidence anchored, the matrix regenerated
+
+`W6_1_DELIVERED_COMMANDS` in `scripts/generate-parity-matrix.py` gains
+the thirty-nine ids that became EXECUTABLE after §D — B12's rule, a
+command joins in the PR that makes it executable: §E's five (delete,
+editCard, renameGroup, setColor, clearColor — shipped without a front
+door, given one by §G2), the §G2 residue (newGroup, addLink,
+moveIntoGroup, editConnection, deleteConnection, addNote, addMedia,
+locateFile, removeFromGroup, createConnectedCard,
+createConnectedCardDirectional, duplicate, convertToNote),
+`slate.canvas.newCard` and `slate.file.newCanvas`, §F's thirteen
+(moveMode, resizeMode, connectMode, commitMode and cancelMode —
+returning as the §D entry promised, F being the PR that made them
+reachable — placeBelow, placeRightOf, placeAbove, placeLeftOf,
+alignWith, connectTo, resizeDefaultSize, resizeFitContent) and §G's six
+(toggleMark, showMarks, clearMarks, deleteMarked, groupMarked,
+colorMarked). The set now equals the chord table's canvas inventory
+exactly — fifty-eight ids, none missing, none extra — checked by set
+difference against `ChordTable.cs` before the regeneration. The status
+string's gate date moved to 2026-09-02.
+
+`chords.json`'s `deliveryEvidence` gains three groups, each with
+implementation and test anchors the generator checks file-by-file and
+marker-by-marker: canvasMutations (the delete funnel, the convert verb,
+`CanvasMutationOperation`, the prompt family, `CanvasVaultFilePickerViewModel`,
+`ICanvasNoteCreator`, `CanvasContextDispatch`, the workspace's
+`CanvasNewGroupCommand`, the sidebar's `CreateCanvasCommand`, the chord
+rows; the history facts, `EveryReachableGuardExitSpeaksItsCell`, the
+convert and delete-connection facts, `TheOutlineMenuEqualsThePlan`, the
+authoring journey), canvasModes (`CanvasModeController`, `CanvasPlaceSet`,
+the navigator, `CanvasMoveModeCommand`; `ConnectModeConnectsTheReadersCard`,
+`StagedConnectAppliesOnceWithEveryParameterSpelled`,
+`M2_CommitRunsTheEffectAndSpeaksItsConfirmation`, the modes journey) and
+canvasMarks (`ToggleMark`, `SubmitBulkMarked`, `CanvasToggleMarkCommand`;
+`ToggleMarkPublishesTheAuthorityAndSpeaksTheLiveCount`,
+`DeleteMarkedIsOneActionAndUndoRestoresIt`, `ColorMarkedKeepsTheMarks`,
+the marks journey). The block was re-serialized through the projection
+writer, so the byte-for-byte round-trip `ChordTableTests` makes holds.
+
+`parity_matrix.md` regenerated: fifty-eight canvas command rows now read
+implemented — thirty-nine flipped out of pending, nineteen re-dated. The
+"Accessible canvas (T parity)" surface row stays pending BY CONTRACT:
+PR H reconciles the evidence and flips only that row (G2-14), which is
+why #745 is not added to the generator's expected issue set here.
+Discharges G2-14's matrix clause and IG2-3.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

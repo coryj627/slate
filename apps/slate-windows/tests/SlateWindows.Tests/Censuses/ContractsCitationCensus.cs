@@ -444,7 +444,11 @@ public sealed class ContractsCitationCensus
                 // TG2-7 bound the context plan over (surface, target), taking
                 // the section to 184; 183 sits above the pre-task population
                 // of 181 — an eighth time.
-                183),
+                //
+                // TG2-8 bound the matrix, taking the
+                // section to 204; 203 sits above the pre-task population
+                // of 184 — a ninth time.
+                203),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

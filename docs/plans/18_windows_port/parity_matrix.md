@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-31 at `b511295` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-09-02 at `7434b01` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -55,62 +55,62 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.bases.viewAsList` | Bases: View as List | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
 | `slate.bases.viewAsTable` | Bases: View as Table | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
 | `slate.bases.whereAmI` | Bases: Where Am I? | — | — | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |
-| `slate.canvas.actualSize` | Canvas: Actual Size | ⌘0 | Command 0 | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.addLink` | Canvas: Add Link Card… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.addMedia` | Canvas: Add Media… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.addNote` | Canvas: Add Note to Canvas… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.alignWith` | Canvas: Align With… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.cancelMode` | Canvas: Cancel Mode | — | — | #745 (W6-1) | pending |
-| `slate.canvas.clearColor` | Canvas: Clear Color | — | — | #745 (W6-1) | pending |
-| `slate.canvas.clearFilter` | Canvas: Clear Filter | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.clearMarks` | Canvas: Clear All Marks | — | — | #745 (W6-1) | pending |
-| `slate.canvas.commitMode` | Canvas: Commit Mode | — | — | #745 (W6-1) | pending |
-| `slate.canvas.connectMode` | Canvas: Connect Mode | — | — | #745 (W6-1) | pending |
-| `slate.canvas.connectTo` | Canvas: Connect To… | ⌃⌘C | Control Command C | #745 (W6-1) | pending |
-| `slate.canvas.convertToNote` | Canvas: Convert Card to Note… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.createConnectedCard` | Canvas: Create Connected Card | ⌃⌥⌘N | Control Option Command N | #745 (W6-1) | pending |
-| `slate.canvas.createConnectedCardDirectional` | Canvas: Create Connected Card (Choose Direction)… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.delete` | Canvas: Delete Selection | — | — | #745 (W6-1) | pending |
-| `slate.canvas.deleteConnection` | Canvas: Delete Connection… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.deleteMarked` | Canvas: Delete Marked Cards | — | — | #745 (W6-1) | pending |
-| `slate.canvas.duplicate` | Canvas: Duplicate | — | — | #745 (W6-1) | pending |
-| `slate.canvas.editCard` | Canvas: Edit Card Text… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.editConnection` | Canvas: Edit Connection… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.enterGroup` | Canvas: Enter Group | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.exitGroup` | Canvas: Exit Group | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.filterCards` | Canvas: Filter Cards… | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.fitCanvas` | Canvas: Fit Canvas | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.followConnectionBack` | Canvas: Follow Connection Back | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.followConnectionForward` | Canvas: Follow Connection Forward | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.groupMarked` | Canvas: Group Marked Cards… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.locateFile` | Canvas: Locate File… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.moveIntoGroup` | Canvas: Move into Group… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.moveMode` | Canvas: Move Mode | ⌃⌘G | Control Command G | #745 (W6-1) | pending |
-| `slate.canvas.newCard` | Canvas: New Card | ⌥⌘N | Option Command N | #745 (W6-1) | pending |
-| `slate.canvas.newGroup` | Canvas: New Group… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.nextCard` | Canvas: Next Card | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.placeAbove` | Canvas: Place Above… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.placeBelow` | Canvas: Place Below… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.placeLeftOf` | Canvas: Place Left Of… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.placeRightOf` | Canvas: Place Right Of… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.previousCard` | Canvas: Previous Card | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.removeFromGroup` | Canvas: Remove from Group | — | — | #745 (W6-1) | pending |
-| `slate.canvas.renameGroup` | Canvas: Rename Group… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.resizeDefaultSize` | Canvas: Resize to Default Size | — | — | #745 (W6-1) | pending |
-| `slate.canvas.resizeFitContent` | Canvas: Resize to Fit Content | — | — | #745 (W6-1) | pending |
-| `slate.canvas.resizeMode` | Canvas: Resize Mode | ⌃⌘R | Control Command R | #745 (W6-1) | pending |
-| `slate.canvas.setColor` | Canvas: Set Color… | — | — | #745 (W6-1) | pending |
-| `slate.canvas.showMarks` | Canvas: Show Marked Cards | — | — | #745 (W6-1) | pending |
-| `slate.canvas.showOutline` | Canvas: Show Outline | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.showTable` | Canvas: Show Table | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.showVisual` | Canvas: Show Visual | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.toggleFollowSelection` | Canvas: Toggle Viewport Follows Selection | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.toggleMark` | Canvas: Toggle Mark | ⌃⌘M | Control Command M | #745 (W6-1) | pending |
-| `slate.canvas.tracePath` | Canvas: Trace Path from Selected Card | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.whereAmI` | Canvas: Where Am I? | ⌃⌘I | Control Command I | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.zoomIn` | Canvas: Zoom In | ⌘= | Command Equals | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.zoomOut` | Canvas: Zoom Out | ⌘- | Command Minus | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
-| `slate.canvas.zoomToSelection` | Canvas: Zoom to Selection | — | — | #745 (W6-1) | implemented; local gates green 2026-08-25; interactive CI + human AT pending |
+| `slate.canvas.actualSize` | Canvas: Actual Size | ⌘0 | Command 0 | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.addLink` | Canvas: Add Link Card… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.addMedia` | Canvas: Add Media… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.addNote` | Canvas: Add Note to Canvas… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.alignWith` | Canvas: Align With… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.cancelMode` | Canvas: Cancel Mode | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.clearColor` | Canvas: Clear Color | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.clearFilter` | Canvas: Clear Filter | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.clearMarks` | Canvas: Clear All Marks | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.commitMode` | Canvas: Commit Mode | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.connectMode` | Canvas: Connect Mode | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.connectTo` | Canvas: Connect To… | ⌃⌘C | Control Command C | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.convertToNote` | Canvas: Convert Card to Note… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.createConnectedCard` | Canvas: Create Connected Card | ⌃⌥⌘N | Control Option Command N | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.createConnectedCardDirectional` | Canvas: Create Connected Card (Choose Direction)… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.delete` | Canvas: Delete Selection | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.deleteConnection` | Canvas: Delete Connection… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.deleteMarked` | Canvas: Delete Marked Cards | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.duplicate` | Canvas: Duplicate | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.editCard` | Canvas: Edit Card Text… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.editConnection` | Canvas: Edit Connection… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.enterGroup` | Canvas: Enter Group | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.exitGroup` | Canvas: Exit Group | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.filterCards` | Canvas: Filter Cards… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.fitCanvas` | Canvas: Fit Canvas | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.followConnectionBack` | Canvas: Follow Connection Back | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.followConnectionForward` | Canvas: Follow Connection Forward | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.groupMarked` | Canvas: Group Marked Cards… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.locateFile` | Canvas: Locate File… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.moveIntoGroup` | Canvas: Move into Group… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.moveMode` | Canvas: Move Mode | ⌃⌘G | Control Command G | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.newCard` | Canvas: New Card | ⌥⌘N | Option Command N | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.newGroup` | Canvas: New Group… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.nextCard` | Canvas: Next Card | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.placeAbove` | Canvas: Place Above… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.placeBelow` | Canvas: Place Below… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.placeLeftOf` | Canvas: Place Left Of… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.placeRightOf` | Canvas: Place Right Of… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.previousCard` | Canvas: Previous Card | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.removeFromGroup` | Canvas: Remove from Group | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.renameGroup` | Canvas: Rename Group… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.resizeDefaultSize` | Canvas: Resize to Default Size | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.resizeFitContent` | Canvas: Resize to Fit Content | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.resizeMode` | Canvas: Resize Mode | ⌃⌘R | Control Command R | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.setColor` | Canvas: Set Color… | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.showMarks` | Canvas: Show Marked Cards | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.showOutline` | Canvas: Show Outline | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.showTable` | Canvas: Show Table | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.showVisual` | Canvas: Show Visual | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.toggleFollowSelection` | Canvas: Toggle Viewport Follows Selection | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.toggleMark` | Canvas: Toggle Mark | ⌃⌘M | Control Command M | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.tracePath` | Canvas: Trace Path from Selected Card | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.whereAmI` | Canvas: Where Am I? | ⌃⌘I | Control Command I | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.zoomIn` | Canvas: Zoom In | ⌘= | Command Equals | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.zoomOut` | Canvas: Zoom Out | ⌘- | Command Minus | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
+| `slate.canvas.zoomToSelection` | Canvas: Zoom to Selection | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
 | `slate.diagnostics.refreshSync` | Refresh Sync Diagnostics | — | — | #740 (W4-8) | implemented; local gates green 2026-08-09; interactive CI + human AT pending |
 | `slate.editor.actualSize` | Editor: Actual Size | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.editor.addProperty` | Add Property… | — | — | #736 (W4-4) | implemented; local gates green 2026-08-03; interactive CI + human AT pending |
@@ -129,7 +129,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.file.duplicate` | Duplicate | — | — | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
 | `slate.file.importFilesAndFolders` | Import Files and Folders… | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.file.moveTo` | Move To… | ⇧⌘M | Shift Command M | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
-| `slate.file.newCanvas` | New Canvas | — | — | #745 (W6-1) | pending |
+| `slate.file.newCanvas` | New Canvas | — | — | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
 | `slate.file.newFolder` | New Folder | — | — | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
 | `slate.file.newFromTemplate` | New Note from Template… | ⇧⌘N | Shift Command N | #743 (W5-3) | implemented; local gates green 2026-08-20; interactive CI + human AT pending |
 | `slate.file.newNote` | New Note | ⌘N | Command N | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |

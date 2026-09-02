@@ -2388,6 +2388,57 @@
           "apps/slate-windows/tests/SlateWindows.Tests/CanvasModeControllerTests.cs#TheEscapeLadderConsumesExactlyOneRungPerPress",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean"
         ]
+      },
+      "canvasMutations": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#CanvasDeleteSelection",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#CanvasConvertToNote",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasMutationOperation.cs#CanvasMutationOperation",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasPromptViewModel.cs#CanvasPromptViewModel",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasVaultFilePickerViewModel.cs#CanvasVaultFilePickerViewModel",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasNoteCreation.cs#ICanvasNoteCreator",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasContextMenuPlan.cs#CanvasContextDispatch",
+          "apps/slate-windows/src/SlateWindows/Canvas/WorkspaceViewModel.Canvas.cs#CanvasNewGroupCommand",
+          "apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.cs#CreateCanvasCommand",
+          "apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs#CanvasRows"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#UndoAndRedoVerbsRestoreBytesAndSpeakTheHistorySentence",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#EveryReachableGuardExitSpeaksItsCell",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs#ConvertWritesTheNoteThenRetargetsAndUndoKeepsTheNote",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasDocumentTests.cs#DeleteConnectionFollowsMacsCardinalityAndNamesTheOtherEndpoint",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasContextMenuTests.cs#TheOutlineMenuEqualsThePlan",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasAuthoring_NewCanvasCardEditorAndUndo_AreReachable"
+        ]
+      },
+      "canvasModes": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasModeController.cs#CanvasModeController",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#CanvasPlaceSet",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasNavigator.cs#CanvasNavigator",
+          "apps/slate-windows/src/SlateWindows/Canvas/WorkspaceViewModel.Canvas.cs#CanvasMoveModeCommand",
+          "apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs#CanvasRows"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#ConnectModeConnectsTheReadersCard",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#StagedConnectAppliesOnceWithEveryParameterSpelled",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasModeControllerTests.cs#M2_CommitRunsTheEffectAndSpeaksItsConfirmation",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasModes_MoveResizeAndConnectPicker_AreReachable"
+        ]
+      },
+      "canvasMarks": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#ToggleMark",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#SubmitBulkMarked",
+          "apps/slate-windows/src/SlateWindows/Canvas/WorkspaceViewModel.Canvas.cs#CanvasToggleMarkCommand",
+          "apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs#CanvasRows"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#ToggleMarkPublishesTheAuthorityAndSpeaksTheLiveCount",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#DeleteMarkedIsOneActionAndUndoRestoresIt",
+          "apps/slate-windows/tests/SlateWindows.Tests/CanvasMutationTests.cs#ColorMarkedKeepsTheMarks",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable"
+        ]
       }
     },
     "commands": {
@@ -2517,7 +2568,46 @@
       "slate.canvas.followConnectionBack": "canvasNavigator",
       "slate.canvas.tracePath": "canvasNavigator",
       "slate.canvas.filterCards": "canvasNavigator",
-      "slate.canvas.clearFilter": "canvasNavigator"
+      "slate.canvas.clearFilter": "canvasNavigator",
+      "slate.canvas.delete": "canvasMutations",
+      "slate.canvas.editCard": "canvasMutations",
+      "slate.canvas.renameGroup": "canvasMutations",
+      "slate.canvas.setColor": "canvasMutations",
+      "slate.canvas.clearColor": "canvasMutations",
+      "slate.canvas.newGroup": "canvasMutations",
+      "slate.canvas.addLink": "canvasMutations",
+      "slate.canvas.moveIntoGroup": "canvasMutations",
+      "slate.canvas.editConnection": "canvasMutations",
+      "slate.canvas.deleteConnection": "canvasMutations",
+      "slate.canvas.addNote": "canvasMutations",
+      "slate.canvas.addMedia": "canvasMutations",
+      "slate.canvas.locateFile": "canvasMutations",
+      "slate.canvas.removeFromGroup": "canvasMutations",
+      "slate.canvas.createConnectedCard": "canvasMutations",
+      "slate.canvas.createConnectedCardDirectional": "canvasMutations",
+      "slate.canvas.duplicate": "canvasMutations",
+      "slate.canvas.convertToNote": "canvasMutations",
+      "slate.canvas.newCard": "canvasMutations",
+      "slate.file.newCanvas": "canvasMutations",
+      "slate.canvas.moveMode": "canvasModes",
+      "slate.canvas.resizeMode": "canvasModes",
+      "slate.canvas.connectMode": "canvasModes",
+      "slate.canvas.commitMode": "canvasModes",
+      "slate.canvas.cancelMode": "canvasModes",
+      "slate.canvas.placeBelow": "canvasModes",
+      "slate.canvas.placeRightOf": "canvasModes",
+      "slate.canvas.placeAbove": "canvasModes",
+      "slate.canvas.placeLeftOf": "canvasModes",
+      "slate.canvas.alignWith": "canvasModes",
+      "slate.canvas.connectTo": "canvasModes",
+      "slate.canvas.resizeDefaultSize": "canvasModes",
+      "slate.canvas.resizeFitContent": "canvasModes",
+      "slate.canvas.toggleMark": "canvasMarks",
+      "slate.canvas.showMarks": "canvasMarks",
+      "slate.canvas.clearMarks": "canvasMarks",
+      "slate.canvas.deleteMarked": "canvasMarks",
+      "slate.canvas.groupMarked": "canvasMarks",
+      "slate.canvas.colorMarked": "canvasMarks"
     },
     "issues": {
       "#720": "vault",
