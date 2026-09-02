@@ -9935,6 +9935,58 @@ citation census refused the dead name, and the reference now reads
 as prose naming its successor — the prose is not re-litigated, a dead
 citation is.
 
+### TG-2 — the marks list: live, currency-bound, close-then-land
+
+The picker's sibling lands as `CanvasMarksListPrompt`, a variant of
+TG-1's hierarchy whose bindable surface is the base's — the prompt
+base gained change notification for exactly this task. It is a LIVE
+projection (IG-36): the document's `ProjectMarkedRows` reads the
+store through core's reading order under the lease in ONE try, and
+the variant reprojects on every applied publication — marks and
+population alike — with rows keyed by node id, named as every
+Windows projection names a card, `CardReference` plus ", marked"
+(IG-54), the heading carrying the projected count, the active row
+surviving by id and a removed one's successor the next at the same
+ordinal, else the previous. Admission reads STORE emptiness through
+`OpenMarksList` — an empty store refuses `NoMarks` and presents
+nothing — while the rows read the projection, so a store holding
+only ghosts opens a zero-row list whose rows CANNOT take focus (the
+list's `Focusable` binds to `HasRows`), whose Clear control shows
+and, having emptied the store, closes it (IG-43); the store emptying
+closes the sheet however it emptied — an external unmark, another
+pane's clear, a later mark effect — through the workspace's
+close-if-current (IG-44), and the sheet's closure hook unsubscribes
+the projection in the one place a sheet stops being current.
+
+Enter JUMPS close-first-then-land (IG-39): the seat is silent (no
+moved-to line, frozen A12), a Visual owner switches to the outline
+through the shipped `ShowSurface` (IG-40), a filtered-out row clears
+the filter and the announcer's new `FireFilterLineNow` emits the
+filter line as the one arbiter before the landing posts (IG-42), and
+the A14 request — addressed to the owner captured at open, the tab
+the pane renders — posts at background priority so it runs only
+after the workspace has cleared the sheet; A14's own outcomes
+(delivered, pending, dropped) are the landing's, and the invented
+synchronous failure arm is gone (IG-41). Delete unmarks the active
+row through the document's idempotent, spoken `Unmark`. A refused
+lease or a thrown query speaks the C4 table's `NotReadable` — an
+existing core arm, no host prose — and the sheet keeps its last
+current rows (IG-52's list half; the group half rides TG-5). The
+Show Marked Cards palette row lands with mac's label; the Delete key
+joins the prompt sheet's gate.
+
+Facts: six, at the workspace — the empty-store refusal; the live
+projection with the external unmark's successor and the store-empty
+close; the Jump's close-first-then-land (the pin is that the
+document's standing request is unchanged until the pump, since the
+tab's own nodeless request stands headless); Delete's spoken unmark
+keeping the sheet; the ghost-only zero-row list and its Clear; the
+filtered-row Jump clearing first. Mutations, each byte-restored: M1
+the store-empty close dropped, M2 the landing posted before the
+close, M3 the filter clearance dropped, M4 the successor rule
+dropped, M5 admission on the projection instead of the store. All
+bitten.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same

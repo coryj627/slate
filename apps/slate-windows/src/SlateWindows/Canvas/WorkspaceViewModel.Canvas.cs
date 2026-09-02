@@ -80,6 +80,9 @@ internal sealed partial class WorkspaceViewModel
                     CanvasPromptViewModel.RenameGroup(document, groupId, current));
             document.SetColorRequested += () =>
                 _ = TryPresentCanvasPrompt(CanvasPromptViewModel.SetColor(document));
+            document.MarksListRequested += owner =>
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.MarksList(document, owner, CloseCanvasPromptIfCurrent));
             _canvasDocuments[key] = document;
             InstallCanvasDocumentSeams(document);
             document.Load();
@@ -375,8 +378,39 @@ internal sealed partial class WorkspaceViewModel
     public CanvasPromptViewModel? CanvasPromptSheet
     {
         get => _canvasPromptSheet;
-        private set => SetField(ref _canvasPromptSheet, value);
+        private set
+        {
+            CanvasPromptViewModel? was = _canvasPromptSheet;
+            if (SetField(ref _canvasPromptSheet, value))
+            {
+                // §G TG-2: the one place a sheet stops being current,
+                // however it closed — a live variant unsubscribes here.
+                was?.Closed();
+            }
+        }
     }
+
+    /// <summary>§G TG-2 (G4): Delete on the marks list unmarks the
+    /// active row; on any other prompt the key means nothing.</summary>
+    public void DeleteOnCanvasPrompt() =>
+        (CanvasPromptSheet as CanvasMarksListPrompt)?.UnmarkActive();
+
+    /// <summary>§G TG-2 (G3/G4): the marks list's Clear control — G3's
+    /// verb, then the sheet closes with the emptied store.</summary>
+    public void ClearMarksFromCanvasPrompt()
+    {
+        if (CanvasPromptSheet is CanvasMarksListPrompt && ActiveCanvasDocument is { } document)
+        {
+            document.ClearMarks();
+        }
+    }
+
+    public System.Windows.Input.ICommand CanvasPromptClearMarksCommand =>
+        _canvasPromptClearMarksCommand ??= new RelayCommand(
+            _ => ClearMarksFromCanvasPrompt(),
+            _ => CanvasPromptSheet is CanvasMarksListPrompt);
+
+    private RelayCommand? _canvasPromptClearMarksCommand;
 
     public void CloseCanvasPrompt() => CanvasPromptSheet = null;
 
@@ -481,6 +515,8 @@ internal sealed partial class WorkspaceViewModel
 
     private RelayCommand? _canvasToggleMarkCommand;
 
+    private RelayCommand? _canvasShowMarksCommand;
+
     private RelayCommand? _canvasClearMarksCommand;
 
     private RelayCommand? _canvasPlaceRightOfCommand;
@@ -562,8 +598,20 @@ internal sealed partial class WorkspaceViewModel
         _canvasWhereAmICommand ??= NavigatorCommand(
             navigator => navigator.WhereAmI());
 
-    /// <summary>§F TF-7 (F5/F6): the picker-opening verbs — the
-    /// document owns every refusal and the request.</summary>
+    /// <summary>§G TG-2 (G7): Show Marked Cards — the owner is the
+    /// active tab, the object the A14 landing is addressed to.</summary>
+    public System.Windows.Input.ICommand CanvasShowMarksCommand =>
+        _canvasShowMarksCommand ??= new RelayCommand(
+            _ =>
+            {
+                if (ActiveCanvasDocument is { } document
+                    && ActiveGroup.ActiveTab is { } tab)
+                {
+                    document.OpenMarksList(tab);
+                }
+            },
+            _ => ActiveCanvasDocument is not null);
+
     public System.Windows.Input.ICommand CanvasToggleMarkCommand =>
         _canvasToggleMarkCommand ??= DocumentCommand(document => document.ToggleMark());
 
@@ -578,6 +626,8 @@ internal sealed partial class WorkspaceViewModel
         _canvasConnectToCommand ??= DocumentCommand(
             document => document.OpenCardPicker(CanvasCardPickerPurpose.ConnectTo));
 
+    /// <summary>§F TF-7 (F5/F6): the picker-opening verbs — the
+    /// document owns every refusal and the request.</summary>
     public System.Windows.Input.ICommand CanvasPlaceBelowCommand =>
         _canvasPlaceBelowCommand ??= DocumentCommand(
             document => document.OpenCardPicker(CanvasCardPickerPurpose.PlaceBelow));

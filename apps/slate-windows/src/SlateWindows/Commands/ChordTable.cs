@@ -282,6 +282,8 @@ internal static class ChordTable
 
         public const string CanvasClearMarks = "slate.canvas.clearMarks";
 
+        public const string CanvasShowMarks = "slate.canvas.showMarks";
+
         public const string CanvasConnectTo = "slate.canvas.connectTo";
 
         public const string CanvasConnectMode = "slate.canvas.connectMode";
@@ -1005,6 +1007,8 @@ internal static class ChordTable
                 "Mark or unmark the selected card. Bulk actions apply to every "
                 + "marked card at once.",
                 "⌃⌘M", "Ctrl+Alt+M", ChordScope.Canvas),
+            Reg(Ids.CanvasShowMarks, "Canvas: Show Marked Cards", CommandSection.Canvas,
+                "Open the marks list: jump to or unmark any marked card."),
             Reg(Ids.CanvasClearMarks, "Canvas: Clear All Marks", CommandSection.Canvas,
                 "Unmark every marked card."),
             Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,

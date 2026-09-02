@@ -655,6 +655,12 @@ public partial class MainWindow : Window
                 _viewModel.Workspace.SubmitCanvasPrompt();
                 e.Handled = true;
             }
+            else if (e.Key == Key.Delete && modifiers == ModifierKeys.None)
+            {
+                // §G TG-2: Delete unmarks the marks list's active row.
+                _viewModel.Workspace.DeleteOnCanvasPrompt();
+                e.Handled = true;
+            }
 
             return;
         }

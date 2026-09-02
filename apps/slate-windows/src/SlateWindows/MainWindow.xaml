@@ -3815,9 +3815,17 @@
                     <ListBox ItemsSource="{Binding Choices}"
                              SelectedItem="{Binding SelectedChoice}"
                              DisplayMemberPath="Name"
+                             Focusable="{Binding HasRows}"
                              Visibility="{Binding HasTextField, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
                              AutomationProperties.AutomationId="CanvasPromptChoices"
-                             AutomationProperties.Name="Choices. Enter submits." />
+                             AutomationProperties.Name="Choices. Enter submits; on the marks list Enter jumps and Delete unmarks." />
+                    <Button Content="Clear All Marks"
+                            Command="{Binding DataContext.Workspace.CanvasPromptClearMarksCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                            Visibility="{Binding ShowsClearMarks, Converter={StaticResource BooleanToVisibilityConverter}}"
+                            Margin="0,8,0,0"
+                            HorizontalAlignment="Left"
+                            AutomationProperties.AutomationId="CanvasPromptClearMarks"
+                            AutomationProperties.Name="Clear all marks" />
                 </StackPanel>
             </local:AutomationLandmarkBorder>
         </Grid>

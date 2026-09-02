@@ -28,8 +28,12 @@ internal sealed record CanvasPromptChoice(string? Value, string Name);
 /// variant that cannot submit cannot exist. The bindable surface is
 /// the base's, so the XAML sheet is the same for every variant.
 /// </summary>
-internal abstract class CanvasPromptViewModel
+internal abstract class CanvasPromptViewModel : System.ComponentModel.INotifyPropertyChanged
 {
+    private string _title;
+    private ImmutableArray<CanvasPromptChoice> _choices;
+    private CanvasPromptChoice? _selectedChoice;
+
     private protected CanvasPromptViewModel(
         CanvasDocumentViewModel document,
         string title,
@@ -37,23 +41,68 @@ internal abstract class CanvasPromptViewModel
         ImmutableArray<CanvasPromptChoice> choices)
     {
         Document = document;
-        Title = title;
+        _title = title;
         Draft = draft;
-        Choices = choices;
-        SelectedChoice = choices.IsEmpty ? null : choices[0];
+        _choices = choices;
+        _selectedChoice = choices.IsEmpty ? null : choices[0];
     }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
     private protected CanvasDocumentViewModel Document { get; }
 
-    public string Title { get; }
+    public string Title
+    {
+        get => _title;
+        private protected set
+        {
+            _title = value;
+            Raise(nameof(Title));
+        }
+    }
 
     public string Draft { get; set; }
 
-    public bool HasTextField => Choices.IsEmpty;
+    public bool HasTextField => Choices.IsEmpty && !ShowsClearMarks;
 
-    public ImmutableArray<CanvasPromptChoice> Choices { get; }
+    public ImmutableArray<CanvasPromptChoice> Choices
+    {
+        get => _choices;
+        private protected set
+        {
+            _choices = value;
+            Raise(nameof(Choices));
+            Raise(nameof(HasRows));
+        }
+    }
 
-    public CanvasPromptChoice? SelectedChoice { get; set; }
+    public CanvasPromptChoice? SelectedChoice
+    {
+        get => _selectedChoice;
+        set
+        {
+            _selectedChoice = value;
+            Raise(nameof(SelectedChoice));
+        }
+    }
+
+    /// <summary>§G TG-2 (IG-43): whether the sheet offers the Clear
+    /// All Marks control — the marks list only.</summary>
+    public virtual bool ShowsClearMarks => false;
+
+    /// <summary>§G TG-2 (IG-43): whether the rows list can take focus
+    /// — false for a zero-row marks list, so the Clear control is the
+    /// first focusable in the dialog.</summary>
+    public bool HasRows => !Choices.IsEmpty;
+
+    /// <summary>The workspace's one hook when the sheet stops being
+    /// current, however it closed — a live variant unsubscribes.</summary>
+    internal virtual void Closed()
+    {
+    }
+
+    private protected void Raise(string name) =>
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
 
     /// <summary>Enter's arm: route the answer to the shipped verb and
     /// ANSWER what happened. A Pending answer names its operation
@@ -80,6 +129,118 @@ internal abstract class CanvasPromptViewModel
 
     internal static CanvasPromptViewModel SetColor(CanvasDocumentViewModel document) =>
         new CanvasSetColorPrompt(document);
+
+    internal static CanvasPromptViewModel MarksList(
+        CanvasDocumentViewModel document, object owner, Action<CanvasPromptViewModel> closeIfCurrent) =>
+        new CanvasMarksListPrompt(document, owner, closeIfCurrent);
+}
+
+/// <summary>
+/// §G TG-2 (G4): the marks list — the picker's sibling on the prompt
+/// sheet, a currency-bound LIVE projection: rows are the projected
+/// marked set in reading order, keyed by node id and named the way
+/// every Windows projection names a card, reprojected on every
+/// publication; the active row survives by id and a removed active
+/// row's successor is the next at the same ordinal, else the previous.
+/// Enter JUMPS: the sheet closes FIRST and the A14 landing posts
+/// after, addressed to the owner captured at open; a Visual owner is
+/// switched to the outline; a filtered-out row clears the filter
+/// with the filter line fired NOW as the one arbiter. Delete UNMARKS
+/// the active row (spoken); the sheet closes when the STORE empties,
+/// however it emptied.
+/// </summary>
+internal sealed class CanvasMarksListPrompt : CanvasPromptViewModel
+{
+    private readonly object _owner;
+    private readonly Action<CanvasPromptViewModel> _closeIfCurrent;
+
+    internal CanvasMarksListPrompt(
+        CanvasDocumentViewModel document, object owner, Action<CanvasPromptViewModel> closeIfCurrent)
+        : base(document, "Marked Cards", string.Empty, [])
+    {
+        _owner = owner;
+        _closeIfCurrent = closeIfCurrent;
+        Reproject();
+        document.PublicationApplied += OnPublicationApplied;
+    }
+
+    public override bool ShowsClearMarks => true;
+
+    internal object Owner => _owner;
+
+    internal override void Closed() => Document.PublicationApplied -= OnPublicationApplied;
+
+    /// <summary>Enter: JUMP. Close first, land after (IG-39): the
+    /// selection seats silently now; the A14 request posts at
+    /// background priority so it runs after the workspace has cleared
+    /// this sheet; the Visual owner switches to the outline first
+    /// (IG-40); a filtered-out row clears the filter and fires its
+    /// line now (IG-42). A14's own outcomes — delivered, pending,
+    /// dropped — are the landing's, not this sheet's (IG-41).</summary>
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        if (SelectedChoice?.Value is not { } nodeId)
+        {
+            return CanvasPromptSubmit.Refused;
+        }
+        Document.SeatSelectionSilently(nodeId);
+        if (Document.Selection.ActiveSurface == CanvasSurfaceKind.Visual)
+        {
+            Document.ShowSurface(CanvasSurfaceKind.Outline);
+        }
+        if (Document.FilterActive && Document.FilteredOutline.All(row => row.NodeId != nodeId))
+        {
+            Document.Navigator.ClearFilter();
+            Document.FireFilterLineNow();
+        }
+        object owner = _owner;
+        CanvasDocumentViewModel document = Document;
+        _ = System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Background,
+            () => document.RequestFocusLanding(owner, nodeId));
+        return CanvasPromptSubmit.Completed;
+    }
+
+    /// <summary>Delete: unmark the active row through the document's
+    /// idempotent verb (spoken); the successor takes the highlight,
+    /// and the store-empty close rides the reprojection.</summary>
+    internal void UnmarkActive()
+    {
+        if (SelectedChoice?.Value is { } nodeId)
+        {
+            _ = Document.Unmark(nodeId);
+        }
+    }
+
+    private void OnPublicationApplied(CanvasPublication _) => Reproject();
+
+    private void Reproject()
+    {
+        if (Document.AppliedPublication is { MarkedIntent.Count: 0 })
+        {
+            _closeIfCurrent(this);
+            return;
+        }
+        string? active = SelectedChoice?.Value;
+        int ordinal = Choices.IsEmpty || active is null
+            ? 0
+            : Math.Max(0, Choices.ToList().FindIndex(c => c.Value == active));
+        ImmutableArray<CanvasPromptChoice> rows = Document.ProjectMarkedRows() is { } projected
+            ? [.. projected.Select(row => new CanvasPromptChoice(
+                row.NodeId,
+                CanvasPhrase.CardReference(row.Kind, row.SpeakableName) + ", marked"))]
+            : Choices;
+        Choices = rows;
+        Title = "Marked Cards (" + rows.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")";
+        if (rows.IsEmpty)
+        {
+            SelectedChoice = null;
+            return;
+        }
+        CanvasPromptChoice? kept = rows.FirstOrDefault(c => c.Value == active);
+        SelectedChoice = kept ?? rows[Math.Min(ordinal, rows.Length - 1)];
+    }
 }
 
 /// <summary>§F TF-8 / §G TG-1: the label step of Connect To… — the

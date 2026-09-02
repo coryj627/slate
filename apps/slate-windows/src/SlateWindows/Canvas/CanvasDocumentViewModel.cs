@@ -349,6 +349,12 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// </remarks>
     internal CanvasAnnouncer AnnouncerForTests => _announcer;
 
+    /// <summary>§G TG-2 (IG-42): the one arbiter between a filter
+    /// clearance and the landing that follows it — the boundary fires
+    /// the pending filter line NOW, so the sentence emits before the
+    /// A14 request posts.</summary>
+    internal void FireFilterLineNow() => _announcer.FireFilterLineNow();
+
     /// <summary>Shared selection + marks for every pane showing this
     /// canvas (contract A1/R-B).</summary>
     public CanvasSelection Selection { get; } = new();
@@ -3481,6 +3487,63 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
         ApplyPublication();
         return true;
+    }
+
+    /// <summary>§G TG-2 (G4, IG-10/IG-36): Show Marked Cards — admission
+    /// reads STORE emptiness (an empty store refuses NoMarks and
+    /// presents nothing); the rows are the projection's. The owner —
+    /// the pane the verb ran from — is captured for the Jump's A14
+    /// landing.</summary>
+    internal event Action<object>? MarksListRequested;
+
+    public void OpenMarksList(object owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        if (_slot.Current.MarkedIntent.Count == 0)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+            return;
+        }
+        MarksListRequested?.Invoke(owner);
+    }
+
+    /// <summary>§G TG-2 (IG-36, IG-52): the marked set PROJECTED through
+    /// core's reading order under the lease — a currency-bound read in
+    /// one try. Null when the lease refused or the query threw, with
+    /// the C4 table's own NotReadable sentence spoken (an existing core
+    /// arm, no host prose); the caller keeps its last current rows.</summary>
+    internal IReadOnlyList<CanvasOutlineRow>? ProjectMarkedRows()
+    {
+        string[] ids = [.. _slot.Current.MarkedIntent];
+        if (ids.Length == 0)
+        {
+            return [];
+        }
+        string[]? ordered = null;
+        try
+        {
+            if (_slot.Current.Lease is { } lease)
+            {
+                _ = lease.Invoke(
+                    () =>
+                    {
+                        CanvasPublication now = _slot.Current;
+                        return !now.Retired && now.Names(lease);
+                    },
+                    handle => ordered = _session.CanvasOrderNodes(handle, ids));
+            }
+        }
+        catch (VaultException)
+        {
+            ordered = null;
+        }
+        if (ordered is null)
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotReadable()));
+            return null;
+        }
+
+        return [.. ordered.Where(_rows.ContainsKey).Select(id => _rows[id])];
     }
 
     /// <summary>The live population's basis — the editor's commit

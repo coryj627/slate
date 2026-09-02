@@ -374,7 +374,11 @@ public sealed class ContractsCitationCensus
                 // TG-1 bound the prompt hierarchy and the landing,
                 // taking the section to 22; 20 sits above the
                 // pre-task population of 20 — a second time.
-                20),
+                //
+                // TG-2 bound the marks list and its landing, taking
+                // the section to 25; 23 sits above the pre-task
+                // population of 22 — a third time.
+                23),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

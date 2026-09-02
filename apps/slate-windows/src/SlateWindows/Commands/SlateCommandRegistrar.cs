@@ -510,6 +510,8 @@ internal static class SlateCommandRegistrar
                 host => host.Workspace?.CanvasToggleMarkCommand,
             [ChordTable.Ids.CanvasClearMarks] =
                 host => host.Workspace?.CanvasClearMarksCommand,
+            [ChordTable.Ids.CanvasShowMarks] =
+                host => host.Workspace?.CanvasShowMarksCommand,
             [ChordTable.Ids.CanvasPlaceBelow] =
                 host => host.Workspace?.CanvasPlaceBelowCommand,
             [ChordTable.Ids.CanvasPlaceRightOf] =

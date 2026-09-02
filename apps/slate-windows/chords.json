@@ -1029,6 +1029,18 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.showMarks",
+      "label": "Canvas: Show Marked Cards",
+      "section": "Canvas",
+      "hint": "Open the marks list: jump to or unmark any marked card.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.clearMarks",
       "label": "Canvas: Clear All Marks",
       "section": "Canvas",

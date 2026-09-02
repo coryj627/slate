@@ -95,6 +95,190 @@ public sealed class CanvasDocumentTests : IDisposable
             new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
             synchronousForTests);
 
+    /// <summary>§G TG-2 (G4, IG-10): opening reads STORE emptiness —
+    /// an empty store refuses NoMarks and presents nothing.</summary>
+    [Fact]
+    public void OpeningWithAnEmptyStoreRefusesNoMarks()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        document.OpenMarksList(tab);
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("No marks", StringComparison.Ordinal));
+    }
+
+    /// <summary>§G TG-2 (IG-36/IG-44/IG-54): rows are the LIVE
+    /// projection in reading order, named as every projection names a
+    /// card; an external unmark reprojects with the successor active;
+    /// the store emptying closes the sheet.</summary>
+    [Fact]
+    public void TheListProjectsRowsLiveAndClosesWhenTheStoreEmpties()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("evidence");
+        document.ToggleMark();
+        document.SeatSelectionSilently("question");
+        document.ToggleMark();
+
+        document.OpenMarksList(tab);
+        var sheet = Assert.IsType<CanvasMarksListPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal(["question", "evidence"], sheet.Choices.Select(c => c.Value).ToArray());
+        Assert.All(sheet.Choices, c => Assert.EndsWith(", marked", c.Name, StringComparison.Ordinal));
+        Assert.Equal("Marked Cards (2)", sheet.Title);
+        Assert.Same(tab, sheet.Owner);
+
+        _ = document.Unmark("question");
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Equal(["evidence"], sheet.Choices.Select(c => c.Value).ToArray());
+        Assert.Equal("evidence", sheet.SelectedChoice?.Value);
+        Assert.Equal("Marked Cards (1)", sheet.Title);
+
+        _ = document.Unmark("evidence");
+        Assert.Null(workspace.CanvasPromptSheet);
+    }
+
+    /// <summary>§G TG-2 (IG-39): Enter JUMPS — the sheet closes FIRST,
+    /// the A14 landing posts after, addressed to the captured owner;
+    /// the seat is silent (no moved-to line).</summary>
+    [Fact]
+    public void JumpClosesFirstThenLandsThroughA14()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("evidence");
+        document.ToggleMark();
+        document.SeatSelectionSilently("question");
+        document.OpenMarksList(tab);
+        Assert.IsType<CanvasMarksListPrompt>(workspace.CanvasPromptSheet);
+        _announced.Clear();
+        CanvasFocusRequest? standing = document.FocusRequest;
+
+        workspace.SubmitCanvasPrompt();
+
+        // Closed first: the Jump's landing is not yet posted — whatever
+        // request stood before (the tab's own nodeless one) still stands.
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Same(standing, document.FocusRequest);
+        PumpDispatcher();
+        Assert.Same(tab, document.FocusRequest?.Owner);
+        Assert.Equal("evidence", document.FocusRequest?.NodeId);
+        Assert.Equal("evidence", document.Selection.Selected);
+        Assert.DoesNotContain(
+            _announced,
+            a => a.Text.Contains("Evidence so far", StringComparison.Ordinal));
+    }
+
+    /// <summary>§G TG-2 (IG-8/IG-9): Delete unmarks the active row —
+    /// spoken — the sheet stays, the successor takes the highlight.</summary>
+    [Fact]
+    public void DeleteUnmarksTheActiveRowKeepingTheSheet()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        document.ToggleMark();
+        document.SeatSelectionSilently("evidence");
+        document.ToggleMark();
+        document.OpenMarksList(tab);
+        var sheet = Assert.IsType<CanvasMarksListPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal("question", sheet.SelectedChoice?.Value);
+        _announced.Clear();
+
+        workspace.DeleteOnCanvasPrompt();
+
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Equal(["evidence"], sheet.Choices.Select(c => c.Value).ToArray());
+        Assert.Equal("evidence", sheet.SelectedChoice?.Value);
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Unmarked", StringComparison.Ordinal));
+    }
+
+    /// <summary>§G TG-2 (IG-43): a ghost-only store opens a ZERO-ROW
+    /// list — the rows cannot take focus, the Clear control shows and
+    /// closes the sheet having emptied the store.</summary>
+    [Fact]
+    public void AGhostOnlyStoreOpensAZeroRowListAndClearCloses()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("loose");
+        document.ToggleMark();
+        document.CanvasDeleteSelection();
+        Assert.Contains("loose", document.AppliedPublication!.MarkedIntent);
+
+        document.OpenMarksList(tab);
+        var sheet = Assert.IsType<CanvasMarksListPrompt>(workspace.CanvasPromptSheet);
+        Assert.False(sheet.HasRows);
+        Assert.True(sheet.ShowsClearMarks);
+        Assert.Equal("Marked Cards (0)", sheet.Title);
+        _announced.Clear();
+
+        workspace.ClearMarksFromCanvasPrompt();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Cleared 1 mark", StringComparison.Ordinal));
+    }
+
+    /// <summary>§G TG-2 (IG-42/GD-6): a Jump onto a filtered-out row
+    /// clears the filter with its line fired NOW, then lands.</summary>
+    [Fact]
+    public void AFilteredRowJumpClearsTheFilterFirst()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("evidence");
+        document.ToggleMark();
+        document.FilterText = "question";
+        Assert.True(document.FilterActive);
+        Assert.DoesNotContain(document.FilteredOutline, r => r.NodeId == "evidence");
+
+        document.OpenMarksList(tab);
+        var sheet = Assert.IsType<CanvasMarksListPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal("evidence", sheet.SelectedChoice?.Value);
+        _announced.Clear();
+
+        workspace.SubmitCanvasPrompt();
+
+        Assert.False(document.FilterActive);
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("ilter", StringComparison.Ordinal));
+        PumpDispatcher();
+        Assert.Equal("evidence", document.FocusRequest?.NodeId);
+    }
+
     /// <summary>§G TG-1 (IG-38): a submit's sheet closes when its
     /// OPERATION LANDS — not on the keypress: Pending keeps the sheet
     /// until the posted landing runs, then the exact sheet closes and
