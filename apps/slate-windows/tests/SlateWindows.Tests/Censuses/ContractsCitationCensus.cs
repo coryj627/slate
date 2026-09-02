@@ -1136,6 +1136,10 @@ public sealed class ContractsCitationCensus
         (
             "§G2",
             "## PR G2 — the verb residue: front doors for §E's verbs, and the parity extras",
+            "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled"),
+        (
+            "§H",
+            "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled",
             "## §W-G canonical-consumption audit"),
         (
             "divergences",
@@ -1185,14 +1189,10 @@ public sealed class ContractsCitationCensus
         _ = sample;
         string section = Section(
             "## PR C — the navigator, the mode stack",
-            "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled",
+            "## §W-G canonical-consumption audit",
             "C");
         Assert.True(
             section.Contains(replacement, StringComparison.OrdinalIgnoreCase),
-        (
-            "§H",
-            "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled",
-            "## §W-G canonical-consumption audit"),
             $"§C never names {replacement}, which is what replaced {retired} — "
             + "so the guard above is watching for a ghost and the row that "
             + "should say what the mechanism IS now is missing.");
