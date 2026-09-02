@@ -12972,6 +12972,45 @@ M3 the surface row a literal again (the regenerated matrix reads
 `pending` — checked by regeneration, the generator's own output being
 the gate). All bitten.
 
+### TH-10 — The AT checklist: T's ten items for UIA, every human cell Pending, every twin named
+
+`docs/plans/18_windows_port/reports/w6_1_canvas_at_checklist.md` (H8,
+IH-20, IH-46): the field form's header lines — Tester, AT, OS, Build,
+Corpus, Method, and the run date and evidence reference IH-46 asked for
+— each "Pending — release residual" until a named tester records a run,
+then one table in the W7-4 instrument's spirit: number, T's item,
+check, how (the UIA route), the observable outcome, the automated twin,
+Narrator, NVDA, JAWS. T's ten items are carried one to one, with the
+controlling checklist's three clauses of the first item as three
+distinct checks (IH-46): the outline walk (names, n-of-m, colour names,
+connection rows with direction and label), the table (the six headers
+and the sort announcement), the visual board (peer traversal pans the
+window, no dead end, Invoke selects); then arrow-only traversal with the
+rotor's routes named or declared not applicable rather than silently
+replaced (IH-20); keyboard-only tab-through with the focus ring; Windows
+Voice Access with "show numbers" and T's FIVE dictated commands
+verbatim — "Click 3", "Toggle Mark", "Connect To", "Delete Marked
+Cards", "Where am I" — with the tool to be recorded (D-7); switch access
+as move, nudge, commit and the Escape ladder; braille inspectability of
+the mode, the marks and the filter from Values; text scaling 225 % with
+its outcomes; the four Contrast themes plus one customised with theirs;
+Reduce Motion with its. Every human cell reads Pending; Narrator is
+smoke scope (D-7). Each row names its automated twin — the journey or
+fact covering the automatable half — or "none — human only" with the
+nearest pin in parentheses. `w_c_matrix.md`'s wave-close status links
+the file and says the canvas rows stay Pending until it carries a named
+run.
+
+Pinned by `TheAtChecklistCarriesTsTenItemsWithTheirTwinsPending` in
+`WcMatrixCanvasEvidenceCensus`: the file and its eight header fields;
+eleven rows of nine cells; T's items 1–10 all referenced; every human
+cell Pending or a recorded run; the five dictated commands verbatim in
+the Voice Access row; every backticked twin resolving to a fact, a
+journey or a test class; the matrix's link. Mutations, each
+byte-restored: M1 a dictated command dropped (bit); M2 a human cell
+pre-filled "Pass" (bit — never green by omission); M3 a twin renamed
+(bit). All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)

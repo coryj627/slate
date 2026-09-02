@@ -505,7 +505,11 @@ public sealed class ContractsCitationCensus
                 // TH-9 bound the matrix and the validator's teeth, taking the
                 // section to 150; 149 sits above the pre-task population
                 // of 144 — a tenth time.
-                149),
+                //
+                // TH-10 bound the AT checklist, taking the
+                // section to 152; 151 sits above the pre-task population
+                // of 150 — an eleventh time.
+                151),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

@@ -365,4 +365,56 @@ public sealed class WcMatrixCanvasEvidenceCensus
         }
         Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
+
+    /// <summary>§H TH-10 (H8, IH-20, IH-46): the manual AT checklist carries
+    /// T's ten items one to one — the three clauses of T's first item as
+    /// three checks — with the five dictated commands verbatim, every
+    /// human cell Pending until a named run, the field form's header
+    /// fields present, and every automated twin resolving in the test
+    /// tree; the matrix's wave-close status links it.</summary>
+    [Fact]
+    public void TheAtChecklistCarriesTsTenItemsWithTheirTwinsPending()
+    {
+        string path = Path.Combine(RepoRoot, "docs", "plans", "18_windows_port", "reports", "w6_1_canvas_at_checklist.md");
+        Assert.True(File.Exists(path), "the W6-1 AT checklist is missing");
+        string text = File.ReadAllText(path);
+        foreach (string field in (string[])["**Tester:**", "**AT:**", "**OS:**", "**Build:**", "**Corpus:**", "**Method:**", "**Run date:**", "**Evidence reference:**"])
+        {
+            Assert.Contains(field, text);
+        }
+        var rows = text.Split('\n').Where(l => Regex.IsMatch(l, @"^\| \d+ \|")).Select(l => l.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToArray()).ToList();
+        Assert.Equal(11, rows.Count);
+        var tItems = new HashSet<int>();
+        string tests = TestText();
+        foreach (string[] row in rows)
+        {
+            Assert.Equal(9, row.Length);
+            foreach (string item in row[1].Split(',').Select(s => s.Trim()))
+            {
+                tItems.Add(int.Parse(item, System.Globalization.CultureInfo.InvariantCulture));
+            }
+            foreach (int human in (int[])[6, 7, 8])
+            {
+                Assert.True(
+                    row[human] == "Pending" || row[human].Contains("verified", StringComparison.OrdinalIgnoreCase),
+                    $"checklist row {row[0]}: a human cell that is neither Pending nor a recorded run: {row[human]}");
+            }
+            foreach (Match backticked in Regex.Matches(row[5], "`([A-Za-z][A-Za-z0-9_]{14,})`"))
+            {
+                string name = backticked.Groups[1].Value;
+                Assert.True(
+                    Regex.IsMatch(tests, @"\b(void|Task)\s+" + name + @"\s*\(") || Regex.IsMatch(tests, @"\bclass\s+" + name + @"\b"),
+                    $"checklist row {row[0]}: the twin `{name}` resolves to no fact, journey or test class");
+            }
+        }
+        Assert.Equal(Enumerable.Range(1, 10), tItems.OrderBy(i => i));
+        string voice = Assert.Single(rows, r => r[0] == "6")[3];
+        foreach (string command in (string[])["\"Click 3\"", "\"Toggle Mark\"", "\"Connect To\"", "\"Delete Marked Cards\"", "\"Where am I\""])
+        {
+            Assert.Contains(command, voice);
+        }
+        string matrix = File.ReadAllText(Path.Combine(RepoRoot, "docs", "plans", "18_windows_port", "w_c_matrix.md"));
+        Assert.Contains("reports/w6_1_canvas_at_checklist.md", matrix);
+    }
+
 }
