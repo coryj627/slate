@@ -1149,6 +1149,30 @@
       "registered": true
     },
     {
+      "id": "slate.canvas.newGroup",
+      "label": "Canvas: New Group…",
+      "section": "Canvas",
+      "hint": "Create a labeled group next to the selection.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.canvas.addLink",
+      "label": "Canvas: Add Link Card…",
+      "section": "Canvas",
+      "hint": "Paste or type a URL; a link card is placed next to your selection.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.canvas.connectMode",
       "label": "Canvas: Connect Mode",
       "section": "Canvas",

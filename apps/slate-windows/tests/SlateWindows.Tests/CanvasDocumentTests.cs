@@ -95,6 +95,144 @@ public sealed class CanvasDocumentTests : IDisposable
             new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
             synchronousForTests);
 
+    /// <summary>§G2 TG2-1 (G2-2, G2D-11): New Group… from the palette — the
+    /// prompt, then mac's label rule: an empty draft is a NULL label the
+    /// verb speaks as "Untitled"; a draft with spaces is written
+    /// untrimmed. Pending closes when the operation lands.</summary>
+    [Fact]
+    public void ANewGroupPromptFollowsMacsLabelRule()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        _announced.Clear();
+
+        workspace.CanvasNewGroupCommand.Execute(null);
+        var sheet = Assert.IsType<CanvasNewGroupPrompt>(workspace.CanvasPromptSheet);
+        Assert.True(sheet.HasTextField);
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Contains(
+            _announced,
+            a => a.Text.Contains("Created group \"Untitled\"", StringComparison.Ordinal));
+
+        workspace.CanvasNewGroupCommand.Execute(null);
+        workspace.CanvasPromptSheet!.Draft = "  Q3 ";
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Contains(
+            document.AppliedPublication!.Loaded!.Population.SceneNodes,
+            n => n.Kind == "group" && n.Title == "  Q3 ");
+    }
+
+    /// <summary>§G2 TG2-1 (G2-5, G2D-10): Add Link Card… — a non-URL
+    /// answers Refused through the verb's NotAUrl arm with the sheet and
+    /// draft kept; a URL with surrounding whitespace is TRIMMED and lands
+    /// a link card, the sheet closing on the landing.</summary>
+    [Fact]
+    public void AnAddLinkPromptTrimsAndRefusesANonUrl()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        int linksBefore = document.AppliedPublication!.Loaded!.Population.SceneNodes
+            .Count(n => n.Kind == "link");
+
+        workspace.CanvasAddLinkCommand.Execute(null);
+        CanvasPromptViewModel sheet = Assert.IsType<CanvasAddLinkPrompt>(workspace.CanvasPromptSheet);
+        sheet.Draft = "not a url";
+        _announced.Clear();
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Equal("not a url", sheet.Draft);
+        Assert.Contains(_announced, a => a.Text.Contains("URL", StringComparison.OrdinalIgnoreCase));
+
+        sheet.Draft = "  https://example.org/a  ";
+        workspace.SubmitCanvasPrompt();
+        PumpDispatcher();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Equal(
+            linksBefore + 1,
+            document.AppliedPublication!.Loaded!.Population.SceneNodes.Count(n => n.Kind == "link"));
+        // The TRIMMED url is what lands (Uri parsing forgives the spaces;
+        // the file must not carry them).
+        string bytes = File.ReadAllText(Path.Combine(_fixture.Root, "board.canvas"));
+        Assert.Contains("\"url\":\"https://example.org/a\"", bytes);
+        Assert.DoesNotContain("  https://example.org/a", bytes);
+    }
+
+    /// <summary>§G2 TG2-1 (G2-7, IG2-51): a GROUP's palette Delete asks —
+    /// E8's Ungroup-or-Cancel confirmation. Cancel changes nothing and
+    /// closes; Ungroup removes the frame and keeps its cards.</summary>
+    [Fact]
+    public void AGroupsDeleteAsksUngroupOrCancel()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("grp");
+        int nodesBefore = document.AppliedPublication!.Loaded!.Population.SceneNodes.Length;
+
+        workspace.CanvasDeleteCommand.Execute(null);
+
+        var sheet = Assert.IsType<CanvasUngroupConfirmPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal(2, sheet.Choices.Length);
+        Assert.Equal("ungroup", sheet.SelectedChoice?.Value);
+        sheet.SelectedChoice = sheet.Choices[1];
+        workspace.SubmitCanvasPrompt();
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.Equal(nodesBefore, document.AppliedPublication!.Loaded!.Population.SceneNodes.Length);
+
+        document.SeatSelectionSilently("grp");
+        workspace.CanvasDeleteCommand.Execute(null);
+        workspace.SubmitCanvasPrompt();
+
+        Assert.Null(workspace.CanvasPromptSheet);
+        Assert.DoesNotContain(
+            document.AppliedPublication!.Loaded!.Population.SceneNodes, n => n.NodeId == "grp");
+        Assert.Contains(
+            document.AppliedPublication!.Loaded!.Population.SceneNodes, n => n.NodeId == "question");
+    }
+
+    /// <summary>§G2 TG2-1 (G2-4, IG2-44, IG2-47): the submit answer is a
+    /// sealed family — Advanced cannot exist without its successor, the
+    /// three plain answers are values — and a choice carries a status the
+    /// sheet's rows bind onto the item's UIA ItemStatus.</summary>
+    [Fact]
+    public void TheSubmitFamilyAndTheChoiceStatusAreShapedAsFrozen()
+    {
+        Assert.Throws<ArgumentNullException>(() => new CanvasPromptSubmit.Advanced(null!));
+        Assert.Equal(CanvasPromptSubmit.Refused, CanvasPromptSubmit.Refused);
+        Assert.NotEqual(CanvasPromptSubmit.Refused, CanvasPromptSubmit.Completed);
+        Assert.Equal("s", new CanvasPromptChoice("v", "n", "s").Status);
+        Assert.Null(new CanvasPromptChoice("v", "n").Status);
+
+        string xaml = File.ReadAllText(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"));
+        int list = xaml.IndexOf("AutomationProperties.AutomationId=\"CanvasPromptChoices\"", StringComparison.Ordinal);
+        Assert.True(list >= 0);
+        int end = xaml.IndexOf("</ListBox>", list, StringComparison.Ordinal);
+        Assert.Contains(
+            "Property=\"AutomationProperties.ItemStatus\" Value=\"{Binding Status}\"",
+            xaml[list..end]);
+    }
+
     /// <summary>§G2 TG2-0 (G2-1): the five front-door commands over §E's
     /// surfaced verbs reach the document from the workspace — Delete
     /// removes the seated card, Edit Card Text opens the editor sheet,

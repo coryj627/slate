@@ -3775,7 +3775,8 @@
                     <TextBlock Text="{Binding Title}"
                                FontWeight="SemiBold"
                                Margin="0,0,0,8" />
-                    <TextBox Text="{Binding Filter, UpdateSourceTrigger=PropertyChanged}"
+                    <TextBox x:Name="CanvasCardPickerFilterBox"
+                             Text="{Binding Filter, UpdateSourceTrigger=PropertyChanged}"
                              AutomationProperties.AutomationId="CanvasCardPickerFilter"
                              AutomationProperties.Name="Filter cards"
                              Margin="0,0,0,8" />
@@ -3808,18 +3809,30 @@
                     <TextBlock Text="{Binding Title}"
                                FontWeight="SemiBold"
                                Margin="0,0,0,8" />
-                    <TextBox Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
+                    <TextBox x:Name="CanvasPromptDraftBox"
+                             Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
                              Visibility="{Binding HasTextField, Converter={StaticResource BooleanToVisibilityConverter}}"
                              AutomationProperties.AutomationId="CanvasPromptDraft"
                              AutomationProperties.Name="Answer. Enter submits, Escape cancels." />
-                    <ListBox ItemsSource="{Binding Choices}"
+                    <ListBox x:Name="CanvasPromptChoicesList"
+                             ItemsSource="{Binding Choices}"
                              SelectedItem="{Binding SelectedChoice}"
                              DisplayMemberPath="Name"
                              Focusable="{Binding HasRows}"
                              Visibility="{Binding HasTextField, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
                              AutomationProperties.AutomationId="CanvasPromptChoices"
-                             AutomationProperties.Name="Choices. Enter submits; on the marks list Enter jumps and Delete unmarks." />
-                    <Button Content="Clear All Marks"
+                             AutomationProperties.Name="Choices. Enter submits; on the marks list Enter jumps and Delete unmarks.">
+                        <!-- §G2 TG2-1 (IG2-47): a choice's Status rides the item's UIA
+                             ItemStatus — the connection prompts carry the outline row's
+                             ordinal clause so parallel same-named rows stay distinct. -->
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="AutomationProperties.ItemStatus" Value="{Binding Status}" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                    </ListBox>
+                    <Button x:Name="CanvasPromptClearMarksButton"
+                            Content="Clear All Marks"
                             Command="{Binding DataContext.Workspace.CanvasPromptClearMarksCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                             Visibility="{Binding ShowsClearMarks, Converter={StaticResource BooleanToVisibilityConverter}}"
                             Margin="0,8,0,0"

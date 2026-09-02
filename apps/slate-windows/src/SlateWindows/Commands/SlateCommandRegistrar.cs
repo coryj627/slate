@@ -518,6 +518,8 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.CanvasSetColor] = host => host.Workspace?.CanvasSetColorCommand,
             [ChordTable.Ids.CanvasClearColor] =
                 host => host.Workspace?.CanvasClearColorCommand,
+            [ChordTable.Ids.CanvasNewGroup] = host => host.Workspace?.CanvasNewGroupCommand,
+            [ChordTable.Ids.CanvasAddLink] = host => host.Workspace?.CanvasAddLinkCommand,
             [ChordTable.Ids.CanvasShowMarks] =
                 host => host.Workspace?.CanvasShowMarksCommand,
             [ChordTable.Ids.CanvasGroupMarked] =

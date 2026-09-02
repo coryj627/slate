@@ -2382,11 +2382,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         }
         if (row.Kind == "group")
         {
-            // UNREACHABLE from the surfaces (§E TE-11c): the grid's
-            // Delete gates on kind, the context-menu plan omits Delete
-            // on groups (ED-3 - the group's one removal is Ungroup),
-            // and the chord path seats through the same rows. A guard,
-            // not a cell.
+            // §G2 TG2-1 (G2-7, IG2-51): the palette's Delete on a group is
+            // E8's and ED-3's Ungroup-or-Cancel confirmation — the row
+            // surfaces keep their own Ungroup row (TE-8), this is the
+            // generic verb's door, never a silent return.
+            UngroupConfirmRequested?.Invoke(selected, row.Title);
             return;
         }
         var operation = new CanvasMutationOperation(
@@ -2414,9 +2414,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// parameter (the prompt sheet is TE-7's); geometry from core's
     /// group defaults at the selection anchor.</summary>
     public CanvasMutationOperation? CanvasNewGroup(
-        string label, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
+        string? label, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
-        ArgumentNullException.ThrowIfNull(label);
+        // §G2 TG2-1 (G2D-11): a null label is mac's unlabeled group, spoken
+        // "Untitled"; the op carries the null and core names the frame.
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
@@ -2447,7 +2448,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     string id = SlateUniffiMethods.CanvasNewId();
                     operation.CreatedId = id;
                     return new CanvasAction(
-                        $"create group \"{label}\"",
+                        $"create group \"{label ?? "Untitled"}\"",
                         [
                             new CanvasOp.CreateGroup(
                                 id, label, placement.X, placement.Y,
@@ -2461,18 +2462,17 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     return null;
                 }
             },
-            $"create group \"{label}\"",
-            confirm: () => new CanvasA11yEvent.CanvasCreated("group", label, relative!));
+            $"create group \"{label ?? "Untitled"}\"",
+            confirm: () => new CanvasA11yEvent.CanvasCreated("group", label ?? "Untitled", relative!));
         return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
     /// <summary>§E TE-5c: Rename Group — the real op (IE-23's round-1
     /// catch: never SetNodeContent on a group).</summary>
     public CanvasMutationOperation? CanvasRenameGroup(
-        string groupId, string label, Action<CanvasOperationOutcome>? completion = null)
+        string groupId, string? label, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(groupId);
-        ArgumentNullException.ThrowIfNull(label);
         if (_slot.Current.Loaded is not { } basis)
         {
             SpeakNotReady();
@@ -2487,10 +2487,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         CanvasMutationAdmission admission = Funnel.Apply(
             operation,
             _ => new CanvasAction(
-                $"rename group to \"{label}\"",
+                $"rename group to \"{label ?? "Untitled"}\"",
                 [new CanvasOp.RenameGroup(groupId, label)]),
-            $"rename group to \"{label}\"",
-            confirm: () => new CanvasA11yEvent.CanvasRenamedGroup(label));
+            $"rename group to \"{label ?? "Untitled"}\"",
+            confirm: () => new CanvasA11yEvent.CanvasRenamedGroup(label ?? "Untitled"));
         return admission == CanvasMutationAdmission.Admitted ? operation : null;
     }
 
@@ -3267,6 +3267,39 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>§F TF-8 (FD-4): the carried Rename Group prompt — the
     /// COMMIT verb shipped in §E; this is its front door.</summary>
     internal event Action<string, string>? GroupRenameRequested;
+
+    /// <summary>§G2 TG2-1 (G2-7): a group's Delete asks — the workspace
+    /// presents the Ungroup-or-Cancel confirmation (group id, title).</summary>
+    internal event Action<string, string>? UngroupConfirmRequested;
+
+    /// <summary>§G2 TG2-1 (G2-2): New Group…'s front door — mac's opener
+    /// admits first, so a document that is not ready speaks that and
+    /// presents nothing.</summary>
+    internal event Action? NewGroupRequested;
+
+    internal void RequestNewGroup()
+    {
+        if (_slot.Current.Loaded is null)
+        {
+            SpeakNotReady();
+            return;
+        }
+        NewGroupRequested?.Invoke();
+    }
+
+    /// <summary>§G2 TG2-1 (G2-5): Add Link Card…'s front door, the same
+    /// admit-then-present shape (mac's canvasOpenAddLink).</summary>
+    internal event Action? AddLinkRequested;
+
+    internal void RequestAddLink()
+    {
+        if (_slot.Current.Loaded is null)
+        {
+            SpeakNotReady();
+            return;
+        }
+        AddLinkRequested?.Invoke();
+    }
 
     internal void RequestGroupRename(string groupId)
     {

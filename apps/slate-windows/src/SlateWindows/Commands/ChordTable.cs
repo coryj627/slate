@@ -284,6 +284,8 @@ internal static class ChordTable
         public const string CanvasRenameGroup = "slate.canvas.renameGroup";
         public const string CanvasSetColor = "slate.canvas.setColor";
         public const string CanvasClearColor = "slate.canvas.clearColor";
+        public const string CanvasNewGroup = "slate.canvas.newGroup";
+        public const string CanvasAddLink = "slate.canvas.addLink";
 
         public const string CanvasClearMarks = "slate.canvas.clearMarks";
 
@@ -1047,6 +1049,11 @@ internal static class ChordTable
                 + "or purple."),
             Reg(Ids.CanvasClearColor, "Canvas: Clear Color", CommandSection.Canvas,
                 "Remove the selected card's color."),
+            // §G2 TG2-1: the two text prompts' front doors.
+            Reg(Ids.CanvasNewGroup, "Canvas: New Group…", CommandSection.Canvas,
+                "Create a labeled group next to the selection."),
+            Reg(Ids.CanvasAddLink, "Canvas: Add Link Card…", CommandSection.Canvas,
+                "Paste or type a URL; a link card is placed next to your selection."),
             Reg(Ids.CanvasConnectMode, "Canvas: Connect Mode", CommandSection.Canvas,
                 "Remember the selected card, navigate to a target with the "
                 + "usual movements, press Return to connect."),

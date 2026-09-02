@@ -417,7 +417,11 @@ public sealed class ContractsCitationCensus
                 // TG2-0 bound the front-door substrate, taking the
                 // section to 114; 113 sits above the pre-task
                 // population of 96 — a first time.
-                113),
+                //
+                // TG2-1 bound the prompt lifecycle and the first sheets,
+                // taking the section to 123; 122 sits above the
+                // pre-task population of 114 — a second time.
+                122),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

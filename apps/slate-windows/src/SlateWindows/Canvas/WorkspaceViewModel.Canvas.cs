@@ -80,6 +80,18 @@ internal sealed partial class WorkspaceViewModel
                     CanvasPromptViewModel.RenameGroup(document, groupId, current));
             document.SetColorRequested += () =>
                 _ = TryPresentCanvasPrompt(CanvasPromptViewModel.SetColor(document));
+            // §G2 TG2-1: the New Group and Add Link prompts carry the
+            // invoking tab as the operation's owner; the group Delete's
+            // confirmation is E8's Ungroup-or-Cancel.
+            document.NewGroupRequested += () =>
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.NewGroup(document, ActiveGroup.ActiveTab));
+            document.AddLinkRequested += () =>
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.AddLink(document, ActiveGroup.ActiveTab));
+            document.UngroupConfirmRequested += (groupId, title) =>
+                _ = TryPresentCanvasPrompt(
+                    CanvasPromptViewModel.UngroupConfirm(document, groupId, title));
             document.GroupMarkedRequested += () =>
                 _ = TryPresentCanvasPrompt(CanvasPromptViewModel.GroupMarked(document));
             document.ColorMarkedRequested += () =>
@@ -452,7 +464,15 @@ internal sealed partial class WorkspaceViewModel
             System.Windows.Threading.Dispatcher.CurrentDispatcher;
         CanvasPromptSubmit result = sheet.Submit(
             () => home.BeginInvoke(() => CloseCanvasPromptIfCurrent(sheet)));
-        if (result == CanvasPromptSubmit.Completed)
+        if (result is CanvasPromptSubmit.Advanced advanced)
+        {
+            // §G2 TG2-1 (G2-4, IG2-44): the STAGE transition — one setter
+            // call retires the predecessor (its Closed runs) and seats the
+            // successor; a completion the predecessor captured compares
+            // by reference and closes nothing.
+            CanvasPromptSheet = advanced.Next;
+        }
+        else if (result == CanvasPromptSubmit.Completed)
         {
             CanvasPromptSheet = null;
         }
@@ -659,11 +679,19 @@ internal sealed partial class WorkspaceViewModel
         _canvasClearColorCommand ??= DocumentCommand(
             (document, owner) => document.CanvasSetColor(null, owner: owner));
 
+    public System.Windows.Input.ICommand CanvasNewGroupCommand =>
+        _canvasNewGroupCommand ??= DocumentCommand(document => document.RequestNewGroup());
+
+    public System.Windows.Input.ICommand CanvasAddLinkCommand =>
+        _canvasAddLinkCommand ??= DocumentCommand(document => document.RequestAddLink());
+
     private RelayCommand? _canvasDeleteCommand;
     private RelayCommand? _canvasEditCardCommand;
     private RelayCommand? _canvasRenameGroupCommand;
     private RelayCommand? _canvasSetColorCommand;
     private RelayCommand? _canvasClearColorCommand;
+    private RelayCommand? _canvasNewGroupCommand;
+    private RelayCommand? _canvasAddLinkCommand;
 
     public System.Windows.Input.ICommand CanvasConnectModeCommand =>
         _canvasConnectModeCommand ??= NavigatorCommand(

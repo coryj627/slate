@@ -10,15 +10,43 @@ namespace SlateWindows.Canvas;
 /// closure follows the result, never the keypress. Refused keeps the
 /// sheet and its draft (the verb spoke); Pending keeps it until the
 /// named operation LANDS; Completed closes now.</summary>
-internal enum CanvasPromptSubmit
+internal abstract record CanvasPromptSubmit
 {
-    Refused,
-    Pending,
-    Completed,
+    private CanvasPromptSubmit()
+    {
+    }
+
+    internal static readonly CanvasPromptSubmit Refused = new RefusedAnswer();
+    internal static readonly CanvasPromptSubmit Pending = new PendingAnswer();
+    internal static readonly CanvasPromptSubmit Completed = new CompletedAnswer();
+
+    private sealed record RefusedAnswer : CanvasPromptSubmit;
+
+    private sealed record PendingAnswer : CanvasPromptSubmit;
+
+    private sealed record CompletedAnswer : CanvasPromptSubmit;
+
+    /// <summary>§G2 TG2-1 (G2-4, IG2-44): a STAGED prompt's answer — the
+    /// successor rides in the result itself, never in a side property,
+    /// so an Advanced without a successor cannot be represented and a
+    /// successor cannot attach to any other answer. The workspace swaps
+    /// the sheet atomically on it.</summary>
+    internal sealed record Advanced : CanvasPromptSubmit
+    {
+        internal Advanced(CanvasPromptViewModel next)
+        {
+            ArgumentNullException.ThrowIfNull(next);
+            Next = next;
+        }
+
+        internal CanvasPromptViewModel Next { get; }
+    }
 }
 
-/// <summary>One choice row for a choices-shaped prompt.</summary>
-internal sealed record CanvasPromptChoice(string? Value, string Name);
+/// <summary>§G2 TG2-1 (IG2-47): a choice carries an optional STATUS —
+/// the outline row's ordinal clause for a connection — bound to the
+/// item's UIA ItemStatus so parallel same-named rows stay distinct.</summary>
+internal sealed record CanvasPromptChoice(string? Value, string Name, string? Status = null);
 
 /// <summary>
 /// §G TG-1 (IG-37): the prompt machinery as a SEALED HIERARCHY — one
@@ -142,6 +170,20 @@ internal abstract class CanvasPromptViewModel : System.ComponentModel.INotifyPro
     internal static CanvasPromptViewModel MarksList(
         CanvasDocumentViewModel document, object owner, Action<CanvasPromptViewModel> closeIfCurrent) =>
         new CanvasMarksListPrompt(document, owner, closeIfCurrent);
+
+    internal static CanvasPromptViewModel NewGroup(CanvasDocumentViewModel document, object? owner) =>
+        new CanvasNewGroupPrompt(document, owner);
+
+    internal static CanvasPromptViewModel AddLink(CanvasDocumentViewModel document, object? owner) =>
+        new CanvasAddLinkPrompt(document, owner);
+
+    internal static CanvasPromptViewModel UngroupConfirm(
+        CanvasDocumentViewModel document, string groupId, string title) =>
+        new CanvasUngroupConfirmPrompt(document, groupId, title);
+
+    /// <summary>§G2 TG2-1 (G2D-11): mac's label rule — the EMPTY draft is
+    /// a null label (spoken "Untitled"); whitespace is kept, untrimmed.</summary>
+    internal static string? NormalizeLabel(string draft) => draft.Length == 0 ? null : draft;
 }
 
 /// <summary>
@@ -312,9 +354,89 @@ internal sealed class CanvasRenameGroupPrompt : CanvasPromptViewModel
     {
         ArgumentNullException.ThrowIfNull(onLanded);
         CanvasMutationOperation? operation = Document.CanvasRenameGroup(
-            GroupId, Draft, completion: outcome => { if (Landed(outcome)) { onLanded(); } });
+            GroupId, NormalizeLabel(Draft), completion: outcome => { if (Landed(outcome)) { onLanded(); } });
         return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
     }
+}
+
+/// <summary>§G2 TG2-1 (G2-2, G2D-11): New Group… — a text kind whose
+/// submit runs the shipped verb with mac's label rule (empty is a null
+/// label, untrimmed) and the invoking tab as the operation's owner.</summary>
+internal sealed class CanvasNewGroupPrompt : CanvasPromptViewModel
+{
+    private readonly object? _owner;
+
+    internal CanvasNewGroupPrompt(CanvasDocumentViewModel document, object? owner)
+        : base(document, "New Group", string.Empty, [])
+    {
+        _owner = owner;
+    }
+
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        CanvasMutationOperation? operation = Document.CanvasNewGroup(
+            NormalizeLabel(Draft), owner: _owner,
+            completion: outcome => { if (Landed(outcome)) { onLanded(); } });
+        return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
+    }
+}
+
+/// <summary>§G2 TG2-1 (G2-5, G2D-10): Add Link Card… — a text kind whose
+/// submit TRIMS the draft (mac's rule) and runs the shipped verb; the
+/// verb's NotAUrl arm is the only validation and answers Refused with
+/// the draft kept.</summary>
+internal sealed class CanvasAddLinkPrompt : CanvasPromptViewModel
+{
+    private readonly object? _owner;
+
+    internal CanvasAddLinkPrompt(CanvasDocumentViewModel document, object? owner)
+        : base(document, "Add Link Card", string.Empty, [])
+    {
+        _owner = owner;
+    }
+
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        CanvasMutationOperation? operation = Document.CanvasAddLinkCard(
+            Draft.Trim(), owner: _owner,
+            completion: outcome => { if (Landed(outcome)) { onLanded(); } });
+        return operation is null ? CanvasPromptSubmit.Refused : CanvasPromptSubmit.Pending;
+    }
+}
+
+/// <summary>§G2 TG2-1 (G2-7, IG2-51): E8's and ED-3's Ungroup-or-Cancel
+/// confirmation for a group's DELETE — two choices, Ungroup first;
+/// Ungroup runs the algebra's one group removal (the cards stay),
+/// Cancel changes nothing. Either answer closes the sheet now: the
+/// verb speaks its own sentence and the sheet has nothing to wait
+/// for.</summary>
+internal sealed class CanvasUngroupConfirmPrompt : CanvasPromptViewModel
+{
+    internal CanvasUngroupConfirmPrompt(CanvasDocumentViewModel document, string groupId, string title)
+        : base(
+            document,
+            "Delete Group " + Quote(title) + "?",
+            string.Empty,
+            [new CanvasPromptChoice("ungroup", "Ungroup — remove the frame, keep its cards"), new CanvasPromptChoice(null, "Cancel")])
+    {
+        GroupId = groupId;
+    }
+
+    internal string GroupId { get; }
+
+    internal override CanvasPromptSubmit Submit(Action onLanded)
+    {
+        ArgumentNullException.ThrowIfNull(onLanded);
+        if (SelectedChoice?.Value == "ungroup")
+        {
+            Document.CanvasUngroup(GroupId);
+        }
+        return CanvasPromptSubmit.Completed;
+    }
+
+    private static string Quote(string title) => "\u0022" + title + "\u0022";
 }
 
 /// <summary>The carried Set Color prompt (FD-4) over the SELECTION:

@@ -366,6 +366,7 @@ public partial class MainWindow : Window
         if (_observedWorkspace is not null)
         {
             _observedWorkspace.EditorPaneFocusRequested -= Workspace_EditorPaneFocusRequested;
+            _observedWorkspace.PropertyChanged -= Workspace_CanvasSheetChanged;
             UnwireWorkspaceProperties(_observedWorkspace);
             UnwireWorkspaceCitations(_observedWorkspace);
             UnwireWorkspaceBases(_observedWorkspace);
@@ -376,11 +377,68 @@ public partial class MainWindow : Window
         if (workspace is not null)
         {
             workspace.EditorPaneFocusRequested += Workspace_EditorPaneFocusRequested;
+            workspace.PropertyChanged += Workspace_CanvasSheetChanged;
             WireWorkspaceProperties(workspace);
             WireWorkspaceCitations(workspace);
             WireWorkspaceBases(workspace);
             WireWorkspaceTemplates(workspace);
         }
+    }
+
+    /// <summary>§G2 TG2-1 (G2-4, IG2-45): the ONE focus-delivery seam for
+    /// the canvas sheets — a prompt or picker that just became current
+    /// (opened, or swapped in by a staged prompt's Advanced) takes
+    /// keyboard focus on its first focusable, after layout, on the
+    /// dispatcher: the text field when the sheet has one, else its rows,
+    /// else its one button. A sheet that stops being current delivers
+    /// nothing; the modal machinery's own focus return stands.</summary>
+    private void Workspace_CanvasSheetChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is not WorkspaceViewModel workspace)
+        {
+            return;
+        }
+        if (e.PropertyName == nameof(WorkspaceViewModel.CanvasPromptSheet)
+            && workspace.CanvasPromptSheet is not null)
+        {
+            _ = Dispatcher.InvokeAsync(FocusCanvasPromptSheet, DispatcherPriority.Input);
+        }
+        else if (e.PropertyName == nameof(WorkspaceViewModel.CanvasCardPickerSheet)
+            && workspace.CanvasCardPickerSheet is not null)
+        {
+            _ = Dispatcher.InvokeAsync(
+                () => _ = TryFocus(CanvasCardPickerFilterBox), DispatcherPriority.Input);
+        }
+    }
+
+    private void FocusCanvasPromptSheet()
+    {
+        if (_viewModel.Workspace?.CanvasPromptSheet is null)
+        {
+            return;
+        }
+        if (CanvasPromptDraftBox.IsVisible)
+        {
+            if (TryFocus(CanvasPromptDraftBox))
+            {
+                CanvasPromptDraftBox.SelectAll();
+            }
+            return;
+        }
+        if (CanvasPromptChoicesList.IsVisible && CanvasPromptChoicesList.Focusable)
+        {
+            object? selected = CanvasPromptChoicesList.SelectedItem;
+            if (selected is not null
+                && CanvasPromptChoicesList.ItemContainerGenerator.ContainerFromItem(selected)
+                    is IInputElement container
+                && TryFocus(container))
+            {
+                return;
+            }
+            _ = TryFocus(CanvasPromptChoicesList);
+            return;
+        }
+        _ = TryFocus(CanvasPromptClearMarksButton);
     }
 
     private void Workspace_EditorPaneFocusRequested(

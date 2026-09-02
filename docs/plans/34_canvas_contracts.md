@@ -11017,6 +11017,72 @@ owner (the owner fact bit), M3 Set Color's opener guard removed (the
 openers fact bit), M4 Clear Color's resolver removed (the registrar's
 coverage census bit). All bitten.
 
+### TG2-1 — the prompt lifecycle: the answer as a family, focus delivered, the first sheets
+
+The submit answer stops being an enum. `CanvasPromptSubmit` is a
+sealed record family — Refused, Pending and Completed as values, and
+`Advanced` as a record that CARRIES its successor and refuses to be
+constructed without one (IG2-44): a staged prompt cannot answer
+Advanced with nothing to advance to, and no other answer can smuggle
+a successor. The workspace's `SubmitCanvasPrompt` swaps on it in one
+setter call — the predecessor's `Closed` runs, the successor is
+current — and a completion the predecessor captured compares by
+reference and closes nothing (G2-4). Every existing usage kept its
+spelling; the frozen three answers are the same three.
+
+Focus is DELIVERED, for the first time. No code path moved keyboard
+focus into the prompt or picker overlay when it opened — the journeys
+typed through UIA's Value pattern, which needs no focus, and a reader
+pressing a chord was left where they stood (IG2-45's finding, wider
+than the swap it was raised on). The window now observes the
+workspace's sheet properties: a prompt or picker that becomes current
+— opened, or swapped in by Advanced — takes focus on its first
+focusable after layout, on the dispatcher at Input priority: the text
+field when the sheet has one (selected whole, so a prefilled draft is
+replaced by typing), else the selected choice's container, else the
+list, else its one button; the picker's filter field. The seam is the
+window's, `Workspace_CanvasSheetChanged`, and the journey pins the
+focused element (TG2-9).
+
+A choice carries a STATUS (`CanvasPromptChoice` gains it, null by
+default) and the choices list binds it onto each item's UIA
+ItemStatus through an item-container style (IG2-47) — the connection
+prompts will carry the outline row's ordinal clause there, so two
+identically-labelled parallel connections stay distinct to a reader.
+
+The first sheets: New Group… (`CanvasNewGroupPrompt`, a text kind) and
+Add Link Card… (`CanvasAddLinkPrompt`, a text kind), each with its row,
+resolver and command, each carrying the invoking tab as the
+operation's owner, each opened through a request seam whose opener
+admits first (mac's `canvasPromptNewGroup` and `canvasOpenAddLink`).
+Mac's label rule lands (G2D-11, IG2-16): `NormalizeLabel` turns the
+EMPTY draft into a null label and keeps whitespace untrimmed; the two
+verbs take `string?` labels, pass the null to core's `CreateGroup`
+and `RenameGroup`, and speak "Untitled" for it — the shipped Windows
+verbs wrote the empty string and are corrected, Rename Group's prompt
+included. Add Link TRIMS its draft (mac's rule) and leaves validation
+to the verb's `NotAUrl` arm — Refused keeps the sheet and the draft
+(G2-5, G2D-10). And a GROUP's palette Delete asks: `CanvasDeleteSelection`
+no longer returns silently for a group but raises
+`UngroupConfirmRequested`, and the workspace presents
+`CanvasUngroupConfirmPrompt` — Ungroup first, Cancel second — whose
+Ungroup runs the algebra's one removal and whose Cancel changes
+nothing; either closes now (G2-7, IG2-51: E8's and ED-3's confirmation
+kept, revision 2's "retired" retired). The row surfaces keep their
+direct Ungroup row (TE-8).
+
+Facts: four — New Group's label rule end to end (the empty draft
+spoken "Untitled", a spaced draft written untrimmed); Add Link's
+refusal keeping the sheet and its trim landing the trimmed url on
+disk (Uri parsing forgives the spaces, the file must not carry them);
+the group's Delete asking, Cancel leaving the bytes and Ungroup
+keeping the cards; the family's shape with the choice status and the
+XAML binding read from the window's own text. Mutations, each
+byte-restored: M1 the label rule removed, M2 the trim removed (which
+bit only once the fact read the written url — the first version
+watched the parse, which forgives), M3 the group arm silent again,
+M4 the ItemStatus setter removed. All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
