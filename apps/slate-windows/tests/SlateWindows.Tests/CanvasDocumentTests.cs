@@ -498,6 +498,67 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Contains("Zone", document.Outline.First(r => r.NodeId == "loose").GroupPath);
     }
 
+    /// <summary>§G2 TG2-7 (IG2-60, TG-0's rule): a node row's selection
+    /// verb seats ITS row silently before the verb — the mark lands on
+    /// the row the menu was opened on, wherever the selection stood.
+    /// </summary>
+    [Fact]
+    public void ANodeRowsSelectionVerbSeatsItsRowBeforeTheVerb()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        document.SeatSelectionSilently("link");
+        CanvasContextDispatch.Execute(
+            document,
+            new CanvasContextTarget.Node("evidence", "text", false),
+            CanvasContextVerb.ToggleMark,
+            tab,
+            () => { });
+        Assert.True(document.Selection.IsMarked("evidence"));
+        Assert.False(document.Selection.IsMarked("link"));
+        Assert.Equal("evidence", document.Selection.Selected);
+    }
+
+    /// <summary>§G2 TG2-7 (G2-12, IG2-60): a connection row's verbs act
+    /// on the CAPTURED edge from its seated source — Edit opens the
+    /// direction stage for that edge with no picker, Delete removes
+    /// that edge — and the selection lands on the SOURCE, never the
+    /// other endpoint, wherever it stood before the dispatch.</summary>
+    [Fact]
+    public void AConnectionRowsVerbsActOnTheCapturedEdgeFromItsSeatedSource()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+
+        document.SeatSelectionSilently("evidence");
+        CanvasNeighbor captured = Assert.Single(document.NeighborsOf("evidence"));
+        var target = new CanvasContextTarget.Connection("evidence", captured);
+
+        // The selection moved on after the rows were captured: the
+        // dispatch seats the SOURCE, not the other endpoint.
+        document.SeatSelectionSilently("link");
+        CanvasContextDispatch.Execute(document, target, CanvasContextVerb.EditConnection, tab, () => { });
+        Assert.IsType<CanvasEditConnectionDirectionPrompt>(workspace.CanvasPromptSheet);
+        Assert.Equal("evidence", document.Selection.Selected);
+        workspace.CloseCanvasPrompt();
+
+        document.SeatSelectionSilently("link");
+        CanvasContextDispatch.Execute(document, target, CanvasContextVerb.DeleteConnection, tab, () => { });
+        Assert.DoesNotContain(
+            document.AppliedPublication!.Loaded!.Population.SceneEdges, e => e.EdgeId == "e1");
+        Assert.Equal("evidence", document.Selection.Selected);
+        Assert.Empty(document.NeighborsOf("evidence"));
+    }
+
     /// <summary>§G2 TG2-2 (G2-5, IG2-46, IG2-13): the connection verbs follow
     /// mac's cardinality — none refuses NoConnections and presents
     /// nothing, ONE routes directly, and the delete sentence names the

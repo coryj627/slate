@@ -4044,6 +4044,25 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     internal void RequestEditConnection(object? owner = null) => RequestConnectionVerb(owner, toDelete: false);
 
+    /// <summary>§G2 TG2-7 (G2-12): the edit for a CAPTURED edge — a context
+    /// row's, selected-relative to the seated source — straight to the
+    /// direction stage; no picker.</summary>
+    internal void RequestEditConnection(CanvasNeighbor neighbor, object? owner = null)
+    {
+        ArgumentNullException.ThrowIfNull(neighbor);
+        if (_slot.Current.Loaded is not { } loaded)
+        {
+            SpeakNotReady();
+            return;
+        }
+        if (Selection.Selected is not { } selected || !_rows.ContainsKey(selected))
+        {
+            Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        EditConnectionRequested?.Invoke(new CanvasPromptContext(owner, loaded, selected), neighbor);
+    }
+
     private void RequestConnectionVerb(object? owner, bool toDelete)
     {
         if (_slot.Current.Loaded is not { } loaded)
@@ -4991,25 +5010,35 @@ internal static class CanvasPhrase
 
     public const string SetColorRowAction = "Set Color…";
 
-    /// <summary>The group row's Delete stays disabled with the
-    /// algebra's why: removal of a group IS Ungroup (ED-3).</summary>
-    public const string GroupRemovalIsUngroup =
-        "A group is removed by Ungroup — its cards stay.";
+    /// <summary>§G2 TG2-7 (G2-12): the residue's rows, mac's labels
+    /// verbatim.</summary>
+    public const string ConvertToNoteRowAction = "Convert to Note…";
+
+    public const string CreateConnectedCardRowAction = "Create Connected Card";
+
+    public const string DuplicateRowAction = "Duplicate";
+
+    public const string LocateFileRowAction = "Locate File…";
+
+    public const string ConnectToRowAction = "Connect To…";
+
+    public const string MoveIntoGroupRowAction = "Move into Group…";
+
+    public const string RemoveFromGroupRowAction = "Remove from Group";
+
+    /// <summary>The connection row's three, on the row's edge
+    /// directly (G2-12).</summary>
+    public const string JumpToCardRowAction = "Jump to Card";
+
+    public const string EditConnectionRowAction = "Edit Connection…";
+
+    public const string DeleteConnectionRowAction = "Delete Connection";
 
     /// <summary>§E TE-8: verbs whose COMMIT path shipped but whose
     /// prompt sheet has not — visible with the why, mac's
     /// temporarily-unavailable shape, never a dead click.</summary>
     public const string PromptArrivesLater =
         "Its prompt arrives with a later slice.";
-
-    /// <summary>The reason the Toggle Mark row action is listed but
-    /// disabled: the marking verbs are PR G's. Carried as the action's
-    /// <c>DisabledReason</c>, which the substrate exposes as HelpText —
-    /// the mac RowAction contract's "retain the relevant action with its
-    /// reason".</summary>
-    public const string MarkingArrivesLater = "Marking cards arrives in a later slice.";
-
-    /// <summary>The same, for Delete: the mutation funnel is PR E's.</summary>
 
     /// <summary>
     /// The table's summary line — mac's sentence verbatim, including its

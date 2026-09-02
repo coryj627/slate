@@ -440,7 +440,11 @@ public sealed class ContractsCitationCensus
                 // TG2-6 bound Convert Card to Note, taking the section to 181;
                 // 180 sits above the pre-task population of 165 — a seventh
                 // time.
-                180),
+                //
+                // TG2-7 bound the context plan over (surface, target), taking
+                // the section to 184; 183 sits above the pre-task population
+                // of 181 — an eighth time.
+                183),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

@@ -78,6 +78,7 @@ internal sealed class CanvasOutlineRowViewModel : BindableBase
             isGroup: false)
         {
             Neighbor = neighbor,
+            SourceNodeId = parent.NodeId,
         };
 
     /// <summary>Stable line identity — the node id, or
@@ -88,6 +89,11 @@ internal sealed class CanvasOutlineRowViewModel : BindableBase
     public CanvasOutlineRow? Row { get; private init; }
 
     public CanvasNeighbor? Neighbor { get; private init; }
+
+    /// <summary>§G2 TG2-7: a connection row's SOURCE — the node whose
+    /// rows it sits under — so its verbs act on the captured edge
+    /// selected-relative to that node (G2-12).</summary>
+    public string? SourceNodeId { get; private init; }
 
     public bool IsConnection => Neighbor is not null;
 
@@ -954,64 +960,52 @@ internal sealed class CanvasOutlineView : UserControl
         }
     }
 
-    /// <summary>§E TE-8: the row's menu from the plan — headers,
-    /// enabled flags and staged reasons verbatim; verbs map onto the
-    /// document. A connection row (no node Row) gets no menu.</summary>
+    /// <summary>§E TE-8, widened by §G2 TG2-7 (G2-12): the row's menu
+    /// from the plan over the row's TARGET — a node with its kind and
+    /// group membership, or a connection captured with its source —
+    /// headers, enabled flags and reasons verbatim; every verb runs
+    /// through the one dispatch table.</summary>
     internal System.Windows.Controls.ContextMenu? BuildContextMenu(
         CanvasOutlineRowViewModel rowModel)
     {
         ArgumentNullException.ThrowIfNull(rowModel);
-        if (rowModel.Row is not { } row || Model is not { } model)
+        if (Model is not { } model || TargetOf(rowModel) is not { } target)
         {
             return null;
         }
-        return BuildMenuFromPlan(row.Kind, (verb, nodeId) =>
+        object? owner = DataContext;
+        return BuildMenuFromPlan(target, verb =>
+            CanvasContextDispatch.Execute(model, target, verb, owner, rowModel.RaiseActivate));
+    }
+
+    /// <summary>The row's plan target: a node row carries its kind and
+    /// whether it sits in a group; a connection row carries its source
+    /// and the captured neighbor.</summary>
+    internal static CanvasContextTarget? TargetOf(CanvasOutlineRowViewModel rowModel)
+    {
+        ArgumentNullException.ThrowIfNull(rowModel);
+        if (rowModel.Neighbor is { } neighbor && rowModel.SourceNodeId is { } source)
         {
-            switch (verb)
-            {
-                case CanvasContextVerb.Open:
-                    rowModel.RaiseActivate();
-                    break;
-                case CanvasContextVerb.Delete:
-                    model.SeatSelectionSilently(nodeId);
-                    model.CanvasDeleteSelection();
-                    break;
-                case CanvasContextVerb.Ungroup:
-                    model.CanvasUngroup(nodeId);
-                    break;
-                case CanvasContextVerb.EditCard:
-                    model.RequestCardEditor(nodeId);
-                    break;
-                case CanvasContextVerb.ToggleMark:
-                    // §G TG-0 (G1, IG-25): every context consumer seats
-                    // its source row SILENTLY before the verb.
-                    model.SeatSelectionSilently(nodeId);
-                    model.ToggleMark();
-                    break;
-                case CanvasContextVerb.RenameGroup:
-                    model.RequestGroupRename(nodeId);
-                    break;
-                case CanvasContextVerb.SetColor:
-                    model.SeatSelectionSilently(nodeId);
-                    model.RequestSetColor();
-                    break;
-                default:
-                    break;
-            }
-        }, row.NodeId);
+            return new CanvasContextTarget.Connection(source, neighbor);
+        }
+        if (rowModel.Row is { } row)
+        {
+            return new CanvasContextTarget.Node(row.NodeId, row.Kind, row.GroupPath.Length > 0);
+        }
+        return null;
     }
 
     /// <summary>The ONE plan-to-menu mapping — the opening handler and
     /// the census fact share it, so the built rows cannot drift from
-    /// the plan (IE-31).</summary>
+    /// the plan (IE-31, G2-12).</summary>
     internal static System.Windows.Controls.ContextMenu BuildMenuFromPlan(
-        string kind, Action<CanvasContextVerb, string> execute, string nodeId)
+        CanvasContextTarget target, Action<CanvasContextVerb> execute)
     {
-        ArgumentNullException.ThrowIfNull(kind);
+        ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(execute);
-        ArgumentNullException.ThrowIfNull(nodeId);
         var menu = new System.Windows.Controls.ContextMenu();
-        foreach (CanvasContextMenuRow planned in CanvasContextMenuPlan.RowsFor(kind))
+        foreach (CanvasContextMenuRow planned in
+            CanvasContextMenuPlan.RowsFor(CanvasContextSurface.Outline, target))
         {
             var item = new System.Windows.Controls.MenuItem
             {
@@ -1025,7 +1019,7 @@ internal sealed class CanvasOutlineView : UserControl
                 System.Windows.Controls.ToolTipService.SetShowOnDisabled(item, true);
             }
             CanvasContextVerb verb = planned.Verb;
-            item.Click += (_, _) => execute(verb, nodeId);
+            item.Click += (_, _) => execute(verb);
             menu.Items.Add(item);
         }
         return menu;

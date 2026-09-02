@@ -1946,7 +1946,10 @@ can tell "not yet" from "not here". The reasons are label-class copy in
 because that sentence belongs to command rows and a row action is not
 one. Pinned by
 `ActivationRunsTheSameSeamTheOutlineDoesIncludingTheMediaGate` and
-`TheUnshippedRowActionsAreListedDisabledWithTheirReason`.
+`TheRowMenuEqualsThePlansGridProjectionAndToggleMarkIsLive` (§G2 TG2-7
+renamed it from TheUnshippedRowActionsAreListedDisabledWithTheirReason
+when the last staged row went live; the visible-with-reason shape is
+now pinned from the plan's side).
 
 **B7 — The announce seam is swapped onto the canvas relay (DoD §H).**
 The substrate raises CANONICAL grid events — `GridSorted` on a sort,
@@ -11388,6 +11391,74 @@ closing. Mutations, each byte-restored: M1 the verb's `.md` guard
 removed, M2 the recovery state removed (a retry re-created), M3 the
 posted landing removed, M4 Exists answered as a create failure. All
 bitten.
+
+### TG2-7 — The context plan over (surface, target): one dispatch, mac's order, the connection rows on their edge
+
+The plan (G2-12, IG2-28, IG2-29, IG2-59): `CanvasContextMenuPlan.RowsFor`
+takes a `CanvasContextSurface` — Outline or Grid; the renderer carries no
+context menu (G2D-12, recorded) and is not a surface here — and a
+discriminated `CanvasContextTarget`: a `Node` with its id, core's kind
+and whether it sits in a group, or a `Connection` with its source node
+and the neighbor captured selected-relative to that source. The
+outline's node projection is mac's order (CanvasOutlineView.swift):
+Open; Edit Card Text… and Convert to Note… (text); Create Connected
+Card; Duplicate; Rename Group… (group); Locate File… (file, image);
+Toggle Mark; Connect To…; Set Color… on EVERY kind, groups included;
+Move into Group…; Remove from Group (in a group); Delete for a card,
+Ungroup for a group (ED-3's one removal). A connection row: Jump to
+Card; Edit Connection…; Delete Connection — the captured edge directly,
+no picker. The grid's projection is mac's table subset from the SAME
+plan — Open; Toggle Mark, LIVE, the last staged reason retired
+(MarkingArrivesLater and GroupRemovalIsUngroup are gone); Delete or
+Ungroup — and a connection target yields no grid rows. Every row is
+live. One label table, `CanvasContextMenuPlan.Label`, names the plan's
+rows and the grid's actions alike; ten `CanvasPhrase` row-action
+constants carry mac's labels verbatim.
+
+The one dispatch (IG2-60): `CanvasContextDispatch.Execute` maps every
+verb onto the document's verb for EVERY consumer. On a node target,
+Open is the surface's own activation (Enter's path); Edit Card, Rename
+Group and Ungroup name their row; every other verb seats the row
+SILENTLY first (TG-0's rule), then runs — Toggle Mark, Convert to Note,
+Create Connected Card, Duplicate, Locate File (the vault pick), Connect
+To (the card picker), Set Color, Move into Group, Remove from Group,
+Delete. On a connection target the dispatch seats the SOURCE silently —
+a no-op when the source already hosts the rows, never the other
+endpoint — then Jump to Card follows the edge, Edit Connection goes
+straight to the direction stage for the captured neighbor through the
+document's new `RequestEditConnection(neighbor, owner)` entry, and
+Delete Connection deletes that edge. The owner an operation carries is
+the surface's DataContext, the tab.
+
+The consumers DERIVE. The outline's `BuildContextMenu` builds the target
+from the row (`TargetOf`: a node row's kind and group path; a connection
+row's `SourceNodeId`, new on the row model, with its neighbor) — so
+connection rows now have a menu where they had none — and
+`BuildMenuFromPlan(target, execute)` remains the one plan-to-menu
+mapping. The grid's hand-list retired: `RowActions` is built from
+`GridVerbs`, each action asking the plan per row whether it applies
+(`IsVisible`) and is live (`IsEnabled`) and executing through the
+dispatch; an action's reason is the first the plan gives that verb over
+any kind, because the substrate carries one reason per action.
+
+Facts: eight — the plan's tables per (surface, target) in mac's order,
+with Locate File… on file and image only, Edit Card Text… and Convert to
+Note… on text only, Remove from Group only inside a group, the
+connection's three rows and the grid's two arms; no silent arm, and none
+staged; every verb placed somewhere under its own label; the outline
+census bidirectional per target (five kinds in and out of a group, a
+connection); the row's target derived from the row; the grid census over
+every fixture row with Toggle Mark live and Open the same activation
+Enter runs; the connection dispatch on the captured edge from its seated
+source (Edit to the direction prompt, Delete to the edge gone, the
+selection landing on the source when it stood elsewhere); a node verb
+seating its row before the verb. §B's citation of the renamed table fact
+updated. Mutations, each byte-restored: M1 the connection dispatch
+seating the other endpoint, M2 the outline projection dropping
+Duplicate, M3 the node seat removed — which the grid's fact could not
+catch, the reader's currency already seating the row, so the seat's
+proof moved to the document level — M4 Set Color withheld from groups.
+All bitten.
 
 ---
 
