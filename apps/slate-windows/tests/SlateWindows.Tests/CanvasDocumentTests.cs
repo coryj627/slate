@@ -95,6 +95,31 @@ public sealed class CanvasDocumentTests : IDisposable
             new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
             synchronousForTests);
 
+    /// <summary>§G TG-6 (IG-53, the reachable row): a RELOAD while the
+    /// marks list is open — the one displacement the shipped machinery
+    /// can produce — carries the marks and the list reprojects; the
+    /// sheet stands.</summary>
+    [Fact]
+    public void AReloadKeepsTheMarksAndTheListReprojects()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("board.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.SeatSelectionSilently("question");
+        document.ToggleMark();
+        document.OpenMarksList(tab);
+        var sheet = Assert.IsType<CanvasMarksListPrompt>(workspace.CanvasPromptSheet);
+
+        document.Load();
+
+        Assert.Contains("question", document.AppliedPublication!.MarkedIntent);
+        Assert.Same(sheet, workspace.CanvasPromptSheet);
+        Assert.Equal(["question"], sheet.Choices.Select(c => c.Value).ToArray());
+    }
+
     /// <summary>§G TG-2 (G4, IG-10): opening reads STORE emptiness —
     /// an empty store refuses NoMarks and presents nothing.</summary>
     [Fact]

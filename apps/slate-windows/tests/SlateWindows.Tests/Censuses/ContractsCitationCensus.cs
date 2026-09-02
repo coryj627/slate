@@ -391,7 +391,11 @@ public sealed class ContractsCitationCensus
                 // TG-5 bound the group verb and its prompt, taking the
                 // section to 40; 38 sits above the pre-task
                 // population of 35 — a sixth time.
-                38),
+                //
+                // TG-6 bound the mode and history cells, taking the
+                // section to 42; 41 sits above the pre-task
+                // population of 40 — a seventh time.
+                41),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

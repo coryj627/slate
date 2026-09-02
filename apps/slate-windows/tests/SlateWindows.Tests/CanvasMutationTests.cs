@@ -287,6 +287,157 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§G TG-6 (G6/GD-4): a mark write during a held mode is
+    /// FREE and never alters the holder — the captured set stands,
+    /// cancel leaves the marks alone, and only the next entry reads
+    /// the new set.</summary>
+    [Fact]
+    public void MarkWritesDuringAHeldModeNeverAlterTheHolder()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.Equal(2, document.Transient!.Ids.Length);
+
+        document.SeatSelectionSilently("blocker");
+        document.ToggleMark();
+
+        Assert.Equal(3, document.AppliedPublication!.MarkedIntent.Count);
+        Assert.Equal(2, document.Transient!.Ids.Length);
+        Assert.True(document.Modes.Cancel());
+        Assert.Equal(3, document.AppliedPublication!.MarkedIntent.Count);
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.Equal(3, document.Transient!.Ids.Length);
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-6 (G6, F4d): a bulk verb under a held mode is a
+    /// funnel verb — ModeHeld, the ModeBusy sentence, nothing written,
+    /// the marks and the mode standing.</summary>
+    [Fact]
+    public void BulkVerbsDuringAHeldModeRefuseModeHeld()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        string before = DiskBytes();
+        _announced.Clear();
+
+        document.CanvasDeleteMarked();
+
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("in progress", StringComparison.Ordinal));
+        Assert.Equal(before, DiskBytes());
+        Assert.Contains("a", document.AppliedPublication!.MarkedIntent);
+        Assert.True(document.Modes.IsActive);
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-6 (G6, TF-10's column): under suspension a bulk
+    /// verb answers the ladder's ConflictPending — the conflict
+    /// sentence, nothing written.</summary>
+    [Fact]
+    public void BulkVerbsUnderSuspensionAnswerTheConflictSentence()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            DiskBytes() + "\n");
+        Assert.False(document.Modes.Commit());
+        Assert.True(document.Funnel.ModeSuspended);
+        string before = DiskBytes();
+        _announced.Clear();
+
+        document.CanvasDeleteMarked();
+
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("changed on disk", StringComparison.Ordinal));
+        Assert.Equal(before, DiskBytes());
+        Assert.True(document.Modes.Cancel());
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-6 (G6): a mode commit KEEPS the marks — the
+    /// moving set survives its own move.</summary>
+    [Fact]
+    public void AModeCommitKeepsTheMarks()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("grp");
+        document.ToggleMark();
+        document.Navigator.AttachPresenter(new FakePane());
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.True(document.Navigator.ModeStep(1, 0, large: false));
+
+        Assert.True(document.Modes.Commit());
+
+        Assert.False(document.Modes.IsActive);
+        Assert.Equal(2, document.AppliedPublication!.MarkedIntent.Count);
+        document.Shutdown();
+    }
+
+    /// <summary>§G TG-6 (G8/GD-7): undo of a bulk verb speaks core's
+    /// render verbatim and applies the one inverse — colors restored,
+    /// a created group removed — while the marks are NOT history.</summary>
+    [Fact]
+    public void UndoOfABulkVerbSpeaksCoresRenderAndRestores()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.SeatSelectionSilently("a");
+        document.ToggleMark();
+        document.SeatSelectionSilently("blocker");
+        document.ToggleMark();
+        document.CanvasColorMarked("2");
+        _announced.Clear();
+
+        document.CanvasUndo();
+
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Undid: color 2 cards", StringComparison.Ordinal));
+        CanvasPopulation restored = document.AppliedPublication!.Loaded!.Population;
+        Assert.Null(restored.SceneByNode["a"].Color);
+        Assert.Equal(2, document.AppliedPublication!.MarkedIntent.Count);
+
+        var prompt = (CanvasGroupMarkedPrompt)CanvasPromptViewModel.GroupMarked(document);
+        prompt.Draft = "Bundle";
+        Assert.Equal(CanvasPromptSubmit.Pending, prompt.Submit(() => { }));
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+        _announced.Clear();
+
+        document.CanvasUndo();
+
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(
+            _announced,
+            x => x.Text.Contains("Undid: group 2 cards", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            document.AppliedPublication!.Loaded!.Population.SceneNodes,
+            n => n.Kind == "group" && n.Title == "Bundle");
+        Assert.Empty(document.AppliedPublication!.MarkedIntent);
+        document.Shutdown();
+    }
+
     /// <summary>§G TG-5 (G5/IG-21): Group Marked wraps the set in ONE
     /// group at core's padded frame — every CreateGroup argument from
     /// the returned rect — named by CountNoun, the captured marks

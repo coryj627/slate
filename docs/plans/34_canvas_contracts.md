@@ -10125,6 +10125,45 @@ width and height, recorded), M2 the label normalization dropped, M3
 the marks kept after grouping, M4 the door refusal dropped. All
 bitten.
 
+### TG-6 — marks and modes, marks and history: the cells pinned
+
+This task ships facts more than code, because the substrate the
+earlier tasks built already IMPLIED every cell — and the point of
+pinning is that the implication cannot drift. G6 (GD-4): a mark write
+during a held mode is FREE and never alters the holder — the
+captured set stands at its entry size while the store grows, cancel
+leaves the marks alone, and only the next entry reads the new set; a
+bulk verb under a held mode is a funnel verb and is refused ModeHeld
+with the ModeBusy sentence, the marks and the mode standing; under
+suspension the same verb answers the ladder's ConflictPending — the
+"changed on disk" sentence, TF-10's column — writing nothing; a mode
+commit KEEPS the marks, the moving set surviving its own move. G8
+(GD-7): undo of a bulk verb speaks core's `CanvasHistoryApplied`
+render VERBATIM — `Undid: color 2 cards`, `Undid: group 2 cards` —
+and applies the one returned inverse, Color's restoring the prior
+colors and Group's removing the created group, while the marks are
+NOT history: the color's marks stay live across the undo, the
+group's stay cleared.
+
+IG-53's REACHABLE row is pinned: a reload while the marks list is
+open — the one displacement the shipped machinery can produce — the
+marks carried, the list reprojected, the sheet standing. The
+resolution rows (overwrite, save-copy, reconflict) await resolution
+verbs that do not exist (TG-3's finding), recorded as future
+machinery. IG-56 closes by SCOPE: the inverse guarantee holds for
+the arms that carry a `CanvasApplyResult`; the unindexed save's
+recorded empty inverse is §E's shipped receipt shape and stands,
+recorded rather than superseded. The action names were pinned by
+their tasks (TG-4, TG-5).
+
+Facts: six — the holder untouched by a mark write with the next
+entry reading the new set; ModeHeld under a held mode; ConflictPending
+under suspension; the commit keeping the marks; the undo renders and
+inverses with the marks untouched; the reload with the list open.
+Mutations, each byte-restored: M1 a mode guard added to Toggle (GD-4
+regressed), M2 the move commit clearing the marks, M3 history
+clearing the marks. All bitten.
+
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
 
 Tier 1 and 2 move to core with the mac consuming the new API in the same
