@@ -13670,7 +13670,7 @@ Five tasks, the eight-row ledger swept. What §E13 leaves behind: one
 arm with one sentence, spoken by the Windows gate that CD-38 built and
 witnessed twice in the corpus; a coverage test that can no longer miss
 a nested family or a skipped arm; a ledger of 114 keys; the records
-corrected where they had gone stale; and #1174 closed by this PR. Owed
+corrected where they had gone stale; and #1174 closed by this PR, #1176. Owed
 to mac: consumption of the arm when #1169 adopts the gate (E13D-2,
 HD-8's forward pointer); the Swift mirror edit, unrun here, arbitrated
 by mac's lane (E13R-1).
@@ -19153,8 +19153,7 @@ and cites #745.
 
 ### (f) The PR E hand-offs, as they stand
 
-- **E13 is CLOSED by PR E13 (#1174; the PR number is recorded in
-  §E13's close-out).** The typed refused-open reason exists:
+- **E13 is CLOSED by PR E13 (#1176, closing #1174).** The typed refused-open reason exists:
   `CanvasBlockedReason::FileTypeNotOpenable { target }`, its render,
   two corpus witnesses, the FFI arm and both host mirrors, and the
   Windows refusal (CD-38) speaks it — CD-38's STOP is discharged. Mac
