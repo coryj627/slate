@@ -1040,4 +1040,445 @@ GraphAnnouncerTests (the 0a-9 suite; the window constant; the funnel guard),
 GraphDiagramTests (the readback event and the 0a-D1 correction),
 `A11yResidueCensusTests` (`pinnedResidueSites` 29 → **28**).
 
+## PR 0b — the graph structural queries move to core
+
+**Goal (spec §PR 0b).** §W-G rows B–K become core queries over the
+existing `GraphIndex`, metrics and layout: the Connections tree in
+reading order, the stable node key, visible neighbours, the name
+filter, the `.slate/graph.json` schema and merge policy, the table rows
+with core-formatted cells and a total order, the constants, the action
+set, the spatial and structural steps, the ghost's note path. Task 0b-1
+is the Rust + FFI + Windows-harness half; Task 0b-2 is the mac
+consumption half (every Swift copy named in §2 deleted there). This
+section is at revision 1.
+
+**What stands today.** Core exposes `graph_snapshot(filter)`,
+`graph_neighborhood(path, depth, filter)` (flat nodes and edges),
+`graph_generation()` and the layout session (`lib.rs:1301–1349`);
+`GraphIndex` owns `filtered_nodes` (`graph.rs:583`), `edges_among`
+(`:612`), `neighborhood_ids` (`:645`), `ghost_key` (`:43`) and the
+`NodeKey` namespaces (`:29`); `NodeMetrics` carries the degrees, the
+component and the orphan flag (`graph_metrics.rs:24–38`). Everything
+in §2 rows B–K is derived in Swift: ConnectionsModel
+(`ConnectionsPanel.swift:375–499`: undirected adjacency, the in/out
+split by centre incidence, self-edges dropped, Link+Embed merged with an
+embed-only flag, recursion with an ancestor guard, per-occurrence path
+ids, `localizedStandardCompare` per level, `references = in_links +
+in_embeds`); `GraphNodeKey` (`GraphViewState.swift:57–78`: `p:` path,
+`g:` + percent-encoded `en_US_POSIX`-lowercased label); the diagram's
+visible neighbours (`GraphDiagramView.swift:1221–1228`) and spatial
+scoring (`:1230–1262`); `graphNameMatches` (`AppState+GraphConfig.swift:16–20`,
+`.caseInsensitive, .diacriticInsensitive`); the config codec with its
+clamps, version rule and unknown-key preservation
+(`GraphConfigStore.swift:131–202`, the I/O and the writer actor around
+it); the nine-column model with `byLabel` and `directionalComparator`
+(`GraphTableView.swift:444–628`) and the folder derivation
+(`AppState+GraphTable.swift:418–420`); the constants
+(`GraphDiagramModel.swift:58` tier 1,500; `GraphDiagramView.swift:461–464`
+diameter; `:643` label cap 200; `AppState+Connections.swift:31–33` depth
+clamp); `GraphRowAction` (`GraphViewState.swift:15–48`); `ghostNotePath`
+(`AppState+Connections.swift:306–315`). The Windows shell has no `Graph/`
+directory: nothing to delete there, which is why 0b precedes PR A–E.
+
+### Contracts
+
+**0b-1 — One derivation per structural rule.** Every rule §2 rows B–K
+names lives once, in `crates/slate-core/src/graph_queries.rs` (the
+tree, the key, neighbours, the filter, the rows, the constants, the
+actions, the steps, the ghost path) and `crates/slate-core/src/graph_config.rs`
+(the schema, defaults, clamps, decode and encode rules, the group
+rules), as pure functions of the session's graph surface or of their
+arguments. The session layer adds handle-based methods that resolve the
+index and delegate; `slate-uniffi` adds 1:1 mirrors with no logic.
+Nothing in a host recomputes any of them (R-D). Task 0b-2 deletes the
+Swift copies, and the §W-G register below reads "moved" per row with
+the deleted range and the consuming site.
+
+**0b-2 — The query surface.** Session-based unless marked free; every
+session query reads the built index under the session's lock order
+(`conn → graph → graph_metrics`) exactly as `graph_snapshot` does.
+
+| Query | Shape | Reads |
+|---|---|---|
+| `graph_connections_tree` | `(path, depth, filter) -> GraphConnectionsTree` | `neighborhood_ids`, `edges_among`, metrics |
+| `GraphNode.stable_key` | a field on the existing record | `NodeKey` |
+| `graph_filter_ids` | `(filter, query) -> Vec<u64>` | `filtered_nodes` + labels |
+| `graph_neighbors` | `(id, filter, query) -> Vec<u64>` | `edges_among` over the visible set |
+| `graph_table_rows` | `(filter, sort) -> Vec<GraphTableRow>` | the snapshot's nodes, metrics, mtimes |
+| `graph_table_columns` | `() -> Vec<String>` | **free** — the nine headers in order |
+| `graph_constants` | `() -> GraphConstants` | **free** |
+| `graph_node_diameter` | `(in_links) -> f64` | **free** |
+| `graph_row_actions` | `(kind) -> Vec<GraphRowAction>` | **free** |
+| `graph_row_action_title` | `(action) -> String` | **free** |
+| `graph_spatial_step` | `(points, neighbors, from, dx, dy) -> Option<u64>` | **free** — geometry only |
+| `graph_structural_step` | `(visible, from, forward) -> Option<u64>` | **free** |
+| `graph_ghost_note_path` | `(target_raw) -> String` | **free** |
+| `graph_config_decode` | `(json) -> Result<GraphConfigRead, GraphConfigError>` | **free** |
+| `graph_config_encode` | `(config, existing_json) -> Result<String, GraphConfigError>` | **free** |
+| `graph_config_matching_group` | `(config, label) -> Option<u32>` | **free** |
+| `graph_config_next_group_style` | `(group_count) -> GraphGroupStyle` | **free** |
+| `graph_color_token_title` / `graph_ring_style_title` | `(token) -> String` / `(style) -> String` | **free** |
+
+**0b-3 — The stable key is core's, one algorithm.** `GraphNode.stable_key`
+is `p:` + the vault-relative path for a Note or Attachment, and `g:` +
+the percent-encoded `ghost_key` for a Ghost — the SAME folded string
+`NodeKey::Ghost` carries (`ghost_key`: trim, strip a leading `./` or
+`/`, Rust `to_lowercase`). Percent-encoding: every UTF-8 byte of a
+character that is not Unicode alphanumeric (`char::is_alphanumeric`) is
+written `%XX` uppercase; alphanumerics pass through, so `Missing Note`
+keys as `g:missing%20note` and `café` as `g:café`. Two disjoint
+namespaces, byte-stable across generations and sessions. Divergences
+from the deleted Swift, recorded (0b-D1): mac folded with
+`lowercased(with: en_US_POSIX)` where core's `ghost_key` is Unicode's
+locale-independent lowercase mapping (they differ on `İ` and Turkish
+`ı`); mac's allowed set was Foundation's `.alphanumerics`, which admits
+combining marks, so an NFD `cafe` + U+0301 kept its mark bare where core
+writes `%CC%81` — distinct from the NFC form in both, which is the
+property the mac test asserted. Pinned by `stable_key_is_the_two_namespaces`
+and `stable_key_percent_encodes_by_rust_alphanumerics`.
+
+**0b-4 — The Connections tree is FLAT pre-order rows, not a recursive
+record** (0bD-1). `GraphConnectionsTree { center_id, center_key, depth,
+incoming: Vec<GraphConnectionRow>, outgoing: Vec<GraphConnectionRow> }`;
+`GraphConnectionRow { id: String, level: u32, parent_id: Option<String>,
+node_id: u64, stable_key, label, path: Option<String>, target_raw:
+String, kind: GraphNodeKind, embed_only: bool, in_links, out_links,
+references: u32 }`. Rules, each the mac's: the neighbourhood is
+`graph_neighborhood`'s payload (depth clamped 1..=3, the filter applied
+before traversal); adjacency is undirected over its edges; the first
+hop splits by centre incidence — `source == centre` ⇒ outgoing (the
+target), `target == centre` ⇒ incoming (the source); a self-edge is
+dropped from both; a neighbour reached by Link and Embed is ONE row,
+`embed_only` iff no Link edge joined them; `references = in_links +
+in_embeds` from metrics; `target_raw = label`; row ids are the
+occurrence path — `in/⟨id⟩` and `out/⟨id⟩` at level 1, `⟨parent⟩/⟨id⟩`
+below — so a diamond descendant is distinct under each parent; nesting
+recurses `depth − 1` further levels, excluding the ancestors on the
+current path (the cycle guard), and a level-N row's children follow it
+immediately (pre-order), each with `parent_id` = the row's id; every
+level is ordered by 0b-5. Snippets are NOT here: the depth-one snippet
+overlay reads the host's `NoteLoadBundle` and stays host, keyed by
+path (0bD-2). Pinned by the tree goldens (ConnectionsPanelTests'
+five cases as Rust facts: the split with ghosts and embeds, depth two
+nesting, depth three with the guard, Link+Embed collapse, the self-edge)
+and by `graph_queries.json`.
+
+**0b-5 — Label order is core's, one comparator, three ties deep.** The
+tree's levels and the table's `byLabel` order by
+`graph_label_order(a, b)`: compare the FOLDED labels (0a's fold — NFD,
+combining marks dropped, lowercase) with digit runs compared as
+numbers (shorter run first on equal value, so `2` < `10` < `010`),
+then the raw labels bytewise, then `stable_key`, then `node_id` — a
+strict total order on distinct rows unconditionally (the mac's three
+tie-breaks, `GraphTableView.swift:535–543`). Divergence from Foundation's
+`localizedStandardCompare`, recorded (0b-D2): Finder's collation is
+locale-sensitive and its diacritic and case handling are its own; core's
+fold is locale-free and agrees across ASCII, Latin-1 and the digit runs
+the fixtures carry. Pinned by `label_order_is_natural_folded_and_total`.
+
+**0b-6 — The name filter is core's fold, and it returns ids.**
+`graph_filter_ids(filter, query)` returns the snapshot's node ids whose
+folded label contains the folded, trimmed needle, in key order; an
+empty (or whitespace-only) needle returns every id. The fold is 0a's
+`name_filter_fold` (NFD, marks dropped, lowercase; Rust `trim` at the
+ends). Divergence from Foundation's `.caseInsensitive,
+.diacriticInsensitive` containment, recorded (0b-D3): they agree on
+case and on decomposable diacritics (`café` under `cafe`), and differ
+where Foundation's mapping is not a decomposition (`ß` matches `ss` on
+neither; `İ` lowers to `i` + a dot mark and so matches `i` in core, not
+on mac). Both projections consume the id list and apply no predicate of
+their own (spec §P2-4 "filter equivalence", now provable). Pinned by
+`filter_ids_fold_case_and_marks` and the artifact's needle list.
+
+**0b-7 — Table rows are core-formatted and core-ordered.**
+`graph_table_rows(filter, sort)` returns `GraphTableRow { stable_key,
+node_id, label, path: Option<String>, kind, kind_label, links_in,
+links_out, embeds_in, embeds_out, component, modified_ms: Option<i64>,
+modified_text, folder }` sorted by `GraphTableSort { column:
+GraphTableColumn, ascending: bool }` over the nine columns `Note,
+LinksIn, LinksOut, EmbedsIn, EmbedsOut, Component, Modified, Folder,
+Kind` (`graph_table_columns()` returns the headers `Note`, `Links in`,
+`Links out`, `Embeds in`, `Embeds out`, `Component`, `Modified`,
+`Folder`, `Kind` in that order). The comparator is the mac's: a
+numeric primary key in the requested direction with the label order
+(0b-5) as the tie-break ALWAYS ascending; `Note` is the label order in
+the requested direction; `Modified` orders `modified_ms` with a missing
+value lowest; `Folder` orders the folder by the label comparator's fold
+then falls through; `Kind` orders `kind_label` bytewise then falls
+through. The default sort is `LinksIn` descending (hubs first). Cells:
+`kind_label` is `Note` / `Attachment` / `Unresolved`; `folder` is the
+path up to its last `/` (empty at the vault root and for ghosts);
+`modified_text` is `YYYY-MM-DD HH:MM` in UTC from `modified_ms`, empty
+for a ghost — a recorded divergence from mac's locale medium date and
+short time (0b-D4): a §W-A cell cannot carry a locale or a zone. The mac
+grid consumes the rows in core's order (`sortsRowsLocally: false`, the
+Bases precedent) and re-queries on a sort change. Pinned by
+`table_rows_sort_is_the_mac_comparator` (the GraphTableViewTests cases
+as Rust facts: descending hubs then labels, ascending flips the number
+not the tie, same-label distinct paths totally ordered, the ghost's empty
+modified text, the kind labels) and by the artifact's sort list.
+
+**0b-8 — The constants have one source.** `graph_constants()` returns
+`GraphConstants { tier_b_threshold: 1500, label_cap: 200,
+connections_depth_min: 1, connections_depth_max: 3, node_diameter_min:
+8.0, node_diameter_max: 28.0, neighbor_label_cap: 10 }`, every field
+the named constant in `graph_queries.rs` (and `neighbor_label_cap` the
+0a constant GRAPH_NEIGHBOR_LABEL_CAP), asserted field by field, never
+a re-typed literal. `graph_node_diameter(in_links)` is
+`8 + 6·ln(1 + in_links)` clamped to 8..=28 (`GraphDiagramView.swift:461–464`).
+The tier boundary is inclusive: 1,500 visible nodes are tier A, 1,501
+tier B (`GraphDiagramTests.testTierBoundaryIsInclusiveAt1500AndSwitchesAt1501`
+as a Rust fact). The zoom clamp (10..=400 percent) stays the canvas
+viewport's, host-designated (§2 row L); 0a's invariants test names it
+as the host's.
+
+**0b-9 — The action set is core's, with its titles and its
+availability.** `GraphRowAction { Open, OpenInNewTab, ShowConnections,
+Reveal, CreateNote }` in that order; `graph_row_action_title` renders
+`Open`, `Open in New Tab`, `Show connections`, `Reveal in File Tree`,
+`Create note` (manifest T66); `graph_row_actions(kind)` returns the four
+navigation actions for a Note or an Attachment and `[CreateNote]` alone
+for a Ghost — no projection offers an action that would do nothing
+(`GraphViewState.swift:39–47`). Pin/Unpin stays diagram-only and
+host-side, exempt from parity by the recorded rationale. Pinned by
+`row_actions_by_kind_are_the_parity_set`.
+
+**0b-10 — The spatial step is core's scoring, over host positions.**
+`graph_spatial_step(points: Vec<GraphPoint { id, x, y }>, neighbors:
+Vec<u64>, from: u64, dx: f64, dy: f64) -> Option<u64>`: first among the
+candidates in `neighbors` that have a point, then — when none scores —
+among every point but `from`; a candidate scores only when its distance
+from `from` exceeds 1e-4 and `cos θ = (v·d)/|v|` exceeds 0.1; the score
+is `|v| / max(cos θ, 1e-4)`; the lowest score wins, ties to the lower
+id (`GraphDiagramView.swift:1230–1250`). `dx, dy` are a direction
+vector; the host passes unit axes. `graph_structural_step(visible:
+Vec<u64>, from: Option<u64>, forward: bool) -> Option<u64>` is the
+wrapping next/previous over the given order, the first (or last)
+element when `from` is absent or not in the list, `None` for an empty
+list (`:1254–1262`). Type-ahead stays a host list search (§2 row J).
+Pinned by `spatial_step_prefers_neighbours_then_falls_back`
+(`testSpatialMoveNeighborsFirstThenFallbackOnAFixedLayout` as a Rust
+fact over the same four points) and the artifact's point table.
+
+**0b-11 — The ghost's note path.** `graph_ghost_note_path(target_raw)`:
+trim (Rust `trim`), strip one leading `./` or `/`, and append `.md`
+unless the last path component's extension is one of `md`, `markdown`,
+`mdown`, `mkd` case-insensitively (`AppState+Connections.swift:306–315`).
+Pinned by the `testGhostNotePathHonorsFolderAndExtension` cases as Rust
+facts and the artifact's target list.
+
+**0b-12 — The config schema and merge policy are core's; the I/O is the
+host's.** Schema v1 of `.slate/graph.json`: `version: 1`; `filters {
+includeAttachments, includeGhosts, orphansOnly, nameQuery }`; `groups:
+[{ query, colorToken, ringStyle }]`; `display { arrows, textFadeZoom,
+nodeSizeMultiplier, linkThickness }`; `forces { center, repel, link,
+linkDistance }`; `mode`; `connectionsDepth`; and — new here, 0aD-6 —
+`verbosity` (`terse` / `standard` / `verbose`, default `standard`).
+Defaults and clamps are the mac's (`GraphConfigStore.swift:131–169`):
+filters false/true/false/""; `textFadeZoom` 0.1..=4.0 default 0.55;
+`nodeSizeMultiplier` 0.5..=2.0 default 1.0; `linkThickness` 0.5..=4.0
+default 1.0; each force 0..=1 default 0.5; `connectionsDepth` 1..=3
+default 1; `mode` `table` unless the tag is `diagram`; a group without a
+string `query` is dropped, an unknown `colorToken` reads `blue`, an
+unknown `ringStyle` `solid`; a non-finite or non-numeric value takes the
+default. `graph_config_decode(json)`: an absent file is the host's
+`.default`; a non-object root → `GraphConfigError::Unparseable`; a
+`version` greater than 1 → `GraphConfigError::NewerVersion { version }`
+(never decoded, never rewritten); otherwise `GraphConfigRead { config,
+unknown_json }` where `unknown_json` is the JSON object of every
+top-level key the schema does not own. `graph_config_encode(config,
+existing_json)`: with an existing text that is not a JSON object →
+`Unparseable`; with a newer version → `NewerVersion`; otherwise the
+known sections replace theirs and every unknown top-level key is
+preserved verbatim; the output is serde's pretty JSON with keys sorted —
+a recorded divergence in file FORMATTING from Foundation's pretty
+printer (0b-D5): the bytes differ, the object does not, and either
+reader accepts both. Atomic temp-and-rename, the single-writer actor and
+its monotonic generation gate stay host-designated (§2 row F; 0bD-3).
+Groups: `graph_config_matching_group(config, label)` is first-match-wins
+over the ordered groups, a group's trimmed query matched as a folded
+substring (0b-6's fold), a blank query never matching;
+`graph_config_next_group_style(group_count)` cycles the ring
+(`solid → dashed → double → dotted`) and the palette (`red, orange,
+yellow, green, teal, blue, purple, pink`) by index. GraphColorToken
+and `GraphRingStyle` are core enums with `persistence tags` = their
+lowercase names and titles = the capitalised names (T71, T72); the mac's
+`color: NSColor` mapping and its APCA test are host-designated (a
+colour is a rendering). Pinned by the GraphConfigTests cases as Rust
+facts (round-trip of every section, the missing file, unknown top-level
+keys preserved, refuse-clobber, refuse-downgrade, clamping, first-match,
+the ring cycle) and the artifact's config round-trip.
+
+**0b-13 — The §W-A `graph_queries` section.** The harness gains one
+artifact, `graph_queries.json`, produced from the MARKDOWN fixture vault
+the other artifacts already open (the graph is a read surface over the
+same links; no second vault, nothing above it moves — 0bD-4), keyed by
+`stable_key` throughout because a node's numeric id is an insertion-
+order index and the two lanes may scan the directory in different
+orders (0bR-2). Sections, in order: `snapshot` under the default filter
+— per node in key order `stable_key`, `label`, `kind`, `path`,
+`in_links`, `out_links`, `in_embeds`, `out_embeds`, `component`,
+`is_orphan` (NOT `pagerank`: a float no 0b query consumes, and NOT
+`modified_ms`: the copy time); `table` — for each pinned sort the nine
+cells minus `modified_text` (the copy time again; its format is a Rust
+fact); `connections` — for each pinned `(path, depth)` the flat rows
+with `id`, `level`, `parent_id`, `stable_key`, `embed_only`,
+`references`; `neighbors` — for each node under the default filter with
+an empty needle, the neighbours' keys in order; `filter` — for each
+pinned needle the matching keys; `ghost_paths` — for each pinned target
+the path; `spatial` — for the pinned point table and neighbour list,
+each direction's answer; `constants`; `actions` per kind with titles;
+`config` — the pinned input JSON decoded then encoded, the output text
+and the unknown keys. The pinned lists (sorts, paths and depths,
+needles, targets, points, the config input) are `public static readonly`
+data on `SurfaceSerializer` and the Swift twin copies each, named in a
+comment beside them. The Windows census gains
+GraphQueriesArtifactCoversEveryNode — every key of the snapshot section
+appears in `neighbors` and in every sort of `table`, so a node cannot
+be skipped in silence (the canvas census's `EveryCanvasFixtureIsReadOrExcluded`
+shape). The mac twin is Task 0b-2's, in the same PR; the committed golden
+arbitrates.
+
+**0b-14 — Mac consumes in the same PR (Task 0b-2); every migration is
+owned by name.** ConnectionsModel (`ConnectionsPanel.swift:375–499`)
+becomes an adapter over `graph_connections_tree` — it nests the flat
+rows by `parent_id` for `OutlineGroup` and overlays snippets by path; its
+derivation is deleted. `GraphNodeKey` (`GraphViewState.swift:50–78`) is
+deleted; every `GraphNodeKey.make` site reads `stable_key`
+(`GraphTableView.swift:492`, `AppState+Connections.swift:185, 210, 235`,
+`AppState+GraphDiagram.swift:194, 209`). `graphNameMatches`
+(`AppState+GraphConfig.swift:16–20`) is deleted; the table's
+`filteredRows` and the diagram's visible set are `graph_filter_ids`'s
+list. `GraphTableColumn.byLabel` / `directionalComparator` / `cell` /
+`header` and `GraphTableRow.init(node:folder:)` (`GraphTableView.swift:444–628`)
+are deleted; the grid takes `graph_table_rows` in core's order with
+`sortsRowsLocally: false` and re-queries on `sortState`; the preset's
+most-linked headline (`AppState+GraphTable.swift:340–354`) reads the
+first row of the default sort. `GraphDiagramModel.tierBThreshold`,
+`GraphDiagramNSView.nodeDiameter` and `labelCap` read `graph_constants`
+/ `graph_node_diameter`; `bestInDirection`, `graphNeighbors` and
+`structuralMove` (`GraphDiagramView.swift:1221–1262`) call the two steps
+and `graph_neighbors`; `clampConnectionsDepth` reads the constants;
+`GraphRowAction` (`GraphViewState.swift:15–48`) is the generated enum
+with `graph_row_action_title` and `graph_row_actions`; `ghostNotePath`
+(`AppState+Connections.swift:306–315`) calls core; GraphConfigStore's
+`decode` / `encode` / `clampD` (`:131–202`) call core, its I/O and the
+actor stay; GraphColorToken and `GraphRingStyle` (`GraphConfig.swift:109–142`)
+are the generated enums with a Swift extension for `color`,
+`dashPattern`, `CaseIterable` and the tags; `matchingGroup`
+(`GraphConfig.swift:34–40`) and `addGraphGroup`'s cycling
+(`AppState+GraphConfig.swift:172–177`) call core. The tests that move
+to Rust facts are named in 0b-4..0b-12; the Swift tests that remain
+assert the adapters (the nesting by `parent_id`, the snippet overlay,
+the grid's re-query, the generated enums' extensions). The Swift edit
+is unrun on this box (0bR-1); the mac lane arbitrates.
+
+**0b-15 — Tripwires.** `the_ffi_mirror_covers_every_graph_query_enum`
+(slate-uniffi) parses core's `GraphRowAction`, GraphTableColumn,
+GraphColorToken, `GraphRingStyle` and GraphConfigError against
+their mirrors both ways, the a11y mirror test's parser reused, with
+each arm count pinned (5, 9, 8, 4, 2). `graph_constants_are_the_named_constants`
+asserts every `GraphConstants` field against its constant. The Windows
+`ParityHarnessCensus` gains the artifact and the coverage fact (0b-13).
+ConnectionsPanelTests, GraphTableViewTests, GraphConfigTests and
+GraphDiagramTests keep the host-side cases and lose the derivation
+cases, each named in 0b-14.
+
+### Decisions
+
+- **0bD-1 — The tree is flat pre-order rows** with `level` and
+  `parent_id`, not a recursive record: both hosts rebuild a hierarchy
+  from a list in one pass, and no binding has to carry a self-referential
+  record.
+- **0bD-2 — Snippets stay host-side.** The depth-one snippet overlay
+  reads the host's note bundle, not the graph; the tree carries paths so
+  the host can key it.
+- **0bD-3 — Config I/O is host-designated; the schema and merge policy
+  are core's.** Atomic temp-and-rename, the single-writer actor and its
+  generation gate stay in Swift (§2 row F's tier-3 half); decode, encode,
+  defaults, clamps, the version rule and the group rules are core's.
+- **0bD-4 — The `graph_queries` artifact reads the markdown vault**, not
+  a second vault: the graph is a read surface over links the corpus
+  already has, and a read adds nothing to the other artifacts.
+- **0bD-5 — The artifact is keyed by `stable_key`** and excludes
+  `pagerank` and the modified fields (0b-13).
+- **0bD-6 — Neighbours and the filter are session queries returning
+  ids**, not pure functions over marshalled data: one query surface
+  (R-A), and both hosts hold the snapshot anyway.
+- **0bD-7 — The `verbosity` key lands in the schema now** (0aD-6), so
+  PR C's menu and a future mac switch have a field to write.
+
+### Recorded divergences (owner-recorded; off-limits for re-litigation)
+
+- **0b-D1 — The stable key's fold and encoding** (0b-3): Unicode
+  lowercase over `en_US_POSIX`; Rust alphanumerics over Foundation's.
+- **0b-D2 — Label order is core's natural fold**, not
+  `localizedStandardCompare` (0b-5).
+- **0b-D3 — The name filter is core's fold**, not Foundation's options
+  (0b-6).
+- **0b-D4 — The Modified cell is `YYYY-MM-DD HH:MM` UTC** (0b-7).
+- **0b-D5 — The config file's formatting is serde's**, sorted keys,
+  not Foundation's pretty printer (0b-12).
+
+### Accepted risks
+
+- **0bR-1 — The Swift migration is unrun on this box.** The mac lane
+  arbitrates; a red lane is fixed here, not waived.
+- **0bR-2 — Node ids are scan-order indices.** The artifact never
+  writes one; the census would show a key-order difference if the lanes
+  disagreed on anything but ids.
+- **0bR-3 — Floats are out of the artifact.** `pagerank` and the
+  layout are not 0b queries; the spatial section's inputs are integers
+  and its outputs ids.
+
+### §W-G register (seeded from spec §2; the close-out re-greps the Windows tree against it)
+
+| # | Pocket | Status after 0b |
+|---|---|---|
+| A | the announcer grammar | moved (PR 0a, #1179) |
+| B | the Connections tree | moved — `graph_connections_tree`; deleted `ConnectionsPanel.swift:375–499`'s derivation |
+| C | the node identity | moved — `GraphNode.stable_key`; deleted `GraphViewState.swift:50–78` |
+| D | visible neighbours and the content cap | moved — `graph_neighbors` (the cap 0a's); deleted `GraphDiagramView.swift:1221–1228` |
+| E | the name filter | moved — `graph_filter_ids`; deleted `AppState+GraphConfig.swift:16–20` |
+| F | the config schema and policy | moved — `graph_config_decode/encode` and the group rules; the I/O host-designated; deleted `GraphConfigStore.swift:131–202` |
+| G | the table columns | moved — `graph_table_rows`, `graph_table_columns`; deleted `GraphTableView.swift:444–628` |
+| H | the constants | moved — `graph_constants`, `graph_node_diameter` |
+| I | the action set | moved — `graph_row_actions`, `graph_row_action_title`; deleted `GraphViewState.swift:15–48` |
+| J | the spatial and structural steps | moved — `graph_spatial_step`, `graph_structural_step`; deleted `GraphDiagramView.swift:1230–1262`; type-ahead host |
+| K | the ghost's note path | moved — `graph_ghost_note_path`; deleted `AppState+Connections.swift:306–315` |
+| L | viewport math | host-by-designation (the canvas viewport) |
+| M | the hit-test grid and tiles | host-by-designation |
+| N | the coalescing state machine | host timers; the class keys core's (0a) |
+| O | the singleton tab lifecycle | host (W1-3) |
+| P | driving the layout session | host driver over core's session |
+
+### Tests that pin PR 0b (Task 0b-1)
+
+`crates/slate-core/src/graph_queries.rs` (tests module): the tree facts
+(five), `stable_key_is_the_two_namespaces`,
+`stable_key_percent_encodes_by_rust_alphanumerics`,
+`label_order_is_natural_folded_and_total`, `filter_ids_fold_case_and_marks`,
+`table_rows_sort_is_the_mac_comparator`, `modified_text_is_utc_minutes`,
+`graph_constants_are_the_named_constants`,
+`node_diameter_is_the_spec_curve_clamped`, `tier_boundary_is_inclusive_at_1500`,
+`row_actions_by_kind_are_the_parity_set`,
+`spatial_step_prefers_neighbours_then_falls_back`,
+`structural_step_wraps`, `ghost_note_path_honours_folder_and_extension`.
+`crates/slate-core/src/graph_config.rs` (tests module): the eight
+GraphConfigTests facts, `verbosity_defaults_to_standard`,
+`encode_preserves_unknown_keys_and_refuses_the_two_cases`.
+`crates/slate-uniffi/src/lib.rs`: `the_ffi_mirror_covers_every_graph_query_enum`.
+`apps/slate-windows/tests/SlateWindows.Tests/Censuses/ParityHarnessCensus.cs`:
+`graph_queries.json` byte for byte; GraphQueriesArtifactCoversEveryNode.
+
+### Tests that pin PR 0b (Task 0b-2, the mac half)
+
+`apps/slate-mac/Tests/SlateMacTests/ParityHarnessTests.swift`: the
+`graph_queries` twin. ConnectionsPanelTests: the adapter's nesting by
+`parent_id` and the snippet overlay. GraphTableViewTests: the grid's
+external sort and the `stable_key` identity. GraphConfigTests: the
+store's I/O against core's codec, the writer's generation gate.
+GraphDiagramTests: the steps through core on the fixed layout, the tier
+boundary through `graph_constants`.
+
 <!-- end of the graph contracts document -->
