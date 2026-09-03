@@ -33,10 +33,13 @@ to a relay + coalescer (Task 0a-2); `corpus.json` gains the graph
 family; the residue census drops 29 → 28; §W-D becomes provable for the
 graph. **Copy rule: shipped mac strings move verbatim** (0a-16 names the
 authority per phrase); this PR does not redesign wording. This section
-is at revision 4: round 1 returned sixteen findings, round 2 twelve,
+is at revision 5: round 1 returned sixteen findings, round 2 twelve,
 round 3 twelve, and round 3's verdict invoked the protocol's stopping
 rule 4 — three consecutive rounds of blockers in one subsystem, twice
-over — so revision 4 opens with the design pass that rule demands.
+over — so revision 4 opened with the design pass that rule demands.
+Round 4 found Subsystem A closed by it and Subsystem B not yet: its ten
+findings are taken in revision 5, which audits the WHOLE schema against
+design B(i)'s reachability rule rather than one variant.
 
 **What stands today.** `GraphAnnouncer.swift` (239 lines): a
 `GraphVerbosity` enum mirroring the canvas's — declared, defaulted to
@@ -97,9 +100,20 @@ cleared by any manual toggle (`:255–262`). The selection-kind rule is a
 host invariant, not a payload: a Ghost is selectable only while ghosts
 are shown and an Attachment only while attachments are shown (the
 diagram drops a selection outside its visible set,
-`GraphDiagramView.swift:484`), and under the unresolved preset only
-Ghost rows exist to select. The matrix obeys it and
-`graph_where_am_i_witnesses_are_host_reachable` asserts it. (ii)
+`GraphDiagramView.swift:484`), under the unresolved preset only Ghost
+rows exist to select, under orphans-only only Notes with no links
+either way survive (`graph.rs::filtered_nodes`), and under a name
+filter only labels containing the trimmed needle exist. Round 4 showed
+the rule had been applied to one variant; revision 5 audits EVERY
+payload of the schema and records each one's invariants in the
+"Payload invariants" table under 0a-2b, asserted over the whole matrix
+by `graph_witnesses_obey_the_payload_invariants` (Where-am-I's kind
+rule keeps its own test, `graph_where_am_i_witnesses_are_host_reachable`).
+The audit moved one more rule into core: the neighbour content's
+"first ten, then the overflow" was a host cap, so a host could hand
+core three labels and an overflow of one — a state it can never be in.
+`GraphNeighborsContent` now carries the FULL ordered visible-neighbour
+list and core owns the cap (`GRAPH_NEIGHBOR_LABEL_CAP = 10`). (ii)
 **Copy authority:** the governing spec carries NO announcement strings.
 Every template lives in exactly two places — this document's schema
 (0a-2b) and the Rust golden — and the spec's §4 names EVENTS
@@ -144,8 +158,8 @@ regeneration path, never by hand), the FFI mirror
 positional, so the graph family is **appended** after the canvas
 family's last entry (`CanvasStatus { Loading }`, `a11y.rs:4491–4493`);
 every pre-existing index is untouched. The witness matrix (0a-17) is
-the ordered list of the graph's entries: **69** of them, the artifact
-growing from 448 to **517**; `the_graph_witnesses_are_exactly_the_matrix_in_order`
+the ordered list of the graph's entries: **71** of them, the artifact
+growing from 448 to **519**; `the_graph_witnesses_are_exactly_the_matrix_in_order`
 (0a-19) is the executable form of the matrix.
 
 **0a-2b — The schema, literally.** Every type below is a uniffi record
@@ -158,15 +172,16 @@ Supporting types:
 | `GraphVerbosity` | `enum { Terse, Standard, Verbose }` | new; 0aD-2 |
 | `GraphNodeKind` | the EXISTING FFI enum `{ Note, Attachment, Ghost }` (`lib.rs:3231`) mirroring `graph::NodeKind` (`graph.rs:53`) | reused (0aD-4); this PR adds the reverse mapping `From<GraphNodeKind> for core::graph::NodeKind` so a host can construct a row |
 | `GraphRowCopy` | `record { label: String, kind: GraphNodeKind, in_links: u32, out_links: u32, references: u32, embed: bool }` | P1's row data; degrees are `u32` as `GraphNode`'s; `embed` is independent of `kind` (a ghost reached only by `![[…]]` is a Ghost with `embed`) |
-| GraphSnapshotCounts | `record { notes: u64, links: u64, orphans: u64, unresolved: u64, filtered: bool }` | exported on `GraphSnapshot.summary_counts` (0a-7) |
-| GraphNeighborhoodCounts | `record { center_label: String, in_links: u32, out_links: u32, note_count: u64, depth: u32 }` | exported on `GraphNeighborhood.summary_counts` (0a-7) |
-| GraphPresetOutcome | `enum { Orphans { count: u64 }, Unresolved { count: u64 }, MostLinked { label: String, in_links: u32 }, NoNotesToRank }` | each arm carries only its fields |
-| GraphForceControl | `enum { Center, Repel, Link, LinkDistance }` | |
-| GraphSurfaceMode | `enum { Table, Diagram }` | named to avoid mac's local `GraphTabMode` (`GraphTableView.swift:9`), which 0a-18 deletes in its favour |
-| GraphWhereAmISelection | `enum { Node { row: GraphRowCopy, component: u32 }, NoSelection }` | `NoSelection`, not `None` — the generated Swift `.none` collision the canvas's `Unstated` avoids (`lib.rs:7591`) |
-| GraphWhereAmIFilter | `enum { Normal { orphans_only: bool, attachments_shown: bool, ghosts_shown: bool }, UnresolvedOnly }` | design B(i): the unresolved preset is one state, not four flags; its backend flags are implied |
-| GraphStatusNote | `enum { Opened, AlreadyOpen, ConnectionsPanel, NoteCreated { name: String }, NoConnections, LoadingConnections }` | |
-| GraphBlockedReason | `enum { LoadFailed { message: String }, ConnectionsLoadFailed { message: String }, NoteCreateFailed { message: String } }` | |
+| `GraphSnapshotCounts` | `record { notes: u64, links: u64, orphans: u64, unresolved: u64, filtered: bool }` | exported on `GraphSnapshot.summary_counts` (0a-7) |
+| `GraphNeighborhoodCounts` | `record { center_label: String, in_links: u32, out_links: u32, note_count: u64, depth: u32 }` | exported on `GraphNeighborhood.summary_counts` (0a-7) |
+| `GraphPresetOutcome` | `enum { Orphans { count: u64 }, Unresolved { count: u64 }, MostLinked { label: String, in_links: u32 }, NoNotesToRank }` | each arm carries only its fields |
+| `GraphForceControl` | `enum { Center, Repel, Link, LinkDistance }` | |
+| `GraphSurfaceMode` | `enum { Table, Diagram }` | named to avoid mac's local `GraphTabMode` (`GraphTableView.swift:9`), which 0a-18 deletes in its favour |
+| `GraphWhereAmISelection` | `enum { Node { row: GraphRowCopy, component: u32 }, NoSelection }` | `NoSelection`, not `None` — the generated Swift `.none` collision the canvas's `Unstated` avoids (`lib.rs:7591`) |
+| `GraphWhereAmIFilter` | `enum { Normal { orphans_only: bool, attachments_shown: bool, ghosts_shown: bool }, UnresolvedOnly }` | design B(i): the unresolved preset is one state, not four flags; its backend flags are implied |
+| GRAPH_NEIGHBOR_LABEL_CAP | `pub const usize = 10` (core, `a11y.rs`) | the neighbour content speaks the first ten labels and counts the rest — P2-3's rule, moved from the host (design B(i)) |
+| `GraphStatusNote` | `enum { Opened, AlreadyOpen, ConnectionsPanel, NoteCreated { name: String }, NoConnections, LoadingConnections }` | |
+| `GraphBlockedReason` | `enum { LoadFailed { message: String }, ConnectionsLoadFailed { message: String }, NoteCreateFailed { message: String } }` | |
 
 The seventeen variants of `GraphA11yEvent`. `Pri` `Medium` unless
 **High**; `Class`: `nav` / `filter` / `force` / `settle` / `—`
@@ -177,21 +192,37 @@ except where "grouped" is written (0a-16).
 |---|---|---|---|---|
 | `GraphRow` | `verbosity: GraphVerbosity, row: GraphRowCopy` | Terse: `⟨label⟩`. Standard/Verbose: kind Note or Attachment → `⟨label⟩, ⟨in_links⟩ links in, ⟨out_links⟩ links out`; kind Ghost → `⟨label⟩, unresolved, ⟨references⟩ references`; then `, embed` when `embed` (any kind) | | nav |
 | `GraphReRooted` | `label: String` | `Connections: ⟨label⟩` | | — |
-| GraphSnapshotSummary | `counts: GraphSnapshotCounts` | `⟨notes⟩ notes, ⟨links⟩ links.` + (when orphans > 0 or unresolved > 0) ` ⟨orphans⟩ orphans, ⟨unresolved⟩ unresolved targets.` + (when filtered) ` Filtered.` — all four counts grouped | | — |
-| GraphNeighborhoodSummary | `counts: GraphNeighborhoodCounts` | `⟨center_label⟩: ⟨in_links⟩ links in, ⟨out_links⟩ links out. Showing ⟨note_count⟩ notes within ⟨depth⟩ links.` — the three counts grouped, depth bare | | — |
+| `GraphSnapshotSummary` | `counts: GraphSnapshotCounts` | `⟨notes⟩ notes, ⟨links⟩ links.` + (when orphans > 0 or unresolved > 0) ` ⟨orphans⟩ orphans, ⟨unresolved⟩ unresolved targets.` + (when filtered) ` Filtered.` — all four counts grouped | | — |
+| `GraphNeighborhoodSummary` | `counts: GraphNeighborhoodCounts` | `⟨center_label⟩: ⟨in_links⟩ links in, ⟨out_links⟩ links out. Showing ⟨note_count⟩ notes within ⟨depth⟩ links.` — the three counts grouped, depth bare | | — |
 | `GraphPreset` | `outcome: GraphPresetOutcome` | Orphans → `⟨count⟩ orphaned notes.`; Unresolved → `⟨count⟩ unresolved targets.`; MostLinked → `Most linked: ⟨label⟩, ⟨in_links⟩ links in.`; NoNotesToRank → `No notes to rank.` | | — |
-| GraphFilterCount | `shown: u32, total: u32` | `⟨shown⟩ of ⟨total⟩ shown` | | filter |
-| GraphForceValue | `control: GraphForceControl, percent: u32` | `Center force ⟨percent⟩ percent` ‖ `Repel force ⟨percent⟩ percent` ‖ `Link force ⟨percent⟩ percent` ‖ `Link distance ⟨percent⟩ percent` | | force |
-| GraphLayoutSettled | — | `Graph layout settled.` | | settle |
+| `GraphFilterCount` | `shown: u32, total: u32` | `⟨shown⟩ of ⟨total⟩ shown` | | filter |
+| `GraphForceValue` | `control: GraphForceControl, percent: u32` | `Center force ⟨percent⟩ percent` ‖ `Repel force ⟨percent⟩ percent` ‖ `Link force ⟨percent⟩ percent` ‖ `Link distance ⟨percent⟩ percent` | | force |
+| `GraphLayoutSettled` | — | `Graph layout settled.` | | settle |
 | `GraphPinned` | `pinned: bool` | `Pinned.` ‖ `Unpinned.` | | — |
 | `GraphZoom` | `fit: bool, percent: u32` | `Zoom ⟨percent⟩ percent.` ‖ `Fit graph. Zoom ⟨percent⟩ percent.` | | — |
 | `GraphMode` | `mode: GraphSurfaceMode` | `Table mode.` ‖ `Diagram mode.` | | — |
 | `GraphWhereAmI` | `selection: GraphWhereAmISelection, zoom_percent: u32, filter: GraphWhereAmIFilter, name_filter: Option<String>` | parts joined by `, ` then `.`: Node → the row copy at Standard grade, `component ⟨component⟩`; NoSelection → `No node selected`; then `zoom ⟨zoom_percent⟩ percent`; then Normal → `filters: ` + the active of `orphans only`, `attachments shown`, and `unresolved shown` ‖ `unresolved hidden` joined by `, `, UnresolvedOnly → `filters: unresolved shown`; then (when `name_filter` is Some and non-empty after trimming) `name filter “⟨trimmed needle⟩”`; then UnresolvedOnly → `unresolved only` | | — |
-| GraphTierEntered | — | `Large graph: summary accessibility mode. Table mode has every node.` | | — |
-| GraphTierSummary | `count: u32` | `⟨count⟩ nodes — too many for per-node navigation. Switch to Table mode for the full, navigable list.` — LABEL; count bare | | — |
-| GraphNeighborsContent | `labels: Vec<String>, more: u32` | `⟨labels joined by ", "⟩` + (when more > 0) ` and ⟨more⟩ more`; empty labels → the empty string — LABEL (content title `Connects to`) | | — |
+| `GraphTierEntered` | — | `Large graph: summary accessibility mode. Table mode has every node.` | | — |
+| `GraphTierSummary` | `count: u32` | `⟨count⟩ nodes — too many for per-node navigation. Switch to Table mode for the full, navigable list.` — LABEL; count bare | | — |
+| `GraphNeighborsContent` | `labels: Vec<String>` — the FULL ordered list of visible unique neighbours | `⟨the first GRAPH_NEIGHBOR_LABEL_CAP labels joined by ", "⟩` + (when more than the cap) ` and ⟨len − cap⟩ more`; empty labels → the empty string — LABEL (content title `Connects to`) | | — |
 | `GraphStatus` | `note: GraphStatusNote` | Opened `Graph.` · AlreadyOpen `The graph is already open.` · ConnectionsPanel `Connections panel.` · NoteCreated `Created note ⟨name⟩.` · NoConnections `This note has no connections.` · LoadingConnections `Loading connections.` | | — |
 | `GraphBlocked` | `reason: GraphBlockedReason` | LoadFailed `Couldn't load the graph: ⟨message⟩` · ConnectionsLoadFailed `Couldn't load connections: ⟨message⟩` · NoteCreateFailed `Couldn't create note: ⟨message⟩` | **High** | — |
+
+Payload invariants (design B(i), audited over the whole schema): every
+combination a payload admits that the shipped host cannot reach is
+named here, and `graph_witnesses_obey_the_payload_invariants` refuses a
+witness that violates one.
+
+| Payload | Invariant the host guarantees |
+|---|---|
+| `GraphRowCopy` | a Ghost's copy speaks `references` (its inbound reference count) and ignores `in_links`/`out_links`, which carry the node's degrees unchanged; `embed` is independent of `kind` (a ghost reached only by `![[…]]` is a Ghost with `embed`) |
+| `GraphNeighborhoodCounts.depth` | 1..=3 — the session clamps before it exports |
+| `GraphFilterCount` | `shown ≤ total` — the needle narrows the fetched set |
+| `GraphForceValue.percent` | 0..=100 — a slider's value ×100, rounded |
+| `GraphZoom.percent` | ≥ 1 — the viewport's scale ×100, rounded |
+| `GraphWhereAmI` | a Ghost only while ghosts are shown (Normal with `ghosts_shown`, or UnresolvedOnly), an Attachment only while attachments are shown, a Note only under Normal; under `orphans_only` the selection is a Note with `in_links == 0 && out_links == 0`; under a non-empty needle the selected label contains the trimmed needle, case-insensitively |
+| `GraphTierSummary.count` | above the tier-B threshold (1,500 as shipped, `GraphDiagramView.swift`; §2 row H moves the constant) |
+| `GraphNeighborsContent.labels` | unique labels in the host's visible traversal order; the cap is core's |
 
 **0a-3 — The inventory is the design of Subsystem A, and every tripwire
 reads it by key.** (i) Core declares `GRAPH_NESTED_ENUMS: &[NestedEnum]`
@@ -210,9 +241,9 @@ before, the graph's rows by the keys `core:`, `mirror:`, `path:` —
 opens the named source per row, compares the core set to the MIRROR-
 named FFI set both ways, asserts each inventory's row count (18 and 9),
 and pins the graph's nine arm counts exactly (`GraphVerbosity` 3,
-GraphPresetOutcome 4, GraphForceControl 4, GraphSurfaceMode 2,
-GraphWhereAmISelection 2, GraphWhereAmIFilter 2, GraphStatusNote
-6, GraphBlockedReason 3, `NodeKind` 3); both `GraphNodeKind`
+`GraphPresetOutcome` 4, `GraphForceControl` 4, `GraphSurfaceMode` 2,
+`GraphWhereAmISelection` 2, `GraphWhereAmIFilter` 2, `GraphStatusNote`
+6, `GraphBlockedReason` 3, `NodeKind` 3); both `GraphNodeKind`
 conversion directions exist (a compile fact). (iii)
 `the_windows_corpus_mirror_lists_every_event_in_order` derives the inner
 constructor marker from the wrapper's name (`new ⟨Outer⟩A11yEvent.`) so
@@ -262,16 +293,21 @@ promises ("node copy + component + zoom + active filters"). Task 0a-2
 moves mac onto this event, so mac's behaviour changes — recorded as
 0a-D1, authorised by P2-3's own text and the t0 §1.4 rule the canvas
 keeps. The needle: the substituted value is the TRIMMED needle
-(Unicode White_Space at both ends — Rust's `str::trim`; mac trims with
-Foundation's `.whitespaces`, identical for a single-line field), and a
-needle empty after trimming is omitted. The filter clause is the closed
-GraphWhereAmIFilter (design B(i)); the selection-kind invariant is
-the host's and the matrix obeys it. The five matrix witnesses cover:
-Normal with all three toggles on plus a needle; UnresolvedOnly with a
-Ghost selected; NoSelection with a whitespace-only needle; Normal with
-attachments shown and ghosts hidden with an Attachment selected; and a
-padded needle trimmed. Pinned by `graph_where_am_i_renders_every_state_exactly`
-and `graph_where_am_i_witnesses_are_host_reachable`.
+(Unicode White_Space at both ends — Rust's `str::trim`; mac hands the
+raw field value over and core trims), and a needle empty after trimming
+is omitted; the matrix witnesses the Unicode rule with U+00A0 (no-break
+space) and U+2003 (em space), not ASCII spaces alone. The filter clause
+is the closed `GraphWhereAmIFilter` (design B(i)); the payload
+invariants of 0a-2b are the host's and the matrix obeys them. The seven
+matrix witnesses cover: an orphan Note ("Alone", 0/0) under Normal with
+all three toggles on and a needle it contains; UnresolvedOnly with a
+Ghost selected at each reference cardinality (2, 0, 1); NoSelection with
+a needle of U+00A0 U+2003 (trimmed empty → omitted); Normal with
+attachments shown and ghosts hidden with an Attachment (1/2) selected;
+and "Alpha" (3/1) with the needle U+2003`alpha`U+00A0 trimmed to
+`alpha`. Pinned by `graph_where_am_i_renders_every_state_exactly`,
+`graph_where_am_i_witnesses_are_host_reachable` and
+`graph_witnesses_obey_the_payload_invariants`.
 
 **0a-7 — The two summaries are typed events over exported count
 records, rendered by the ONE formatter core owns; the counts' semantics
@@ -311,17 +347,21 @@ ways by `graph_priorities_pin_the_error_tier`.
 **0a-9 — Coalescing stays host-side; the class keys do not.** The
 classes are pinned in `a11y.rs`'s "Coalescing class keys" list, family-
 qualified: **`navigation`** = `GraphA11yEvent::GraphRow`; **`filter`** =
-GraphFilterCount; **`forceValue`** = GraphForceValue; **`settle`** =
-GraphLayoutSettled; everything else immediate; a `High` graph event —
+`GraphFilterCount`; **`forceValue`** = `GraphForceValue`; **`settle`** =
+`GraphLayoutSettled`; everything else immediate; a `High` graph event —
 announced or relayed — flushes **and drops** every pending class.
 200 ms latest-wins, each class independent (`GraphAnnouncer.swift:74–84,
-185–218`). Host rules that are not classes: the filter count's
+185–218`); the production window is the test-visible constant
+`GraphAnnouncer.defaultCoalesceWindow`, pinned at 0.2 s by
+`testProductionCoalesceWindowIsTwoHundredMilliseconds` (the behavioural
+suite runs on a 60 s window and flushes explicitly, so timing never
+enters a test's outcome). Host rules that are not classes: the filter count's
 **fire-time gate** (`:123–133, 204–207`) and `cancelPending` on view
 departure or vault change (`:224–226`). Task 0a-2's mac tests cover:
 latest-wins within each of the four classes, independence across all
-six pairs, the 200 ms window, the gate, the cancel, and a High event
-(announced and relayed) flushing all four; PR A's Windows announcer
-repeats the suite.
+six pairs, the window constant, the gate, the cancel, and a High event
+— announced AND relayed, each with all four classes queued — flushing
+all four; PR A's Windows announcer repeats the suite.
 
 **0a-10 — No chord-bearing template.** No graph template carries a host
 chord; the tier copy names "Table mode" by its label.
@@ -339,22 +379,22 @@ literals inside one control (a picker's options, a grid's column
 titles). Every string a user can hear or read is in a row with its
 role: `posted` / `static label` / `custom content` / `canonical relay` /
 `composed label` (a label the host assembles from data — recorded so
-both hosts compose it identically, §W-C) / `diagnostic payload` (error
-detail that reaches speech only inside a `GraphBlocked` message). A
-site the manifest lacks is a round finding.
+both hosts compose it identically, §W-C) / `excluded` (a literal no
+user hears or reads, with the evidence). A site the manifest lacks is a
+round finding.
 
 | # | Site | Current API / string | Role | Event or class | Pin |
 |---|---|---|---|---|---|
 | S1 | `AppState.swift:3236` | `.status("The graph is already open.")` | posted | `GraphStatus{AlreadyOpen}` | golden |
-| S2 | `AppState+Connections.swift:114` | `.summary(hood.audioSummary)` | posted | GraphNeighborhoodSummary | 0a-7 tests |
+| S2 | `AppState+Connections.swift:114` | `.summary(hood.audioSummary)` | posted | `GraphNeighborhoodSummary` | 0a-7 tests |
 | S3 | `AppState+Connections.swift:123` | `.error("Couldn't load connections: …")` | posted | `GraphBlocked{ConnectionsLoadFailed}` | golden |
 | S4 | `AppState+Connections.swift:168` | `.status("Connections panel.")` | posted | `GraphStatus{ConnectionsPanel}` | golden |
 | S5 | `AppState+Connections.swift:212` | `.reRooted(label:)` | posted | `GraphReRooted` | golden |
 | S6 | `AppState+Connections.swift:236` | `.reRooted(label:)` | posted | `GraphReRooted` | golden |
 | S7 | `AppState+Connections.swift:287` | `.status("Created note ….")` | posted | `GraphStatus{NoteCreated}` | golden |
 | S8 | `AppState+Connections.swift:294` | `.error("Couldn't create note: …")` | posted | `GraphBlocked{NoteCreateFailed}` | golden |
-| S9 | `AppState+GraphConfig.swift:131` (`:139–150`) | `announceForceValue(phrase)` | posted (force) | GraphForceValue | golden ×4 |
-| S10 | `AppState+GraphDiagram.swift:177` | `announceSettle("Graph layout settled.")` | posted (settle) | GraphLayoutSettled | golden |
+| S9 | `AppState+GraphConfig.swift:131` (`:139–150`) | `announceForceValue(phrase)` | posted (force) | `GraphForceValue` | golden ×4 |
+| S10 | `AppState+GraphDiagram.swift:177` | `announceSettle("Graph layout settled.")` | posted (settle) | `GraphLayoutSettled` | golden |
 | S11 | `AppState+GraphDiagram.swift:197` | `.rowFocused(ref)` | posted (navigation) | `GraphRow` | matrix |
 | S12 | `AppState+GraphDiagram.swift:231` | `.status("Unpinned.")` | posted | `GraphPinned{false}` | golden |
 | S13 | `AppState+GraphDiagram.swift:235` | `.status("Pinned.")` | posted | `GraphPinned{true}` | golden |
@@ -363,18 +403,18 @@ site the manifest lacks is a round finding.
 | S16 | `AppState+GraphDiagram.swift:355` | `.status("Fit graph. Zoom … percent.")` | posted | `GraphZoom{fit:true}` | golden |
 | S17 | `AppState+GraphTable.swift:57` | `.status("Graph.")` | posted | `GraphStatus{Opened}` | golden |
 | S18 | `AppState+GraphTable.swift:197` (`:336–354`) | `.status(graphPresetAnnouncement(…))` | posted | `GraphPreset` | golden ×4 |
-| S19 | `AppState+GraphTable.swift:202` | `.summary(snap.audioSummary)` | posted | GraphSnapshotSummary | 0a-7 tests |
-| S20 | `AppState+GraphTable.swift:204` (`:225–235`) | `announceFilterCount(…)` | posted (filter) | GraphFilterCount | golden |
+| S19 | `AppState+GraphTable.swift:202` | `.summary(snap.audioSummary)` | posted | `GraphSnapshotSummary` | 0a-7 tests |
+| S20 | `AppState+GraphTable.swift:204` (`:225–235`) | `announceFilterCount(…)` | posted (filter) | `GraphFilterCount` | golden |
 | S21 | `AppState+GraphTable.swift:215` | `.error("Couldn't load the graph: …")` | posted | `GraphBlocked{LoadFailed}` | golden |
-| S22 | `GraphDiagramView.swift:496–498` | `.status("Large graph: …")` | posted | GraphTierEntered | golden |
+| S22 | `GraphDiagramView.swift:496–498` | `.status("Large graph: …")` | posted | `GraphTierEntered` | golden |
 | S23 | `GraphTableView.swift:100` | `.status("Diagram mode.")` | posted | `GraphMode{Diagram}` | golden |
 | S24 | `GraphTableView.swift:103` | `.status("Table mode.")` | posted | `GraphMode{Table}` | golden |
-| S25 | `GraphTableView.swift:340–342` | `announceFilterCount("… shown", gate:)` | posted (filter) | GraphFilterCount | golden |
+| S25 | `GraphTableView.swift:340–342` | `announceFilterCount("… shown", gate:)` | posted (filter) | `GraphFilterCount` | golden |
 | S26 | `GraphTableView.swift:361` | `.status(a11yRender(event).text)` | canonical relay (priority dropped today) | `relay(A11yEvent)` (0a-13) | mac test |
 | L1 | `ConnectionsPanel.swift:239` | `.accessibilityLabel(rowPhrase(row.rowRef))` | static label (AX name) | `GraphRow` rendered | matrix |
 | L2 | `GraphDiagramView.swift:766, 841–843` | `setAccessibilityLabel(axLabel(…))` | static label (AX name) | `GraphRow` rendered | matrix |
-| C1 | `GraphDiagramView.swift:851–869` | `AXCustomContent(label: "Connects to", value:)` | custom content | GraphNeighborsContent | golden ×5 |
-| C2 | `GraphDiagramView.swift:627–629` | the tier summary element's label | static label | GraphTierSummary | golden ×2 |
+| C1 | `GraphDiagramView.swift:851–869` | `AXCustomContent(label: "Connects to", value:)` | custom content | `GraphNeighborsContent` | golden ×5 |
+| C2 | `GraphDiagramView.swift:627–629` | the tier summary element's label | static label | `GraphTierSummary` | golden ×2 |
 | T1 | `ConnectionsPanel.swift:23` | `Select a note to see its connections.` | static label | label inventory (PR B) | §W-C |
 | T2 | `ConnectionsPanel.swift:29` | navigation title `Connections` | static label | label inventory (PR B) | §W-C |
 | T3 | `ConnectionsPanel.swift:78` | header `Connections` | static label | label inventory (PR B) | §W-C |
@@ -396,7 +436,7 @@ site the manifest lacks is a round finding.
 | T19 | `GraphTableView.swift:129` | `Graph diagram error: ⟨e⟩` | static label | label inventory (PR D) | §W-C |
 | T20 | `GraphTableView.swift:133, 137` | `Laying out graph…` visible / `Laying out graph.` AX | static label | label inventory (PR D) | §W-C |
 | T21 | `GraphTableView.swift:145` | picker `View` | static label | label inventory (PR A) | §W-C |
-| T22 | `GraphTableView.swift:146–147` | the mode titles `Table` / `Diagram` (from the mode enum's `title`; 0a-18 moves them to the GraphSurfaceMode extension) | static label | label inventory (PR A) | §W-C |
+| T22 | `GraphTableView.swift:146–147` | the mode titles `Table` / `Diagram` (from the mode enum's `title`; 0a-18 moves them to the `GraphSurfaceMode` extension) | static label | label inventory (PR A) | §W-C |
 | T23 | `GraphTableView.swift:152–153` | AX `Graph view mode`; hint `Switch between the accessible table and the visual diagram.` | static label | label inventory (PR A) | §W-C |
 | T24 | `GraphTableView.swift:160` | field placeholder `Filter notes` | static label | label inventory (PR C) | §W-C |
 | T25 | `GraphTableView.swift:164` | AX `Filter graph by note name` | static label | label inventory (PR C) | §W-C |
@@ -440,11 +480,12 @@ site the manifest lacks is a round finding.
 | T63 | `GraphDiagramView.swift:1328` | custom action `Switch to Table` (the view) | static label | label inventory (PR D) | §W-C |
 | T64 | `GraphDiagramView.swift:767` | AX value `pinned` ‖ empty | static value | label inventory (PR D) | §W-C |
 | T65 | `GraphDiagramView.swift:791–795` | node help `Unresolved. Press to create note.` ‖ `Graph node. Press to open.` (or the disabled reason) | static label | label inventory (PR D) | §W-C |
-| T66 | `GraphDiagramView.swift:803` | custom actions named by `GraphRowAction.title` (`GraphViewState.swift:27–31`: `Open`, `Open in New Tab`, `Show connections`, `Reveal in File Tree`, `Create note`) | static label | 0b's `graph_row_actions` | §W-C |
+| T66 | `GraphViewState.swift:27–31` | `GraphRowAction.title`: `Open`, `Open in New Tab`, `Show connections`, `Reveal in File Tree`, `Create note` — consumed as custom-action names at `GraphDiagramView.swift:803` and as hint/help at T16 | static label | 0b's `graph_row_actions` | §W-C |
 | T67 | `GraphDiagramView.swift:811` | custom action `Unpin` ‖ `Pin` | static label | label inventory (PR D) | §W-C |
 | T68 | `GraphDiagramView.swift:1115` | hover tooltip `⟨label⟩ — ⟨in⟩ in / ⟨out⟩ out` | composed label | label inventory (PR D) | §W-C |
-| T69 | `GraphAnnouncer.swift` (rewritten) | `GraphVerbosity.title` `Terse` / `Standard` / `Verbose`; `GraphSurfaceMode.title` `Table` / `Diagram` | static label | label inventory (PR C; PR A) | §W-C |
-| X1 | `GraphConfigStore.swift:42–110, 251` | the store's thrown and logged error texts | diagnostic payload | reach speech only as a `GraphBlocked` message (`humanReadable`) | — |
+| T69 | `GraphAnnouncer.swift` (rewritten), the `GraphVerbosity` extension | `title`: `Terse` / `Standard` / `Verbose` | static label | label inventory (PR C) | §W-C |
+| T70 | `GraphAnnouncer.swift` (rewritten), the `GraphSurfaceMode` extension | `title`: `Table` / `Diagram` | static label | label inventory (PR A) | §W-C |
+| X1 | `GraphConfigStore.swift:42–110, 251` | the store's thrown and logged error texts | **excluded — not user-facing**: a read failure is discarded and the defaults apply (`AppState+GraphConfig.swift:48–52`); a write failure reaches `NSLog` only (`GraphConfigStore.swift:251`); neither is spoken or shown | — | — |
 
 **0a-13 — The one already-canonical site becomes a relay that keeps
 the priority, on one seam with the typed announcements — the canvas
@@ -471,11 +512,11 @@ not, flushes and drops every pending class before posting.
 **0a-14 — Label-grade events are marked as such; "never spoken" is the
 wrong word.** Two events are LABEL class — **not actively posted**;
 assistive technology reads them as an element's name or content:
-GraphTierSummary (C2) and GraphNeighborsContent (C1). Two are
+`GraphTierSummary` (C2) and `GraphNeighborsContent` (C1). Two are
 dual-use by recorded divergence (0a-D3): `GraphStatus{NoConnections}`
 and `GraphStatus{LoadingConnections}` are static labels on mac (T8, T9)
 and posted on Windows when the leaf takes focus in that state. Every
-other label in the manifest (T1–T7, T10–T69) is §W-C label class,
+other label in the manifest (T1–T7, T10–T70) is §W-C label class,
 carried by the inventory of the PR that lands the surface, and is NOT
 in this vocabulary.
 
@@ -487,32 +528,33 @@ matrix carries a witness for each reachable cell; the copy rule
 preserves the shipped fixed plurals, so a slot whose singular reads as
 a defect is allow-listed by (variant, slot). Uniqueness is asserted per
 slot, not per fragment: the same fragment `1 links in` renders from
-four slots — `GraphRow`, GraphNeighborhoodSummary, `GraphPreset` and
-`GraphWhereAmI`'s row — each its own pair. "and 1 more" is grammatical
-and is not a defect. Bare slots (no noun) are witnessed, not boundary-
-matrixed.
+four slots — `GraphRow`, `GraphNeighborhoodSummary`, `GraphPreset` and
+`GraphWhereAmI`'s row — each its own pair, each with its own zero/one/
+many witnesses. "and 1 more" is grammatical and is not a defect. Bare
+slots (no noun) are witnessed, not boundary-matrixed.
 
 | Variant · slot | Reachable | Shipped form at one | Defect? |
 |---|---|---|---|
 | `GraphRow` · in_links / out_links (Note, Attachment) | 0, 1, many | `1 links in` / `1 links out` | yes, both |
 | `GraphRow` · references (Ghost) | 0, 1, many | `1 references` | yes |
-| GraphSnapshotSummary · notes | 0, 1, many | `1 notes` | yes |
-| GraphSnapshotSummary · links | 0, 1, many | `1 links` | yes |
-| GraphSnapshotSummary · orphans / unresolved | 0 (spoken only beside a non-zero partner; the pair is omitted when both are 0), 1, many | `1 orphans` / `1 unresolved targets` | yes, both |
-| GraphNeighborhoodSummary · in_links / out_links | 0, 1, many | `1 links in` / `1 links out` | yes, both |
-| GraphNeighborhoodSummary · note_count | 0, 1, many | `1 notes` | yes |
-| GraphNeighborhoodSummary · depth | 1, 2, 3 (clamped) | `within 1 links` | yes |
+| `GraphSnapshotSummary` · notes | 0, 1, many | `1 notes` | yes |
+| `GraphSnapshotSummary` · links | 0, 1, many | `1 links` | yes |
+| `GraphSnapshotSummary` · orphans / unresolved | 0 (spoken only beside a non-zero partner; the pair is omitted when both are 0), 1, many | `1 orphans` / `1 unresolved targets` | yes, both |
+| `GraphNeighborhoodSummary` · in_links / out_links | 0, 1, many | `1 links in` / `1 links out` | yes, both |
+| `GraphNeighborhoodSummary` · note_count | 0, 1, many | `1 notes` | yes |
+| `GraphNeighborhoodSummary` · depth | 1, 2, 3 (clamped) | `within 1 links` | yes |
 | `GraphPreset` · Orphans.count / Unresolved.count | 0, 1, many | `1 orphaned notes` / `1 unresolved targets` | yes, both |
 | `GraphPreset` · MostLinked.in_links | 0, 1, many | `1 links in` | yes |
-| GraphFilterCount · shown / total | shown 0, 1, many; total 0 (empty graph), 1, many | — (no noun) | no |
-| GraphForceValue · percent | 0…100 (bare) | — | no |
+| `GraphFilterCount` · shown / total | shown 0, 1, many; total 0 (empty graph), 1, many | — (no noun) | no |
+| `GraphForceValue` · percent | 0…100 (bare) | — | no |
 | `GraphZoom` · percent | positive (bare) | — | no |
-| `GraphWhereAmI` · row.in_links / row.out_links / row.references | as `GraphRow`'s (bare-matrixed: witnessed through the selection) | the row copy's | inherited from `GraphRow` |
+| `GraphWhereAmI` · row.in_links / row.out_links (Note, Attachment) | 0, 1, many | `1 links in` / `1 links out` | yes, both |
+| `GraphWhereAmI` · row.references (Ghost) | 0, 1, many | `1 references` | yes |
 | `GraphWhereAmI` · component | 0, many (bare) | — | no |
 | `GraphWhereAmI` · zoom_percent | positive (bare) | — | no |
-| GraphTierSummary · count | many only (the tier begins above core's threshold) | `⟨n⟩ nodes` | 0 and 1 unreachable, declared |
-| GraphNeighborsContent · labels | 0 (empty string), 1, many | — | no |
-| GraphNeighborsContent · more | 0 (clause omitted), 1, many | `and 1 more` | no — grammatical |
+| `GraphTierSummary` · count | many only (the tier begins above core's threshold) | `⟨n⟩ nodes` | 0 and 1 unreachable, declared |
+| `GraphNeighborsContent` · labels | 0 (empty string), 1, many | — | no |
+| `GraphNeighborsContent` · more (derived: `labels.len() − 10` when above the cap) | 0 (clause omitted), 1, many | `and 1 more` | no — grammatical |
 
 `graph_count_slots_render_at_every_reachable_cardinality` walks the
 table over the matrix; `graph_plural_defects_are_exactly_these_slots`
@@ -537,39 +579,39 @@ other count — degrees in the row copy, the tier count
 presets, filter counts, percents, the depth — renders bare, and the
 matrix's witnesses at 1024 and 2000 pin the bare behaviour.
 
-**0a-17 — The witness matrix is ordered and pinned.** Sixty-nine
+**0a-17 — The witness matrix is ordered and pinned.** Seventy-one
 entries, appended in this order after `CanvasStatus { Loading }`; the
-artifact total becomes 517.
+artifact total becomes 519.
 
 | Variant | Witnesses (in order) |
 |---|---|
 | `GraphRow` (10) | Standard Note "Alpha" 3/1 · Standard Ghost "Missing Note" references 2 · Standard Note "Pic" 1/0 embed · Terse Note "Alpha" · Verbose Note "Hub" 1024/0 (bare) · Standard Attachment "diagram.png" 0/2 · Standard Ghost "Draft" references 0 · Standard Ghost "Todo" references 1 · Standard Note "Alone" 0/0 · Standard Ghost "Missing" references 1 embed |
 | `GraphReRooted` (1) | "Alpha" |
-| GraphSnapshotSummary (7) | 247 / 1,032 / 12 / 3 · 1 / 1 / 0 / 0 (second sentence omitted) · 0 / 0 / 0 / 0 · 40 / 60 / 1 / 1, filtered · 5 / 9 / 0 / 2 · 3 / 4 / 2 / 0 (unresolved zero rendered) · 1,200 / 3,400 / 1,000 / 1,001 (all four grouped) |
-| GraphNeighborhoodSummary (5) | "Alpha" 3/1, 7 notes, depth 1 · "Hub" 1,032/4, 1,206 notes, depth 3 · "diagram.png" 0/0, 0 notes, depth 2 · "Solo" 1/1, 1 notes, depth 1 · "Hub2" 4/1,032, 12 notes, depth 2 (out grouped) |
+| `GraphSnapshotSummary` (7) | 247 / 1,032 / 12 / 3 · 1 / 1 / 0 / 0 (second sentence omitted) · 0 / 0 / 0 / 0 · 40 / 60 / 1 / 1, filtered · 5 / 9 / 0 / 2 · 3 / 4 / 2 / 0 (unresolved zero rendered) · 1,200 / 3,400 / 1,000 / 1,001 (all four grouped) |
+| `GraphNeighborhoodSummary` (5) | "Alpha" 3/1, 7 notes, depth 1 · "Hub" 1,032/4, 1,206 notes, depth 3 · "diagram.png" 0/0, 0 notes, depth 2 · "Solo" 1/1, 1 notes, depth 1 · "Hub2" 4/1,032, 12 notes, depth 2 (out grouped) |
 | `GraphPreset` (10) | Orphans 12 · Orphans 1 · Orphans 0 · Unresolved 1 · Unresolved 12 · Unresolved 0 · MostLinked "Hub" 1032 · MostLinked "Only" 0 · MostLinked "Solo" 1 · NoNotesToRank |
-| GraphFilterCount (3) | 3 of 247 · 1 of 1 · 0 of 0 |
-| GraphForceValue (4) | Center 50 · Repel 70 · Link 100 · LinkDistance 0 |
-| GraphLayoutSettled (1) | — |
+| `GraphFilterCount` (3) | 3 of 247 · 1 of 1 · 0 of 0 |
+| `GraphForceValue` (4) | Center 50 · Repel 70 · Link 100 · LinkDistance 0 |
+| `GraphLayoutSettled` (1) | — |
 | `GraphPinned` (2) | true · false |
 | `GraphZoom` (2) | 125 plain · 63 fit |
 | `GraphMode` (2) | Table · Diagram |
-| `GraphWhereAmI` (5) | Node "Alpha" 3/1 component 2, zoom 100, Normal{orphans only, attachments shown, ghosts shown}, needle "alp" · Node Ghost "Missing Note" component 0, zoom 250, UnresolvedOnly, needle None · NoSelection, zoom 100, Normal{false, false, ghosts shown}, needle Some("   ") (trimmed empty → omitted) · Node Attachment "diagram.png" 0/2 component 7, zoom 50, Normal{false, attachments shown, ghosts hidden} · Node "Alpha" 3/1 component 2, zoom 100, Normal{false, false, ghosts shown}, needle Some(" alpha ") (trimmed to `alpha`) |
-| GraphTierEntered (1) | — |
-| GraphTierSummary (2) | 2000 · 1501 |
-| GraphNeighborsContent (5) | ten labels, more 0 · three labels, more 1 · ten labels, more 42 · one label, more 0 · labels [] |
+| `GraphWhereAmI` (7) | Node "Alone" 0/0 component 2, zoom 100, Normal{orphans only, attachments shown, ghosts shown}, needle "alo" · Node Ghost "Missing Note" references 2, component 0, zoom 250, UnresolvedOnly, needle None · NoSelection, zoom 100, Normal{false, false, ghosts shown}, needle Some(U+00A0 U+2003) (trimmed empty → omitted) · Node Attachment "diagram.png" 1/2 component 7, zoom 50, Normal{false, attachments shown, ghosts hidden} · Node "Alpha" 3/1 component 2, zoom 100, Normal{false, false, ghosts shown}, needle Some(U+2003 `alpha` U+00A0) (trimmed to `alpha`) · Node Ghost "Draft" references 0, component 1, zoom 100, UnresolvedOnly · Node Ghost "Todo" references 1, component 3, zoom 80, UnresolvedOnly |
+| `GraphTierEntered` (1) | — |
+| `GraphTierSummary` (2) | 2000 · 1501 |
+| `GraphNeighborsContent` (5) | ten labels (the cap, no overflow) · eleven labels (`and 1 more`) · fifty-two labels (`and 42 more`) · one label · labels [] |
 | `GraphStatus` (6) | Opened · AlreadyOpen · ConnectionsPanel · NoteCreated "Draft.md" · NoConnections · LoadingConnections |
 | `GraphBlocked` (3) | LoadFailed "io error" · ConnectionsLoadFailed "io error" · NoteCreateFailed "exists" |
 
-10 + 1 + 7 + 5 + 10 + 3 + 4 + 1 + 2 + 2 + 2 + 5 + 1 + 2 + 5 + 6 + 3 = **69**;
-448 + 69 = **517**. This table is the authority, the arithmetic is
-shown, and `the_graph_family_witness_count_is_pinned` asserts 69.
+10 + 1 + 7 + 5 + 10 + 3 + 4 + 1 + 2 + 2 + 2 + 7 + 1 + 2 + 5 + 6 + 3 = **71**;
+448 + 71 = **519**. This table is the authority, the arithmetic is
+shown, and `the_graph_family_witness_count_is_pinned` asserts 71.
 
 **0a-19 — The matrix is executable and lossless.**
 `the_graph_witnesses_are_exactly_the_matrix_in_order` asserts the graph
 entries of `corpus()`, rendered as their full Debug identities (the
 same strings the artifact's `event` field carries — every field, no
-markers), equal an ordered literal list of the 69 identities above;
+markers), equal an ordered literal list of the 71 identities above;
 deleting, substituting, reordering or editing ANY field of a witness
 fails here on its own, not only in the golden and the artifact (the
 E13 precedent, `file_type_not_openable_has_exactly_its_two_ordered_witnesses`,
@@ -583,15 +625,19 @@ their events; S20 and S25 collapse to one event; `GraphEvent`,
 `GraphRowRef`, `rowPhrase`, `forcesChangePhrase` (replaced by
 `changedForce(old:new:) -> (control, percent)?`), `graphPresetAnnouncement`
 (replaced by `graphPresetEvent(_:snap:) -> GraphA11yEvent`),
-`graphFilterCountText` (replaced by `graphFilterCountEvent(_:) ->
-GraphA11yEvent`), `graphDiagramWhereAmIText` (replaced by
+`graphFilterCountText` (replaced by `graphFilterCount(_:) -> (shown:
+UInt32, total: UInt32)`, the payload of the ONE gated entry
+`announceFilterCount(shown:total:gate:)` — a tuple rather than an event
+because the event is constructed inside the gated entry and nowhere
+else), `graphDiagramWhereAmIText` (replaced by
 `graphDiagramWhereAmIEvent() -> GraphA11yEvent?`) and
 `graphDiagramFilterPhrase` (its clause is core's) are deleted, and
 their callers migrate with them: GraphCommandsTests
 `testPresetAnnouncementStringsAreVerbatim` (`:76`) and
 `testMostLinkedOnEmptyGraph` (`:110`) assert typed outcomes;
-GraphTabRoutingTests `testGraphFilterCountText` (`:161`) asserts the
-typed event and `testPresetAnnouncesOnceFromFreshSnapshotNoReplay`
+GraphTabRoutingTests `testGraphFilterCountText` (`:161`, renamed
+`testGraphFilterCountFollowsTheNeedle`) asserts the tuple and
+`testPresetAnnouncesOnceFromFreshSnapshotNoReplay`
 (`:241`) renders the event for its expected text;
 `GraphConfigTests.testForcesChangePhraseNamesTheOneChangedControl`
 (`:97`) asserts the (control, percent) pair; GraphDiagramTests `:317`
@@ -604,7 +650,7 @@ The two remaining `GraphRowRef` constructors (`ConnectionsPanel.swift:365–369`
 that construct the records gain `summaryCounts:` (`GraphCommandsTests.swift:70`
 keeps its snapshot helper; `ConnectionsPanelTests.swift:78, 111, 133,
 153, 166, 176`); the local `GraphTabMode` (`GraphTableView.swift:9–19`)
-is deleted for the generated GraphSurfaceMode at every type site —
+is deleted for the generated `GraphSurfaceMode` at every type site —
 `GraphConfig.mode` (`GraphConfig.swift:18`), `setGraphMode`
 (`AppState+GraphConfig.swift:178`), the container's `@State`
 (`GraphTableView.swift:27`) and its picker's `allCases` (`:146`) — with
@@ -617,7 +663,9 @@ keeps its default `.table` — the v1 file is unchanged on disk; the
 generated `GraphVerbosity` gets the extension of 0a-5. The mac tests:
 GraphAnnouncerTests's copy assertions (`:25–51`) move to the Rust
 golden; GraphAnnouncerTests keeps the 0a-9 suite and the funnel
-guard; `A11yResidueCensusTests.pinnedResidueSites` reads **28**;
+guard — which strips `//` comment lines before scanning, so the
+announcer's own doc comment may name the primitive it forbids;
+`A11yResidueCensusTests.pinnedResidueSites` reads **28**;
 `a11y.rs:14–38`'s module doc is rewritten so only the structural-
 mutation builder remains a named host-composed exception, pinned by
 `the_module_doc_names_no_engine_but_the_mutation_builder`. The Swift
@@ -642,7 +690,10 @@ edit is unrun on this box (0aR-1).
   lands the parameter and the Swift extension; the schema key and the
   menu follow; mac's missing switch is a filed gap.
 - **0aD-7 — Payload shape follows host reachability** (design B(i)):
-  booleans only where every combination is reachable; otherwise arms.
+  booleans only where every combination is reachable; otherwise arms;
+  every remaining invariant named in 0a-2b's table and asserted over
+  the matrix. A rule a host applied before handing data to core (the
+  neighbour cap) is core's.
 - **0aD-8 — The governing spec names events and never quotes copy**
   (design B(ii)); recorded as a §5 rule of `w6_2_graph_spec.md`.
 
@@ -678,7 +729,7 @@ edit is unrun on this box (0aR-1).
 | Finding | Severity | Disposition |
 |---|---|---|
 | IG0a-1 | BLOCKER | taken — typed summaries over exported count records, the formatter named, the spec amended (0a-7, 0aD-1) |
-| IG0a-2 | BLOCKER | taken — 0a-2b is a literal schema with every field and width; GraphPresetOutcome and GraphWhereAmISelection close the invalid combinations; `GraphNodeKind` reused |
+| IG0a-2 | BLOCKER | taken — 0a-2b is a literal schema with every field and width; `GraphPresetOutcome` and `GraphWhereAmISelection` close the invalid combinations; `GraphNodeKind` reused |
 | IG0a-3 | BLOCKER | taken — 0a-3 names every parser and what each can see after this PR |
 | IG0a-4 | BLOCKER | taken — 0a-16, 0aD-5, 0a-D4, 0a-D5 |
 | IG0a-5 | MAJOR | taken — 0a-15's slot table with reachability |
@@ -698,13 +749,13 @@ edit is unrun on this box (0aR-1).
 
 | Finding | Severity | Disposition |
 |---|---|---|
-| IG0a-17 | BLOCKER | taken — 0a-2b's two literal tables; the spec's §4 amended to this schema (five places, one GraphForceValue, no GraphFilterPhrase, typed summaries, the Where-am-I policy, PR E's consumption) |
+| IG0a-17 | BLOCKER | taken — 0a-2b's two literal tables; the spec's §4 amended to this schema (five places, one `GraphForceValue`, no GraphFilterPhrase, typed summaries, the Where-am-I policy, PR E's consumption) |
 | IG0a-18 | BLOCKER | taken — the matrix recounted with the arithmetic shown, an Attachment witness added, the two figures in 0a-2 corrected |
 | IG0a-20 | BLOCKER | taken — a path-aware inventory naming `graph.rs` for `NodeKind`; both conversion directions required; the Windows coalescing assertion explicitly deferred to PR A, the false claim removed |
 | IG0a-19 | MAJOR | taken — 0a-19's exact-ordered-witness test |
 | IG0a-21 | MAJOR | taken — 0a-15 classifies by (variant, slot) with reachability; "and 1 more" struck; the matrix carries the boundaries |
 | IG0a-22 | MAJOR | taken — 0a-7 names Link+Embed for `links`, full-graph Link-only degrees for the neighbourhood, and adds the independent field test |
-| IG0a-23 | MAJOR | taken — 0a-18 owns the seven fixtures, deletes the local `GraphTabMode` for GraphSurfaceMode, and specifies the persistence extension |
+| IG0a-23 | MAJOR | taken — 0a-18 owns the seven fixtures, deletes the local `GraphTabMode` for `GraphSurfaceMode`, and specifies the persistence extension |
 | IG0a-24 | MAJOR | taken — the manifest gains the diagram and inspector rows; T13's composed plural recorded for PR B |
 | IG0a-25 | MAJOR | taken — 0a-5 and 0aD-6: default-only in 0a on both hosts, the key in 0b, the Swift extension here; the false "already writes" claim removed; the mac gap recorded |
 | IG0a-26 | MAJOR | taken — 0a-13 is the canvas-compatible shape: rendered `(text, priority)` pending, AppKitAnnouncementPoster |
@@ -732,17 +783,42 @@ pass above is that stop; the dispositions follow from it.
 | IG0a-39 | MINOR | taken — the trimmed needle and its whitespace set stated; the padded-needle witness |
 | IG0a-40 | MINOR | taken — seven grouped counts, each with an above-999 witness |
 
+### Round 4 — ten findings, dispositions
+
+Round 4's verdict: Subsystem A's design closed its class; Subsystem B's
+did not — one Where-am-I witness and the neighbour content still
+admitted unreachable states, and the governing spec still quoted copy.
+Process deviation, recorded: the round read the working tree while the
+implementation of revisions 1–4 was applied locally and a byte-restoring
+mutation pass ran, so findings 43–50 cite the implementation; each was
+verified against the restored tree before it was counted (session
+lesson: a codex round reads the local tree, not the pushed head).
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| IG0a-41 | BLOCKER (carried) | taken — every quoted announcement template in the spec is gone (§0 items 3 and 9, §2 row D, §4 PR 0a item 5, PR B's re-root); the §5 rule distinguishes a template (never quoted) from a control's NAME (quoted where it names the control) |
+| IG0a-42 | BLOCKER (carried) | taken — GraphFilterPhrase deleted from PR C; every PR's Consumes list matches the schema (PR A + `GraphSnapshotSummary`; PR B + `GraphNeighborhoodSummary`, `GraphBlocked`) |
+| IG0a-43 | BLOCKER (carried) | taken — the orphan and needle invariants in 0a-2b's table; the first witness is an orphan Note ("Alone" 0/0) with a needle it contains; `graph_witnesses_obey_the_payload_invariants` |
+| IG0a-44 | BLOCKER (missed) | taken — `GraphNeighborsContent { labels }` carries the full list and core owns GRAPH_NEIGHBOR_LABEL_CAP; witnesses at 10, 11, 52, 1, 0; the whole schema audited (the invariants table) |
+| IG0a-45 | MAJOR (carried) | taken — the Where-am-I row slots require zero/one/many; two Ghost witnesses (references 0, 1) and the Attachment at 1/2; 71 / 519 |
+| IG0a-46 | MAJOR (carried) | taken — T66 cites the literal site, T69/T70 split, X1 excluded with the evidence that neither failure is user-facing |
+| IG0a-47 | MAJOR (carried) | taken — `GraphAnnouncer.defaultCoalesceWindow` pinned at 0.2 s; the relayed-High case queues all four classes |
+| IG0a-48 | MAJOR (carried) | taken — 0a-18 states the tuple feeds the one gated entry; the routing test renamed |
+| IG0a-49 | BLOCKER (created by rev 4) | taken — the funnel guard strips `//` comment lines before scanning |
+| IG0a-50 | MINOR (carried) | taken — U+00A0 and U+2003 witnesses, all-whitespace and padded |
+
 ### Tests that pin PR 0a
 
 `crates/slate-core/src/a11y.rs`: `corpus_renders_the_shipped_strings`
-(69 golden rows), `committed_corpus_artifact_matches_the_vocabulary`
-(517), `every_graph_variant_and_arm_is_represented_in_the_corpus`,
+(71 golden rows), `committed_corpus_artifact_matches_the_vocabulary`
+(519), `every_graph_variant_and_arm_is_represented_in_the_corpus`,
 `every_graph_parameter_enum_is_listed_for_coverage`,
 `the_graph_family_occupies_one_top_level_variant`,
 `a11y_event_top_level_count_is_pinned`,
 `graph_verbosity_matrix_pins_every_level`,
 `graph_where_am_i_renders_every_state_exactly`,
 `graph_where_am_i_witnesses_are_host_reachable`,
+`graph_witnesses_obey_the_payload_invariants`,
 `graph_priorities_pin_the_error_tier`,
 `graph_count_slots_render_at_every_reachable_cardinality`,
 `graph_plural_defects_are_exactly_these_slots`,
@@ -760,7 +836,7 @@ canvas — Windows graph from PR A). `apps/slate-windows/.../A11yCorpusCensus.cs
 `EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` over the
 graph entries. `apps/slate-mac/Tests/SlateMacTests/`:
 A11yCorpusCensusTests (the graph entries through the real FFI),
-GraphAnnouncerTests (the 0a-9 suite; the funnel guard),
+GraphAnnouncerTests (the 0a-9 suite; the window constant; the funnel guard),
 GraphDiagramTests (the readback event and the 0a-D1 correction),
 `A11yResidueCensusTests` (`pinnedResidueSites` 29 → **28**).
 
