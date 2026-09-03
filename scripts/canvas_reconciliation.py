@@ -46,6 +46,12 @@ from collections import Counter
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DOC = os.path.join(ROOT, "docs", "plans", "34_canvas_contracts.md")
 SHELL = os.path.join(ROOT, "apps", "slate-windows")
+# The pinned totals (review round 1, IH-59): a document that lost a head
+# or a Verified bullet does not regenerate a smaller table and bless it;
+# it fails here until the pin is bumped on purpose. CanvasReconciliationCensus
+# carries the same two constants.
+EXPECTED_KEYS = 315
+EXPECTED_VERIFIED = 60
 START = "<!-- reconciliation:generated:start -->"
 END = "<!-- reconciliation:generated:end -->"
 NL = "\n"
@@ -256,6 +262,9 @@ def evidence(section: str, ident: str, text: str, declared: set[str]) -> tuple[s
 def evidence_table(doc: str, declared: set[str]) -> tuple[str, int]:
     rows = ["| Section | Kind | Id | Discharged by | Pinned by |", "|---|---|---|---|---|"]
     ks = keys(doc)
+    assert len(ks) == EXPECTED_KEYS, f"{len(ks)} keys derived; the pin says {EXPECTED_KEYS} — bump the pin deliberately or restore the head"
+    verified = sum(1 for s, _, _, _ in ks if s == "Verified")
+    assert verified == EXPECTED_VERIFIED, f"{verified} Verified bullets; the pin says {EXPECTED_VERIFIED}"
     seen = Counter((s, k, i) for s, k, i, _ in ks)
     dup = [k for k, n in seen.items() if n > 1]
     assert not dup, f"duplicate keys: {dup}"

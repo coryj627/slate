@@ -764,11 +764,17 @@ _DECLARATION_HEAD = re.compile(
 _TYPE_HEAD = re.compile(r"\b(?:class|record|interface|enum|struct)[ \t]+(?P<name>\w+)\b")
 
 
+_CODE_ONLY = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:[^"\\\n]|\\.)*"', re.S)
+
+
 def declares(text: str, marker: str) -> bool:
     """Whether `marker` is DECLARED in the C# text: a type head, or an
     accessible member head (a method, constructor, property, event or
     field) whose name is the marker. A name that appears only as a
-    call, an argument or a comment does not declare."""
+    call, an argument, a comment or a string literal does not declare —
+    comments and strings are stripped before the heads are read (review
+    round 1, IH-58)."""
+    text = _CODE_ONLY.sub("", text)
     for m in _TYPE_HEAD.finditer(text):
         if m.group("name") == marker:
             return True

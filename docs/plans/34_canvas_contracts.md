@@ -3480,119 +3480,119 @@ where a platform never fires the key.
 
 | Key | mac site(s) | Windows site(s) | Windows fact(s) | Note |
 |---|---|---|---|---|
-| `CanvasMovedTo` | `AppState+CanvasNavigation.swift#previousPath`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#previousPath` (+1) | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#SelectNode` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#MovedTo`, `CanvasAnnouncerTests.cs#TheCardReferenceMatchesCoresOwnComposition` (+4) |  |
-| `CanvasGroupEntered` | `AppState+CanvasNavigation.swift#previousPath`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#previousPath` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#GroupBoundaryEvent` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#CrossingAGroupBoundaryBuildsTheEntryEventWithTheGroupsOwnCount`, `CanvasNavigatorTests.cs#GroupBoundariesUseCoresParentAndChildrenNeverADepthWalk` |  |
-| `CanvasGroupLeft` | `AppState+CanvasNavigation.swift#previousPath`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#previousPath` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#GroupBoundaryEvent` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#CrossingAGroupBoundaryBuildsTheEntryEventWithTheGroupsOwnCount` |  |
-| `CanvasConnectionTraversed` | `AppState+CanvasNavigation.swift#otherKind`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#kind` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#ConnectionRowName`, `CanvasNavigator.cs#FollowConnection` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheSelectedCardsConnectionRowsAreCoreRenderedAndComeFirst` |  |
-| `CanvasTracePathEnd` | `AppState+CanvasNavigation.swift#titles` | `CanvasNavigator.cs#TracePath` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasMoveRelative` | `AppState+CanvasModes.swift#descs`, `CanvasAnnouncer.swift#coalescingClass` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasNavigator.cs#ModeStep` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasResizeGeometry` | `AppState+CanvasModes.swift#mutable`, `AppState+CanvasModes.swift#newHeight`, `CanvasAnnouncer.swift#coalescingClass` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasNavigator.cs#ApplyResizeRect` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#TheClampRetiresTheGeometryLine` |  |
-| `CanvasResizeClamped` | `AppState+CanvasModes.swift#newHeight` | `CanvasAnnouncer.cs#RetiresNavigation`, `CanvasNavigator.cs#ResizeStep` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#TheClampRetiresTheGeometryLine` |  |
+| `CanvasMovedTo` | `AppState+CanvasNavigation.swift#canvasSelect`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#announceMove` (+1) | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#SelectNode` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#MovedTo`, `CanvasAnnouncerTests.cs#TheCardReferenceMatchesCoresOwnComposition` (+4) |  |
+| `CanvasGroupEntered` | `AppState+CanvasNavigation.swift#canvasSelect`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#announceMove` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#GroupBoundaryEvent` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#CrossingAGroupBoundaryBuildsTheEntryEventWithTheGroupsOwnCount`, `CanvasNavigatorTests.cs#GroupBoundariesUseCoresParentAndChildrenNeverADepthWalk` |  |
+| `CanvasGroupLeft` | `AppState+CanvasNavigation.swift#canvasSelect`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#announceMove` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#GroupBoundaryEvent` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#CrossingAGroupBoundaryBuildsTheEntryEventWithTheGroupsOwnCount` |  |
+| `CanvasConnectionTraversed` | `AppState+CanvasNavigation.swift#canvasFollowConnection`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasOutlineView.swift#connectionPhrase` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasDocumentViewModel.cs#ConnectionRowName`, `CanvasNavigator.cs#FollowConnection` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheSelectedCardsConnectionRowsAreCoreRenderedAndComeFirst` |  |
+| `CanvasTracePathEnd` | `AppState+CanvasNavigation.swift#canvasTracePath` | `CanvasNavigator.cs#TracePath` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasMoveRelative` | `AppState+CanvasModes.swift#canvasModeStep`, `CanvasAnnouncer.swift#coalescingClass` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasNavigator.cs#ModeStep` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasResizeGeometry` | `AppState+CanvasModes.swift#canvasApplyResizePreset`, `AppState+CanvasModes.swift#canvasModeStep`, `CanvasAnnouncer.swift#coalescingClass` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasNavigator.cs#ApplyResizeRect` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#TheClampRetiresTheGeometryLine` |  |
+| `CanvasResizeClamped` | `AppState+CanvasModes.swift#canvasModeStep` | `CanvasAnnouncer.cs#RetiresNavigation`, `CanvasNavigator.cs#ResizeStep` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#TheClampRetiresTheGeometryLine` |  |
 | `CanvasModeEntered` | `CanvasModeController.swift#enter` | `CanvasAnnouncer.cs#RetiresNavigation`, `CanvasModeController.cs#Enter` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#AFilterLineSurvivesTheTransition`, `CanvasModeControllerTests.cs#EntryNamesTheModeTheObjectAndTheExits` (+2) |  |
 | `CanvasModeRejected` | `CanvasModeController.swift#enter` | `CanvasModeController.cs#Enter` | `A11yCorpusCensus.cs#Corpus`, `CanvasModeControllerTests.cs#ASecondEntryIsRejectedAndCommitsNothing` |  |
-| `CanvasModeCommitted` | `AppState+CanvasModes.swift#ok` | `CanvasAnnouncer.cs#RetiresNavigation`, `CanvasNavigator.cs#SubmitTransientCommit` | `A11yCorpusCensus.cs#Corpus`, `CanvasModeControllerTests.cs#ACompletedModeHoldsNoPane`, `CanvasModeControllerTests.cs#AModesOwnerEndsWithTheMode` (+6) |  |
-| `CanvasModeEndedWithoutEffect` | `AppState+CanvasConnect.swift#target`, `AppState+CanvasModes.swift#original` | `CanvasAnnouncer.cs#RetiresNavigation`, `CanvasNavigator.cs#SubmitConnectCommit`, `CanvasNavigator.cs#SubmitTransientCommit` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasModeCommitted` | `AppState+CanvasModes.swift#canvasCommitTransient` | `CanvasAnnouncer.cs#RetiresNavigation`, `CanvasNavigator.cs#SubmitTransientCommit` | `A11yCorpusCensus.cs#Corpus`, `CanvasModeControllerTests.cs#ACompletedModeHoldsNoPane`, `CanvasModeControllerTests.cs#AModesOwnerEndsWithTheMode` (+6) |  |
+| `CanvasModeEndedWithoutEffect` | `AppState+CanvasConnect.swift#canvasEnterConnectMode`, `AppState+CanvasModes.swift#canvasCommitTransient` | `CanvasAnnouncer.cs#RetiresNavigation`, `CanvasNavigator.cs#SubmitConnectCommit`, `CanvasNavigator.cs#SubmitTransientCommit` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasModeCancelled` | `CanvasModeController.swift#cancel` | `CanvasAnnouncer.cs#RetiresNavigation`, `CanvasModeController.cs#Cancel` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#ACancelRetiresThePendingNavigationLine`, `CanvasModeControllerTests.cs#ADisplacedResolutionCancelsTheMode` (+1) |  |
-| `CanvasCreated` | `AppState+CanvasActions.swift#ok`, `AppState+CanvasCreate.swift#ok` | `CanvasDocumentViewModel.cs#CanvasAddFileCard`, `CanvasDocumentViewModel.cs#CanvasAddLinkCard`, `CanvasDocumentViewModel.cs#CanvasNewCard` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#CoalescingCollapsesRapidNavigationAndTheFinalStateWins` |  |
-| `CanvasFileCreated` | `AppState+CanvasActions.swift#prepared` | `FilesSidebarViewModel.cs#CreateCanvas` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasConnectedCardCreated` | `AppState+CanvasExtras.swift#ok` | `CanvasDocumentViewModel.cs#CanvasCreateConnectedCard` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasConnected` | `AppState+CanvasConnect.swift#ok` | `CanvasDocumentViewModel.cs#CanvasConnect`, `CanvasNavigator.cs#SubmitConnectCommit` | `A11yCorpusCensus.cs#Corpus`, `CanvasModeControllerTests.cs#Spec` |  |
-| `CanvasConnectionUpdated` | `AppState+CanvasConnect.swift#ok` | `CanvasDocumentViewModel.cs#CanvasEditConnection` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasMovedIntoGroup` | `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#CanvasMoveIntoGroup` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasRemovedFromGroup` | `AppState+CanvasCreate.swift#ok` | `CanvasDocumentViewModel.cs#CanvasRemoveFromGroup` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasColorSet` | `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#CanvasSetColor` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasRenamedGroup` | `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#CanvasRenameGroup` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasCardUpdated` | `AppState+CanvasCreate.swift#ok` | `CanvasDocumentViewModel.cs#CanvasCommitCardEdit` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasCardRetargeted` | `AppState+CanvasCreate.swift#ok` | `CanvasDocumentViewModel.cs#CanvasLocateFile` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasCardPlaced` | `AppState+CanvasActions.swift#ok`, `AppState+CanvasExtras.swift#title` | `CanvasDocumentViewModel.cs#CanvasDuplicate`, `CanvasDocumentViewModel.cs#CanvasPlaceRelative` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasCardAligned` | `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#CanvasAlignWith` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasConvertedToNote` | `AppState+CanvasExtras.swift#fetched` | `CanvasDocumentViewModel.cs#CanvasConvertToNote` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasDeleted` | `AppState+CanvasActions.swift#ok`, `AppState+CanvasConnect.swift#ok` | `CanvasDocumentViewModel.cs#CanvasDeleteConnection`, `CanvasDocumentViewModel.cs#CanvasDeleteMarked`, `CanvasDocumentViewModel.cs#CanvasDeleteSelection` (+1) | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBulkMoved` | `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#CanvasPlaceRelative` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBulkColorSet` | `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#CanvasColorMarked`, `CanvasPromptViewModel.cs#Submit` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasGrouped` | `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#SubmitGroupMarked` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBulkDuplicated` | `AppState+CanvasExtras.swift#title` | `CanvasDocumentViewModel.cs#CanvasDuplicate` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasMarkToggled` | `AppState+CanvasActions.swift#marking` | `CanvasDocumentViewModel.cs#ToggleMark`, `CanvasDocumentViewModel.cs#Unmark` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasMarksCleared` | `AppState+CanvasActions.swift#count` | `CanvasDocumentViewModel.cs#ClearMarks` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasFilterCount` | `AppState+CanvasExtras.swift#view`, `CanvasAnnouncer.swift#coalescingClass` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasNavigator.cs#AnnounceFilterCount` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#AFilterLineSurvivesTheTransition`, `CanvasAnnouncerTests.cs#TheTwoClassesCoalesceIndependently` (+1) |  |
+| `CanvasCreated` | `AppState+CanvasActions.swift#canvasNewCard`, `AppState+CanvasActions.swift#canvasNewGroup`, `AppState+CanvasCreate.swift#canvasCreatePlaced` | `CanvasDocumentViewModel.cs#CanvasAddFileCard`, `CanvasDocumentViewModel.cs#CanvasAddLinkCard`, `CanvasDocumentViewModel.cs#CanvasNewCard` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#CoalescingCollapsesRapidNavigationAndTheFinalStateWins` |  |
+| `CanvasFileCreated` | `AppState+CanvasActions.swift#canvasNewCanvasFile` | `FilesSidebarViewModel.cs#CreateCanvas` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasConnectedCardCreated` | `AppState+CanvasExtras.swift#canvasCreateConnectedCard` | `CanvasDocumentViewModel.cs#CanvasCreateConnectedCard` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasConnected` | `AppState+CanvasConnect.swift#canvasConnect` | `CanvasDocumentViewModel.cs#CanvasConnect`, `CanvasNavigator.cs#SubmitConnectCommit` | `A11yCorpusCensus.cs#Corpus`, `CanvasModeControllerTests.cs#Spec` |  |
+| `CanvasConnectionUpdated` | `AppState+CanvasConnect.swift#canvasEditConnection` | `CanvasDocumentViewModel.cs#CanvasEditConnection` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasMovedIntoGroup` | `AppState+CanvasActions.swift#canvasMoveIntoGroup` | `CanvasDocumentViewModel.cs#CanvasMoveIntoGroup` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasRemovedFromGroup` | `AppState+CanvasCreate.swift#canvasRemoveFromGroup` | `CanvasDocumentViewModel.cs#CanvasRemoveFromGroup` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasColorSet` | `AppState+CanvasActions.swift#canvasSetColor` | `CanvasDocumentViewModel.cs#CanvasSetColor` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasRenamedGroup` | `AppState+CanvasActions.swift#canvasRenameGroup` | `CanvasDocumentViewModel.cs#CanvasRenameGroup` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasCardUpdated` | `AppState+CanvasCreate.swift#canvasCommitCardEdit` | `CanvasDocumentViewModel.cs#CanvasCommitCardEdit` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasCardRetargeted` | `AppState+CanvasCreate.swift#canvasLocate` | `CanvasDocumentViewModel.cs#CanvasLocateFile` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasCardPlaced` | `AppState+CanvasActions.swift#canvasPlaceRelative`, `AppState+CanvasExtras.swift#canvasDuplicate` | `CanvasDocumentViewModel.cs#CanvasDuplicate`, `CanvasDocumentViewModel.cs#CanvasPlaceRelative` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasCardAligned` | `AppState+CanvasActions.swift#canvasAlignWith` | `CanvasDocumentViewModel.cs#CanvasAlignWith` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasConvertedToNote` | `AppState+CanvasExtras.swift#canvasConvertToNote` | `CanvasDocumentViewModel.cs#CanvasConvertToNote` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasDeleted` | `AppState+CanvasActions.swift#canvasDeleteMarked`, `AppState+CanvasActions.swift#canvasDeleteSelection`, `AppState+CanvasConnect.swift#canvasDeleteConnection` | `CanvasDocumentViewModel.cs#CanvasDeleteConnection`, `CanvasDocumentViewModel.cs#CanvasDeleteMarked`, `CanvasDocumentViewModel.cs#CanvasDeleteSelection` (+1) | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBulkMoved` | `AppState+CanvasActions.swift#canvasPlaceRelative` | `CanvasDocumentViewModel.cs#CanvasPlaceRelative` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBulkColorSet` | `AppState+CanvasActions.swift#canvasColorMarked` | `CanvasDocumentViewModel.cs#CanvasColorMarked`, `CanvasPromptViewModel.cs#Submit` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasGrouped` | `AppState+CanvasActions.swift#canvasGroupMarked` | `CanvasDocumentViewModel.cs#SubmitGroupMarked` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBulkDuplicated` | `AppState+CanvasExtras.swift#canvasDuplicate` | `CanvasDocumentViewModel.cs#CanvasDuplicate` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasMarkToggled` | `AppState+CanvasActions.swift#canvasToggleMark` | `CanvasDocumentViewModel.cs#ToggleMark`, `CanvasDocumentViewModel.cs#Unmark` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasMarksCleared` | `AppState+CanvasActions.swift#canvasClearMarks` | `CanvasDocumentViewModel.cs#ClearMarks` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasFilterCount` | `AppState+CanvasExtras.swift#canvasAnnounceFilterCount`, `CanvasAnnouncer.swift#coalescingClass` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasNavigator.cs#AnnounceFilterCount` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#AFilterLineSurvivesTheTransition`, `CanvasAnnouncerTests.cs#TheTwoClassesCoalesceIndependently` (+1) |  |
 | `CanvasFilterCleared` | `AppState+CanvasExtras.swift#canvasClearFilter`, `CanvasAnnouncer.swift#coalescingClass`, `CanvasContainerView.swift#clearFilter` | `CanvasAnnouncer.cs#CoalescingClassOf`, `CanvasNavigator.cs#ClearFilter`, `CanvasNavigator.cs#ClearFilterRung` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyCanvasSeatsTheReaderOnItsOnboarding`, `CanvasNavigatorTests.cs#ClearingTheFilterRestoresEveryCardAndSaysHowMany` (+1) |  |
-| `CanvasZoom` | `AppState+CanvasNavigation.swift#announceZoom`, `AppState+CanvasNavigation.swift#doc`, `AppState+CanvasNavigation.swift#node` | `CanvasNavigator.cs#ViewportVerb` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheZoomValueIsCoresRenderMinusItsPeriod`, `CanvasNavigatorTests.cs#TheZoomVerbsSpeakCoresZoomEventWithTheirContext` |  |
+| `CanvasZoom` | `AppState+CanvasNavigation.swift#announceZoom`, `AppState+CanvasNavigation.swift#canvasFitCanvas`, `AppState+CanvasNavigation.swift#canvasZoomToSelection` | `CanvasNavigator.cs#ViewportVerb` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheZoomValueIsCoresRenderMinusItsPeriod`, `CanvasNavigatorTests.cs#TheZoomVerbsSpeakCoresZoomEventWithTheirContext` |  |
 | `CanvasFollowSelectionToggled` | `AppState+CanvasNavigation.swift#canvasToggleFollowSelection` | `CanvasNavigator.cs#ViewportVerb` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheFollowToggleSpeaksBothStates` |  |
 | `CanvasViewportNoPane` | — | `CanvasNavigator.cs#ViewportVerb` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AViewportVerbWithNoPaneSpeaksTheTypedRefusal`, `CanvasNavigatorTests.cs#TheZoomVerbsSpeakCoresZoomEventWithTheirContext` | mac designated: Windows-only (§D ID-7): mac's canvas always has a pane to address |
 | `CanvasSurfaceShown` | `AppState+Canvas.swift#showCanvasSurface` | `CanvasDocumentViewModel.cs#ShowSurface` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ShowVisualIsEnabledAndDrivesTheSurfaceSwitch`, `CanvasTableTests.cs#ShowTableIsEnabledAndDrivesTheOneSurfaceSwitch` |  |
-| `CanvasHistoryApplied` | `AppState+Canvas.swift#result` | `CanvasMutationFunnel.cs#TransactHistory` | `A11yCorpusCensus.cs#Corpus`, `CanvasMutationFunnelTests.cs#AnUnindexedHistoryApplyCrossesTheReceiptAndBlocksOnRecovery` |  |
+| `CanvasHistoryApplied` | `AppState+Canvas.swift#canvasRedo`, `AppState+Canvas.swift#canvasUndo` | `CanvasMutationFunnel.cs#TransactHistory` | `A11yCorpusCensus.cs#Corpus`, `CanvasMutationFunnelTests.cs#AnUnindexedHistoryApplyCrossesTheReceiptAndBlocksOnRecovery` |  |
 | `CanvasUndoMenuTitle` | `AppState.swift#canvasUndoRedoMenuTitle` | — | `A11yCorpusCensus.cs#Corpus` | designated: no Edit menu on Windows (HD-D3); the history verbs' palette rows carry the registry's static labels |
 | `CanvasHistoryQuarantinedTitle` | — | — | `A11yCorpusCensus.cs#Corpus` | designated: no Edit menu on Windows (HD-D3); mac designated: mac's undo stack has no basis quarantine (TE-2/TE-4 are Windows's mechanism) — with no Edit menu on Windows either, an orphaned label arm, owed to an owner decision |
-| `CanvasStatus/NothingSelected` | `AppState+CanvasActions.swift#canvasOpenCardPicker`, `AppState+CanvasActions.swift#canvasPromptMoveIntoGroup`, `AppState+CanvasActions.swift#canvasPromptSetColor` (+15) | `CanvasDocumentViewModel.cs#AnnounceSelectionUnresolvable`, `CanvasDocumentViewModel.cs#CanvasConnect`, `CanvasDocumentViewModel.cs#CanvasConvertToNote` (+24) | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#AnOrdinaryImmediateEventRetiresNothing`, `CanvasNavigatorTests.cs#AnUnresolvableSelectionIsNeverReportedAsAnEmptyAnswer` (+1) |  |
-| `CanvasStatus/NoMarks` | `AppState+CanvasActions.swift#canvasPromptGroupMarked`, `AppState+CanvasActions.swift#canvasShowMarksList`, `AppState+CanvasActions.swift#marked` | `CanvasDocumentViewModel.cs#CanvasDuplicate`, `CanvasDocumentViewModel.cs#OpenMarksList`, `CanvasDocumentViewModel.cs#RequestColorMarked` (+3) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#NothingSpeaksAfterTheLastTabClosed`, `CanvasNavigatorTests.cs#AShutdownDuringACommitDrainsTheHeldDepartureThenSilences` (+1) |  |
-| `CanvasStatus/NotAGroup` | `AppState+CanvasActions.swift#row`, `AppState+CanvasNavigation.swift#row` | `CanvasDocumentViewModel.cs#CanvasMoveIntoGroup`, `CanvasDocumentViewModel.cs#CanvasUngroup`, `CanvasDocumentViewModel.cs#RequestGroupRenameForSelection` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyGroupAndANonGroupEachSayWhatTheyAre` |  |
-| `CanvasStatus/NotATextCard` | `AppState+CanvasCreate.swift#row` | `CanvasDocumentViewModel.cs#NodeTextOf`, `CanvasDocumentViewModel.cs#OpenCardEditor` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasStatus/NotAFileCard` | `AppState+CanvasCreate.swift#row` | `CanvasDocumentViewModel.cs#RequestVaultPick` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasStatus/NoGroups` | `AppState+CanvasActions.swift#groups` | `CanvasDocumentViewModel.cs#RequestMoveIntoGroup` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasStatus/NoNotesInVault` | `AppState+CanvasCreate.swift#notes` | `CanvasDocumentViewModel.cs#RequestVaultPick` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasStatus/NoMediaInVault` | `AppState+CanvasCreate.swift#media` | `CanvasDocumentViewModel.cs#RequestVaultPick` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasStatus/NoFilesToPointAt` | `AppState+CanvasCreate.swift#candidates` | `CanvasDocumentViewModel.cs#RequestVaultPick` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasStatus/OnlyTextCardsConvert` | `AppState+CanvasExtras.swift#row` | `CanvasDocumentViewModel.cs#CanvasConvertToNote`, `CanvasDocumentViewModel.cs#RequestConvertToNote` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasStatus/NoConnections` | `AppState+CanvasActions.swift#choices` | `CanvasDocumentViewModel.cs#CanvasDeleteConnection`, `CanvasDocumentViewModel.cs#CanvasEditConnection`, `CanvasDocumentViewModel.cs#SpeakNoConnections` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasStatus/PickOutsideMovingSet` | `AppState+CanvasActions.swift#moving` | `CanvasDocumentViewModel.cs#HandleCardPick` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasStatus/PickDifferentTarget` | `AppState+CanvasConnect.swift#target` | `CanvasDocumentViewModel.cs#CanvasAlignWith`, `CanvasDocumentViewModel.cs#CanvasPlaceRelative`, `CanvasDocumentViewModel.cs#HandleCardPick` (+3) | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasStatus/NothingSelected` | `AppState+CanvasActions.swift#canvasOpenCardPicker`, `AppState+CanvasActions.swift#canvasPromptMoveIntoGroup`, `AppState+CanvasActions.swift#canvasPromptSetColor` (+14) | `CanvasDocumentViewModel.cs#AnnounceSelectionUnresolvable`, `CanvasDocumentViewModel.cs#CanvasConnect`, `CanvasDocumentViewModel.cs#CanvasConvertToNote` (+24) | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#AnOrdinaryImmediateEventRetiresNothing`, `CanvasNavigatorTests.cs#AnUnresolvableSelectionIsNeverReportedAsAnEmptyAnswer` (+1) |  |
+| `CanvasStatus/NoMarks` | `AppState+CanvasActions.swift#canvasColorMarked`, `AppState+CanvasActions.swift#canvasDeleteMarked`, `AppState+CanvasActions.swift#canvasGroupMarked` (+2) | `CanvasDocumentViewModel.cs#CanvasDuplicate`, `CanvasDocumentViewModel.cs#OpenMarksList`, `CanvasDocumentViewModel.cs#RequestColorMarked` (+3) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#NothingSpeaksAfterTheLastTabClosed`, `CanvasNavigatorTests.cs#AShutdownDuringACommitDrainsTheHeldDepartureThenSilences` (+1) |  |
+| `CanvasStatus/NotAGroup` | `AppState+CanvasActions.swift#canvasPromptRenameGroup`, `AppState+CanvasActions.swift#canvasRenameGroup`, `AppState+CanvasNavigation.swift#canvasEnterGroup` | `CanvasDocumentViewModel.cs#CanvasMoveIntoGroup`, `CanvasDocumentViewModel.cs#CanvasUngroup`, `CanvasDocumentViewModel.cs#RequestGroupRenameForSelection` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyGroupAndANonGroupEachSayWhatTheyAre` |  |
+| `CanvasStatus/NotATextCard` | `AppState+CanvasCreate.swift#canvasEditCard` | `CanvasDocumentViewModel.cs#NodeTextOf`, `CanvasDocumentViewModel.cs#OpenCardEditor` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasStatus/NotAFileCard` | `AppState+CanvasCreate.swift#canvasOpenLocate` | `CanvasDocumentViewModel.cs#RequestVaultPick` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasStatus/NoGroups` | `AppState+CanvasActions.swift#canvasPromptMoveIntoGroup` | `CanvasDocumentViewModel.cs#RequestMoveIntoGroup` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasStatus/NoNotesInVault` | `AppState+CanvasCreate.swift#canvasOpenAddNote` | `CanvasDocumentViewModel.cs#RequestVaultPick` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasStatus/NoMediaInVault` | `AppState+CanvasCreate.swift#canvasOpenAddMedia` | `CanvasDocumentViewModel.cs#RequestVaultPick` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasStatus/NoFilesToPointAt` | `AppState+CanvasCreate.swift#canvasOpenLocate` | `CanvasDocumentViewModel.cs#RequestVaultPick` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasStatus/OnlyTextCardsConvert` | `AppState+CanvasExtras.swift#canvasPromptConvertToNote` | `CanvasDocumentViewModel.cs#CanvasConvertToNote`, `CanvasDocumentViewModel.cs#RequestConvertToNote` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasStatus/NoConnections` | `AppState+CanvasActions.swift#canvasPromptDeleteConnection`, `AppState+CanvasActions.swift#canvasPromptEditConnection` | `CanvasDocumentViewModel.cs#CanvasDeleteConnection`, `CanvasDocumentViewModel.cs#CanvasEditConnection`, `CanvasDocumentViewModel.cs#SpeakNoConnections` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasStatus/PickOutsideMovingSet` | `AppState+CanvasActions.swift#canvasPlaceRelative` | `CanvasDocumentViewModel.cs#HandleCardPick` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasStatus/PickDifferentTarget` | `AppState+CanvasConnect.swift#canvasConnect` | `CanvasDocumentViewModel.cs#CanvasAlignWith`, `CanvasDocumentViewModel.cs#CanvasPlaceRelative`, `CanvasDocumentViewModel.cs#HandleCardPick` (+3) | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NoChanges` | `AppState+CanvasCreate.swift#canvasCommitCardEdit` | `CanvasCardEditorViewModel.cs#CommitOnEscape`, `CanvasDocumentViewModel.cs#CanvasAlignWith` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NotReadable` | `AppState+Canvas.swift#canvasWhereAmI`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState`, `AppState+CanvasNavigation.swift#canvasReadRefusal` | `CanvasDocumentViewModel.cs#NodeTextOf`, `CanvasDocumentViewModel.cs#ProjectMarkedRows`, `CanvasDocumentViewModel.cs#ReadRefusalFor` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheReadMappingAnswersEveryLoadState` |  |
-| `CanvasStatus/Empty` | `AppState+Canvas.swift#handle` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough`, `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyCanvasAnswersRatherThanMovingNowhere`, `CanvasNavigatorTests.cs#WhereAmIOnAnEmptyCanvasStillAnswers` |  |
-| `CanvasStatus/EndOfCanvas` | `AppState+CanvasNavigation.swift#target` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#SelectAdjacent` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#MovementCrossesTheWholeLargeCanvasWithoutRederivingOrder`, `CanvasNavigatorTests.cs#MovementWalksTheFilteredSetAndTheProjectionsNarrowWithIt` (+2) |  |
-| `CanvasStatus/StartOfCanvas` | `AppState+CanvasNavigation.swift#target` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#SelectAdjacent` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheEndsOfTheCanvasAnnounceRatherThanDoingNothing` |  |
-| `CanvasStatus/AtCanvasLevel` | `AppState+CanvasNavigation.swift#parent` | `CanvasNavigator.cs#ExitGroup` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnUnresolvableSelectionIsNeverReportedAsAnEmptyAnswer`, `CanvasNavigatorTests.cs#GroupBoundariesUseCoresParentAndChildrenNeverADepthWalk` |  |
-| `CanvasStatus/NoCardsMatchFilter` | `AppState+CanvasNavigation.swift#rows` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AFilterThatMatchesNothingSaysSoRatherThanReadingAsAnEmptyCanvas` |  |
+| `CanvasStatus/Empty` | `AppState+Canvas.swift#canvasWhereAmI` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough`, `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyCanvasAnswersRatherThanMovingNowhere`, `CanvasNavigatorTests.cs#WhereAmIOnAnEmptyCanvasStillAnswers` |  |
+| `CanvasStatus/EndOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#SelectAdjacent` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#MovementCrossesTheWholeLargeCanvasWithoutRederivingOrder`, `CanvasNavigatorTests.cs#MovementWalksTheFilteredSetAndTheProjectionsNarrowWithIt` (+2) |  |
+| `CanvasStatus/StartOfCanvas` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#ArrowMove`, `CanvasNavigator.cs#SelectAdjacent` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheEndsOfTheCanvasAnnounceRatherThanDoingNothing` |  |
+| `CanvasStatus/AtCanvasLevel` | `AppState+CanvasNavigation.swift#canvasExitGroup` | `CanvasNavigator.cs#ExitGroup` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnUnresolvableSelectionIsNeverReportedAsAnEmptyAnswer`, `CanvasNavigatorTests.cs#GroupBoundariesUseCoresParentAndChildrenNeverADepthWalk` |  |
+| `CanvasStatus/NoCardsMatchFilter` | `AppState+CanvasNavigation.swift#canvasSelectAdjacent` | `CanvasNavigator.cs#AnnounceNothingToMoveThrough` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AFilterThatMatchesNothingSaysSoRatherThanReadingAsAnEmptyCanvas` |  |
 | `CanvasStatus/NothingToUndo` | `AppState+Canvas.swift#canvasUndo` | `CanvasDocumentViewModel.cs#RunHistory` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasStatus/NothingToRedo` | `AppState+Canvas.swift#canvasRedo` | `CanvasDocumentViewModel.cs#RunHistory` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasStatus/GroupIsEmpty` | `AppState+CanvasNavigation.swift#children` | `CanvasNavigator.cs#EnterGroup` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyGroupAndANonGroupEachSayWhatTheyAre` |  |
-| `CanvasStatus/NoOutgoingPath` | `AppState+CanvasNavigation.swift#startTitle` | `CanvasNavigator.cs#TracePath` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TracePathWalksCoresCycleSafeChainAndEndsWithTheCount` |  |
-| `CanvasStatus/NotInAGroup` | `AppState+CanvasCreate.swift#node`, `AppState+CanvasCreate.swift#parent` | `CanvasDocumentViewModel.cs#CanvasRemoveFromGroup` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasStatus/NoConnection` | `AppState+CanvasNavigation.swift#candidates` | `CanvasNavigator.cs#FollowConnection` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AMissingConnectionSaysWhichDirectionAndWhichOrdinal`, `CanvasNavigatorTests.cs#ARightArrowOnAConnectionlessLeafStillAnswers` |  |
-| `CanvasStatus/Reopening` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+CanvasExtras.swift#view`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState` (+3) | `CanvasDocumentViewModel.cs#ReadRefusalFor`, `CanvasNavigator.cs#FilterStatusSentence` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheReadMappingAnswersEveryLoadState` |  |
-| `CanvasStatus/Loading` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+Canvas.swift#dropCanvasModeState`, `AppState+CanvasExtras.swift#view` (+3) | `CanvasDocumentViewModel.cs#ReadRefusalFor` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheFilterSummaryNeverCountsRowsTheSurfaceIsNotShowing`, `CanvasNavigatorTests.cs#TheReadMappingAnswersEveryLoadState` |  |
+| `CanvasStatus/GroupIsEmpty` | `AppState+CanvasNavigation.swift#canvasEnterGroup` | `CanvasNavigator.cs#EnterGroup` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AnEmptyGroupAndANonGroupEachSayWhatTheyAre` |  |
+| `CanvasStatus/NoOutgoingPath` | `AppState+CanvasNavigation.swift#canvasTracePath` | `CanvasNavigator.cs#TracePath` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TracePathWalksCoresCycleSafeChainAndEndsWithTheCount` |  |
+| `CanvasStatus/NotInAGroup` | `AppState+CanvasCreate.swift#canvasRemoveFromGroup` | `CanvasDocumentViewModel.cs#CanvasRemoveFromGroup` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasStatus/NoConnection` | `AppState+CanvasNavigation.swift#canvasFollowConnection` | `CanvasNavigator.cs#FollowConnection` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#AMissingConnectionSaysWhichDirectionAndWhichOrdinal`, `CanvasNavigatorTests.cs#ARightArrowOnAConnectionlessLeafStillAnswers` |  |
+| `CanvasStatus/Reopening` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+CanvasExtras.swift#canvasAnnounceFilterCount`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState` (+3) | `CanvasDocumentViewModel.cs#ReadRefusalFor`, `CanvasNavigator.cs#FilterStatusSentence` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheReadMappingAnswersEveryLoadState` |  |
+| `CanvasStatus/Loading` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+Canvas.swift#dropCanvasModeState`, `AppState+CanvasExtras.swift#canvasAnnounceFilterCount` (+3) | `CanvasDocumentViewModel.cs#ReadRefusalFor` | `A11yCorpusCensus.cs#Corpus`, `CanvasNavigatorTests.cs#TheFilterSummaryNeverCountsRowsTheSurfaceIsNotShowing`, `CanvasNavigatorTests.cs#TheReadMappingAnswersEveryLoadState` |  |
 | `CanvasBlocked/ModeBusy` | `AppState+Canvas.swift#canvasApply`, `AppState+Canvas.swift#canvasRedo`, `AppState+Canvas.swift#canvasUndo` (+1) | `CanvasDocumentViewModel.cs#RequestConvertToNote`, `CanvasMutationFunnel.cs#AnnounceAdmission`, `CanvasNavigator.cs#ResizeDefaultSize` (+1) | `A11yCorpusCensus.cs#Corpus`, `CanvasMutationFunnelTests.cs#ABusyGateRefusesAudiblyOncePerHold`, `CanvasMutationFunnelTests.cs#AForeignModeTokenRefusesAudibly` (+1) |  |
-| `CanvasBlocked/UndoBlocked` | `AppState+Canvas.swift#result` | `CanvasMutationFunnel.cs#AnnounceHistoryBlocked` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBlocked/RedoBlocked` | `AppState+Canvas.swift#result` | `CanvasMutationFunnel.cs#AnnounceHistoryBlocked` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBlocked/UndoBlocked` | `AppState+Canvas.swift#canvasUndo` | `CanvasMutationFunnel.cs#AnnounceHistoryBlocked` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBlocked/RedoBlocked` | `AppState+Canvas.swift#canvasRedo` | `CanvasMutationFunnel.cs#AnnounceHistoryBlocked` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasBlocked/UndoQuarantined` | — | `CanvasDocumentViewModel.cs#RunHistory` | `A11yCorpusCensus.cs#Corpus`, `CanvasMutationTests.cs#AQuarantinedStackSpeaksTheTruthfulSentenceNotNothingToUndo` | mac designated: mac's undo stack has no basis quarantine (TE-2/TE-4 are Windows's); mac's `.quarantine` is BatchTrash's path quarantine, another mechanism |
 | `CanvasBlocked/RedoQuarantined` | — | `CanvasDocumentViewModel.cs#RunHistory` | `A11yCorpusCensus.cs#Corpus`, `CanvasMutationTests.cs#AQuarantinedStackSpeaksTheTruthfulSentenceNotNothingToUndo` | mac designated: mac's undo stack has no basis quarantine (TE-2/TE-4 are Windows's) |
-| `CanvasBlocked/LinkOpenFailed` | `CanvasContainerView.swift#target` | `CanvasDocumentViewModel.cs#ActivateLinkCard` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBlocked/AlignWouldOverlap` | `AppState+CanvasActions.swift#overlaps` | `CanvasDocumentViewModel.cs#CanvasAlignWith` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBlocked/NotAUrl` | `AppState+CanvasCreate.swift#trimmed` | `CanvasDocumentViewModel.cs#ActivateLinkCard`, `CanvasDocumentViewModel.cs#CanvasAddLinkCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ALinkOutsideTheAllowlistIsRefusedWithTheVocabularysReason` |  |
-| `CanvasBlocked/CardTextUnreadable` | `AppState+CanvasCreate.swift#seed` | `CanvasDocumentViewModel.cs#NodeTextOf`, `CanvasDocumentViewModel.cs#OpenCardEditor` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBlocked/NotePathMustEndInMd` | `AppState+CanvasExtras.swift#cleanPath` | `CanvasDocumentViewModel.cs#CanvasConvertToNote` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBlocked/NoFreeSpaceInGroup` | `AppState+CanvasActions.swift#overlaps` | `CanvasDocumentViewModel.cs#CanvasMoveIntoGroup` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBlocked/NotePathExists` | `AppState+CanvasExtras.swift#cleanPath`, `AppState+CanvasExtras.swift#fetched` | `CanvasDocumentViewModel.cs#CanvasConvertToNote` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBlocked/NoteReadFailed` | `AppState+CanvasExtras.swift#fetched` | `CanvasDocumentViewModel.cs#CanvasConvertToNote` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBlocked/NoteCreateFailed` | `AppState+CanvasExtras.swift#fetched` | `CanvasDocumentViewModel.cs#CanvasConvertToNote`, `CanvasDocumentViewModel.cs#SpeakNoteCreateFailed` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBlocked/NoteRetargetFailed` | `AppState+CanvasExtras.swift#fetched` | `CanvasDocumentViewModel.cs#SpeakNoteRetargetFailed` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBlocked/HeadingNotFound` | `AppState+CanvasExtras.swift#wanted` | `WorkspaceViewModel.Canvas.cs#RouteCanvasAnchorAnnouncement` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ACanvasOriginHeadingMissSpeaksTheCanvasReasonOnce`, `CanvasDocumentTests.cs#AFileCardAnchorMissThroughTheWorkspaceSpeaksTheCanvasReasonOnce` |  |
+| `CanvasBlocked/LinkOpenFailed` | `CanvasContainerView.swift#activate` | `CanvasDocumentViewModel.cs#ActivateLinkCard` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBlocked/AlignWouldOverlap` | `AppState+CanvasActions.swift#canvasAlignWith` | `CanvasDocumentViewModel.cs#CanvasAlignWith` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBlocked/NotAUrl` | `AppState+CanvasCreate.swift#canvasAddLinkCard` | `CanvasDocumentViewModel.cs#ActivateLinkCard`, `CanvasDocumentViewModel.cs#CanvasAddLinkCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ALinkOutsideTheAllowlistIsRefusedWithTheVocabularysReason` |  |
+| `CanvasBlocked/CardTextUnreadable` | `AppState+CanvasCreate.swift#canvasEditCard` | `CanvasDocumentViewModel.cs#NodeTextOf`, `CanvasDocumentViewModel.cs#OpenCardEditor` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBlocked/NotePathMustEndInMd` | `AppState+CanvasExtras.swift#canvasConvertToNote` | `CanvasDocumentViewModel.cs#CanvasConvertToNote` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBlocked/NoFreeSpaceInGroup` | `AppState+CanvasActions.swift#canvasMoveIntoGroup` | `CanvasDocumentViewModel.cs#CanvasMoveIntoGroup` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBlocked/NotePathExists` | `AppState+CanvasExtras.swift#canvasConvertToNote` | `CanvasDocumentViewModel.cs#CanvasConvertToNote` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBlocked/NoteReadFailed` | `AppState+CanvasExtras.swift#canvasConvertToNote` | `CanvasDocumentViewModel.cs#CanvasConvertToNote` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBlocked/NoteCreateFailed` | `AppState+CanvasExtras.swift#canvasConvertToNote` | `CanvasDocumentViewModel.cs#CanvasConvertToNote`, `CanvasDocumentViewModel.cs#SpeakNoteCreateFailed` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBlocked/NoteRetargetFailed` | `AppState+CanvasExtras.swift#canvasConvertToNote` | `CanvasDocumentViewModel.cs#SpeakNoteRetargetFailed` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBlocked/HeadingNotFound` | `AppState+CanvasExtras.swift#canvasOpenFileAtHeading` | `WorkspaceViewModel.Canvas.cs#RouteCanvasAnchorAnnouncement` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ACanvasOriginHeadingMissSpeaksTheCanvasReasonOnce`, `CanvasDocumentTests.cs#AFileCardAnchorMissThroughTheWorkspaceSpeaksTheCanvasReasonOnce` |  |
 | `CanvasBlocked/ReopenFailed` | `CanvasContainerView.swift#announceCanvasRetargetFailure` | `CanvasDocumentViewModel.cs#RetargetAbsent` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheReopenFailureBannerIsCoresSentence` |  |
-| `CanvasActionFailed/NewCard` | `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#CanvasNewCard` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasActionFailed/NewGroup` | `AppState+CanvasActions.swift#canvasPromptNewGroup`, `AppState+CanvasActions.swift#id`, `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#CanvasNewGroup`, `CanvasDocumentViewModel.cs#SubmitGroupMarked` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasActionFailed/NewCanvas` | `AppState+CanvasActions.swift#create`, `AppState+CanvasActions.swift#error` | `FilesSidebarViewModel.cs#CanvasCreateFailure` | `A11yCorpusCensus.cs#Corpus`, `FileManagementTests.cs#AFailedCanvasCreationIsCoresSentence` |  |
-| `CanvasActionFailed/MoveIntoGroup` | `AppState+CanvasActions.swift#id`, `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#CanvasMoveIntoGroup` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasActionFailed/Placement` | `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#CanvasPlaceRelative`, `CanvasDocumentViewModel.cs#OpenCardPicker` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasActionFailed/Align` | `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#CanvasAlignWith` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasActionFailed/Create` | `AppState+CanvasActions.swift#create`, `AppState+CanvasCreate.swift#ok` | `CanvasDocumentViewModel.cs#CanvasAddFileCard`, `CanvasDocumentViewModel.cs#CanvasAddLinkCard`, `CanvasDocumentViewModel.cs#RequestVaultPick` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasActionFailed/RemoveFromGroup` | `AppState+CanvasCreate.swift#ok` | `CanvasDocumentViewModel.cs#CanvasRemoveFromGroup` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasActionFailed/Duplicate` | `AppState+CanvasExtras.swift#title` | `CanvasDocumentViewModel.cs#CanvasDuplicate` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasActionFailed/CreateConnectedCard` | `AppState+CanvasExtras.swift#ok` | `CanvasDocumentViewModel.cs#CanvasCreateConnectedCard` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasActionFailed/CanvasAction` | `AppState+Canvas.swift#result` | `CanvasDocumentViewModel.cs#ActivateFileCard`, `CanvasDocumentViewModel.cs#PrepareConnectAction`, `CanvasDocumentViewModel.cs#RequestVaultPick` (+7) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing`, `CanvasDocumentTests.cs#TheProductionMediaSeamOpensMediaAndRefusesEverythingElse` (+1) |  |
-| `CanvasActionFailed/WhereAmI` | `AppState+Canvas.swift#event` | `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasSaveConflict` | `AppState+Canvas.swift#result` | `CanvasCardEditorViewModel.cs#CommitOnEscape`, `CanvasMutationFunnel.cs#AnnounceAdmission`, `CanvasMutationFunnel.cs#Transact` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#AnAnnouncementFromAForeignThreadMarshalsHome`, `CanvasAnnouncerTests.cs#AnErrorIsAssertiveAndDropsPendingNavigationRatherThanFlushingIt` (+1) |  |
-| `CanvasFileNotFound` | `CanvasContainerView.swift#subpath` | `CanvasDocumentViewModel.cs#ActivateFileCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AFileCardWithNoVaultTargetSaysSoAndStaysNavigable`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing` |  |
-| `CanvasOpened` | `CanvasContainerView.swift#subpath`, `CanvasContainerView.swift#target` | `CanvasDocumentViewModel.cs#ActivateFileCard`, `CanvasDocumentViewModel.cs#ActivateLinkCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ActivatingALinkCardGoesThroughTheAllowlistAndSpeaksTheVocabulary`, `CanvasDocumentTests.cs#ActivatingAnImageCardOpensItInTheDefaultAppNotAnEditorTab` (+1) |  |
+| `CanvasActionFailed/NewCard` | `AppState+CanvasActions.swift#canvasNewCard` | `CanvasDocumentViewModel.cs#CanvasNewCard` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasActionFailed/NewGroup` | `AppState+CanvasActions.swift#canvasNewGroup`, `AppState+CanvasActions.swift#canvasPromptNewGroup`, `AppState+CanvasActions.swift#id` | `CanvasDocumentViewModel.cs#CanvasNewGroup`, `CanvasDocumentViewModel.cs#SubmitGroupMarked` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasActionFailed/NewCanvas` | `AppState+CanvasActions.swift#canvasNewCanvasFile` | `FilesSidebarViewModel.cs#CanvasCreateFailure` | `A11yCorpusCensus.cs#Corpus`, `FileManagementTests.cs#AFailedCanvasCreationIsCoresSentence` |  |
+| `CanvasActionFailed/MoveIntoGroup` | `AppState+CanvasActions.swift#canvasMoveIntoGroup`, `AppState+CanvasActions.swift#id` | `CanvasDocumentViewModel.cs#CanvasMoveIntoGroup` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasActionFailed/Placement` | `AppState+CanvasActions.swift#canvasPlaceRelative` | `CanvasDocumentViewModel.cs#CanvasPlaceRelative`, `CanvasDocumentViewModel.cs#OpenCardPicker` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasActionFailed/Align` | `AppState+CanvasActions.swift#canvasAlignWith` | `CanvasDocumentViewModel.cs#CanvasAlignWith` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasActionFailed/Create` | `AppState+CanvasActions.swift#canvasNewCanvasFile`, `AppState+CanvasCreate.swift#canvasCreatePlaced` | `CanvasDocumentViewModel.cs#CanvasAddFileCard`, `CanvasDocumentViewModel.cs#CanvasAddLinkCard`, `CanvasDocumentViewModel.cs#RequestVaultPick` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasActionFailed/RemoveFromGroup` | `AppState+CanvasCreate.swift#canvasRemoveFromGroup` | `CanvasDocumentViewModel.cs#CanvasRemoveFromGroup` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasActionFailed/Duplicate` | `AppState+CanvasExtras.swift#canvasDuplicate` | `CanvasDocumentViewModel.cs#CanvasDuplicate` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasActionFailed/CreateConnectedCard` | `AppState+CanvasExtras.swift#canvasCreateConnectedCard` | `CanvasDocumentViewModel.cs#CanvasCreateConnectedCard` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasActionFailed/CanvasAction` | `AppState+Canvas.swift#canvasApply` | `CanvasDocumentViewModel.cs#ActivateFileCard`, `CanvasDocumentViewModel.cs#PrepareConnectAction`, `CanvasDocumentViewModel.cs#RequestVaultPick` (+7) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing`, `CanvasDocumentTests.cs#TheProductionMediaSeamOpensMediaAndRefusesEverythingElse` (+1) |  |
+| `CanvasActionFailed/WhereAmI` | `AppState+Canvas.swift#canvasWhereAmI` | `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasSaveConflict` | `AppState+Canvas.swift#canvasApply` | `CanvasCardEditorViewModel.cs#CommitOnEscape`, `CanvasMutationFunnel.cs#AnnounceAdmission`, `CanvasMutationFunnel.cs#Transact` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#AnAnnouncementFromAForeignThreadMarshalsHome`, `CanvasAnnouncerTests.cs#AnErrorIsAssertiveAndDropsPendingNavigationRatherThanFlushingIt` (+1) |  |
+| `CanvasFileNotFound` | `CanvasContainerView.swift#activate` | `CanvasDocumentViewModel.cs#ActivateFileCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AFileCardWithNoVaultTargetSaysSoAndStaysNavigable`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing` |  |
+| `CanvasOpened` | `CanvasContainerView.swift#activate` | `CanvasDocumentViewModel.cs#ActivateFileCard`, `CanvasDocumentViewModel.cs#ActivateLinkCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ActivatingALinkCardGoesThroughTheAllowlistAndSpeaksTheVocabulary`, `CanvasDocumentTests.cs#ActivatingAnImageCardOpensItInTheDefaultAppNotAnEditorTab` (+1) |  |
 | `CanvasMutationRefused/Opening` | `AppState+Canvas.swift#canvasMutationRefusal` | `CanvasMutationFunnel.cs#NotReadyReason` | `A11yCorpusCensus.cs#Corpus`, `CanvasMutationFunnelTests.cs#ANotReadyAdmissionSpeaksTheTypedRefusal` |  |
 | `CanvasMutationRefused/Reopening` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState`, `AppState+CanvasNavigation.swift#canvasFollowConnection` (+1) | — | `A11yCorpusCensus.cs#Corpus` | designated: Windows retargets synchronously (§A): no pending-preparation window exists for the refusal to arise in; the read-side Reopening status carries the state |
 | `CanvasMutationRefused/RetargetFailed` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState`, `AppState+CanvasNavigation.swift#canvasReadRefusal` (+1) | `CanvasMutationFunnel.cs#NotReadyReason` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasMutationRefused/Unavailable` | `AppState+Canvas.swift#activeCanvasMutationRefusal`, `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+Canvas.swift#commitCanvasPromptMutation` | `CanvasMutationFunnel.cs#NotReadyReason` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasMutationRefused/ReadOnly` | `AppState+Canvas.swift#canvasMutationRefusal` | `CanvasMutationFunnel.cs#NotReadyReason` | `A11yCorpusCensus.cs#Corpus`, `CanvasModeControllerTests.cs#DepartingSpec`, `CanvasModeControllerTests.cs#RefusingSpec` |  |
-| `CanvasMutationRefused/CardEditorUnavailable` | `AppState+Canvas.swift#activeCanvasCardEditorRefusal` | `CanvasDocumentViewModel.cs#OpenCardEditor` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasMutationRefused/CardEditorUnavailable` | `AppState+Canvas.swift#activeCanvasCardEditorRefusal` | — | `A11yCorpusCensus.cs#Corpus` | designated: rows and lease retire together on Windows (§A, §C-unit): a text row with no handle is not a reachable state, and a retired announcer refuses the sentence — no trigger to consume (PR review round 1, IH-55) |
 | `CanvasMutationRefused/RefreshPending` | — | `CanvasMutationFunnel.cs#AnnounceAdmission` | `A11yCorpusCensus.cs#Corpus`, `CanvasMutationFunnelTests.cs#ARecoveryPendingAdmissionSpeaksRefreshPending` | mac designated: Windows-only (§E TE-0): the landed-but-unindexed refresh state has no mac twin |
 | `CanvasLoadedDegraded` | `CanvasContainerView.swift#announceDegradedLoadIfNeeded`, `CanvasContainerView.swift#header` | `CanvasDocumentViewModel.cs#AnnounceDegradedLoadIfNeeded`, `CanvasDocumentViewModel.cs#DegradedBannerText` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheDegradedBannerIsTheSameRenderTheAnnouncementSpeaks` |  |
 | `CanvasEmptyOnboarding` | `CanvasContainerView.swift#emptyOnboarding` | `CanvasDocumentViewModel.cs#EmptyOnboardingText` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#LabelRenderingPostsNothingAndReturnsCoresText`, `CanvasDocumentTests.cs#AnEmptyCanvasCarriesTheOnboardingCopyFromCore` |  |
-| `CanvasWhereAmI` | `AppState+Canvas.swift#ctx`, `AppState+Canvas.swift#event`, `SlateCommands.swift#registerStructural` | `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasWhereAmI` | `AppState+Canvas.swift#canvasWhereAmI`, `SlateCommands.swift#registerStructural` | `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus` |  |
 
 ### THE FREEZE — read this first
 
@@ -12851,7 +12851,7 @@ synchronously and has no pending-preparation window for the refusal to
 arise in). On mac, five keys have no site by designation: the
 Windows-only `CanvasViewportNoPane` (ID-7) and `RefreshPending` (TE-0),
 the two quarantine reasons and the quarantined title (mac's undo stack
-has no basis quarantine; its `.quarantine` is BatchTrash's).
+has no basis quarantine; its `.quarantine` is BatchTrash's). *Corrected by PR review round 1 (IH-55): the consumer could never speak — the announcer retires with the rows — so the arm is removed and the key designated on Windows with that reason.*
 
 Facts: the census's four, `AFailedCanvasCreationIsCoresSentence` (the
 render with the attempted name and the reason; the host sentence gone),
@@ -13254,6 +13254,45 @@ waived; the six mac issues (#1165–#1170) and the t0 contract issue
 pass (HD-3), the two designated title arms (HD-9), item 7 of the
 acceptance list, and the issue's own closure — H does not close #745
 (HD-6).
+
+### PR review round 1 (§H) — the post-implementation pass: eleven findings, eleven fixes
+
+The §5.2 adversarial pass over the diff (codex, xhigh, 2026-09-02) read
+the code against the records and found what the records had certified
+too kindly: two H4 triggers that never delivered their typed event, and
+seven gates whose grammar admitted the exact false state each claimed
+to exclude. Nothing refuted; every finding taken, each with a
+byte-restored mutation that the gate now bites.
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| IH-54 | BLOCKER | taken — `CanvasCreateFailure` returns the EVENT and a typed `ReportFailure(A11yEvent)` overload announces it unchanged (the status shows core's render); the fact drives the sidebar and asserts the delivered event is the same object |
+| IH-55 | BLOCKER | taken — the dead arm removed from `OpenCardEditor`; `CanvasMutationRefused/CardEditorUnavailable` DESIGNATED on Windows in the ledger and the census with the reason (rows and lease retire together; a retired announcer refuses); TH-4's record corrected in place |
+| IH-56 | BLOCKER | taken — `MEMBER_SWIFT` binds to the type's indentation, so a `let` inside a body is never a site; the mac fact reads the named member's SPAN (a Swift-aware span) for the key; `--report` exits 1 on any missing site; the table regenerated |
+| IH-57 | BLOCKER | taken — every cell claim matches a whole token (`CellHas`), and EVERY backticked evidence token resolves with no length floor: a fact, a class, a shell member, a dotted `Type.Member`, an axe label the surface scans, a test file by path, or a fixture |
+| IH-58 | BLOCKER | taken — the generator and the census strip comments and string literals before reading declaration heads; the quoted-id exception still reads the raw text, as it must |
+| IH-59 | BLOCKER | taken — EXPECTED_KEYS (315) and EXPECTED_VERIFIED (60) pinned in the script and the census; the census re-derives BOTH evidence columns by the script's grammar and compares every cell, so a hand-edited cell or a table regenerated over a reduced document fails on this lane without python |
+| IH-60 | BLOCKER | taken — a human cell is exactly `Pending` or `Verified ⟨date⟩ …`; the header fields have values that agree with the cells (Pending tester and run date while no run; a named tester and a dated run once any cell records one); every row names a resolving twin or says "none — human only" |
+| IH-61 | MAJOR | taken — the word fragments `"of"`/`"in"` on a joining line are offences; each sink is checked inside its own member's span with comments stripped, every overload joined |
+| IH-62 | MAJOR | taken — the fit's bounds member must be a pure delegation (no Min/Max, Union, extreme value, loop or fold) and the renderer joins no rectangles anywhere |
+| IH-63 | MAJOR | taken — the twelve merge commits must be distinct; a merge commit's subject must name its PR; the six squash merges are bound by the API's mergeCommit at generation and by ancestry here; H's base must be an ancestor of `git merge-base origin/main HEAD` |
+| IH-64 | MAJOR | taken — the destructive sentence must start "Deleted " and end " — Ctrl+Z to undo": core's arm with the platform's chord, not any line naming undo |
+
+Mutations, each byte-restored: M54 the typed failure re-wrapped as
+host text (bit); M55 the designation dropped from the census — no site
+and no designation (bit); M56 a mac site pointed at a local (bit); M57
+the table's control type `NotDataGrid` (bit); M58 an evidence marker
+declared only in a comment (the census bit; the generator refuses);
+M59 a Verified bullet deleted, then `--write` (the script's pin refuses
+to regenerate; the census's pin bit); M60 a human cell `Unverified`
+(bit); M61 the positional status joined from its words in a sink (bit);
+M62 a `Rect.Union` in the fit's bounds member (bit); M63 two ledger
+rows naming one merge commit (bit); M64 the undo chord spelled Ctrl+Y
+(the grammar fact bit). All bitten. The verdict's remaining half —
+"multiple supposedly mutation-resistant gates admit the exact false
+states they claim to exclude" — was true of the gates as written and
+is not true of them now; the sweep table above stands corrected by
+this record for the rows it names.
 
 ---
 
@@ -18522,7 +18561,7 @@ not keyed is not claimed as keyed.
 | §H | contract | H1 | TH-0, TH-1, TH-2 | `CanvasDocumentViewModel`, `AuthoringLoopThenUndoChainRestoresTheCommittedBytes`, `CanvasCommitCardEdit`, `SubmitGroupMarked`, `AttachPresenter`, `LargeCanvasOpensNavigatesAndWindowsUnderBudget`, `CanvasPeerTopology`, `CanvasViewportState`, +1 more |
 | §H | contract | H2 | TH-2 | `CanvasOpenBenchmarks`, `CanvasRendererBenchmarks`, `SelectionStepRead`, `CanvasEndToEndTests` |
 | §H | contract | H3 | TH-3 | — |
-| §H | contract | H4 | TH-5, TH-6, TH-4 | `CanvasViewportOutcome`, `CommittedViewport`, `CanvasSurfaceView`, `CanvasFollowSelectionToggled`, `CanvasA11yEvent`, `CanvasStatusNote`, `CanvasBlockedReason`, `CanvasFailedAction`, +8 more |
+| §H | contract | H4 | TH-5, TH-6, TH-4, PR review round 1 (§H) | `CanvasViewportOutcome`, `CommittedViewport`, `CanvasSurfaceView`, `CanvasFollowSelectionToggled`, `CanvasA11yEvent`, `CanvasStatusNote`, `CanvasBlockedReason`, `CanvasFailedAction`, +8 more |
 | §H | contract | H5 | TH-8 | — |
 | §H | contract | H6 | TH-7 | `CanvasModeController`, `CanvasOrderNodes`, `CanvasPlaceInsideGroup`, `CanvasGroupRectAround`, `CanvasAutoSides`, `CanvasProximityOrder`, `CanvasConstants` |
 | §H | contract | H7 | TH-9 | — |
@@ -18611,62 +18650,62 @@ not keyed is not claimed as keyed.
 
 | Id | Head | Recorded |
 |---|---|---|
-| CD-1 | No standalone overlap events. | Recorded divergences, line 13627 |
-| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 13638 |
-| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 13645 |
-| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 13662 |
-| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 13670 |
-| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 13681 |
-| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 13692 |
-| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 13704 |
-| CD-9 | `towardOther` is dropped. | Recorded divergences, line 13711 |
-| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 13721 |
-| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 13738 |
-| CD-12 | The family nests under one top-level variant | Recorded divergences, line 13749 |
-| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 13769 |
-| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 13789 |
-| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 13813 |
-| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 13848 |
-| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 13859 |
-| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 13867 |
-| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 13878 |
-| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 13887 |
-| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 13901 |
-| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 13917 |
-| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 13938 |
-| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 13962 |
-| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 13968 |
-| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 13988 |
-| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14018 |
-| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14049 |
-| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14066 |
-| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14078 |
-| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14094 |
-| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14106 |
-| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14122 |
-| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14137 |
-| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14170 |
-| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14193 |
-| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14206 |
-| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14222 |
-| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 14522 |
-| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 14557 |
-| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 14590 |
-| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 14618 |
-| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 14627 |
-| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 14645 |
-| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 14661 |
-| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 14740 |
-| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 14763 |
-| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 14821 |
+| CD-1 | No standalone overlap events. | Recorded divergences, line 13666 |
+| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 13677 |
+| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 13684 |
+| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 13701 |
+| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 13709 |
+| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 13720 |
+| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 13731 |
+| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 13743 |
+| CD-9 | `towardOther` is dropped. | Recorded divergences, line 13750 |
+| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 13760 |
+| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 13777 |
+| CD-12 | The family nests under one top-level variant | Recorded divergences, line 13788 |
+| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 13808 |
+| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 13828 |
+| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 13852 |
+| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 13887 |
+| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 13898 |
+| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 13906 |
+| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 13917 |
+| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 13926 |
+| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 13940 |
+| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 13956 |
+| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 13977 |
+| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 14001 |
+| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 14007 |
+| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 14027 |
+| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14057 |
+| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14088 |
+| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14105 |
+| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14117 |
+| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14133 |
+| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14145 |
+| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14161 |
+| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14176 |
+| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14209 |
+| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14232 |
+| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14245 |
+| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14261 |
+| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 14561 |
+| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 14596 |
+| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 14629 |
+| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 14657 |
+| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 14666 |
+| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 14684 |
+| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 14700 |
+| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 14779 |
+| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 14802 |
+| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 14860 |
 
 | Id | Head | Recorded |
 |---|---|---|
-| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 14861 |
-| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 14873 |
-| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 14880 |
-| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 14889 |
-| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 14895 |
+| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 14900 |
+| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 14912 |
+| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 14919 |
+| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 14928 |
+| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 14934 |
 
 **(d) Owner decisions D-1…D-7, with their resolution and evidence.**
 

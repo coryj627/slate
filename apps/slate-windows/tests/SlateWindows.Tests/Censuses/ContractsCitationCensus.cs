@@ -521,7 +521,12 @@ public sealed class ContractsCitationCensus
                 // TH-13 bound the sweep and the close-out, taking the
                 // section to 192; 191 sits above the pre-task population
                 // of 165 — a fourteenth time.
-                191),
+                //
+                // RR-1 bound the review round: two Python constants the record
+                // named are not shell identifiers and are unbackticked, so the
+                // section stands at 191; 190 sits one below it — a fifteenth
+                // time.
+                190),
             (
                 "Reconciliation",
                 "## Issue reconciliation (#745)",

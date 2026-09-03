@@ -3050,15 +3050,15 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotATextCard()));
             return null;
         }
-        // §H TH-4 (H4): no lease, or a retired publication, is mac's
-        // CardEditorUnavailable — the document has no handle to seed from;
-        // a handle whose text cannot be read is the blocked arm below. On
-        // Windows rows and lease retire together, so this arm is the
-        // defensive consumer of the vocabulary, not a reachable state.
+        // §H PR review round 1 (IH-55): on Windows rows and lease retire
+        // together, so a text row with no handle is not a reachable
+        // state — and a retired announcer would refuse the sentence in
+        // any case. Nothing is spoken from a state that cannot occur;
+        // mac's CardEditorUnavailable is DESIGNATED on Windows in the
+        // trigger ledger with that reason. A handle whose text cannot
+        // be read is the blocked arm below.
         if (_slot.Current.Lease is not { } lease || _slot.Current.Retired)
         {
-            Speak(new CanvasA11yEvent.CanvasMutationRefused(
-                CanvasMutationRefusal.CardEditorUnavailable));
             return null;
         }
         CanvasEditorSeed? seed = null;

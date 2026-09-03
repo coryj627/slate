@@ -39,9 +39,19 @@ public sealed class DeliveryEvidenceCensus
         return doc.RootElement.GetProperty("deliveryEvidence").Clone();
     }
 
-    private static bool Declares(string text, string marker) =>
-        TypeHead.Matches(text).Any(m => m.Groups["name"].Value == marker)
-        || DeclarationHead.Matches(text).Any(m => m.Groups["name"].Value == marker);
+    /// <summary>Comments and string literals are not declaration sites
+    /// (review round 1, IH-58): the generator strips them before it reads
+    /// heads, and so does this mirror.</summary>
+    private static readonly Regex CodeOnly = new(
+        "//[^\n]*|/\\*.*?\\*/|\"(?:[^\"\\\\\n]|\\\\.)*\"",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+
+    private static bool Declares(string text, string marker)
+    {
+        string code = CodeOnly.Replace(text, "");
+        return TypeHead.Matches(code).Any(m => m.Groups["name"].Value == marker)
+            || DeclarationHead.Matches(code).Any(m => m.Groups["name"].Value == marker);
+    }
 
     [Fact]
     public void EveryCSharpMarkerIsADeclarationOrAJourneysAutomationId()

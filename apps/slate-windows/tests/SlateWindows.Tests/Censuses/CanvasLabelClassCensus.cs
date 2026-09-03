@@ -58,6 +58,16 @@ public sealed class CanvasLabelClassCensus
         {
             return "the container fallback";
         }
+        // Review round 1 (IH-61): the positional status joined from its
+        // WORDS — string.Join(" ", n, "of", m, "in", c), a Concat, a
+        // Format — carries no literal with both " of " and " in ", so the
+        // fragment words are offences on any joining line.
+        string word = body.Trim();
+        if ((word == "of" || word == "in")
+            && Regex.IsMatch(line, @"\b(?:Join|Concat|Format|Append|Insert)\s*\(|\+\s*\$?""|""\s*\+"))
+        {
+            return "the positional status (joined from its words)";
+        }
         return null;
     }
 
@@ -105,16 +115,49 @@ public sealed class CanvasLabelClassCensus
     /// list's row, the move-into-group prompt's row — and the renderer's
     /// fit reads core's bounds through the document, never a union.</summary>
     [Theory]
-    [InlineData("CanvasOutlineView.cs", "CanvasPhrase.CardReference(")]
-    [InlineData("CanvasOutlineView.cs", "CanvasPhrase.RowStatus(")]
-    [InlineData("CanvasDocumentViewModel.cs", "CanvasPhrase.PickerRowLabel(row.Kind, row.SpeakableName, row.GroupPath)")]
-    [InlineData("CanvasPromptViewModel.cs", "CanvasPhrase.CardReference(row.Kind, row.SpeakableName) + CanvasPhrase.MarkedSuffix")]
-    [InlineData("CanvasPromptViewModel.cs", "CanvasPhrase.CardReference(g.Kind, g.SpeakableName)")]
-    [InlineData("CanvasRendererView.cs", "Model?.CurrentBounds()")]
-    public void EverySinkCallsItsHelper(string file, string call)
+    [InlineData("CanvasOutlineView.cs", "ForNode", "CanvasPhrase.CardReference(")]
+    [InlineData("CanvasOutlineView.cs", "ForNode", "CanvasPhrase.RowStatus(")]
+    [InlineData("CanvasOutlineView.cs", "RefreshStatus", "CanvasPhrase.RowStatus(")]
+    [InlineData("CanvasDocumentViewModel.cs", "BuildCardPickerModel", "CanvasPhrase.PickerRowLabel(row.Kind, row.SpeakableName, row.GroupPath)")]
+    [InlineData("CanvasPromptViewModel.cs", "Reproject", "CanvasPhrase.CardReference(row.Kind, row.SpeakableName) + CanvasPhrase.MarkedSuffix")]
+    [InlineData("CanvasPromptViewModel.cs", "CanvasMoveIntoGroupPrompt", "CanvasPhrase.CardReference(g.Kind, g.SpeakableName)")]
+    [InlineData("CanvasRendererView.cs", "AllBounds", "Model?.CurrentBounds()")]
+    public void EverySinkCallsItsHelper(string file, string member, string call)
     {
-        string source = File.ReadAllText(Path.Combine(CanvasRoot, file));
-        Assert.Contains(call, source);
+        // Review round 1 (IH-61): the call must sit in the SINK's own
+        // member, read without comments — a helper named in a comment or
+        // a dead member elsewhere in the file is not a call.
+        string span = MemberSpan(File.ReadAllText(Path.Combine(CanvasRoot, file)), member);
+        Assert.Contains(call, span);
+    }
+
+    /// <summary>The member's source from its declaration line to the next
+    /// member-level declaration or the class's closing brace, comments
+    /// stripped.</summary>
+    private static string MemberSpan(string source, string member)
+    {
+        string[] lines = source.Split('\n');
+        var declaration = new Regex(@"^    (?:internal|private|public|protected)\b[^=(]*?\b" + member + @"\s*\(");
+        var spans = new System.Text.StringBuilder();
+        bool found = false;
+        for (int start = 0; start < lines.Length; start++)
+        {
+            if (!declaration.IsMatch(lines[start]))
+            {
+                continue;
+            }
+            found = true;
+            int end = start + 1;
+            while (end < lines.Length
+                && !Regex.IsMatch(lines[end], @"^    (?:internal|private|public|protected|static|\[|///|\})")
+                && !lines[end].StartsWith("}", StringComparison.Ordinal))
+            {
+                end++;
+            }
+            spans.Append(string.Join("\n", lines[start..end])).Append('\n');
+        }
+        Assert.True(found, $"no member {member}");
+        return Regex.Replace(spans.ToString(), @"//[^\n]*", "");
     }
 
     /// <summary>The renderer keeps no union of its own (§W-G row H's
@@ -122,8 +165,19 @@ public sealed class CanvasLabelClassCensus
     [Fact]
     public void TheRendererComputesNoBoundsUnion()
     {
+        // Review round 1 (IH-62): the OPERATION is forbidden, not two
+        // spellings of it — the fit's bounds member is a pure delegation
+        // to core through the document, with no fold, no union, no
+        // extreme value and no loop of its own; and the renderer joins no
+        // rectangles anywhere.
         string source = File.ReadAllText(Path.Combine(CanvasRoot, "CanvasRendererView.cs"));
-        Assert.DoesNotContain("Math.Min(left", source);
-        Assert.DoesNotContain("double.MaxValue, top", source);
+        string span = MemberSpan(source, "AllBounds");
+        Assert.Contains("Model?.CurrentBounds()", span);
+        Assert.False(
+            Regex.IsMatch(span, @"Math\.Min|Math\.Max|\.Min\(|\.Max\(|Union|MaxValue|MinValue|foreach|\bfor\s*\(|Aggregate"),
+            "the fit's bounds member computes something of its own:\n" + span);
+        string code = Regex.Replace(source, @"//[^\n]*", "");
+        Assert.DoesNotContain("Rect.Union", code);
+        Assert.DoesNotContain(".Union(", code);
     }
 }

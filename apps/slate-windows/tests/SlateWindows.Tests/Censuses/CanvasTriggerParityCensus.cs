@@ -38,6 +38,7 @@ public sealed class CanvasTriggerParityCensus
         "CanvasUndoMenuTitle",
         "CanvasHistoryQuarantinedTitle",
         "CanvasMutationRefused/Reopening",
+        "CanvasMutationRefused/CardEditorUnavailable",
     ];
 
     private static readonly HashSet<string> MacDesignated =
@@ -256,13 +257,18 @@ public sealed class CanvasTriggerParityCensus
                 }
                 string source = File.ReadAllText(path);
                 string member = site.Groups[2].Value;
-                if (member != "?" && !Regex.IsMatch(source, @"\b(func|var|let)\s+" + Regex.Escape(member) + @"\b"))
+                // Review round 1 (IH-56): the key must be spelled INSIDE the
+                // Swift member the row names — a type-level func/var/let —
+                // so a row naming a local, or a key that moved to another
+                // member of the same file, fails.
+                string? span = member == "?" ? null : MemberSpan(source, member, swift: true);
+                if (span is null)
                 {
                     failures.Add($"{row.Key}: {site.Value} names no member");
                 }
-                if (!tokens.Any(t => source.Contains(t, StringComparison.Ordinal)))
+                else if (!tokens.Any(t => span.Contains(t, StringComparison.Ordinal)))
                 {
-                    failures.Add($"{row.Key}: {site.Value} does not spell {string.Join("/", tokens)}");
+                    failures.Add($"{row.Key}: {site.Value} does not spell {string.Join("/", tokens)} inside {member}");
                 }
             }
         }
@@ -294,19 +300,28 @@ public sealed class CanvasTriggerParityCensus
         @"^\s+(?:public|internal|private|protected)\s+(?:static\s+|override\s+|async\s+|virtual\s+|sealed\s+|new\s+|readonly\s+)*(?:[\w<>?,\[\]\.]+\s+)?(\w+)\s*(?:\(|=>|=|\{|$)",
         RegexOptions.Compiled);
 
+    /// <summary>A Swift member is declared at the type's own indentation —
+    /// four spaces inside <c>extension X {</c> — with func/var/let; a
+    /// deeper let/var is a local of the member above it (the generator's
+    /// MEMBER_SWIFT, mirrored; review round 1, IH-56).</summary>
+    private static readonly Regex SwiftMemberDeclaration = new(
+        @"^ {0,4}(?:@\w+\s+)*(?:(?:private|fileprivate|internal|public|open)(?:\(set\))?\s+)?(?:static\s+|final\s+|override\s+|mutating\s+)*(?:func|var|let|init|subscript)\s+(\w+)",
+        RegexOptions.Compiled);
+
     /// <summary>The source of EVERY declaration bearing the member's name
     /// (overloads, and the same name in sibling classes), each from its
     /// declaration to the next declaration at the same or a shallower
     /// indentation — joined, so a token in any of them counts; null when
     /// no declaration bears the name.</summary>
-    private static string? MemberSpan(string source, string member)
+    private static string? MemberSpan(string source, string member, bool swift = false)
     {
+        Regex declaration = swift ? SwiftMemberDeclaration : MemberDeclaration;
         string[] lines = source.Split('\n');
         var spans = new System.Text.StringBuilder();
         bool found = false;
         for (int i = 0; i < lines.Length; i++)
         {
-            Match m = MemberDeclaration.Match(lines[i]);
+            Match m = declaration.Match(lines[i]);
             if (!m.Success || m.Groups[1].Value != member)
             {
                 continue;
@@ -317,7 +332,7 @@ public sealed class CanvasTriggerParityCensus
             {
                 if (j > i)
                 {
-                    Match next = MemberDeclaration.Match(lines[j]);
+                    Match next = declaration.Match(lines[j]);
                     int nextIndent = lines[j].Length - lines[j].TrimStart().Length;
                     if (next.Success && nextIndent <= indent)
                     {

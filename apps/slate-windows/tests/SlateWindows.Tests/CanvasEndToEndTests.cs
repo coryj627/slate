@@ -192,10 +192,13 @@ public sealed class CanvasEndToEndTests : IDisposable
         _announced.Clear();
         document.CanvasDeleteSelection();
         document.AnnouncerForTests.FlushForTests();
+        // Review round 1 (IH-64): the sentence is core's destructive arm
+        // with the platform's chord (D-6) — "Deleted ⟨card⟩ — Ctrl+Z to
+        // undo" — not any host line that mentions undo.
         Assert.Contains(
             _announced,
-            a => a.Text.Contains("Ctrl+Z", StringComparison.Ordinal)
-                || a.Text.Contains("undo", StringComparison.OrdinalIgnoreCase));
+            a => a.Text.StartsWith("Deleted ", StringComparison.Ordinal)
+                && a.Text.EndsWith(" — Ctrl+Z to undo", StringComparison.Ordinal));
         Assert.Equal(8, document.Outline.Count);
         document.CanvasUndo();
         Assert.Equal(9, document.Outline.Count);

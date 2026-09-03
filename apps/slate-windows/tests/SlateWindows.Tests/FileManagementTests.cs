@@ -1379,16 +1379,28 @@ public sealed class FileManagementTests
     /// sentences the sidebar composed ("Could not create canvas …") are
     /// gone; the render carries the attempted name and the reason.</summary>
     [Fact]
-    public void AFailedCanvasCreationIsCoresSentence()
+    public async Task AFailedCanvasCreationIsCoresSentence()
     {
-        string sentence = FilesSidebarViewModel.CanvasCreateFailure("Untitled Canvas.canvas: no free name");
+        // Review round 1 (IH-54): the failure is the typed event, and the
+        // sidebar announces THAT event — not a host line carrying its text.
+        A11yEvent failure = FilesSidebarViewModel.CanvasCreateFailure("Untitled Canvas.canvas: no free name");
+        var typed = Assert.IsType<A11yEvent.Canvas>(failure);
         Assert.Equal(
-            SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
-                new CanvasA11yEvent.CanvasActionFailed(
-                    CanvasFailedAction.NewCanvas, "Untitled Canvas.canvas: no free name"))).Text,
-            sentence);
+            new CanvasA11yEvent.CanvasActionFailed(CanvasFailedAction.NewCanvas, "Untitled Canvas.canvas: no free name"),
+            typed.Event);
+        string sentence = SlateUniffiMethods.A11yRender(failure).Text;
         Assert.Contains("Untitled Canvas.canvas: no free name", sentence);
         Assert.DoesNotContain("Could not create canvas Untitled", sentence);
+
+        using FixtureVault fixture = FixtureVault.Create(1, "canvas-create-failure");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        announced.Clear();
+        rig.Sidebar.ReportFailure(failure);
+        A11yEvent delivered = Assert.Single(announced);
+        Assert.Same(failure, delivered);
+        Assert.Equal(sentence, rig.Sidebar.Status);
     }
 
     /// <summary>§E TE-10 (IE-21/IE-22): New Canvas is the vault-scoped

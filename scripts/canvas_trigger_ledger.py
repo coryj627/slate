@@ -44,6 +44,7 @@ DESIGNATED = {
     "windows": {
         "CanvasUndoMenuTitle": "no Edit menu on Windows (HD-D3); the history verbs' palette rows carry the registry's static labels",
         "CanvasHistoryQuarantinedTitle": "no Edit menu on Windows (HD-D3)",
+        "CanvasMutationRefused/CardEditorUnavailable": "rows and lease retire together on Windows (§A, §C-unit): a text row with no handle is not a reachable state, and a retired announcer refuses the sentence — no trigger to consume (PR review round 1, IH-55)",
         "CanvasMutationRefused/Reopening": "Windows retargets synchronously (§A): no pending-preparation window exists for the refusal to arise in; the read-side Reopening status carries the state",
     },
     "mac": {
@@ -88,7 +89,11 @@ def keys() -> list[tuple[str, str | None]]:
 MEMBER_CS = re.compile(
     r"^\s+(?:public|internal|private|protected)\s+(?:static\s+|override\s+|async\s+|virtual\s+|sealed\s+|new\s+|readonly\s+)*"
     r"(?:[\w<>?,\[\]\.]+\s+)?(\w+)\s*(?:\(|=>|=|\{|$)")
-MEMBER_SWIFT = re.compile(r"^\s*(?:@\w+\s+)*(?:private\s+|fileprivate\s+|internal\s+|public\s+|open\s+)?"
+# A Swift MEMBER is declared at the type's own indentation (four spaces
+# inside `extension X {` / `final class X {`); a `let`/`var` deeper than
+# that is a local of the member above it, never a site (review round 1,
+# IH-56).
+MEMBER_SWIFT = re.compile(r"^ {0,4}(?:@\w+\s+)*(?:private\s+|fileprivate\s+|internal\s+|public\s+|open\s+)?"
                           r"(?:static\s+|final\s+|override\s+)*(?:func|var|let)\s+(\w+)")
 FACT_CS = re.compile(r"^\s+public\s+(?:async\s+)?(?:void|Task)\s+(\w+)\s*\(")
 
@@ -259,7 +264,7 @@ def report() -> int:
     print(f"no Windows site: {len(missing_win)} -> {missing_win}")
     print(f"no Windows fact: {len(missing_fact)} -> {missing_fact}")
     print(f"no mac site: {len(missing_mac)} -> {missing_mac}")
-    return 0
+    return 1 if (missing_win or missing_fact or missing_mac) else 0
 
 
 if __name__ == "__main__":

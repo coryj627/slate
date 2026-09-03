@@ -138,6 +138,12 @@ public sealed class WcMatrixCanvasEvidenceCensus
 
     private sealed record Row(string Title, string[] Cells);
 
+    /// <summary>Review round 1 (IH-57): a cell HAS a token when the token
+    /// stands as a whole word in it — `NotDataGrid` does not carry
+    /// `DataGrid`; a substring is not a claim.</summary>
+    private static bool CellHas(string cell, string token) =>
+        Regex.IsMatch(cell, @"(?<![A-Za-z0-9_])" + Regex.Escape(token) + @"(?![A-Za-z0-9_])");
+
     private static string RepoRoot => SourceText.RepoRoot();
 
     private static List<Row> CanvasRows()
@@ -266,7 +272,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
                     {
                         failures.Add($"{surface.Title}: {peer.Class} does not return control type {type}");
                     }
-                    if (!controlCell.Contains(type, StringComparison.Ordinal))
+                    if (!CellHas(controlCell, type))
                     {
                         failures.Add($"{surface.Title}: the control-type cell lacks {type} ({peer.Class})");
                     }
@@ -277,7 +283,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
                     {
                         failures.Add($"{surface.Title}: {peer.Class} does not handle PatternInterface.{pattern}");
                     }
-                    if (!patternCell.Contains(pattern, StringComparison.Ordinal))
+                    if (!CellHas(patternCell, pattern))
                     {
                         failures.Add($"{surface.Title}: the patterns cell lacks {pattern} ({peer.Class})");
                     }
@@ -285,21 +291,21 @@ public sealed class WcMatrixCanvasEvidenceCensus
             }
             foreach (string type in surface.NativeControlTypes)
             {
-                if (!controlCell.Contains(type, StringComparison.Ordinal))
+                if (!CellHas(controlCell, type))
                 {
                     failures.Add($"{surface.Title}: the control-type cell lacks {type}");
                 }
             }
             foreach (string pattern in surface.NativePatterns)
             {
-                if (!patternCell.Contains(pattern, StringComparison.Ordinal))
+                if (!CellHas(patternCell, pattern))
                 {
                     failures.Add($"{surface.Title}: the patterns cell lacks {pattern}");
                 }
             }
             foreach (string source in surface.NameSources)
             {
-                if (!nameCell.Contains(source, StringComparison.Ordinal))
+                if (!CellHas(nameCell, source))
                 {
                     failures.Add($"{surface.Title}: the Name/HelpText cell lacks {source}");
                 }
@@ -324,19 +330,42 @@ public sealed class WcMatrixCanvasEvidenceCensus
                     failures.Add($"{surface.Title}: the evidence cell lacks `{name}`");
                 }
             }
-            // Every backticked name in the evidence cell RESOLVES: a fact or
-            // journey, a test class, or a shell member the prose points at.
+            // EVERY backticked token in the evidence cell RESOLVES (review
+            // round 1, IH-57 — no length floor): a fact or journey, a test
+            // or benchmark class, a shell member the prose points at, an
+            // axe label this surface scans, or a fixture or scenario
+            // directory under core's tests.
             string shell = ShellText();
-            foreach (Match backticked in Regex.Matches(evidence, "`([A-Za-z][A-Za-z0-9_]{14,})`"))
+            foreach (Match backticked in Regex.Matches(evidence, "`([^`]+)`"))
             {
                 string name = backticked.Groups[1].Value;
-                bool method = Regex.IsMatch(tests, @"\b(void|Task)\s+" + name + @"\s*\(");
-                bool type = Regex.IsMatch(tests, @"\bclass\s+" + name + @"\b")
-                    || Regex.IsMatch(BenchText(), @"\bclass\s+" + name + @"\b");
-                bool member = Regex.IsMatch(shell, @"\b" + name + @"\s*[\(<]");
-                if (!method && !type && !member)
+                bool method = Regex.IsMatch(tests, @"\b(void|Task)\s+" + Regex.Escape(name) + @"\s*\(");
+                bool type = Regex.IsMatch(tests, @"\bclass\s+" + Regex.Escape(name) + @"\b")
+                    || Regex.IsMatch(BenchText(), @"\bclass\s+" + Regex.Escape(name) + @"\b");
+                bool member = Regex.IsMatch(shell, @"\b" + Regex.Escape(name) + @"\s*[\(<]");
+                bool axe = surface.AxeLabels.Contains(name);
+                // A dotted token — `Type.Member` — resolves when the type is
+                // declared and the member is declared in the same trees.
+                bool dotted = false;
+                if (name.Contains('.', StringComparison.Ordinal))
                 {
-                    failures.Add($"{surface.Title}: `{name}` resolves to no fact, journey, test or benchmark class, or shell member");
+                    string[] parts = name.Split('.');
+                    string owner = parts[^2];
+                    string leaf = parts[^1];
+                    string all = tests + shell + BenchText();
+                    dotted = Regex.IsMatch(all, @"\b(?:class|record|struct|interface)\s+" + Regex.Escape(owner) + @"\b")
+                        && Regex.IsMatch(all, @"\b" + Regex.Escape(leaf) + @"\s*[\(<{=]");
+                }
+                bool pathLike = name.Contains('/', StringComparison.Ordinal);
+                bool testFile = pathLike && Directory
+                    .EnumerateFiles(Path.Combine(RepoRoot, "apps", "slate-windows", "tests"), "*.cs", SearchOption.AllDirectories)
+                    .Any(p => p.Replace('\\', '/').EndsWith("/" + name + ".cs", StringComparison.Ordinal));
+                bool fixture = !pathLike
+                    && (Directory.Exists(Path.Combine(RepoRoot, "crates", "slate-core", "tests", "fixtures", name))
+                        || Directory.EnumerateFiles(Path.Combine(RepoRoot, "crates", "slate-core", "tests", "fixtures"), name + ".*", SearchOption.AllDirectories).Any());
+                if (!method && !type && !member && !axe && !fixture && !testFile && !dotted)
+                {
+                    failures.Add($"{surface.Title}: `{name}` resolves to no fact, journey, test or benchmark class, shell member, axe label or fixture");
                 }
             }
             MatchCollection labels = Regex.Matches(evidence, "axe: (`[a-z0-9-]+`(?:, `[a-z0-9-]+`)*)");
@@ -378,14 +407,22 @@ public sealed class WcMatrixCanvasEvidenceCensus
         string path = Path.Combine(RepoRoot, "docs", "plans", "18_windows_port", "reports", "w6_1_canvas_at_checklist.md");
         Assert.True(File.Exists(path), "the W6-1 AT checklist is missing");
         string text = File.ReadAllText(path);
-        foreach (string field in (string[])["**Tester:**", "**AT:**", "**OS:**", "**Build:**", "**Corpus:**", "**Method:**", "**Run date:**", "**Evidence reference:**"])
+        // Review round 1 (IH-60): the header FIELDS have values, and the
+        // values agree with the cells — while every human cell is Pending,
+        // the tester and the run date read Pending; once a cell records a
+        // run, the tester is named and the run date is a date.
+        var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string field in (string[])["Tester", "AT", "OS", "Build", "Corpus", "Method", "Run date", "Evidence reference"])
         {
-            Assert.Contains(field, text);
+            Match value = Regex.Match(text, @"\*\*" + Regex.Escape(field) + @":\*\* ([^·\n]+)");
+            Assert.True(value.Success && value.Groups[1].Value.Trim().Length > 0, $"the checklist's {field} field is missing or empty");
+            fields[field] = value.Groups[1].Value.Trim();
         }
         var rows = text.Split('\n').Where(l => Regex.IsMatch(l, @"^\| \d+ \|")).Select(l => l.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToArray()).ToList();
         Assert.Equal(11, rows.Count);
         var tItems = new HashSet<int>();
         string tests = TestText();
+        bool anyRun = false;
         foreach (string[] row in rows)
         {
             Assert.Equal(9, row.Length);
@@ -395,17 +432,37 @@ public sealed class WcMatrixCanvasEvidenceCensus
             }
             foreach (int human in (int[])[6, 7, 8])
             {
+                // Exactly "Pending", or a run: "Verified ⟨date⟩ …" — never
+                // "Unverified", never a bare word.
+                bool run = Regex.IsMatch(row[human], @"^Verified \d{4}-\d{2}-\d{2}\b");
+                anyRun |= run;
                 Assert.True(
-                    row[human] == "Pending" || row[human].Contains("verified", StringComparison.OrdinalIgnoreCase),
+                    row[human] == "Pending" || run,
                     $"checklist row {row[0]}: a human cell that is neither Pending nor a recorded run: {row[human]}");
             }
-            foreach (Match backticked in Regex.Matches(row[5], "`([A-Za-z][A-Za-z0-9_]{14,})`"))
+            // The automated twin is named — at least one resolving long
+            // name — or the row says "none — human only" in those words.
+            MatchCollection twins = Regex.Matches(row[5], "`([A-Za-z][A-Za-z0-9_]{14,})`");
+            Assert.True(
+                twins.Count > 0 || row[5].StartsWith("none — human only", StringComparison.Ordinal),
+                $"checklist row {row[0]}: no automated twin and no \"none — human only\"");
+            foreach (Match backticked in twins)
             {
                 string name = backticked.Groups[1].Value;
                 Assert.True(
                     Regex.IsMatch(tests, @"\b(void|Task)\s+" + name + @"\s*\(") || Regex.IsMatch(tests, @"\bclass\s+" + name + @"\b"),
                     $"checklist row {row[0]}: the twin `{name}` resolves to no fact, journey or test class");
             }
+        }
+        if (anyRun)
+        {
+            Assert.False(fields["Tester"].Contains("Pending", StringComparison.Ordinal), "a run is recorded but the tester is Pending");
+            Assert.Matches(@"^\d{4}-\d{2}-\d{2}", fields["Run date"]);
+        }
+        else
+        {
+            Assert.StartsWith("Pending", fields["Tester"], StringComparison.Ordinal);
+            Assert.StartsWith("Pending", fields["Run date"], StringComparison.Ordinal);
         }
         Assert.Equal(Enumerable.Range(1, 10), tItems.OrderBy(i => i));
         string voice = Assert.Single(rows, r => r[0] == "6")[3];
