@@ -531,9 +531,9 @@ public sealed class ContractsCitationCensus
                 "E13",
                 "## PR E13 — the typed refused-open reason (#1174)",
                 "## §W-G canonical-consumption audit",
-                // The E13 slice (#1174): seven contracts, three decisions,
+                // The E13 slice (#1174): seven contracts, four decisions,
                 // one risk, the pinning tests — a small section with a
-                // floor of its own.
+                // floor of its own (IE13-19).
                 3_000,
                 // A DESIGN floor at revision 1: the citations are existing
                 // names; the floor rises with the records.
