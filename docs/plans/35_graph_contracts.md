@@ -217,8 +217,9 @@ witness that violates one.
 
 | Payload | Invariant the host guarantees |
 |---|---|
-| `GraphRowCopy` | built by exactly two constructors — the Connections row (`ConnectionsPanel.swift:424–435`: `references = in_links + in_embeds`, `embed` = reached by embeds only) and the diagram row (`GraphDiagramModel.swift:97–106`: `references = in_links`, `embed = false`) — so `references ≥ in_links` always, with equality from the diagram; an Attachment or a Ghost has no file to link FROM, so `out_links == 0` for both; a Ghost's copy speaks `references`, a Note's or Attachment's its degrees; `embed` is independent of `kind` |
-| `GraphSnapshotCounts` | `orphans ≤ notes` — an orphan is a Note |
+| `GraphRowCopy` | built by exactly two constructors — the Connections row (`ConnectionsPanel.swift:424–435`: `references = in_links + in_embeds`, `embed` = reached by embeds only) and the diagram row (`GraphDiagramModel.swift:97–106`: `references = in_links`, `embed = false`) — so `references ≥ in_links` always, with equality from the diagram; an Attachment or a Ghost has no file to link FROM, so `out_links == 0` for both, and an embed-only relationship INTO one is an incoming embed, so `embed` on a Ghost or Attachment implies `references > in_links`; a row without the embed flag whose references exceed its link degree still has a degree (`in_links > 0 || out_links > 0`); a Ghost's copy speaks `references`, a Note's or Attachment's its degrees; `embed` is independent of `kind` |
+| `GraphSnapshotCounts` | `orphans ≤ notes` — an orphan is a Note; `links > 0 ⇒ notes > 0` — every edge originates from a Note; `unresolved ≤ links` — every retained ghost was created by a retained reference (`session.rs::snapshot_summary_counts`) |
+| `GraphNeighborhoodCounts` | `in_links > 0 ∨ out_links > 0 ⇒ note_count > 0` — a linked centre has a depth-one Note neighbour or is one (`session.rs:1949–1988`) |
 | `GraphNeighborhoodCounts.depth` | 1..=3 — the session clamps before it exports |
 | `GraphFilterCount` | `shown ≤ total` — the needle narrows the fetched set |
 | `GraphForceValue.percent` | 0..=100 — a slider's value ×100, rounded |
@@ -555,11 +556,11 @@ slots (no noun) are witnessed, not boundary-matrixed.
 | `GraphPreset` · MostLinked.in_links | 0, 1, many | `1 links in` | yes |
 | `GraphFilterCount` · shown / total | shown 0, 1, many; total 0 (empty graph), 1, many | — (no noun) | no |
 | `GraphForceValue` · percent | 0…100 (bare) | — | no |
-| `GraphZoom` · percent | positive (bare) | — | no |
+| `GraphZoom` · percent | 10..=400 (bare; the viewport's clamp) | — | no |
 | `GraphWhereAmI` · row.in_links / row.out_links (Note, Attachment) | 0, 1, many | `1 links in` / `1 links out` | yes, both |
 | `GraphWhereAmI` · row.references (Ghost) | 0, 1, many | `1 references` | yes |
-| `GraphWhereAmI` · component | 0, many (bare) | — | no |
-| `GraphWhereAmI` · zoom_percent | positive (bare) | — | no |
+| `GraphWhereAmI` · component | 0, 1, many (bare) | — | no |
+| `GraphWhereAmI` · zoom_percent | 10..=400 (bare; the viewport's clamp) | — | no |
 | `GraphTierSummary` · count | many only (the tier begins above core's threshold) | `⟨n⟩ nodes` | 0 and 1 unreachable, declared |
 | `GraphNeighborsContent` · labels | 0 (empty string), 1, many | — | no |
 | `GraphNeighborsContent` · more (derived: `labels.len() − 10` when above the cap) | 0 (clause omitted), 1, many | `and 1 more` | no — grammatical |
@@ -594,7 +595,7 @@ row's `references` is written beside its degrees as `in/out/refs`.
 
 | Variant | Witnesses (in order) |
 |---|---|
-| `GraphRow` (10) | Standard Note "Alpha" 3/1/3 · Standard Ghost "Missing Note" 2/0/2 · Standard Note "Pic" 1/0/1 embed · Terse Note "Alpha" 3/1/3 · Verbose Note "Hub" 1024/3/1024 (bare) · Standard Attachment "diagram.png" 2/0/2 · Standard Ghost "Draft" 0/0/0 · Standard Ghost "Todo" 1/0/1 · Standard Note "Alone" 0/0/0 · Standard Ghost "Missing" 1/0/1 embed |
+| `GraphRow` (10) | Standard Note "Alpha" 3/1/3 · Standard Ghost "Missing Note" 2/0/2 · Standard Note "Pic" 1/0/1 embed · Terse Note "Alpha" 3/1/3 · Verbose Note "Hub" 1024/3/1024 (bare) · Standard Attachment "diagram.png" 2/0/2 · Standard Ghost "Draft" 0/0/0 · Standard Ghost "Todo" 1/0/1 · Standard Note "Alone" 0/0/0 · Standard Ghost "Missing" 0/0/1 embed (an embed-only ghost: its one reference is the embed) |
 | `GraphReRooted` (1) | "Alpha" |
 | `GraphSnapshotSummary` (7) | 247 / 1,032 / 12 / 3 · 1 / 1 / 0 / 0 (second sentence omitted) · 0 / 0 / 0 / 0 · 40 / 60 / 1 / 1, filtered · 5 / 9 / 0 / 2 · 3 / 4 / 2 / 0 (unresolved zero rendered) · 1,200 / 3,400 / 1,000 / 1,001 (all four grouped) |
 | `GraphNeighborhoodSummary` (5) | "Alpha" 3/1, 7 notes, depth 1 · "Hub" 1,032/4, 1,206 notes, depth 3 · "diagram.png" 0/0, 0 notes, depth 2 · "Solo" 1/1, 1 notes, depth 1 · "Hub2" 4/1,032, 12 notes, depth 2 (out grouped) |
@@ -833,6 +834,137 @@ revision 6.
 | IG0a-55 | MAJOR (created by rev 5) | taken — one label per unique neighbour ID, text may repeat; the uniqueness assertion removed; the "Foo, Foo" witness |
 | IG0a-56 | MAJOR (created by rev 5) | taken — the needle predicate is mac's, case- and diacritic-insensitive; core folds with NFD and drops combining marks; the "Café"/`cafe` witness |
 | IG0a-57 | MAJOR (missed) | taken — T71 and T72, the two ordered option sets |
+
+### THE FREEZE — revision 6 stands
+
+Round 4's verdict: revise again — Subsystem A frozen (round 5), Subsystem B(ii) frozen (round 6), Subsystem B(i) with one blocker CREATED by revision 6's fix (an unconstructible embed-only ghost tuple), one earlier-round miss and one minor. The section is frozen at revision 4
+on 2026-09-03; the round-4 findings below are the ledger the task
+loop discharges by code. Precedent applied; the owner may overrule.
+
+### Round 6 — three findings; the ledger
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| IG0a-58 | BLOCKER (created by rev 6) | ledger — discharged by code: the witness is the embed-only ghost `0/0/1 embed`; `row_copy_is_constructible` gains the two rules (embed on a Ghost or Attachment ⇒ `references > in_links`; references above the link degree without the flag ⇒ a degree); 0a-2b and 0a-17 corrected in the frozen text as the discharge |
+| IG0a-59 | BLOCKER (missed) | ledger — discharged by code: `links > 0 ⇒ notes > 0`, `unresolved ≤ links`, and the neighbourhood's `in ∨ out ⇒ note_count > 0` named in 0a-2b and asserted by `graph_witnesses_obey_the_payload_invariants` |
+| IG0a-60 | MINOR (missed) | ledger — discharged in the text: 0a-15's zoom rows read 10..=400, the component row 0, 1, many |
+
+The freeze applies the standing precedent (E13's: a round whose blocker
+was created by the previous fix, rule 5, with the remaining findings
+carried as a ledger the task loop discharges by code) — **precedent
+applied; the owner may overrule.** Subsystem A was frozen by round 5,
+B(ii) by round 6; B(i)'s three items are the ledger above, every one
+discharged before the PR opened.
+
+### Task loop — records
+
+**TG0a-0 — Baselines.** `A11yEvent` 198 top-level variants;
+`tests/fixtures/a11y/corpus.json` 448 entries; CANVAS_NESTED_ENUMS 18
+families; `A11yResidueCensusTests.pinnedResidueSites` 29;
+`GraphAnnouncer.swift` 239 lines with one `// W0.5-3 residue:` site; the
+graph citation census floor 7 over 8 (revision 4, before the bindings).
+
+**TG0a-1 — Core: the count records, the formatter, the session.**
+`graph.rs` gains `GraphSnapshotCounts` and `GraphNeighborhoodCounts`
+with the semantics of 0a-7 in their doc comments and a `summary_counts`
+field on each record; `graph_summary.rs` (new) holds `snapshot_summary`
+and `neighborhood_summary`; `session.rs`'s `snapshot_audio_summary`
+becomes `snapshot_summary_counts` and the neighbourhood composer is
+gone — both `audio_summary` strings are the formatter over the exported
+counts. Facts: `summary_counts_are_the_index_counts` (a vault with a
+count-2 link, an embed, a ghost, a far note beyond depth 1 and an
+attachment centre: `links` 6 under the default filter and 7 with
+attachments shown; the centre's degrees 2/1 at depth 1 AND depth 2;
+`note_count` 2 then 3; the attachment centre 0/0 with one note) and
+`summary_events_render_the_snapshot_fields_verbatim`; the two module
+tests of `graph_summary.rs`; the 36 pre-existing session graph facts
+unchanged, the two shipped summary strings among them.
+
+**TG0a-2 — Core: the family.** `a11y.rs` gains the graph section —
+`GraphVerbosity`, `GraphRowCopy`, `GraphPresetOutcome`,
+`GraphForceControl`, `GraphSurfaceMode`, `GraphWhereAmISelection`,
+`GraphWhereAmIFilter`, `GraphStatusNote`, `GraphBlockedReason`,
+`GraphA11yEvent` (17 variants), `graph_row_copy`, the `priority()` /
+`render()` pair — `A11yEvent::Graph { event }` with its two delegation
+arms (198 → 199), the graph rows of the ONE class-key list, the module
+doc rewritten (the graph is no longer a named engine; only the
+structural-mutation builder remains), `graph_corpus()` (73 witnesses,
+appended after `CanvasStatus { Loading }`), 73 golden rows, and the
+tests of 0a's list — every one generated from one matrix source
+(`g0a-matrix.py` in the session scratch: the Rust corpus body, the
+golden rows, the 73 Debug identities and both host mirrors are five
+renderings of one table, so the five places cannot disagree). The
+artifact regenerated through its own path: 448 → 521, 73 graph entries.
+Facts green: `cargo test -p slate-core --lib a11y::` (25, the 16 graph
+tests among them), `graph_summary::` (2), `session::tests::graph::` (36).
+
+**TG0a-3 — FFI.** `lib.rs` mirrors every type of 0a-2b (`GraphWhereAmIFilter`
+included), adds `From<GraphNodeKind> for core::graph::NodeKind`, the two
+count records both ways, `summary_counts` on the two graph records, and
+the `Graph` arm; the tripwires generalised as 0a-3 says:
+`pinned_coalescing_classes(core_source, family)` reads one family's
+markers; `the_mac_graph_coalescing_switch_matches_the_pinned_class_list`
+(new) over `GraphAnnouncer.swift`; the Windows corpus-order parser
+derives the inner marker from the wrapper; the FFI mirror test reads
+the canvas tuples as before and the graph's `NestedEnum` rows BY KEY
+(`core:`, `mirror:`, `path:`), opens the named source, compares the
+mirror-named set, and pins the nine graph arm counts. Facts green:
+`cargo test -p slate-uniffi --lib -- a11y corpus_mirror coalescing
+ffi_mirror` (7). Clippy clean over both crates; `cargo fmt --check`
+clean.
+
+**TG0a-4 — The census mirrors.** 73 entries appended to
+`A11yCorpusCensus.cs` and `A11yCorpusCensusTests.swift` after the
+canvas's last, in matrix order, from the one matrix source. Bindings
+regenerated (`generate-bindings.ps1`; 83 mentions of `GraphA11yEvent`
+in the generated C#); `A11yCorpusCensus` and
+`GraphContractsCitationCensus` green on the fresh Windows build (4).
+
+**TG0a-5 — Task 0a-2, the mac host.** `GraphAnnouncer.swift` rewritten
+to 0a-13's API (`announce`, `announceFilterCount(shown:total:gate:)`,
+`relay`; the private `emit` over `a11yRender`, pending `(text,
+priority, gate)`, AppKitAnnouncementPoster, the High flush) with the
+`GraphVerbosity` and `GraphSurfaceMode` extensions (0a-5, 0a-18); every
+S-row migrated by name (S1–S26), L1–L2 and C1–C2 rendering their events,
+the two `GraphRowRef` constructors now `rowCopy` accessors, the five
+text builders replaced by their typed twins (`changedForce`,
+`graphPresetEvent`, `graphFilterCount`, `graphDiagramWhereAmIEvent`;
+the filter clause is core's), `GraphTabMode` deleted for
+`GraphSurfaceMode` at its four type sites with the tags `table` /
+`diagram` kept, the seven fixtures given `summaryCounts:`, every named
+test caller migrated, GraphAnnouncerTests rewritten to the 0a-9 suite
+(latest-wins ×4, independence, the gate, the cancel, the High flush
+announced and relayed, the relay's priority, the empty render, the
+funnel guard now also refusing `.hostComposed`), `pinnedResidueSites`
+29 → 28. Unrun on this box (0aR-1): the mac lane arbitrates.
+
+**TG0a-6 — Mutations, byte-restored (absolute paths; every file's hash
+asserted equal after restore).**
+
+| # | Mutation | Caught by |
+|---|---|---|
+| M1 | a witness deleted from `graph_corpus()` | `the_graph_witnesses_are_exactly_the_matrix_in_order`, `the_graph_family_witness_count_is_pinned` |
+| M2 | two witnesses reordered | `the_graph_witnesses_are_exactly_the_matrix_in_order` ("diverges at index") |
+| M3 | a template's trailing period dropped | `corpus_renders_the_shipped_strings` |
+| M4 | the `GraphWhereAmIFilter` row dropped from the inventory | `every_graph_parameter_enum_is_listed_for_coverage` |
+| M5 | the inventory's `mirror` for `NodeKind` misnamed | `the_ffi_mirror_covers_every_core_a11y_variant` |
+| M6 | the `forceValue` bullet dropped from the class-key list | `the_mac_graph_coalescing_switch_matches_the_pinned_class_list` |
+| M7 | `links` counted Link edges only | `summary_counts_are_the_index_counts` |
+| M8 | the unresolved-preset Ghost witness given ghosts-hidden flags | `graph_where_am_i_witnesses_are_host_reachable` ("unreachable Where-am-I witness") |
+| M9 | the `Unresolved { count: 0 }` witness deleted | `graph_count_slots_render_at_every_reachable_cardinality` ("reachable at [Zero]") |
+| M10 | a Windows mirror entry deleted | `the_windows_corpus_mirror_lists_every_event_in_order` |
+| M11 | `case .graphForceValue` dropped from the mac switch | `the_mac_graph_coalescing_switch_matches_the_pinned_class_list` |
+| M12 | `GraphTierEntered` dropped from the FFI mirror | `the_ffi_mirror_covers_every_core_a11y_variant` (a compile error, then the mirror difference) |
+| M13 | GRAPH_NEIGHBOR_LABEL_CAP moved to 9 | `corpus_renders_the_shipped_strings` |
+
+Thirteen of thirteen caught; every mutated file restored byte for byte
+(hash asserted).
+
+**TG0a-7 — Floors.** The graph citation census floor: 7 over 8 at
+revision 4, then 77 over 78 at revision 5 once the regenerated bindings
+declared the family's names in the Windows tree (the census counts a
+backticked name declared anywhere it scans, generated bindings
+included), then **79 over 80** at revision 6.
 
 ### Tests that pin PR 0a
 

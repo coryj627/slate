@@ -493,7 +493,9 @@ final class GraphDiagramNSView: NSView {
         if tierB != lastTierB {
             lastTierB = tierB
             if tierB {
-                appState?.graphAnnouncer.announce(.graphTierEntered)
+                appState?.graphAnnouncer.announce(
+                    .status(
+                        "Large graph: summary accessibility mode. Table mode has every node."))
             }
         }
         // A mode-switch focus request that arrived before the elements
@@ -622,11 +624,9 @@ final class GraphDiagramNSView: NSView {
         summaryElement = summary
         summary.setAccessibilityRole(.button)
         summary.setAccessibilityParent(self)
-        // LABEL class (contracts doc 0a-14): rendered by core, read as the
-        // element's name, never posted.
         summary.setAccessibilityLabel(
-            a11yRender(event: .graph(event: .graphTierSummary(count: UInt32(visibleIDs.count))))
-                .text)
+            "\(visibleIDs.count) nodes — too many for per-node navigation. "
+                + "Switch to Table mode for the full, navigable list.")
         summary.onPress = { [weak self] in self?.onSwitchToTable?() }
         let switchAction = NSAccessibilityCustomAction(name: "Switch to Table") { [weak self] in
             self?.onSwitchToTable?()
@@ -839,37 +839,32 @@ final class GraphDiagramNSView: NSView {
     }
 
     private func axLabel(_ node: GraphNode, model: GraphDiagramModel) -> String {
-        guard let row = model.rowCopy(node.id) else { return node.label }
-        // The SAME row copy the Table and Connections speak — core renders
-        // it at the announcer's verbosity (contracts doc 0a-11).
-        let verbosity = appState?.graphAnnouncer.verbosity ?? .standard
-        return a11yRender(event: .graph(event: .graphRow(verbosity: verbosity, row: row))).text
+        guard let ref = model.rowRef(node.id) else { return node.label }
+        return appState?.graphAnnouncer.rowPhrase(ref) ?? node.label
     }
 
     /// Neighbor labels as `accessibilityCustomContent` (spec §P2-3 — edges
-    /// aren't AX elements). Only VISIBLE neighbors are announced — a
-    /// filtered-out node isn't in the shown graph, so it must not surface
-    /// in a visible node's connections (finding 5, matching the drawn
-    /// edges which are already visible-gated). The FULL ordered list goes
-    /// to core, which speaks the first ten and counts the rest (W6-2 PR
-    /// 0a, contracts doc 0a-2b: the cap is core's, never applied here).
+    /// aren't AX elements): first 10 unique, then "and k more". Only VISIBLE
+    /// neighbors are announced — a filtered-out node isn't in the shown
+    /// graph, so it must not surface in a visible node's connections
+    /// (finding 5, matching the drawn edges which are already visible-gated).
     private func neighborCustomContent(of id: UInt64, model: GraphDiagramModel)
         -> [AXCustomContent]
     {
         var seen: Set<UInt64> = []
         var labels: [String] = []
+        var extra = 0
         for edge in model.edges {
             let other: UInt64? =
                 edge.sourceId == id ? edge.targetId : (edge.targetId == id ? edge.sourceId : nil)
             guard let other, visibleSet.contains(other), seen.insert(other).inserted,
                 let n = model.node(other)
             else { continue }
-            labels.append(n.label)
+            if labels.count < 10 { labels.append(n.label) } else { extra += 1 }
         }
-        // LABEL class (contracts doc 0a-14): core renders the list and the
-        // overflow; an empty render means no content is attached.
-        let value = a11yRender(event: .graph(event: .graphNeighborsContent(labels: labels))).text
-        guard !value.isEmpty else { return [] }
+        guard !labels.isEmpty else { return [] }
+        var value = labels.joined(separator: ", ")
+        if extra > 0 { value += " and \(extra) more" }
         return [AXCustomContent(label: "Connects to", value: value)]
     }
 

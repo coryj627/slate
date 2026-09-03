@@ -21,14 +21,13 @@ final class A11yResidueCensusTests: XCTestCase {
     /// vocabulary template yet. Shrinking it (converting residue) is the
     /// intended direction.
     ///
-    /// 31 → 30 → 29 → **28**: W6-1 PR 0a gave the canvas announcer a
-    /// typed core vocabulary (`A11yEvent.canvas`) and W6-2 PR 0a did the
-    /// same for the graph (`A11yEvent.graph`), so both announcers post
-    /// rendered events and their `.hostComposed` sites are gone. No
-    /// engine-level vocabulary remains outstanding. The shared
+    /// 31 → 30 → **29**: W6-1 PR 0a gave the canvas announcer a typed
+    /// core vocabulary (`A11yEvent.canvas`), so `CanvasAnnouncer` posts
+    /// rendered events and its `.hostComposed` site is gone. The graph
+    /// announcer is the remaining named engine (W6-2). The shared
     /// structural-mutation site stays: it serves every authoring
-    /// surface, and both admission ladders merely left it.
-    private static let pinnedResidueSites = 28
+    /// surface, and the canvas admission ladder merely left it.
+    private static let pinnedResidueSites = 29
 
     private struct SwiftSource {
         let path: String

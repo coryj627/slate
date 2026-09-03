@@ -3233,7 +3233,7 @@ final class AppState: ObservableObject {
         // not spawn a second graph (round 2 finding 6). It's already the
         // active tab, so this is a no-op beyond the spoken confirmation.
         if case .graph = item {
-            graphAnnouncer.announce(.graphStatus(note: .alreadyOpen))
+            graphAnnouncer.announce(.status("The graph is already open."))
             return
         }
         // Snapshot the outgoing buffer, then open the duplicate. The

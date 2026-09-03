@@ -67,17 +67,13 @@ final class GraphCommandsTests: XCTestCase {
     }
 
     private func snapshot(_ nodes: [GraphNode]) -> GraphSnapshot {
-        GraphSnapshot(
-            nodes: nodes, edges: [], generation: 1, audioSummary: "",
-            summaryCounts: GraphSnapshotCounts(
-                notes: UInt64(nodes.count), links: 0, orphans: 0, unresolved: 0, filtered: false))
+        GraphSnapshot(nodes: nodes, edges: [], generation: 1, audioSummary: "")
     }
 
-    /// The preset headline is a typed outcome (P1-3; the copy moved to
-    /// core's golden in W6-2 PR 0a). Orphans/unresolved carry a count;
-    /// most-linked names the top row under the default sort.
+    /// Announcement copy is normative (P1-3). Orphans/unresolved report a
+    /// count; most-linked names the top row under the default sort.
     @MainActor
-    func testPresetOutcomesAreTyped() {
+    func testPresetAnnouncementStringsAreVerbatim() {
         let appState = AppState()
 
         // Orphans: the snapshot IS the orphan set (backend filtered), so
@@ -86,8 +82,7 @@ final class GraphCommandsTests: XCTestCase {
             node(1, "a", kind: .note), node(2, "b", kind: .note), node(3, "c", kind: .note),
         ])
         XCTAssertEqual(
-            appState.graphPresetEvent(.orphans, snap: orphanSnap),
-            .graphPreset(outcome: .orphans(count: 3)))
+            appState.graphPresetAnnouncement(.orphans, snap: orphanSnap), "3 orphaned notes.")
 
         // Unresolved: counts only ghost rows (the client kind filter).
         let mixedSnap = snapshot([
@@ -96,8 +91,8 @@ final class GraphCommandsTests: XCTestCase {
             node(3, "Also Missing", kind: .ghost),
         ])
         XCTAssertEqual(
-            appState.graphPresetEvent(.unresolved, snap: mixedSnap),
-            .graphPreset(outcome: .unresolved(count: 2)))
+            appState.graphPresetAnnouncement(.unresolved, snap: mixedSnap),
+            "2 unresolved targets.")
 
         // Most linked: the top row under Links-in-desc (label tie-break).
         let hubSnap = snapshot([
@@ -106,8 +101,8 @@ final class GraphCommandsTests: XCTestCase {
             node(3, "mid", kind: .note, inLinks: 4),
         ])
         XCTAssertEqual(
-            appState.graphPresetEvent(.mostLinked, snap: hubSnap),
-            .graphPreset(outcome: .mostLinked(label: "hub", inLinks: 9)))
+            appState.graphPresetAnnouncement(.mostLinked, snap: hubSnap),
+            "Most linked: hub, 9 links in.")
     }
 
     /// Empty graph: most-linked degrades gracefully rather than crashing.
@@ -115,7 +110,7 @@ final class GraphCommandsTests: XCTestCase {
     func testMostLinkedOnEmptyGraph() {
         let appState = AppState()
         XCTAssertEqual(
-            appState.graphPresetEvent(.mostLinked, snap: snapshot([])),
-            .graphPreset(outcome: .noNotesToRank))
+            appState.graphPresetAnnouncement(.mostLinked, snap: snapshot([])),
+            "No notes to rank.")
     }
 }

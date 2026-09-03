@@ -3,16 +3,28 @@
 
 import SwiftUI
 
+/// The Graph tab's modes (U3 toggle pattern: one coherent AX tree per
+/// mode). Table is the accessible-first grid; Diagram is the visual
+/// force-directed projection (P2-3 #559).
+enum GraphTabMode: String, CaseIterable {
+    case table
+    case diagram
+
+    var title: String {
+        switch self {
+        case .table: return "Table"
+        case .diagram: return "Diagram"
+        }
+    }
+}
+
 /// The Graph tab body (Milestone P, P1-2 #555): hosts the mode seam and,
 /// in Table mode, the whole-graph grid + filter bar. One coherent AX
 /// tree per mode (U3 toggle pattern).
 struct GraphContainerView: View {
     @EnvironmentObject private var appState: AppState
     let tabID: TabID
-    // The two modes are core's `GraphSurfaceMode` (W6-2 PR 0a; the local
-    // enum it replaced is gone — `GraphAnnouncer.swift` carries the
-    // picker titles and the persistence tags).
-    @State private var mode: GraphSurfaceMode = .table
+    @State private var mode: GraphTabMode = .table
     @State private var showInspector = false
     /// Bumped on every USER mode switch so the newly-shown projection moves
     /// VoiceOver focus onto the shared-selected node — the row (Table) or
@@ -85,10 +97,10 @@ struct GraphContainerView: View {
             switch newMode {
             case .diagram:
                 appState.ensureGraphDiagram()
-                appState.graphAnnouncer.announce(.graphMode(mode: .diagram))
+                appState.graphAnnouncer.announce(.status("Diagram mode."))
             case .table:
                 appState.resetGraphDiagramState()
-                appState.graphAnnouncer.announce(.graphMode(mode: .table))
+                appState.graphAnnouncer.announce(.status("Table mode."))
             }
         }
         // A backend-filter change rebuilds the diagram's layout too, so
@@ -131,7 +143,7 @@ struct GraphContainerView: View {
     private var filterBar: some View {
         HStack(spacing: Tokens.Spacing.sm) {
             Picker("View", selection: $mode) {
-                ForEach(GraphSurfaceMode.allCases, id: \.self) { m in
+                ForEach(GraphTabMode.allCases, id: \.self) { m in
                     Text(m.title).tag(m)
                 }
             }
@@ -326,7 +338,7 @@ struct GraphTableView: View {
         let shown = filteredRows.count
         let total = allRows.count
         appState.graphAnnouncer.announceFilterCount(
-            shown: UInt32(shown), total: UInt32(total),
+            "\(shown) of \(total) shown",
             gate: { [weak appState] in appState?.graphTabActive == true })
     }
 
@@ -345,9 +357,8 @@ struct GraphTableView: View {
             showsRowContextMenu: true,
             rowActions: rowActions,
             focusRequest: gridFocusRequest,
-            // The grid's own events relay with THEIR priority (0a-D2).
             announce: { [weak appState] event in
-                appState?.graphAnnouncer.relay(event)
+                appState?.graphAnnouncer.announce(.status(a11yRender(event: event).text))
             })
     }
 

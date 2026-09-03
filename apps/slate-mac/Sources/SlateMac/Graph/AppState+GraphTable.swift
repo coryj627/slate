@@ -54,7 +54,7 @@ extension AppState {
             let id = workspace.openTab(.graph, activate: false)
             activateTab(id)
         }
-        graphAnnouncer.announce(.graphStatus(note: .opened))
+        graphAnnouncer.announce(.status("Graph."))
     }
 
     /// Activate a `.graph` tab: park the outgoing note buffer first so
@@ -193,18 +193,16 @@ extension AppState {
                 self.graphTablePendingPreset = nil
                 guard speak else { return }
                 if let preset {
-                    self.graphAnnouncer.announce(self.graphPresetEvent(preset, snap: snap))
+                    self.graphAnnouncer.announce(
+                        .status(self.graphPresetAnnouncement(preset, snap: snap)))
                     return
                 }
                 switch announce {
                 case .summary:
-                    // Typed over the counts the record carries (contracts doc 0a-7).
-                    self.graphAnnouncer.announce(
-                        .graphSnapshotSummary(counts: snap.summaryCounts))
+                    self.graphAnnouncer.announce(.summary(snap.audioSummary))
                 case .filterCount:
-                    let count = self.graphFilterCount(snap)
                     self.graphAnnouncer.announceFilterCount(
-                        shown: count.shown, total: count.total,
+                        self.graphFilterCountText(snap),
                         gate: { [weak self] in self?.graphTabActive == true })
                 case .silent:
                     break
@@ -214,18 +212,17 @@ extension AppState {
                 self.graphTableSnapshot = nil
                 if speak {
                     self.graphAnnouncer.announce(
-                        .graphBlocked(reason: .loadFailed(message: self.humanReadable(error))))
+                        .error("Couldn't load the graph: \(self.humanReadable(error))"))
                 }
             }
         }
     }
 
-    /// The filter count for `snap` under the current client-side text
+    /// "{k} of {n} shown" for `snap` under the current client-side text
     /// filter — the single source of truth the view's synchronous
     /// announcement and the post-fetch announcement both use, so the two
-    /// paths can't drift (round 2 finding 7). The payload of the gated
-    /// `announceFilterCount`; core renders the copy (W6-2 PR 0a).
-    func graphFilterCount(_ snap: GraphSnapshot) -> (shown: UInt32, total: UInt32) {
+    /// paths can't drift (round 2 finding 7).
+    func graphFilterCountText(_ snap: GraphSnapshot) -> String {
         let total = snap.nodes.count
         let needle = graphTableTextFilter.trimmingCharacters(in: .whitespaces)
         let shown =
@@ -234,7 +231,7 @@ extension AppState {
             : snap.nodes.filter {
                 $0.label.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
             }.count
-        return (UInt32(shown), UInt32(total))
+        return "\(shown) of \(total) shown"
     }
 
     /// Drop the shared cross-projection selection if the node it names is
@@ -333,18 +330,15 @@ extension AppState {
         }
     }
 
-    /// The headline event for a preset, computed from the fresh snapshot
-    /// (P1-3; the copy is core's since W6-2 PR 0a). Orphans/unresolved
-    /// carry the shown count; most-linked names the top row under the
-    /// grid's default sort.
-    func graphPresetEvent(_ preset: GraphPreset, snap: GraphSnapshot) -> GraphA11yEvent {
+    /// The spoken headline for a preset, computed from the fresh snapshot
+    /// (P1-3 normative copy). Orphans/unresolved report the shown count;
+    /// most-linked names the top row under the grid's default sort.
+    func graphPresetAnnouncement(_ preset: GraphPreset, snap: GraphSnapshot) -> String {
         switch preset {
         case .orphans:
-            return .graphPreset(
-                outcome: .orphans(count: UInt64(graphPresetShownCount(snap, kind: nil))))
+            return "\(graphPresetShownCount(snap, kind: nil)) orphaned notes."
         case .unresolved:
-            return .graphPreset(
-                outcome: .unresolved(count: UInt64(graphPresetShownCount(snap, kind: .ghost))))
+            return "\(graphPresetShownCount(snap, kind: .ghost)) unresolved targets."
         case .mostLinked:
             // The top row is what the grid shows at row 0 under the
             // default Links-in-descending sort (label/key tie-break) —
@@ -354,8 +348,8 @@ extension AppState {
                 let top = rows.sorted(by: {
                     GraphTableColumn.linksIn.directionalComparator($0, $1, ascending: false)
                 }).first
-            else { return .graphPreset(outcome: .noNotesToRank) }
-            return .graphPreset(outcome: .mostLinked(label: top.label, inLinks: top.linksIn))
+            else { return "No notes to rank." }
+            return "Most linked: \(top.label), \(top.linksIn) links in."
         }
     }
 
