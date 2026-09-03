@@ -43,7 +43,7 @@ public sealed class GraphContractsCitationCensus
             (
                 "0b",
                 "## PR 0b — the graph structural queries move to core",
-                "<!-- end of the graph contracts document -->",
+                "## PR A — the graph document, the tab wiring, the table projection",
                 // The structural-queries section: fifteen contracts, the query
                 // surface, decisions, divergences, risks, the register, the pins.
                 6_000,
@@ -52,6 +52,18 @@ public sealed class GraphContractsCitationCensus
                 // unbackticked until they exist. The floor sits one below the
                 // measured population and rises with the records.
                 33),
+            (
+                "A",
+                "## PR A — the graph document, the tab wiring, the table projection",
+                "<!-- end of the graph contracts document -->",
+                // The document section: seventeen contracts, the three rules
+                // on Windows, decisions, divergences, risks, the pins.
+                6_000,
+                // Revision 1 cites existing identifiers only through the
+                // shell, its tests and the mac sources it names; the family's
+                // own names are unbackticked until they exist. The floor sits
+                // one below the measured population and rises with the records.
+                70),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
