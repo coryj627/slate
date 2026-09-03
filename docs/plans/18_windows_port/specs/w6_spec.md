@@ -44,8 +44,23 @@ The original scope items, retained as the acceptance checklist (each maps to the
 
 ## W6-2 · Graph view (Milestone P parity) — PR series 2
 
-1. Consumes P's canonical model and its **accessible textual representation** (the entry-criterion artifact) + metrics substrate; accessible-first order per P's locked decisions (one model, two projections).
-2. The P interaction model is the behavioral spec once shipped; same §W-A/§W-C/§W-D discipline; determinism guarantees (P rejected nondeterministic layout) hold identically through the binding.
-3. **Phase 0 first (from W6-1):** the graph announcer is the other named residue engine (`a11y.rs:14–28`); run the same §W-G audit (announcer → core, Swift-derived structural rules → core, mac consumes) before the first Windows PR, and write its detailed spec in the W6-1 form.
+**Detailed executable spec: [w6_2_graph_spec.md](w6_2_graph_spec.md)** — the facts established 2026-09-03 (the read-side FFI and layout session already bound; the announcer grammar and eleven structural rules Swift-only; the shell's singleton placeholder; twelve pending command rows; the contracts document is `35_graph_contracts.md`), the architecture every PR shares, the §W-G seed register (rows A–P), the PR series 0a/0b → A–F with per-PR goal/consumes/builds/behavior/tests/evidence, the process and gates, the owner decisions D-1..D-8, and the chord mapping.
+
+| PR | Slice | Gate |
+|---|---|---|
+| 0a | **Core:** graph announcer vocabulary → `a11y.rs` (`A11yEvent::Graph`, `GraphVerbosity`; the P1/P2 copy verbatim; mac consumes; residue 29 → 28) | — |
+| 0b | **Core:** the connections tree, the stable node key, neighbours, the name filter, the `.slate/graph.json` schema and generation rules, the table rows with formatted cells, the constants, the action set, the spatial step, the ghost's note path → `VaultSession` FFI (mac consumes; `graph_queries` §W-A rows) | ∥ 0a |
+| A | Graph document behind the singleton tab + the table projection (W4-1 substrate) — the textual projection first | 0a |
+| B | The Connections leaf (the right pane's local graph, depth 1–3, re-root, ghost create) | A, 0b |
+| C | Navigator: Where-am-I, presets, the name filter, verbosity, config | A, 0b |
+| D | Diagram: renderer with per-node peers, tiers, the layout driver, zoom | C |
+| E | Inspector: filters, groups, display, forces | D |
+| F | Close-out: E2E, §K/§W-A/§W-C/§W-D/§W-G evidence, matrix + `chords.json`, AT checklist, issue reconciliation | E |
+
+The original scope items, retained as the acceptance checklist (each maps to the PRs named):
+
+1. Consumes P's canonical model and its **accessible textual representation** (the entry-criterion artifact) + metrics substrate; accessible-first order per P's locked decisions (one model, two projections) — **PR 0b, A, B, D**.
+2. The P interaction model is the behavioral spec once shipped; same §W-A/§W-C/§W-D discipline; determinism guarantees (P rejected nondeterministic layout) hold identically through the binding — **PR A–E; the §W-A position golden in D; recorded F**.
+3. **Phase 0 first (from W6-1):** the graph announcer is the other named residue engine (`a11y.rs:14–38`); run the same §W-G audit (announcer → core, Swift-derived structural rules → core, mac consumes) before the first Windows PR, and write its detailed spec in the W6-1 form — **PR 0a/0b; the spec above**.
 
 - [ ] (each) matrix rows green; canonical-consumption audit (§W-G) recorded; AT checklists executed
