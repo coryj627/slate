@@ -101,6 +101,14 @@ internal sealed class CanvasPreferencesViewModel : BindableBase
         {
             if (string.Equals(_verbosityKey, value, StringComparison.Ordinal))
             {
+                // m1 (§C-unit's minors, fixed 2026-09-03): the three menu
+                // items are CHECK items bound OneWay; a click on the
+                // selected one toggles it to false locally, and only a
+                // notification re-pushes the binding. Re-selecting re-
+                // asserts the check; nothing is stored, nothing spoken.
+                OnPropertyChanged(nameof(IsVerbosityTerse));
+                OnPropertyChanged(nameof(IsVerbosityStandard));
+                OnPropertyChanged(nameof(IsVerbosityVerbose));
                 return;
             }
             _verbosityKey = value;

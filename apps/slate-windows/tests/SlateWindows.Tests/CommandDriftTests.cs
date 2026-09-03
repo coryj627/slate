@@ -160,7 +160,7 @@ public sealed class CommandDriftTests
 
         var checkedItems = 0;
         foreach (XElement item in menu.DescendantsAndSelf()
-            .Where(element => element.Name.LocalName == "MenuItem"))
+            .Where(element => element.Name.LocalName is "MenuItem" or "CheckMenuItem"))
         {
             string? accelerator = item.Attribute("InputGestureText")?.Value;
             if (string.IsNullOrEmpty(accelerator))
@@ -368,7 +368,7 @@ public sealed class CommandDriftTests
         XElement menu = MenuElement();
         var paths = new HashSet<string>(StringComparer.Ordinal);
         foreach (XElement item in menu.DescendantsAndSelf()
-            .Where(element => element.Name.LocalName == "MenuItem"))
+            .Where(element => element.Name.LocalName is "MenuItem" or "CheckMenuItem"))
         {
             string? command = item.Attribute("Command")?.Value;
             if (string.IsNullOrEmpty(command))
@@ -398,7 +398,7 @@ public sealed class CommandDriftTests
     {
         XElement menu = MenuElement();
         return menu.DescendantsAndSelf()
-            .Where(element => element.Name.LocalName == "MenuItem")
+            .Where(element => element.Name.LocalName is "MenuItem" or "CheckMenuItem")
             .Select(element => element.Attribute("Click")?.Value)
             .Where(value => !string.IsNullOrEmpty(value))
             .Select(value => value!)

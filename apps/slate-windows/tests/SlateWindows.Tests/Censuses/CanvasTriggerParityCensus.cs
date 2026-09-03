@@ -286,7 +286,7 @@ public sealed class CanvasTriggerParityCensus
         Assert.DoesNotContain("AutomationId=\"EditMenu\"", xaml);
         foreach (string line in xaml.Split('\n'))
         {
-            if (line.Contains("<MenuItem", StringComparison.Ordinal))
+            if (line.Contains("<MenuItem", StringComparison.Ordinal) || line.Contains("<local:CheckMenuItem", StringComparison.Ordinal))
             {
                 Assert.False(
                     Regex.IsMatch(line, "Header=\"_?(Undo|Redo)\""),

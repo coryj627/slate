@@ -183,9 +183,17 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
             parameter =>
             {
                 if (parameter is not string key
-                    || !CodeVerbosityNames.TryGetValue(key, out string? display)
-                    || string.Equals(_codePreambleVerbosity, key, StringComparison.Ordinal))
+                    || !CodeVerbosityNames.TryGetValue(key, out string? display))
                 {
+                    return;
+                }
+                if (string.Equals(_codePreambleVerbosity, key, StringComparison.Ordinal))
+                {
+                    // m1: the re-selected item re-asserts its check.
+                    RaiseCheckGroup(
+                        nameof(IsCodeVerbosityPreambleOnly),
+                        nameof(IsCodeVerbosityFirstLine),
+                        nameof(IsCodeVerbosityAllTokens));
                     return;
                 }
                 CodePreambleVerbosity = key;
@@ -393,6 +401,19 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
         }
     }
 
+    /// <summary>The notifications of one radio group's check items, raised
+    /// together — on a change and on a re-selection alike (m1).</summary>
+    private void RaiseCheckGroup(params string?[] names)
+    {
+        foreach (string? name in names)
+        {
+            if (name is not null)
+            {
+                OnPropertyChanged(name);
+            }
+        }
+    }
+
     private void SetMathPreference(
         object? parameter,
         IReadOnlyDictionary<string, string> names,
@@ -403,19 +424,25 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
         Action<string> persist,
         string? boolC = null)
     {
-        if (parameter is not string key
-            || !names.TryGetValue(key, out string? display)
-            || string.Equals(field, key, StringComparison.Ordinal))
+        if (parameter is not string key || !names.TryGetValue(key, out string? display))
         {
             return;
         }
-        field = key;
-        OnPropertyChanged(boolA);
-        OnPropertyChanged(boolB);
-        if (boolC is not null)
+        if (string.Equals(field, key, StringComparison.Ordinal))
         {
-            OnPropertyChanged(boolC);
+            // m1 (§C-unit's minors, fixed 2026-09-03): the group's items
+            // are CHECK items (WPF has no radio menu item) bound OneWay.
+            // A click on the already-selected item toggles its IsChecked
+            // to false locally before the command runs; with the value
+            // unchanged nothing re-pushed the binding and the selected
+            // item read unchecked. Re-raising the group's notifications
+            // re-asserts the selection — nothing is persisted or spoken,
+            // because nothing changed.
+            RaiseCheckGroup(boolA, boolB, boolC);
+            return;
         }
+        field = key;
+        RaiseCheckGroup(boolA, boolB, boolC);
         persist(key);
         _announce(announcement(display));
         MathPrefsChanged?.Invoke(CurrentMathPrefs);
