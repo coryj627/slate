@@ -85,6 +85,25 @@ public sealed class CanvasDocumentTests : IDisposable
         File.WriteAllText(
             Path.Combine(_fixture.Root, "broken.canvas"), "{ this is not json");
         File.WriteAllText(Path.Combine(_fixture.Root, "blank.canvas"), "{}");
+        // §H TH-11 (E14, IH-47): three file cards whose subpaths are a
+        // heading anchor, a block anchor and a heading that does not
+        // exist, over a real note with a real block id — the landing
+        // facts drive the WORKSPACE's own seam, not a fake.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "blocknote.md"),
+            "# Block note\n\nFirst paragraph.\n\nThe referenced paragraph. ^ref1\n\nAfter it.\n");
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "anchors.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"head","type":"file","file":"note0.md","subpath":"#Note 0","x":0,"y":0,"width":240,"height":140},
+                {"id":"blk","type":"file","file":"blocknote.md","subpath":"#^ref1","x":260,"y":0,"width":240,"height":140},
+                {"id":"miss","type":"file","file":"note0.md","subpath":"#Nowhere","x":520,"y":0,"width":240,"height":140}
+              ],
+              "edges": []
+            }
+            """);
     }
 
     private CanvasDocumentViewModel NewDocument(
@@ -1234,12 +1253,12 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Same(successor, workspace.CanvasPromptSheet);
     }
 
-    private WorkspaceViewModel NewWorkspace() =>
+    private WorkspaceViewModel NewWorkspace(Action<A11yEvent>? announce = null) =>
         new(
             _session,
             _fixture.Root,
             () => [],
-            _ => { },
+            announce ?? (_ => { }),
             startInteractionBackgroundWork: false,
             announceRendered: _announced.Add);
 
@@ -1314,48 +1333,39 @@ public sealed class CanvasDocumentTests : IDisposable
             CanvasPhrase.OpenFailed("board.canvas", thrown));
     }
 
-    /// <summary>§H TH-6 (H4, IH-40): on a canvas-origin open, the editor's
-    /// generic heading miss — and its block-not-found sentence — become
-    /// core's canvas reason with the subpath and the file, spoken ONCE
-    /// through the document's announcer and never through the shell's;
-    /// the landing announcements still reach the shell.</summary>
+    /// <summary>§H TH-6 (IH-40), re-routed by TH-11 (E14, IH-47): the
+    /// editor's generic heading miss — and the host-composed block miss —
+    /// from a canvas-origin open become core's canvas reason with the
+    /// subpath and the file, spoken ONCE as the canvas event through the
+    /// shell's announcer (the document may already be retired); a landing
+    /// passes through untouched.</summary>
     [Fact]
     public void ACanvasOriginHeadingMissSpeaksTheCanvasReasonOnce()
     {
-        CanvasDocumentViewModel document = NewDocument("board.canvas");
-        document.Load();
         var shell = new List<A11yEvent>();
         var anchor = new LinkAnchor("heading", "Missing heading");
 
-        _announced.Clear();
         WorkspaceViewModel.RouteCanvasAnchorAnnouncement(
-            document, anchor, "notes/note0.md", new A11yEvent.HeadingNotFound(), shell.Add);
-        document.AnnouncerForTests.FlushForTests();
+            anchor, "notes/note0.md", new A11yEvent.HeadingNotFound(), shell.Add);
         Assert.Equal(
-            CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasBlocked(
-                new CanvasBlockedReason.HeadingNotFound("Missing heading", "note0.md"))),
-            Assert.Single(_announced).Text);
-        Assert.Empty(shell);
+            new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.HeadingNotFound("Missing heading", "note0.md")),
+            Assert.IsType<A11yEvent.Canvas>(Assert.Single(shell)).Event);
 
-        _announced.Clear();
+        shell.Clear();
         var block = new LinkAnchor("block", "abc123");
         WorkspaceViewModel.RouteCanvasAnchorAnnouncement(
-            document, block, "note0.md",
+            block, "note0.md",
             new A11yEvent.HostComposed("Block abc123 was not found.", A11yPriority.Medium), shell.Add);
-        document.AnnouncerForTests.FlushForTests();
         Assert.Equal(
-            CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasBlocked(
-                new CanvasBlockedReason.HeadingNotFound("abc123", "note0.md"))),
-            Assert.Single(_announced).Text);
-        Assert.Empty(shell);
+            new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.HeadingNotFound("abc123", "note0.md")),
+            Assert.IsType<A11yEvent.Canvas>(Assert.Single(shell)).Event);
 
-        _announced.Clear();
+        shell.Clear();
         WorkspaceViewModel.RouteCanvasAnchorAnnouncement(
-            document, anchor, "note0.md", new A11yEvent.ScrolledToHeading("Found"), shell.Add);
-        document.AnnouncerForTests.FlushForTests();
-        Assert.Empty(_announced);
+            anchor, "note0.md", new A11yEvent.ScrolledToHeading("Found"), shell.Add);
         Assert.IsType<A11yEvent.ScrolledToHeading>(Assert.Single(shell));
-        document.Shutdown();
     }
 
     /// <summary>
@@ -3861,6 +3871,109 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Equal(CanvasLoadState.Ready, survivor.State);
         Assert.Contains(survivor.Outline, row => row.NodeId == "src");
         Assert.DoesNotContain(survivor.Outline, row => row.NodeId == "question");
+    }
+
+    // --- E14: the file card's anchor lands the caret, through the workspace ---
+
+    /// <summary>§H TH-11 (E14, IH-47): a file card whose subpath is a
+    /// heading anchor, activated over the WORKSPACE's own seam, opens the
+    /// note in the current tab and — after the asynchronous resolution is
+    /// pumped — parks the caret EXACTLY at the heading's line and speaks
+    /// the editor's own ScrolledToHeading; the canvas announcer says
+    /// nothing, because a hit is the editor's sentence (HD-6).</summary>
+    [Fact]
+    public void AFileCardHeadingAnchorLandsTheCaretAtTheHeadingThroughTheWorkspace()
+    {
+        var shell = new List<A11yEvent>();
+        using WorkspaceViewModel workspace = NewWorkspace(shell.Add);
+        workspace.OpenPath("anchors.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        Assert.Equal(CanvasLoadState.Ready, document.State);
+        _announced.Clear();
+
+        Assert.Equal(CanvasActivation.Navigated, document.Activate(Row(document, "head")));
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        Assert.Equal("note0.md", tab.Path);
+        PumpUntil(() => tab.AnchorNavigationPublishCountForTests == 1);
+
+        Assert.Equal(tab.Text.IndexOf("# Note 0", StringComparison.Ordinal), tab.EditorCaretOffset);
+        // The shell also speaks the tab open itself; the anchor's sentence
+        // is the editor's, once, and no miss rides beside it.
+        Assert.Equal("Note 0", Assert.Single(shell.OfType<A11yEvent.ScrolledToHeading>()).Heading);
+        Assert.DoesNotContain(shell, e => e is A11yEvent.HeadingNotFound);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Empty(_announced);
+    }
+
+    /// <summary>§H TH-11 (E14, IH-47): the block twin — a
+    /// <c>#^id</c> subpath is a block anchor (A13), the caret lands
+    /// exactly at the block's line and the editor speaks its own
+    /// "Scrolled to block" sentence.</summary>
+    [Fact]
+    public void AFileCardBlockAnchorLandsTheCaretAtTheBlockThroughTheWorkspace()
+    {
+        var shell = new List<A11yEvent>();
+        using WorkspaceViewModel workspace = NewWorkspace(shell.Add);
+        workspace.OpenPath("anchors.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        Assert.Equal(new LinkAnchor("block", "ref1"), document.AnchorFor("blk"));
+        _announced.Clear();
+
+        Assert.Equal(CanvasActivation.Navigated, document.Activate(Row(document, "blk")));
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        Assert.Equal("blocknote.md", tab.Path);
+        PumpUntil(() => tab.AnchorNavigationPublishCountForTests == 1);
+
+        Assert.Equal(
+            tab.Text.IndexOf("The referenced paragraph", StringComparison.Ordinal),
+            tab.EditorCaretOffset);
+        Assert.Equal(
+            "Scrolled to block ref1.",
+            Assert.Single(shell.OfType<A11yEvent.HostComposed>()).Text);
+        Assert.DoesNotContain(shell, e => e is A11yEvent.HeadingNotFound);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Empty(_announced);
+    }
+
+    /// <summary>§H TH-11 (E14, IH-47; TH-6's consumer at the workspace
+    /// level): a heading the note does not have opens the note, leaves the
+    /// caret where it was, and is spoken ONCE as the canvas reason with
+    /// the heading and the file — through the shell, because the canvas
+    /// document is already retired once the note replaced it in the
+    /// current tab (the defect this fact found in TH-6's route); the
+    /// editor's generic miss never reaches the shell.</summary>
+    [Fact]
+    public void AFileCardAnchorMissThroughTheWorkspaceSpeaksTheCanvasReasonOnce()
+    {
+        var shell = new List<A11yEvent>();
+        using WorkspaceViewModel workspace = NewWorkspace(shell.Add);
+        workspace.OpenPath("anchors.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        _announced.Clear();
+
+        Assert.Equal(CanvasActivation.Navigated, document.Activate(Row(document, "miss")));
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        Assert.Equal("note0.md", tab.Path);
+        int caretBefore = tab.EditorCaretOffset;
+        PumpUntil(() => tab.AnchorNavigationPublishCountForTests == 1);
+
+        Assert.Equal(caretBefore, tab.EditorCaretOffset);
+        Assert.DoesNotContain(shell, e => e is A11yEvent.HeadingNotFound or A11yEvent.ScrolledToHeading);
+        Assert.DoesNotContain(shell, e => e is A11yEvent.HostComposed h && h.Text.Contains("not found", StringComparison.Ordinal));
+        // The document is RETIRED by now — the note replaced it in the
+        // current tab — so the reason cannot come through its announcer.
+        Assert.True(document.AnnouncerForTests.IsRetired);
+        Assert.Equal(
+            new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.HeadingNotFound("Nowhere", "note0.md")),
+            Assert.IsType<A11yEvent.Canvas>(Assert.Single(shell.OfType<A11yEvent.Canvas>())).Event);
+        Assert.Empty(_announced);
     }
 
     // --- B4: the gate is physical and fails closed -------------------------

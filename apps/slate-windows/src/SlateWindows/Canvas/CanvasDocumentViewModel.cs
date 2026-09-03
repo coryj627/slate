@@ -4154,14 +4154,6 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     internal void SpeakPickDifferentTarget() =>
         Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.PickDifferentTarget()));
 
-    /// <summary>§H TH-6 (IH-40): a file card's subpath that the note does
-    /// not contain — the canvas reason, with the heading and the file, as
-    /// mac speaks it for a subpath miss; the workspace routes the editor's
-    /// generic miss here for a canvas-origin open.</summary>
-    internal void SpeakHeadingNotFound(string heading, string filename) =>
-        Speak(new CanvasA11yEvent.CanvasBlocked(
-            new CanvasBlockedReason.HeadingNotFound(heading, filename)));
-
     internal void SpeakNoConnections() =>
         Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoConnections()));
 

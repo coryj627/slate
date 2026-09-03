@@ -157,16 +157,15 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>§H TH-6 (IH-40): the anchor navigation's announcements on a
     /// CANVAS-origin open. A miss — the editor's generic heading-not-found,
     /// or its block-not-found sentence — is spoken as core's canvas reason
-    /// with the subpath and the file, through the document's announcer,
-    /// once; everything else (the landing) goes to the shell as before.</summary>
+    /// with the subpath and the file, as the canvas event through the
+    /// shell's announcer, once; everything else (the landing) goes to the
+    /// shell as before.</summary>
     internal static void RouteCanvasAnchorAnnouncement(
-        CanvasDocumentViewModel document,
         LinkAnchor anchor,
         string path,
         A11yEvent spoken,
         Action<A11yEvent> shell)
     {
-        ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(anchor);
         ArgumentNullException.ThrowIfNull(spoken);
         ArgumentNullException.ThrowIfNull(shell);
@@ -175,7 +174,16 @@ internal sealed partial class WorkspaceViewModel
                 && composed.Text.EndsWith(" was not found.", StringComparison.Ordinal));
         if (miss)
         {
-            document.SpeakHeadingNotFound(anchor.Text, System.IO.Path.GetFileName(path));
+            // §H TH-11 (E14, IH-47): the canvas document is retired at the
+            // tab-set boundary the moment the note replaces it in the
+            // current tab — TH-6's route through the document's announcer
+            // spoke into a retired funnel and the reason was LOST. The
+            // reason is core's canvas sentence either way; it rides the
+            // shell's announcer as the canvas event, alive regardless of
+            // the document's lifetime, once.
+            shell(new A11yEvent.Canvas(new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.HeadingNotFound(
+                    anchor.Text, System.IO.Path.GetFileName(path)))));
             return;
         }
         shell(spoken);
@@ -197,13 +205,13 @@ internal sealed partial class WorkspaceViewModel
                 {
                     WorkspaceGroupViewModel group = ActiveGroup;
                     WorkspaceTabViewModel? tab = group.ActiveTab;
-                    // §H TH-6 (IH-40): the editor's generic miss becomes the
-                    // canvas reason, once, through the document's announcer.
+                    // §H TH-6 (IH-40), TH-11: the editor's generic miss becomes
+                    // the canvas reason, once, through the shell's announcer.
                     _ = tab?.NavigateToAnchor(
                         anchor,
                         null,
                         spoken => RouteCanvasAnchorAnnouncement(
-                            document, anchor, path, spoken, _announce),
+                            anchor, path, spoken, _announce),
                         () => ReferenceEquals(ActiveGroup, group)
                             && ReferenceEquals(group.ActiveTab, tab));
                 }

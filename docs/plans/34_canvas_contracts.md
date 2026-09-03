@@ -3566,7 +3566,7 @@ where a platform never fires the key.
 | `CanvasBlocked/NoteReadFailed` | `AppState+CanvasExtras.swift#fetched` | `CanvasDocumentViewModel.cs#CanvasConvertToNote` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasBlocked/NoteCreateFailed` | `AppState+CanvasExtras.swift#fetched` | `CanvasDocumentViewModel.cs#CanvasConvertToNote`, `CanvasDocumentViewModel.cs#SpeakNoteCreateFailed` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasBlocked/NoteRetargetFailed` | `AppState+CanvasExtras.swift#fetched` | `CanvasDocumentViewModel.cs#SpeakNoteRetargetFailed` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasBlocked/HeadingNotFound` | `AppState+CanvasExtras.swift#wanted` | `CanvasDocumentViewModel.cs#SpeakHeadingNotFound` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ACanvasOriginHeadingMissSpeaksTheCanvasReasonOnce` |  |
+| `CanvasBlocked/HeadingNotFound` | `AppState+CanvasExtras.swift#wanted` | `WorkspaceViewModel.Canvas.cs#RouteCanvasAnchorAnnouncement` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ACanvasOriginHeadingMissSpeaksTheCanvasReasonOnce`, `CanvasDocumentTests.cs#AFileCardAnchorMissThroughTheWorkspaceSpeaksTheCanvasReasonOnce` |  |
 | `CanvasBlocked/ReopenFailed` | `CanvasContainerView.swift#announceCanvasRetargetFailure` | `CanvasDocumentViewModel.cs#RetargetAbsent` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheReopenFailureBannerIsCoresSentence` |  |
 | `CanvasActionFailed/NewCard` | `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#CanvasNewCard` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/NewGroup` | `AppState+CanvasActions.swift#canvasPromptNewGroup`, `AppState+CanvasActions.swift#id`, `AppState+CanvasActions.swift#ok` | `CanvasDocumentViewModel.cs#CanvasNewGroup`, `CanvasDocumentViewModel.cs#SubmitGroupMarked` | `A11yCorpusCensus.cs#Corpus` |  |
@@ -12689,11 +12689,16 @@ Windows:
   host-composed "Block … was not found." — a pre-existing shell residue,
   noted for the reconciliation). The seam now routes those two misses,
   and only those, through `WorkspaceViewModel.RouteCanvasAnchorAnnouncement`
-  to the document's new boundary `SpeakHeadingNotFound(heading, filename)`
-  — core's canvas reason with the subpath and the file, as mac speaks a
-  subpath miss — spoken ONCE through the canvas announcer and never
-  through the shell's; the landing announcements still reach the shell.
-  E14's exact-landing facts are TH-11's; this is the miss's consumer.
+  to a document boundary (SpeakHeadingNotFound) — core's canvas reason
+  with the subpath and the file, as mac speaks a subpath miss — spoken
+  ONCE and never as the editor's generic sentence; the landing
+  announcements still reach the shell. *Corrected by TH-11: the
+  workspace-level landing fact found that the canvas document is retired
+  at the tab-set boundary the moment the note replaces it in the current
+  tab, so this route spoke into a retired announcer and the reason was
+  lost; the miss now rides the shell's announcer as the canvas event,
+  and the document boundary is gone.* E14's exact-landing facts are
+  TH-11's; this is the miss's consumer.
 
 Facts: `AQuarantinedStackSpeaksTheTruthfulSentenceNotNothingToUndo` (the
 disk changed and RELOADED, the undo entry quarantined, the truthful
@@ -12701,8 +12706,9 @@ undo sentence and the entry still standing; then the redo side the same
 way), `TheReopenFailureBannerIsCoresSentence` (the exact render with the
 move as the message; the open failure unchanged), and
 `ACanvasOriginHeadingMissSpeaksTheCanvasReasonOnce` (a heading miss and
-a block miss each spoken as the canvas reason through the document,
-nothing through the shell; a landing passing through to the shell).
+a block miss each spoken as the canvas reason, never as the editor's
+sentence; a landing passing through to the shell — re-shaped by TH-11
+to the shell route).
 Mutations, each byte-restored: M1 the quarantine arm removed ("nothing
 to undo" again; bit); M2 the miss passed to the shell (bit); M3 the
 banner back to host text (bit). All bitten.
@@ -13010,6 +13016,55 @@ journey or a test class; the matrix's link. Mutations, each
 byte-restored: M1 a dictated command dropped (bit); M2 a human cell
 pre-filled "Pass" (bit — never green by omission); M3 a twin renamed
 (bit). All bitten.
+
+### TH-11 — E14 verified at the workspace: the caret lands exactly, and the miss route corrected
+
+E14's landing facts run over the WORKSPACE's own seam — a canvas opened
+through `WorkspaceViewModel`, a file card activated on the document the
+workspace holds, the note opened in the current tab, the asynchronous
+anchor resolution pumped to its publish — not over a fake
+`OpenFileCardFromSurface`. The fixture (IH-47) is a canvas of three file
+cards over seeded notes: a heading anchor (`#Note 0` on the fixture
+note), a block anchor (`#^ref1` on a note carrying the block id) and a
+heading the note does not have.
+
+- **The heading anchor** opens the note in the current tab and, once the
+  publish lands, parks the caret EXACTLY at the heading line's start —
+  the offset the fact computes from the tab's own text — and the shell
+  speaks the editor's ScrolledToHeading with the heading's text, once;
+  no miss beside it; the canvas announcer says nothing (a hit is the
+  editor's sentence, HD-6).
+- **The block anchor** is typed "block" by `AnchorFor` (A13), lands at
+  the block's line start and speaks "Scrolled to block ref1." — the
+  host-composed shell sentence noted in TH-6 for the reconciliation.
+- **The miss** opens the note, leaves the caret where it was, and is
+  spoken ONCE as core's canvas reason with the heading and the file.
+
+**The defect the third fact found.** TH-6 routed the miss to the
+document's announcer. At the workspace level that announcer is already
+RETIRED: opening the note in the current tab removes the canvas from
+the tab set, and the tab-set boundary shuts the document down before
+the asynchronous miss publishes — the reason was spoken into a retired
+funnel and lost; TH-6's fact drove the static route directly and could
+not see it. The route now emits the canvas event through the SHELL's
+announcer (`A11yEvent.Canvas` carrying CanvasBlocked/HeadingNotFound —
+the same core sentence, alive regardless of the document's lifetime,
+once); the document boundary is removed; TH-6's fact is re-shaped to
+the shell route and its record corrected in place. The trigger ledger's
+row for the key names the shell route now (regenerated). E14's STOP is
+not reached: the two landings are exact and the miss speaks.
+
+Facts: `AFileCardHeadingAnchorLandsTheCaretAtTheHeadingThroughTheWorkspace`,
+`AFileCardBlockAnchorLandsTheCaretAtTheBlockThroughTheWorkspace`,
+`AFileCardAnchorMissThroughTheWorkspaceSpeaksTheCanvasReasonOnce` (asserts
+the document IS retired by the time the miss lands, so the shell route
+is the only one that can speak), and the re-shaped
+`ACanvasOriginHeadingMissSpeaksTheCanvasReasonOnce`. Mutations, each
+byte-restored: M1 `AnchorFor` no longer types `#^id` as a block (the
+block fact bit); M2 the seam drops the anchor (all three bit); M3 the
+still-active guard inverted, the publish dropped (all three bit); M4
+the miss passed to the shell as the editor's generic sentence (both
+miss facts bit). All bitten.
 
 ---
 

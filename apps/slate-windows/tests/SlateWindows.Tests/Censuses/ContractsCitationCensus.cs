@@ -509,7 +509,11 @@ public sealed class ContractsCitationCensus
                 // TH-10 bound the AT checklist, taking the
                 // section to 152; 151 sits above the pre-task population
                 // of 150 — an eleventh time.
-                151),
+                //
+                // TH-11 bound E14 at the workspace, taking the
+                // section to 158; 157 sits above the pre-task population
+                // of 152 — a twelfth time.
+                157),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
