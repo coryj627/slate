@@ -78,6 +78,18 @@ public sealed class CheckItemGroupsTests
         Assert.True(verbose.IsChecked);
         Assert.False(item.IsChecked);
         Assert.Equal(AutomationControlType.MenuItem, verbosePeer.GetAutomationControlType());
+
+        // The provider contract (codoki, PR #1177): a disabled item
+        // refuses the pattern, runs nothing, and keeps its check.
+        verbose.IsEnabled = false;
+        var count = 0;
+        preferences.PropertyChanged += (_, _) => count++;
+        _ = Assert.Throws<System.Windows.Automation.ElementNotEnabledException>(
+            () => Assert.IsAssignableFrom<IToggleProvider>(verbosePeer.GetPattern(PatternInterface.Toggle)).Toggle());
+        PumpDeferredClicks();
+        Assert.Equal(0, count);
+        Assert.True(verbose.IsChecked);
+        Assert.True(preferences.IsVerbosityVerbose);
     });
 
     /// <summary>The four editor groups, at the view model: a re-selection

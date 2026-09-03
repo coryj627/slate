@@ -42,6 +42,16 @@ public sealed class CheckMenuItemAutomationPeer(CheckMenuItem owner) : MenuItemA
     {
         public ToggleState ToggleState => owner.IsChecked ? ToggleState.On : ToggleState.Off;
 
-        public void Toggle() => owner.ClickFromAutomation();
+        /// <summary>The UIA provider contract the stock peer keeps: a
+        /// disabled element refuses the pattern rather than running a
+        /// command its CanExecute disabled (codoki, PR #1177).</summary>
+        public void Toggle()
+        {
+            if (!owner.IsEnabled)
+            {
+                throw new ElementNotEnabledException();
+            }
+            owner.ClickFromAutomation();
+        }
     }
 }
