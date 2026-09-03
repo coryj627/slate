@@ -34,12 +34,12 @@ public sealed class GraphContractsCitationCensus
                 // The vocabulary section: fifteen contracts, the event
                 // enumeration, decisions, divergences, risks, the pins.
                 6_000,
-                // Revision 3 cites 5 existing identifiers (the canvas
-                // precedent's tests and the Windows census, several more than
-                // once; the family's own names are unbackticked until they
-                // exist); 4 sits one below that population, and the floor
-                // rises with the records.
-                4),
+                // Revision 4 cites 8 existing identifiers (the canvas
+                // precedent's tests, the Windows census and the mac twins the
+                // census allow-lists, several more than once; the family's own
+                // names are unbackticked until they exist); 7 sits one below
+                // that population, and the floor rises with the records.
+                7),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
