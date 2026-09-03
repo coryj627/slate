@@ -463,6 +463,8 @@ final class A11yCorpusCensusTests: XCTestCase {
             .canvas(event: .canvasBlocked(reason: .noteRetargetFailed(path: "notes/research.md", message: "io error"))),
             .canvas(event: .canvasBlocked(reason: .headingNotFound(heading: "Roadmap", filename: "notes.md"))),
             .canvas(event: .canvasBlocked(reason: .reopenFailed(message: "The file moved."))),
+            .canvas(event: .canvasBlocked(reason: .fileTypeNotOpenable(target: "setup.exe"))),
+            .canvas(event: .canvasBlocked(reason: .fileTypeNotOpenable(target: "tools/setup.exe"))),
             .canvas(event: .canvasActionFailed(action: .newCard, detail: "the file is read-only")),
             .canvas(event: .canvasActionFailed(action: .newGroup, detail: "the file is read-only")),
             .canvas(event: .canvasActionFailed(action: .newCanvas, detail: "the file is read-only")),

@@ -451,6 +451,8 @@ public sealed class A11yCorpusCensus
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasBlocked(Reason: new CanvasBlockedReason.NoteRetargetFailed(Path: "notes/research.md", Message: "io error"))),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasBlocked(Reason: new CanvasBlockedReason.HeadingNotFound(Heading: "Roadmap", Filename: "notes.md"))),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasBlocked(Reason: new CanvasBlockedReason.ReopenFailed(Message: "The file moved."))),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasBlocked(Reason: new CanvasBlockedReason.FileTypeNotOpenable(Target: "setup.exe"))),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasBlocked(Reason: new CanvasBlockedReason.FileTypeNotOpenable(Target: "tools/setup.exe"))),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasActionFailed(Action: CanvasFailedAction.NewCard, Detail: "the file is read-only")),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasActionFailed(Action: CanvasFailedAction.NewGroup, Detail: "the file is read-only")),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasActionFailed(Action: CanvasFailedAction.NewCanvas, Detail: "the file is read-only")),

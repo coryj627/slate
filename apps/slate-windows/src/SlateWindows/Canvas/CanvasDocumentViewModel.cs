@@ -1919,14 +1919,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             // different hand-off with a different failure mode.
             if (!CanvasMediaPolicy.IsOpenableMedia(target))
             {
-                // The vocabulary has no "this file type is not openable"
-                // reason, so the refusal rides the generic failed-action
-                // arm with the TARGET as its dynamic detail — never a
-                // host-authored sentence (0a-1). The gap is recorded in
-                // CD-38 as a STOP point: the typed reason is a core
-                // change this task may not make.
-                Speak(new CanvasA11yEvent.CanvasActionFailed(
-                    CanvasFailedAction.CanvasAction, target));
+                // PR E13 (#1174, E13-3): the typed reason — core's
+                // FileTypeNotOpenable with the TARGET as the card carries
+                // it (E13D-4), the STOP CD-38 recorded now discharged.
+                Speak(new CanvasA11yEvent.CanvasBlocked(
+                    new CanvasBlockedReason.FileTypeNotOpenable(target)));
                 return CanvasActivation.Refused;
             }
             if (OpenMediaCardFromSurface?.Invoke(target) == true)

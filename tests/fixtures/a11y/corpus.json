@@ -2010,6 +2010,16 @@
     "text": "Canvas could not be reopened. The previous snapshot is read-only. The file moved."
   },
   {
+    "event": "Canvas { event: CanvasBlocked { reason: FileTypeNotOpenable { target: \"setup.exe\" } } }",
+    "priority": "high",
+    "text": "setup.exe is not a note or media file, so it was not opened from the canvas."
+  },
+  {
+    "event": "Canvas { event: CanvasBlocked { reason: FileTypeNotOpenable { target: \"tools/setup.exe\" } } }",
+    "priority": "high",
+    "text": "tools/setup.exe is not a note or media file, so it was not opened from the canvas."
+  },
+  {
     "event": "Canvas { event: CanvasActionFailed { action: NewCard, detail: \"the file is read-only\" } }",
     "priority": "high",
     "text": "New card failed: the file is read-only"

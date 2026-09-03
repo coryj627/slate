@@ -624,8 +624,8 @@ public sealed class CanvasTableTests : IDisposable
             document.AnnouncerForTests.FlushForTests();
             Assert.Equal(
                 SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
-                    new CanvasA11yEvent.CanvasActionFailed(
-                        CanvasFailedAction.CanvasAction, "setup.exe"))).Text,
+                    new CanvasA11yEvent.CanvasBlocked(
+                    new CanvasBlockedReason.FileTypeNotOpenable("setup.exe")))).Text,
                 _announced[^1].Text);
 
             // A group has nothing to open on a flat projection, and mac

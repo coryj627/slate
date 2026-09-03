@@ -7748,6 +7748,7 @@ pub enum CanvasBlockedReason {
     NoteRetargetFailed { path: String, message: String },
     HeadingNotFound { heading: String, filename: String },
     ReopenFailed { message: String },
+    FileTypeNotOpenable { target: String },
 }
 
 impl From<CanvasBlockedReason> for core::a11y::CanvasBlockedReason {
@@ -7772,6 +7773,7 @@ impl From<CanvasBlockedReason> for core::a11y::CanvasBlockedReason {
             F::NoteRetargetFailed { path, message } => C::NoteRetargetFailed { path, message },
             F::HeadingNotFound { heading, filename } => C::HeadingNotFound { heading, filename },
             F::ReopenFailed { message } => C::ReopenFailed { message },
+            F::FileTypeNotOpenable { target } => C::FileTypeNotOpenable { target },
         }
     }
 }
@@ -11653,6 +11655,107 @@ mod tests {
                 missing.is_empty(),
                 "these core {enum_name} variants are missing from the FFI mirror, \
                  so no host can name them: {missing:?}"
+            );
+        }
+
+        // W6-1 PR E13 (IE13-14, IE13-15): every closed nested family the
+        // core inventory lists — the list read from CANVAS_NESTED_ENUMS
+        // in core's own source and its count asserted, so a family
+        // added there is compared here without anyone remembering to —
+        // with the arm count pinned EXACTLY for the four families this
+        // slice names (a skipped arm in both parses changes a number)
+        // and mirror equality for all eighteen.
+        fn nested_families_of(core_source: &str) -> Vec<String> {
+            let decl = core_source
+                .find("const CANVAS_NESTED_ENUMS")
+                .expect("core's nested-enum inventory");
+            // Past the type signature — its own parentheses are not tuples.
+            let start = decl
+                + core_source[decl..]
+                    .find("= &[")
+                    .expect("the inventory's table")
+                + 4;
+            let end = start
+                + core_source[start..]
+                    .find("\n    ];")
+                    .expect("the inventory's terminator");
+            let code: String = core_source[start..end]
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let mut families = Vec::new();
+            let mut depth = 0usize;
+            let bytes: Vec<char> = code.chars().collect();
+            let mut i = 0;
+            while i < bytes.len() {
+                match bytes[i] {
+                    '(' => {
+                        depth += 1;
+                        if depth == 1 {
+                            let mut j = i + 1;
+                            while j < bytes.len() && bytes[j].is_whitespace() {
+                                j += 1;
+                            }
+                            assert_eq!(bytes[j], '"', "a family tuple opens with its name");
+                            let mut k = j + 1;
+                            while bytes[k] != '"' {
+                                k += 1;
+                            }
+                            families.push(bytes[j + 1..k].iter().collect());
+                            i = k;
+                        }
+                    }
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                i += 1;
+            }
+            families
+        }
+        let families = nested_families_of(&core_source);
+        assert_eq!(
+            families.len(),
+            18,
+            "core's nested-enum inventory lists {} families; this test knows eighteen — \
+             extend both or neither",
+            families.len()
+        );
+        let exact: std::collections::BTreeMap<&str, usize> = [
+            ("CanvasStatusNote", 28usize),
+            ("CanvasBlockedReason", 18),
+            ("CanvasFailedAction", 12),
+            ("CanvasMutationRefusal", 7),
+        ]
+        .into_iter()
+        .collect();
+        for family in &families {
+            let core_variants = variant_names_of(&core_source, family);
+            let mirror_variants = variant_names_of(&mirror, family);
+            match exact.get(family.as_str()) {
+                Some(&count) => assert_eq!(
+                    core_variants.len(),
+                    count,
+                    "{family} parses to {} arms in core; the pin says {count} — an arm the \
+                     line parser skipped, or a pin to bump on purpose",
+                    core_variants.len()
+                ),
+                None => assert!(
+                    core_variants.len() >= 2,
+                    "parsed only {} core {family} arms — the parser broke, not the vocabulary",
+                    core_variants.len()
+                ),
+            }
+            let missing: Vec<&String> = core_variants.difference(&mirror_variants).collect();
+            assert!(
+                missing.is_empty(),
+                "these core {family} arms are missing from the FFI mirror, so no host can \
+                 name them: {missing:?}"
+            );
+            let extra: Vec<&String> = mirror_variants.difference(&core_variants).collect();
+            assert!(
+                extra.is_empty(),
+                "the FFI mirror of {family} carries arms core does not: {extra:?}"
             );
         }
     }

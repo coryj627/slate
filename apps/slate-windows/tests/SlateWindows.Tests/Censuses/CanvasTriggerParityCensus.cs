@@ -48,6 +48,7 @@ public sealed class CanvasTriggerParityCensus
         "CanvasBlocked/UndoQuarantined",
         "CanvasBlocked/RedoQuarantined",
         "CanvasMutationRefused/RefreshPending",
+        "CanvasBlocked/FileTypeNotOpenable",
     ];
 
     private static readonly Regex Site = new("`([^`#]+)#([^`]+)`", RegexOptions.Compiled);
@@ -156,7 +157,7 @@ public sealed class CanvasTriggerParityCensus
         List<string> derived = DerivedKeys();
         List<string> listed = Ledger().Select(r => r.Key).ToList();
         Assert.Equal(derived.OrderBy(k => k, StringComparer.Ordinal), listed.OrderBy(k => k, StringComparer.Ordinal));
-        Assert.Equal(113, derived.Count);
+        Assert.Equal(114 /* 113 at PR H; PR E13's FileTypeNotOpenable */, derived.Count);
     }
 
     [Fact]
