@@ -13,7 +13,7 @@ import XCTest
 /// the recorded old/new columns are asserted on the mac lane, not
 /// asserted about.
 final class GraphKeyCharacterizationTests: XCTestCase {
-    /// The old key algorithm (`make(path:label:)`), verbatim.
+    /// The old `GraphNodeKey.make(path:label:)`, verbatim.
     private static func oldKey(path: String?, label: String) -> String {
         if let path { return "p:" + path }
         let folded = label.lowercased(with: Locale(identifier: "en_US_POSIX"))

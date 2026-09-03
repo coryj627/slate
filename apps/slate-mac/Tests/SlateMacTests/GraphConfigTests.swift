@@ -164,8 +164,8 @@ final class GraphConfigTests: XCTestCase {
         XCTAssertEqual(cfg.matchingGroup(for: "weekly meeting")?.colorToken, .red)
         XCTAssertNil(cfg.matchingGroup(for: "unrelated"))
         XCTAssertEqual(
-            graphConfigMatchingGroups(config: cfg, labels: ["meeting-note", "unrelated"]), [0, nil],
-            "the batch form the diagram uses (0bD-11)")
+            graphConfigMatchingGroup(config: cfg, label: "meeting-note"), 0,
+            "the index the topology entry carries (0b-6b)")
         // A blank query never swallows every node.
         cfg.groups = [GraphGroup(query: "  ", colorToken: .pink, ringStyle: .solid)]
         XCTAssertNil(cfg.matchingGroup(for: "anything"))

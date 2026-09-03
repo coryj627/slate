@@ -861,7 +861,7 @@ final class GraphDiagramTests: XCTestCase {
         let a = snap.nodes.first { $0.label == "a" }!
         let key = a.stableKey
         let newID = a.id &+ 1000
-        let aReassigned = GraphNode(id: newID, stableKey: "p:" + a.path, path: a.path, label: a.label, kind: a.kind, inLinks: a.inLinks,
+        let aReassigned = GraphNode(id: newID, stableKey: a.stableKey, path: a.path, label: a.label, kind: a.kind, inLinks: a.inLinks,
             outLinks: a.outLinks, inEmbeds: a.inEmbeds, outEmbeds: a.outEmbeds,
             component: a.component, isOrphan: a.isOrphan, pagerank: a.pagerank,
             modifiedMs: a.modifiedMs)

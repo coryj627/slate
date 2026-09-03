@@ -77,7 +77,8 @@ final class GraphCommandsTests: XCTestCase {
         _ id: UInt64, _ label: String, kind: GraphNodeKind, inLinks: UInt32 = 0
     ) -> GraphNode {
         GraphNode(
-            id: id, path: kind == .ghost ? nil : "\(label).md", label: label, kind: kind,
+            id: id, stableKey: kind == .ghost ? "g:" + label.lowercased() : "p:\(label).md",
+            path: kind == .ghost ? nil : "\(label).md", label: label, kind: kind,
             inLinks: inLinks, outLinks: 0, inEmbeds: 0, outEmbeds: 0, component: 0,
             isOrphan: false, pagerank: 0, modifiedMs: nil)
     }
