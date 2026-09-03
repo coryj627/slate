@@ -91,18 +91,18 @@ final class GraphDiagramModel: ObservableObject {
         viewport.fit(rect: rect, padding: 60)
     }
 
-    /// The `GraphRowRef` (P1-1 verbatim VoiceOver copy) for a node — the
-    /// SAME phrasing the Table and Connections surfaces speak, so a node
-    /// sounds identical in every projection.
-    func rowRef(_ id: UInt64) -> GraphRowRef? {
+    /// The row copy data (P1-1 VoiceOver copy, rendered by core since
+    /// W6-2 PR 0a) for a node — the SAME event the Table and Connections
+    /// surfaces raise, so a node sounds identical in every projection.
+    func rowCopy(_ id: UInt64) -> GraphRowCopy? {
         guard let n = nodesByID[id] else { return nil }
-        return GraphRowRef(
+        return GraphRowCopy(
             label: n.label,
-            linksIn: n.inLinks,
-            linksOut: n.outLinks,
-            isGhost: n.kind == .ghost,
+            kind: n.kind,
+            inLinks: n.inLinks,
+            outLinks: n.outLinks,
             references: n.inLinks,
-            isEmbed: false)
+            embed: false)
     }
 
     /// Adopt a fresh topology after `session.refresh()` re-synced the

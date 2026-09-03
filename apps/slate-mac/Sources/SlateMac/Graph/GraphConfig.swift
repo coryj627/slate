@@ -15,7 +15,7 @@ struct GraphConfig: Equatable, Sendable {
     var groups: [GraphGroup]
     var display: GraphDisplay
     var forces: GraphForcesConfig
-    var mode: GraphTabMode
+    var mode: GraphSurfaceMode
     /// Migrated from P1-1's Connections depth setting (clamped 1…3).
     var connectionsDepth: Int
 

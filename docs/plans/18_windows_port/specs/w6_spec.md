@@ -61,6 +61,6 @@ The original scope items, retained as the acceptance checklist (each maps to the
 
 1. Consumes P's canonical model and its **accessible textual representation** (the entry-criterion artifact) + metrics substrate; accessible-first order per P's locked decisions (one model, two projections) — **PR 0b, A, B, D**.
 2. The P interaction model is the behavioral spec once shipped; same §W-A/§W-C/§W-D discipline; determinism guarantees (P rejected nondeterministic layout) hold identically through the binding — **PR A–E; the §W-A position golden in D; recorded F**.
-3. **Phase 0 first (from W6-1):** the graph announcer is the other named residue engine (`a11y.rs:14–38`); run the same §W-G audit (announcer → core, Swift-derived structural rules → core, mac consumes) before the first Windows PR, and write its detailed spec in the W6-1 form — **PR 0a/0b; the spec above**.
+3. **Phase 0 first (from W6-1):** the graph announcer is the other named residue engine (`a11y.rs:14–38`); run the same §W-G audit (announcer → core, Swift-derived structural rules → core, mac consumes) before the first Windows PR, and write its detailed spec in the W6-1 form — **PR 0a/0b; the spec above**. — *evidence 2026-09-03 (0a #1179, the announcer vocabulary in core with the mac host consuming; 0b pending)*
 
 - [ ] (each) matrix rows green; canonical-consumption audit (§W-G) recorded; AT checklists executed

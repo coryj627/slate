@@ -1308,7 +1308,7 @@ public sealed class ContractsCitationCensus
     /// types, members, locals-that-matter. Syntax only: resolving
     /// symbols would need a compilation, and what a citation needs is
     /// that the name is written down somewhere real.</summary>
-    private static HashSet<string> DeclaredNames()
+    internal static HashSet<string> DeclaredNames()
     {
         var names = new HashSet<string>(StringComparer.Ordinal);
         string[] roots =
