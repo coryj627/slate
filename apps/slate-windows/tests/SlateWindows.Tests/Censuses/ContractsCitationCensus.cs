@@ -524,9 +524,10 @@ public sealed class ContractsCitationCensus
                 //
                 // RR-1 bound the review round: two Python constants the record
                 // named are not shell identifiers and are unbackticked, so the
-                // section stands at 191; 190 sits one below it — a fifteenth
-                // time.
-                190),
+                // section stood at 191; 190 sat one below it — a fifteenth
+                // time. PR E13's records (TE13-3) took it to 192; 191 sits
+                // one below that population — a sixteenth time.
+                191),
             (
                 "E13",
                 "## PR E13 — the typed refused-open reason (#1174)",
@@ -535,8 +536,8 @@ public sealed class ContractsCitationCensus
                 // one risk, the pinning tests — a small section with a
                 // floor of its own (IE13-19).
                 3_000,
-                // TE13-3 bound the section after its records, taking it
-                // to 44; 43 sits one below the population.
+                // TE13-3 bound the section after its records: the section
+                // cites 44 identifiers; 43 sits one below that population.
                 43),
             (
                 "Reconciliation",
@@ -546,9 +547,10 @@ public sealed class ContractsCitationCensus
                 // generated tables, the issues, the hand-offs and the
                 // residuals; a citation floor of its own.
                 20_000,
-                // TH-12 bound the section at its birth, taking it to
-                // 658; 658 sits one below the population of 659.
-                658),
+                // TH-12 bound the section at its birth, when it cited 659
+                // identifiers and 658 sat one below. PR E13's rows (TE13-3)
+                // took it to 683; 682 sits one below that population.
+                682),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
