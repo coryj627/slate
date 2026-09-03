@@ -31,9 +31,9 @@ carries over unchanged.
 priority and verbosity policy core-side; mac's `GraphAnnouncer` shrinks
 to a relay + coalescer (Task 0a-2); `corpus.json` gains the graph
 family; the residue census drops 29 → 28; §W-D becomes provable for the
-graph. **Copy rule: shipped mac strings move verbatim** — P1's
-"VoiceOver copy (normative)" and P2-3's copy are the reference; this PR
-does not redesign wording.
+graph. **Copy rule: shipped mac strings move verbatim** (0a-16 names the
+authority per phrase); this PR does not redesign wording. This section
+is at revision 2 after round 1's sixteen findings.
 
 **What stands today.** `GraphAnnouncer.swift` (239 lines): a
 `GraphVerbosity` enum mirroring the canvas's, a `GraphRowRef` carrying a
@@ -44,23 +44,12 @@ class-keyed debounced posters outside the event type
 (`announceFilterCount`, `announceForceValue`, `announceSettle`), one
 grammar (`rowPhrase`, `:158–170`) and one template (`"Connections:
 {label}"`, `:179`), all posting through the one `// W0.5-3 residue:`
-site (`:98–100`). Twenty-six posting sites compose the prose:
-`AppState.swift:3236`; `AppState+Connections.swift:114, 123, 168, 212,
-236, 287, 294`; `AppState+GraphConfig.swift:131` (over
-`forcesChangePhrase` `:139–150`); `AppState+GraphDiagram.swift:177, 231,
-235, 245` (over `graphDiagramWhereAmIText` `:252–267` and
-`graphDiagramFilterPhrase` `:359–365`), `:346, 355`;
-`AppState+GraphTable.swift:57, 197` (over `graphPresetAnnouncement`
-`:336–354`), `:202, 204` (over `graphFilterCountText` `:225–235`),
-`:215`; `GraphDiagramView.swift:496–498`; `GraphTableView.swift:100,
-103, 340–342, 361`. Three label-class sites render the row copy
-without posting (`ConnectionsPanel.swift:239`,
-`GraphDiagramView.swift:843`, `AppState+GraphDiagram.swift:256`). Core
-carries two workspace-level graph events (`GraphOpensSinglePane`,
-`ReopenedGraph`) and zero graph-announcer entries in the corpus; the
-two `audio_summary` strings are composed in `session.rs`
-(`snapshot_audio_summary` `:9017`; the neighbourhood string inline at
-`:1990–1997`), outside the vocabulary.
+site (`:98–100`). The manifest below (0a-12) is the site inventory;
+this paragraph no longer carries one. Core carries two workspace-level
+graph events (`GraphOpensSinglePane`, `ReopenedGraph`) and zero
+graph-announcer entries in the corpus; the two `audio_summary` strings
+are composed in `session.rs` (`snapshot_audio_summary` `:9017`; the
+neighbourhood string inline at `:1990–1997`), outside the vocabulary.
 
 ### Contracts
 
@@ -69,19 +58,21 @@ announcement string is a typed variant or a typed ARM of one. Mac's
 three free-text cases (`summary`, `status`, `error`) and the three
 text-taking posters dissolve. `String` payload is permitted only for
 dynamic data — labels, file names, OS error detail, the name-filter
-needle, counts — **never for a whole sentence**. The vocabulary is
-enumerated in full below (seventeen variants over seven closed nested
-enums); a string with no home in the table is a round finding, not an
-implementation choice.
+needle — **never for a whole sentence**. The vocabulary is enumerated
+in full below (seventeen variants over the nested enums 0a-2b names)
+as a concrete FFI schema; a string with no home in the table is a round
+finding, not an implementation choice.
 
 **0a-1b — One engine, one top-level variant.** The family is reached
 through `A11yEvent::Graph { event: GraphA11yEvent }`, the nested
 family-per-engine pattern 0a-1b of the canvas document made the rule
 (`a11y.rs:1246–1255`); `GraphA11yEvent` owns its variants and its own
 `priority()` / `render()`, which `A11yEvent` delegates to. `A11yEvent`
-stands at 199 top-level variants; this PR adds one. Variant NAMES keep
-their `Graph` prefix so every citation stays literally true. Pinned by
-`the_graph_family_occupies_one_top_level_variant`.
+stands at **198** top-level variants today (`a11y.rs:557` onward,
+counted by `declared_variants`); this PR adds one, to 199 of uniffi's
+256, and `a11y_event_top_level_count_is_pinned` pins that number so a
+later family bumps it on purpose. Variant NAMES keep their `Graph`
+prefix. Pinned by `the_graph_family_occupies_one_top_level_variant`.
 
 **0a-2 — The five-place rule.** A graph string is pinned in five
 hand-maintained places, and all five move together: the variant and
@@ -92,259 +83,402 @@ regeneration path, never by hand), the FFI mirror
 (`crates/slate-uniffi/src/lib.rs`), and **both** census mirrors
 (`A11yCorpusCensusTests.swift`, `A11yCorpusCensus.cs`). Corpus order is
 positional, so the graph family is **appended** after the canvas
-family's last entry; every pre-existing index is untouched. The
-artifact grows from 448 entries to 448 + the graph witnesses, and both
-totals are stated in the record with the count read from the artifact.
+family's last entry (`CanvasStatus { Loading }`, `a11y.rs:4491–4493`);
+every pre-existing index is untouched. The witness matrix (0a-17) is
+the ordered list of the graph's entries; the artifact grows from 448
+to **492** entries, and the record states both numbers read from the
+artifact.
 
-**0a-3 — The tripwires already exist and cover the graph without
-change.** `the_ffi_mirror_covers_every_core_a11y_variant` reads the
-nested-family inventory from core's source (PR E13, IE13-14); the
-graph's nested enums join CANVAS_NESTED_ENUMS's twin,
-GRAPH_NESTED_ENUMS, and the inventory test that pins the family count
-asserts the graph's; `the_mac_corpus_mirror_lists_every_event_in_order`
-and its Windows twin parse the census files by name and order; the two
-coalescing switch-list tests read core's ONE class list. Each of these
-fails on a forgotten mirror in `cargo test`, before any host builds.
+**0a-2b — The payload types are named, closed, and reuse what core
+has.** The schema (the table below) uses these uniffi types and no
+prose shorthand: `GraphVerbosity { Terse, Standard, Verbose }` (new;
+0aD-2); the EXISTING `GraphNodeKind { Note, Attachment, Ghost }`
+(`crates/slate-uniffi/src/lib.rs:3231`, mirroring `graph::NodeKind`) for
+a row's kind — no `GraphRowKind` (0aD-4); `GraphRowCopy { label:
+String, kind: GraphNodeKind, in_links: u32, out_links: u32, references:
+u32, embed: bool }` (a record, the P1 row's data; degrees are `u32` as
+`GraphNode`'s are); `GraphSnapshotCounts { notes: u64, links: u64,
+orphans: u64, unresolved: u64, filtered: bool }` and
+`GraphNeighborhoodCounts { center_label: String, in_links: u32,
+out_links: u32, note_count: u64, depth: u32 }` (records exported ON the
+FFI's `GraphSnapshot` / `GraphNeighborhood` as `summary_counts`, 0a-7);
+`GraphPresetOutcome { Orphans { count: u64 }, Unresolved { count: u64 },
+MostLinked { label: String, in_links: u32 }, NoNotesToRank }` (each arm
+carries only its own fields — `Orphans` cannot carry a top row);
+`GraphForceControl { Center, Repel, Link, LinkDistance }`;
+`GraphTabMode { Table, Diagram }`; `GraphWhereAmISelection { Node {
+row: GraphRowCopy, component: u32 }, None }`; GraphStatusNote and
+GraphBlockedReason (their arms below). Nested enums the inventory
+lists: `GraphVerbosity`, GraphPresetOutcome, GraphForceControl,
+`GraphTabMode`, GraphWhereAmISelection, GraphStatusNote,
+GraphBlockedReason — **seven** — plus the reused `GraphNodeKind`,
+covered through `GraphRowCopy.kind` at its sites.
+
+**0a-3 — The tripwires are canvas-specific today and are generalised
+here, by name.** Round 1 found that "the tripwires already cover the
+graph" was false: every parser knows one family. This PR changes, and
+the record names, each of: (i) core's inventory — GRAPH_NESTED_ENUMS
+beside CANVAS_NESTED_ENUMS, `every_graph_variant_and_arm_is_represented_in_the_corpus`
+and `every_graph_parameter_enum_is_listed_for_coverage` as the canvas
+tests' twins, and `graph_variant_of` beside `canvas_variant_of`; (ii)
+uniffi's `the_ffi_mirror_covers_every_core_a11y_variant`, whose
+nested-family parser reads ONE inventory constant today
+(`lib.rs:11668`) and reads both after, with the family count asserted
+per inventory and the exact-arm pins extended to the graph's seven;
+(iii) `the_windows_corpus_mirror_lists_every_event_in_order`, which
+matches `new CanvasA11yEvent.` (`lib.rs:11222`) and matches `new
+GraphA11yEvent.` too after; (iv) `the_mac_corpus_mirror_lists_every_event_in_order`,
+likewise for `.graph(event:`; (v) the two coalescing switch-list tests,
+which parse `CanvasA11yEvent::` markers and open only the canvas
+announcer files (`lib.rs:11365, 11418, 11489`) — after, the class list
+carries the graph's classes (0a-9) and the tests open `GraphAnnouncer.swift`
+and, when PR A lands it, `GraphAnnouncer.cs`, asserting the graph's four
+classes against the pinned list. Each of these fails on a forgotten
+mirror in `cargo test`, before any host builds — after this PR, not
+before.
 
 **0a-4 — Completeness is asserted, not assumed.**
 `every_graph_variant_and_arm_is_represented_in_the_corpus` parses this
 module's `pub enum` declarations and fails when a graph variant — or a
-closed-set ARM of any of the graph's nested enums — never reaches
-`corpus()`; its companion asserts the coverage table lists exactly the
-`Graph*` parameter enums the module declares. The exact-count pins the
-E13 slice introduced for four canvas families are extended to the
-graph's nested enums as they land.
+closed-set ARM of any of the seven nested enums, or of `GraphNodeKind`
+at its `GraphRowCopy.kind` site — never reaches `corpus()`; its
+companion asserts the coverage table lists exactly the `Graph*`
+parameter enums the module declares (the reused `GraphNodeKind` listed
+by an explicit exemption line, since it is not a `Graph*` a11y enum).
 
 **0a-5 — Verbosity is a parameter on exactly one family.**
-`GraphVerbosity { Terse, Standard, Verbose }` is core (a separate enum
-from `CanvasVerbosity`, because P persists it separately — spec D-6);
-it is carried by `GraphRow` and by nothing else: P1's row copy is the
-one graph template that varies (terse collapses to the label). Core
-stays pure — no module state, no "current verbosity"; each host owns
-the persisted preference (in `.slate/graph.json` through 0b's config
-API) and passes it per event. `graph_verbosity_matrix_pins_every_level`
-pins the six (level × note/ghost) renderings and asserts structurally
-that no other variant carries the parameter.
+`GraphVerbosity` is core, separate from `CanvasVerbosity` (0aD-2); it
+is carried by `GraphRow` and by nothing else: P1's row copy is the one
+graph template that varies (terse collapses to the label). Core stays
+pure — no module state; each host owns the persisted preference (in
+`.slate/graph.json` through 0b's config API) and passes it per event.
+`graph_verbosity_matrix_pins_every_level` pins the nine (level ×
+note/ghost/embed) renderings and asserts structurally that no other
+variant carries the parameter.
 
-**0a-6 — Where-am-I is always verbose-grade, and that is a recorded
-divergence from mac.** `GraphWhereAmI` takes **no** verbosity
-parameter; its row clause renders the full row copy at every level.
-Mac composes it from `rowPhrase`, which collapses to the bare label at
-terse (`AppState+GraphDiagram.swift:256`), so a terse reader asking
-"Where am I?" hears less than P2-3 promises ("node copy + component +
-zoom + active filters"). Core follows the promise and the t0 §1.4 rule
-the canvas already keeps (0a-D1; the mac detail is filed at close-out).
+**0a-6 — Where-am-I always renders the full row copy, and that is a
+CORRECTION of shipped mac behaviour, not a divergence.** `GraphWhereAmI`
+takes no verbosity parameter; its `Node` selection renders the row copy
+at standard grade at every level. Mac composes it from `rowPhrase`
+(`AppState+GraphDiagram.swift:256`), which collapses to the bare label
+at terse, so a terse reader asking "Where am I?" hears less than P2-3
+promises ("node copy + component + zoom + active filters"). Because
+Task 0a-2 moves mac onto this event, mac's behaviour changes with it —
+recorded as 0a-D1, a defect correction authorised by P2-3's own text
+and the t0 §1.4 rule the canvas keeps. The exact outputs — selected and
+unselected, every filter combination, an empty and a non-empty name
+filter, the curly quotes, the trailing period — are pinned by the
+witness matrix and `graph_where_am_i_renders_every_state_exactly`.
 
-**0a-7 — The two summaries are typed events rendered by the ONE format
-core already owns.** `GraphSnapshotSummary { notes, links, orphans,
-unresolved, filtered }` and `GraphNeighborhoodSummary { label, in_links,
-out_links, shown, depth }` render through the same functions that
-produce `GraphSnapshot.audio_summary` and `GraphNeighborhood.audio_summary`
-— `snapshot_audio_summary` and the neighbourhood formatter move from
-`session.rs` into a shared core module that both `session.rs` and
-`a11y.rs` call, so P0-3's format lives in one place. Pinned by
-`summary_events_render_the_snapshot_fields_verbatim`: for a built
-fixture, rendering the event constructed from the snapshot's counts
-equals the snapshot's `audio_summary` byte for byte, and likewise for a
-neighbourhood. The `audio_summary` fields stay on the FFI records for
-the summary regions; hosts ANNOUNCE the typed event (mac's `.summary`
-sites, `AppState+Connections.swift:114`, `AppState+GraphTable.swift:202`).
+**0a-7 — The two summaries are typed events over exported count
+records, rendered by the ONE formatter core owns — and this supersedes
+the spec's "relayed, not re-rendered" sentence (0aD-1).**
+`GraphSnapshotSummary { counts: GraphSnapshotCounts }` and
+`GraphNeighborhoodSummary { counts: GraphNeighborhoodCounts }` render
+through `crates/slate-core/src/graph_summary.rs` —
+`pub fn snapshot_summary(&GraphSnapshotCounts) -> String` and
+`pub fn neighborhood_summary(&GraphNeighborhoodCounts) -> String`, the
+P0-3 formats with `graph::grouped_decimal` — which `session.rs` calls
+to fill `audio_summary` and `a11y.rs` calls to render the events, so
+the format has one home. The counts' semantics are the session's
+today, now named: `notes` = nodes of kind Note in the FILTERED payload;
+`links` = the sum of edge `count`s (reference-distinct); `orphans` =
+nodes with `is_orphan`; `unresolved` = nodes of kind Ghost; `filtered`
+= the filter deviates from `{attachments: false, ghosts: true,
+orphans_only: false}`; `note_count` = Note-kind nodes within the depth
+INCLUDING the centre only when the centre is a note (attachments and
+ghosts excluded); `depth` = the clamped depth. Hosts obtain the counts
+as the records core exports on `GraphSnapshot.summary_counts` and
+`GraphNeighborhood.summary_counts` and construct the event from them —
+no host counts anything (R-D). Pinned by
+`summary_events_render_the_snapshot_fields_verbatim` over a mixed-kind
+fixture with multi-count edges: rendering the event from the record
+equals the record's `audio_summary` byte for byte, snapshot and
+neighbourhood, at the default filter and off it.
 
 **0a-8 — Priorities are mac's `.error` case, listed explicitly.**
-`GraphBlocked` is `High`; every other graph event is `Medium`.
-`priority()` ends in a catch-all `_ => Medium`, so the High member is
-named in the explicit arm and pinned both ways by
+`GraphBlocked` is `High`; every other graph event is `Medium`, Where-
+am-I included: mac's comment at `AppState+GraphDiagram.swift:242` says
+"assertively" while the code posts `.summary` at medium
+(`GraphAnnouncer.swift:118–119`); the code is the shipped behaviour,
+the comment is deleted in 0a-2, and the canvas's Where-am-I is Medium
+too. `priority()` ends in a catch-all `_ => Medium`, so the High member
+is named in the explicit arm and pinned both ways by
 `graph_priorities_pin_the_error_tier`.
 
 **0a-9 — Coalescing stays host-side; the class keys do not.** Timing is
 the hosts' (a pure render has no clock), but the classes are pinned in
 `a11y.rs`'s "Coalescing class keys" list — the ONE list the two
-switch-list tests read — with the graph's four: **`navigation`** =
-`GraphRow`; **`filter`** = GraphFilterCount; **`forceValue`** =
+switch-list tests read (0a-3 v) — with the graph's four: **`navigation`**
+= `GraphRow`; **`filter`** = GraphFilterCount; **`forceValue`** =
 GraphForceValue; **`settle`** = GraphLayoutSettled; everything else
-posts immediately; a `High` graph event flushes **and drops** every
-pending class. 200 ms latest-wins, each class independent
-(`GraphAnnouncer.swift:74–84, 185–218`). Two host timing rules that are
-NOT classes are recorded here so both hosts copy them: the filter
-count's **fire-time gate** (a queued count is dropped if the graph is no
-longer the focused surface when the debounce fires, `:123–133,
-204–207`) and `cancelPending` on view departure or vault change
-(`:224–226`).
+posts immediately; a `High` graph event — announced OR relayed — flushes
+**and drops** every pending class. 200 ms latest-wins, each class
+independent (`GraphAnnouncer.swift:74–84, 185–218`). Two host timing
+rules that are NOT classes are recorded so both hosts copy them: the
+filter count's **fire-time gate** (a queued count is dropped if the
+graph is no longer the focused surface when the debounce fires,
+`:123–133, 204–207`) and `cancelPending` on view departure or vault
+change (`:224–226`). Task 0a-2's mac tests, and PR A's Windows twins,
+cover every class: latest-wins within each of the four, pairwise
+independence across all six pairs, the 200 ms window, the gate, the
+cancel, and a High event (announced and relayed) flushing all four.
 
-**0a-10 — No chord-bearing template.** Unlike the canvas's three, no
-graph template carries a host chord: the tier-B copy names "Table mode"
-by its label, not its chord. The chord-parameter convention (canvas
-0a-9) is therefore not exercised by this family; a host that needs one
-later adds the parameter, never the chord text.
+**0a-10 — No chord-bearing template.** No graph template carries a host
+chord: the tier copy names "Table mode" by its label. The chord-
+parameter convention (canvas 0a-9) is not exercised by this family.
 
 **0a-11 — The row copy is one helper, spoken and labelled alike.** P1's
 row template — `"{label}, {in} links in, {out} links out"`, ghosts
 `"{label}, unresolved, {references} references"`, `", embed"` appended,
-terse → the label, counts substituted verbatim with the plurals as the
-spec writes them (`GraphAnnouncerTests.swift:34–38`: "1 references" is
-the shipped copy, migrated under the copy rule and allow-listed as a
-(arm, string) pair like the canvas's CR-3 defects) — is a single core
-helper (`a11y.rs::graph_row_copy`) used by `GraphRow`'s render and by
-`GraphWhereAmI`'s row clause. The three mac label sites
-(`ConnectionsPanel.swift:239`, `GraphDiagramView.swift:843`,
-`AppState+GraphDiagram.swift:256`) render `GraphRow` through
-`a11yRender`; `rowPhrase` is deleted.
+terse → the label — is a single core helper (`a11y.rs::graph_row_copy`
+over `GraphRowCopy`) used by `GraphRow`'s render and by
+`GraphWhereAmI`'s `Node` clause. The label sites (manifest rows L1–L2)
+render `GraphRow` through `a11yRender`; `rowPhrase` and `GraphRowRef`
+are deleted, the generated `GraphRowCopy` taking their place.
 
-**0a-12 — The one already-canonical site becomes a relay that keeps the
-priority.** The grid's own sort and filter events reach mac's announcer
-as `.status(a11yRender(event).text)` (`GraphTableView.swift:361`),
-which drops core's priority — the same defect the canvas's 0a-2 fixed.
-`GraphAnnouncer.relay(_ event: A11yEvent)` carries the render's text AND
-priority; the Windows relay does the same from day one (PR A).
+**0a-12 — The site manifest is the inventory.** One row per string
+site: file:line, the current API, the copy's source, the role
+(`posted` / `static label` / `custom content` / `canonical relay`), the
+event, the pin. The record checks the manifest against the tree at
+close; a site the manifest lacks is a round finding.
 
-**0a-13 — Label-grade events are marked as such.** Two events are LABEL
-class, never spoken: `GraphTierSummary { count }` (the tier-B summary
-element's name) and `GraphNeighborsContent { labels, more }` (the
-"Connects to" custom content of a node peer). They live here because
-both hosts must compose them identically from core data. Every other
-graph label — the grid's `"Graph, data grid"` name, the column titles,
-the kind labels Note / Attachment / Unresolved, the badges Unresolved /
-Embed / Attachment, `"Local graph depth"` and its hint, the loading, no-
-connections and error labels of the Connections panel, the custom
-action name `"Switch to Table"` — stays §W-C label class, recorded in
-the label inventory PR A/B carry, and is NOT in this vocabulary.
+| # | Site | Current API | Copy source | Role | Event | Pin |
+|---|---|---|---|---|---|---|
+| S1 | `AppState.swift:3236` | `.status("The graph is already open.")` | literal | posted | `GraphStatus{AlreadyOpen}` | golden |
+| S2 | `AppState+Connections.swift:114` | `.summary(hood.audioSummary)` | `session.rs:1990` | posted | GraphNeighborhoodSummary | 0a-7 test |
+| S3 | `AppState+Connections.swift:123` | `.error("Couldn't load connections: …")` | literal + OS detail | posted | `GraphBlocked{ConnectionsLoadFailed}` | golden |
+| S4 | `AppState+Connections.swift:168` | `.status("Connections panel.")` | literal | posted | `GraphStatus{ConnectionsPanel}` | golden |
+| S5 | `AppState+Connections.swift:212` | `.reRooted(label:)` | `GraphAnnouncer.swift:179` | posted | `GraphReRooted` | golden |
+| S6 | `AppState+Connections.swift:236` | `.reRooted(label:)` | same | posted | `GraphReRooted` | golden |
+| S7 | `AppState+Connections.swift:287` | `.status("Created note ….")` | literal + name | posted | `GraphStatus{NoteCreated}` | golden |
+| S8 | `AppState+Connections.swift:294` | `.error("Couldn't create note: …")` | literal + detail | posted | `GraphBlocked{NoteCreateFailed}` | golden |
+| S9 | `AppState+GraphConfig.swift:131` | `announceForceValue(phrase)` | `:139–150` | posted (forceValue) | GraphForceValue | golden ×4 |
+| S10 | `AppState+GraphDiagram.swift:177` | `announceSettle("Graph layout settled.")` | literal | posted (settle) | GraphLayoutSettled | golden |
+| S11 | `AppState+GraphDiagram.swift:197` | `.rowFocused(ref)` | `rowPhrase` | posted (navigation) | `GraphRow` | matrix |
+| S12 | `AppState+GraphDiagram.swift:231` | `.status("Unpinned.")` | literal | posted | `GraphPinned{false}` | golden |
+| S13 | `AppState+GraphDiagram.swift:235` | `.status("Pinned.")` | literal | posted | `GraphPinned{true}` | golden |
+| S14 | `AppState+GraphDiagram.swift:245` | `.summary(whereAmIText)` | `:252–267`, `:359–365`, `rowPhrase` at `:256` | posted | `GraphWhereAmI` | 0a-6 test |
+| S15 | `AppState+GraphDiagram.swift:346` | `.status("Zoom … percent.")` | literal + percent | posted | `GraphZoom{fit:false}` | golden |
+| S16 | `AppState+GraphDiagram.swift:355` | `.status("Fit graph. Zoom … percent.")` | literal + percent | posted | `GraphZoom{fit:true}` | golden |
+| S17 | `AppState+GraphTable.swift:57` | `.status("Graph.")` | literal | posted | `GraphStatus{Opened}` | golden |
+| S18 | `AppState+GraphTable.swift:197` | `.status(graphPresetAnnouncement(…))` | `:336–354` | posted | `GraphPreset` | golden ×4 |
+| S19 | `AppState+GraphTable.swift:202` | `.summary(snap.audioSummary)` | `session.rs:9017` | posted | GraphSnapshotSummary | 0a-7 test |
+| S20 | `AppState+GraphTable.swift:204` | `announceFilterCount(graphFilterCountText(snap), gate:)` | `:225–235` | posted (filter) | GraphFilterCount | golden |
+| S21 | `AppState+GraphTable.swift:215` | `.error("Couldn't load the graph: …")` | literal + detail | posted | `GraphBlocked{LoadFailed}` | golden |
+| S22 | `GraphDiagramView.swift:496–498` | `.status("Large graph: …")` | literal | posted | GraphTierEntered | golden |
+| S23 | `GraphTableView.swift:100` | `.status("Diagram mode.")` | literal | posted | `GraphMode{Diagram}` | golden |
+| S24 | `GraphTableView.swift:103` | `.status("Table mode.")` | literal | posted | `GraphMode{Table}` | golden |
+| S25 | `GraphTableView.swift:340–342` | `announceFilterCount("… shown", gate:)` | inline literal (duplicate of S20's) | posted (filter) | GraphFilterCount | golden |
+| S26 | `GraphTableView.swift:361` | `.status(a11yRender(event).text)` | the grid's own core events | **canonical relay** (priority dropped today) | `relay(A11yEvent)` (0a-13) | mac test |
+| L1 | `ConnectionsPanel.swift:239` | `.accessibilityLabel(rowPhrase(row.rowRef))` | `rowPhrase` | static label (AX name) | `GraphRow` rendered | matrix |
+| L2 | `GraphDiagramView.swift:843` | `axLabel` → `rowPhrase(ref)` | `rowPhrase` | static label (AX name) | `GraphRow` rendered | matrix |
+| C1 | `GraphDiagramView.swift:851–869` | `AXCustomContent(label: "Connects to", value:)` | inline | custom content | GraphNeighborsContent | golden ×3 |
+| C2 | `GraphDiagramView.swift:627–629` | `setAccessibilityLabel("… nodes — too many …")` | inline | static label (the summary element's name) | GraphTierSummary | golden ×2 |
+| C3 | `GraphDiagramView.swift:631` | custom action `"Switch to Table"` | inline | static label | label inventory (0a-14) | §W-C |
+| T1 | `ConnectionsPanel.swift:93, 103–104` | `"Local graph depth"` + hint | inline | static label | label inventory | §W-C |
+| T2 | `ConnectionsPanel.swift:121` | `"Connections error: …"` | inline | static label | label inventory (the posted form is S3) | §W-C |
+| T3 | `ConnectionsPanel.swift:125, 130` | `"This note has no connections."` (visible and AX) | inline | static label on mac; **posted on Windows** (0a-D3) | `GraphStatus{NoConnections}` | golden |
+| T4 | `ConnectionsPanel.swift:137, 144` | `"Loading connections…"` visible / `"Loading connections."` AX | inline | static label on mac; **posted on Windows** (0a-D3) | `GraphStatus{LoadingConnections}` — the AX form, with the period | golden |
+| T5 | `ConnectionsPanel.swift:301–309` | badges `Unresolved` / `Embed` / `Attachment` | inline | static label | label inventory | §W-C |
+| T6 | `GraphTableView.swift:351, 614–622, 482–484` | `"Graph, data grid"`, column titles, kind labels | inline | static label | label inventory | §W-C |
 
-**0a-14 — Every render arm is TOTAL over its payload domain.** An arm
-may not assume a cardinality its payload admits: counts render at every
-value; `GraphNeighborsContent { labels: [] }` renders an empty content
-value (the host omits the content); `GraphPreset { MostLinked, top:
-None }` renders `"No notes to rank."`; the Where-am-I row clause with no
-selection renders `"No node selected"`. Exception, by design, the
-shipped plural defects of 0a-11, allow-listed as pairs.
+**0a-13 — The one already-canonical site becomes a relay that keeps the
+priority, on one seam with the typed announcements.** S26 reaches mac's
+announcer as a Medium status, dropping core's priority — the defect the
+canvas's 0a-2 fixed. Task 0a-2 pins the announcer's API:
+`announce(_ event: GraphA11yEvent)` renders and classifies;
+`relay(_ event: A11yEvent)` carries the render's text AND priority; both
+converge on one private `emit(text, priority, class)` so a High RELAY
+flushes and drops the four classes exactly as a High announcement does;
+`GraphEvent` is deleted; `GraphRowRef` is replaced by the generated
+`GraphRowCopy`; the generated `GraphVerbosity` gains a Swift extension
+for its menu `title` and its `.slate/graph.json` spelling (`terse` /
+`standard` / `verbose`, the strings the store already writes); the
+poster seam is `postAccessibilityAnnouncement(event)` with the typed
+event, never `.hostComposed`. PR A's `GraphAnnouncer.cs` mirrors the
+three methods.
 
-**0a-15 — Mac consumes in the same PR (Task 0a-2), and the census
-counts it.** `GraphAnnouncer.phrase`, `rowPhrase`, `forcesChangePhrase`,
-`graphPresetAnnouncement`, `graphFilterCountText`'s string,
-`graphDiagramWhereAmIText`, `graphDiagramFilterPhrase` and the status
-literals are replaced by event construction + `a11yRender`; the
-announcer's `post` closure posts rendered events through the canonical
-vocabulary, so its `// W0.5-3 residue:` marker goes and
-`A11yResidueCensusTests.pinnedResidueSites` reads **28**;
-`testNoDirectAnnouncementsUnderGraph` keeps guarding; the copy
-assertions of GraphAnnouncerTests (`:25–51`) and
-`GraphCommandsTests.testPresetAnnouncementStringsVerbatim` and
-`GraphConfigTests.testForcesChangePhraseNamesOneControl` move to the
-Rust golden and the Swift tests keep coalescing, flush, the fire-time
-gate, `cancelPending` and class independence. The Swift edit is unrun on
-this box (0aR-1).
+**0a-14 — Label-grade events are marked as such; "never spoken" is
+the wrong word.** Two events are LABEL class — **not actively posted**;
+assistive technology reads them as an element's name or content:
+`GraphTierSummary { count }` (C2) and `GraphNeighborsContent { labels,
+more }` (C1). Two more are dual-use by recorded divergence (0a-D3):
+`GraphStatus{NoConnections}` and `GraphStatus{LoadingConnections}` are
+static labels on mac (T3, T4) and posted on Windows when the leaf takes
+focus in that state. Every other graph label — C3, T1, T2, T5, T6 —
+stays §W-C label class, recorded in the label inventory PR A/B carry,
+and is NOT in this vocabulary. The manifest is the exhaustive mapping.
 
-### The event enumeration (the PR's contract)
+**0a-15 — Every render arm is TOTAL over its payload domain, and every
+preserved plural defect is listed.** An arm renders at every value its
+payload admits: `GraphNeighborsContent { labels: [] }` renders the empty
+string (the host omits the content); `GraphPresetOutcome::NoNotesToRank`
+renders `"No notes to rank."`; `GraphWhereAmISelection::None` renders
+`"No node selected"`. The copy rule preserves the shipped templates'
+fixed plurals; every singular that therefore reads as a defect is
+allow-listed as an (arm, text) PAIR by `graph_plural_defects_are_exactly_these`,
+each proved to render from that arm and nowhere else: `GraphRow` —
+`"1 links in"`, `"1 links out"`, `"1 references"`; GraphSnapshotSummary
+— `"1 notes"`, `"1 links"`, `"1 orphans"`, `"1 unresolved targets"`;
+GraphNeighborhoodSummary — `"1 links in"`, `"1 links out"`, `"1 notes"`,
+`"within 1 links"` (`session.rs:780, 914` already pin two of these as
+shipped); `GraphPreset` — `"1 orphaned notes"`, `"1 unresolved targets"`,
+`"1 links in"`; GraphTierSummary — `"1 nodes"`; GraphNeighborsContent
+— `"and 1 more"`; `GraphWhereAmI` inherits `GraphRow`'s. `"0 links out"`
+is grammatical and is a boundary witness, not a defect. The matrix
+(0a-17) carries a zero, a one and a many for every count.
 
-Seventeen variants of `GraphA11yEvent`, all reached through
-`A11yEvent::Graph { event }` (0a-1b). `V` = the `GraphVerbosity`
-parameter. Class: `nav` / `filter` / `force` / `settle` / `—`
-(immediate). All priorities `Medium` unless marked **High**.
+**0a-16 — The shipped string is the authority where the P specs
+differ, and each difference is recorded.** P2 writes the tier message
+with a semicolon (`p2_spec.md:109`); mac shipped two sentences with a
+period (`GraphDiagramView.swift:498`) — the shipped form moves (0a-D4).
+P2 writes `"Repel force 0.7; layout settling… settled."` (`p2_spec.md:127`);
+mac shipped `"Repel force 70 percent"` (a percent, S9) and a separate
+`"Graph layout settled."` (S10) — both shipped forms move as two events
+in that order (0a-D5). Punctuation, the numeric form (a rounded integer
+percent) and the event order are pinned by the golden rows.
 
-| Event | Payload | Template(s) | Pri | Class | mac site(s) replaced |
-|---|---|---|---|---|---|
-| `GraphRow` | `V, label, kind (Note‖Attachment‖Ghost), in_links, out_links, references, embed` | terse `⟨label⟩` · note/attachment `⟨label⟩, ⟨in⟩ links in, ⟨out⟩ links out` · ghost `⟨label⟩, unresolved, ⟨references⟩ references` · `+ ", embed"` | | nav | `GraphAnnouncer.swift:158–170` (spoken at `AppState+GraphDiagram.swift:197`; labelled at `ConnectionsPanel.swift:239`, `GraphDiagramView.swift:843`) |
-| `GraphReRooted` | `label` | `Connections: ⟨label⟩` | | — | `GraphAnnouncer.swift:179`; `AppState+Connections.swift:212, 236` |
-| GraphSnapshotSummary | `notes, links, orphans, unresolved, filtered` | P0-3: `⟨n⟩ notes, ⟨e⟩ links.[ ⟨o⟩ orphans, ⟨g⟩ unresolved targets.][ Filtered.]` (grouped decimals) | | — | `AppState+GraphTable.swift:202` (over `session.rs:9017`) |
-| GraphNeighborhoodSummary | `label, in_links, out_links, shown, depth` | P0-3: `⟨label⟩: ⟨in⟩ links in, ⟨out⟩ links out. Showing ⟨k⟩ notes within ⟨d⟩ links.` | | — | `AppState+Connections.swift:114` (over `session.rs:1990–1997`) |
-| `GraphPreset` | `preset (Orphans‖Unresolved‖MostLinked), count, top: Option<(label, in_links)>` | `⟨k⟩ orphaned notes.` ‖ `⟨k⟩ unresolved targets.` ‖ `Most linked: ⟨label⟩, ⟨n⟩ links in.` ‖ `No notes to rank.` | | — | `AppState+GraphTable.swift:197, 336–354` |
-| GraphFilterCount | `shown, total` | `⟨shown⟩ of ⟨total⟩ shown` | | filter | `AppState+GraphTable.swift:204, 225–235`; `GraphTableView.swift:340–342` (two sites, one event) |
-| GraphForceValue | `control (Center‖Repel‖Link‖LinkDistance), percent` | `Center force ⟨p⟩ percent` ‖ `Repel force ⟨p⟩ percent` ‖ `Link force ⟨p⟩ percent` ‖ `Link distance ⟨p⟩ percent` | | force | `AppState+GraphConfig.swift:131, 139–150` |
-| GraphLayoutSettled | — | `Graph layout settled.` | | settle | `AppState+GraphDiagram.swift:177` |
-| `GraphPinned` | `pinned` | `Pinned.` ‖ `Unpinned.` | | — | `AppState+GraphDiagram.swift:231, 235` |
-| `GraphZoom` | `fit, percent` | `Zoom ⟨p⟩ percent.` ‖ `Fit graph. Zoom ⟨p⟩ percent.` | | — | `AppState+GraphDiagram.swift:346, 355` |
-| `GraphMode` | `mode (Table‖Diagram)` | `Table mode.` ‖ `Diagram mode.` | | — | `GraphTableView.swift:100, 103` |
-| `GraphWhereAmI` | `row: Option<GraphRow payload minus V>, component: Option<u32>, zoom_percent, orphans_only, attachments_shown, ghosts_shown, name_filter: Option<String>, unresolved_only` | `⟨row copy⟩, component ⟨c⟩` ‖ `No node selected` · `, zoom ⟨p⟩ percent` · `, filters: [orphans only, ][attachments shown, ]unresolved shown‖hidden` · `[, name filter “⟨q⟩”]` · `[, unresolved only]` · `.` — always verbose-grade (0a-6) | | — | `AppState+GraphDiagram.swift:245, 252–267, 359–365` |
-| GraphTierEntered | — | `Large graph: summary accessibility mode. Table mode has every node.` | | — | `GraphDiagramView.swift:496–498` |
-| GraphTierSummary | `count` | `⟨n⟩ nodes — too many for per-node navigation. Switch to Table mode for the full, navigable list.` — LABEL | | — | `GraphDiagramView.swift:627–629` |
-| GraphNeighborsContent | `labels[], more` | `⟨a⟩, ⟨b⟩, …[ and ⟨k⟩ more]` — LABEL (content title `Connects to`) | | — | `GraphDiagramView.swift:851–869` |
-| `GraphStatus` | `note` (6 arms) | see below | | — | see below |
-| `GraphBlocked` | `reason` (3 arms) | see below | **High** | — | see below |
+**0a-17 — The witness matrix is ordered and pinned.** The corpus gains
+these entries, in this order, after `CanvasStatus { Loading }`; the
+artifact total becomes 492 and `the_graph_family_witness_count_is_pinned`
+asserts 44 graph entries:
 
-**GraphStatusNote (6 arms, all Medium).** `Opened` (`Graph.` —
-`AppState+GraphTable.swift:57`) · `AlreadyOpen` (`The graph is already
-open.` — `AppState.swift:3236`) · ConnectionsPanel (`Connections
-panel.` — `AppState+Connections.swift:168`) · `NoteCreated { name }`
-(`Created note ⟨name⟩.` — `:287`) · `NoConnections` (`This note has no
-connections.` — the panel's empty state, `ConnectionsPanel.swift:125,
-130`, spoken when the leaf is focused empty) · LoadingConnections
-(`Loading connections.` — `:137, 144`).
+| Variant | Witnesses (in order) |
+|---|---|
+| `GraphRow` (5) | Standard note "Alpha" 3/1 · Standard ghost "Missing Note" references 2 · Standard note "Pic" 1/0 embed · Terse note "Alpha" · Verbose note "Hub" 1,024/0 (grouped? — no: degrees are bare `u32`, "1024 links in"; the witness pins that degrees are NOT grouped) |
+| `GraphReRooted` (1) | "Alpha" |
+| GraphSnapshotSummary (3) | 247 notes, 1,032 links, 12 orphans, 3 unresolved · 1 notes, 0 links (second sentence omitted) · 40 notes, 60 links, 0/0, filtered |
+| GraphNeighborhoodSummary (2) | "Alpha" 3/1, 7 notes within 1 · "Hub" 1,032/4, 1,206 notes within 3 |
+| `GraphPreset` (4) | Orphans 12 · Unresolved 1 · MostLinked "Hub" 1,032 · NoNotesToRank |
+| GraphFilterCount (2) | 3 of 247 · 1 of 1 |
+| GraphForceValue (4) | Center 50 · Repel 70 · Link 100 · LinkDistance 0 |
+| GraphLayoutSettled (1) | — |
+| `GraphPinned` (2) | true · false |
+| `GraphZoom` (2) | 125 plain · 63 fit |
+| `GraphMode` (2) | Table · Diagram |
+| `GraphWhereAmI` (3) | Node "Alpha" 3/1, component 2, zoom 100, orphans only + attachments shown + unresolved shown, name filter “alp”, unresolved only · Node ghost "Missing Note", component 0, zoom 250, unresolved hidden, no name filter · None, zoom 100, unresolved shown |
+| GraphTierEntered (1) | — |
+| GraphTierSummary (2) | 2,000 · 1 |
+| GraphNeighborsContent (3) | ten labels, more 0 · three labels, more 1 · labels [] |
+| `GraphStatus` (6) | Opened · AlreadyOpen · ConnectionsPanel · NoteCreated "Draft.md" · NoConnections · LoadingConnections |
+| `GraphBlocked` (3) | LoadFailed "io error" · ConnectionsLoadFailed "io error" · NoteCreateFailed "exists" |
 
-**GraphBlockedReason (3 arms, all High).** `LoadFailed { message }`
-(`Couldn't load the graph: ⟨m⟩` — `AppState+GraphTable.swift:215`) ·
-`ConnectionsLoadFailed { message }` (`Couldn't load connections: ⟨m⟩` —
-`AppState+Connections.swift:123`; the panel's error label
-`Connections error: ⟨m⟩` at `ConnectionsPanel.swift:121` is label
-class) · `NoteCreateFailed { message }` (`Couldn't create note: ⟨m⟩` —
-`:294`).
+Forty-four. `GraphRow`'s fifth witness settles a question the round
+raised: degrees render as bare integers everywhere the row copy speaks
+them (mac's `\(ref.linksIn)` is a bare `UInt32`), and only the summary
+counts are grouped (`grouped_decimal`), as P0-3 writes.
 
-The seventeen variants, in table order: `GraphRow`, `GraphReRooted`,
-GraphSnapshotSummary, GraphNeighborhoodSummary, `GraphPreset`,
-GraphFilterCount, GraphForceValue, GraphLayoutSettled,
-`GraphPinned`, `GraphZoom`, `GraphMode`, `GraphWhereAmI`,
-GraphTierEntered, GraphTierSummary, GraphNeighborsContent,
-`GraphStatus`, `GraphBlocked`. The seven nested enums:
-`GraphVerbosity`, `GraphRowKind`, GraphPresetKind,
-GraphForceControl, `GraphTabMode`, GraphStatusNote,
-GraphBlockedReason. The table is the authority for the round; a
-variant the implementation adds or drops is a revision of this section,
-not a footnote.
+**0a-18 — Mac consumes in the same PR (Task 0a-2), and the module doc
+and the census record it.** Every S-row's composition is replaced by
+event construction + `a11yRender` through the API of 0a-13; the L-rows
+render `GraphRow`; C1/C2 render their events; the two `"{k} of {n}
+shown"` sites collapse to one event; GraphAnnouncerTests's copy
+assertions (`:25–51`), `GraphCommandsTests.testPresetAnnouncementStringsAreVerbatim`
+(`:76`) and `GraphConfigTests.testForcesChangePhraseNamesTheOneChangedControl`
+(`:97`) move to the Rust golden and the Swift tests keep the coalescing
+suite of 0a-9; `A11yResidueCensusTests.pinnedResidueSites` reads **28**
+when `GraphAnnouncer.swift:98`'s marker goes; `a11y.rs:14–38`'s module
+doc is rewritten so only the structural-mutation builder remains a
+named host-composed exception, pinned by the residue census's own
+comment and by `the_module_doc_names_no_engine_but_the_mutation_builder`
+(a source scan for "remaining named engine"). The Swift edit is unrun
+on this box (0aR-1).
 
 ### Decisions
 
-- **0aD-1 — The summaries are typed, and their format has one home.**
-  P0-3's two formats move from `session.rs` to a shared core module
-  called by the session's `audio_summary` producers and by the a11y
-  render (0a-7). The alternative — relaying the snapshot's string as a
-  `HostComposed`-shaped `GraphSummary { text }` — would put a whole
-  sentence in a `String` payload, which 0a-1 forbids, and would leave
-  the corpus unable to witness the format.
+- **0aD-1 — The summaries are typed events over exported count records,
+  superseding the spec's "relayed, not re-rendered" sentence.** The
+  spec's §4 PR 0a said the two `audio_summary` strings are relayed as
+  text; that keeps a whole sentence in a `String` payload (0a-1) and
+  leaves the corpus unable to witness P0-3's format. Core exports the
+  counts (`summary_counts` on both records), renders the event and the
+  field from one formatter (0a-7), and the spec's paragraph is amended
+  in this PR to point here.
 - **0aD-2 — `GraphVerbosity` is its own enum.** Not an alias of
   `CanvasVerbosity`: P persists the graph's level in the vault file and
   the canvas's on the device; one type would invite one preference.
 - **0aD-3 — The filter count's fire-time gate and `cancelPending` are
-  recorded as host rules, not events.** They govern WHETHER a queued
-  count posts, which a pure render cannot decide; both hosts implement
-  them and the contracts name them (0a-9).
+  host rules, not events.** They govern WHETHER a queued count posts,
+  which a pure render cannot decide; both hosts implement them and the
+  contracts name them (0a-9).
+- **0aD-4 — A row's kind reuses `GraphNodeKind`.** The FFI already
+  carries the closed kind vocabulary; a second enum would be a
+  duplicate with a mapping to maintain.
+- **0aD-5 — The shipped string is the copy authority; the P specs'
+  variants are recorded, not adopted.** 0a-16's two cases; a future P
+  amendment changes the vocabulary through a revision, not a host.
 
 ### Recorded divergences (owner-recorded; off-limits for re-litigation)
 
-- **0a-D1 — Where-am-I speaks the full row copy at every verbosity.**
-  Mac collapses it at terse through `rowPhrase`; core renders the
-  promise (P2-3, t0 §1.4). A mac detail, filed at close-out.
-- **0a-D2 — The grid relay keeps core's priority.** Mac's
-  `GraphTableView.swift:361` re-wraps a rendered event as a Medium
-  status; both hosts relay text and priority.
+- **0a-D1 — Where-am-I speaks the full row copy at every verbosity, on
+  both hosts.** A correction of mac's terse coupling (0a-6), authorised
+  by P2-3's text; mac's behaviour changes in this PR.
+- **0a-D2 — The grid relay keeps core's priority** (0a-13); mac's
+  `GraphTableView.swift:361` re-wrapped a rendered event as Medium.
 - **0a-D3 — The Connections panel's empty and loading states are
-  spoken through the vocabulary when the leaf takes focus empty.** Mac
-  labels them only; Windows announces `GraphStatus` for the same
-  states (the W4-7 UIA-delivery lesson: a label on a plain container is
-  not heard). Mac's behaviour is unchanged by 0a; PR B pins Windows's.
+  posted on Windows when the leaf takes focus in them**, and stay static
+  labels on mac (T3, T4): the W4-7 UIA-delivery lesson — a label on a
+  plain container is not heard. Mac's behaviour is unchanged by 0a; PR B
+  pins Windows's.
+- **0a-D4 — The tier message keeps mac's two sentences**, not P2's
+  semicolon (`p2_spec.md:109`).
+- **0a-D5 — The force value and the settle are two events with mac's
+  wording**, not P2's single phrase (`p2_spec.md:127`).
 
 ### Accepted risks
 
 - **0aR-1 — The Swift migration is unrun on this box.** Mac's CI lane
-  arbitrates; a red mac lane is fixed here, not waived (HR-1's shape).
-- **0aR-2 — The uniffi budget.** `A11yEvent` moves to 200 of 256
+  arbitrates; a red mac lane is fixed here, not waived.
+- **0aR-2 — The uniffi budget.** `A11yEvent` moves to 199 of 256
   top-level variants; the nesting rule (0a-1b) keeps every later engine
   at one.
+
+### Round 1 — sixteen findings, dispositions
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| IG0a-1 | BLOCKER | taken — typed summaries kept, the counts exported as records, the formatter named, the spec's sentence amended and 0aD-1 records the supersession |
+| IG0a-2 | BLOCKER | taken — 0a-2b names every payload type; GraphPresetOutcome and GraphWhereAmISelection close the invalid combinations; `GraphNodeKind` reused (0aD-4); widths pinned |
+| IG0a-3 | BLOCKER | taken — 0a-3 rewritten as the list of parsers this PR generalises, each named |
+| IG0a-4 | BLOCKER | taken — 0a-16 and 0aD-5: the shipped string is the authority; 0a-D4/0a-D5 record P2's variants |
+| IG0a-5 | MAJOR | taken — 0a-15 lists every preserved singular as a pair; the matrix carries 0/1/many |
+| IG0a-6 | MAJOR | taken — "not actively posted"; the manifest's role column classifies every string; the dual-use pair recorded |
+| IG0a-7 | MAJOR | taken — the module and signatures named; `note_count` with its exact semantics; the mixed fixture |
+| IG0a-8 | MAJOR | taken — 0a-13 pins the mac API, the deletion of `GraphEvent`/`GraphRowRef`, the verbosity extension, the poster seam |
+| IG0a-9 | MAJOR | taken — 0a-9 requires the full coalescing suite on mac and its Windows twin in PR A |
+| IG0a-10 | MAJOR | taken — 0a-17's ordered matrix, 44 witnesses, the total 492 pinned |
+| IG0a-11 | MAJOR | taken — 0a-6 reclassified as a correction; exact outputs pinned |
+| IG0a-12 | MAJOR | taken — 0a-12's manifest replaces the prose census (S11 restored; `:256` and `:361` reclassified) |
+| IG0a-13 | MINOR | taken — 198 → 199, pinned |
+| IG0a-14 | MINOR | taken — both test names corrected here and in the spec |
+| IG0a-15 | MINOR | taken — the module-doc rewrite is an acceptance item with a scan (0a-18) |
+| IG0a-16 | MINOR | taken — Medium pinned, the stale comment deleted (0a-8) |
 
 ### Tests that pin PR 0a
 
 `crates/slate-core/src/a11y.rs`: `corpus_renders_the_shipped_strings`
-(the graph golden rows), `committed_corpus_artifact_matches_the_vocabulary`,
-`every_graph_variant_and_arm_is_represented_in_the_corpus` and its
-inventory companion, `the_graph_family_occupies_one_top_level_variant`,
+(the 44 golden rows), `committed_corpus_artifact_matches_the_vocabulary`
+(492), `every_graph_variant_and_arm_is_represented_in_the_corpus` and
+`every_graph_parameter_enum_is_listed_for_coverage`,
+`the_graph_family_occupies_one_top_level_variant`,
+`a11y_event_top_level_count_is_pinned`,
 `graph_verbosity_matrix_pins_every_level`,
-`summary_events_render_the_snapshot_fields_verbatim`,
-`graph_priorities_pin_the_error_tier`, the plural-defect pair test.
-`crates/slate-uniffi/src/lib.rs`: `the_ffi_mirror_covers_every_core_a11y_variant`
-(over the graph's nested families), the two corpus-order tests, the two
-coalescing switch-list tests. `apps/slate-windows/.../A11yCorpusCensus.cs`:
+`graph_where_am_i_renders_every_state_exactly`,
+`graph_priorities_pin_the_error_tier`,
+`graph_plural_defects_are_exactly_these`,
+`the_graph_family_witness_count_is_pinned`,
+`the_module_doc_names_no_engine_but_the_mutation_builder`.
+`crates/slate-core/src/graph_summary.rs` and `session.rs`:
+`summary_events_render_the_snapshot_fields_verbatim`.
+`crates/slate-uniffi/src/lib.rs`: the generalised
+`the_ffi_mirror_covers_every_core_a11y_variant`, the two corpus-order
+tests, the two coalescing switch-list tests.
+`apps/slate-windows/.../A11yCorpusCensus.cs`:
 `EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` over the
 graph entries. `apps/slate-mac/Tests/SlateMacTests/`:
 A11yCorpusCensusTests (the graph entries through the real FFI),
-GraphAnnouncerTests (coalescing, flush, the gate, `cancelPending`,
-class independence, the widened funnel guard), `A11yResidueCensusTests`
-(`pinnedResidueSites` 29 → **28**).
+GraphAnnouncerTests (the 0a-9 suite; the funnel guard),
+`A11yResidueCensusTests` (`pinnedResidueSites` 29 → **28**).
 
 <!-- end of the graph contracts document -->
