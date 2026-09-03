@@ -2275,7 +2275,16 @@ clippy, the bindings, the golden, the censuses) is the reproduction; it
 ran green on its fourth pass after three corrections — the FFI derives
 `GraphFilter` / `GraphEdge` lacked, the clippy lints in the facts and
 the `Leaf` alias, and the two schema-walk name collisions that gave the
-edges their `from_key` / `to_key` names.
+edges their `from_key` / `to_key` names. The Windows Rust lane on the
+PR's third head (7ce8c53, mac test files only; run 33805992482) failed
+one session search test, `tag_scope_rows_clear_when_tag_removed`,
+untouched by this PR: it rewrites a 17-byte body with another 17-byte
+body and re-scans, and the re-scan's fast path skips a file whose mtime
+and size are both unchanged — Windows file times move with the ~16 ms
+system tick, so a rewrite inside the first write's tick left the stale
+tag rows in place. Root-caused, not a flake: the test now rewrites
+through the session tests' rewrite-until-the-mtime-advances helper, the
+remedy the other slow-path tests already use.
 
 ### Decisions
 
