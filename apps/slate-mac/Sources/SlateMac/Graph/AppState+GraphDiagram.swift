@@ -174,7 +174,7 @@ extension AppState {
     func graphDiagramDidConverge() {
         guard graphForcesSettlePending else { return }
         graphForcesSettlePending = false
-        graphAnnouncer.announceSettle("Graph layout settled.")
+        graphAnnouncer.announce(.graphLayoutSettled)
     }
 
     // MARK: Selection + readback
@@ -193,8 +193,8 @@ extension AppState {
         if let node = model.node(id) {
             graphSelectedNodeKey = GraphNodeKey.make(for: node)
         }
-        if announce, let ref = model.rowRef(id) {
-            graphAnnouncer.announce(.rowFocused(ref))
+        if announce, let row = model.rowCopy(id) {
+            graphAnnouncer.announce(.graphRow(verbosity: graphAnnouncer.verbosity, row: row))
         }
     }
 
@@ -228,42 +228,54 @@ extension AppState {
         if model.pinned.contains(id) {
             model.pinned.remove(id)
             model.session.unpinNode(id: id)
-            graphAnnouncer.announce(.status("Unpinned."))
+            graphAnnouncer.announce(.graphPinned(pinned: false))
         } else {
             model.pinned.insert(id)
             model.session.pinNode(id: id, x: x, y: y)
-            graphAnnouncer.announce(.status("Pinned."))
+            graphAnnouncer.announce(.graphPinned(pinned: true))
         }
     }
 
     /// The ⌃⌘I "Where am I?" readback for the diagram (spec §P2-3): the
     /// selected node's row copy, its component, the zoom level, and the
     /// active filters — backend AND the client-side name query / preset kind
-    /// filter (review) — assembled once and spoken assertively.
+    /// filter. One typed event; core renders it (W6-2 PR 0a, contracts
+    /// doc 0a-6): ALWAYS the full row copy, at every verbosity — a recorded
+    /// correction of the terse coupling this readback used to inherit
+    /// (0a-D1). Medium, as the shipped code posted it.
     func graphDiagramWhereAmI() {
-        guard let text = graphDiagramWhereAmIText() else { return }
-        graphAnnouncer.announce(.summary(text))
+        guard let event = graphDiagramWhereAmIEvent() else { return }
+        graphAnnouncer.announce(event)
     }
 
-    /// The assembled ⌃⌘I readback string — the selected node's row copy, its
-    /// component, the zoom, and the active filters (backend AND the
-    /// client-side name query / Unresolved-preset kind, which the backend
-    /// phrase omits — review finding). Pure + testable; nil when no diagram.
-    func graphDiagramWhereAmIText() -> String? {
+    /// The ⌃⌘I readback as data — the selection clause, the zoom, the
+    /// backend filter flags, the client-side needle (core trims it and
+    /// omits an empty one) and the Unresolved-preset kind. Pure +
+    /// testable; nil when no diagram.
+    func graphDiagramWhereAmIEvent() -> GraphA11yEvent? {
         guard let model = graphDiagramModel else { return nil }
-        var parts: [String] = []
-        if let sel = model.selection, let node = model.node(sel), let ref = model.rowRef(sel) {
-            parts.append(graphAnnouncer.rowPhrase(ref))
-            parts.append("component \(node.component)")
+        let selection: GraphWhereAmISelection
+        if let sel = model.selection, let node = model.node(sel), let row = model.rowCopy(sel) {
+            selection = .node(row: row, component: node.component)
         } else {
-            parts.append("No node selected")
+            selection = .noSelection
         }
-        parts.append("zoom \(model.viewport.zoomPercent) percent")
-        parts.append(graphDiagramFilterPhrase(model.filter))
-        let needle = graphTableTextFilter.trimmingCharacters(in: .whitespaces)
-        if !needle.isEmpty { parts.append("name filter \u{201C}\(needle)\u{201D}") }
-        if graphTableKindFilter == .ghost { parts.append("unresolved only") }
-        return parts.joined(separator: ", ") + "."
+        // The filter clause is the closed set of reachable states
+        // (contracts doc design B(i)): the unresolved preset is ONE arm
+        // whose backend flags are implied; otherwise the three toggles.
+        let backend = model.filter
+        let filter: GraphWhereAmIFilter =
+            graphTableKindFilter == .ghost
+            ? .unresolvedOnly
+            : .normal(
+                orphansOnly: backend.orphansOnly,
+                attachmentsShown: backend.includeAttachments,
+                ghostsShown: backend.includeGhosts)
+        return .graphWhereAmI(
+            selection: selection,
+            zoomPercent: UInt32(max(0, model.viewport.zoomPercent)),
+            filter: filter,
+            nameFilter: graphTableTextFilter)
     }
 
     // MARK: Zoom router (join the #848 focus-routed menu owner)
@@ -343,7 +355,8 @@ extension AppState {
     private func graphDiagramZoom(_ change: (CanvasViewport) -> Void) {
         guard let viewport = graphDiagramModel?.viewport else { return }
         change(viewport)
-        graphAnnouncer.announce(.status("Zoom \(viewport.zoomPercent) percent."))
+        graphAnnouncer.announce(
+            .graphZoom(fit: false, percent: UInt32(max(0, viewport.zoomPercent))))
     }
 
     /// ⌥⌘0 "Fit Graph" (a new chord — spec §P2-3 / T rule R3): frame every
@@ -352,15 +365,8 @@ extension AppState {
     func graphDiagramFit() {
         guard let model = graphDiagramModel else { return }
         model.fitToContent()
-        graphAnnouncer.announce(.status("Fit graph. Zoom \(model.viewport.zoomPercent) percent."))
+        graphAnnouncer.announce(
+            .graphZoom(fit: true, percent: UInt32(max(0, model.viewport.zoomPercent))))
     }
 
-    /// A spoken description of the active backend filter (Where-am-I).
-    func graphDiagramFilterPhrase(_ filter: GraphFilter) -> String {
-        var active: [String] = []
-        if filter.orphansOnly { active.append("orphans only") }
-        if filter.includeAttachments { active.append("attachments shown") }
-        active.append(filter.includeGhosts ? "unresolved shown" : "unresolved hidden")
-        return "filters: " + active.joined(separator: ", ")
-    }
 }

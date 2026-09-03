@@ -77,7 +77,9 @@ final class ConnectionsPanelTests: XCTestCase {
         ]
         let hood = GraphNeighborhood(
             centerId: 1, depth: 1, nodes: [center, inbound, outbound, ghost, pic],
-            edges: edges, audioSummary: "irrelevant")
+            edges: edges, audioSummary: "irrelevant",
+            summaryCounts: GraphNeighborhoodCounts(
+                centerLabel: "", inLinks: 0, outLinks: 0, noteCount: 0, depth: 1))
 
         let model = ConnectionsModel(hood: hood, bundle: nil, depth: 1)
 
@@ -94,8 +96,8 @@ final class ConnectionsPanelTests: XCTestCase {
         XCTAssertTrue(picRow.isAttachment)
 
         let inRow = model.incoming[0]
-        XCTAssertEqual(inRow.rowRef.linksIn, 0)
-        XCTAssertEqual(inRow.rowRef.linksOut, 1)
+        XCTAssertEqual(inRow.rowCopy.inLinks, 0)
+        XCTAssertEqual(inRow.rowCopy.outLinks, 1)
         XCTAssertFalse(inRow.isGhost)
     }
 
@@ -110,7 +112,9 @@ final class ConnectionsPanelTests: XCTestCase {
         ]
         let hood = GraphNeighborhood(
             centerId: 1, depth: 2, nodes: [center, a, b], edges: edges,
-            audioSummary: "")
+            audioSummary: "",
+            summaryCounts: GraphNeighborhoodCounts(
+                centerLabel: "", inLinks: 0, outLinks: 0, noteCount: 0, depth: 1))
         let model = ConnectionsModel(hood: hood, bundle: nil, depth: 2)
         let aRow = model.outgoing.first { $0.label == "A" }!
         XCTAssertEqual(aRow.nested.map(\.label), ["B"], "second-hop B nests under A")
@@ -131,7 +135,9 @@ final class ConnectionsPanelTests: XCTestCase {
             GraphEdge(sourceId: 3, targetId: 4, kind: .link, count: 1),
         ]
         let hood = GraphNeighborhood(
-            centerId: 1, depth: 3, nodes: [center, a, b, c], edges: edges, audioSummary: "")
+            centerId: 1, depth: 3, nodes: [center, a, b, c], edges: edges, audioSummary: "",
+            summaryCounts: GraphNeighborhoodCounts(
+                centerLabel: "", inLinks: 0, outLinks: 0, noteCount: 0, depth: 1))
         let model = ConnectionsModel(hood: hood, bundle: nil, depth: 3)
         let aRow = model.outgoing.first { $0.label == "A" }!
         let bRow = aRow.nested.first { $0.label == "B" }!
@@ -151,7 +157,9 @@ final class ConnectionsPanelTests: XCTestCase {
             GraphEdge(sourceId: 1, targetId: 2, kind: .embed, count: 1),
         ]
         let hood = GraphNeighborhood(
-            centerId: 1, depth: 1, nodes: [center, both], edges: edges, audioSummary: "")
+            centerId: 1, depth: 1, nodes: [center, both], edges: edges, audioSummary: "",
+            summaryCounts: GraphNeighborhoodCounts(
+                centerLabel: "", inLinks: 0, outLinks: 0, noteCount: 0, depth: 1))
         let model = ConnectionsModel(hood: hood, bundle: nil, depth: 1)
         XCTAssertEqual(model.outgoing.count, 1, "one row per neighbor, not per edge")
         XCTAssertFalse(model.outgoing[0].isEmbed, "has a real link → not embed-only")
@@ -164,7 +172,9 @@ final class ConnectionsPanelTests: XCTestCase {
         let center = node(1, "Center", path: "center.md", kind: .note)
         let edges = [GraphEdge(sourceId: 1, targetId: 1, kind: .link, count: 1)]
         let hood = GraphNeighborhood(
-            centerId: 1, depth: 1, nodes: [center], edges: edges, audioSummary: "")
+            centerId: 1, depth: 1, nodes: [center], edges: edges, audioSummary: "",
+            summaryCounts: GraphNeighborhoodCounts(
+                centerLabel: "", inLinks: 0, outLinks: 0, noteCount: 0, depth: 1))
         let model = ConnectionsModel(hood: hood, bundle: nil, depth: 1)
         XCTAssertTrue(model.incoming.isEmpty && model.outgoing.isEmpty)
     }
@@ -175,7 +185,9 @@ final class ConnectionsPanelTests: XCTestCase {
         let edges = [GraphEdge(sourceId: 1, targetId: 3, kind: .link, count: 1)]
         let hood = GraphNeighborhood(
             centerId: 1, depth: 1, nodes: [center, outbound], edges: edges,
-            audioSummary: "")
+            audioSummary: "",
+            summaryCounts: GraphNeighborhoodCounts(
+                centerLabel: "", inLinks: 0, outLinks: 0, noteCount: 0, depth: 1))
         let bundle = NoteLoadBundle(
             backlinks: BacklinkPage(items: [], nextCursor: nil, totalFiltered: 0),
             outgoingLinks: [

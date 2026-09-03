@@ -314,7 +314,7 @@ final class GraphDiagramTests: XCTestCase {
             fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
         let state = AppState(recentsStore: store, externalOpener: { _ in true })
         XCTAssertFalse(state.graphDiagramZoomActive)
-        XCTAssertEqual(state.graphDiagramFilterPhrase(filter), "filters: unresolved shown")
+        XCTAssertNil(state.graphDiagramWhereAmIEvent(), "no diagram ⇒ no readback")
     }
 
     func testZoomRoutePriorityGraphVsEditor() throws {
@@ -393,22 +393,31 @@ final class GraphDiagramTests: XCTestCase {
 
     func testWhereAmIReadbackIncludesClientFilters() throws {
         // The ⌃⌘I readback must report the CLIENT-side filters (name query +
-        // Unresolved-preset kind), which the backend filter phrase omits
-        // (review finding). Exercises the pure text builder.
+        // Unresolved-preset kind), which the backend filter clause omits
+        // (review finding). The event is built here; core renders it
+        // (W6-2 PR 0a — the exact sentences are the Rust golden's).
         let session = try makeSession()
         let model = try makeModel(session)
         let (state, _) = makeView(model)
         state.graphTableTextFilter = "alpha"
         state.graphTableKindFilter = .ghost
-        let text = try XCTUnwrap(state.graphDiagramWhereAmIText())
+        let event = try XCTUnwrap(state.graphDiagramWhereAmIEvent())
+        let text = a11yRender(event: .graph(event: event)).text
         XCTAssertTrue(text.contains("filters:"), "still reports the backend filters")
         XCTAssertTrue(text.contains("name filter"), "reports the client name query")
         XCTAssertTrue(text.contains("alpha"), "includes the needle")
         XCTAssertTrue(text.contains("unresolved only"), "reports the preset kind filter")
+        XCTAssertTrue(text.contains("zoom "), "reports the zoom")
+        // 0a-D1: the readback is the FULL row copy whatever the verbosity —
+        // the event carries no verbosity at all.
+        state.graphAnnouncer.verbosity = .terse
+        let terse = try XCTUnwrap(state.graphDiagramWhereAmIEvent())
+        XCTAssertEqual(terse, event, "verbosity does not reach the readback")
         // No client filters ⇒ neither clause appears.
         state.graphTableTextFilter = ""
         state.graphTableKindFilter = nil
-        let plain = try XCTUnwrap(state.graphDiagramWhereAmIText())
+        let plainEvent = try XCTUnwrap(state.graphDiagramWhereAmIEvent())
+        let plain = a11yRender(event: .graph(event: plainEvent)).text
         XCTAssertFalse(plain.contains("name filter"))
         XCTAssertFalse(plain.contains("unresolved only"))
     }

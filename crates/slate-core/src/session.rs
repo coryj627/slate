@@ -1919,12 +1919,14 @@ impl VaultSession {
             )
             .collect();
 
-        let audio_summary = snapshot_audio_summary(&nodes, &edges, filter);
+        let summary_counts = snapshot_summary_counts(&nodes, &edges, filter);
+        let audio_summary = crate::graph_summary::snapshot_summary(&summary_counts);
         Ok(crate::graph::GraphSnapshot {
             nodes,
             edges,
             generation: index.generation(),
             audio_summary,
+            summary_counts,
         })
     }
 
@@ -1987,20 +1989,23 @@ impl VaultSession {
             .iter()
             .filter(|n| matches!(n.kind, crate::graph::NodeKind::Note))
             .count() as u64;
-        let audio_summary = format!(
-            "{}: {} links in, {} links out. Showing {} notes within {} links.",
+        // The centre's degrees are its FULL-GRAPH metrics — Link edges
+        // only, unaffected by depth or filter (contracts doc 0a-7).
+        let summary_counts = crate::graph::GraphNeighborhoodCounts {
             center_label,
-            crate::graph::grouped_decimal(u64::from(center.in_links)),
-            crate::graph::grouped_decimal(u64::from(center.out_links)),
-            crate::graph::grouped_decimal(note_count),
+            in_links: center.in_links,
+            out_links: center.out_links,
+            note_count,
             depth,
-        );
+        };
+        let audio_summary = crate::graph_summary::neighborhood_summary(&summary_counts);
         Ok(crate::graph::GraphNeighborhood {
             center_id,
             depth,
             nodes,
             edges,
             audio_summary,
+            summary_counts,
         })
     }
 
@@ -2103,7 +2108,7 @@ impl VaultSession {
     /// Creates `config.cache_dir` if missing, opens/creates the SQLite
     /// database under it, and applies all pending schema migrations.
     // (graph payload helpers live below as free fns: `file_mtimes`,
-    // `graph_node_payload`, `snapshot_audio_summary`.)
+    // `graph_node_payload`, `snapshot_summary_counts`.)
     pub fn open(
         provider: Arc<dyn VaultProvider>,
         config: SessionConfig,
@@ -9009,44 +9014,34 @@ fn graph_node_payload(
     }
 }
 
-/// Normative snapshot summary (p0_spec §P0-3):
-/// `"{n} notes, {e} links. {o} orphans, {g} unresolved targets."` —
-/// counts describe the FILTERED payload; the second sentence is
-/// omitted when both counts are 0; `" Filtered."` appends when the
-/// filter deviates from the defaults.
-fn snapshot_audio_summary(
+/// The whole-graph summary's counts (p0_spec §P0-3; contracts doc 0a-7):
+/// every count describes the FILTERED payload, `links` sums Link and
+/// Embed edge counts alike, and `filtered` is the deviation from the
+/// default filter. Rendering is `graph_summary::snapshot_summary`'s —
+/// the one formatter the a11y vocabulary also renders through.
+fn snapshot_summary_counts(
     nodes: &[crate::graph::GraphNode],
     edges: &[crate::graph::GraphEdge],
     filter: crate::graph::GraphFilter,
-) -> String {
-    use crate::graph::{NodeKind, grouped_decimal};
+) -> crate::graph::GraphSnapshotCounts {
+    use crate::graph::NodeKind;
     let notes = nodes
         .iter()
         .filter(|n| matches!(n.kind, NodeKind::Note))
         .count() as u64;
-    let ghosts = nodes
+    let unresolved = nodes
         .iter()
         .filter(|n| matches!(n.kind, NodeKind::Ghost))
         .count() as u64;
     let orphans = nodes.iter().filter(|n| n.is_orphan).count() as u64;
-    let references: u64 = edges.iter().map(|e| u64::from(e.count)).sum();
-
-    let mut summary = format!(
-        "{} notes, {} links.",
-        grouped_decimal(notes),
-        grouped_decimal(references)
-    );
-    if orphans > 0 || ghosts > 0 {
-        summary.push_str(&format!(
-            " {} orphans, {} unresolved targets.",
-            grouped_decimal(orphans),
-            grouped_decimal(ghosts)
-        ));
+    let links: u64 = edges.iter().map(|e| u64::from(e.count)).sum();
+    crate::graph::GraphSnapshotCounts {
+        notes,
+        links,
+        orphans,
+        unresolved,
+        filtered: filter != crate::graph::GraphFilter::default(),
     }
-    if filter != crate::graph::GraphFilter::default() {
-        summary.push_str(" Filtered.");
-    }
-    summary
 }
 
 // --- Internal: scan ---
