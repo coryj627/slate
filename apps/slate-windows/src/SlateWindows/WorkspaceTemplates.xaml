@@ -415,7 +415,7 @@
                                   InputGestureText="Ctrl+E"
                                   Command="{Binding EditorInteractions.PreviewEmbedCommand}" />
                         <Separator />
-                        <MenuItem Header="Check _Spelling While Typing"
+                        <local:CheckMenuItem Header="Check _Spelling While Typing"
                                   AutomationProperties.AutomationId="EditorToggleSpellCheckContext"
                                   IsCheckable="True"
                                   IsChecked="{Binding EditorPreferences.IsSpellCheckEnabled, Mode=OneWay}"

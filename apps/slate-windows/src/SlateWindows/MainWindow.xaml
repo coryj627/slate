@@ -205,7 +205,7 @@
                           Command="{Binding Workspace.ShowHistoryPanelCommand}" />
                 <!-- Contract H8: the since-open opt-in (mac Settings ▸
                      History), a HOST preference, default off. -->
-                <MenuItem Header="Show _Changes Since Last Open"
+                <local:CheckMenuItem Header="Show _Changes Since Last Open"
                           AutomationProperties.AutomationId="HistoryChangesSinceOpenMenuItem"
                           IsCheckable="True"
                           IsChecked="{Binding Workspace.EditorPreferences.HistoryShowChangesSinceOpen, Mode=OneWay}"
@@ -339,57 +339,57 @@
                           AutomationProperties.HelpText="Re-read the vault's bibliography sources after fixing them."
                           Command="{Binding Workspace.ReloadBibliographyCommand}" />
                 <Separator />
-                <MenuItem Header="Check _Spelling While Typing"
+                <local:CheckMenuItem Header="Check _Spelling While Typing"
                           AutomationProperties.AutomationId="EditorToggleSpellCheckMenuItem"
                           IsCheckable="True"
                           IsChecked="{Binding Workspace.EditorPreferences.IsSpellCheckEnabled, Mode=OneWay}"
                           Command="{Binding Workspace.EditorPreferences.ToggleSpellCheckCommand}" />
-                <MenuItem Header="Open Reading Lin_ks in New Tab"
+                <local:CheckMenuItem Header="Open Reading Lin_ks in New Tab"
                           AutomationProperties.AutomationId="EditorToggleReadingLinkTargetMenuItem"
                           IsCheckable="True"
                           IsChecked="{Binding Workspace.EditorPreferences.OpenReadingLinksInNewTab, Mode=OneWay}"
                           Command="{Binding Workspace.EditorPreferences.ToggleReadingLinkTargetCommand}" />
                 <MenuItem Header="_Math"
                           AutomationProperties.AutomationId="EditorMathPrefsMenu">
-                    <MenuItem Header="Speech Style: _ClearSpeak"
+                    <local:CheckMenuItem Header="Speech Style: _ClearSpeak"
                               AutomationProperties.AutomationId="EditorMathClearSpeakMenuItem"
                               IsCheckable="True"
                               IsChecked="{Binding Workspace.EditorPreferences.IsMathSpeechClearSpeak, Mode=OneWay}"
                               Command="{Binding Workspace.EditorPreferences.SetMathSpeechStyleCommand}"
                               CommandParameter="clearSpeak" />
-                    <MenuItem Header="Speech Style: _SimpleSpeak"
+                    <local:CheckMenuItem Header="Speech Style: _SimpleSpeak"
                               AutomationProperties.AutomationId="EditorMathSimpleSpeakMenuItem"
                               IsCheckable="True"
                               IsChecked="{Binding Workspace.EditorPreferences.IsMathSpeechSimpleSpeak, Mode=OneWay}"
                               Command="{Binding Workspace.EditorPreferences.SetMathSpeechStyleCommand}"
                               CommandParameter="simpleSpeak" />
                     <Separator />
-                    <MenuItem Header="Verbosity: _Terse"
+                    <local:CheckMenuItem Header="Verbosity: _Terse"
                               AutomationProperties.AutomationId="EditorMathTerseMenuItem"
                               IsCheckable="True"
                               IsChecked="{Binding Workspace.EditorPreferences.IsMathVerbosityTerse, Mode=OneWay}"
                               Command="{Binding Workspace.EditorPreferences.SetMathVerbosityCommand}"
                               CommandParameter="terse" />
-                    <MenuItem Header="Verbosity: M_edium"
+                    <local:CheckMenuItem Header="Verbosity: M_edium"
                               AutomationProperties.AutomationId="EditorMathMediumMenuItem"
                               IsCheckable="True"
                               IsChecked="{Binding Workspace.EditorPreferences.IsMathVerbosityMedium, Mode=OneWay}"
                               Command="{Binding Workspace.EditorPreferences.SetMathVerbosityCommand}"
                               CommandParameter="medium" />
-                    <MenuItem Header="Verbosity: _Verbose"
+                    <local:CheckMenuItem Header="Verbosity: _Verbose"
                               AutomationProperties.AutomationId="EditorMathVerboseMenuItem"
                               IsCheckable="True"
                               IsChecked="{Binding Workspace.EditorPreferences.IsMathVerbosityVerbose, Mode=OneWay}"
                               Command="{Binding Workspace.EditorPreferences.SetMathVerbosityCommand}"
                               CommandParameter="verbose" />
                     <Separator />
-                    <MenuItem Header="Braille: _Nemeth"
+                    <local:CheckMenuItem Header="Braille: _Nemeth"
                               AutomationProperties.AutomationId="EditorMathNemethMenuItem"
                               IsCheckable="True"
                               IsChecked="{Binding Workspace.EditorPreferences.IsMathBrailleNemeth, Mode=OneWay}"
                               Command="{Binding Workspace.EditorPreferences.SetMathBrailleCodeCommand}"
                               CommandParameter="nemeth" />
-                    <MenuItem Header="Braille: _UEB"
+                    <local:CheckMenuItem Header="Braille: _UEB"
                               AutomationProperties.AutomationId="EditorMathUebMenuItem"
                               IsCheckable="True"
                               IsChecked="{Binding Workspace.EditorPreferences.IsMathBrailleUeb, Mode=OneWay}"
@@ -398,19 +398,19 @@
                 </MenuItem>
                 <MenuItem Header="Code Preamble _Verbosity"
                           AutomationProperties.AutomationId="EditorCodeVerbosityMenu">
-                    <MenuItem Header="Preamble _Only"
+                    <local:CheckMenuItem Header="Preamble _Only"
                               AutomationProperties.AutomationId="EditorCodeVerbosityPreambleOnlyMenuItem"
                               IsCheckable="True"
                               IsChecked="{Binding Workspace.EditorPreferences.IsCodeVerbosityPreambleOnly, Mode=OneWay}"
                               Command="{Binding Workspace.EditorPreferences.SetCodePreambleVerbosityCommand}"
                               CommandParameter="preambleOnly" />
-                    <MenuItem Header="Preamble + _First Line"
+                    <local:CheckMenuItem Header="Preamble + _First Line"
                               AutomationProperties.AutomationId="EditorCodeVerbosityFirstLineMenuItem"
                               IsCheckable="True"
                               IsChecked="{Binding Workspace.EditorPreferences.IsCodeVerbosityFirstLine, Mode=OneWay}"
                               Command="{Binding Workspace.EditorPreferences.SetCodePreambleVerbosityCommand}"
                               CommandParameter="preambleFirstLine" />
-                    <MenuItem Header="Preamble + _All Tokens"
+                    <local:CheckMenuItem Header="Preamble + _All Tokens"
                               AutomationProperties.AutomationId="EditorCodeVerbosityAllTokensMenuItem"
                               IsCheckable="True"
                               IsChecked="{Binding Workspace.EditorPreferences.IsCodeVerbosityAllTokens, Mode=OneWay}"
@@ -509,19 +509,19 @@
                      announcement of its own. -->
                 <MenuItem Header="_Verbosity"
                           AutomationProperties.AutomationId="CanvasVerbosityMenu">
-                    <MenuItem Header="_Terse"
+                    <local:CheckMenuItem Header="_Terse"
                               AutomationProperties.AutomationId="CanvasVerbosityTerseMenuItem"
                               IsCheckable="True"
                               IsChecked="{Binding Workspace.CanvasPreferences.IsVerbosityTerse, Mode=OneWay}"
                               Command="{Binding Workspace.CanvasPreferences.SetVerbosityCommand}"
                               CommandParameter="terse" />
-                    <MenuItem Header="_Standard"
+                    <local:CheckMenuItem Header="_Standard"
                               AutomationProperties.AutomationId="CanvasVerbosityStandardMenuItem"
                               IsCheckable="True"
                               IsChecked="{Binding Workspace.CanvasPreferences.IsVerbosityStandard, Mode=OneWay}"
                               Command="{Binding Workspace.CanvasPreferences.SetVerbosityCommand}"
                               CommandParameter="standard" />
-                    <MenuItem Header="_Verbose"
+                    <local:CheckMenuItem Header="_Verbose"
                               AutomationProperties.AutomationId="CanvasVerbosityVerboseMenuItem"
                               IsCheckable="True"
                               IsChecked="{Binding Workspace.CanvasPreferences.IsVerbosityVerbose, Mode=OneWay}"

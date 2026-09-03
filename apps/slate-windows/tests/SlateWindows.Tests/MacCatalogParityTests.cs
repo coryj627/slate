@@ -152,7 +152,7 @@ public sealed class MacCatalogParityTests
                 attribute.Name.LocalName.EndsWith("AutomationId", StringComparison.Ordinal)
                 && attribute.Value == "CanvasMenu"));
         HashSet<string> windowsMenuPaths = canvasMenuElement.Descendants()
-            .Where(element => element.Name.LocalName == "MenuItem")
+            .Where(element => element.Name.LocalName is "MenuItem" or "CheckMenuItem")
             .Select(element => element.Attribute("Command")?.Value ?? string.Empty)
             .Select(command => Regex.Match(command, @"^\{Binding\s+([A-Za-z0-9_.]+)\}$"))
             .Where(match => match.Success)
