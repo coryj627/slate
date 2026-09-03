@@ -5,9 +5,14 @@ import XCTest
 
 @testable import SlateMac
 
-/// #560 acceptance: `.slate/graph.json` round-trips, preserves unknown
-/// keys, refuses to clobber an unparseable file, and clamps; group
-/// precedence is first-match-wins with a distinct ring channel.
+/// #560 acceptance, the host side (W6-2 PR 0b): the codec — defaults,
+/// clamps, the version rule, unknown-key preservation, group precedence,
+/// the ring cycle — is core's (`graph_config`, contracts doc 0b-12) and
+/// its facts live in `crates/slate-core/src/graph_config.rs`. What remains
+/// here is the store's I/O against that codec (refuse-to-clobber and
+/// refuse-to-downgrade leave the file byte-intact), the writer's
+/// generation gate, the verbosity load / fallback / save (0b-14), and the
+/// rendering extensions on the generated enums.
 final class GraphConfigTests: XCTestCase {
     private var tempDir: URL!
 
@@ -21,6 +26,14 @@ final class GraphConfigTests: XCTestCase {
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: tempDir)
         try super.tearDownWithError()
+    }
+
+    private func writeGraphJson(_ text: String) throws -> URL {
+        let slate = tempDir.appendingPathComponent(".slate")
+        try FileManager.default.createDirectory(at: slate, withIntermediateDirectories: true)
+        let url = slate.appendingPathComponent("graph.json")
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        return url
     }
 
     func testRoundTripsAllSections() throws {
@@ -37,24 +50,23 @@ final class GraphConfigTests: XCTestCase {
         cfg.forces = GraphForcesConfig(center: 0.2, repel: 0.9, link: 0.3, linkDistance: 0.7)
         cfg.mode = .diagram
         cfg.connectionsDepth = 3
+        cfg.verbosity = .verbose
 
         try store.write(cfg)
         let read = try store.read()
         XCTAssertEqual(read, cfg)
+        XCTAssertEqual(read.verbosity, .verbose, "the verbosity key round-trips (0bD-7)")
     }
 
     func testMissingFileReadsDefault() throws {
         XCTAssertEqual(try GraphConfigStore(vaultRoot: tempDir).read(), .default)
+        XCTAssertEqual(GraphConfig.default, graphConfigDefault(), "the default is core's")
+        XCTAssertEqual(GraphConfig.default.verbosity, .standard)
     }
 
     func testPreservesUnknownTopLevelKeys() throws {
         // A future Slate wrote a key we don't know; our rewrite must keep it.
-        let slate = tempDir.appendingPathComponent(".slate")
-        try FileManager.default.createDirectory(at: slate, withIntermediateDirectories: true)
-        let url = slate.appendingPathComponent("graph.json")
-        try #"{"version":1,"futureThing":{"keep":true},"mode":"table"}"#
-            .write(to: url, atomically: true, encoding: .utf8)
-
+        let url = try writeGraphJson(#"{"version":1,"futureThing":{"keep":true},"mode":"table"}"#)
         let store = GraphConfigStore(vaultRoot: tempDir)
         var cfg = try store.read()
         cfg.mode = .diagram
@@ -64,14 +76,14 @@ final class GraphConfigTests: XCTestCase {
             try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
         XCTAssertNotNil((root?["futureThing"] as? [String: Any])?["keep"] as? Bool)
         XCTAssertEqual(root?["mode"] as? String, "diagram")
+        // The bytes are core's canonical writer (0b-D5): sorted keys, LF.
+        let text = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(text.hasPrefix("{\n  \"connectionsDepth\": 1,\n  \"display\": {"))
+        XCTAssertFalse(text.contains("\r"))
     }
 
     func testRefusesToClobberUnparseableFile() throws {
-        let slate = tempDir.appendingPathComponent(".slate")
-        try FileManager.default.createDirectory(at: slate, withIntermediateDirectories: true)
-        let url = slate.appendingPathComponent("graph.json")
-        try "this is not json {{{".write(to: url, atomically: true, encoding: .utf8)
-
+        let url = try writeGraphJson("this is not json {{{")
         XCTAssertThrowsError(try GraphConfigStore(vaultRoot: tempDir).write(.default))
         // The garbage is left intact, not overwritten.
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "this is not json {{{")
@@ -82,12 +94,8 @@ final class GraphConfigTests: XCTestCase {
         // Reading must REFUSE (not silently downgrade to defaults) and a
         // write must REFUSE to clobber it — the file stays byte-intact
         // (review finding 2).
-        let slate = tempDir.appendingPathComponent(".slate")
-        try FileManager.default.createDirectory(at: slate, withIntermediateDirectories: true)
-        let url = slate.appendingPathComponent("graph.json")
         let future = #"{"version":999,"mode":"diagram","futureSection":{"x":1}}"#
-        try future.write(to: url, atomically: true, encoding: .utf8)
-
+        let url = try writeGraphJson(future)
         let store = GraphConfigStore(vaultRoot: tempDir)
         XCTAssertThrowsError(try store.read(), "a newer version is not downgraded on read")
         XCTAssertThrowsError(try store.write(.default), "a newer version is not clobbered on write")
@@ -133,11 +141,10 @@ final class GraphConfigTests: XCTestCase {
             "an older generation must not overwrite the newer one")
     }
 
+    /// The clamps are core's; the store hands the text through.
     func testClampsOutOfRangeValues() throws {
-        let slate = tempDir.appendingPathComponent(".slate")
-        try FileManager.default.createDirectory(at: slate, withIntermediateDirectories: true)
-        try #"{"forces":{"repel":9.0,"center":-3},"connectionsDepth":99,"display":{"nodeSizeMultiplier":100}}"#
-            .write(to: slate.appendingPathComponent("graph.json"), atomically: true, encoding: .utf8)
+        _ = try writeGraphJson(
+            #"{"forces":{"repel":9.0,"center":-3},"connectionsDepth":99,"display":{"nodeSizeMultiplier":100}}"#)
         let cfg = try GraphConfigStore(vaultRoot: tempDir).read()
         XCTAssertEqual(cfg.forces.repel, 1.0)
         XCTAssertEqual(cfg.forces.center, 0.0)
@@ -145,6 +152,7 @@ final class GraphConfigTests: XCTestCase {
         XCTAssertEqual(cfg.display.nodeSizeMultiplier, 2.0)
     }
 
+    /// First-match-wins is core's; the Swift sugar returns the group.
     func testGroupPrecedenceIsFirstMatchWins() {
         var cfg = GraphConfig.default
         cfg.groups = [
@@ -155,18 +163,53 @@ final class GraphConfigTests: XCTestCase {
         XCTAssertEqual(cfg.matchingGroup(for: "meeting-note")?.colorToken, .blue)
         XCTAssertEqual(cfg.matchingGroup(for: "weekly meeting")?.colorToken, .red)
         XCTAssertNil(cfg.matchingGroup(for: "unrelated"))
+        XCTAssertEqual(
+            graphConfigMatchingGroup(config: cfg, label: "meeting-note"), 0,
+            "the index the topology entry carries (0b-6b)")
         // A blank query never swallows every node.
         cfg.groups = [GraphGroup(query: "  ", colorToken: .pink, ringStyle: .solid)]
         XCTAssertNil(cfg.matchingGroup(for: "anything"))
     }
 
+    /// The pickers iterate core's option vectors (design B): `allCases` and
+    /// the titles are the vectors', in core's order, one per enum case.
+    func testPickersAreBuiltFromCoresOptionVectors() {
+        let tokens = graphColorTokens()
+        XCTAssertEqual(GraphColorToken.allCases, tokens.map(\.token))
+        XCTAssertEqual(GraphColorToken.allCases.map(\.title), tokens.map(\.title))
+        XCTAssertEqual(tokens.map(\.tag), ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"])
+        let rings = graphRingStyles()
+        XCTAssertEqual(GraphRingStyle.allCases, rings.map(\.style))
+        XCTAssertEqual(GraphRingStyle.allCases.map(\.title), rings.map(\.title))
+        XCTAssertEqual(rings.map(\.tag), ["solid", "dashed", "double", "dotted"])
+        // Every generated case is in its vector exactly once.
+        XCTAssertEqual(Set(tokens.map(\.token)).count, tokens.count)
+        XCTAssertEqual(Set(rings.map(\.style)).count, rings.count)
+        // The modes and the levels too (design B): the switcher and the
+        // Verbosity menu iterate core's vectors, the shipped titles and tags.
+        let modes = graphSurfaceModes()
+        XCTAssertEqual(GraphSurfaceMode.allCases, modes.map(\.mode))
+        XCTAssertEqual(GraphSurfaceMode.allCases.map(\.title), ["Table", "Diagram"])
+        XCTAssertEqual(modes.map(\.tag), ["table", "diagram"])
+        XCTAssertEqual(GraphSurfaceMode(persistenceTag: "diagram"), .diagram)
+        let levels = graphVerbosities()
+        XCTAssertEqual(GraphVerbosity.allCases, levels.map(\.verbosity))
+        XCTAssertEqual(GraphVerbosity.allCases.map(\.title), ["Terse", "Standard", "Verbose"])
+        XCTAssertEqual(levels.map(\.tag), ["terse", "standard", "verbose"])
+    }
+
     func testRingStylesAreADistinctNonColorChannel() {
         // Four ring styles so the first four groups are distinguishable
-        // without relying on colour (WCAG 1.4.1).
+        // without relying on colour (WCAG 1.4.1). The tokens and titles are
+        // core's; the dash pattern is a rendering.
         XCTAssertEqual(GraphRingStyle.allCases.count, 4)
+        XCTAssertEqual(GraphRingStyle.allCases.map(\.title), ["Solid", "Dashed", "Double", "Dotted"])
         XCTAssertNil(GraphRingStyle.solid.dashPattern)
         XCTAssertNotNil(GraphRingStyle.dashed.dashPattern)
         XCTAssertNotNil(GraphRingStyle.dotted.dashPattern)
+        let style = graphConfigNextGroupStyle(groupCount: 1)
+        XCTAssertEqual(style.ringStyle, .dashed)
+        XCTAssertEqual(style.colorToken, .orange)
     }
 
     func testColorPaletteHasEightSlotsMeetingAPCA() {
@@ -179,8 +222,41 @@ final class GraphConfigTests: XCTestCase {
                 let lc = APCAContrast.lc(
                     text: token.color, background: .windowBackgroundColor, for: appearance)
                 XCTAssertGreaterThan(
-                    abs(lc), 10, "\(token.rawValue) is a visible mark in \(name) (Lc \(lc))")
+                    abs(lc), 10, "\(token.title) is a visible mark in \(name) (Lc \(lc))")
             }
         }
+    }
+
+    // MARK: - Verbosity (0b-14, 0bD-7)
+
+    /// A loaded config applies its verbosity to the announcer.
+    @MainActor
+    func testLoadedConfigAppliesVerbosityToTheAnnouncer() throws {
+        _ = try writeGraphJson(#"{"version":1,"verbosity":"terse"}"#)
+        let state = AppState()
+        state.applyLoadedGraphConfig(try GraphConfigStore(vaultRoot: tempDir).read(), vaultURL: tempDir)
+        XCTAssertEqual(state.graphAnnouncer.verbosity, .terse)
+        XCTAssertTrue(state.graphConfigWritable)
+    }
+
+    /// A malformed file falls back to the defaults — Standard — and marks
+    /// the config read-only.
+    @MainActor
+    func testMalformedConfigFallsBackToStandard() throws {
+        _ = try writeGraphJson("not json")
+        let state = AppState()
+        state.graphAnnouncer.verbosity = .verbose
+        state.applyGraphConfigLoadFailure(vaultURL: tempDir)
+        XCTAssertEqual(state.graphAnnouncer.verbosity, .standard)
+        XCTAssertFalse(state.graphConfigWritable)
+    }
+
+    /// The live verbosity is what a save persists.
+    @MainActor
+    func testSaveAggregateCarriesTheLiveVerbosity() throws {
+        let state = AppState()
+        state.applyLoadedGraphConfig(.default, vaultURL: tempDir)
+        state.graphAnnouncer.verbosity = .verbose
+        XCTAssertEqual(state.graphConfigSaveAggregate().verbosity, .verbose)
     }
 }

@@ -17,39 +17,26 @@ import Foundation
 // `persistenceTag` are the strings 0b's store writes into the vault
 // file; renaming one silently resets a user's choice.
 extension GraphVerbosity: Codable, CaseIterable {
-    public static var allCases: [GraphVerbosity] {
-        [.terse, .standard, .verbose]
-    }
+    /// Core's ordered levels with their tags and titles (W6-2 PR 0b,
+    /// 0b-12, design B), fetched once: no level is listed here.
+    static let specs: [GraphVerbositySpec] = graphVerbosities()
 
-    /// Settings picker label (t0 §1.2 level names).
-    var title: String {
-        switch self {
-        case .terse: return "Terse"
-        case .standard: return "Standard"
-        case .verbose: return "Verbose"
-        }
-    }
+    public static var allCases: [GraphVerbosity] { specs.map(\.verbosity) }
 
-    private var persistenceTag: String {
-        switch self {
-        case .terse: return "terse"
-        case .standard: return "standard"
-        case .verbose: return "verbose"
-        }
-    }
+    /// Settings picker label (t0 §1.2 level names) — core's title.
+    var title: String { Self.specs.first { $0.verbosity == self }?.title ?? "" }
+
+    private var persistenceTag: String { Self.specs.first { $0.verbosity == self }?.tag ?? "" }
 
     public init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
-        switch value {
-        case "terse": self = .terse
-        case "standard": self = .standard
-        case "verbose": self = .verbose
-        default:
+        guard let spec = Self.specs.first(where: { $0.tag == value }) else {
             throw DecodingError.dataCorruptedError(
                 in: try decoder.singleValueContainer(),
                 debugDescription: "Unknown GraphVerbosity: \(value)"
             )
         }
+        self = spec.verbosity
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -65,31 +52,20 @@ extension GraphVerbosity: Codable, CaseIterable {
 //
 // **Persistence-tag stability — DO NOT RENAME.**
 extension GraphSurfaceMode: CaseIterable {
-    public static var allCases: [GraphSurfaceMode] {
-        [.table, .diagram]
-    }
+    /// Core's ordered modes with their tags and titles (W6-2 PR 0b,
+    /// 0b-12, design B), fetched once: the mode switcher iterates this.
+    static let specs: [GraphSurfaceModeSpec] = graphSurfaceModes()
 
-    var title: String {
-        switch self {
-        case .table: return "Table"
-        case .diagram: return "Diagram"
-        }
-    }
+    public static var allCases: [GraphSurfaceMode] { specs.map(\.mode) }
 
-    /// The `.slate/graph.json` `mode` tag.
-    var persistenceTag: String {
-        switch self {
-        case .table: return "table"
-        case .diagram: return "diagram"
-        }
-    }
+    var title: String { Self.specs.first { $0.mode == self }?.title ?? "" }
+
+    /// The `.slate/graph.json` `mode` tag — core's.
+    var persistenceTag: String { Self.specs.first { $0.mode == self }?.tag ?? "" }
 
     init?(persistenceTag: String) {
-        switch persistenceTag {
-        case "table": self = .table
-        case "diagram": self = .diagram
-        default: return nil
-        }
+        guard let spec = Self.specs.first(where: { $0.tag == persistenceTag }) else { return nil }
+        self = spec.mode
     }
 }
 

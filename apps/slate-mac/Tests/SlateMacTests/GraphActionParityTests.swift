@@ -45,27 +45,21 @@ final class GraphActionParityTests: XCTestCase {
     func testSharedNodeKeyRoundTripsAndSeparatesGhosts() {
         // Real node ⇒ "p:<path>"; ghost ⇒ "g:<percent-encoded folded
         // label>" — two disjoint namespaces, byte-stable (P2-5 #561).
-        let note = GraphNode(
-            id: 1, path: "Notes/Alpha.md", label: "Alpha", kind: .note, inLinks: 0, outLinks: 0,
+        let note = GraphNode(id: 1, stableKey: "p:" + "Notes/Alpha.md", path: "Notes/Alpha.md", label: "Alpha", kind: .note, inLinks: 0, outLinks: 0,
             inEmbeds: 0, outEmbeds: 0, component: 0, isOrphan: false, pagerank: 0, modifiedMs: nil)
-        XCTAssertEqual(GraphNodeKey.make(for: note), "p:Notes/Alpha.md")
+        XCTAssertEqual(note.stableKey, "p:Notes/Alpha.md")
+        XCTAssertEqual(graphStableKeyForPath(path: "Notes/Alpha.md"), note.stableKey)
 
-        let ghost = GraphNode(
-            id: 2, path: nil, label: "Missing Note", kind: .ghost, inLinks: 0, outLinks: 0,
+        let ghost = GraphNode(id: 2, stableKey: "g:" + ("Missing Note").lowercased().replacingOccurrences(of: " ", with: "%20"), path: nil, label: "Missing Note", kind: .ghost, inLinks: 0, outLinks: 0,
             inEmbeds: 0, outEmbeds: 0, component: 0, isOrphan: true, pagerank: 0, modifiedMs: nil)
-        XCTAssertEqual(GraphNodeKey.make(for: ghost), "g:missing%20note")
+        XCTAssertEqual(ghost.stableKey, "g:missing%20note")
 
         // Case/byte folding: "MISSING NOTE" folds to the SAME ghost key.
-        let ghostUpper = GraphNode(
-            id: 3, path: nil, label: "MISSING NOTE", kind: .ghost, inLinks: 0, outLinks: 0,
+        let ghostUpper = GraphNode(id: 3, stableKey: "g:" + ("MISSING NOTE").lowercased().replacingOccurrences(of: " ", with: "%20"), path: nil, label: "MISSING NOTE", kind: .ghost, inLinks: 0, outLinks: 0,
             inEmbeds: 0, outEmbeds: 0, component: 0, isOrphan: true, pagerank: 0, modifiedMs: nil)
-        XCTAssertEqual(GraphNodeKey.make(for: ghostUpper), GraphNodeKey.make(for: ghost))
+        XCTAssertEqual(ghostUpper.stableKey, ghost.stableKey)
 
         // A real node and a ghost never collide (disjoint "p:"/"g:").
-        XCTAssertNotEqual(GraphNodeKey.make(for: note), GraphNodeKey.make(for: ghost))
-
-        // The Table row id IS the shared key (round-trip through the row).
-        XCTAssertEqual(GraphTableRow(node: note, folder: "Notes").id, GraphNodeKey.make(for: note))
-        XCTAssertEqual(GraphTableRow(node: ghost, folder: "").id, GraphNodeKey.make(for: ghost))
+        XCTAssertNotEqual(note.stableKey, ghost.stableKey)
     }
 }

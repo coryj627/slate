@@ -140,6 +140,14 @@ final class GraphDiagramNSView: NSView {
     /// is the O(1) membership test.
     private var visibleIDs: [UInt64] = []
     private var visibleSet: Set<UInt64> = []
+    /// Core's topology for the current epoch (W6-2 PR 0b, 0b-6b): the
+    /// diameter, group, label slot and neighbours of every visible node,
+    /// keyed by id, and the visible edges — ONE crossing per SEMANTIC
+    /// EPOCH (design B), cached across the settling frames.
+    private var topology: [UInt64: GraphTopologyNode] = [:]
+    private var topologyEdges: [GraphEdge] = []
+    private var topologyEpoch: GraphTopologyEpoch?
+    private(set) var topologyFetchCount = 0
     /// The tier actually rendered last (keyed off the VISIBLE count, not
     /// the raw topology) — drives the relabel-on-zoom gate and the test
     /// seam. `lastTierB` doubles as the "announce once on entry" latch.
@@ -158,7 +166,10 @@ final class GraphDiagramNSView: NSView {
     static let tileSize: CGFloat = 512
     /// Visible-label cap (spec §P2-3): at most this many labels, chosen by
     /// in-links, so a dense graph doesn't drown in text.
-    static let labelCap = 200
+    /// Core's constant (0b-8), fetched once: the diagram labels at most
+    /// this many visible nodes, ranked by in-links — the topology entry's
+    /// `labeled` flag is the decision.
+    static let labelCap = Int(AppState.graphConstantsOnce.labelCap)
     /// Labels only draw at or above this zoom (text-fade parity).
     static let labelFadeZoom: CGFloat = 0.55
 
@@ -371,46 +382,55 @@ final class GraphDiagramNSView: NSView {
     // MARK: Config-driven display / filter (P2-4 #560)
 
     private var display: GraphDisplay { appState?.graphConfig.display ?? .default }
-    private var nameNeedle: String { appState?.graphTableTextFilter ?? "" }
-    /// The preset client-side kind filter (`.ghost` for the Unresolved
-    /// preset; nil = all) — the SAME filter the Table applies on top of the
-    /// backend filter, so the two projections show one node set (finding 5).
-    private var kindFilter: GraphNodeKind? { appState?.graphTableKindFilter }
-
-    /// The client name filter — the SAME predicate the Table applies.
-    private func nameMatches(_ label: String) -> Bool {
-        AppState.graphNameMatches(label, needle: nameNeedle)
-    }
-
-    /// A node is VISIBLE iff it passes BOTH client-side filters the Table
-    /// applies — the name needle and the preset kind filter — on top of the
-    /// backend filter the layout was built with. The single definition of
-    /// "shown" every tier/render/count/nav/hit-test/AX/fit path consults so
-    /// the Diagram covers exactly the Table's node set (finding 5).
-    private func isVisible(_ node: GraphNode) -> Bool {
-        guard nameMatches(node.label) else { return false }
-        if let kind = kindFilter, node.kind != kind { return false }
-        return true
-    }
-
-    /// Recompute `visibleIDs`/`visibleSet` from the model + current filters.
-    /// Called before ANY consumer of the visible set (fit bounds in
-    /// `applyFrame`, and `rebuildTopology`) so every path — render, count,
-    /// nav, hit-test, AX, and fit — agrees on one set (finding 5).
+    /// Recompute `visibleIDs`/`visibleSet`/`topology` from core's topology
+    /// under the ONE visibility query the Table holds (W6-2 PR 0b, 0b-6b):
+    /// every path — render, count, nav, hit-test, AX, fit — reads one set,
+    /// and the Diagram covers exactly the Table's node set (finding 5). The
+    /// held generation is the layout's (design A): a topology from another
+    /// generation is dropped and the visible set empties until the layout's
+    /// refresh path adopts and the rebuild reissues.
     private func refreshVisibleSet() {
-        guard let model else {
+        guard let model, let appState else {
             visibleIDs = []
             visibleSet = []
+            topology = [:]
+            topologyEdges = []
+            topologyEpoch = nil
             return
         }
-        visibleIDs = model.nodeIDs.filter { id in model.node(id).map(isVisible) ?? false }
+        // The semantic epoch (design B): the layout handle, its generation,
+        // the visibility query and the config. A settling frame under the
+        // same epoch paints from the cache and crosses nothing.
+        let epoch = GraphTopologyEpoch(
+            layout: ObjectIdentifier(model.session), generation: model.generation,
+            query: appState.graphVisibilityQuery, config: appState.graphConfig)
+        guard epoch != topologyEpoch else { return }
+        topologyEpoch = epoch
+        topologyFetchCount += 1
+        guard
+            let result = appState.graphTopologyForDiagram(
+                heldGeneration: model.generation, heldFilter: model.filter)
+        else {
+            visibleIDs = []
+            visibleSet = []
+            topology = [:]
+            topologyEdges = []
+            return
+        }
+        topology = Dictionary(uniqueKeysWithValues: result.nodes.map { ($0.id, $0) })
+        topologyEdges = result.edges
+        visibleIDs = result.nodes.map(\.id).filter { model.node($0) != nil }
         visibleSet = Set(visibleIDs)
+        // Where-am-I reads the same record (0b-6b): publish it beside the model.
+        appState.graphDiagramTopology = result
     }
 
-    /// Node diameter with the display multiplier applied (`nodeDiameter`
-    /// is the base spec formula, kept pure for the unit test).
-    private func scaledDiameter(inLinks: UInt32) -> CGFloat {
-        Self.nodeDiameter(inLinks: inLinks) * CGFloat(display.nodeSizeMultiplier)
+    /// Node diameter with the display multiplier applied: the topology
+    /// entry's core curve when the node is in it (one crossing per
+    /// rebuild), the same curve through the scalar query otherwise.
+    private func scaledDiameter(of id: UInt64, inLinks: UInt32) -> CGFloat {
+        let base = topology[id].map { CGFloat($0.diameter) } ?? Self.nodeDiameter(inLinks: inLinks)
+        return base * CGFloat(display.nodeSizeMultiplier)
     }
 
     /// Layout → view point (`view = (p − offset) × scale`) — the mapping
@@ -456,11 +476,10 @@ final class GraphDiagramNSView: NSView {
         applyTransform()
     }
 
-    /// Node diameter in LAYOUT units (spec §P2-3): `8 + 6·ln(1+in_links)`,
-    /// clamped 8–28. The content-layer transform scales it with zoom.
+    /// Node diameter in LAYOUT units (spec §P2-3): core's curve (0b-8).
+    /// The content-layer transform scales it with zoom.
     static func nodeDiameter(inLinks: UInt32) -> CGFloat {
-        let d = 8.0 + 6.0 * log(1.0 + Double(inLinks))
-        return CGFloat(min(28.0, max(8.0, d)))
+        CGFloat(graphNodeDiameter(inLinks: inLinks))
     }
 
     // MARK: Data → layers / elements (layout coordinates)
@@ -507,7 +526,8 @@ final class GraphDiagramNSView: NSView {
         let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         let showLabels = (viewport?.scale ?? 1) >= display.textFadeZoom
         lastLabelsShown = showLabels
-        let labelIDs = showLabels ? labelPriorityIDs(model) : []
+        // The label slots are core's (0b-6): the topology entry's flag.
+        let labelIDs: Set<UInt64> = showLabels ? Set(topology.values.filter(\.labeled).map(\.id)) : []
 
         var seen: Set<UInt64> = []
         var elements: [GraphNodeAXElement] = []
@@ -519,7 +539,7 @@ final class GraphDiagramNSView: NSView {
         for id in visibleIDs {
             guard let node = model.node(id), let p = positions[id] else { continue }
             seen.insert(id)
-            let diameter = scaledDiameter(inLinks: node.inLinks)
+            let diameter = scaledDiameter(of: id, inLinks: node.inLinks)
             let rect = CGRect(
                 x: p.x - diameter / 2, y: p.y - diameter / 2, width: diameter, height: diameter)
 
@@ -528,7 +548,8 @@ final class GraphDiagramNSView: NSView {
             if dot.superlayer == nil { nodeContainer.addSublayer(dot) }
             dot.frame = rect
             dot.path = CGPath(ellipseIn: CGRect(origin: .zero, size: rect.size), transform: nil)
-            let group = appState?.graphConfig.matchingGroup(for: node.label)
+            // The group is the topology entry's (0b-6b): core's first match.
+            let group = topology[id]?.group.map { appState?.graphConfig.groups[Int($0)] } ?? nil
             styleNode(dot, node: node, group: group, increaseContrast: increaseContrast)
 
             if labelIDs.contains(id) {
@@ -637,16 +658,6 @@ final class GraphDiagramNSView: NSView {
         setAccessibilityChildren([summary])
     }
 
-    private func labelPriorityIDs(_ model: GraphDiagramModel) -> Set<UInt64> {
-        // Rank the VISIBLE nodes only — a filtered-out node never gets a
-        // label slot (finding 5).
-        if visibleIDs.count <= Self.labelCap { return visibleSet }
-        let ranked = visibleIDs.sorted { a, b in
-            (model.node(a)?.inLinks ?? 0) > (model.node(b)?.inLinks ?? 0)
-        }
-        return Set(ranked.prefix(Self.labelCap))
-    }
-
     private func makeNodeLayer() -> CAShapeLayer {
         let layer = CAShapeLayer()
         layer.lineWidth = 1.5
@@ -700,18 +711,16 @@ final class GraphDiagramNSView: NSView {
     }
 
     private func rebuildEdges(_ model: GraphDiagramModel) {
+        _ = model
         let path = CGMutablePath()
         let arrows = display.arrows
-        // ALL edges among VISIBLE endpoints are drawn in layout space (the
-        // content-layer clips off-screen geometry) — a long segment
-        // crossing the viewport with both endpoints outside is kept (round
-        // 1 finding 13). An edge to a filtered-out node (name OR kind) is
-        // dropped so the diagram's edges match the Table's visible set
-        // (finding 5 — `visibleSet` is the one definition).
-        for edge in model.edges {
-            guard let a = positions[edge.sourceId], let b = positions[edge.targetId],
-                visibleSet.contains(edge.sourceId), visibleSet.contains(edge.targetId)
-            else { continue }
+        // The visible edges are the topology record's (W6-2 PR 0b, 0b-6b):
+        // every edge among visible endpoints, in core's order, drawn in
+        // layout space (the content-layer clips off-screen geometry) — a
+        // long segment crossing the viewport with both endpoints outside is
+        // kept (round 1 finding 13); nothing is filtered here.
+        for edge in topologyEdges {
+            guard let a = positions[edge.sourceId], let b = positions[edge.targetId] else { continue }
             path.move(to: a)
             path.addLine(to: b)
             if arrows { addArrowhead(to: path, from: a, to: b) }
@@ -838,8 +847,18 @@ final class GraphDiagramNSView: NSView {
         }
     }
 
+    /// The row copy from the topology entry (W6-2 PR 0b, 0b-6b): the
+    /// same fields the Table and Connections speak, read from the one
+    /// per-node record; the model's metadata only before the first epoch.
+    private func rowCopy(for id: UInt64, model: GraphDiagramModel) -> GraphRowCopy? {
+        guard let n = topology[id] else { return model.rowCopy(id) }
+        return GraphRowCopy(
+            label: n.label, kind: n.kind, inLinks: n.inLinks, outLinks: n.outLinks,
+            references: n.inLinks, embed: false)
+    }
+
     private func axLabel(_ node: GraphNode, model: GraphDiagramModel) -> String {
-        guard let row = model.rowCopy(node.id) else { return node.label }
+        guard let row = rowCopy(for: node.id, model: model) else { return node.label }
         // The SAME row copy the Table and Connections speak — core renders
         // it at the announcer's verbosity (contracts doc 0a-11).
         let verbosity = appState?.graphAnnouncer.verbosity ?? .standard
@@ -856,16 +875,11 @@ final class GraphDiagramNSView: NSView {
     private func neighborCustomContent(of id: UInt64, model: GraphDiagramModel)
         -> [AXCustomContent]
     {
-        var seen: Set<UInt64> = []
-        var labels: [String] = []
-        for edge in model.edges {
-            let other: UInt64? =
-                edge.sourceId == id ? edge.targetId : (edge.targetId == id ? edge.sourceId : nil)
-            guard let other, visibleSet.contains(other), seen.insert(other).inserted,
-                let n = model.node(other)
-            else { continue }
-            labels.append(n.label)
-        }
+        // The neighbours are the topology entry's (W6-2 PR 0b, 0b-6b):
+        // visible-gated, unique, in edge order — the same list the spatial
+        // step consumes; the cap is core's (0a-2b). No crossing here.
+        _ = model
+        let labels = (topology[id]?.neighbors ?? []).map(\.label)
         // LABEL class (contracts doc 0a-14): core renders the list and the
         // overflow; an empty render means no content is attached.
         let value = a11yRender(event: .graph(event: .graphNeighborsContent(labels: labels))).text
@@ -916,7 +930,7 @@ final class GraphDiagramNSView: NSView {
             guard let node = model.node(element.nodeId), let p = positions[element.nodeId] else {
                 continue
             }
-            let d = scaledDiameter(inLinks: node.inLinks) * (viewport?.scale ?? 1)
+            let d = scaledDiameter(of: element.nodeId, inLinks: node.inLinks) * (viewport?.scale ?? 1)
             let center = layoutToView(p)
             element.setAccessibilityFrame(
                 screenRect(
@@ -934,7 +948,7 @@ final class GraphDiagramNSView: NSView {
             selectionAccentLayer.path = nil
             return
         }
-        let diameter = scaledDiameter(inLinks: node.inLinks) * (viewport?.scale ?? 1)
+        let diameter = scaledDiameter(of: selected, inLinks: node.inLinks) * (viewport?.scale ?? 1)
         let center = layoutToView(p)
         let ringRect = CGRect(
             x: center.x - diameter / 2 - 4, y: center.y - diameter / 2 - 4,
@@ -963,7 +977,7 @@ final class GraphDiagramNSView: NSView {
                     guard let p = positions[id], let node = model.node(id),
                         visibleSet.contains(id)
                     else { continue }
-                    let radius = scaledDiameter(inLinks: node.inLinks) / 2 + 2  // layout, +slop
+                    let radius = scaledDiameter(of: id, inLinks: node.inLinks) / 2 + 2  // layout, +slop
                     let dist = hypot(p.x - lp.x, p.y - lp.y)
                     if dist <= radius, best == nil || dist < best!.dist { best = (id, dist) }
                 }
@@ -981,8 +995,16 @@ final class GraphDiagramNSView: NSView {
         appState.activateTab(tabID)
     }
 
+    /// The path and the kind a node acts with: the topology entry's
+    /// (0b-6b), the model's metadata only before the first epoch.
+    private func actionTarget(_ id: UInt64) -> (kind: GraphNodeKind, label: String, path: String?)? {
+        if let n = topology[id] { return (n.kind, n.label, n.path) }
+        guard let n = model?.node(id) else { return nil }
+        return (n.kind, n.label, n.path)
+    }
+
     private func activate(_ id: UInt64) {
-        guard let appState, let node = model?.node(id) else { return }
+        guard let appState, let node = actionTarget(id) else { return }
         focusOwningGroup()
         if node.kind == .ghost {
             guard appState.structuralMutationDisabledReason == nil else { return }
@@ -993,19 +1015,19 @@ final class GraphDiagramNSView: NSView {
     }
 
     private func openInNewTab(_ id: UInt64) {
-        guard let appState, let path = model?.node(id)?.path else { return }
+        guard let appState, let path = actionTarget(id)?.path else { return }
         focusOwningGroup()
         appState.openFile(path, target: .newTab)
     }
 
     private func showConnections(_ id: UInt64) {
-        guard let appState, let path = model?.node(id)?.path else { return }
+        guard let appState, let path = actionTarget(id)?.path else { return }
         focusOwningGroup()
         appState.reRootConnections(on: path)
     }
 
     private func reveal(_ id: UInt64) {
-        guard let appState, let path = model?.node(id)?.path else { return }
+        guard let appState, let path = actionTarget(id)?.path else { return }
         focusOwningGroup()
         appState.revealInFileTree(path)
     }
@@ -1202,63 +1224,30 @@ final class GraphDiagramNSView: NSView {
             if let first = visibleIDs.first { select(first) }
             return
         }
-        let dir = CGVector(dx: dx, dy: dy)
-        if let best = bestInDirection(
-            from: from, dir: dir, candidates: graphNeighbors(of: current, model: model), model: model)
+        _ = from
+        _ = model
+        // Core scores the step (W6-2 PR 0b, 0b-10) over the positions the
+        // renderer holds: the topology entry's VISIBLE neighbours first,
+        // then every other visible node (finding 5).
+        let points = visibleIDs.compactMap { id -> GraphPoint? in
+            guard let p = positions[id] else { return nil }
+            return GraphPoint(id: id, x: Double(p.x), y: Double(p.y))
+        }
+        let neighbors = (topology[current]?.neighbors ?? []).map(\.id)
+        if let best = graphSpatialStep(
+            points: points, neighbors: neighbors, from: current, dx: Double(dx), dy: Double(dy))
         {
             select(best)
-            return
         }
-        if let best = bestInDirection(
-            from: from, dir: dir, candidates: visibleIDs.filter { $0 != current }, model: model)
-        {
-            select(best)
-        }
-    }
-
-    /// Graph neighbors of `id` that are currently VISIBLE — spatial nav's
-    /// neighbor-first step must not jump to a filtered-out node (finding 5).
-    private func graphNeighbors(of id: UInt64, model: GraphDiagramModel) -> [UInt64] {
-        var out: [UInt64] = []
-        for edge in model.edges {
-            if edge.sourceId == id, visibleSet.contains(edge.targetId) { out.append(edge.targetId) }
-            if edge.targetId == id, visibleSet.contains(edge.sourceId) { out.append(edge.sourceId) }
-        }
-        return out
-    }
-
-    func bestInDirection(
-        from: CGPoint, dir: CGVector, candidates: [UInt64], model: GraphDiagramModel
-    ) -> UInt64? {
-        var best: (id: UInt64, score: CGFloat)?
-        for id in candidates {
-            guard let p = positions[id] else { continue }
-            let vx = p.x - from.x
-            let vy = p.y - from.y
-            let dist = hypot(vx, vy)
-            guard dist > 0.0001 else { continue }
-            let proj = (vx * dir.dx + vy * dir.dy) / dist  // cosθ
-            guard proj > 0.1 else { continue }
-            let score = dist / max(proj, 0.0001)
-            if let b = best {
-                if score < b.score || (score == b.score && id < b.id) { best = (id, score) }
-            } else {
-                best = (id, score)
-            }
-        }
-        return best?.id
     }
 
     /// Tab/⇧Tab: next/previous VISIBLE node in KEY order (structural),
-    /// wrapping — filtered-out nodes are skipped entirely (finding 5).
+    /// wrapping — core's step over the visible order (0b-10).
     func structuralMove(forward: Bool) {
         guard model != nil, !visibleIDs.isEmpty else { return }
-        let ids = visibleIDs
-        guard let current = model?.selection, let idx = ids.firstIndex(of: current) else {
-            select(forward ? ids.first! : ids.last!)
-            return
+        if let next = graphStructuralStep(visible: visibleIDs, from: model?.selection, forward: forward) {
+            select(next)
         }
-        select(ids[forward ? (idx + 1) % ids.count : (idx - 1 + ids.count) % ids.count])
     }
 
     func typeAhead(_ chars: String) {

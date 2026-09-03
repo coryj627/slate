@@ -30,7 +30,7 @@ public sealed class GraphContractsCitationCensus
             (
                 "0a",
                 "## PR 0a — the graph announcer vocabulary moves to core",
-                "<!-- end of the graph contracts document -->",
+                "## PR 0b — the graph structural queries move to core",
                 // The vocabulary section: fifteen contracts, the event
                 // enumeration, decisions, divergences, risks, the pins.
                 6_000,
@@ -40,6 +40,18 @@ public sealed class GraphContractsCitationCensus
                 // names are unbackticked until they exist); 99 sits one below
                 // that population, and the floor rises with the records.
                 99),
+            (
+                "0b",
+                "## PR 0b — the graph structural queries move to core",
+                "<!-- end of the graph contracts document -->",
+                // The structural-queries section: fifteen contracts, the query
+                // surface, decisions, divergences, risks, the register, the pins.
+                6_000,
+                // Revision 5 cites existing identifiers only through the mac
+                // sources and tests it names; the family's own names are
+                // unbackticked until they exist. The floor sits one below the
+                // measured population and rises with the records.
+                33),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

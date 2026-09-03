@@ -3,76 +3,53 @@
 
 import Foundation
 
-/// The canonical node-action set shared by ALL graph projections — Table
-/// rows, Diagram nodes, and the Connections leaf (Milestone P, P2-5 #561,
-/// DoD §P-B "action parity"). Each projection builds its context menu /
-/// VoiceOver custom actions from this ONE enum, so the three can never
-/// silently drift apart (the parity drift test asserts exactly this).
-///
-/// `pin`/`unpin` is DELIBERATELY absent — it is diagram-only (a visual
-/// layout affordance with no meaning in the Table/Connections lists) and is
-/// exempted from parity with that rationale.
-enum GraphRowAction: String, CaseIterable {
-    case open
-    case openInNewTab
-    case showConnections
-    case reveal
-    case createNote
+// The canonical node-action set (Milestone P, P2-5 #561, DoD §P-B) and
+// the cross-projection node key are CORE'S since W6-2 PR 0b (contracts
+// doc 0b-3, 0b-9): `GraphRowAction` is the generated enum, its titles and
+// its kind eligibility come from `graph_row_action_title` /
+// `graph_row_actions` — fetched ONCE per process into the statics below
+// (design B: a per-node crossing is forbidden) — and a node's identity
+// is `GraphNode.stableKey`. What remains here is the Swift sugar the
+// projections read.
+
+extension GraphRowAction: CaseIterable {
+    /// Core's eligibility vectors per kind, fetched once (design B): the
+    /// action and its title, in core's order.
+    private static let specs: [GraphNodeKind: [GraphRowActionSpec]] = Dictionary(
+        uniqueKeysWithValues: [GraphNodeKind.note, .attachment, .ghost].map { ($0, graphRowActions(kind: $0)) })
+
+    /// The canonical order: the union of the per-kind vectors — the
+    /// generated enum is not CaseIterable, and no case is listed here.
+    public static var allCases: [GraphRowAction] {
+        var seen: [GraphRowAction] = []
+        for kind in [GraphNodeKind.note, .ghost] {
+            for spec in specs[kind] ?? [] where !seen.contains(spec.action) {
+                seen.append(spec.action)
+            }
+        }
+        return seen
+    }
 
     /// The user-facing label — the VoiceOver action name AND the
-    /// context-menu title, identical across every projection so the spoken
-    /// action set matches byte-for-byte.
+    /// context-menu title, core's string from the vectors.
     var title: String {
-        switch self {
-        case .open: return "Open"
-        case .openInNewTab: return "Open in New Tab"
-        case .showConnections: return "Show connections"
-        case .reveal: return "Reveal in File Tree"
-        case .createNote: return "Create note"
+        for vector in Self.specs.values {
+            if let spec = vector.first(where: { $0.action == self }) { return spec.title }
         }
+        return ""
     }
 
-    /// Whether this action applies to a node of the given ghost-ness: the
-    /// four navigation actions need a real file; "Create note" applies only
-    /// to a ghost (an unresolved target). No projection ever offers an
-    /// action that would silently do nothing.
+    /// Whether a node of the given ghost-ness is ELIGIBLE for this action
+    /// (core's rule: the four navigation actions need a real file; "Create
+    /// note" applies only to a ghost). Whether it can run NOW is the host's
+    /// admission (0bD-8).
     func applies(toGhost isGhost: Bool) -> Bool {
-        self == .createNote ? isGhost : !isGhost
+        Self.actions(forGhost: isGhost).contains(self)
     }
 
-    /// The canonical, ordered action set a node of the given ghost-ness must
-    /// expose — the exact list every projection is checked against.
+    /// The canonical, ordered action set a node of the given ghost-ness is
+    /// eligible for — core's vector.
     static func actions(forGhost isGhost: Bool) -> [GraphRowAction] {
-        allCases.filter { $0.applies(toGhost: isGhost) }
-    }
-}
-
-/// The cross-projection-stable identity for a graph node (Milestone P,
-/// P2-5 #561). A raw backend `UInt64` id is only stable WITHIN one graph
-/// generation (a rebuild reassigns ids — `graph.rs`), so it cannot be the
-/// shared selection key. Instead every projection keys a node the way the
-/// P1-2 Table already did: the vault path under `"p:"` for a real node, and
-/// the percent-encoded folded label under `"g:"` for a ghost (no path).
-/// Two disjoint namespaces, byte-stable, legible for ASCII labels.
-enum GraphNodeKey {
-    static func make(path: String?, label: String) -> String {
-        if let path {
-            return "p:\(path)"
-        }
-        // The backend keys ghosts on the raw UTF-8 bytes of the folded
-        // target (no Unicode NFC), so percent-encode to keep byte-distinct
-        // labels distinct while ASCII stays readable ("missing note" →
-        // "missing%20note"). Fold with the INVARIANT (en_US_POSIX) locale,
-        // not bare `lowercased()`, so the key is byte-stable regardless of
-        // the user's system locale (e.g. Turkish "I"→"ı") — the Table and
-        // Diagram must derive the SAME key for the same label on every
-        // machine (Codoki review).
-        let folded = label.lowercased(with: Locale(identifier: "en_US_POSIX"))
-        let encoded = folded.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? folded
-        return "g:\(encoded)"
-    }
-
-    static func make(for node: GraphNode) -> String {
-        make(path: node.path, label: node.label)
+        (specs[isGhost ? .ghost : .note] ?? []).map(\.action)
     }
 }

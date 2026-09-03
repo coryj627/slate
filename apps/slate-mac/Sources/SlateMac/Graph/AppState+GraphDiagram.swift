@@ -94,6 +94,36 @@ extension AppState {
     /// Tear down the diagram (graph-tab close, vault open/close, or the
     /// mode toggle returning to Table). Bumps the build sequence so any
     /// in-flight build/refresh publishes nothing.
+    /// The diagram's topology under the current visibility query and the
+    /// config (W6-2 PR 0b, 0b-6b, design B): one crossing per rebuild. The
+    /// held generation is the LAYOUT's (design A): a result from another
+    /// generation is dropped and nil returned — the layout's own refresh
+    /// path (`refreshGraphDiagramIfGraphChanged`) is the recovery, never a
+    /// snapshot fetch — and the rebuild that follows the adoption reissues.
+    func graphTopologyForDiagram(heldGeneration: UInt64, heldFilter: GraphFilter) -> GraphTopology? {
+        let query = graphVisibilityQuery
+        // The layout's identity includes its backend filter (design A): a
+        // query under another filter is never even issued against it.
+        guard query.filter == heldFilter else { return nil }
+        if let source = graphTopologySource {
+            return source(query, graphConfig, heldGeneration)
+        }
+        guard let session = currentSession,
+            let topology = try? session.graphTopology(query: query, config: graphConfig)
+        else { return nil }
+        return Self.acceptGraphTopology(
+            topology, heldGeneration: heldGeneration, heldFilter: heldFilter, queryFilter: query.filter)
+    }
+
+    /// The pure half of the diagram's token check, unit-testable: a
+    /// topology publishes only against the layout's identity — its backend
+    /// filter and its generation (design A).
+    nonisolated static func acceptGraphTopology(
+        _ topology: GraphTopology, heldGeneration: UInt64, heldFilter: GraphFilter, queryFilter: GraphFilter
+    ) -> GraphTopology? {
+        topology.generation == heldGeneration && queryFilter == heldFilter ? topology : nil
+    }
+
     func resetGraphDiagramState() {
         graphDiagramBuildSeq += 1
         graphDiagramRefreshTask?.cancel()
@@ -159,7 +189,7 @@ extension AppState {
             // reassign the old numeric id to a DIFFERENT node, so keeping
             // `model.selection`'s raw UInt64 (as `adopt` does) would move the
             // ring — and Return — to the wrong node, or drop a node that
-            // actually survived under a new id. The shared `GraphNodeKey` is
+            // actually survived under a new id. The shared `stableKey` is
             // the source of truth.
             model.selection = Self.graphDiagramNodeID(
                 forKey: self.graphSelectedNodeKey, ids: synced.0, byID: byID)
@@ -189,16 +219,16 @@ extension AppState {
         model.selection = id
         // Mirror into the SHARED cross-projection selection (P2-5 #561) so
         // the Table lands on the same row on a Diagram→Table switch. Keyed by
-        // the stable `GraphNodeKey`, never the volatile layout id.
+        // the stable `stableKey`, never the volatile layout id.
         if let node = model.node(id) {
-            graphSelectedNodeKey = GraphNodeKey.make(for: node)
+            graphSelectedNodeKey = node.stableKey
         }
         if announce, let row = model.rowCopy(id) {
             graphAnnouncer.announce(.graphRow(verbosity: graphAnnouncer.verbosity, row: row))
         }
     }
 
-    /// The layout id of the node whose stable `GraphNodeKey` equals `key`,
+    /// The layout id of the node whose `stableKey` equals `key`,
     /// among `ids`/`byID` — the ONE mapping that both the build-time seeding
     /// and the live lookup use, so they can't drift (P2-5 #561). Pure +
     /// `nonisolated` for unit testing.
@@ -206,7 +236,7 @@ extension AppState {
         forKey key: String?, ids: [UInt64], byID: [UInt64: GraphNode]
     ) -> UInt64? {
         guard let key else { return nil }
-        return ids.first { id in byID[id].map { GraphNodeKey.make(for: $0) == key } ?? false }
+        return ids.first { id in byID[id]?.stableKey == key }
     }
 
     /// The layout id of the node matching the shared `graphSelectedNodeKey`
@@ -256,7 +286,10 @@ extension AppState {
         guard let model = graphDiagramModel else { return nil }
         let selection: GraphWhereAmISelection
         if let sel = model.selection, let node = model.node(sel), let row = model.rowCopy(sel) {
-            selection = .node(row: row, component: node.component)
+            // The component is the topology entry's (0b-6b) when the diagram
+            // has accepted one; the model's metadata before the first epoch.
+            let component = graphDiagramTopology?.nodes.first { $0.id == sel }?.component ?? node.component
+            selection = .node(row: row, component: component)
         } else {
             selection = .noSelection
         }

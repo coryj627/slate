@@ -10,6 +10,22 @@ import XCTest
 /// the graph table (backend filter + client kind filter) and announce a
 /// headline computed from the fresh snapshot.
 final class GraphCommandsTests: XCTestCase {
+    /// A rows result over a snapshot's nodes, hubs first — the shape the
+    /// preset headline reads (W6-2 PR 0b, design A).
+    private func rows(of snap: GraphSnapshot, kind: GraphNodeKind? = nil) -> GraphTableRows {
+        let nodes = snap.nodes.filter { kind == nil || $0.kind == kind }
+            .sorted { $0.inLinks != $1.inLinks ? $0.inLinks > $1.inLinks : $0.label < $1.label }
+        return GraphTableRows(
+            generation: snap.generation, total: UInt64(snap.nodes.count),
+            rows: nodes.map { n in
+                GraphTableRow(
+                    stableKey: n.stableKey, nodeId: n.id, label: n.label, path: n.path, kind: n.kind,
+                    cells: [n.label, String(n.inLinks), "0", "0", "0", "0", "", "", ""],
+                    linksIn: n.inLinks, linksOut: n.outLinks, embedsIn: n.inEmbeds, embedsOut: n.outEmbeds,
+                    component: n.component, modifiedMs: n.modifiedMs)
+            })
+    }
+
 
     /// The seven graph commands live in `CommandSection.graph` and none
     /// registers a global chord — P1's zero-new-chords rule (mirrors
@@ -61,7 +77,8 @@ final class GraphCommandsTests: XCTestCase {
         _ id: UInt64, _ label: String, kind: GraphNodeKind, inLinks: UInt32 = 0
     ) -> GraphNode {
         GraphNode(
-            id: id, path: kind == .ghost ? nil : "\(label).md", label: label, kind: kind,
+            id: id, stableKey: kind == .ghost ? "g:" + label.lowercased() : "p:\(label).md",
+            path: kind == .ghost ? nil : "\(label).md", label: label, kind: kind,
             inLinks: inLinks, outLinks: 0, inEmbeds: 0, outEmbeds: 0, component: 0,
             isOrphan: false, pagerank: 0, modifiedMs: nil)
     }
@@ -86,7 +103,7 @@ final class GraphCommandsTests: XCTestCase {
             node(1, "a", kind: .note), node(2, "b", kind: .note), node(3, "c", kind: .note),
         ])
         XCTAssertEqual(
-            appState.graphPresetEvent(.orphans, snap: orphanSnap),
+            appState.graphPresetEvent(.orphans, rows: rows(of: orphanSnap)),
             .graphPreset(outcome: .orphans(count: 3)))
 
         // Unresolved: counts only ghost rows (the client kind filter).
@@ -96,7 +113,7 @@ final class GraphCommandsTests: XCTestCase {
             node(3, "Also Missing", kind: .ghost),
         ])
         XCTAssertEqual(
-            appState.graphPresetEvent(.unresolved, snap: mixedSnap),
+            appState.graphPresetEvent(.unresolved, rows: rows(of: mixedSnap, kind: .ghost)),
             .graphPreset(outcome: .unresolved(count: 2)))
 
         // Most linked: the top row under Links-in-desc (label tie-break).
@@ -105,8 +122,9 @@ final class GraphCommandsTests: XCTestCase {
             node(2, "hub", kind: .note, inLinks: 9),
             node(3, "mid", kind: .note, inLinks: 4),
         ])
+        // Row zero of the published result (design A) is the headline.
         XCTAssertEqual(
-            appState.graphPresetEvent(.mostLinked, snap: hubSnap),
+            appState.graphPresetEvent(.mostLinked, rows: rows(of: hubSnap)),
             .graphPreset(outcome: .mostLinked(label: "hub", inLinks: 9)))
     }
 
@@ -115,7 +133,7 @@ final class GraphCommandsTests: XCTestCase {
     func testMostLinkedOnEmptyGraph() {
         let appState = AppState()
         XCTAssertEqual(
-            appState.graphPresetEvent(.mostLinked, snap: snapshot([])),
+            appState.graphPresetEvent(.mostLinked, rows: rows(of: snapshot([]))),
             .graphPreset(outcome: .noNotesToRank))
     }
 }

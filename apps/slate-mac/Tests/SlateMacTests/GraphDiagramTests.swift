@@ -66,14 +66,71 @@ final class GraphDiagramTests: XCTestCase {
             nodesByID: byID, edges: layout.edges(), generation: gen)
     }
 
+    /// A topology fixture over a model, the way core answers it (W6-2 PR
+    /// 0b, 0b-6b): the predicate, the curve and the matcher are core's free
+    /// functions; the neighbour lists are read off the model's edges. Used
+    /// for the synthetic models that have no session behind them.
+    private static func fixtureTopology(
+        model: GraphDiagramModel, query: GraphVisibilityQuery, config: GraphConfig, generation: UInt64
+    ) -> GraphTopology {
+        let visible = model.nodeIDs.filter { id in
+            guard let n = model.node(id) else { return false }
+            if let kind = query.kindOnly, n.kind != kind { return false }
+            return graphLabelMatches(label: n.label, query: query.nameQuery)
+        }
+        let visibleSet = Set(visible)
+        var neighbors: [UInt64: [UInt64]] = [:]
+        for e in model.edges where e.sourceId != e.targetId {
+            for (a, b) in [(e.sourceId, e.targetId), (e.targetId, e.sourceId)]
+            where visibleSet.contains(a) && visibleSet.contains(b) {
+                if !(neighbors[a] ?? []).contains(b) { neighbors[a, default: []].append(b) }
+            }
+        }
+        let cap = Int(graphConstants().labelCap)
+        let labeled: Set<UInt64> =
+            visible.count <= cap
+            ? visibleSet
+            : Set(visible.sorted { (model.node($0)?.inLinks ?? 0) > (model.node($1)?.inLinks ?? 0) }.prefix(cap))
+        return GraphTopology(
+            generation: generation, total: UInt64(model.nodeIDs.count),
+            nodes: visible.map { id in
+                let n = model.node(id)!
+                return GraphTopologyNode(
+                    id: id, stableKey: n.stableKey, label: n.label, path: n.path, kind: n.kind,
+                    inLinks: n.inLinks, outLinks: n.outLinks, inEmbeds: n.inEmbeds, outEmbeds: n.outEmbeds,
+                    component: n.component, isOrphan: n.isOrphan,
+                    diameter: graphNodeDiameter(inLinks: n.inLinks),
+                    group: graphConfigMatchingGroup(config: config, label: n.label),
+                    labeled: labeled.contains(id),
+                    neighbors: (neighbors[id] ?? []).map { o in
+                        let m = model.node(o)!
+                        return GraphNeighbor(id: o, stableKey: m.stableKey, label: m.label)
+                    })
+            },
+            edges: model.edges.filter { visibleSet.contains($0.sourceId) && visibleSet.contains($0.targetId) })
+    }
+
     private func makeView(
-        _ model: GraphDiagramModel, reduceMotion: Bool = false,
+        _ model: GraphDiagramModel, session: VaultSession? = nil, reduceMotion: Bool = false,
         onSwitchToTable: @escaping () -> Void = {}
     ) -> (AppState, GraphDiagramNSView) {
         let store = RecentVaultsStore(
             fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
         let state = AppState(recentsStore: store, externalOpener: { _ in true })
         state.graphDiagramModel = model
+        // The topology source (0b-6b): the real session's query when the
+        // test has one, else the fixture over the synthetic model; both go
+        // through the held-generation check (design A).
+        state.graphTopologySource = { query, config, generation in
+            if let session {
+                return (try? session.graphTopology(query: query, config: config))
+                    .flatMap {
+                        AppState.acceptGraphTopology(
+                            $0, heldGeneration: generation, heldFilter: model.filter, queryFilter: query.filter)
+                    }
+            }
+            return Self.fixtureTopology(model: model, query: query, config: config, generation: generation)
+        }
         retainedStates.append(state)
         let tabID = state.workspace.openTab(.graph, activate: true)
         let view = GraphDiagramNSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
@@ -97,7 +154,7 @@ final class GraphDiagramTests: XCTestCase {
     func testTierAMaterializesEveryNodeWithRowCopyRoleAndActions() throws {
         let session = try makeSession()
         let model = try makeModel(session)
-        let (_, view) = makeView(model)
+        let (_, view) = makeView(model, session: session)
         view.tickOnceForTesting()
 
         XCTAssertEqual(view.axChildCountForTesting(), model.nodeCount)
@@ -123,7 +180,7 @@ final class GraphDiagramTests: XCTestCase {
         // viewport — a pan must never drop nodes from the AX tree.
         let session = try makeSession()
         let model = try makeModel(session)
-        let (_, view) = makeView(model)
+        let (_, view) = makeView(model, session: session)
         view.tickOnceForTesting()
         let before = view.axChildCountForTesting()
         model.viewport.offset = CGPoint(x: 100_000, y: 100_000)  // pan far away
@@ -163,8 +220,7 @@ final class GraphDiagramTests: XCTestCase {
             let ids = Array(UInt64(1)...UInt64(count))
             var byID: [UInt64: GraphNode] = [:]
             for id in ids {
-                byID[id] = GraphNode(
-                    id: id, path: "n\(id).md", label: "n\(id)", kind: .note, inLinks: 0,
+                byID[id] = GraphNode(id: id, stableKey: "p:" + "n\(id).md", path: "n\(id).md", label: "n\(id)", kind: .note, inLinks: 0,
                     outLinks: 0, inEmbeds: 0, outEmbeds: 0, component: 0, isOrphan: true,
                     pagerank: 0, modifiedMs: nil)
             }
@@ -183,8 +239,7 @@ final class GraphDiagramTests: XCTestCase {
         var byID: [UInt64: GraphNode] = [:]
         var positions: [UInt64: CGPoint] = [:]
         for (i, id) in ids.enumerated() {
-            byID[id] = GraphNode(
-                id: id, path: "n\(id).md", label: "n\(id)", kind: .note, inLinks: 0,
+            byID[id] = GraphNode(id: id, stableKey: "p:" + "n\(id).md", path: "n\(id).md", label: "n\(id)", kind: .note, inLinks: 0,
                 outLinks: 0, inEmbeds: 0, outEmbeds: 0, component: 0, isOrphan: true,
                 pagerank: 0, modifiedMs: nil)
             positions[id] = CGPoint(x: Double(i), y: Double(i))
@@ -208,7 +263,7 @@ final class GraphDiagramTests: XCTestCase {
         let session = try makeSession()
         let model = try makeModel(session)
         let ids = try idByPath(session)
-        let (state, view) = makeView(model)
+        let (state, view) = makeView(model, session: session)
         // Fixed layout: a at origin, b to the right, c below, d far right.
         // a's graph neighbors are b and c (a→b, a→c); d is an orphan.
         let layout: [UInt64: CGPoint] = [
@@ -241,7 +296,7 @@ final class GraphDiagramTests: XCTestCase {
     func testReduceMotionAppliesASingleConvergedFrame() throws {
         let session = try makeSession()
         let model = try makeModel(session)
-        let (_, view) = makeView(model, reduceMotion: true)
+        let (_, view) = makeView(model, session: session, reduceMotion: true)
         let frame = try XCTUnwrap(view.settleReduceMotionForTesting())
         XCTAssertGreaterThan(frame.iteration, 0)
         XCTAssertEqual(view.axChildCountForTesting(), model.nodeCount)
@@ -253,7 +308,7 @@ final class GraphDiagramTests: XCTestCase {
         let session = try makeSession()
         let model = try makeModel(session)
         let ids = try idByPath(session)
-        let (_, view) = makeView(model)
+        let (_, view) = makeView(model, session: session)
         view.injectPositionsForTesting([
             ids["a.md"]!: CGPoint(x: 0, y: 0),
             ids["b.md"]!: CGPoint(x: 400, y: 300),
@@ -330,7 +385,7 @@ final class GraphDiagramTests: XCTestCase {
         // never wins here — its priority is unchanged from #848.
         let session = try makeSession()
         let model = try makeModel(session)
-        let (state, _) = makeView(model)  // opens + activates a graph tab
+        let (state, _) = makeView(model, session: session)  // opens + activates a graph tab
         XCTAssertNil(state.activeCanvasDocument)
         XCTAssertTrue(state.graphDiagramZoomActive)
         XCTAssertEqual(state.zoomRouteTarget, .graph)
@@ -367,7 +422,7 @@ final class GraphDiagramTests: XCTestCase {
 
         let session = try makeSession()
         let model = try makeModel(session)
-        let (state, _) = makeView(model)  // opens + activates a graph tab
+        let (state, _) = makeView(model, session: session)  // opens + activates a graph tab
         XCTAssertNil(state.activeCanvasDocument)
         XCTAssertTrue(state.graphDiagramZoomActive)
         XCTAssertEqual(state.whereAmIRouteTarget, .graph)
@@ -398,7 +453,7 @@ final class GraphDiagramTests: XCTestCase {
         // (W6-2 PR 0a — the exact sentences are the Rust golden's).
         let session = try makeSession()
         let model = try makeModel(session)
-        let (state, _) = makeView(model)
+        let (state, _) = makeView(model, session: session)
         state.graphTableTextFilter = "alpha"
         state.graphTableKindFilter = .ghost
         let event = try XCTUnwrap(state.graphDiagramWhereAmIEvent())
@@ -425,7 +480,7 @@ final class GraphDiagramTests: XCTestCase {
     func testApplyFrameDropsMismatchedGenerationFrame() throws {
         let session = try makeSession()
         let model = try makeModel(session)
-        let (_, view) = makeView(model)
+        let (_, view) = makeView(model, session: session)
         view.tickOnceForTesting()  // applies a real (matching-generation) frame
         let n = model.nodeCount
         let before = view.nodeFramesForTesting()
@@ -454,7 +509,7 @@ final class GraphDiagramTests: XCTestCase {
     func testNameFilterHidesNonMatchingNodesInDiagram() throws {
         let session = try makeSession()
         let model = try makeModel(session)
-        let (state, view) = makeView(model)
+        let (state, view) = makeView(model, session: session)
         state.graphTableTextFilter = "a"  // only the note "a" matches
         view.tickOnceForTesting()
         let visible = Set(view.nodeFramesForTesting().keys)
@@ -468,11 +523,14 @@ final class GraphDiagramTests: XCTestCase {
         let snapshot = try session.graphSnapshot(filter: filter)
         let needle = "c"
         // Table's visible set (its filteredRows use the same static).
+        // The Table's visible set is core's answer to the same query (0b-6).
         let tableVisible = Set(
-            snapshot.nodes.filter { AppState.graphNameMatches($0.label, needle: needle) }.map(\.id))
+            try session.graphVisibility(
+                query: GraphVisibilityQuery(filter: filter, nameQuery: needle, kindOnly: nil)
+            ).ids)
         // Diagram's visible set (the renderer applies the same static).
         let model = try makeModel(session)
-        let (state, view) = makeView(model)
+        let (state, view) = makeView(model, session: session)
         state.graphTableTextFilter = needle
         view.tickOnceForTesting()
         XCTAssertEqual(
@@ -483,7 +541,7 @@ final class GraphDiagramTests: XCTestCase {
     func testNodeSizeMultiplierScalesTheDrawnDiameter() throws {
         let session = try makeSession()
         let model = try makeModel(session)
-        let (state, view) = makeView(model)
+        let (state, view) = makeView(model, session: session)
         view.tickOnceForTesting()
         let id = model.nodeIDs.first!
         let base = try XCTUnwrap(view.nodeFramesForTesting()[id]).width
@@ -496,7 +554,7 @@ final class GraphDiagramTests: XCTestCase {
     func testGroupColoursMatchingNodesWithADistinctRing() throws {
         let session = try makeSession()
         let model = try makeModel(session)
-        let (state, view) = makeView(model)
+        let (state, view) = makeView(model, session: session)
         state.graphConfig.groups = [
             GraphGroup(query: "a", colorToken: .green, ringStyle: .dashed)
         ]
@@ -519,7 +577,7 @@ final class GraphDiagramTests: XCTestCase {
         // flagged: solid dash == ungrouped dash, so width must differ.
         let session = try makeSession()
         let model = try makeModel(session)
-        let (state, view) = makeView(model)
+        let (state, view) = makeView(model, session: session)
         state.graphConfig.groups = [
             GraphGroup(query: "a", colorToken: .green, ringStyle: .solid)
         ]
@@ -542,7 +600,7 @@ final class GraphDiagramTests: XCTestCase {
         // note (P2-4 Codoki nit). This guards that reset.
         let session = try makeSession()
         let model = try makeModel(session)
-        let (state, view) = makeView(model)
+        let (state, view) = makeView(model, session: session)
         let snap = try session.graphSnapshot(filter: filter)
         let aID = snap.nodes.first { $0.label == "a" }!.id  // a.md is a note
 
@@ -585,8 +643,7 @@ final class GraphDiagramTests: XCTestCase {
             let id = UInt64(i)
             ids.append(id)
             let label = i <= 3 ? "keep\(i)" : "n\(i)"
-            byID[id] = GraphNode(
-                id: id, path: "n\(id).md", label: label, kind: .note, inLinks: 0, outLinks: 0,
+            byID[id] = GraphNode(id: id, stableKey: "p:" + "n\(id).md", path: "n\(id).md", label: label, kind: .note, inLinks: 0, outLinks: 0,
                 inEmbeds: 0, outEmbeds: 0, component: 0, isOrphan: true, pagerank: 0, modifiedMs: nil)
             positions[id] = CGPoint(x: Double(i), y: Double(i))
         }
@@ -637,8 +694,7 @@ final class GraphDiagramTests: XCTestCase {
         let session = try makeSession()
         let base = try makeModel(session)
         func node(_ id: UInt64, _ label: String) -> GraphNode {
-            GraphNode(
-                id: id, path: "\(label).md", label: label, kind: .note, inLinks: 0, outLinks: 0,
+            GraphNode(id: id, stableKey: "p:" + "\(label).md", path: "\(label).md", label: label, kind: .note, inLinks: 0, outLinks: 0,
                 inEmbeds: 0, outEmbeds: 0, component: 0, isOrphan: false, pagerank: 0,
                 modifiedMs: nil)
         }
@@ -670,7 +726,7 @@ final class GraphDiagramTests: XCTestCase {
         // spuriously say "settled" (review finding 8).
         let session = try makeSession()
         let model = try makeModel(session)
-        let (state, _) = makeView(model)  // sets graphDiagramModel
+        let (state, _) = makeView(model, session: session)  // sets graphDiagramModel
         state.setGraphForces(
             GraphForcesConfig(center: 0.1, repel: 0.9, link: 0.2, linkDistance: 0.8))
         XCTAssertTrue(state.graphForcesSettlePending, "a live diagram arms the settled announcement")
@@ -766,13 +822,13 @@ final class GraphDiagramTests: XCTestCase {
     func testDiagramSelectionMirrorsToTheSharedKey() throws {
         let session = try makeSession()
         let model = try makeModel(session)
-        let (state, _) = makeView(model)
+        let (state, _) = makeView(model, session: session)
         let snap = try session.graphSnapshot(filter: filter)
         let aNode = snap.nodes.first { $0.label == "a" }!
         state.graphDiagramSelect(aNode.id)
         XCTAssertEqual(model.selection, aNode.id)
         XCTAssertEqual(
-            state.graphSelectedNodeKey, GraphNodeKey.make(for: aNode),
+            state.graphSelectedNodeKey, aNode.stableKey,
             "selecting in the Diagram writes the shared cross-projection key")
     }
 
@@ -782,10 +838,10 @@ final class GraphDiagramTests: XCTestCase {
         // id; an absent key maps to nil (no crash, no stale selection).
         let session = try makeSession()
         let model = try makeModel(session)
-        let (state, _) = makeView(model)  // sets graphDiagramModel
+        let (state, _) = makeView(model, session: session)  // sets graphDiagramModel
         let snap = try session.graphSnapshot(filter: filter)
         let cNode = snap.nodes.first { $0.label == "c" }!
-        state.graphSelectedNodeKey = GraphNodeKey.make(for: cNode)
+        state.graphSelectedNodeKey = cNode.stableKey
         XCTAssertEqual(state.graphDiagramIDForSharedSelection(), cNode.id)
         state.graphSelectedNodeKey = "p:/does-not-exist.md"
         XCTAssertNil(state.graphDiagramIDForSharedSelection())
@@ -803,10 +859,9 @@ final class GraphDiagramTests: XCTestCase {
         let model = try makeModel(session)
         let snap = try session.graphSnapshot(filter: filter)
         let a = snap.nodes.first { $0.label == "a" }!
-        let key = GraphNodeKey.make(for: a)
+        let key = a.stableKey
         let newID = a.id &+ 1000
-        let aReassigned = GraphNode(
-            id: newID, path: a.path, label: a.label, kind: a.kind, inLinks: a.inLinks,
+        let aReassigned = GraphNode(id: newID, stableKey: a.stableKey, path: a.path, label: a.label, kind: a.kind, inLinks: a.inLinks,
             outLinks: a.outLinks, inEmbeds: a.inEmbeds, outEmbeds: a.outEmbeds,
             component: a.component, isOrphan: a.isOrphan, pagerank: a.pagerank,
             modifiedMs: a.modifiedMs)
@@ -821,7 +876,7 @@ final class GraphDiagramTests: XCTestCase {
     func testSetGraphForcesUpdatesConfigAndTheLiveLayoutStaysFinite() throws {
         let session = try makeSession()
         let model = try makeModel(session)
-        let (state, _) = makeView(model)
+        let (state, _) = makeView(model, session: session)
         state.setGraphForces(
             GraphForcesConfig(center: 0.1, repel: 0.9, link: 0.2, linkDistance: 0.8))
         XCTAssertEqual(state.graphConfig.forces.repel, 0.9)
@@ -850,5 +905,60 @@ final class GraphDiagramTests: XCTestCase {
                 text: .separatorColor, background: bg, for: appearance)
             XCTAssertGreaterThan(abs(edge), 3, "\(name): edges are visible against the background")
         }
+    }
+
+    // MARK: W6-2 PR 0b — the diagram's token (design A)
+
+    /// A topology from another generation than the layout holds, or under
+    /// another backend filter than the layout's, is dropped; the layout's
+    /// refresh path is the recovery, never a snapshot fetch.
+    func testTopologyFromAnotherGenerationOrFilterIsDropped() {
+        let t = GraphTopology(generation: 7, total: 0, nodes: [], edges: [])
+        let held = GraphFilter(includeAttachments: false, includeGhosts: true, orphansOnly: false)
+        let other = GraphFilter(includeAttachments: true, includeGhosts: true, orphansOnly: false)
+        XCTAssertNil(AppState.acceptGraphTopology(t, heldGeneration: 6, heldFilter: held, queryFilter: held))
+        XCTAssertNil(AppState.acceptGraphTopology(t, heldGeneration: 7, heldFilter: held, queryFilter: other))
+        XCTAssertNotNil(AppState.acceptGraphTopology(t, heldGeneration: 7, heldFilter: held, queryFilter: held))
+    }
+
+    /// The topology is fetched once per semantic epoch (design B): the
+    /// settling frames paint from the cache, and a needle change is a new
+    /// epoch.
+    func testTopologyIsFetchedOncePerEpochWhileSettling() throws {
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, view) = makeView(model, session: session)
+        for _ in 0..<5 { view.tickOnceForTesting() }
+        XCTAssertEqual(view.topologyFetchCount, 1, "five settling frames, one crossing")
+        state.graphTableTextFilter = "a"
+        view.tickOnceForTesting()
+        XCTAssertEqual(view.topologyFetchCount, 2, "a needle change is a new epoch")
+        view.tickOnceForTesting()
+        XCTAssertEqual(view.topologyFetchCount, 2)
+        var config = state.graphConfig
+        config.groups.append(GraphGroup(query: "a", colorToken: .red, ringStyle: .solid))
+        state.graphConfig = config
+        view.tickOnceForTesting()
+        XCTAssertEqual(view.topologyFetchCount, 3, "a config change is a new epoch")
+        view.tickOnceForTesting()
+        view.tickOnceForTesting()
+        XCTAssertEqual(view.topologyFetchCount, 3, "settling frames under one epoch cross nothing")
+    }
+
+    /// A mutation between the layout's adoption and the topology query:
+    /// the answer carries the newer generation and the diagram shows
+    /// nothing until the refresh path adopts.
+    func testMutationBetweenAdoptionAndQueryEmptiesTheVisibleSet() throws {
+        let session = try makeSession()
+        let model = try makeModel(session)
+        let (state, view) = makeView(model, session: session)
+        view.tickOnceForTesting()
+        XCTAssertEqual(view.visibleNodeCountForTesting(), model.nodeCount)
+        _ = try session.saveText(path: "d.md", contents: "# D\n[[a]]\n", expectedContentHash: nil)
+        view.tickOnceForTesting()  // the same epoch: the cache paints, nothing is fetched
+        XCTAssertEqual(view.visibleNodeCountForTesting(), model.nodeCount, "no crossing under an unchanged epoch")
+        state.graphTableTextFilter = " "  // a new epoch (the needle changed; an empty fold)
+        view.tickOnceForTesting()  // the fetch answers with the NEWER generation
+        XCTAssertEqual(view.visibleNodeCountForTesting(), 0, "a newer-generation topology never lands on an old layout")
     }
 }

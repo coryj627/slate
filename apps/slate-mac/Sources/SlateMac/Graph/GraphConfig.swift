@@ -3,61 +3,29 @@
 
 import AppKit
 
-/// The persisted graph-tab configuration (Milestone P, P2-4 #560) —
-/// filters, colour groups, display knobs, forces, the last mode, and the
-/// Connections depth that P1-1 owned. Serialized to `.slate/graph.json`
-/// v1 (single-writer: only the Mac app writes it, so no lock — a separate
-/// file from `prefs.json` precisely to avoid contending on its flock).
-struct GraphConfig: Equatable, Sendable {
-    static let version = 1
+// The persisted graph-tab configuration (Milestone P, P2-4 #560) is
+// CORE'S schema since W6-2 PR 0b (contracts doc 0b-12): `GraphConfig`,
+// `GraphFilterConfig`, `GraphGroup`, `GraphDisplay`, `GraphForcesConfig`,
+// `GraphColorToken` and `GraphRingStyle` are the generated types, and the
+// defaults, clamps, version rule, unknown-key preservation and group rules
+// live in `slate_core::graph_config`. What remains here is the Swift sugar
+// the views read — and the colours, which are a rendering.
 
-    var filters: GraphFilterConfig
-    var groups: [GraphGroup]
-    var display: GraphDisplay
-    var forces: GraphForcesConfig
-    var mode: GraphSurfaceMode
-    /// Migrated from P1-1's Connections depth setting (clamped 1…3).
-    var connectionsDepth: Int
-
-    static let `default` = GraphConfig(
-        filters: .default,
-        groups: [],
-        display: .default,
-        forces: .default,
-        mode: .table,
-        connectionsDepth: 1)
+extension GraphConfig {
+    static let `default` = graphConfigDefault()
 
     /// The group that colours a node with `label`: FIRST-match-wins over
-    /// the ordered list (Obsidian parity). A group's query is a
-    /// case/diacritic-insensitive label substring; an empty query never
-    /// matches (so a blank rule can't swallow every node).
+    /// the ordered list, core's rule (the diagram reads the topology
+    /// entry's `group` instead — one crossing per rebuild, design B).
     func matchingGroup(for label: String) -> GraphGroup? {
-        groups.first { group in
-            let q = group.query.trimmingCharacters(in: .whitespaces)
-            guard !q.isEmpty else { return false }
-            return label.range(of: q, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-        }
+        graphConfigMatchingGroup(config: self, label: label).map { groups[Int($0)] }
     }
 }
 
-/// The graph's effective filter — the backend toggles (shared with the
-/// Table's `GraphFilter`) plus the client-side name query. The SAME
-/// predicate the Table applies, so both projections show one node set
-/// (spec §P2-4 "single source of truth").
-struct GraphFilterConfig: Equatable, Sendable {
-    var includeAttachments: Bool
-    var includeGhosts: Bool
-    var orphansOnly: Bool
-    /// Client-side label substring (case/diacritic-insensitive); empty = all.
-    var nameQuery: String
-
-    static let `default` = GraphFilterConfig(
-        includeAttachments: false, includeGhosts: true, orphansOnly: false, nameQuery: "")
+extension GraphFilterConfig {
+    static let `default` = GraphConfig.default.filters
 
     /// The backend projection filter (drops the client-only name query).
-    /// The client-side name needle is applied by the ONE shared predicate
-    /// `AppState.graphNameMatches` (both Table and Diagram call it), so the
-    /// single-source-of-truth invariant lives in exactly one place.
     var backend: GraphFilter {
         GraphFilter(
             includeAttachments: includeAttachments, includeGhosts: includeGhosts,
@@ -65,27 +33,12 @@ struct GraphFilterConfig: Equatable, Sendable {
     }
 }
 
-/// Display knobs (spec §P2-4). Multipliers are 0.5…2.0 with a 1.0
-/// default; text-fade is the zoom below which labels hide.
-struct GraphDisplay: Equatable, Sendable {
-    var arrows: Bool
-    var textFadeZoom: Double
-    var nodeSizeMultiplier: Double
-    var linkThickness: Double
-
-    static let `default` = GraphDisplay(
-        arrows: false, textFadeZoom: 0.55, nodeSizeMultiplier: 1.0, linkThickness: 1.0)
+extension GraphDisplay {
+    static let `default` = GraphConfig.default.display
 }
 
-/// The four Obsidian-parity force sliders (0…1), mirrored into the
-/// kernel's `LayoutForces`.
-struct GraphForcesConfig: Equatable, Sendable {
-    var center: Double
-    var repel: Double
-    var link: Double
-    var linkDistance: Double
-
-    static let `default` = GraphForcesConfig(center: 0.5, repel: 0.5, link: 0.5, linkDistance: 0.5)
+extension GraphForcesConfig {
+    static let `default` = GraphConfig.default.forces
 
     var layoutForces: LayoutForces {
         LayoutForces(
@@ -94,20 +47,15 @@ struct GraphForcesConfig: Equatable, Sendable {
     }
 }
 
-/// One colour-group rule: a label substring query → a palette colour +
-/// ring style. First match wins (Obsidian parity). The ring style is a
-/// SECOND channel so colour is never the sole signal (WCAG 1.4.1).
-struct GraphGroup: Equatable, Sendable {
-    var query: String
-    var colorToken: GraphColorToken
-    var ringStyle: GraphRingStyle
-}
+/// The eight-slot palette: the tokens and titles are core's (T71); each
+/// slot's COLOUR is a rendering and stays here (asserted against APCA in
+/// tests).
+extension GraphColorToken: CaseIterable {
+    /// Core's ordered palette (T71), fetched once (design B): the picker
+    /// and `allCases` are built from the vector, never from a literal.
+    static let specs: [GraphColorTokenSpec] = graphColorTokens()
 
-/// An 8-slot colour palette, each slot a system-managed colour that
-/// clears APCA in both appearances (asserted in tests). Raw values are
-/// the stable tokens persisted in `graph.json`.
-enum GraphColorToken: String, CaseIterable, Sendable {
-    case red, orange, yellow, green, teal, blue, purple, pink
+    public static var allCases: [GraphColorToken] { specs.map(\.token) }
 
     var color: NSColor {
         switch self {
@@ -122,13 +70,17 @@ enum GraphColorToken: String, CaseIterable, Sendable {
         }
     }
 
-    var title: String { rawValue.capitalized }
+    var title: String { Self.specs.first { $0.token == self }?.title ?? "" }
 }
 
 /// The ring styles that carry group membership without relying on colour
-/// (spec §P2-4). Cycled automatically as groups are added.
-enum GraphRingStyle: String, CaseIterable, Sendable {
-    case solid, dashed, double, dotted
+/// (spec §P2-4): the tokens and titles are core's (T72); the dash pattern
+/// is a rendering.
+extension GraphRingStyle: CaseIterable {
+    /// Core's ordered ring styles, fetched once (design B).
+    static let specs: [GraphRingStyleSpec] = graphRingStyles()
+
+    public static var allCases: [GraphRingStyle] { specs.map(\.style) }
 
     /// The `CAShapeLayer.lineDashPattern` for this style (nil = solid);
     /// `double` is rendered as a thicker ring by the caller.
@@ -139,4 +91,6 @@ enum GraphRingStyle: String, CaseIterable, Sendable {
         case .dotted: return [1, 2]
         }
     }
+
+    var title: String { Self.specs.first { $0.style == self }?.title ?? "" }
 }

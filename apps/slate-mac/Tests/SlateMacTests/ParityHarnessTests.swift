@@ -174,7 +174,405 @@ final class ParityHarnessTests: XCTestCase {
         // W6-1 PR A (§W-A `canvas_read`, contract A20): the READ side of
         // the same corpus, from its own temp vault. Mirrors Program.cs.
         artifacts["canvas_read.json"] = Data(try canvasReadArtifact().utf8)
+        // W6-2 PR 0b (§W-A `graph_queries`, contracts doc 0b-13): its own
+        // vault, its own record shapes. Mirrors Program.cs exactly.
+        artifacts["graph_queries.json"] = Data(try graphQueriesArtifact().utf8)
         return artifacts
+    }
+
+    // MARK: - Graph structural queries (W6-2 PR 0b, §W-A)
+
+    /// The graph vault (contracts doc 0b-13, 0bD-4 revised): its own corpus,
+    /// its own temp vault, so nothing above it moves. Mirrors Program.cs.
+    private static var graphFixturesDir: URL {
+        repoRoot.appendingPathComponent("crates/slate-core/tests/fixtures/graph_vault")
+    }
+
+    // The pinned input lists below are DUPLICATED from
+    // `SurfaceSerializer.cs` (`PinnedGraph*`), the same way the canvas
+    // lists are: the twins cannot share a source file, so each carries its
+    // own copy and the committed golden arbitrates. Every id in the
+    // artifact is a `stable_key`, never a numeric node id (0bR-2; the
+    // census's no-id guard proves it).
+
+    private static let graphInclusiveFilter = GraphFilter(
+        includeAttachments: true, includeGhosts: true, orphansOnly: false)
+
+    /// The visibility queries the artifact pins: (name, query).
+    private static let pinnedGraphQueries: [(String, GraphVisibilityQuery)] = [
+        ("all", GraphVisibilityQuery(filter: graphInclusiveFilter, nameQuery: "", kindOnly: nil)),
+        ("all:hub", GraphVisibilityQuery(filter: graphInclusiveFilter, nameQuery: "hub", kindOnly: nil)),
+        ("all:HUB", GraphVisibilityQuery(filter: graphInclusiveFilter, nameQuery: "HUB", kindOnly: nil)),
+        ("all:café", GraphVisibilityQuery(filter: graphInclusiveFilter, nameQuery: "café", kindOnly: nil)),
+        ("all:cafe", GraphVisibilityQuery(filter: graphInclusiveFilter, nameQuery: "cafe", kindOnly: nil)),
+        ("all:ghost", GraphVisibilityQuery(filter: graphInclusiveFilter, nameQuery: "ghost", kindOnly: nil)),
+        ("all:istanbul", GraphVisibilityQuery(filter: graphInclusiveFilter, nameQuery: "istanbul", kindOnly: nil)),
+        ("all:padded-2", GraphVisibilityQuery(filter: graphInclusiveFilter, nameQuery: "  2  ", kindOnly: nil)),
+        ("all:newline-10", GraphVisibilityQuery(filter: graphInclusiveFilter, nameQuery: "\n10\n", kindOnly: nil)),
+        ("all:zzz", GraphVisibilityQuery(filter: graphInclusiveFilter, nameQuery: "zzz", kindOnly: nil)),
+        (
+            "default",
+            GraphVisibilityQuery(
+                filter: GraphFilter(includeAttachments: false, includeGhosts: true, orphansOnly: false),
+                nameQuery: "", kindOnly: nil)
+        ),
+        ("all:ghosts-only", GraphVisibilityQuery(filter: graphInclusiveFilter, nameQuery: "", kindOnly: .ghost)),
+        (
+            "orphans",
+            GraphVisibilityQuery(
+                filter: GraphFilter(includeAttachments: true, includeGhosts: true, orphansOnly: true),
+                nameQuery: "", kindOnly: nil)
+        ),
+    ]
+
+    /// The sixteen table sorts: each non-Modified column both ways.
+    /// Modified is deliberately absent: its order is the checkout time.
+    private static let pinnedGraphTableSorts: [(GraphTableColumn, Bool, String)] = [
+        (.note, true, "note asc"), (.note, false, "note desc"),
+        (.linksIn, true, "links_in asc"), (.linksIn, false, "links_in desc"),
+        (.linksOut, true, "links_out asc"), (.linksOut, false, "links_out desc"),
+        (.embedsIn, true, "embeds_in asc"), (.embedsIn, false, "embeds_in desc"),
+        (.embedsOut, true, "embeds_out asc"), (.embedsOut, false, "embeds_out desc"),
+        (.component, true, "component asc"), (.component, false, "component desc"),
+        (.folder, true, "folder asc"), (.folder, false, "folder desc"),
+        (.kind, true, "kind asc"), (.kind, false, "kind desc"),
+    ]
+
+    private static let pinnedGraphConnections: [(String, UInt32)] = [
+        ("hub.md", 1),
+        ("hub.md", 2),
+        ("hub.md", 3),
+        ("notes/nested/deep.md", 2),
+        ("10.md", 1),
+        ("self.md", 1),
+    ]
+
+    private static let pinnedGraphGhostTargets: [String] = [
+        "Ghost One",
+        "./Ghost One",
+        "/ghost two",
+        "notes/Foo.MD",
+        "dir/",
+        ".md",
+        "a\\b",
+        "café",
+    ]
+
+    /// The spatial point table, labelled a–d (ids are local to the table
+    /// and never written): a at the origin, b right, c below, d diagonal.
+    private static let pinnedGraphSpatialPoints: [(String, GraphPoint)] = [
+        ("a", GraphPoint(id: 1, x: 0.0, y: 0.0)),
+        ("b", GraphPoint(id: 2, x: 10.0, y: 0.0)),
+        ("c", GraphPoint(id: 3, x: 0.0, y: 10.0)),
+        ("d", GraphPoint(id: 4, x: 10.0, y: 10.0)),
+    ]
+
+    /// a's neighbours: d alone, so the neighbour-first rule is visible.
+    private static let pinnedGraphSpatialNeighbors: [UInt64] = [4]
+
+    /// The four unit axes, from a.
+    private static let pinnedGraphSpatialDirections: [(Int64, Int64)] = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+
+    /// The structural order, by label.
+    private static let pinnedGraphStructuralOrder: [String] = ["a", "b", "c", "d"]
+
+    private static let pinnedGraphConfigInput =
+        "{\"version\":1,\"futureThing\":{\"keep\":true,\"nested\":{\"z\":1,\"a\":[1,2]}},"
+        + "\"filters\":{\"includeAttachments\":true,\"nameQuery\":\"café\"},"
+        + "\"groups\":[{\"query\":\"project\",\"colorToken\":\"green\",\"ringStyle\":\"dashed\"},7,{\"colorToken\":\"blue\"},"
+        + "{\"query\":\"x\",\"colorToken\":\"mauve\",\"ringStyle\":\"wavy\"}],"
+        + "\"display\":{\"nodeSizeMultiplier\":100,\"textFadeZoom\":null},"
+        + "\"forces\":{\"repel\":9.0,\"center\":-3,\"link\":0.25},"
+        + "\"mode\":\"diagram\",\"connectionsDepth\":99}"
+
+    private static func graphKindName(_ kind: GraphNodeKind) -> String {
+        switch kind {
+        case .note: return "note"
+        case .attachment: return "attachment"
+        case .ghost: return "ghost"
+        }
+    }
+
+    private static func graphKeyList(_ j: CanonicalJson, _ keys: [String]) {
+        j.raw("[")
+        for (k, key) in keys.enumerated() {
+            if k > 0 { j.raw(",") }
+            j.str(key)
+        }
+        j.raw("]")
+    }
+
+    /// Vault-level artifact: the W6-2 PR 0b structural queries over the
+    /// graph vault — the twin of `SurfaceSerializer.GraphQueriesArtifact`,
+    /// key for key and in the same order. The committed golden arbitrates.
+    private static func graphQueriesArtifact() throws -> String {
+        let fm = FileManager.default
+        let vaultRoot = fm.temporaryDirectory
+            .appendingPathComponent("parity-graph-\(UUID().uuidString)")
+        try fm.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: vaultRoot) }
+        // The whole vault, folders included (the nested note is a witness).
+        for item in try fm.contentsOfDirectory(atPath: graphFixturesDir.path) {
+            try fm.copyItem(
+                at: graphFixturesDir.appendingPathComponent(item),
+                to: vaultRoot.appendingPathComponent(item))
+        }
+        let session = try VaultSession.openFilesystem(rootPath: vaultRoot.path)
+        let cancel = CancelToken()
+        _ = try session.scanInitial(cancel: cancel)
+
+        let all = pinnedGraphQueries[0].1
+        let read = try graphConfigDecode(json: pinnedGraphConfigInput)
+        let cfg = read.config
+        let snapshot = try session.graphSnapshot(filter: graphInclusiveFilter)
+        var keyOf: [UInt64: String] = [:]
+        for n in snapshot.nodes { keyOf[n.id] = n.stableKey }
+        let byKey = snapshot.nodes.sorted {
+            Array($0.stableKey.utf8).lexicographicallyPrecedes(Array($1.stableKey.utf8))
+        }
+        let keysOf = { (ids: [UInt64]) -> [String] in ids.map { keyOf[$0] ?? "" } }
+
+        let j = CanonicalJson()
+        j.raw("{\"snapshot\":[")
+        for (i, n) in byKey.enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"key\":").str(n.stableKey)
+                .raw(",\"label\":").str(n.label)
+                .raw(",\"kind\":").str(graphKindName(n.kind))
+                .raw(",\"path\":")
+            appendOptionalString(j, n.path.map(slash))
+            j.raw(",\"in_links\":").num(UInt64(n.inLinks))
+                .raw(",\"out_links\":").num(UInt64(n.outLinks))
+                .raw(",\"in_embeds\":").num(UInt64(n.inEmbeds))
+                .raw(",\"out_embeds\":").num(UInt64(n.outEmbeds))
+                .raw(",\"component\":").num(UInt64(n.component))
+                .raw(",\"is_orphan\":").bool(n.isOrphan)
+                .raw("}")
+        }
+        j.raw("]")
+
+        j.raw(",\"visibility\":[")
+        for (q, pin) in pinnedGraphQueries.enumerated() {
+            if q > 0 { j.raw(",") }
+            let v = try session.graphVisibility(query: pin.1)
+            j.raw("{\"query\":").str(pin.0)
+                .raw(",\"total\":").num(v.total)
+                .raw(",\"visible\":")
+            graphKeyList(j, keysOf(v.ids))
+            j.raw(",\"labeled\":")
+            graphKeyList(j, keysOf(v.labeled))
+            j.raw("}")
+        }
+        j.raw("]")
+
+        // The topology for the `all` query under the pinned config's groups
+        // (0b-6b): per node in core's order, the curve as an integer.
+        j.raw(",\"topology\":{\"nodes\":[")
+        let topology = try session.graphTopology(query: all, config: cfg)
+        for (i, n) in topology.nodes.enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"key\":").str(n.stableKey)
+                .raw(",\"diameter_x100\":").num(Int64((n.diameter * 100).rounded()))
+                .raw(",\"group\":")
+            if let group = n.group { _ = j.num(UInt64(group)) } else { _ = j.null() }
+            j.raw(",\"labeled\":").bool(n.labeled).raw(",\"neighbors\":")
+            graphKeyList(j, n.neighbors.map(\.stableKey))
+            j.raw("}")
+        }
+        j.raw("],\"edges\":[")
+        for (e, edge) in topology.edges.enumerated() {
+            if e > 0 { j.raw(",") }
+            j.raw("{\"from_key\":").str(keyOf[edge.sourceId] ?? "")
+                .raw(",\"to_key\":").str(keyOf[edge.targetId] ?? "")
+                .raw(",\"kind\":").str(edge.kind == .embed ? "embed" : "link")
+                .raw("}")
+        }
+        j.raw("]}")
+
+        j.raw(",\"table\":[")
+        for (s, sort) in pinnedGraphTableSorts.enumerated() {
+            if s > 0 { j.raw(",") }
+            let result = try session.graphTableRows(
+                query: all, sort: GraphTableSort(column: sort.0, ascending: sort.1))
+            j.raw("{\"query\":").str("all").raw(",\"sort\":").str(sort.2)
+                .raw(",\"total\":").num(result.total).raw(",\"rows\":[")
+            for (r, row) in result.rows.enumerated() {
+                if r > 0 { j.raw(",") }
+                // The nine cells minus Modified (index 6), named.
+                j.raw("{\"key\":").str(row.stableKey)
+                    .raw(",\"note\":").str(row.cells[0])
+                    .raw(",\"links_in\":").str(row.cells[1])
+                    .raw(",\"links_out\":").str(row.cells[2])
+                    .raw(",\"embeds_in\":").str(row.cells[3])
+                    .raw(",\"embeds_out\":").str(row.cells[4])
+                    .raw(",\"component\":").str(row.cells[5])
+                    .raw(",\"folder\":").str(slash(row.cells[7]))
+                    .raw(",\"kind\":").str(row.cells[8])
+                    .raw("}")
+            }
+            j.raw("]}")
+        }
+        j.raw("]")
+
+        j.raw(",\"connections\":[")
+        for (c, pin) in pinnedGraphConnections.enumerated() {
+            if c > 0 { j.raw(",") }
+            let tree = try session.graphConnectionsTree(
+                path: pin.0, depth: pin.1, filter: graphInclusiveFilter)
+            j.raw("{\"path\":").str(pin.0)
+                .raw(",\"depth\":").num(UInt64(pin.1))
+                .raw(",\"center_key\":").str(tree.centerKey)
+                .raw(",\"tree_depth\":").num(UInt64(tree.depth))
+                .raw(",\"summary\":{\"center_label\":").str(tree.summaryCounts.centerLabel)
+                .raw(",\"in_links\":").num(UInt64(tree.summaryCounts.inLinks))
+                .raw(",\"out_links\":").num(UInt64(tree.summaryCounts.outLinks))
+                .raw(",\"note_count\":").num(tree.summaryCounts.noteCount)
+                .raw(",\"depth\":").num(UInt64(tree.summaryCounts.depth))
+                .raw("}")
+            for (name, list) in [("incoming", tree.incoming), ("outgoing", tree.outgoing)] {
+                j.raw(",\"" + name + "\":[")
+                for (r, row) in list.enumerated() {
+                    if r > 0 { j.raw(",") }
+                    j.raw("{\"occurrence\":").str(row.id)
+                        .raw(",\"parent\":")
+                    appendOptionalString(j, row.parentId)
+                    j.raw(",\"level\":").num(UInt64(row.level))
+                        .raw(",\"key\":").str(row.stableKey)
+                        .raw(",\"kind\":").str(graphKindName(row.kind))
+                        .raw(",\"embed_only\":").bool(row.embedOnly)
+                        .raw(",\"references\":").num(UInt64(row.references))
+                        .raw("}")
+                }
+                j.raw("]")
+            }
+            j.raw("}")
+        }
+        j.raw("]")
+
+        j.raw(",\"ghost_paths\":[")
+        for (g, target) in pinnedGraphGhostTargets.enumerated() {
+            if g > 0 { j.raw(",") }
+            j.raw("{\"target\":").str(target)
+                .raw(",\"path\":").str(graphGhostNotePath(targetRaw: target))
+                .raw("}")
+        }
+        j.raw("]")
+
+        let points = pinnedGraphSpatialPoints.map(\.1)
+        let labelOf = { (id: UInt64?) -> String? in
+            id.flatMap { want in pinnedGraphSpatialPoints.first { $0.1.id == want }?.0 }
+        }
+        j.raw(",\"spatial\":[")
+        for (t, dir) in pinnedGraphSpatialDirections.enumerated() {
+            if t > 0 { j.raw(",") }
+            let to = graphSpatialStep(
+                points: points, neighbors: pinnedGraphSpatialNeighbors,
+                from: points[0].id, dx: Double(dir.0), dy: Double(dir.1))
+            j.raw("{\"from\":").str("a")
+                .raw(",\"dx\":").num(dir.0)
+                .raw(",\"dy\":").num(dir.1)
+                .raw(",\"to\":")
+            appendOptionalString(j, labelOf(to))
+            j.raw("}")
+        }
+        j.raw("]")
+
+        j.raw(",\"structural\":[")
+        let order = pinnedGraphStructuralOrder
+        let ids = order.map { label in pinnedGraphSpatialPoints.first { $0.0 == label }!.1.id }
+        var first = true
+        for from in order.map({ Optional($0) }) + [nil] {
+            for forward in [true, false] {
+                if !first { j.raw(",") }
+                first = false
+                let fromId = from.flatMap { label in pinnedGraphSpatialPoints.first { $0.0 == label }?.1.id }
+                let to = graphStructuralStep(visible: ids, from: fromId, forward: forward)
+                j.raw("{\"from\":")
+                appendOptionalString(j, from)
+                j.raw(",\"forward\":").bool(forward).raw(",\"to\":")
+                appendOptionalString(j, labelOf(to))
+                j.raw("}")
+            }
+        }
+        j.raw("]")
+
+        let constants = graphConstants()
+        j.raw(",\"constants\":{\"tier_b_threshold\":").num(UInt64(constants.tierBThreshold))
+            .raw(",\"label_cap\":").num(UInt64(constants.labelCap))
+            .raw(",\"connections_depth_min\":").num(UInt64(constants.connectionsDepthMin))
+            .raw(",\"connections_depth_max\":").num(UInt64(constants.connectionsDepthMax))
+            .raw(",\"node_diameter_min\":").num(Int64(constants.nodeDiameterMin))
+            .raw(",\"node_diameter_max\":").num(Int64(constants.nodeDiameterMax))
+            .raw(",\"neighbor_label_cap\":").num(UInt64(constants.neighborLabelCap))
+            .raw(",\"diameter_at_0\":").num(Int64(graphNodeDiameter(inLinks: 0)))
+            .raw(",\"diameter_at_1000000\":").num(Int64(graphNodeDiameter(inLinks: 1_000_000)))
+            .raw("}")
+
+        j.raw(",\"actions\":[")
+        for (k, kind) in [GraphNodeKind.note, .attachment, .ghost].enumerated() {
+            if k > 0 { j.raw(",") }
+            j.raw("{\"kind\":").str(graphKindName(kind)).raw(",\"actions\":[")
+            for (a, spec) in graphRowActions(kind: kind).enumerated() {
+                if a > 0 { j.raw(",") }
+                j.str(spec.title)
+            }
+            j.raw("]}")
+        }
+        j.raw("]")
+
+        j.raw(",\"config\":{\"input\":").str(pinnedGraphConfigInput)
+            .raw(",\"unknown_json\":").str(read.unknownJson)
+            .raw(",\"include_attachments\":").bool(cfg.filters.includeAttachments)
+            .raw(",\"name_query\":").str(cfg.filters.nameQuery)
+            .raw(",\"group_count\":").num(UInt64(cfg.groups.count))
+            .raw(",\"group_tags\":[")
+        let tokens = graphColorTokens()
+        let rings = graphRingStyles()
+        for (g, group) in cfg.groups.enumerated() {
+            if g > 0 { j.raw(",") }
+            j.str(
+                (tokens.first { $0.token == group.colorToken }?.tag ?? "") + "/"
+                    + (rings.first { $0.style == group.ringStyle }?.tag ?? ""))
+        }
+        j.raw("],\"palette\":[")
+        for (p, token) in tokens.enumerated() {
+            if p > 0 { j.raw(",") }
+            j.str(token.tag + "/" + token.title)
+        }
+        j.raw("],\"ring_styles\":[")
+        for (r, ring) in rings.enumerated() {
+            if r > 0 { j.raw(",") }
+            j.str(ring.tag + "/" + ring.title)
+        }
+        j.raw("],\"modes\":[")
+        for (m, mode) in graphSurfaceModes().enumerated() {
+            if m > 0 { j.raw(",") }
+            j.str(mode.tag + "/" + mode.title)
+        }
+        j.raw("],\"verbosities\":[")
+        for (v, level) in graphVerbosities().enumerated() {
+            if v > 0 { j.raw(",") }
+            j.str(level.tag + "/" + level.title)
+        }
+        j.raw("],\"connections_depth\":").num(UInt64(cfg.connectionsDepth))
+            .raw(",\"mode\":").str(cfg.mode == .diagram ? "diagram" : "table")
+            .raw(",\"verbosity\":").str({ () -> String in
+                switch cfg.verbosity {
+                case .terse: return "terse"
+                case .verbose: return "verbose"
+                case .standard: return "standard"
+                }
+            }())
+            .raw(",\"repel_x100\":").num(Int64((cfg.forces.repel * 100).rounded()))
+            .raw(",\"center_x100\":").num(Int64((cfg.forces.center * 100).rounded()))
+            .raw(",\"link_x100\":").num(Int64((cfg.forces.link * 100).rounded()))
+            .raw(",\"node_size_x100\":").num(Int64((cfg.display.nodeSizeMultiplier * 100).rounded()))
+            .raw(",\"encoded\":").str(try graphConfigEncode(config: cfg, existingJson: pinnedGraphConfigInput))
+            .raw(",\"encoded_fresh\":").str(try graphConfigEncode(config: graphConfigDefault(), existingJson: nil))
+            .raw("}")
+
+        j.raw("}")
+        return j.output + "\n"
     }
 
     // MARK: - Surfaces (mirror SurfaceSerializer.cs)
@@ -1377,6 +1775,42 @@ final class ParityHarnessTests: XCTestCase {
     /// entry of BOTH committed canvas artifacts, and every exclusion names
     /// a fixture that exists. The Windows twin is
     /// `ParityHarnessCensus.EveryCanvasFixtureIsReadOrExcluded`.
+    /// W6-2 PR 0b (contracts doc 0b-15): every name of core's query surface
+    /// is bound — referenced once each, so a renamed or dropped binding
+    /// fails to compile here, the way the Windows reflection census fails.
+    func testGraphQuerySurfaceIsBound() throws {
+        let free: [Any] = [
+            graphStableKeyForPath(path: "a.md"),
+            graphLabelMatches(label: "a", query: "a"),
+            graphTableColumns(),
+            graphConstants(),
+            graphNodeDiameter(inLinks: 0),
+            graphRowActions(kind: .note),
+            graphSpatialStep(points: [], neighbors: [], from: 0, dx: 1, dy: 0) as Any,
+            graphStructuralStep(visible: [], from: nil, forward: true) as Any,
+            graphGhostNotePath(targetRaw: "a"),
+            graphConfigDefault(),
+            try graphConfigDecode(json: "{}"),
+            try graphConfigEncode(config: graphConfigDefault(), existingJson: nil),
+            graphConfigMatchingGroup(config: graphConfigDefault(), label: "a") as Any,
+            graphConfigNextGroupStyle(groupCount: 0),
+            graphColorTokens(),
+            graphRingStyles(),
+            graphSurfaceModes(),
+            graphVerbosities(),
+        ]
+        XCTAssertEqual(free.count, 18)
+        // The five session queries, as unevaluated method references.
+        let session: [(VaultSession) -> Any] = [
+            { $0.graphVisibility(query:) },
+            { $0.graphTopology(query:config:) },
+            { $0.graphNeighbors(query:id:) },
+            { $0.graphConnectionsTree(path:depth:filter:) },
+            { $0.graphTableRows(query:sort:) },
+        ]
+        XCTAssertEqual(session.count, 5)
+    }
+
     func testEveryCanvasFixtureIsReadOrExcluded() throws {
         let fixtures = try FileManager.default
             .contentsOfDirectory(atPath: Self.canvasFixturesDir.path)

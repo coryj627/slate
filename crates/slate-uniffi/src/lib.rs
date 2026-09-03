@@ -1324,6 +1324,69 @@ impl VaultSession {
         self.inner.graph_generation()
     }
 
+    /// The visible set under a query (W6-2 PR 0b, contracts doc 0b-6):
+    /// the ids that pass the needle and the kind overlay, the
+    /// label-priority subset, the total under the backend filter, and the
+    /// generation read (0b-2b — discard on mismatch).
+    pub fn graph_visibility(
+        &self,
+        query: GraphVisibilityQuery,
+    ) -> Result<GraphVisibility, VaultError> {
+        Ok(self.inner.graph_visibility(&query.into())?.into())
+    }
+
+    /// The topology under a query and a config (0b-6b, design B): every
+    /// visible node with its key, label, kind, in-links, diameter, group,
+    /// label slot and visible neighbours — one crossing per rebuild.
+    pub fn graph_topology(
+        &self,
+        query: GraphVisibilityQuery,
+        config: GraphConfig,
+    ) -> Result<GraphTopology, VaultError> {
+        Ok(self
+            .inner
+            .graph_topology(&query.into(), &config.into())?
+            .into())
+    }
+
+    /// The VISIBLE neighbours of `id` under a query (0b-6b): both
+    /// directions, unique, in the snapshot's edge order.
+    pub fn graph_neighbors(
+        &self,
+        query: GraphVisibilityQuery,
+        id: u64,
+    ) -> Result<GraphNeighbors, VaultError> {
+        Ok(self.inner.graph_neighbors(&query.into(), id)?.into())
+    }
+
+    /// The Connections tree for `path` (0b-4): flat pre-order rows, split
+    /// by centre incidence, ordered by core's label order, nested
+    /// `depth - 1` further levels, ids built from stable keys.
+    pub fn graph_connections_tree(
+        &self,
+        path: String,
+        depth: u32,
+        filter: GraphFilter,
+    ) -> Result<GraphConnectionsTree, VaultError> {
+        Ok(self
+            .inner
+            .graph_connections_tree(&path, depth, filter.into())?
+            .into())
+    }
+
+    /// The table rows under a query, core-formatted (nine cells) and in
+    /// `sort`'s order (0b-7).
+    pub fn graph_table_rows(
+        &self,
+        query: GraphVisibilityQuery,
+        sort: GraphTableSort,
+    ) -> Result<GraphTableRows, VaultError> {
+        Ok(self
+            .inner
+            .graph_table_rows(&query.into(), sort.into())?
+            .into())
+    }
+
     /// Cheap discriminator for interaction caches backed by indexed content.
     pub fn interaction_generation(&self) -> u64 {
         self.inner.interaction_generation()
@@ -3281,6 +3344,9 @@ impl From<core::graph::EdgeKind> for GraphEdgeKind {
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct GraphNode {
     pub id: u64,
+    /// The cross-projection, cross-generation identity (W6-2 PR 0b,
+    /// 0b-3): `p:` + the path or `g:` + the percent-encoded ghost key.
+    pub stable_key: String,
     /// `None` for ghosts.
     pub path: Option<String>,
     pub label: String,
@@ -3300,6 +3366,7 @@ impl From<core::graph::GraphNode> for GraphNode {
     fn from(n: core::graph::GraphNode) -> Self {
         GraphNode {
             id: n.id,
+            stable_key: n.stable_key,
             path: n.path,
             label: n.label,
             kind: n.kind.into(),
@@ -3317,7 +3384,7 @@ impl From<core::graph::GraphNode> for GraphNode {
 
 /// One collapsed edge (#552): parallel references share an edge with
 /// a reference count. Mirrors `slate_core::graph::GraphEdge`.
-#[derive(Debug, Clone, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct GraphEdge {
     pub source_id: u64,
     pub target_id: u64,
@@ -3338,7 +3405,7 @@ impl From<core::graph::GraphEdge> for GraphEdge {
 
 /// Projection filter (#552). Defaults: attachments off, ghosts on,
 /// all notes. Mirrors `slate_core::graph::GraphFilter`.
-#[derive(Debug, Clone, Copy, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct GraphFilter {
     pub include_attachments: bool,
     pub include_ghosts: bool,
@@ -3476,6 +3543,879 @@ impl From<core::graph::GraphNeighborhood> for GraphNeighborhood {
             audio_summary: n.audio_summary,
             summary_counts: n.summary_counts.into(),
         }
+    }
+}
+
+// --- Graph structural queries (W6-2 PR 0b, #746) -----------------------
+// 1:1 with `slate_core::graph_queries` and `graph_config` (contracts doc
+// 35_graph_contracts.md §PR 0b). No logic here — every conversion is a
+// field-for-field move; the free functions delegate. The record field
+// lists are pinned against core's by
+// `the_ffi_records_mirror_core_field_for_field`.
+
+/// FFI mirror of [`core::graph_queries::GraphConstants`] (0b-8).
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct GraphConstants {
+    pub tier_b_threshold: u32,
+    pub label_cap: u32,
+    pub connections_depth_min: u32,
+    pub connections_depth_max: u32,
+    pub node_diameter_min: f64,
+    pub node_diameter_max: f64,
+    pub neighbor_label_cap: u32,
+}
+
+impl From<core::graph_queries::GraphConstants> for GraphConstants {
+    fn from(c: core::graph_queries::GraphConstants) -> Self {
+        GraphConstants {
+            tier_b_threshold: c.tier_b_threshold,
+            label_cap: c.label_cap,
+            connections_depth_min: c.connections_depth_min,
+            connections_depth_max: c.connections_depth_max,
+            node_diameter_min: c.node_diameter_min,
+            node_diameter_max: c.node_diameter_max,
+            neighbor_label_cap: c.neighbor_label_cap,
+        }
+    }
+}
+
+/// The constants with accessible meaning (0b-8). Handle-free.
+#[uniffi::export]
+pub fn graph_constants() -> GraphConstants {
+    core::graph_queries::constants().into()
+}
+
+/// Node diameter in layout units: `8 + 6·ln(1 + in_links)`, clamped 8..=28.
+#[uniffi::export]
+pub fn graph_node_diameter(in_links: u32) -> f64 {
+    core::graph_queries::node_diameter(in_links)
+}
+
+/// The `p:` stable key for a path the host holds without a node (0b-3).
+#[uniffi::export]
+pub fn graph_stable_key_for_path(path: String) -> String {
+    core::graph_queries::stable_key_for_path(&path)
+}
+
+/// The one name predicate (0b-6): the folded label contains the folded,
+/// trimmed needle; an empty needle matches everything.
+#[uniffi::export]
+pub fn graph_label_matches(label: String, query: String) -> bool {
+    core::graph_queries::label_matches(&label, &query)
+}
+
+/// FFI mirror of [`core::graph_queries::GraphVisibilityQuery`] (0b-2).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphVisibilityQuery {
+    pub filter: GraphFilter,
+    pub name_query: String,
+    pub kind_only: Option<GraphNodeKind>,
+}
+
+impl From<GraphVisibilityQuery> for core::graph_queries::GraphVisibilityQuery {
+    fn from(q: GraphVisibilityQuery) -> Self {
+        core::graph_queries::GraphVisibilityQuery {
+            filter: q.filter.into(),
+            name_query: q.name_query,
+            kind_only: q.kind_only.map(Into::into),
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphVisibility`] (0b-6, 0b-2b).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphVisibility {
+    pub generation: u64,
+    pub total: u64,
+    pub ids: Vec<u64>,
+    pub labeled: Vec<u64>,
+}
+
+impl From<core::graph_queries::GraphVisibility> for GraphVisibility {
+    fn from(v: core::graph_queries::GraphVisibility) -> Self {
+        GraphVisibility {
+            generation: v.generation,
+            total: v.total,
+            ids: v.ids,
+            labeled: v.labeled,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphNeighbor`] (0b-6b).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphNeighbor {
+    pub id: u64,
+    pub stable_key: String,
+    pub label: String,
+}
+
+/// FFI mirror of [`core::graph_queries::GraphNeighbors`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphNeighbors {
+    pub generation: u64,
+    pub neighbors: Vec<GraphNeighbor>,
+}
+
+impl From<core::graph_queries::GraphNeighbors> for GraphNeighbors {
+    fn from(n: core::graph_queries::GraphNeighbors) -> Self {
+        GraphNeighbors {
+            generation: n.generation,
+            neighbors: n
+                .neighbors
+                .into_iter()
+                .map(|x| GraphNeighbor {
+                    id: x.id,
+                    stable_key: x.stable_key,
+                    label: x.label,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTopologyNode`] (0b-6b).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphTopologyNode {
+    pub id: u64,
+    pub stable_key: String,
+    pub label: String,
+    pub path: Option<String>,
+    pub kind: GraphNodeKind,
+    pub in_links: u32,
+    pub out_links: u32,
+    pub in_embeds: u32,
+    pub out_embeds: u32,
+    pub component: u32,
+    pub is_orphan: bool,
+    pub diameter: f64,
+    pub group: Option<u32>,
+    pub labeled: bool,
+    pub neighbors: Vec<GraphNeighbor>,
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTopology`] — one record per
+/// semantic epoch (design B): the visible nodes and the visible edges.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphTopology {
+    pub generation: u64,
+    pub total: u64,
+    pub nodes: Vec<GraphTopologyNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
+impl From<core::graph_queries::GraphTopology> for GraphTopology {
+    fn from(t: core::graph_queries::GraphTopology) -> Self {
+        GraphTopology {
+            generation: t.generation,
+            total: t.total,
+            edges: t.edges.into_iter().map(Into::into).collect(),
+            nodes: t
+                .nodes
+                .into_iter()
+                .map(|n| GraphTopologyNode {
+                    id: n.id,
+                    stable_key: n.stable_key,
+                    label: n.label,
+                    path: n.path,
+                    kind: n.kind.into(),
+                    in_links: n.in_links,
+                    out_links: n.out_links,
+                    in_embeds: n.in_embeds,
+                    out_embeds: n.out_embeds,
+                    component: n.component,
+                    is_orphan: n.is_orphan,
+                    diameter: n.diameter,
+                    group: n.group,
+                    labeled: n.labeled,
+                    neighbors: n
+                        .neighbors
+                        .into_iter()
+                        .map(|x| GraphNeighbor {
+                            id: x.id,
+                            stable_key: x.stable_key,
+                            label: x.label,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphRowAction`] (0b-9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphRowAction {
+    Open,
+    OpenInNewTab,
+    ShowConnections,
+    Reveal,
+    CreateNote,
+}
+
+impl From<core::graph_queries::GraphRowAction> for GraphRowAction {
+    fn from(a: core::graph_queries::GraphRowAction) -> Self {
+        use core::graph_queries::GraphRowAction as C;
+        match a {
+            C::Open => GraphRowAction::Open,
+            C::OpenInNewTab => GraphRowAction::OpenInNewTab,
+            C::ShowConnections => GraphRowAction::ShowConnections,
+            C::Reveal => GraphRowAction::Reveal,
+            C::CreateNote => GraphRowAction::CreateNote,
+        }
+    }
+}
+
+impl From<GraphRowAction> for core::graph_queries::GraphRowAction {
+    fn from(a: GraphRowAction) -> Self {
+        use core::graph_queries::GraphRowAction as C;
+        match a {
+            GraphRowAction::Open => C::Open,
+            GraphRowAction::OpenInNewTab => C::OpenInNewTab,
+            GraphRowAction::ShowConnections => C::ShowConnections,
+            GraphRowAction::Reveal => C::Reveal,
+            GraphRowAction::CreateNote => C::CreateNote,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphRowActionSpec`] (0b-9,
+/// design B): the action and its title.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphRowActionSpec {
+    pub action: GraphRowAction,
+    pub title: String,
+}
+
+/// The ordered actions a node of `kind` is eligible for, with their
+/// titles (0b-9): a host builds its menus, custom actions and `allCases`
+/// from these vectors.
+#[uniffi::export]
+pub fn graph_row_actions(kind: GraphNodeKind) -> Vec<GraphRowActionSpec> {
+    core::graph_queries::row_actions(kind.into())
+        .into_iter()
+        .map(|s| GraphRowActionSpec {
+            action: s.action.into(),
+            title: s.title,
+        })
+        .collect()
+}
+
+/// A ghost target's note path (0b-11). Handle-free.
+#[uniffi::export]
+pub fn graph_ghost_note_path(target_raw: String) -> String {
+    core::graph_queries::ghost_note_path(&target_raw)
+}
+
+/// FFI mirror of [`core::graph_queries::GraphPoint`].
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct GraphPoint {
+    pub id: u64,
+    pub x: f64,
+    pub y: f64,
+}
+
+impl From<GraphPoint> for core::graph_queries::GraphPoint {
+    fn from(p: GraphPoint) -> Self {
+        core::graph_queries::GraphPoint {
+            id: p.id,
+            x: p.x,
+            y: p.y,
+        }
+    }
+}
+
+/// Arrow-key spatial navigation over host positions (0b-10): neighbours
+/// first, then every other point; the scoring is core's.
+#[uniffi::export]
+pub fn graph_spatial_step(
+    points: Vec<GraphPoint>,
+    neighbors: Vec<u64>,
+    from: u64,
+    dx: f64,
+    dy: f64,
+) -> Option<u64> {
+    let points: Vec<core::graph_queries::GraphPoint> = points.into_iter().map(Into::into).collect();
+    core::graph_queries::spatial_step(&points, &neighbors, from, dx, dy)
+}
+
+/// Tab / Shift-Tab over the visible order, wrapping (0b-10).
+#[uniffi::export]
+pub fn graph_structural_step(visible: Vec<u64>, from: Option<u64>, forward: bool) -> Option<u64> {
+    core::graph_queries::structural_step(&visible, from, forward)
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTableColumn`] (0b-7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphTableColumn {
+    Note,
+    LinksIn,
+    LinksOut,
+    EmbedsIn,
+    EmbedsOut,
+    Component,
+    Modified,
+    Folder,
+    Kind,
+}
+
+impl From<GraphTableColumn> for core::graph_queries::GraphTableColumn {
+    fn from(c: GraphTableColumn) -> Self {
+        use core::graph_queries::GraphTableColumn as C;
+        match c {
+            GraphTableColumn::Note => C::Note,
+            GraphTableColumn::LinksIn => C::LinksIn,
+            GraphTableColumn::LinksOut => C::LinksOut,
+            GraphTableColumn::EmbedsIn => C::EmbedsIn,
+            GraphTableColumn::EmbedsOut => C::EmbedsOut,
+            GraphTableColumn::Component => C::Component,
+            GraphTableColumn::Modified => C::Modified,
+            GraphTableColumn::Folder => C::Folder,
+            GraphTableColumn::Kind => C::Kind,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTableSort`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct GraphTableSort {
+    pub column: GraphTableColumn,
+    pub ascending: bool,
+}
+
+impl From<GraphTableSort> for core::graph_queries::GraphTableSort {
+    fn from(s: GraphTableSort) -> Self {
+        core::graph_queries::GraphTableSort {
+            column: s.column.into(),
+            ascending: s.ascending,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTableColumnSpec`] (0b-7):
+/// the ordered column model a grid is built from.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphTableColumnSpec {
+    pub column: GraphTableColumn,
+    pub header: String,
+}
+
+impl From<core::graph_queries::GraphTableColumn> for GraphTableColumn {
+    fn from(c: core::graph_queries::GraphTableColumn) -> Self {
+        use core::graph_queries::GraphTableColumn as C;
+        match c {
+            C::Note => GraphTableColumn::Note,
+            C::LinksIn => GraphTableColumn::LinksIn,
+            C::LinksOut => GraphTableColumn::LinksOut,
+            C::EmbedsIn => GraphTableColumn::EmbedsIn,
+            C::EmbedsOut => GraphTableColumn::EmbedsOut,
+            C::Component => GraphTableColumn::Component,
+            C::Modified => GraphTableColumn::Modified,
+            C::Folder => GraphTableColumn::Folder,
+            C::Kind => GraphTableColumn::Kind,
+        }
+    }
+}
+
+/// The nine columns in display order with their headers (0b-7). Handle-free.
+#[uniffi::export]
+pub fn graph_table_columns() -> Vec<GraphTableColumnSpec> {
+    core::graph_queries::table_columns()
+        .into_iter()
+        .map(|s| GraphTableColumnSpec {
+            column: s.column.into(),
+            header: s.header,
+        })
+        .collect()
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTableRow`] (0b-7): the nine
+/// cells in column order plus the raw values.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphTableRow {
+    pub stable_key: String,
+    pub node_id: u64,
+    pub label: String,
+    pub path: Option<String>,
+    pub kind: GraphNodeKind,
+    pub cells: Vec<String>,
+    pub links_in: u32,
+    pub links_out: u32,
+    pub embeds_in: u32,
+    pub embeds_out: u32,
+    pub component: u32,
+    pub modified_ms: Option<i64>,
+}
+
+impl From<core::graph_queries::GraphTableRow> for GraphTableRow {
+    fn from(r: core::graph_queries::GraphTableRow) -> Self {
+        GraphTableRow {
+            stable_key: r.stable_key,
+            node_id: r.node_id,
+            label: r.label,
+            path: r.path,
+            kind: r.kind.into(),
+            cells: r.cells,
+            links_in: r.links_in,
+            links_out: r.links_out,
+            embeds_in: r.embeds_in,
+            embeds_out: r.embeds_out,
+            component: r.component,
+            modified_ms: r.modified_ms,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTableRows`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphTableRows {
+    pub generation: u64,
+    pub total: u64,
+    pub rows: Vec<GraphTableRow>,
+}
+
+impl From<core::graph_queries::GraphTableRows> for GraphTableRows {
+    fn from(r: core::graph_queries::GraphTableRows) -> Self {
+        GraphTableRows {
+            generation: r.generation,
+            total: r.total,
+            rows: r.rows.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphConnectionRow`] (0b-4).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphConnectionRow {
+    pub id: String,
+    pub level: u32,
+    pub parent_id: Option<String>,
+    pub node_id: u64,
+    pub stable_key: String,
+    pub label: String,
+    pub path: Option<String>,
+    pub target_raw: String,
+    pub kind: GraphNodeKind,
+    pub embed_only: bool,
+    pub in_links: u32,
+    pub out_links: u32,
+    pub references: u32,
+}
+
+impl From<core::graph_queries::GraphConnectionRow> for GraphConnectionRow {
+    fn from(r: core::graph_queries::GraphConnectionRow) -> Self {
+        GraphConnectionRow {
+            id: r.id,
+            level: r.level,
+            parent_id: r.parent_id,
+            node_id: r.node_id,
+            stable_key: r.stable_key,
+            label: r.label,
+            path: r.path,
+            target_raw: r.target_raw,
+            kind: r.kind.into(),
+            embed_only: r.embed_only,
+            in_links: r.in_links,
+            out_links: r.out_links,
+            references: r.references,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphConnectionsTree`] (0b-4):
+/// the rows AND the neighbourhood's counts, one record per load.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphConnectionsTree {
+    pub generation: u64,
+    pub center_id: u64,
+    pub center_key: String,
+    pub depth: u32,
+    pub summary_counts: GraphNeighborhoodCounts,
+    pub incoming: Vec<GraphConnectionRow>,
+    pub outgoing: Vec<GraphConnectionRow>,
+}
+
+impl From<core::graph_queries::GraphConnectionsTree> for GraphConnectionsTree {
+    fn from(t: core::graph_queries::GraphConnectionsTree) -> Self {
+        GraphConnectionsTree {
+            generation: t.generation,
+            center_id: t.center_id,
+            center_key: t.center_key,
+            depth: t.depth,
+            summary_counts: t.summary_counts.into(),
+            incoming: t.incoming.into_iter().map(Into::into).collect(),
+            outgoing: t.outgoing.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+// --- The config schema (0b-12) ---
+
+/// FFI mirror of [`core::graph_config::GraphColorToken`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphColorToken {
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Teal,
+    Blue,
+    Purple,
+    Pink,
+}
+
+impl From<core::graph_config::GraphColorToken> for GraphColorToken {
+    fn from(t: core::graph_config::GraphColorToken) -> Self {
+        use core::graph_config::GraphColorToken as C;
+        match t {
+            C::Red => GraphColorToken::Red,
+            C::Orange => GraphColorToken::Orange,
+            C::Yellow => GraphColorToken::Yellow,
+            C::Green => GraphColorToken::Green,
+            C::Teal => GraphColorToken::Teal,
+            C::Blue => GraphColorToken::Blue,
+            C::Purple => GraphColorToken::Purple,
+            C::Pink => GraphColorToken::Pink,
+        }
+    }
+}
+
+impl From<GraphColorToken> for core::graph_config::GraphColorToken {
+    fn from(t: GraphColorToken) -> Self {
+        use core::graph_config::GraphColorToken as C;
+        match t {
+            GraphColorToken::Red => C::Red,
+            GraphColorToken::Orange => C::Orange,
+            GraphColorToken::Yellow => C::Yellow,
+            GraphColorToken::Green => C::Green,
+            GraphColorToken::Teal => C::Teal,
+            GraphColorToken::Blue => C::Blue,
+            GraphColorToken::Purple => C::Purple,
+            GraphColorToken::Pink => C::Pink,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_config::GraphRingStyle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphRingStyle {
+    Solid,
+    Dashed,
+    Double,
+    Dotted,
+}
+
+impl From<core::graph_config::GraphRingStyle> for GraphRingStyle {
+    fn from(s: core::graph_config::GraphRingStyle) -> Self {
+        use core::graph_config::GraphRingStyle as C;
+        match s {
+            C::Solid => GraphRingStyle::Solid,
+            C::Dashed => GraphRingStyle::Dashed,
+            C::Double => GraphRingStyle::Double,
+            C::Dotted => GraphRingStyle::Dotted,
+        }
+    }
+}
+
+impl From<GraphRingStyle> for core::graph_config::GraphRingStyle {
+    fn from(s: GraphRingStyle) -> Self {
+        use core::graph_config::GraphRingStyle as C;
+        match s {
+            GraphRingStyle::Solid => C::Solid,
+            GraphRingStyle::Dashed => C::Dashed,
+            GraphRingStyle::Double => C::Double,
+            GraphRingStyle::Dotted => C::Dotted,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_config::GraphColorTokenSpec`] (0b-12,
+/// design B): one entry of the ordered palette.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphColorTokenSpec {
+    pub token: GraphColorToken,
+    pub tag: String,
+    pub title: String,
+}
+
+/// FFI mirror of [`core::graph_config::GraphRingStyleSpec`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphRingStyleSpec {
+    pub style: GraphRingStyle,
+    pub tag: String,
+    pub title: String,
+}
+
+/// The ordered palette with tags and titles (T71): a host builds its
+/// picker and its `allCases` from this vector.
+#[uniffi::export]
+pub fn graph_color_tokens() -> Vec<GraphColorTokenSpec> {
+    core::graph_config::color_tokens()
+        .into_iter()
+        .map(|s| GraphColorTokenSpec {
+            token: s.token.into(),
+            tag: s.tag,
+            title: s.title,
+        })
+        .collect()
+}
+
+/// The ordered ring styles with tags and titles (T72).
+#[uniffi::export]
+pub fn graph_ring_styles() -> Vec<GraphRingStyleSpec> {
+    core::graph_config::ring_styles()
+        .into_iter()
+        .map(|s| GraphRingStyleSpec {
+            style: s.style.into(),
+            tag: s.tag,
+            title: s.title,
+        })
+        .collect()
+}
+
+/// FFI mirror of [`core::graph_config::GraphSurfaceModeSpec`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphSurfaceModeSpec {
+    pub mode: GraphSurfaceMode,
+    pub tag: String,
+    pub title: String,
+}
+
+/// FFI mirror of [`core::graph_config::GraphVerbositySpec`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphVerbositySpec {
+    pub verbosity: GraphVerbosity,
+    pub tag: String,
+    pub title: String,
+}
+
+/// The ordered surface modes with their `graph.json` tags and switcher
+/// titles (0b-12): a host's mode switcher iterates this vector.
+#[uniffi::export]
+pub fn graph_surface_modes() -> Vec<GraphSurfaceModeSpec> {
+    core::graph_config::surface_modes()
+        .into_iter()
+        .map(|s| GraphSurfaceModeSpec {
+            mode: s.mode.into(),
+            tag: s.tag,
+            title: s.title,
+        })
+        .collect()
+}
+
+/// The ordered verbosity levels with their tags and menu titles (0b-12):
+/// a host's Verbosity menu iterates this vector.
+#[uniffi::export]
+pub fn graph_verbosities() -> Vec<GraphVerbositySpec> {
+    core::graph_config::verbosities()
+        .into_iter()
+        .map(|s| GraphVerbositySpec {
+            verbosity: s.verbosity.into(),
+            tag: s.tag,
+            title: s.title,
+        })
+        .collect()
+}
+
+/// FFI mirror of [`core::graph_config::GraphFilterConfig`].
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphFilterConfig {
+    pub include_attachments: bool,
+    pub include_ghosts: bool,
+    pub orphans_only: bool,
+    pub name_query: String,
+}
+
+/// FFI mirror of [`core::graph_config::GraphGroup`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphGroup {
+    pub query: String,
+    pub color_token: GraphColorToken,
+    pub ring_style: GraphRingStyle,
+}
+
+/// FFI mirror of [`core::graph_config::GraphDisplay`].
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphDisplay {
+    pub arrows: bool,
+    pub text_fade_zoom: f64,
+    pub node_size_multiplier: f64,
+    pub link_thickness: f64,
+}
+
+/// FFI mirror of [`core::graph_config::GraphForcesConfig`].
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphForcesConfig {
+    pub center: f64,
+    pub repel: f64,
+    pub link: f64,
+    pub link_distance: f64,
+}
+
+/// FFI mirror of [`core::graph_config::GraphConfig`] — schema v1 plus
+/// `verbosity` (0aD-6).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphConfig {
+    pub filters: GraphFilterConfig,
+    pub groups: Vec<GraphGroup>,
+    pub display: GraphDisplay,
+    pub forces: GraphForcesConfig,
+    pub mode: GraphSurfaceMode,
+    pub connections_depth: u32,
+    pub verbosity: GraphVerbosity,
+}
+
+impl From<core::graph_config::GraphConfig> for GraphConfig {
+    fn from(c: core::graph_config::GraphConfig) -> Self {
+        GraphConfig {
+            filters: GraphFilterConfig {
+                include_attachments: c.filters.include_attachments,
+                include_ghosts: c.filters.include_ghosts,
+                orphans_only: c.filters.orphans_only,
+                name_query: c.filters.name_query,
+            },
+            groups: c
+                .groups
+                .into_iter()
+                .map(|g| GraphGroup {
+                    query: g.query,
+                    color_token: g.color_token.into(),
+                    ring_style: g.ring_style.into(),
+                })
+                .collect(),
+            display: GraphDisplay {
+                arrows: c.display.arrows,
+                text_fade_zoom: c.display.text_fade_zoom,
+                node_size_multiplier: c.display.node_size_multiplier,
+                link_thickness: c.display.link_thickness,
+            },
+            forces: GraphForcesConfig {
+                center: c.forces.center,
+                repel: c.forces.repel,
+                link: c.forces.link,
+                link_distance: c.forces.link_distance,
+            },
+            mode: c.mode.into(),
+            connections_depth: c.connections_depth,
+            verbosity: c.verbosity.into(),
+        }
+    }
+}
+
+impl From<GraphConfig> for core::graph_config::GraphConfig {
+    fn from(c: GraphConfig) -> Self {
+        core::graph_config::GraphConfig {
+            filters: core::graph_config::GraphFilterConfig {
+                include_attachments: c.filters.include_attachments,
+                include_ghosts: c.filters.include_ghosts,
+                orphans_only: c.filters.orphans_only,
+                name_query: c.filters.name_query,
+            },
+            groups: c
+                .groups
+                .into_iter()
+                .map(|g| core::graph_config::GraphGroup {
+                    query: g.query,
+                    color_token: g.color_token.into(),
+                    ring_style: g.ring_style.into(),
+                })
+                .collect(),
+            display: core::graph_config::GraphDisplay {
+                arrows: c.display.arrows,
+                text_fade_zoom: c.display.text_fade_zoom,
+                node_size_multiplier: c.display.node_size_multiplier,
+                link_thickness: c.display.link_thickness,
+            },
+            forces: core::graph_config::GraphForcesConfig {
+                center: c.forces.center,
+                repel: c.forces.repel,
+                link: c.forces.link,
+                link_distance: c.forces.link_distance,
+            },
+            mode: c.mode.into(),
+            connections_depth: c.connections_depth,
+            verbosity: c.verbosity.into(),
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_config::GraphConfigError`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
+pub enum GraphConfigError {
+    #[error("graph.json is unparseable: {reason}")]
+    Unparseable { reason: String },
+    #[error("graph.json is a newer version ({version}); not downgrading")]
+    NewerVersion { version: u64 },
+}
+
+impl From<core::graph_config::GraphConfigError> for GraphConfigError {
+    fn from(e: core::graph_config::GraphConfigError) -> Self {
+        use core::graph_config::GraphConfigError as C;
+        match e {
+            C::Unparseable { reason } => GraphConfigError::Unparseable { reason },
+            C::NewerVersion { version } => GraphConfigError::NewerVersion { version },
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_config::GraphConfigRead`].
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphConfigRead {
+    pub config: GraphConfig,
+    pub unknown_json: String,
+}
+
+/// The default config — what a missing `graph.json` means (0b-12).
+#[uniffi::export]
+pub fn graph_config_default() -> GraphConfig {
+    core::graph_config::default().into()
+}
+
+/// Decode a `graph.json` text (0b-12): defaults, clamps, the version
+/// rule, the unknown keys preserved for the next write.
+#[uniffi::export]
+pub fn graph_config_decode(json: String) -> Result<GraphConfigRead, GraphConfigError> {
+    let read = core::graph_config::decode(&json)?;
+    Ok(GraphConfigRead {
+        config: read.config.into(),
+        unknown_json: read.unknown_json,
+    })
+}
+
+/// Encode a config over the existing file text (0b-12): refuses an
+/// unparseable or newer existing file, preserves unknown top-level keys,
+/// writes canonical bytes.
+#[uniffi::export]
+pub fn graph_config_encode(
+    config: GraphConfig,
+    existing_json: Option<String>,
+) -> Result<String, GraphConfigError> {
+    Ok(core::graph_config::encode(
+        &config.into(),
+        existing_json.as_deref(),
+    )?)
+}
+
+/// The first group whose query matches `label` (0b-12), as an index.
+#[uniffi::export]
+pub fn graph_config_matching_group(config: GraphConfig, label: String) -> Option<u32> {
+    core::graph_config::matching_group(&config.into(), &label).map(|i| i as u32)
+}
+
+/// FFI mirror of [`core::graph_config::GraphGroupStyle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct GraphGroupStyle {
+    pub color_token: GraphColorToken,
+    pub ring_style: GraphRingStyle,
+}
+
+/// The style a new group takes, by its index (0b-12).
+#[uniffi::export]
+pub fn graph_config_next_group_style(group_count: u32) -> GraphGroupStyle {
+    let s = core::graph_config::next_group_style(group_count as usize);
+    GraphGroupStyle {
+        color_token: s.color_token.into(),
+        ring_style: s.ring_style.into(),
     }
 }
 
@@ -8335,6 +9275,17 @@ pub enum GraphVerbosity {
     Verbose,
 }
 
+impl From<core::a11y::GraphVerbosity> for GraphVerbosity {
+    fn from(v: core::a11y::GraphVerbosity) -> Self {
+        use core::a11y::GraphVerbosity as C;
+        match v {
+            C::Terse => GraphVerbosity::Terse,
+            C::Standard => GraphVerbosity::Standard,
+            C::Verbose => GraphVerbosity::Verbose,
+        }
+    }
+}
+
 impl From<GraphVerbosity> for core::a11y::GraphVerbosity {
     fn from(v: GraphVerbosity) -> Self {
         use core::a11y::GraphVerbosity as C;
@@ -8420,6 +9371,16 @@ impl From<GraphForceControl> for core::a11y::GraphForceControl {
 pub enum GraphSurfaceMode {
     Table,
     Diagram,
+}
+
+impl From<core::a11y::GraphSurfaceMode> for GraphSurfaceMode {
+    fn from(m: core::a11y::GraphSurfaceMode) -> Self {
+        use core::a11y::GraphSurfaceMode as C;
+        match m {
+            C::Table => GraphSurfaceMode::Table,
+            C::Diagram => GraphSurfaceMode::Diagram,
+        }
+    }
 }
 
 impl From<GraphSurfaceMode> for core::a11y::GraphSurfaceMode {
@@ -12329,6 +13290,229 @@ mod tests {
                 "the FFI mirror of {family} carries arms core does not: {extra:?}"
             );
         }
+    }
+
+    /// The brace-matched body of `pub <kind> <name> {` in `source`.
+    fn graph_decl_body<'a>(source: &'a str, kind: &str, name: &str) -> &'a str {
+        let needle = format!("pub {kind} {name} {{");
+        let decl = source
+            .find(&needle)
+            .unwrap_or_else(|| panic!("{name} declaration"));
+        let open = decl + source[decl..].find('{').expect("opening brace");
+        let mut depth = 0usize;
+        for (offset, ch) in source[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &source[open + 1..open + offset];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("{name}: unbalanced braces");
+    }
+
+    /// W6-2 PR 0b (contracts doc 0b-15): every closed set the structural
+    /// queries carry is mirrored both ways, with each arm count pinned —
+    /// the a11y mirror test's parser over the two query modules.
+    #[test]
+    fn the_ffi_mirror_covers_every_graph_query_enum() {
+        fn variant_names_of(source: &str, enum_name: &str) -> std::collections::BTreeSet<String> {
+            let body = graph_decl_body(source, "enum", enum_name);
+            let mut names = std::collections::BTreeSet::new();
+            let mut depth = 0usize;
+            for line in body.lines() {
+                let trimmed = line.trim();
+                if depth == 0 && !trimmed.starts_with("//") && !trimmed.starts_with('#') {
+                    let name: String = trimmed
+                        .chars()
+                        .take_while(char::is_ascii_alphanumeric)
+                        .collect();
+                    let tail = trimmed[name.len()..].trim_start();
+                    let delimited = tail.is_empty()
+                        || tail.starts_with(',')
+                        || tail.starts_with('{')
+                        || tail.starts_with('(');
+                    if !name.is_empty()
+                        && name.starts_with(|c: char| c.is_ascii_uppercase())
+                        && delimited
+                    {
+                        names.insert(name);
+                    }
+                }
+                depth += trimmed.matches('{').count();
+                depth -= trimmed.matches('}').count().min(depth);
+            }
+            names
+        }
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mirror = std::fs::read_to_string(manifest.join("src/lib.rs")).expect("mirror source");
+        let queries = std::fs::read_to_string(manifest.join("../slate-core/src/graph_queries.rs"))
+            .expect("graph_queries");
+        let config = std::fs::read_to_string(manifest.join("../slate-core/src/graph_config.rs"))
+            .expect("graph_config");
+        for (source, family, count) in [
+            (&queries, "GraphRowAction", 5usize),
+            (&queries, "GraphTableColumn", 9),
+            (&config, "GraphColorToken", 8),
+            (&config, "GraphRingStyle", 4),
+            (&config, "GraphConfigError", 2),
+        ] {
+            let core_variants = variant_names_of(source, family);
+            let mirror_variants = variant_names_of(&mirror, family);
+            assert_eq!(
+                core_variants.len(),
+                count,
+                "{family} parses to {} core arms; the pin says {count}",
+                core_variants.len()
+            );
+            assert_eq!(
+                core_variants, mirror_variants,
+                "{family}: core and the FFI mirror disagree"
+            );
+        }
+    }
+
+    /// 0b-15: every name in core's `GRAPH_QUERY_SURFACE` is exported here
+    /// — a free `pub fn` under `#[uniffi::export]` or a `VaultSession`
+    /// method — so a query cannot exist in core without a binding.
+    #[test]
+    fn the_ffi_mirror_exports_every_graph_query() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mirror = std::fs::read_to_string(manifest.join("src/lib.rs")).expect("mirror source");
+        let surface = core::graph_queries::GRAPH_QUERY_SURFACE;
+        assert!(
+            surface.len() >= 23,
+            "the surface list shrank to {}",
+            surface.len()
+        );
+        for name in surface {
+            let declared = format!("pub fn {name}(");
+            let at = mirror
+                .find(&declared)
+                .unwrap_or_else(|| panic!("{name} is not exported from lib.rs"));
+            let preceding = &mirror[..at];
+            let exported = preceding.trim_end().ends_with("#[uniffi::export]")
+                || preceding
+                    .rfind("impl VaultSession {")
+                    .is_some_and(|i| !preceding[i..].contains("\n}\n"));
+            assert!(
+                exported,
+                "{name} is declared but neither exported nor a session method"
+            );
+        }
+    }
+
+    /// 0b-15: every `pub struct` in the two core modules, and `GraphNode`
+    /// in `graph.rs`, has a mirror of the same name here with the SAME
+    /// `(field, type)` pairs in the SAME order — the types compared as
+    /// text after the one alias map core→FFI — so a field, a width or an
+    /// `Option` that drifts fails here, not in a host. `GraphConfigError`'s
+    /// variant payloads are compared the same way.
+    #[test]
+    fn the_ffi_records_mirror_core_field_for_field() {
+        fn structs_of(source: &str) -> Vec<String> {
+            source
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("pub struct "))
+                .filter_map(|rest| {
+                    rest.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .next()
+                })
+                .map(str::to_string)
+                .collect()
+        }
+        /// Core type text under the alias map: path prefixes dropped,
+        /// `NodeKind` → `GraphNodeKind`; `usize` never crosses.
+        fn normalise(ty: &str) -> String {
+            let ty = ty.trim().trim_end_matches(',').trim();
+            let ty = ty
+                .replace("crate::graph::", "")
+                .replace("crate::graph_config::", "");
+            assert!(!ty.contains("usize"), "usize is not an FFI width: {ty}");
+            ty.split_inclusive(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .flat_map(|piece| {
+                    let (word, sep) = match piece.char_indices().last() {
+                        Some((i, c)) if !c.is_ascii_alphanumeric() && c != '_' => {
+                            (&piece[..i], &piece[i..])
+                        }
+                        _ => (piece, ""),
+                    };
+                    let word = match word {
+                        "NodeKind" => "GraphNodeKind",
+                        "EdgeKind" => "GraphEdgeKind",
+                        other => other,
+                    };
+                    [word.to_string(), sep.to_string()]
+                })
+                .collect()
+        }
+        fn fields_of(source: &str, name: &str) -> Vec<(String, String)> {
+            let body = graph_decl_body(source, "struct", name);
+            body.lines()
+                .filter_map(|line| line.trim().strip_prefix("pub "))
+                .filter_map(|rest| rest.split_once(':'))
+                .map(|(f, ty)| (f.trim().to_string(), normalise(ty)))
+                .collect()
+        }
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mirror = std::fs::read_to_string(manifest.join("src/lib.rs")).expect("mirror source");
+        let queries = std::fs::read_to_string(manifest.join("../slate-core/src/graph_queries.rs"))
+            .expect("graph_queries");
+        let config = std::fs::read_to_string(manifest.join("../slate-core/src/graph_config.rs"))
+            .expect("graph_config");
+        let graph =
+            std::fs::read_to_string(manifest.join("../slate-core/src/graph.rs")).expect("graph");
+        let mut seen = 0;
+        let mut names: Vec<(&String, String)> = Vec::new();
+        for source in [&queries, &config] {
+            for name in structs_of(source) {
+                names.push((source, name));
+            }
+        }
+        // Every `graph.rs` record the surface reuses (0b-15).
+        for reused in [
+            "GraphNode",
+            "GraphEdge",
+            "GraphFilter",
+            "GraphNeighborhoodCounts",
+        ] {
+            names.push((&graph, reused.to_string()));
+        }
+        for (source, name) in names {
+            assert!(
+                mirror.contains(&format!("pub struct {name} {{")),
+                "{name} has no FFI mirror"
+            );
+            assert_eq!(
+                fields_of(source, &name),
+                fields_of(&mirror, &name),
+                "{name}: the mirror's (field, type) pairs differ from core's"
+            );
+            seen += 1;
+        }
+        assert!(
+            seen >= 28,
+            "only {seen} records parsed; the parser lost the modules"
+        );
+        // The error enum's payloads, variant for variant.
+        fn payloads_of(source: &str) -> Vec<String> {
+            graph_decl_body(source, "enum", "GraphConfigError")
+                .lines()
+                .map(str::trim)
+                .filter(|l| l.starts_with(|c: char| c.is_ascii_uppercase()) && l.contains('{'))
+                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect()
+        }
+        assert_eq!(
+            payloads_of(&config),
+            payloads_of(&mirror),
+            "GraphConfigError payloads differ"
+        );
+        assert_eq!(payloads_of(&config).len(), 2);
     }
 
     #[test]

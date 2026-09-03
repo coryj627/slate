@@ -513,9 +513,14 @@ fn tag_scope_rows_clear_when_tag_removed() {
     );
 
     let provider = FsVaultProvider::new(tmp.path().to_path_buf());
-    provider
-        .write_file("notes/n.md", b"no more tag here\n")
-        .unwrap();
+    // The new body has the ORIGINAL's byte length, so the re-scan's fast
+    // path (mtime_ms and size unchanged → skip) would keep the stale
+    // file_tags rows if the rewrite landed inside the first write's
+    // file-time tick (Windows file times move with the ~16 ms system
+    // tick; PR #1180's run 33805992482 hit it). Rewrite until the mtime
+    // advances — the remedy the other slow-path tests use.
+    let original = provider.stat("notes/n.md").unwrap().mtime_ms;
+    rewrite_until_mtime_advances(&provider, "notes/n.md", b"no more tag here\n", original);
     session.scan_initial(&CancelToken::new()).unwrap();
     assert!(
         session
