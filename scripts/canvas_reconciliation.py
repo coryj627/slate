@@ -50,7 +50,7 @@ SHELL = os.path.join(ROOT, "apps", "slate-windows")
 # or a Verified bullet does not regenerate a smaller table and bless it;
 # it fails here until the pin is bumped on purpose. CanvasReconciliationCensus
 # carries the same two constants.
-EXPECTED_KEYS = 315
+EXPECTED_KEYS = 326  # 315 at PR H + PR E13's seven contracts, three decisions, one risk
 EXPECTED_VERIFIED = 60
 START = "<!-- reconciliation:generated:start -->"
 END = "<!-- reconciliation:generated:end -->"
@@ -70,6 +70,7 @@ PR_SECTIONS = [
     ("G", "## PR G — "),
     ("G2", "## PR G2 — "),
     ("H", "## PR H — "),
+    ("E13", "## PR E13 — "),
     ("VA", "## Vocabulary additions"),
 ]
 VERIFIED = "## Verified during implementation"
@@ -95,7 +96,8 @@ LONG_NAME = re.compile(r"`([A-Z][A-Za-z0-9_]{14,})`")
 KIND_BY_PREFIX = {
     "0a": "contract", "0b": "contract", "A": "contract", "B": "contract",
     "C": "contract", "U": "contract", "E": "contract", "F": "contract",
-    "G": "contract", "G2": "contract", "H": "contract",
+    "G": "contract", "G2": "contract", "H": "contract", "E13": "contract",
+    "E13D": "decision", "E13R": "risk",
     "DD": "decision", "G2D": "decision", "HD": "decision",
     "HD-D": "divergence", "HR": "risk",
     "ID": "obligation", "TD": "task", "TE": "task", "TF": "task",
@@ -106,7 +108,7 @@ KIND_BY_PREFIX = {
 def _prefix(ident: str) -> str:
     if ident in ("IN", "OUT"):
         return ident
-    m = re.match(r"^(HD-D|G2D|G2|0a|0b|[A-Z]+)-?\d", ident)
+    m = re.match(r"^(HD-D|G2D|G2|E13D|E13R|E13|0a|0b|[A-Z]+)-?\d", ident)
     return m.group(1) if m else ident
 
 

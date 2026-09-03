@@ -456,7 +456,7 @@ public sealed class ContractsCitationCensus
             (
                 "H",
                 "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled",
-                "## §W-G canonical-consumption audit",
+                "## PR E13 — the typed refused-open reason (#1174)",
                 // The close-out section: contracts over the nine
                 // deliverables, then the task records; it pins below its
                 // honest size and rises with its records, as §G2's did.
@@ -527,6 +527,17 @@ public sealed class ContractsCitationCensus
                 // section stands at 191; 190 sits one below it — a fifteenth
                 // time.
                 190),
+            (
+                "E13",
+                "## PR E13 — the typed refused-open reason (#1174)",
+                "## §W-G canonical-consumption audit",
+                // The E13 slice (#1174): seven contracts, three decisions,
+                // one risk, the pinning tests — a small section with a
+                // floor of its own.
+                3_000,
+                // A DESIGN floor at revision 1: the citations are existing
+                // names; the floor rises with the records.
+                12),
             (
                 "Reconciliation",
                 "## Issue reconciliation (#745)",
@@ -1212,6 +1223,10 @@ public sealed class ContractsCitationCensus
         (
             "§H",
             "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled",
+            "## PR E13 — the typed refused-open reason (#1174)"),
+        (
+            "§E13",
+            "## PR E13 — the typed refused-open reason (#1174)",
             "## §W-G canonical-consumption audit"),
         (
             "reconciliation",

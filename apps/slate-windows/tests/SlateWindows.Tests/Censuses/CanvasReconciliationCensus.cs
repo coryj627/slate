@@ -30,7 +30,7 @@ public sealed class CanvasReconciliationCensus
 
     /// <summary>The pinned key total and Verified count — the same two
     /// constants the script asserts (`EXPECTED_KEYS`, `EXPECTED_VERIFIED`).</summary>
-    private const int ExpectedKeys = 315;
+    private const int ExpectedKeys = 326; // 315 at PR H + PR E13's seven contracts, three decisions, one risk
     private const int ExpectedVerified = 60;
 
     private static string RepoRoot => SourceText.RepoRoot();
@@ -147,6 +147,7 @@ public sealed class CanvasReconciliationCensus
         ("0a", "## PR 0a — "), ("0b", "## PR 0b — "), ("A", "## PR A — "), ("B", "## PR B — "),
         ("C", "## PR C — "), ("C-unit", "## PR C-unit — "), ("D", "## PR D — "), ("E", "## PR E — "),
         ("F", "## PR F — "), ("G", "## PR G — "), ("G2", "## PR G2 — "), ("H", "## PR H — "),
+        ("E13", "## PR E13 — "),
         ("VA", "## Vocabulary additions"),
     ];
 
@@ -344,7 +345,7 @@ public sealed class CanvasReconciliationCensus
         {
             return id;
         }
-        Match m = Regex.Match(id, @"^(HD-D|G2D|G2|0a|0b|[A-Z]+)-?\d");
+        Match m = Regex.Match(id, @"^(HD-D|G2D|G2|E13D|E13R|E13|0a|0b|[A-Z]+)-?\d");
         return m.Success ? m.Groups[1].Value : id;
     }
 
@@ -369,10 +370,10 @@ public sealed class CanvasReconciliationCensus
         }
         return p switch
         {
-            "0a" or "0b" or "A" or "B" or "C" or "U" or "E" or "F" or "G" or "G2" or "H" => "contract",
-            "DD" or "G2D" or "HD" => "decision",
+            "0a" or "0b" or "A" or "B" or "C" or "U" or "E" or "F" or "G" or "G2" or "H" or "E13" => "contract",
+            "DD" or "G2D" or "HD" or "E13D" => "decision",
             "HD-D" => "divergence",
-            "HR" => "risk",
+            "HR" or "E13R" => "risk",
             "ID" => "obligation",
             "TD" or "TE" or "TF" => "task",
             "VA" => "vocabulary",
