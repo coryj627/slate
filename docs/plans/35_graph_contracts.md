@@ -966,6 +966,47 @@ declared the family's names in the Windows tree (the census counts a
 backticked name declared anywhere it scans, generated bindings
 included), then **79 over 80** at revision 6.
 
+### Close-out — PR 0a shipped (#1179)
+
+**The PR.** `feat/w6-2-0a`, PR #1179, head `f2658ed` at the gate:
+thirteen checks green on that exact head — `build + test (windows
+x64)`, `shell accessibility gate (windows x64)`, `app build + test
+(windows x64)`, `rust tests (windows x64)`, `test (nextest, ci
+profile)`, `fmt / clippy`, `bench-compile`, `SPDX header present on
+every .rs/.swift`, `a11y-check` (100/100), `SwiftUI Accessibility
+Check`, `Mac app XCTest suite`, `semgrep-cloud-platform/scan`, `Codoki
+PR Review`. **0aR-1 discharged by the lane:** the Swift migration
+compiled and the mac suites passed on the first run — GraphAnnouncerTests
+(the 0a-9 suite, the window constant, the comment-aware funnel guard),
+A11yCorpusCensusTests over the 73 graph entries through the real FFI,
+`A11yResidueCensusTests` at 28, GraphDiagramTests' readback event,
+GraphCommandsTests, GraphConfigTests, GraphTabRoutingTests,
+ConnectionsPanelTests with the seven `summaryCounts:` fixtures.
+
+**PR review round 1 (§0a, codoki).** One inline finding, High: the C#
+census's `Labels: […]` "is not valid C# and will cause a compile error".
+**Refuted on the thread** with the build as the evidence — a C# 12
+collection expression targeting the generated `List<string>` parameter,
+the project on `net10.0-windows` (C# 14), the same form shipped by the
+canvas entries (`GroupPath: []`), and the exact head compiling and
+passing `A11yCorpusCensus` on the fresh build here and on the CI
+Windows lanes. Thread resolved; no change made. Codoki's summary on `f2658ed` read Requires changes on that one finding while the CI Windows lanes on the same head (`build + test (windows x64)`, `app build + test (windows x64)`) had compiled and run the file; the re-review on the close-out head, and the gate it must satisfy — every check green and codoki's safe-to-merge on the exact head — are the PR's own record.
+
+**What this PR leaves for the series.** 0b: the `verbosity` key in the
+`.slate/graph.json` schema (0aD-6); the structural queries. PR A: the
+Windows `GraphAnnouncer.cs` over the four pinned classes, and the
+Windows half of the graph coalescing tripwire (0a-3 (v)). PR B: the
+posted `NoConnections` / `LoadingConnections` (0a-D3) and the composed
+section header's plural rule (T13). PR C: the verbosity menu. PR E: the
+inspector's label inventory (T37–T60, T71, T72). Filed at close-out:
+the mac verbosity gap (no switch, no store — the mac-details register).
+
+**The five places, final.** `a11y.rs` (17 variants, 73 witnesses, 73
+golden rows), `tests/fixtures/a11y/corpus.json` (521), `lib.rs`
+(every mirror, both `GraphNodeKind` directions), `A11yCorpusCensus.cs`
+and `A11yCorpusCensusTests.swift` (73 each) — all five renderings of
+one matrix source, and the frozen section's 0a-17 the authority.
+
 ### Tests that pin PR 0a
 
 `crates/slate-core/src/a11y.rs`: `corpus_renders_the_shipped_strings`

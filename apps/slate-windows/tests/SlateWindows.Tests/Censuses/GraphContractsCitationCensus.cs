@@ -34,7 +34,7 @@ public sealed class GraphContractsCitationCensus
                 // The vocabulary section: fifteen contracts, the event
                 // enumeration, decisions, divergences, risks, the pins.
                 6_000,
-                // The frozen section (revision 6 + records) cites 97 existing identifiers (the canvas
+                // The frozen section (revision 6 + records + close-out) cites 97 existing identifiers (the canvas
                 // precedent's tests, the Windows census and the mac twins the
                 // census allow-lists, several more than once; the family's own
                 // names are unbackticked until they exist); 96 sits one below
