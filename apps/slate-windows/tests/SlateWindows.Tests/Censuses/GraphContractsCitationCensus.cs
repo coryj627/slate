@@ -59,11 +59,11 @@ public sealed class GraphContractsCitationCensus
                 // The document section: seventeen contracts, the three rules
                 // on Windows, decisions, divergences, risks, the pins.
                 6_000,
-                // Revision 1 cites existing identifiers only through the
+                // Revision 2 cites existing identifiers only through the
                 // shell, its tests and the mac sources it names; the family's
                 // own names are unbackticked until they exist. The floor sits
                 // one below the measured population and rises with the records.
-                70),
+                90),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
