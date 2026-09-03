@@ -513,7 +513,22 @@ public sealed class ContractsCitationCensus
                 // TH-11 bound E14 at the workspace, taking the
                 // section to 158; 157 sits above the pre-task population
                 // of 152 — a twelfth time.
-                157),
+                //
+                // TH-12 bound the reconciliation, taking the
+                // section to 165; 164 sits above the pre-task population
+                // of 158 — a thirteenth time.
+                164),
+            (
+                "Reconciliation",
+                "## Issue reconciliation (#745)",
+                "<!-- end of the contracts document -->",
+                // §H TH-12 (H9): the final section — the ledger, the
+                // generated tables, the issues, the hand-offs and the
+                // residuals; a citation floor of its own.
+                20_000,
+                // TH-12 bound the section at its birth, taking it to
+                // 658; 658 sits one below the population of 659.
+                658),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -1189,6 +1204,10 @@ public sealed class ContractsCitationCensus
             "§H",
             "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled",
             "## §W-G canonical-consumption audit"),
+        (
+            "reconciliation",
+            "## Issue reconciliation (#745)",
+            "<!-- end of the contracts document -->"),
         (
             "divergences",
             "## Recorded divergences (owner-recorded; off-limits for re-litigation)",

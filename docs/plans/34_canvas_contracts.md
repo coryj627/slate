@@ -13066,6 +13066,92 @@ still-active guard inverted, the publish dropped (all three bit); M4
 the miss passed to the shell as the editor's generic sentence (both
 miss facts bit). All bitten.
 
+### TH-12 — The reconciliation: generated where it can be, checked where it claims, filed where it points
+
+The final section "Issue reconciliation (#745)" is appended to this
+document and registered with `ContractsCitationCensus` as a PR section
+of its own (a floor below its population, the standing convention) and
+in the scanned prose; its terminator is an HTML comment closing the
+document. What it carries, against H9's letters and the ledger rows
+IH-48…IH-51:
+
+- **(a) The PR ledger and the ancestry gate.** Twelve merged pull
+  requests — the spec (#1151) and 0a…G2 (#1154…#1164; PR C landed as
+  C-lite, #1158, then C-unit, #1159) — each with its branch, merge
+  commit and date, and the exit code of
+  `git merge-base --is-ancestor ⟨commit⟩ HEAD` recorded per row (all
+  exit 0), H's base recorded as G2's merge commit and verified the same
+  way. The gate is its own fact, `EveryLedgeredMergeIsAnAncestorOfThisHead`
+  in the new `CanvasReconciliationCensus` (IH-51): it parses the ledger,
+  refuses a shallow clone, runs the command for every row and for the
+  base. `windows.yml`'s app job now checks out full history — a
+  depth-one clone cannot answer an ancestry question, and a gate that
+  cannot run is not a gate.
+- **(b)–(d) Generated.** `scripts/canvas_reconciliation.py` is named by
+  path, command (`--write` regenerates, `--check` verifies the document
+  carries exactly its output), output (the block between two HTML
+  comment markers) and schema (IH-51). Keys are (section, register
+  kind, id) — every `**ID — ` head of the twelve PR sections and the
+  vocabulary additions, read from the key-bearing subsections only, so
+  a round record or a task record quoting a head is evidence and not a
+  second key; §H's own HD, HD-D and HR registers are keys like any
+  (IH-49); C-unit's task heads are two kinds of key, the obligation and the
+  record, the case H9 names — C-unit numbers its implementation
+  record's tasks independently of its obligations, so its five record
+  heads are keys of kind record beside the obligation keys; the
+  "Verified during implementation" bullets are keys V-1…V-60 (IH-49).
+  315 keys, one row each: the record
+  subsections of the key's section that cite the id, and the long
+  identifiers those paragraphs backtick — each checked against a
+  declaration-shaped scan of the Windows tree and rendered plain with
+  "(not in the tree)" when absent (two Swift class names), never
+  dropped. A key nothing cites reads "unevidenced"; the five early
+  sections list their pinning facts once per section, not per contract,
+  and their rows say so verbatim rather than borrowing the section's
+  evidence. The script asserts each head occurs once in its section,
+  that no two keys share a row, and the register counts (CD 48, CR 5,
+  D 7). (c) re-lists CD-1…CD-48 and CR-1…CR-5 with the head's first
+  clause and the line recorded; (d) carries D-1…D-7 with a resolution
+  column — D-4's action performed (#1165).
+- **(e) Fifteen inputs, ten issue records, the groupings named
+  (IH-48, HD-4):** six mac defects, one issue each — #1165 (`canvasColorMarked`
+  unregistered, D-4), #1166 (the stale selection after undo), #1167
+  (`canvasSelectAdjacent` silent outside ready and on an empty canvas),
+  #1168 (the outline's title against `speakable_name`), #1169 (the
+  laxer non-Markdown open), #1170 (the stale media HelpText); the six
+  t0 clauses as ONE contract issue, #1171; three core mechanisms, one
+  each — #1172 (the clone op), #1173 (the degraded canvas not
+  navigable), #1174 (E13's typed reason). Every body quotes its register
+  line and cites #745.
+- **(f)** E13 recorded OPEN with CD-38's STOP and #1174 (HD-8); E14
+  recorded from TH-11's workspace-level facts — exact landings, no
+  STOP, the seam defect they found named as a Windows fix. **(g)** the
+  two residual rows (m1's class; W4-7's restore path) with owner and
+  status. **(h)** the help-doc column to W8-6 (#756). **(i)** the human
+  AT pass, the interactive CI clause, the two designated title arms,
+  and the rule that nothing is green by omission.
+- **The census's claim, narrowed (IH-50):** the section states the
+  citation census's exact grammar — backticked tokens of fifteen or more
+  characters beginning with an uppercase letter, declared in the shell,
+  its tests or the bindings — and names the structured references
+  outside it as the round's review.
+- **The spec conversions:** `w6_spec.md` §W6-1's seven items are
+  checkbox rows, items 1–6 ticked with the merge dates of their
+  evidence, item 7 rewritten "executed, or listed as the release
+  residual with the owner's sign-off" and unticked; the five citations
+  of `33_canvas_contracts.md` in the canvas spec and the one in
+  `w6_spec.md` read 34.
+
+Pinned by `CanvasReconciliationCensus`: `EveryLedgeredMergeIsAnAncestorOfThisHead`,
+`TheEvidenceTableCarriesOneRowPerKey` (the keys re-derived in C# by the
+script's grammar and compared to the table, section-qualified) and
+`TheRegistersDecisionsAndIssuesArePinned` (48, 5, 7; ten numbered issue
+rows, six-one-three). Mutations, each byte-restored: M1 a
+contract → evidence row omitted (`--check` exit 1; the one-row-per-key
+fact bit); M2 C-unit's T1 record row dropped — two same-id keys
+collapsed (both bit); M3 a ledgered merge commit altered (the ancestry
+fact bit); M4 an issue record removed (the counts fact bit). All bitten.
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
@@ -18032,3 +18118,539 @@ Nothing above was wasted — the redesign PR starts from all of it — but
 the sizing was wrong from the brief. **Size a PR by SUBSYSTEM, not by
 requirement count**: the filter's async publish was a subsystem, and it
 was scoped as one line item among thirteen.
+
+---
+
+## Issue reconciliation (#745)
+
+The final section (H9). It names evidence, not intent: what is checked
+here is checked by `CanvasReconciliationCensus` and by the generator
+committed beside this document; what is human stays Pending and says
+so. Registered with `ContractsCitationCensus` like a PR section — that
+census's exact claim, narrowed to its grammar (IH-50): every backticked
+token of fifteen or more characters that begins with an uppercase letter
+must be declared somewhere in the Windows shell, its tests or the
+generated bindings; shorter tokens, lowercase names, paths,
+`file#member` references and Swift, Rust and Python names are outside
+it and were the round's review (HR-2).
+
+### (a) The PR ledger, and the ancestry check
+
+Twelve merged pull requests carry the issue from its spec to PR G2.
+Each merge commit below was verified an ancestor of H's head
+(`8d446db96`, TH-12) by the command in the last column, whose exit code
+is recorded; the same check is `EveryLedgeredMergeIsAnAncestorOfThisHead`,
+run on every build, so the ledger cannot outlive its history. H's base
+is the merged `main` after G2: `git merge-base main HEAD` answers
+`02cc97426`, and G2's merge commit `02cc97426` is an ancestor
+(exit 0).
+
+| PR | Slice | Branch | Merge commit | Merged | `git merge-base --is-ancestor ⟨commit⟩ HEAD` |
+|---|---|---|---|---|---|
+| #1151 | the spec (docs) | `docs/745-w6-1-canvas-spec` | `5ae0a276b` | 2026-08-22 | exit 0 (ancestor) |
+| #1154 | 0a | `feat/w6-1-0a` | `145d8c1dc` | 2026-08-23 | exit 0 (ancestor) |
+| #1155 | 0b | `feat/w6-1-0b` | `146a4b928` | 2026-08-24 | exit 0 (ancestor) |
+| #1156 | A | `feat/w6-1-a` | `5ebef55ba` | 2026-08-25 | exit 0 (ancestor) |
+| #1157 | B | `feat/w6-1-b` | `66f1ed28f` | 2026-08-25 | exit 0 (ancestor) |
+| #1158 | C (landed as C-lite) | `feat/w6-1-c-lite` | `0725c49e1` | 2026-08-27 | exit 0 (ancestor) |
+| #1159 | C-unit | `feat/w6-1-c-unit` | `d96fb32e8` | 2026-08-31 | exit 0 (ancestor) |
+| #1160 | D | `feat/w6-1-d` | `8a267f090` | 2026-09-01 | exit 0 (ancestor) |
+| #1161 | E | `feat/w6-1-e` | `c08889b86` | 2026-09-01 | exit 0 (ancestor) |
+| #1162 | F | `feat/w6-1-f` | `1ab6f0ee2` | 2026-09-01 | exit 0 (ancestor) |
+| #1163 | G | `feat/w6-1-g` | `e00b9aae1` | 2026-09-02 | exit 0 (ancestor) |
+| #1164 | G2 | `feat/w6-1-g2` | `02cc97426` | 2026-09-02 | exit 0 (ancestor) |
+
+### (b)–(d) Contract → evidence, the registers, the owner decisions — generated
+
+`scripts/canvas_reconciliation.py` — run as
+`python scripts/canvas_reconciliation.py --write` to regenerate the block
+below, `--check` to verify the document carries exactly what it would
+regenerate (exit 1 otherwise; the census mirrors its key derivation).
+Its output is the three tables between the two HTML comment markers;
+its schema: (b) `| Section | Kind | Id | Discharged by | Pinned by |`,
+one row per key (section, register kind, id) — every `**ID — ` head of
+the twelve PR sections and the vocabulary additions, read from the
+key-bearing subsections only (a round record or a task record quoting a
+head is evidence, not a second key), with C-unit's task heads counted
+twice as the obligation and the record, plus the "Verified during
+implementation" bullets keyed V-n; (c) `| Id | Head | Recorded |` over
+CD-1…CD-48 and CR-1…CR-5; (d) the owner decisions with a resolution
+column. The script asserts each key's head occurs exactly once in its
+section, that no two keys share a row, and the register counts. A key
+no record cites reads "unevidenced"; the early sections (0a, 0b, A, B,
+C) list their pinning facts once for the whole section, not per
+contract, and their rows say exactly that — evidence that exists and is
+not keyed is not claimed as keyed.
+
+<!-- reconciliation:generated:start -->
+
+**(b) Contract → evidence — 315 keys, one row each, keyed (section, kind, id).** Generated by `scripts/canvas_reconciliation.py` from the document's own records: "discharged by" lists the record subsections of the key's section that cite the id; "pinned by" the long identifiers those paragraphs backtick, each checked against the Windows tree. "unevidenced" is a key no record cites.
+
+| Section | Kind | Id | Discharged by | Pinned by |
+|---|---|---|---|---|
+| §0a | contract | 0a-1 | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0a | contract | 0a-1b | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0a | contract | 0a-2 | Tests that pin PR 0a | `EveryCorpusEventRendersTheCommittedIdentityTextAndPriority`, `TheMirrorHasNoDuplicateEntries`, A11yCorpusCensusTests (not in the tree), `CanvasAnnouncerTests`, A11yResidueCensusTests (not in the tree) |
+| §0a | contract | 0a-3 | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0a | contract | 0a-4 | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0a | contract | 0a-5 | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0a | contract | 0a-6 | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0a | contract | 0a-7 | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0a | contract | 0a-8 | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0a | contract | 0a-9 | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0a | contract | 0a-10 | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0a | contract | 0a-11 | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0a | contract | 0a-12 | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0a | contract | 0a-13 | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0a | contract | 0a-14 | unevidenced by id — §0a's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-1 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-2 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-3 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-4 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-5 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-6 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-7 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-8 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-9 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-10 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-11 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-12 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-13 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-14 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-15 | unevidenced by id — §0b's pinning list is not keyed per contract | — |
+| §0b | contract | 0b-16 | Tests that pin PR 0b (Task 0b-1) | — |
+| §0b | contract | 0b-17 | Tests that pin PR 0b (Task 0b-1) | — |
+| §A | contract | A1 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A2 | Tests that pin PR A | `ActiveCanvasSurface`, `TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke`, `ShowVisualIsEnabledAndDrivesTheSurfaceSwitch`, `APendingNavigationLineFiresOnItsOwnWithoutAFlush`, `DispatcherTimer`, `CanvasDocumentTests`, `AShutdownDuringAnInFlightLoadNeverPublishesAndClosesTheHandle`, `ASecondLoadSupersedesTheFirstPublish`, +2 more |
+| §A | contract | A3 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A4 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A5 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A6 | Tests that pin PR A | `ActiveCanvasSurface`, `TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke`, `ShowVisualIsEnabledAndDrivesTheSurfaceSwitch`, `APendingNavigationLineFiresOnItsOwnWithoutAFlush`, `DispatcherTimer`, `CanvasDocumentTests`, `AShutdownDuringAnInFlightLoadNeverPublishesAndClosesTheHandle`, `ASecondLoadSupersedesTheFirstPublish`, +2 more |
+| §A | contract | A7 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A8 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A9 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A10 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A11 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A12 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A13 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A14 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A15 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A16 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A17 | Tests that pin PR A | `ActiveCanvasSurface`, `TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke`, `ShowVisualIsEnabledAndDrivesTheSurfaceSwitch`, `APendingNavigationLineFiresOnItsOwnWithoutAFlush`, `DispatcherTimer`, `CanvasDocumentTests`, `AShutdownDuringAnInFlightLoadNeverPublishesAndClosesTheHandle`, `ASecondLoadSupersedesTheFirstPublish`, +2 more |
+| §A | contract | A18 | Tests that pin PR A | `ActiveCanvasSurface`, `TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke`, `ShowVisualIsEnabledAndDrivesTheSurfaceSwitch`, `APendingNavigationLineFiresOnItsOwnWithoutAFlush`, `DispatcherTimer`, `CanvasDocumentTests`, `AShutdownDuringAnInFlightLoadNeverPublishesAndClosesTheHandle`, `ASecondLoadSupersedesTheFirstPublish`, +2 more |
+| §A | contract | A19 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A20 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §B | contract | B1 | Tests that pin PR B | `CanvasSurfaceView`, `CanvasTableView`, `TheLargeCanvasBindsEveryRowCoreServed`, `GridConformanceTests`, `EveryGridUnderCanvasRidesTheRelay`, `ShowVisualIsEnabledAndDrivesTheSurfaceSwitch`, `TheSurfaceSwitcherIsNamedAndAllThreeArmsAreLive`, `CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean` |
+| §B | contract | B2 | unevidenced by id — §B's pinning list is not keyed per contract | — |
+| §B | contract | B3 | unevidenced by id — §B's pinning list is not keyed per contract | — |
+| §B | contract | B4 | unevidenced by id — §B's pinning list is not keyed per contract | — |
+| §B | contract | B5 | unevidenced by id — §B's pinning list is not keyed per contract | — |
+| §B | contract | B6 | unevidenced by id — §B's pinning list is not keyed per contract | — |
+| §B | contract | B7 | Tests that pin PR B | `CanvasSurfaceView`, `CanvasTableView`, `TheLargeCanvasBindsEveryRowCoreServed`, `GridConformanceTests`, `EveryGridUnderCanvasRidesTheRelay`, `ShowVisualIsEnabledAndDrivesTheSurfaceSwitch`, `TheSurfaceSwitcherIsNamedAndAllThreeArmsAreLive`, `CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean` |
+| §B | contract | B8 | unevidenced by id — §B's pinning list is not keyed per contract | — |
+| §B | contract | B9 | unevidenced by id — §B's pinning list is not keyed per contract | — |
+| §B | contract | B10 | unevidenced by id — §B's pinning list is not keyed per contract | — |
+| §B | contract | B11 | Tests that pin PR B | `CanvasSurfaceView`, `CanvasTableView`, `TheLargeCanvasBindsEveryRowCoreServed`, `GridConformanceTests`, `EveryGridUnderCanvasRidesTheRelay`, `ShowVisualIsEnabledAndDrivesTheSurfaceSwitch`, `TheSurfaceSwitcherIsNamedAndAllThreeArmsAreLive`, `CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean` |
+| §B | contract | B12 | unevidenced by id — §B's pinning list is not keyed per contract | — |
+| §C | contract | C1 | Tests that pin PR C | `CanvasSurfaceView`, `CanvasModeConformance`, `TheSnapshotVisibilityPredicateMatchesTheSurfaceRender`, `TheShellInstallsTheModalOverlayAnswerForModeCancellation`, `SharedCommandChords`, `NoExportProducerAndTheFilterChordFocusesTheCanvasFilter`, `CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean` |
+| §C | contract | C2 | unevidenced by id — §C's pinning list is not keyed per contract | — |
+| §C | contract | C3 | unevidenced by id — §C's pinning list is not keyed per contract | — |
+| §C | contract | C4 | unevidenced by id — §C's pinning list is not keyed per contract | — |
+| §C | contract | C5 | unevidenced by id — §C's pinning list is not keyed per contract | — |
+| §C | contract | C6 | unevidenced by id — §C's pinning list is not keyed per contract | — |
+| §C | contract | C7 | unevidenced by id — §C's pinning list is not keyed per contract | — |
+| §C | contract | C8 | Tests that pin PR C | `CanvasSurfaceView`, `CanvasModeConformance`, `TheSnapshotVisibilityPredicateMatchesTheSurfaceRender`, `TheShellInstallsTheModalOverlayAnswerForModeCancellation`, `SharedCommandChords`, `NoExportProducerAndTheFilterChordFocusesTheCanvasFilter`, `CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean` |
+| §C | contract | C9 | unevidenced by id — §C's pinning list is not keyed per contract | — |
+| §C | contract | C10 | Tests that pin PR C | `CanvasSurfaceView`, `CanvasModeConformance`, `TheSnapshotVisibilityPredicateMatchesTheSurfaceRender`, `TheShellInstallsTheModalOverlayAnswerForModeCancellation`, `SharedCommandChords`, `NoExportProducerAndTheFilterChordFocusesTheCanvasFilter`, `CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean` |
+| §C | contract | C11 | unevidenced by id — §C's pinning list is not keyed per contract | — |
+| §C | contract | C12 | unevidenced by id — §C's pinning list is not keyed per contract | — |
+| §C | contract | C13 | unevidenced by id — §C's pinning list is not keyed per contract | — |
+| §C | contract | C14 | Tests that pin PR C | `CanvasSurfaceView`, `CanvasModeConformance`, `TheSnapshotVisibilityPredicateMatchesTheSurfaceRender`, `TheShellInstallsTheModalOverlayAnswerForModeCancellation`, `SharedCommandChords`, `NoExportProducerAndTheFilterChordFocusesTheCanvasFilter`, `CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean` |
+| §C | contract | C15 | unevidenced by id — §C's pinning list is not keyed per contract | — |
+| §C | contract | C16 | Tests that pin PR C | `CanvasSurfaceView`, `CanvasModeConformance`, `TheSnapshotVisibilityPredicateMatchesTheSurfaceRender`, `TheShellInstallsTheModalOverlayAnswerForModeCancellation`, `SharedCommandChords`, `NoExportProducerAndTheFilterChordFocusesTheCanvasFilter`, `CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean` |
+| §C | contract | C17 | Tests that pin PR C | `CanvasSurfaceView`, `CanvasModeConformance`, `TheSnapshotVisibilityPredicateMatchesTheSurfaceRender`, `TheShellInstallsTheModalOverlayAnswerForModeCancellation`, `SharedCommandChords`, `NoExportProducerAndTheFilterChordFocusesTheCanvasFilter`, `CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean` |
+| §C-unit | scope | IN | Implementation record | `ICanvasLoadSource` |
+| §C-unit | scope | OUT | unevidenced | — |
+| §C-unit | contract | U1 | C-lite reconciliation, Implementation record | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +1 more |
+| §C-unit | contract | U2 | C-lite reconciliation | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +1 more |
+| §C-unit | contract | U3 | unevidenced | — |
+| §C-unit | contract | U4 | C-lite reconciliation, Verification plan, Implementation record | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +6 more |
+| §C-unit | contract | U5 | Implementation record | `CanvasPublication`, `CanvasPublicationSlot`, `CanvasHandleLease`, `CanvasLoadPipeline` |
+| §C-unit | contract | U6 | unevidenced | — |
+| §C-unit | contract | U7 | unevidenced | — |
+| §C-unit | contract | U8 | Verification plan | — |
+| §C-unit | contract | U9 | Verification plan, Implementation record | `CanvasFilterMachine`, `ICanvasFilterSource`, `CanvasFilterSchedule`, `CanvasFilterMachineTests`, `CanvasLoadAcceptance`, `CanvasAnswerState`, `CanvasLeaseViolationException` |
+| §C-unit | contract | U10 | Verification plan | — |
+| §C-unit | contract | U11 | Implementation record | `ICanvasLoadSource` |
+| §C-unit | contract | U12 | C-lite reconciliation, Implementation record | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +2 more |
+| §C-unit | contract | U13 | C-lite reconciliation, Verification plan, Implementation record | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +2 more |
+| §C-unit | contract | U14 | unevidenced | — |
+| §C-unit | design | D1 | Verification plan, Implementation record | `CanvasLeaseTransfer`, `CanvasLoadDelivery` |
+| §C-unit | design | D2 | unevidenced | — |
+| §C-unit | design | D3 | unevidenced | — |
+| §C-unit | design | D4 | C-lite reconciliation, Verification plan | — |
+| §C-unit | design | D5 | unevidenced | — |
+| §C-unit | design | D6 | unevidenced | — |
+| §C-unit | task | T1 | C-lite reconciliation, Implementation record | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +20 more |
+| §C-unit | task | T2 | Implementation record | `CanvasHandleLease`, `CanvasPopulation`, `CanvasProjectionUnit`, `CanvasLeaseTransfer`, `CanvasLoadDelivery` |
+| §C-unit | task | T3 | C-lite reconciliation, Implementation record | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +15 more |
+| §C-unit | task | T4 | C-lite reconciliation, Implementation record | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +9 more |
+| §C-unit | task | T5 | C-lite reconciliation, Implementation record | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +3 more |
+| §C-unit | task | T6 | C-lite reconciliation, Verification plan, Implementation record | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +6 more |
+| §C-unit | invariant | I1 | Verification plan, Implementation record | `CanvasHandleLease`, `CanvasPopulation`, `CanvasProjectionUnit`, `CanvasLeaseTransfer`, `ICanvasLoadSource`, `CanvasLoadDelivery` |
+| §C-unit | invariant | I2 | Implementation record | `CanvasPublication`, `CanvasPublicationSlot`, `CanvasRequestIdentity`, `CanvasModelCopy`, `CanvasLoadAcceptance` |
+| §C-unit | invariant | I3 | Implementation record | `ICanvasLoadSource` |
+| §C-unit | invariant | I4 | Implementation record | `ICanvasLoadSource`, `CanvasPublication`, `CanvasPublicationSlot`, `CanvasHandleLease`, `CanvasLoadPipeline` |
+| §C-unit | invariant | I5 | Implementation record | `CanvasPublication`, `CanvasPublicationSlot`, `CanvasRequestIdentity`, `CanvasModelCopy`, `CanvasLeaseRelease`, `CanvasHandleLease`, `CanvasLeaseViolationException`, `CanvasPopulation`, +14 more |
+| §C-unit | invariant | I6 | unevidenced | — |
+| §C-unit | invariant | I7 | Implementation record | `CanvasPublication`, `CanvasPublicationSlot`, `CanvasRequestIdentity`, `CanvasModelCopy`, `CanvasLoadAcceptance`, `CanvasHandleLease`, `CanvasLoadPipeline` |
+| §C-unit | invariant | I8 | Implementation record | `CanvasPublication`, `CanvasPublicationSlot`, `CanvasHandleLease`, `CanvasLoadPipeline` |
+| §C-unit | record | T1 | C-lite reconciliation, Implementation record | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +20 more |
+| §C-unit | record | T2 | Implementation record | `CanvasHandleLease`, `CanvasPopulation`, `CanvasProjectionUnit`, `CanvasLeaseTransfer`, `CanvasLoadDelivery` |
+| §C-unit | record | T3 | C-lite reconciliation, Implementation record | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +15 more |
+| §C-unit | record | T6 | C-lite reconciliation, Verification plan, Implementation record | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +6 more |
+| §C-unit | record | T4 | C-lite reconciliation, Implementation record | `CanvasDocumentViewModel`, `CanvasSelection`, `PanelWorkScheduler`, `CanvasAnnouncer`, `CanvasModeController`, `CanvasNavigator`, `CanvasOutlineView`, `CanvasSurfaceView`, +9 more |
+| §D | contract | D1 | Verification plan | `ThemeTokenContrastTests`, `ShellAccessibilityTests`, `SharedCommandChords` |
+| §D | contract | D2 | Implementation record | `CanvasPopulation`, `CanvasSceneNode`, `CanvasSceneEdge`, `ACallerRetainedSceneCannotMoveTheBuiltPopulation`, `TheDescriptorIndexIsLoadClassAndKeyedByNode` |
+| §D | contract | D3 | unevidenced | — |
+| §D | contract | D4 | unevidenced | — |
+| §D | contract | D5 | unevidenced | — |
+| §D | contract | D6 | Verification plan, Implementation record | `ThemeTokenContrastTests`, `ShellAccessibilityTests`, `SharedCommandChords`, `CanvasTextScaleService`, `CanvasRendererView`, `CanvasRendererAutomationPeer`, `CanvasCardAutomationPeer`, `ViewportCommand`, +1 more |
+| §D | contract | D7 | unevidenced | — |
+| §D | contract | D8 | unevidenced | — |
+| §D | contract | D9 | unevidenced | — |
+| §D | contract | D10 | unevidenced | — |
+| §D | contract | D11 | Implementation record | `TheTooltipClosesOnlyWhenEveryTriggerHasDeparted`, `SelectingATruncatedCardSummonsTheTooltipAndEscDismissesIt`, `ARendererDetachReturnsTheSubscriberCountToBaseline` |
+| §D | contract | D12 | unevidenced | — |
+| §D | contract | D13 | Verification plan, Implementation record | `ThemeTokenContrastTests`, `ShellAccessibilityTests`, `SharedCommandChords`, `CanvasTextScaleService`, `CanvasRendererView`, `CanvasRendererAutomationPeer`, `CanvasCardAutomationPeer`, `ViewportCommand`, +1 more |
+| §D | contract | D14 | Verification plan | `ThemeTokenContrastTests`, `ShellAccessibilityTests`, `SharedCommandChords` |
+| §D | contract | D15 | unevidenced | — |
+| §D | contract | D16 | Verification plan | `ThemeTokenContrastTests`, `ShellAccessibilityTests`, `SharedCommandChords` |
+| §D | contract | D17 | unevidenced | — |
+| §D | decision | DD-1 | unevidenced | — |
+| §D | decision | DD-2 | Implementation record | `CanvasPeerTopology`, `ALongEdgeCrossingTheWindowMaterializesWithoutItsEndpoints`, `ARetainedCommitRebuildsAndAnEqualSetDoesNot`, `CardsMaterializeByTheWindowPlusOneMargin`, `AnUnlabelledEdgeIsNeverAPeer`, `TombstonesAreRetainedOnlyAndIdentityIsDiscriminated` |
+| §D | decision | DD-3 | Verification plan, Implementation record | `ThemeTokenContrastTests`, `ShellAccessibilityTests`, `SharedCommandChords`, `TheTooltipClosesOnlyWhenEveryTriggerHasDeparted`, `SelectingATruncatedCardSummonsTheTooltipAndEscDismissesIt`, `ARendererDetachReturnsTheSubscriberCountToBaseline` |
+| §D | decision | DD-4 | unevidenced | — |
+| §D | decision | DD-5 | unevidenced | — |
+| §D | decision | DD-6 | unevidenced | — |
+| §D | decision | DD-7 | Verification plan | `ThemeTokenContrastTests`, `ShellAccessibilityTests`, `SharedCommandChords` |
+| §D | obligation | ID-1 | Implementation record | `CanvasViewportState`, `CanvasPresentationState`, `CanvasPresentationEngine`, `OnPublicationApplied`, `DiscardedBuildsForTests`, `PublicationApplied`, `ACommitFromAWorkerThreadThrowsTheThreadRule`, `APublicationLandingMidBuildIsNeverOvertaken`, +1 more |
+| §D | obligation | ID-2 | Implementation record | `ACommitFromAWorkerThreadThrowsTheThreadRule`, `APublicationLandingMidBuildIsNeverOvertaken`, `AViewportCommitDuringAPublicationBuildIsNotLost` |
+| §D | obligation | ID-3 | Implementation record | `CanvasPopulation`, `CanvasSceneNode`, `CanvasSceneEdge`, `ACallerRetainedSceneCannotMoveTheBuiltPopulation`, `TheDescriptorIndexIsLoadClassAndKeyedByNode`, `CanvasPeerTopology`, `ALongEdgeCrossingTheWindowMaterializesWithoutItsEndpoints`, `ARetainedCommitRebuildsAndAnEqualSetDoesNot`, +3 more |
+| §D | obligation | ID-4 | Implementation record | `CanvasPeerTopology`, `ALongEdgeCrossingTheWindowMaterializesWithoutItsEndpoints`, `ARetainedCommitRebuildsAndAnEqualSetDoesNot`, `CardsMaterializeByTheWindowPlusOneMargin`, `AnUnlabelledEdgeIsNeverAPeer`, `TombstonesAreRetainedOnlyAndIdentityIsDiscriminated` |
+| §D | obligation | ID-5 | Implementation record | `CanvasPresentationState`, `SeatSelectionSilently`, `TheStateSelectionFollowsThePublicationNotTheUnit`, `TwoStatesAnswerWithTheirOwnSelections` |
+| §D | obligation | ID-6 | Implementation record | `CanvasPresentationState`, `SeatSelectionSilently`, `TheStateSelectionFollowsThePublicationNotTheUnit`, `TwoStatesAnswerWithTheirOwnSelections` |
+| §D | obligation | ID-7 | Implementation record | `CanvasViewportNoPane`, `ViewportFromKey`, `VisualOnlyFromKey`, `CanvasViewportVerb`, `CanvasViewportBindings`, `TheViewportBindingRecordIsTheOneAuthority`, `CanvasEnablementCensus`, `CtrlFFromTheTableHeaderReachesTheFilter` |
+| §D | obligation | ID-8 | Implementation record | `CanvasViewportNoPane`, `ViewportFromKey`, `VisualOnlyFromKey`, `CanvasViewportVerb`, `CanvasViewportBindings`, `TheViewportBindingRecordIsTheOneAuthority`, `CanvasEnablementCensus`, `CtrlFFromTheTableHeaderReachesTheFilter` |
+| §D | obligation | ID-9 | Implementation record | `TheTooltipClosesOnlyWhenEveryTriggerHasDeparted`, `SelectingATruncatedCardSummonsTheTooltipAndEscDismissesIt`, `ARendererDetachReturnsTheSubscriberCountToBaseline` |
+| §E | contract | E1 | Implementation record | — |
+| §E | contract | E2 | Implementation record | `ICanvasLoadSource`, `ICanvasMutationSource`, `CanvasMutationFunnel`, `AnnounceAdmission`, `CanvasMutationRefusal`, `CanvasStatusNote` |
+| §E | contract | E3 | Implementation record | `ICanvasLoadSource`, `ICanvasMutationSource`, `CanvasMutationFunnelTests` |
+| §E | contract | E4 | Implementation record | `CanvasMutationOperation`, `CanvasOperationId`, `CanvasMutationEffect`, `CanvasMutationGate`, `CanvasLeaseViolationException`, `SavedButUnindexed` |
+| §E | contract | E5 | unevidenced | — |
+| §E | contract | E6 | Implementation record | `CanvasPopulation`, `ThePopulationCarriesItsLoadBasis`, `SavedButUnindexed`, `TheMediaGateIsCoresClassification` |
+| §E | contract | E7 | unevidenced | — |
+| §E | contract | E8 | unevidenced | — |
+| §E | contract | E8a | Verification plan, Implementation record | `EmptyOnboardingText`, `CanvasEmptyOnboarding`, `RestoreCheckout`, `CanvasMutationFunnel`, `AnnounceAdmission`, `CanvasMutationRefusal`, `CanvasStatusNote` |
+| §E | contract | E9 | unevidenced | — |
+| §E | contract | E10 | Implementation record | `CanvasPopulation`, `ThePopulationCarriesItsLoadBasis`, `SavedButUnindexed`, `TheMediaGateIsCoresClassification` |
+| §E | contract | E11 | unevidenced | — |
+| §E | contract | E12 | Implementation record | `CanvasPopulation`, `ThePopulationCarriesItsLoadBasis`, `SavedButUnindexed`, `TheMediaGateIsCoresClassification` |
+| §E | contract | E13 | unevidenced | — |
+| §E | contract | E14 | Implementation record | `EmptyOnboardingText`, `CanvasEmptyOnboarding`, `RestoreCheckout`, `LastActivatedNode`, `EditorRequested` |
+| §E | contract | E15 | Verification plan, Implementation record | `CanvasFocusRequest`, `OutlinePublished` |
+| §E | contract | E16 | Verification plan, Implementation record | `CanvasFocusRequest`, `OutlinePublished` |
+| §E | contract | E17 | unevidenced | — |
+| §E | contract | E18 | Implementation record | `CanvasMutationTests`, `CanvasScenarioDriver`, `CanvasScenarioCensus` |
+| §E | contract | E19 | Implementation record | `EmptyOnboardingText`, `CanvasEmptyOnboarding`, `RestoreCheckout` |
+| §F | contract | F1 | Implementation record | `CanvasTransientHolder`, `CanvasOrderNodes` |
+| §F | contract | F1a | Implementation record, TF-3, TF-9, §F close-out, PR review round 1 | `SuspendModeToken`, `ReinstallSuspendedModeToken`, `ForgetSuspendedModeToken`, `CanvasTransientHolder`, `CanvasOrderNodes`, `CanvasNavigator`, `CanvasConstants`, `CanvasCheckOverlap`, +6 more |
+| §F | contract | F2 | unevidenced | — |
+| §F | contract | F2a | unevidenced | — |
+| §F | contract | F3 | unevidenced | — |
+| §F | contract | F4 | unevidenced | — |
+| §F | contract | F4a | unevidenced | — |
+| §F | contract | F4b | TF-3, TF-9, TF-10, PR review round 1 | `CanvasNavigator`, `CanvasConstants`, `CanvasCheckOverlap`, `CanvasDescribeRelative`, `SubmitTransientCommit`, `UpdateNodeGeometry`, `CanvasConnectOrigin`, `NothingSelected`, +1 more |
+| §F | contract | F4c | Implementation record | `SuspendModeToken`, `ReinstallSuspendedModeToken`, `ForgetSuspendedModeToken` |
+| §F | contract | F4d | unevidenced | — |
+| §F | contract | F5 | TF-7, TF-8, TF-10 | `CanvasCardPickerRequest`, `CanvasPlaceRelative`, `CanvasAlignWith`, `BuildCardPickerModel`, `CanvasCardPicker`, `NothingSelected` |
+| §F | contract | F6 | TF-5, TF-7, TF-11 | `ModeVisibleChanged`, `CommitTransient`, `CanvasCardPickerRequest`, `CanvasPlaceRelative`, `CanvasAlignWith`, `BuildCardPickerModel` |
+| §F | contract | F7 | TF-5, TF-8, TF-9, TF-10 | `ModeVisibleChanged`, `CommitTransient`, `CanvasConnectStage`, `CanvasAutoSides`, `CanvasColorName`, `CanvasConnectOrigin`, `NothingSelected` |
+| §F | contract | F8 | TF-9 | `CanvasConnectOrigin` |
+| §F | contract | F9 | The task loop, TF-4 | `CommitOrEnterResize`, `CanvasFailedAction` |
+| §F | contract | F9a | TF-3, TF-10 | `CanvasNavigator`, `CanvasConstants`, `CanvasCheckOverlap`, `CanvasDescribeRelative`, `SubmitTransientCommit`, `UpdateNodeGeometry`, `AnnounceConflictPending`, `CanvasSaveConflict`, +1 more |
+| §F | contract | F10 | TF-5 | `CommitTransient` |
+| §F | contract | F11 | TF-6 | — |
+| §G | contract | G1 | The task loop | — |
+| §G | contract | G2 | The task loop | — |
+| §G | contract | G3 | The task loop | — |
+| §G | contract | G4 | The task loop, TG-1 | — |
+| §G | contract | G5 | The task loop, TG-1 | `CanvasPromptViewModel`, `CanvasColorName`, `CanvasRenameGroup` |
+| §G | contract | G6 | The task loop, TG-4, TG-5, TG-6 | `RequestColorMarked`, `CanvasSetColorPrompt`, `RequestGroupMarked`, `CanvasHistoryApplied` |
+| §G | contract | G7 | The task loop, TG-4 | `SubmitBulkMarked` |
+| §G | contract | G8 | The task loop, TG-3, TG-4, TG-6 | `WithMarkedIntent`, `CanvasMarkEffect`, `RefreshAndPublish`, `SubmitBulkMarked`, `CanvasHistoryApplied` |
+| §G | contract | G9 | The task loop, TG-7 | `CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable` |
+| §G2 | contract | G2-1 | The task loop, TG2-0 | `TheCanvasMenuMirrorsMacsMenuOwnershipOverTheResidue`, `SlateCommandRegistrar`, `CommandDriftTests` |
+| §G2 | contract | G2-2 | The task loop, TG2-0 | `CanvasRenameGroup`, `CanvasMoveIntoGroup`, `CanvasAddFileCard`, `CanvasAddLinkCard`, `CanvasLocateFile`, `CanvasEditConnection`, `CanvasDeleteConnection`, `CanvasMutationOperation`, +2 more |
+| §G2 | contract | G2-3 | The task loop, TG2-0 | `RequestSetColor`, `NothingSelected`, `RequestGroupRenameForSelection`, `RequestCardEditorForSelection` |
+| §G2 | contract | G2-4 | The task loop, TG2-1 | `CanvasPromptSubmit`, `SubmitCanvasPrompt` |
+| §G2 | contract | G2-5 | The task loop, TG2-1, TG2-2 | `CanvasNewGroupPrompt`, `CanvasAddLinkPrompt`, `CanvasDeleteSelection`, `UngroupConfirmRequested`, `CanvasUngroupConfirmPrompt`, `RequestDeleteConnection`, `RequestEditConnection`, `CanvasPickConnectionPrompt`, +1 more |
+| §G2 | contract | G2-6 | The task loop, TG2-3 | `ICanvasPickerSheet`, `CanvasCardPickerSheet`, `CanvasVaultFilePickerViewModel`, `CanvasVaultFilePickerModel`, `CanvasPickerRow` |
+| §G2 | contract | G2-7 | The task loop, TG2-1 | `CanvasNewGroupPrompt`, `CanvasAddLinkPrompt`, `CanvasDeleteSelection`, `UngroupConfirmRequested`, `CanvasUngroupConfirmPrompt` |
+| §G2 | contract | G2-8 | The task loop, TG2-4 | `NothingSelected`, `UpdateNodeGeometry`, `CanvasRemovedFromGroup` |
+| §G2 | contract | G2-9 | The task loop, TG2-4 | `CanvasAutoSides`, `CanvasConnectedCardCreated`, `CanvasConnectedDirectionPrompt`, `CanvasMutationOperation`, `CanvasOperationCompletion`, `OpenEditorOnLanding`, `TryMarkEditorOpened`, `CreatedEditorRequested`, +1 more |
+| §G2 | contract | G2-10 | The task loop, TG2-5 | `CanvasDuplicate`, `NothingSelected`, `CanvasOrderNodes`, `CanvasChildrenOf`, `CanvasCardPlaced`, `CanvasBulkDuplicated` |
+| §G2 | contract | G2-11 | The task loop, TG2-6 | `ICanvasNoteCreator`, `FilesSidebarViewModel`, `CanvasNoteCreateResult`, `StructuralHistoryBarrier`, `CanvasNoteCreator`, `NoteCreateFailed` |
+| §G2 | contract | G2-12 | The task loop, TG2-7 | `CanvasContextSurface`, `CanvasContextTarget` |
+| §G2 | contract | G2-13 | The task loop, TG2-9 | `CanvasVerbs_GroupConnectDuplicateLinkConvertAndUndo_AreReachable`, `OpenNewCanvasFromFileMenu` |
+| §G2 | contract | G2-14 | The task loop, TG2-8, TG2-9 | — |
+| §G2 | decision | G2D-1 | The task loop, TG2-3, §G2 close-out | `ICanvasPickerSheet`, `CanvasCardPickerSheet`, `CanvasVaultFilePickerViewModel`, `CanvasVaultFilePickerModel`, `CanvasPickerRow` |
+| §G2 | decision | G2D-2 | TG2-2 | `CanvasDeleteConnection`, `CanvasEditConnectionDirectionPrompt`, `CanvasEditConnectionLabelPrompt` |
+| §G2 | decision | G2D-3 | The task loop, TG2-6, TG2-9 | `OnlyTextCardsConvert`, `NoteCreateFailed`, `NoteRetargetFailed`, `CanvasConvertedToNote`, `CanvasVerbs_GroupConnectDuplicateLinkConvertAndUndo_AreReachable`, `OpenNewCanvasFromFileMenu` |
+| §G2 | decision | G2D-4 | The task loop, TG2-5 | `CanvasDuplicate`, `NothingSelected`, `CanvasOrderNodes`, `CanvasChildrenOf`, `CanvasCardPlaced`, `CanvasBulkDuplicated` |
+| §G2 | decision | G2D-5 | unevidenced | — |
+| §G2 | decision | G2D-6 | The task loop, TG2-3 | `CanvasActionFailed`, `NoFilesToPointAt`, `CanvasMediaClass` |
+| §G2 | decision | G2D-7 | The task loop, TG2-5 | `CanvasDuplicate`, `NothingSelected`, `CanvasOrderNodes`, `CanvasChildrenOf`, `CanvasCardPlaced`, `CanvasBulkDuplicated` |
+| §G2 | decision | G2D-8 | The task loop, TG2-3 | `CanvasActionFailed`, `NoFilesToPointAt`, `CanvasMediaClass` |
+| §G2 | decision | G2D-9 | The task loop | — |
+| §G2 | decision | G2D-10 | TG2-1 | `CanvasNewGroupPrompt`, `CanvasAddLinkPrompt`, `CanvasDeleteSelection`, `UngroupConfirmRequested`, `CanvasUngroupConfirmPrompt` |
+| §G2 | decision | G2D-11 | The task loop, TG2-1 | `CanvasNewGroupPrompt`, `CanvasAddLinkPrompt`, `CanvasDeleteSelection`, `UngroupConfirmRequested`, `CanvasUngroupConfirmPrompt` |
+| §G2 | decision | G2D-12 | The task loop, TG2-7, §G2 close-out | `CanvasContextSurface`, `CanvasContextTarget` |
+| §H | contract | H1 | TH-0, TH-1, TH-2 | `CanvasDocumentViewModel`, `AuthoringLoopThenUndoChainRestoresTheCommittedBytes`, `CanvasCommitCardEdit`, `SubmitGroupMarked`, `AttachPresenter`, `LargeCanvasOpensNavigatesAndWindowsUnderBudget`, `CanvasPeerTopology`, `CanvasViewportState`, +1 more |
+| §H | contract | H2 | TH-2 | `CanvasOpenBenchmarks`, `CanvasRendererBenchmarks`, `SelectionStepRead`, `CanvasEndToEndTests` |
+| §H | contract | H3 | TH-3 | — |
+| §H | contract | H4 | TH-5, TH-6, TH-4 | `CanvasViewportOutcome`, `CommittedViewport`, `CanvasSurfaceView`, `CanvasFollowSelectionToggled`, `CanvasA11yEvent`, `CanvasStatusNote`, `CanvasBlockedReason`, `CanvasFailedAction`, +8 more |
+| §H | contract | H5 | TH-8 | — |
+| §H | contract | H6 | TH-7 | `CanvasModeController`, `CanvasOrderNodes`, `CanvasPlaceInsideGroup`, `CanvasGroupRectAround`, `CanvasAutoSides`, `CanvasProximityOrder`, `CanvasConstants` |
+| §H | contract | H7 | TH-9 | — |
+| §H | contract | H8 | TH-10 | — |
+| §H | contract | H9 | TH-12 | `ContractsCitationCensus`, `EveryLedgeredMergeIsAnAncestorOfThisHead`, `CanvasReconciliationCensus` |
+| §H | contract | H10 | unevidenced | — |
+| §H | decision | HD-1 | TH-1 | `AuthoringLoopThenUndoChainRestoresTheCommittedBytes`, `CanvasCommitCardEdit`, `SubmitGroupMarked`, `AttachPresenter` |
+| §H | decision | HD-2 | TH-3 | — |
+| §H | decision | HD-3 | TH-9 | — |
+| §H | decision | HD-4 | TH-12 | `EveryLedgeredMergeIsAnAncestorOfThisHead`, `CanvasReconciliationCensus` |
+| §H | decision | HD-5 | TH-9 | — |
+| §H | decision | HD-6 | TH-11 | — |
+| §H | decision | HD-7 | TH-7 | `CanvasModeController`, `CanvasOrderNodes`, `CanvasPlaceInsideGroup`, `CanvasGroupRectAround`, `CanvasAutoSides`, `CanvasProximityOrder`, `CanvasConstants` |
+| §H | decision | HD-8 | TH-12 | `EveryLedgeredMergeIsAnAncestorOfThisHead`, `CanvasReconciliationCensus` |
+| §H | decision | HD-9 | unevidenced | — |
+| §H | divergence | HD-D1 | TH-2 | `LargeCanvasOpensNavigatesAndWindowsUnderBudget`, `CanvasPeerTopology`, `CanvasViewportState`, `SelectionStepRead` |
+| §H | divergence | HD-D2 | unevidenced | — |
+| §H | divergence | HD-D3 | TH-4 | `CanvasTriggerParityCensus`, `TheLedgerHasARowForEveryStructuralKeyAndNoOther`, `EveryWindowsSiteConstructsItsKeyAndEveryFactAssertsIt`, `EveryMacSiteSpellsItsKey`, `TheWindowsShellHasNoEditMenuForTheTitleArms`, `CanvasFollowSelectionToggled`, `UndoQuarantined`, `RedoQuarantined`, +5 more |
+| §H | risk | HR-1 | TH-3 | — |
+| §H | risk | HR-2 | unevidenced | — |
+| §H | risk | HR-3 | unevidenced | — |
+| §VA | vocabulary | VA-1 | unevidenced | — |
+| §VA | vocabulary | VA-2 | unevidenced | — |
+| Verified during implementation | verified | V-1 | its own bullet | — |
+| Verified during implementation | verified | V-2 | its own bullet | — |
+| Verified during implementation | verified | V-3 | its own bullet | — |
+| Verified during implementation | verified | V-4 | its own bullet | — |
+| Verified during implementation | verified | V-5 | its own bullet | — |
+| Verified during implementation | verified | V-6 | its own bullet | — |
+| Verified during implementation | verified | V-7 | its own bullet | — |
+| Verified during implementation | verified | V-8 | its own bullet | — |
+| Verified during implementation | verified | V-9 | its own bullet | — |
+| Verified during implementation | verified | V-10 | its own bullet | — |
+| Verified during implementation | verified | V-11 | its own bullet | — |
+| Verified during implementation | verified | V-12 | its own bullet | — |
+| Verified during implementation | verified | V-13 | its own bullet | — |
+| Verified during implementation | verified | V-14 | its own bullet | — |
+| Verified during implementation | verified | V-15 | its own bullet | — |
+| Verified during implementation | verified | V-16 | its own bullet | — |
+| Verified during implementation | verified | V-17 | its own bullet | — |
+| Verified during implementation | verified | V-18 | its own bullet | — |
+| Verified during implementation | verified | V-19 | its own bullet | — |
+| Verified during implementation | verified | V-20 | its own bullet | — |
+| Verified during implementation | verified | V-21 | its own bullet | — |
+| Verified during implementation | verified | V-22 | its own bullet | — |
+| Verified during implementation | verified | V-23 | its own bullet | — |
+| Verified during implementation | verified | V-24 | its own bullet | — |
+| Verified during implementation | verified | V-25 | its own bullet | — |
+| Verified during implementation | verified | V-26 | its own bullet | — |
+| Verified during implementation | verified | V-27 | its own bullet | — |
+| Verified during implementation | verified | V-28 | its own bullet | — |
+| Verified during implementation | verified | V-29 | its own bullet | — |
+| Verified during implementation | verified | V-30 | its own bullet | — |
+| Verified during implementation | verified | V-31 | its own bullet | — |
+| Verified during implementation | verified | V-32 | its own bullet | — |
+| Verified during implementation | verified | V-33 | its own bullet | — |
+| Verified during implementation | verified | V-34 | its own bullet | — |
+| Verified during implementation | verified | V-35 | its own bullet | — |
+| Verified during implementation | verified | V-36 | its own bullet | — |
+| Verified during implementation | verified | V-37 | its own bullet | — |
+| Verified during implementation | verified | V-38 | its own bullet | — |
+| Verified during implementation | verified | V-39 | its own bullet | — |
+| Verified during implementation | verified | V-40 | its own bullet | — |
+| Verified during implementation | verified | V-41 | its own bullet | — |
+| Verified during implementation | verified | V-42 | its own bullet | — |
+| Verified during implementation | verified | V-43 | its own bullet | — |
+| Verified during implementation | verified | V-44 | its own bullet | — |
+| Verified during implementation | verified | V-45 | its own bullet | — |
+| Verified during implementation | verified | V-46 | its own bullet | — |
+| Verified during implementation | verified | V-47 | its own bullet | — |
+| Verified during implementation | verified | V-48 | its own bullet | — |
+| Verified during implementation | verified | V-49 | its own bullet | — |
+| Verified during implementation | verified | V-50 | its own bullet | — |
+| Verified during implementation | verified | V-51 | its own bullet | — |
+| Verified during implementation | verified | V-52 | its own bullet | — |
+| Verified during implementation | verified | V-53 | its own bullet | — |
+| Verified during implementation | verified | V-54 | its own bullet | — |
+| Verified during implementation | verified | V-55 | its own bullet | — |
+| Verified during implementation | verified | V-56 | its own bullet | — |
+| Verified during implementation | verified | V-57 | its own bullet | — |
+| Verified during implementation | verified | V-58 | its own bullet | — |
+| Verified during implementation | verified | V-59 | its own bullet | — |
+| Verified during implementation | verified | V-60 | its own bullet | — |
+
+**(c) The divergence register (CD-1…CD-48) and the accepted risks (CR-1…CR-5), as an index.**
+
+| Id | Head | Recorded |
+|---|---|---|
+| CD-1 | No standalone overlap events. | Recorded divergences, line 13524 |
+| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 13535 |
+| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 13542 |
+| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 13559 |
+| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 13567 |
+| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 13578 |
+| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 13589 |
+| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 13601 |
+| CD-9 | `towardOther` is dropped. | Recorded divergences, line 13608 |
+| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 13618 |
+| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 13635 |
+| CD-12 | The family nests under one top-level variant | Recorded divergences, line 13646 |
+| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 13666 |
+| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 13686 |
+| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 13710 |
+| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 13745 |
+| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 13756 |
+| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 13764 |
+| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 13775 |
+| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 13784 |
+| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 13798 |
+| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 13814 |
+| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 13835 |
+| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 13859 |
+| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 13865 |
+| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 13885 |
+| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 13915 |
+| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 13946 |
+| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 13963 |
+| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 13975 |
+| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 13991 |
+| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14003 |
+| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14019 |
+| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14034 |
+| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14067 |
+| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14090 |
+| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14103 |
+| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14119 |
+| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 14419 |
+| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 14454 |
+| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 14487 |
+| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 14515 |
+| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 14524 |
+| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 14542 |
+| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 14558 |
+| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 14637 |
+| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 14660 |
+| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 14718 |
+
+| Id | Head | Recorded |
+|---|---|---|
+| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 14758 |
+| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 14770 |
+| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 14777 |
+| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 14786 |
+| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 14792 |
+
+**(d) Owner decisions D-1…D-7, with their resolution and evidence.**
+
+| # | Decision | Adopted | Resolution and evidence |
+|---|---|---|---|
+| D-1 | §2 tiering (Tier 1+2 move to core with mac consumption; Tier 3 host-by-designation) | **Accepted as listed.** Any demotion of a Tier-2 row is a recorded divergence naming the duplicated rule. | Held: §W-G's register closed in PR H (TH-7) — no reading-order, containment, placement or phrasing math in the Windows canvas; the two demotions recorded as divergences (HD-D3). |
+| D-2 | Chord collisions | **`whereAmI` = Ctrl+Alt+Shift+I** (G18 precedent, `Divergence` recorded on the row); **`connectTo` keeps Ctrl+Alt+C** in `ChordScope.Canvas` (disjoint delivery … | Held: `whereAmI` = Ctrl+Alt+Shift+I and `connectTo` = Ctrl+Alt+C in `chords.json` with delivery evidence; `ChordsJson_IsExactlyTheTablesProjection` pins the projection (TH-9). |
+| D-3 | `speakable_name` session stickiness (T R21) | **Core deterministic by document order**; R21 stickiness preserved by the same mechanism core uses for untitled ordinals if it is session-held, else "ordinals m… | Settled in 0b-1's second branch: ordinals renumber on delete identically on both hosts (CD-20). |
+| D-4 | `canvasColorMarked` unregistered on mac | **File the mac issue; Windows ships Color Marked only if mac registers it** (parity = the registry). | Action performed: the mac issue is filed (the mac list below, item 1); Windows offers no Color Marked row — the registry is the parity. |
+| D-5 | Resize → Fit to Content placeholder formula | **Both hosts use the identical formula**, host-designated and recorded; a real text-measure API is a future core query. 0a owns only the spoken label. | Held: the identical placeholder formula on both hosts, host-designated (PR F's resize preset facts). |
+| D-6 | Canvas undo/redo chords | **Ctrl+Z / Ctrl+Y** (decision 12 + the structural-undo precedent); `Ctrl+Shift+Z` only if the editor already aliases it. | Held: Ctrl+Z / Ctrl+Y on the canvas domain (`CanvasUndo` / `CanvasRedo` rows in `chords.json`; the E2E undo chain, TH-0). |
+| D-7 | Voice Control twin for the AT checklist | **Windows Voice Access** ("show numbers") as the recorded tool; Narrator smoke only. | Held: Windows Voice Access ("show numbers") is the recorded twin in the AT checklist's row 6, Narrator smoke only (TH-10). |
+
+<!-- reconciliation:generated:end -->
+
+### (e) The upstream issues, filed and numbered
+
+Fifteen inputs, ten issue records (IH-48): the six mac defects stand
+alone, one per issue (HD-4); the six t0 clauses travel together as ONE
+contract issue, because they are one document's decisions; the three
+core mechanisms are one issue each. Every body quotes its register line
+and cites #745.
+
+| Key | Issue | Target | Input(s) from the registers |
+|---|---|---|---|
+| mac-1 | #1165 | mac | `canvasColorMarked` unregistered (D-4) |
+| mac-2 | #1166 | mac | the stale selection after undo |
+| mac-3 | #1167 | mac | `canvasSelectAdjacent` silent outside ready and on an empty canvas (CD-46) |
+| mac-4 | #1168 | mac | the outline's title where Windows reads `speakable_name` (CD-30) |
+| mac-5 | #1169 | mac | the laxer non-Markdown open (CD-38) |
+| mac-6 | #1170 | mac | the stale media activation HelpText (CD-36) |
+| t0-1 | #1171 | t0 contract | SIX clauses in one issue (HD-4): M4's palette clause vs M6 (CD-41); M5's ladder without the transient regions (CD-47); the filter-clear silence; Where-am-I's unfiltered fallback; structural movement escaping the filter; group entry and exit narration on the arrow path |
+| core-1 | #1172 | core | the clone op Duplicate's deep copy needs (G2D-7) |
+| core-2 | #1173 | core | the degraded canvas announced but not navigable (VA-2's open half) |
+| core-3 | #1174 | core | E13's typed refused-open reason (CD-38's STOP, HD-8) |
+
+### (f) The PR E hand-offs, as they stand
+
+- **E13 is OPEN.** The typed refused-open reason does not exist: no
+  `CanvasBlockedReason` arm, no rendering, no corpus witness, no
+  mirrors, no mac consumption. The Windows refusal (CD-38) rides the
+  generic failed-action arm, CD-38 records the STOP point, and the core
+  issue is filed (core-3 above). H does not claim closure (HD-8); the
+  owner may rule it a prerequisite slice.
+- **E14 is verified, at the workspace.** TH-11's three facts open a
+  canvas through `WorkspaceViewModel`, activate a file card on the
+  document the workspace holds and pump the asynchronous resolution:
+  the heading anchor and the block anchor (`#^id`, typed "block" by
+  `AnchorFor`) each land the caret EXACTLY at the offset computed from
+  the tab's own text, with the editor's landing sentence spoken once;
+  the miss leaves the caret and speaks core's canvas reason once. No
+  E14 STOP was reached. The third fact found TH-6's miss consumer
+  speaking into a retired announcer — a Windows seam defect, fixed in
+  TH-11 and recorded there, not a core miss.
+
+### (g) The shell-wide residuals flagged for close-out
+
+| # | Residual | Owner | Status |
+|---|---|---|---|
+| R-1 | C-unit's m1: the checkable preference items' OneWay binding (re-clicking a checked verbosity item unchecks it visually) — a CLASS across the shell's check items, not a canvas row | the Windows shell (W8) | deferred; recorded in §C-unit's minors table |
+| R-2 | PR A's History restore of a `.canvas` tab does not reach disk end to end in the harness (the CAS basis is the history head hash) | W4-7's restore path | open; recorded in "Verified during implementation" |
+
+### (h) Hand-offs
+
+- `docs/help/canvas.md`'s Windows chord column → W8-6 (#756), with
+  `chords.json` as its source (the prose is shared; chords substituted
+  per decision 20).
+
+### (i) Residuals
+
+- The human AT pass: every human cell of
+  `reports/w6_1_canvas_at_checklist.md` and of the matrix's eight canvas
+  rows is Pending until a named run (HD-3); the issue closes on the
+  owner's sign-off, not on this PR's merge.
+- The interactive CI clause in the matrix status strings stays until
+  the FlaUI lane runs the canvas journeys interactively.
+- The two designated menu-title arms (H4, HD-9): `CanvasUndoMenuTitle`
+  has no Edit menu on Windows to render into; `CanvasHistoryQuarantinedTitle`
+  likewise — designated with the reason, owed to an owner decision.
+- Anything a gate above left Pending is Pending here too; nothing is
+  green by omission.
+
+`w6_spec.md` §W6-1's seven acceptance items are checkbox rows: items 1–6
+ticked with the date of their evidence; item 7 rewritten as "executed,
+or listed as the release residual with the owner's sign-off" and left
+unticked — the acceptance clause is the ISSUE's closing condition and H
+does not close the issue (HD-6). The two spec files' citations of
+`33_canvas_contracts.md` now read 34 (HD-6).
+
+<!-- end of the contracts document -->
