@@ -47,11 +47,11 @@ public sealed class GraphContractsCitationCensus
                 // The structural-queries section: fifteen contracts, the query
                 // surface, decisions, divergences, risks, the register, the pins.
                 6_000,
-                // Revision 1 cites existing identifiers only through the mac
+                // Revision 2 cites existing identifiers only through the mac
                 // sources and tests it names; the family's own names are
                 // unbackticked until they exist. The floor sits one below the
                 // measured population and rises with the records.
-                2),
+                3),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
