@@ -1044,154 +1044,202 @@ GraphDiagramTests (the readback event and the 0a-D1 correction),
 
 **Goal (spec §PR 0b).** §W-G rows B–K become core queries over the
 existing `GraphIndex`, metrics and layout: the visible set and the
-diagram's whole per-node topology in one record, the Connections tree in
-reading order with its summary, the stable node key, the name filter,
-the `.slate/graph.json` schema and merge policy, the table rows with
-core-formatted cells, a core column model and a total order, the
-constants, the action set, the spatial and structural steps, the
-ghost's note path. Task 0b-1 is the Rust + FFI + Windows-harness half;
-Task 0b-2 is the mac consumption half (every Swift copy named in §2
-deleted there). This section is at revision 3: round 1 returned 25
-findings, round 2 thirteen new ones with eight blockers live — three of
-them CREATED by revision 2's fixes, which is the protocol's rule 5 (a
-round whose blockers the previous fix created counts double), so rule 4
-applies at round 2 and revision 3 opens with the design pass that rule
-demands. The ledgers are below.
+diagram's whole topology — nodes and visible edges — in one record, the
+Connections tree in reading order with its summary, the stable node key,
+the name filter, the `.slate/graph.json` schema and merge policy, the
+table rows with core-formatted cells, a core column model and a total
+order, the constants, the action set and the option tables, the spatial
+and structural steps, the ghost's note path. Task 0b-1 is the Rust + FFI
++ Windows-harness half; Task 0b-2 is the mac consumption half (every
+Swift copy named in §2 deleted there). This section is at revision 4:
+round 1 returned 25 findings, round 2 thirteen with eight blockers live
+— three of them CREATED by revision 2's fixes, the protocol's rule 5, so
+rule 4's stop applied and revision 3 opened with the design pass; round
+3 found that pass had not yet closed any of its three classes and
+returned fourteen findings with nine blockers, three created by revision
+3 — rule 5 again — so revision 4 is the design pass's SECOND TURN: each
+model restated as a RULE that catches its next instance, not a list of
+sites. The ledgers are below.
 
 **What stands today.** Core exposes `graph_snapshot(filter)`,
 `graph_neighborhood(path, depth, filter)` (flat nodes and edges),
 `graph_generation()` and the layout session (`lib.rs:1301–1349`);
-`GraphIndex` owns `filtered_nodes` (`graph.rs:583`), `edges_among`
-(`:612`), `neighborhood_ids` (`:645`), `ghost_key` (`:43`) and the
-`NodeKey` namespaces (`:29`); `NodeMetrics` carries the degrees, the
-component and the orphan flag (`graph_metrics.rs:24–38`); `GraphSnapshot`
-carries `generation` (`graph.rs:319`), `GraphNeighborhood` does not
+`GraphIndex` owns `filtered_nodes` (`graph.rs:583`, sorted by `NodeKey`'s
+derived order — paths before ghosts), `edges_among` (`:612`),
+`neighborhood_ids` (`:645`), `ghost_key` (`:43`) and the `NodeKey`
+namespaces (`:29`); `NodeMetrics` carries the degrees, the component and
+the orphan flag (`graph_metrics.rs:24–38`); `GraphSnapshot` carries
+`generation` (`graph.rs:319`), `GraphNeighborhood` does not
 (`:329–339`), and `graph.rs:249–254` says a generation change may
 reassign ids. Everything in §2 rows B–K is derived in Swift:
 ConnectionsModel (`ConnectionsPanel.swift:375–499`: undirected
 adjacency, the in/out split by centre incidence, self-edges dropped,
 Link+Embed merged with an embed-only flag, recursion with an ancestor
 guard, per-occurrence path ids, `localizedStandardCompare` per level,
-`references = in_links + in_embeds`); `GraphNodeKey`
+`references = in_links + in_embeds`) loaded beside a second call for the
+snippet bundle (`AppState+Connections.swift:60–110`); `GraphNodeKey`
 (`GraphViewState.swift:57–78`: `p:` path, `g:` +
 `addingPercentEncoding(withAllowedCharacters: .alphanumerics)` of the
 `en_US_POSIX`-lowercased LABEL); the diagram's visible set
 (`GraphDiagramView.swift:385–408`: the name predicate AND the preset
-kind filter), its label priority (`:640–648`: the top 200 by in-links,
-ties unordered), its per-node accessible neighbour content built at
-every tier-A rebuild (`:759–768` calls `:856–874` for each visible node:
-visible-gated, deduplicated, edge order), its per-node group lookup
+kind filter), recomputed on EVERY settling frame (`applyFrame`
+`:328–349` calls `refreshVisibleSet`; `rebuildTopology` `:471–481`), its
+label priority (`:640–648`: the top 200 by in-links, ties unordered), its
+visible-edge filter (`rebuildEdges`, `:702–722`), its per-node accessible
+neighbour content built at every tier-A rebuild (`:759–768` calls
+`:856–874` for each visible node: visible-gated, deduplicated, edge
+order, the node's OWN label for a self-link), its per-node group lookup
 (`:531`) and diameter (`:412–413, 461–464`), and its spatial neighbours
-and scoring (`:1221–1262`); `graphNameMatches`
-(`AppState+GraphConfig.swift:16–20`, `.caseInsensitive,
-.diacriticInsensitive`) and the count's second copy of the same
-predicate (`AppState+GraphTable.swift:228–238`); the config codec with
-its clamps, version rule (`if let v = root["version"] as? Int, v > 1`:
-any other shape of `version` is ignored and later overwritten) and
-unknown-key preservation (`GraphConfigStore.swift:38, 131–202`, the I/O
-and the writer actor around it); the nine-column model with `byLabel`,
-`directionalComparator` (Folder by `localizedStandardCompare`, `:568–573`)
-and the `rawValue` column index the grid's sort state uses
-(`GraphTableView.swift:212–213, 444–628`) and the folder derivation
-(`AppState+GraphTable.swift:418–420`); the preset headline that re-sorts
-the snapshot itself (`:340–360`); the constants
-(`GraphDiagramModel.swift:58` tier 1,500; `GraphDiagramView.swift:461–464`
-diameter; `:643` label cap 200; `AppState+Connections.swift:31–33` depth
-clamp); `GraphRowAction` (`GraphViewState.swift:15–48`); `ghostNotePath`
+and scoring (`:1221–1262`); the layout the diagram renders carries an
+immutable backend filter (`GraphDiagramModel.swift:25`) and the layout's
+generation (`:40`); `graphNameMatches` (`AppState+GraphConfig.swift:16–20`,
+`.caseInsensitive, .diacriticInsensitive`) and the count's second copy
+of the same predicate (`AppState+GraphTable.swift:228–238`); the config
+codec with its clamps, version rule (`if let v = root["version"] as?
+Int, v > 1`: any other shape of `version` is ignored and later
+overwritten; `connectionsDepth as? Int`: a fractional depth is the
+default) and unknown-key preservation (`GraphConfigStore.swift:38,
+131–202`, the I/O and the writer actor around it); the nine-column model
+with `byLabel`, `directionalComparator` (Folder by
+`localizedStandardCompare`, `:568–573`) and the `rawValue` column index
+the grid's sort state uses (`GraphTableView.swift:212–213, 444–628`) and
+the folder derivation (`AppState+GraphTable.swift:418–420`); the preset
+headline that re-sorts the snapshot itself (`:340–360`); the pickers
+iterating hand-written `allCases` of the colour and ring enums
+(`GraphInspectorView.swift:90, 95`; `GraphConfig.swift:109–142`); the
+constants (`GraphDiagramModel.swift:58` tier 1,500;
+`GraphDiagramView.swift:461–464` diameter; `:643` label cap 200;
+`AppState+Connections.swift:31–33` depth clamp); `GraphRowAction`
+(`GraphViewState.swift:15–48`); `ghostNotePath`
 (`AppState+Connections.swift:306–315`). The layout's own refresh path
 (`AppState+GraphDiagram.swift:110–145`: `layout.refresh()` then the
 atomic adoption of ids, edges, metadata and the frame's generation) is
 the diagram's generation authority. The Windows shell has no `Graph/`
 directory: nothing to delete there, which is why 0b precedes PR A–E.
 
-### Design pass (protocol rule 4, reached through rule 5) — three subsystems, modelled
+### Design pass (protocol rule 4, reached through rule 5 twice) — three subsystems, modelled as rules
 
-Revision 2 fixed the site each finding named. Round 2 found the fixes
-had created new blockers in three places — a host column literal, a
-recovery rule that fetches the wrong thing for one consumer, a guard
-that cannot bite — which is the signal that a model was missing, not a
-sentence. Before more prose or code, the class each belongs to.
+Revision 2 fixed the site each finding named; revision 3 named three
+classes but wrote each as a description of the sites then known, and
+round 3 found the next instance of each class outside the description —
+a fourth ordered inventory, a consumer whose authority is not a
+generation, a value that carries an id under an allowed name. A model is
+a RULE: it names the class by a property any new instance has, and the
+contracts below are derived from the rule, not enumerated beside it.
 
-**Subsystem A — the query lifecycle (IG0b-1, -5, -28, -29, -30).** The
-class: a projection holds a GENERATION it renders (the table its
-snapshot's, the diagram its layout's, the leaf its tree's) and issues
-REQUESTS whose identity is more than the generation. The model:
+**Subsystem A — the query lifecycle (IG0b-1, -5, -28, -29, -30, -40,
+-41, -42).** *The rule:* a projection renders exactly ONE record — its
+AUTHORITY — and every query it issues is answered against that record's
+IDENTITY, which is whatever fields make the record what it is, not a
+generation alone. A result publishes only under a current TOKEN and in
+agreement with EVERY field of the authority's identity; a result that
+IS the authority replaces it.
 
-- *Held generation, per consumer class.* Three classes, each with one
-  authority and one recovery: (i) snapshot consumers — the table, the
-  count, the selection — hold `graphTableSnapshot.generation`; recovery
-  is a snapshot re-fetch, which resets the held value, then the request
-  is reissued. (ii) Layout consumers — the diagram — hold
-  `model.generation`, the layout's; recovery is `layout.refresh()` and
-  the ATOMIC adoption of ids, edges, metadata, frame and generation
-  (`AppState+GraphDiagram.swift:110–145`, the existing path), then the
-  request is reissued; a snapshot fetch never advances a layout and is
-  never the diagram's recovery. (iii) The leaf holds the tree's
-  generation and the tree is ONE record — it carries `summary_counts` —
-  so the leaf pairs nothing and needs no discard beyond the token.
-- *The load token.* Every request carries `(session identity, the full
+- *The authorities.* The table, the count and the selection render the
+  SNAPSHOT: identity = its `generation`. The diagram renders the LAYOUT:
+  identity = (the layout handle, its immutable backend filter, its
+  generation) — a topology agrees when the token's backend filter equals
+  the layout's filter and its generation equals the layout's, so a
+  filter change that starts an asynchronous layout rebuild can never
+  land a topology on a layout that has no positions for it. The leaf
+  renders the TREE, and the tree is its own authority: a token-current
+  tree result publishes unconditionally and REPLACES the held state (the
+  first load establishes it; a mutation's newer tree replaces it); the
+  tree carries `summary_counts` so the leaf's structure is one record.
+- *The token.* Every request carries `(session identity, the full
   request record, seq)`, where the request record is the complete input
   — GraphVisibilityQuery alone, or with `GraphTableSort`, or with
   `GraphConfig` for the topology — and `seq` is a per-consumer monotonic
   counter that EVERY input change advances (needle, kind, filter, sort,
-  preset, config, vault). A result publishes only when its token equals
-  the consumer's current token in every field AND its `generation`
-  equals the held generation; anything else is dropped whole. Two
-  same-generation answers can therefore never publish out of order.
+  preset, config, vault, layout). A result whose token differs from the
+  current token in any field is dropped whole; two same-generation
+  answers can therefore never publish out of order.
+- *Recovery.* Snapshot consumers re-fetch the snapshot, which resets the
+  identity, then reissue; layout consumers run `layout.refresh()` and
+  adopt ids, edges, metadata, frame and generation atomically
+  (`AppState+GraphDiagram.swift:110–145`), then reissue — a snapshot
+  fetch never advances a layout and is never the diagram's recovery; the
+  leaf needs none.
 - *One publish.* A result publishes rows, the accepted sort and the
   headline it implies in ONE synchronous assignment, rows first (the
   grid's owner contract, `AccessibleDataGrid.swift:173–187`); a preset is
   a token change like any other — it sets filter, kind, needle AND the
   default sort in one token, and its headline is that result's first
   row.
+- *Decoration.* The leaf's snippet overlay reads the host's
+  `NoteLoadBundle`, a second payload with its own lifecycle: it is
+  DECORATION keyed by path — a snippet whose path is not in the tree is
+  ignored, a row without a snippet shows none — and the leaf's
+  generation refresh (`refreshConnectionsIfGraphChanged`) re-pairs the
+  two after a mutation. Recorded as 0bR-4; the structure never depends
+  on it.
 
-**Subsystem B — one crossing per rebuild (IG0b-3, -20, -27).** The class:
-whatever a projection needs PER NODE or PER COLUMN comes from core in one
-record per rebuild, and every constant table is fetched once per
-process. Per-node scalar queries and host-side literals are both
-symptoms of the class being missed. The model:
+**Subsystem B — one crossing per epoch (IG0b-3, -20, -27, -43, -47,
+-48).** *The rule:* anything a projection needs PER NODE, PER EDGE or
+PER MEMBER OF AN ORDERED SET comes from core in ONE record per SEMANTIC
+EPOCH, and no host holds a literal that core could have listed.
 
+- *Ordered inventories are core vectors.* Every ordered set a host
+  iterates — the table columns, the colour tokens, the ring styles, the
+  actions a kind is eligible for — is a core vector of records carrying
+  the enum, its persistence tag where it has one, and its title; the host
+  builds its grids, pickers and `allCases` adapters FROM the vector, and
+  a test on each lane pins the vector's order and membership against the
+  enum's arms. A hand-written `allCases`, `ordered` or `rawValue` index
+  is the class this rule forbids.
 - *The topology record.* `graph_topology(query, config)` returns the
   visible nodes with everything the diagram renders or speaks about each
   — the key, the label, the kind, the in-links, core's diameter, the
-  matching group, the label slot, the visible neighbours as records.
-  The spatial step's neighbour list, the accessible content's label
-  list, the styling and the label decision all read the node's own
-  entry; the diagram makes one session call per rebuild.
-- *The column model.* `graph_table_columns()` returns ordered
-  `GraphTableColumnSpec { column, header }` records; the grid is built
-  from that vector, the sort state's index is the vector index, the cell
-  is `cells[index]`. No host lists the columns.
-- *Constant tables once.* The action list per kind, the titles, the
-  column specs and the constants are fetched once per process into host
+  matching group, the label slot, the visible neighbours as records —
+  AND the visible EDGES in order, so `rebuildEdges` draws core's list and
+  derives nothing.
+- *Per epoch, not per frame.* The diagram fetches the topology when its
+  SEMANTIC EPOCH changes — (the layout handle, its generation, the
+  visibility query, the config) — and caches it across the settling
+  frames, which update positions and paint from the cache; a call-count
+  fact pins one fetch per epoch over a settling run.
+- *Constant tables once.* The constants, the column specs, the option
+  vectors and the action vectors are fetched once per process into host
   statics; a per-node `title` call is a re-crossing and is forbidden.
 - *The count from the rows.* The filter count is the rows result's
   `rows.count` of `total`, announced when that result publishes — one
   path, no per-label predicate crossing.
 
-**Subsystem C — the artifact as evidence (IG0b-9, -31, -37).** The class:
-a census fact proves a claim only when it compares the artifact against
-something the artifact does not own, and a guard proves itself only by a
-mutation that makes it fail. The model:
+**Subsystem C — the artifact as evidence (IG0b-9, -31, -37, -44, -45).**
+*The rule:* a census fact is a TYPED SCHEMA the artifact is validated
+against, value by value, and every claim the artifact makes is checked
+against something the artifact does not own; a guard proves itself by a
+mutation at each place it guards.
 
 - *Artifact-only shapes.* The serializer never writes a core record; it
   copies each into an artifact shape that has no numeric-id field at
   all, so an id can only enter by an explicit write.
-- *The forbidden inventory.* Every numeric-id field name the query
-  records carry — `id`, `node_id`, `parent_id`, `center_id`,
-  `source_id`, `target_id`, `generation` — is forbidden as a property
-  name in the golden text; the census asserts the absence and the
-  presence of `occurrence`.
-- *Cardinality against the pins.* Each section's length equals its
-  pinned vector's, each entry's pin fields equal the pin in order, and
-  the top-level key set is exactly the eleven names; the inventory sets
-  are compared for equality against the fixture-owned list.
+- *The schema walk.* The census walks every value of the golden against
+  a per-section schema table: every KEY-BEARING value — a `key`, a
+  `center_key`, an element of `visible`, `labeled` or `neighbors`, an
+  endpoint of an edge — is a string that is a member of the
+  fixture-owned inventory; every `occurrence` and `parent` is `in` or
+  `out` followed by `/` + the percent-encoding of inventory keys; every
+  NUMBER sits under a name in the numeric allow-list (`in_links`,
+  `out_links`, `in_embeds`, `out_embeds`, `component`, `total`, `level`,
+  `references`, `depth`, `tree_depth`, `note_count`, `diameter_x100`,
+  `group`, `dx`, `dy`, `group_count`, `connections_depth`, the
+  `constants` fields, the `_x100` config fields); every other value is a
+  string, a boolean or null. A numeric id under any name fails here.
+- *The pins.* Each of the eleven sections has an independent pin the
+  artifact does not own: the inventory (snapshot, topology, every table
+  sort), the pinned query names, sort names, `(path, depth)` pairs,
+  targets, directions, structural steps, the three kinds, the constants'
+  field names, the config input and its decoded field names; the
+  top-level key set is exactly the eleven.
 - *Mutations that bite.* The sweep makes the serializer (a) write a
-  forbidden property, (b) drop one node, (c) drop one section, (d)
-  reorder one section's entries — each must fail exactly one named fact.
+  numeric id at EACH key-bearing location in turn, (b) write a forbidden
+  property, (c) drop one node, (d) drop one section, (e) reorder one
+  section's entries, (f) drop one pin field — each must fail exactly one
+  named fact.
 
-The contracts below are rewritten from these three models; the ledgers
-map every finding to the model that takes it.
+The contracts below are derived from these three rules; the ledgers map
+every finding to the rule that takes it.
 
 ### Contracts
 
@@ -1200,27 +1248,29 @@ names lives once, in `crates/slate-core/src/graph_queries.rs` (the
 visible set and the topology, the tree, the key, the filter, the rows
 and the column model, the constants, the actions, the steps, the ghost
 path) and `crates/slate-core/src/graph_config.rs` (the schema, defaults,
-clamps, decode and encode rules, the group rules), as pure functions of
-the session's graph surface or of their arguments. The session layer
-adds handle-based methods that resolve the index and delegate;
-`slate-uniffi` adds 1:1 mirrors with no logic. Nothing in a host
-recomputes any of them, and no host lists what a core vector provides
+clamps, decode and encode rules, the group rules, the option tables), as
+pure functions of the session's graph surface or of their arguments. The
+session layer adds handle-based methods that resolve the index and
+delegate; `slate-uniffi` adds 1:1 mirrors with no logic. Nothing in a
+host recomputes any of them, and no host holds a literal core lists
 (R-D; design B). Task 0b-2 deletes the Swift copies, and the §W-G
 register below reads "moved" per row with the deleted range and the
 consuming site.
 
 **0b-2 — The query surface.** Session-based unless marked free; every
 session query reads the built index under the session's lock order
-(`conn → graph → graph_metrics`) exactly as `graph_snapshot` does, and
-every session result carries the `generation` of the index it read.
-The names here SUPERSEDE the seed names in spec §2 rows B–K and the PR
-C/D/E "Consumes" lists, which the same PR amends to these (0bD-12).
+(`conn → graph → graph_metrics`) exactly as `graph_snapshot` does,
+returns `Result<_, VaultError>` like every session query, and every
+session result carries the `generation` of the index it read. The names
+here SUPERSEDE the seed names in spec §2 rows B–K, §4 PR 0b and the PR
+A–E "Consumes" and "Builds" lists, which the same PR amends to these
+(0bD-12).
 
 | Query | Shape | Reads |
 |---|---|---|
 | `graph_visibility` | `(GraphVisibilityQuery) -> GraphVisibility` | `filtered_nodes`, labels, metrics |
 | `graph_topology` | `(GraphVisibilityQuery, GraphConfig) -> GraphTopology` | the snapshot's nodes and edges, metrics, the config's groups |
-| `graph_neighbors` | `(GraphVisibilityQuery, id) -> GraphNeighbors` | `edges_among` over the visible set — the single-node form |
+| `graph_neighbors` | `(GraphVisibilityQuery, id) -> GraphNeighbors` | `edges_among` over the visible set — the single-node form; an absent or invisible id yields an empty list |
 | `graph_connections_tree` | `(path, depth, filter) -> GraphConnectionsTree` | `neighborhood_ids`, `edges_among`, metrics, the neighbourhood's counts |
 | `graph_table_rows` | `(GraphVisibilityQuery, GraphTableSort) -> GraphTableRows` | the snapshot's nodes, metrics, mtimes |
 | `GraphNode.stable_key` | a field on the existing record | `NodeKey` |
@@ -1229,7 +1279,7 @@ C/D/E "Consumes" lists, which the same PR amends to these (0bD-12).
 | `graph_table_columns` | `() -> Vec<GraphTableColumnSpec>` | **free** — the ordered column model |
 | `graph_constants` | `() -> GraphConstants` | **free** |
 | `graph_node_diameter` | `(in_links) -> f64` | **free** — the curve; the topology carries it per node |
-| `graph_row_actions` / `graph_row_action_title` | `(kind) -> Vec<GraphRowAction>` / `(action) -> String` | **free** |
+| `graph_row_actions` / `graph_row_action_title` | `(kind) -> Vec<GraphRowAction>` / `(action) -> String` | **free** — the ordered eligibility vector per kind |
 | `graph_spatial_step` | `(points, neighbors, from, dx, dy) -> Option<u64>` | **free** — geometry only |
 | `graph_structural_step` | `(visible, from, forward) -> Option<u64>` | **free** |
 | `graph_ghost_note_path` | `(target_raw) -> String` | **free** |
@@ -1238,10 +1288,10 @@ C/D/E "Consumes" lists, which the same PR amends to these (0bD-12).
 | `graph_config_encode` | `(config, existing_json: Option<String>) -> Result<String, GraphConfigError>` | **free** |
 | `graph_config_matching_group` | `(config, label) -> Option<u32>` | **free** — the topology carries it per node |
 | `graph_config_next_group_style` | `(group_count) -> GraphGroupStyle` | **free** |
-| `graph_color_token_title` / `graph_ring_style_title` | `(token) -> String` / `(style) -> String` | **free** |
-| `graph_color_token_tag` / `graph_ring_style_tag` | `(token) -> String` / `(style) -> String` | **free** — the persistence tags |
+| `graph_color_tokens` | `() -> Vec<GraphColorTokenSpec>` | **free** — the ordered palette: token, tag, title |
+| `graph_ring_styles` | `() -> Vec<GraphRingStyleSpec>` | **free** — the ordered ring styles: style, tag, title |
 
-Twenty-four names; core declares them in GRAPH_QUERY_SURFACE (0b-15).
+Twenty-two names; core declares them in GRAPH_QUERY_SURFACE (0b-15).
 `GraphVisibilityQuery { filter: GraphFilter, name_query: String,
 kind_only: Option<NodeKind> }` is the ONE visibility record both
 projections hold: the backend filter, the name needle, and the preset's
@@ -1251,38 +1301,44 @@ kind overlay (`kind_only = Ghost` is the Unresolved preset, which
 table's rows, the diagram's topology, the count — takes it, so "shown"
 has one definition (spec §P2-4 "filter equivalence", now provable).
 
-**0b-2b — Generation and identity; the host's rule (design A).** Node
+**0b-2b — Authority, identity, token; the host's rule (design A).** Node
 ids are `StableGraph` indices that a rebuild may reassign
 (`graph.rs:249–254`). Every session result (GraphVisibility,
 `GraphTopology`, `GraphNeighbors`, `GraphTableRows`,
 GraphConnectionsTree) carries `generation: u64`, the value
 `graph_generation()` would have returned under the same lock. The host
-rule, both lanes: a consumer holds ONE generation — the table, the
-count and the selection the snapshot's; the diagram the layout's; the
-leaf the tree's — and ONE load token `(session, request, seq)` where
+rule, both lanes: a consumer renders ONE record, its authority, and
+issues requests under ONE token `(session, request, seq)` where
 `request` is the complete input record and every input change advances
 `seq`; a result publishes only when its token equals the current token
-in every field and its `generation` equals the held one, else it is
-dropped whole. Recovery is the consumer's own: snapshot consumers
-re-fetch the snapshot then reissue; layout consumers run
-`layout.refresh()` and adopt ids, edges, metadata, frame and generation
-atomically (`AppState+GraphDiagram.swift:110–145`), then reissue; the
-leaf's tree is one record and needs none. Pinned by
+in every field AND it agrees with every field of the authority's
+identity — the table, the count and the selection: the snapshot's
+generation; the diagram: the layout's backend filter (equal to the
+token's `query.filter`) and the layout's generation; the leaf: none, the
+tree being its own authority, so a token-current tree publishes and
+replaces the held state. Anything else is dropped whole. Recovery is the
+consumer's own: snapshot consumers re-fetch the snapshot then reissue;
+layout consumers run `layout.refresh()` and adopt ids, edges, metadata,
+frame and generation atomically (`AppState+GraphDiagram.swift:110–145`),
+then reissue; the leaf needs none. Pinned by
 `session_results_carry_the_generation_they_read` (a mutation between a
 snapshot and a query yields a different generation and the new index's
 ids), and on the mac by the token tests in 0b-14 (a reordered pair of
-same-generation results, a mutation between a layout adoption and a
-topology query).
+same-generation results under different needles, a topology under
+another backend filter than the layout's, a mutation between a layout
+adoption and a topology query, the leaf's first load and its replacement
+after a mutation).
 
 **0b-3 — The stable key is core's, one algorithm.** `GraphNode.stable_key`
 is `p:` + the vault-relative path for a Note or Attachment, and `g:` +
 the percent-encoded `ghost_key` for a Ghost — the SAME folded string
-`NodeKey::Ghost` carries (`ghost_key`: Rust `trim`, strip ONE leading
-`./` or `/`, Rust `to_lowercase`). Percent-encoding: every UTF-8 byte of
-a character that is not Unicode alphanumeric (`char::is_alphanumeric`) is
-written `%XX` uppercase; alphanumerics pass through, so `Missing Note`
-keys as `g:missing%20note` and `café` as `g:café`. Two disjoint
-namespaces, byte-stable across generations and sessions.
+`NodeKey::Ghost` carries (`ghost_key` over the authored `target_raw`:
+Rust `trim`, strip ONE leading `./` or `/`, Rust `to_lowercase`).
+Percent-encoding: every UTF-8 byte of a character that is not Unicode
+alphanumeric (`char::is_alphanumeric`) is written `%XX` uppercase;
+alphanumerics pass through, so `Missing Note` keys as
+`g:missing%20note` and `café` as `g:café`. Two disjoint namespaces,
+byte-stable across generations and sessions.
 `graph_stable_key_for_path(path)` returns the `p:` form for a path the
 host holds without a node (the three selection sites that key from a
 path). Divergences from the deleted Swift, recorded (0b-D1) and made
@@ -1290,21 +1346,22 @@ EXECUTABLE on the mac lane by GraphKeyCharacterizationTests — a test
 that carries the OLD Swift algorithm verbatim and pins its bytes beside
 core's for every witness, so the table below is asserted, not asserted
 about: (i) the SOURCE — mac keyed the displayed LABEL (the smallest
-authored variant, prefix intact), core keys the normalised `ghost_key`,
-so a ghost authored `./Foo` moves from `g:%2E%2Ffoo` to `g:foo`, and
-`Foo` / `./Foo` / `/foo` are one node under one key; (ii) the fold —
-`lowercased(with: en_US_POSIX)` there, Unicode's locale-independent
-lowercase mapping here (`İ` lowers to `i` + U+0307 in core; the mac
-lane's characterization records what `en_US_POSIX` yields); (iii) the
-encoding — Foundation's `addingPercentEncoding(withAllowedCharacters:)`
-applies its allowed set to 7-bit characters only and percent-encodes
-EVERY non-ASCII byte, so mac wrote `café` as `g:caf%C3%A9` and the NFD
-form as `g:cafe%CC%81`, where core writes `g:café` and `g:cafe%CC%81`:
-core keeps non-ASCII alphanumerics bare, and both keep the two
-normalization forms byte-distinct (the property the mac test asserted).
-Witnesses on both lanes: `./Foo`, `/Bar`, `Foo` beside `FOO`, NFC and NFD
-`café`, `İstanbul` — the Rust facts `stable_key_is_the_two_namespaces`
-and `stable_key_percent_encodes_by_rust_alphanumerics`, the
+authored variant, prefix intact), core keys the stored `NodeKey::Ghost`
+derived from `target_raw`, so a ghost authored `./Foo` moves from
+`g:%2E%2Ffoo` to `g:foo`, and `Foo` / `./Foo` / `/foo` are one node
+under one key; (ii) the fold — `lowercased(with: en_US_POSIX)` there,
+Unicode's locale-independent lowercase mapping here (`İ` lowers to `i` +
+U+0307 in core; the mac lane's characterization records what
+`en_US_POSIX` yields); (iii) the encoding — Foundation's
+`addingPercentEncoding(withAllowedCharacters:)` applies its allowed set
+to 7-bit characters only and percent-encodes EVERY non-ASCII byte, so
+mac wrote `café` as `g:caf%C3%A9` and the NFD form as `g:cafe%CC%81`,
+where core writes `g:café` and `g:cafe%CC%81`: core keeps non-ASCII
+alphanumerics bare, and both keep the two normalization forms
+byte-distinct (the property the mac test asserted). Witnesses on both
+lanes: `./Foo`, `/Bar`, `Foo` beside `FOO`, NFC and NFD `café`,
+`İstanbul` — the Rust facts `stable_key_is_the_two_namespaces` and
+`stable_key_percent_encodes_by_rust_alphanumerics`, the
 characterization test, and the graph vault's ghost targets in the
 artifact (0b-13).
 
@@ -1313,15 +1370,15 @@ summary, not a recursive record** (0bD-1). `GraphConnectionsTree {
 generation, center_id, center_key, depth, summary_counts:
 GraphNeighborhoodCounts, incoming: Vec<GraphConnectionRow>, outgoing:
 Vec<GraphConnectionRow> }` — the neighbourhood's own counts (0a-7)
-travel with the tree so the leaf reads ONE record per load and pairs
-nothing (design A); `GraphConnectionRow { id: String, level: u32,
-parent_id: Option<String>, node_id: u64, stable_key, label, path:
-Option<String>, target_raw: String, kind: NodeKind, embed_only: bool,
-in_links, out_links, references: u32 }`. Rules, each the mac's: the
-neighbourhood is `graph_neighborhood`'s payload (depth clamped 1..=3,
-the filter applied before traversal), read under the SAME lock as the
-generation; adjacency is undirected over its edges; the first hop splits
-by centre incidence — `source == centre` ⇒ outgoing (the target),
+travel with the tree so the leaf's structure is ONE record and the tree
+is its own authority (design A); `GraphConnectionRow { id: String,
+level: u32, parent_id: Option<String>, node_id: u64, stable_key, label,
+path: Option<String>, target_raw: String, kind: NodeKind, embed_only:
+bool, in_links, out_links, references: u32 }`. Rules, each the mac's:
+the neighbourhood is `graph_neighborhood`'s payload (depth clamped
+1..=3, the filter applied before traversal), read under the SAME lock as
+the generation; adjacency is undirected over its edges; the first hop
+splits by centre incidence — `source == centre` ⇒ outgoing (the target),
 `target == centre` ⇒ incoming (the source); a self-edge is dropped from
 both; a neighbour reached by Link and Embed is ONE row, `embed_only` iff
 no Link edge joined them; `references = in_links + in_embeds` from
@@ -1337,10 +1394,10 @@ so every key is one `/`-free segment) — `in/p%3Ahub%2Emd`,
 `in/p%3Ahub%2Emd/g%3Aghost%2520one`. A diamond descendant is distinct
 under each parent, and the id is byte-stable across generations and
 lanes. Snippets are NOT here: the depth-one snippet overlay reads the
-host's `NoteLoadBundle` and stays host, keyed by path (0bD-2). Pinned by
-the tree goldens (ConnectionsPanelTests' five cases as Rust facts: the
-split with ghosts and embeds, depth two nesting, depth three with the
-guard, Link+Embed collapse, the self-edge; the counts equal to
+host's `NoteLoadBundle` and is decoration, keyed by path (0bD-2, 0bR-4).
+Pinned by the tree goldens (ConnectionsPanelTests' five cases as Rust
+facts: the split with ghosts and embeds, depth two nesting, depth three
+with the guard, Link+Embed collapse, the self-edge; the counts equal to
 `graph_neighborhood`'s) and by `graph_queries.json`.
 
 **0b-5 — Label order is core's, one comparator, total.** The tree's
@@ -1401,31 +1458,40 @@ Pinned by `filter_ids_fold_case_and_marks` (the cases above plus
 U+3000), `labeled_is_the_capped_priority_set`, and the artifact's needle
 list.
 
-**0b-6b — The topology: one record per rebuild (design B).**
+**0b-6b — The topology: one record per epoch (design B).**
 `graph_topology(q, config)` returns `GraphTopology { generation, total:
-u64, nodes: Vec<GraphTopologyNode> }` with one entry per visible node in
-the snapshot's node order: `GraphTopologyNode { id, stable_key, label,
-kind: NodeKind, in_links: u32, diameter: f64, group: Option<u32>,
-labeled: bool, neighbors: Vec<GraphNeighbor> }` — `diameter` is 0b-8's
-curve unscaled (the display multiplier is a rendering the host applies),
-`group` is 0b-12's first-match index over `config.groups`, `labeled` is
-membership of `graph_visibility`'s `labeled` set, and `neighbors` are
-the node's VISIBLE neighbours as `GraphNeighbor { id, stable_key, label
-}` — over the snapshot's edges in order, for each edge incident to the
-node the OTHER endpoint, kept iff visible and not yet listed (a Link and
-an Embed to the same node yield one entry; a self-edge yields none).
-The diagram's accessible neighbour content (`GraphDiagramView.swift:856–874`:
-the labels, in this order, handed whole to 0a's `GraphNeighborsContent`,
+u64, nodes: Vec<GraphTopologyNode>, edges: Vec<GraphEdge> }` — `nodes`
+one entry per visible node in the snapshot's node order:
+`GraphTopologyNode { id, stable_key, label, kind: NodeKind, in_links:
+u32, diameter: f64, group: Option<u32>, labeled: bool, neighbors:
+Vec<GraphNeighbor> }`, where `diameter` is 0b-8's curve unscaled (the
+display multiplier is a rendering the host applies), `group` is 0b-12's
+first-match index over `config.groups`, `labeled` is membership of
+`graph_visibility`'s `labeled` set, and `neighbors` are the node's
+VISIBLE neighbours as `GraphNeighbor { id, stable_key, label }` — over
+the snapshot's edges in order, for each edge incident to the node the
+OTHER endpoint, kept iff visible and not yet listed (a Link and an Embed
+to the same node yield one entry; a self-edge yields none — a recorded
+divergence, 0b-D9: the mac's diagram content listed the node's own label
+for a self-link, its tree dropped it, and core drops it from both); and
+`edges` the snapshot's edges whose BOTH endpoints are visible, in the
+snapshot's edge order, self-edges included (they are edges, not
+neighbours), which `rebuildEdges` draws as given. The diagram's
+accessible neighbour content (`GraphDiagramView.swift:856–874`: the
+labels, in this order, handed whole to 0a's `GraphNeighborsContent`,
 whose cap is core's), the spatial step's neighbour-first list
-(`:1221–1228`: the ids), the styling (`:531`) and the label decision
-(`:640–648`) all read the entry; the diagram crosses the FFI once per
-rebuild. `graph_neighbors(q, id) -> GraphNeighbors { generation,
-neighbors }` is the same list for one node (an absent or invisible `id`
-returns none), for a host that asks on demand. Pinned by
+(`:1221–1228`: the ids), the styling (`:531`), the label decision
+(`:640–648`) and the drawn edges (`:702–722`) all read the record; the
+diagram crosses the FFI once per semantic epoch. `graph_neighbors(q, id)
+-> GraphNeighbors { generation, neighbors }` is the same list for one
+node — an absent or invisible `id` yields `neighbors: []` under the
+generation read — for a host that asks on demand. Pinned by
 `topology_is_the_visible_nodes_with_their_neighbours` (the topology's
 ids equal `graph_visibility`'s, its `labeled` flags its `labeled` set,
 each node's `neighbors` equal `graph_neighbors`', each `diameter` the
-curve, each `group` the matcher), `neighbors_are_unique_visible_and_ordered`
+curve, each `group` the matcher), `topology_carries_the_visible_edges`
+(the edges are exactly the snapshot's edges among the visible ids, in
+order, the self-edge kept), `neighbors_are_unique_visible_and_ordered`
 (the self-edge and Link+Embed fixtures) and the artifact's `topology`
 section.
 
@@ -1488,14 +1554,16 @@ viewport's, host-designated (§2 row L); 0a's invariants test names it
 as the host's.
 
 **0b-9 — The action set is core's: the order, the titles, the kind
-eligibility.** `GraphRowAction { Open, OpenInNewTab, ShowConnections,
-Reveal, CreateNote }` in that order; `graph_row_action_title` renders
-`Open`, `Open in New Tab`, `Show connections`, `Reveal in File Tree`,
-`Create note` (manifest T66); `graph_row_actions(kind)` returns the four
-navigation actions for a Note or an Attachment and `[CreateNote]` alone
-for a Ghost — KIND ELIGIBILITY: no projection offers an action the node's
-kind cannot take (`GraphViewState.swift:39–47`). Both tables are fetched
-once per process into host statics (design B). Runtime admission is the
+eligibility, as vectors.** `GraphRowAction { Open, OpenInNewTab,
+ShowConnections, Reveal, CreateNote }` in that order;
+`graph_row_action_title` renders `Open`, `Open in New Tab`, `Show
+connections`, `Reveal in File Tree`, `Create note` (manifest T66);
+`graph_row_actions(kind)` returns the ordered ELIGIBILITY vector — the
+four navigation actions for a Note or an Attachment and `[CreateNote]`
+alone for a Ghost: no projection offers an action the node's kind
+cannot take (`GraphViewState.swift:39–47`). Both are fetched once per
+process into host statics, and a host's `allCases` is the union of the
+per-kind vectors in core's order (design B). Runtime admission is the
 host's (0bD-8): while a structural mutation is unavailable, the Table
 and the Connections leaf show `CreateNote` DISABLED with
 `structuralMutationDisabledReason` as the hint, and the Diagram OMITS it
@@ -1545,50 +1613,64 @@ recorded divergence as 0b-6's (0b-D3). Pinned by the
 cases above, and the artifact's target list.
 
 **0b-12 — The config schema and merge policy are core's, IDL complete;
-the I/O is the host's.** The records, exact: `GraphFilterConfig {
-include_attachments: bool, include_ghosts: bool, orphans_only: bool,
-name_query: String }`; `GraphGroup { query: String, color_token:
-GraphColorToken, ring_style: GraphRingStyle }`; `GraphDisplay { arrows:
-bool, text_fade_zoom: f64, node_size_multiplier: f64, link_thickness:
-f64 }`; `GraphForcesConfig { center: f64, repel: f64, link: f64,
-link_distance: f64 }`; `GraphConfig { filters, groups: Vec<GraphGroup>,
-display, forces, mode: GraphSurfaceMode, connections_depth: u32,
-verbosity: GraphVerbosity }`; `GraphConfigRead { config: GraphConfig,
-unknown_json: String }` — the canonical JSON text of an object holding
-every top-level key the schema does not own (`{}` when none);
-`GraphConfigError { Unparseable { reason: String }, NewerVersion {
-version: u64 } }` (a uniffi error enum); `GraphGroupStyle { color_token,
-ring_style }`. `graph_config_default()` is the default, and
-`graph_config_decode("{}")` equals it (a test); an absent file is the
-HOST's case and it uses `graph_config_default()`. Schema v1 of
-`.slate/graph.json`: `version: 1`; `filters { includeAttachments,
-includeGhosts, orphansOnly, nameQuery }`; `groups: [{ query, colorToken,
-ringStyle }]`; `display { arrows, textFadeZoom, nodeSizeMultiplier,
-linkThickness }`; `forces { center, repel, link, linkDistance }`;
-`mode`; `connectionsDepth`; and — new here, 0aD-6 — `verbosity`
-(`terse` / `standard` / `verbose`, default `standard`). Defaults and
-clamps are the mac's (`GraphConfigStore.swift:131–169`): filters
-false/true/false/""; `textFadeZoom` 0.1..=4.0 default 0.55;
+the option tables are vectors; the I/O is the host's.** The records,
+exact: `GraphFilterConfig { include_attachments: bool, include_ghosts:
+bool, orphans_only: bool, name_query: String }`; `GraphGroup { query:
+String, color_token: GraphColorToken, ring_style: GraphRingStyle }`;
+`GraphDisplay { arrows: bool, text_fade_zoom: f64, node_size_multiplier:
+f64, link_thickness: f64 }`; `GraphForcesConfig { center: f64, repel:
+f64, link: f64, link_distance: f64 }`; `GraphConfig { filters, groups:
+Vec<GraphGroup>, display, forces, mode: GraphSurfaceMode,
+connections_depth: u32, verbosity: GraphVerbosity }`; `GraphConfigRead {
+config: GraphConfig, unknown_json: String }` — the canonical JSON text
+of an object holding every top-level key the schema does not own (`{}`
+when none); `GraphConfigError { Unparseable { reason: String },
+NewerVersion { version: u64 } }` (a uniffi error enum); `GraphGroupStyle
+{ color_token, ring_style }`; `GraphColorTokenSpec { token:
+GraphColorToken, tag: String, title: String }` and `GraphRingStyleSpec {
+style: GraphRingStyle, tag: String, title: String }`, the ORDERED option
+tables `graph_color_tokens()` (`red, orange, yellow, green, teal, blue,
+purple, pink`) and `graph_ring_styles()` (`solid, dashed, double,
+dotted`) return, each entry's tag its lowercase name and its title the
+capitalised name (T71, T72); a host's pickers and its `allCases` are
+built from the vectors (design B), and a test on each lane pins each
+vector's length and order against the enum's arms. `graph_config_default()`
+is the default, and `graph_config_decode("{}")` equals it (a test); an
+absent file is the HOST's case and it uses `graph_config_default()`.
+Schema v1 of `.slate/graph.json`: `version: 1`; `filters {
+includeAttachments, includeGhosts, orphansOnly, nameQuery }`; `groups:
+[{ query, colorToken, ringStyle }]`; `display { arrows, textFadeZoom,
+nodeSizeMultiplier, linkThickness }`; `forces { center, repel, link,
+linkDistance }`; `mode`; `connectionsDepth`; and — new here, 0aD-6 —
+`verbosity` (`terse` / `standard` / `verbose`, default `standard`).
+Defaults and clamps are the mac's (`GraphConfigStore.swift:131–169`):
+filters false/true/false/""; `textFadeZoom` 0.1..=4.0 default 0.55;
 `nodeSizeMultiplier` 0.5..=2.0 default 1.0; `linkThickness` 0.5..=4.0
 default 1.0; each force 0..=1 default 0.5; `connectionsDepth` 1..=3
 default 1; `mode` `table` unless the tag is `diagram`. The decode truth
-table: text that is not JSON, or whose number tokens overflow, is
-`Unparseable` (JSON carries no `NaN` or infinity, so no inbound value
-is non-finite); the root must be a JSON object, else `Unparseable`;
-`version` absent → 1; a JSON number whose value is a non-negative
-integer (`1`, `1.0`, `1e0` alike) → that value, greater than 1 →
+table classifies the PARSED VALUE — the workspace enables only
+`serde_json/preserve_order` (`Cargo.toml:68–73`), so a non-integer
+number token is an `f64` and two tokens with the same `f64` value are
+the same value (`1.0000000000000001` is `1.0`; no `arbitrary_precision`
+is wanted, and this is stated, not hidden): text that is not JSON, or
+whose number tokens overflow `f64`, is `Unparseable` (JSON carries no
+`NaN` or infinity, so no inbound value is non-finite); the root must be
+a JSON object, else `Unparseable`; `version` absent → 1; a number whose
+value is a non-negative integer ≤ `u64::MAX` (`1`, `1.0`, `1e0`,
+`1.0000000000000001` alike) → that integer, greater than 1 →
 `NewerVersion { version }` (never decoded, never rewritten); any other
-`version` (fractional, negative, boolean, string, null, beyond `u64`) →
-`Unparseable` — a recorded divergence (0b-D8) from the mac, which
-classified only an `Int` above 1 and otherwise decoded the file and
-later overwrote it; a section that is not an object is ignored whole
-(the defaults stand); a float field that is missing or non-numeric
-takes its default, else is clamped; `connectionsDepth` is a number
-whose value is clamped into 1..=3 and then truncated toward zero (`2.7`
-→ 2, `-1` → 1, `-0` → 1, `1e0` → 1, `99` → 3), a non-number → 1; a
-boolean field that is not a boolean takes its default; `groups` that is
-not an array is ignored, and WITHIN an array each element that is not an
-object or has no string `query` is SKIPPED while the others survive — a
+`version` value (fractional, negative, boolean, string, null, above
+`u64`) → `Unparseable` — a recorded divergence (0b-D8) from the mac,
+which classified only an `Int` above 1 and otherwise decoded the file
+and later overwrote it; a section that is not an object is ignored
+whole (the defaults stand); a float field that is missing or
+non-numeric takes its default, else is clamped; `connectionsDepth` is a
+number whose value is INTEGRAL, clamped into 1..=3 (`2`, `2.0`, `1e0`,
+`99` → 3, `-0` → 1, `-5` → 1), while a fractional value or a non-number
+is the default 1 — the mac's `as? Int` classification, kept; a boolean
+field that is not a boolean takes its default; `groups` that is not an
+array is ignored, and WITHIN an array each element that is not an object
+or has no string `query` is SKIPPED while the others survive — a
 recorded divergence (0b-D6) from the mac, whose `[[String: Any]]` cast
 dropped the whole array when any element was not an object; an unknown
 `colorToken` reads `blue`, an unknown `ringStyle` `solid`; an unknown
@@ -1601,45 +1683,41 @@ preserved SEMANTICALLY (parsed, re-emitted canonically — formatting and
 number spelling of an unknown value are not byte-preserved), and every
 outbound value is clamped as an inbound one — a float `NaN` → the
 default, `±∞` → the bound, the depth into 1..=3 — so the file is always
-in range. The writer is CANONICAL, an explicit pass — the workspace
-enables `serde_json/preserve_order` (`Cargo.toml:73`), so `Map` is
-insertion-ordered and no sorting is implicit: every object's keys sorted
-recursively by Unicode scalar order, serde's pretty printer (two-space
-indent, `"key": value`, `\n` line ends, no trailing newline) — a
-recorded divergence in file FORMATTING from Foundation's pretty printer
-(0b-D5): the bytes differ, the object does not, and either reader
-accepts both. Atomic temp-and-rename, the single-writer actor and its
-monotonic generation gate stay host-designated (§2 row F; 0bD-3), with
-their tests (0b-14). Groups: `graph_config_matching_group(config,
+in range. The writer is CANONICAL, an explicit pass — `preserve_order`
+makes `Map` insertion-ordered and no sorting is implicit: every object's
+keys sorted recursively by Unicode scalar order, serde's pretty printer
+(two-space indent, `"key": value`, `\n` line ends, no trailing newline)
+— a recorded divergence in file FORMATTING from Foundation's pretty
+printer (0b-D5): the bytes differ, the object does not, and either
+reader accepts both. Atomic temp-and-rename, the single-writer actor and
+its monotonic generation gate stay host-designated (§2 row F; 0bD-3),
+with their tests (0b-14). Groups: `graph_config_matching_group(config,
 label)` is first-match-wins over the ordered groups, a group's trimmed
 query matched by `graph_label_matches`, a blank query never matching;
 the topology carries the index per node (0b-6b) — LABEL-ONLY, the
 shipped mac matcher, by owner ruling (0bD-9, 0b-D7);
-`graph_config_next_group_style(group_count)` cycles the ring (`solid →
-dashed → double → dotted`) and the palette (`red, orange, yellow, green,
-teal, blue, purple, pink`) by index. GraphColorToken and `GraphRingStyle`
-are core enums with persistence tags = their lowercase names
-(`graph_color_token_tag`, `graph_ring_style_tag`) and titles = the
-capitalised names (T71, T72); the mac's `color: NSColor` mapping and its
-APCA test are host-designated (a colour is a rendering). Pinned by the
-GraphConfigTests SCHEMA cases as Rust facts (round-trip of every
-section, the empty object as the default, unknown top-level keys
-preserved, the unparseable and newer-version refusals as errors,
-clamping, first-match, the ring cycle), `decode_truth_table` (every row
-above: each version category, each depth category, a mixed groups
-array, each number category, invalid JSON and an overflowing exponent,
-non-finite outbound), `encode_is_canonical_bytes` (a golden string with
-nested unknown keys, escaping, indentation), and the artifact's config
-round-trip; the host I/O facts stay Swift (0b-14).
+`graph_config_next_group_style(group_count)` cycles the ring and the
+palette by index over the two option vectors. The mac's `color:
+NSColor` mapping and its APCA test are host-designated (a colour is a
+rendering). Pinned by the GraphConfigTests SCHEMA cases as Rust facts
+(round-trip of every section, the empty object as the default, unknown
+top-level keys preserved, the unparseable and newer-version refusals as
+errors, clamping, first-match, the ring cycle), `decode_truth_table`
+(every row above: each version category including the f64 witness,
+each depth category, a mixed groups array, each number category,
+invalid JSON and an overflowing exponent, non-finite outbound),
+`encode_is_canonical_bytes` (a golden string with nested unknown keys,
+escaping, indentation), `option_vectors_are_the_enum_arms`, and the
+artifact's config round-trip; the host I/O facts stay Swift (0b-14).
 
 **0b-13 — The §W-A `graph_queries` section, from a dedicated graph
-vault, keyed by stable key, id-free, cardinality-checked (design C).**
-The harness gains one artifact, `graph_queries.json`, produced from a
-NEW fixture vault `crates/slate-core/tests/fixtures/graph_vault/` opened
-as a second session behind `--graph-fixtures` — the markdown vault has
-no digit-run labels, no nested folder, no authored-variant ghosts, and
-its attachments fall outside the default filter (0bD-4, revised). The
-vault, each file a witness: `hub.md` (links to `2`, `10`, `010`,
+vault, keyed by stable key, id-free, schema-checked (design C).** The
+harness gains one artifact, `graph_queries.json`, produced from a NEW
+fixture vault `crates/slate-core/tests/fixtures/graph_vault/` opened as
+a second session behind `--graph-fixtures` — the markdown vault has no
+digit-run labels, no nested folder, no authored-variant ghosts, and its
+attachments fall outside the default filter (0bD-4, revised). The vault,
+each file a witness: `hub.md` (links to `2`, `10`, `010`,
 `notes/nested/deep`, the ghosts `Ghost One`, `./Ghost One`, `/ghost
 two`, `café`, `İstanbul`, the embed `![[pic.png]]`); `2.md` (`[[hub]]`);
 `10.md` (`[[hub]]` and `![[hub]]` — the Link+Embed pair); `010.md`
@@ -1651,29 +1729,31 @@ inventory, byte order, is a literal in the census and the twin:
 `p:010.md`, `p:10.md`, `p:2.md`, `p:hub.md`, `p:notes/nested/deep.md`,
 `p:orphan.md`, `p:pic.png`, `p:self.md`. The serializer copies every
 core record into an ARTIFACT SHAPE with no numeric-id field (design C);
-the ELEVEN sections, in order, every list in `stable_key` byte order
-unless it is core's own order: `snapshot` under the INCLUSIVE filter
-(attachments and ghosts in, orphans-only off) — per node `key`,
-`label`, `kind`, `path`, `in_links`, `out_links`, `in_embeds`,
-`out_embeds`, `component`, `is_orphan` (NOT `pagerank`: a float no 0b
-query consumes; NOT `modified_ms`: the checkout time); `visibility` —
-for each pinned query its `query` name, `total`, the `visible` keys and
-the `labeled` keys in core's order; `topology` — for the `all` query
-under the pinned config, per node in core's order `key`,
-`diameter_x100` (the curve rounded to an integer), `group`, `labeled`,
-`neighbors` as keys in core's order; `table` — for each pinned sort its
-`query` name, `sort` name, `total`, and in core's order per row `key`
-and the eight cells named `note`, `links_in`, `links_out`, `embeds_in`,
-`embeds_out`, `component`, `folder`, `kind` (Modified OMITTED, no
-placeholder: the checkout time; its format is a Rust fact);
+the ELEVEN sections, in order: `snapshot` under the INCLUSIVE filter
+(attachments and ghosts in, orphans-only off), SORTED BY THE SERIALIZER
+into `stable_key` byte order (core's own snapshot order is `NodeKey`'s,
+paths before ghosts; the sort is the serializer's UTF-8 comparison, the
+twin's `utf8` comparison the same) — per node `key`, `label`, `kind`,
+`path`, `in_links`, `out_links`, `in_embeds`, `out_embeds`, `component`,
+`is_orphan` (NOT `pagerank`: a float no 0b query consumes; NOT
+`modified_ms`: the checkout time); `visibility` — for each pinned query
+its `query` name, `total`, the `visible` keys and the `labeled` keys in
+core's order; `topology` — for the `all` query under the pinned config,
+in core's order: `nodes`, per node `key`, `diameter_x100` (the curve
+rounded to an integer), `group`, `labeled`, `neighbors` as keys, and
+`edges`, per edge `from`, `to` (keys) and `kind`; `table` — for each
+pinned sort its `query` name, `sort` name, `total`, and in core's order
+per row `key` and the eight cells named `note`, `links_in`, `links_out`,
+`embeds_in`, `embeds_out`, `component`, `folder`, `kind` (Modified
+OMITTED, no placeholder: the checkout time; its format is a Rust fact);
 `connections` — for each pinned `(path, depth)` the `center_key`, the
-`summary` counts (`in_links`, `out_links`, `note_count`, `depth`), and
-the flat rows in core's order with `occurrence`, `parent`, `level`,
-`key`, `kind`, `embed_only`, `references`; `ghost_paths` — for each
-pinned target the path; `spatial` — the pinned point table's answer per
-direction, as the point's LABEL (the table is labelled `a`..`d`; ids are
-local); `structural` — the pinned order's next and previous from each
-label and from none; `constants`; `actions` per kind with titles;
+`summary` (`center_label`, `in_links`, `out_links`, `note_count`,
+`depth`), and the flat rows in core's order with `occurrence`, `parent`,
+`level`, `key`, `kind`, `embed_only`, `references`; `ghost_paths` — for
+each pinned target the path; `spatial` — the pinned point table's answer
+per direction, as the point's LABEL (the table is labelled `a`..`d`; ids
+are local); `structural` — the pinned order's next and previous from
+each label and from none; `constants`; `actions` per kind with titles;
 `config` — the pinned input decoded then encoded, the output text and
 the unknown keys. The pinned vectors, literal, `public static readonly`
 on `SurfaceSerializer` and copied by the twin, named in a comment beside
@@ -1689,38 +1769,43 @@ connections — `hub.md` at depths 1, 2, 3, `notes/nested/deep.md` at 2,
 `/ghost two`, `notes/Foo.MD`, `dir/`, `.md`, `a\b`, `café`; points —
 `a (0,0)`, `b (10,0)`, `c (0,10)`, `d (10,10)` with neighbours of `a` =
 `[d]`, from `a`, the four unit axes; structural order `[a, b, c, d]`;
-the config input — a v1 object with a nested unknown key, a groups array
-mixing a valid group, a number, a query-less object and a group with
-unknown tags, a fractional force, an out-of-range depth. A literal
-example of the schema is committed beside the golden as
-`graph_queries.example.json` (the eleven keys; the shape the census
-reads). Three Windows census facts, each against something the artifact
+the three kinds; the constants' seven field names; the config input — a
+v1 object with a nested unknown key, a groups array mixing a valid group,
+a number, a query-less object and a group with unknown tags, a
+fractional force, an out-of-range depth — and its decoded field names. A
+literal example of the schema is committed beside the golden directory
+as `crates/slate-core/tests/fixtures/graph_queries.example.json` (the
+eleven keys, each list trimmed to its first entry; the census asserts its
+key set). Four Windows census facts, each against something the artifact
 does not own: GraphQueriesArtifactMatchesTheVaultInventory — the
 snapshot section's key LIST equals the literal inventory, and the
-`topology` section's key set and every `table` sort's key set equal it
-(not containment, not the artifact against itself);
-GraphQueriesArtifactCarriesThePinnedVectors — the top-level key set is
-exactly the eleven names, each section's length equals its pinned
-vector's, and each entry's pin fields (`query`, `sort`, `path` and
-`depth`, `target`, `dx`/`dy`, `from`/`forward`) equal the pin in order;
-GraphQueriesArtifactCarriesNoNodeIds — the golden text has no property
-named `id`, `node_id`, `parent_id`, `center_id`, `source_id`,
-`target_id` or `generation`, and has `occurrence`. The mutation sweep
-makes the serializer write a forbidden property, drop one node, drop one
-section and reorder one section, each failing exactly one named fact.
-The mac twin is Task 0b-2's, in the same PR; the committed golden
-arbitrates.
+`topology` nodes' and every `table` sort's key SETS equal it (equality,
+not containment); GraphQueriesArtifactCarriesThePinnedVectors — the
+top-level key set is exactly the eleven names, each section's length
+equals its pin's, and each entry's pin fields (`query`, `sort`, `path`
+and `depth`, `target`, `dx`/`dy`, `from`/`forward`, the kinds, the
+constants' names, the config input and field names) equal the pin in
+order; GraphQueriesArtifactMatchesItsSchema — the schema walk of design
+C over every value; GraphQueriesArtifactCarriesNoNodeIds — the golden
+text has no property named `id`, `node_id`, `parent_id`, `center_id`,
+`source_id`, `target_id` or `generation`, and has `occurrence` and
+`parent`. The mutation sweep makes the serializer write a numeric id at
+each key-bearing location in turn, write a forbidden property, drop one
+node, drop one section, reorder one section and drop one pin field, each
+failing exactly one named fact. The mac twin is Task 0b-2's, in the same
+PR; the committed golden arbitrates.
 
 **0b-14 — Mac consumes in the same PR (Task 0b-2); every consumer is
 owned by name, production and test.**
 
-*The load token (design A).* `AppState` holds one `graphVisibilityQuery`
-(filter, needle, kind), one `graphTableRequest` (the query and the
-accepted sort), and per consumer a `seq` that every input change
-advances; a result is applied through ONE receiver per consumer
-(`receiveGraphTableRows(token:result:)`,
-`receiveGraphTopology(token:result:)`, `receiveConnectionsTree(token:result:)`)
-that checks the token in every field and the held generation, and
+*The token and the authorities (design A).* `AppState` holds one
+`graphVisibilityQuery` (filter, needle, kind), one `graphTableRequest`
+(the query and the accepted sort), and per consumer a `seq` that every
+input change advances; a result is applied through ONE receiver per
+consumer (`receiveGraphTableRows(token:result:)` against the snapshot's
+generation; the diagram's `acceptGraphTopology` against the layout's
+backend filter and generation; the leaf's tree replacing the held tree)
+that checks the token in every field and the authority's identity, and
 publishes rows, accepted sort and headline in one synchronous
 assignment, rows first; a failed query rolls the request back to the
 accepted state and announces through the announcer.
@@ -1732,21 +1817,28 @@ accepted state and announces through the announcer.
 `rows.count` of `total`; a needle or kind change is a token change that
 reissues the rows request.
 
-*The topology.* The diagram's `isVisible` / `refreshVisibleSet`
-(`GraphDiagramView.swift:385–408`), `labelPriorityIDs` (`:640–648`), the
-per-node `matchingGroup` (`:531`) and diameter (`:412–413, 522`),
+*The topology, per epoch.* The diagram holds ONE `GraphTopology` beside
+the model, fetched through `graphTopologyForDiagram` when the semantic
+epoch — (the layout handle, `model.generation`, `graphVisibilityQuery`,
+`graphConfig`) — changes and NOT on a settling frame: `applyFrame`
+(`GraphDiagramView.swift:328–349`) updates positions and paints from the
+cache; `isVisible` / `refreshVisibleSet` (`:385–408`),
+`labelPriorityIDs` (`:640–648`), the per-node `matchingGroup` (`:531`)
+and diameter (`:412–413, 522`), `rebuildEdges` (`:702–722`),
 `neighborCustomContent` (`:856–874`) and the spatial `graphNeighbors`
-(`:1221–1228`) all read ONE `GraphTopology` held beside the model,
-fetched per rebuild with the layout's generation as the held value and
-recovered through `refreshGraphDiagramIfGraphChanged`'s adoption
-(`AppState+GraphDiagram.swift:110–145`).
+(`:1221–1228`) all read the record; a topology under another backend
+filter than the layout's, or another generation, is dropped and the
+visible set empties until `refreshGraphDiagramIfGraphChanged`'s
+adoption (`AppState+GraphDiagram.swift:110–145`) changes the epoch.
 
 *The tree.* ConnectionsModel (`ConnectionsPanel.swift:375–499`) becomes
 an adapter over `graph_connections_tree`, held on `AppState` as
-`connectionsTree`; the leaf's summary reads the tree's
-`summary_counts`, `connectionsNeighborhood` is no longer loaded for the
-leaf; the adapter nests the flat rows by `parent_id` for `OutlineGroup`
-in one pass and overlays snippets by path; its derivation is deleted.
+`connectionsTree` — the tree is the leaf's authority: a token-current
+result replaces it; the leaf's summary reads the tree's
+`summary_counts`, `connectionsNeighborhood` is no longer loaded; the
+adapter nests the flat rows by `parent_id` for `OutlineGroup` in one
+pass and overlays the bundle's snippets by path as decoration (0bR-4);
+its derivation is deleted.
 
 *The key.* `GraphNodeKey` (`GraphViewState.swift:57–78`) is deleted;
 node sites read `stableKey` (`GraphTableView.swift:492`,
@@ -1776,30 +1868,31 @@ the two steps with the topology entry's neighbours;
 `clampConnectionsDepth` reads the constants; `ghostNotePath`
 (`AppState+Connections.swift:306–315`) calls core.
 
-*Actions.* `GraphRowAction` (`GraphViewState.swift:15–48`) is the
-generated enum plus a Swift extension — `CaseIterable` with `allCases`
-in core's order, `title` and `actions(forGhost:)` read from statics
-fetched once (`graph_row_action_title`, `graph_row_actions`),
-`applies(toGhost:)` over them — so `ConnectionsPanel.swift:259`,
-`GraphDiagramView.swift:800`, `GraphTableView.swift:394, 403`,
-GraphActionParityTests `:19–35` and GraphDiagramTests `:707–750` compile
-unchanged in meaning; the runtime admission overlay (0bD-8) stays at
-each site as shipped (disabled with the hint in the Table and the leaf,
-omitted in the Diagram).
+*Actions and the option tables (design B).* `GraphRowAction`
+(`GraphViewState.swift:15–48`) is the generated enum plus a Swift
+extension whose `allCases`, `title`, `actions(forGhost:)` and
+`applies(toGhost:)` are read from statics fetched once
+(`graph_row_actions` per kind, `graph_row_action_title`), so
+`ConnectionsPanel.swift:259`, `GraphDiagramView.swift:800`,
+`GraphTableView.swift:394, 403`, GraphActionParityTests `:19–35` and
+GraphDiagramTests `:707–750` compile unchanged in meaning; the runtime
+admission overlay (0bD-8) stays at each site as shipped. GraphColorToken
+and `GraphRingStyle` (`GraphConfig.swift:109–142`) are the generated
+enums plus extensions whose `allCases` and `title` are read from
+`graph_color_tokens()` / `graph_ring_styles()` fetched once, so the
+pickers (`GraphInspectorView.swift:90, 95`) iterate core's vectors;
+`color` and `dashPattern` remain renderings; a mac test pins each
+vector's order against the generated enum's cases.
 
 *Config.* GraphConfigStore's `decode` / `encode` / `clampD` (`:131–202`)
 are deleted; `read` calls `graph_config_decode` and maps
 GraphConfigError onto `PrefsJsonStoreError.parseFailed`; `write` calls
 `graph_config_encode(config, existing)` and maps onto `writeFailed`; the
 I/O, the atomic rename and the writer actor stay. The Swift `GraphConfig`,
-GraphFilterConfig, `GraphDisplay`, GraphForcesConfig, `GraphGroup`,
-GraphColorToken and `GraphRingStyle` (`GraphConfig.swift:11–142`) are
-the generated records and enums plus extensions: `GraphConfig.default =
-graphConfigDefault()`, `GraphFilterConfig.backend`,
-`GraphForcesConfig.layoutForces`, `matchingGroup(for:)` over core,
-`CaseIterable` + `title` (a static) + `color` / `dashPattern` on the two
-enums (so `GraphInspectorView.swift:90, 95` read `title`, and
-GraphConfigTests `:166–182` read `allCases` and `title`);
+GraphFilterConfig, `GraphDisplay`, GraphForcesConfig and `GraphGroup`
+(`GraphConfig.swift:11–108`) are the generated records plus extensions:
+`GraphConfig.default = graphConfigDefault()`, `GraphFilterConfig.backend`,
+`GraphForcesConfig.layoutForces`, `matchingGroup(for:)` over core;
 `addGraphGroup` (`AppState+GraphConfig.swift:172–177`) calls
 `graph_config_next_group_style`. VERBOSITY: `loadGraphConfig` (`:40–53`)
 applies the loaded config through `applyLoadedGraphConfig` — the
@@ -1816,106 +1909,137 @@ site, GraphDiagramTests `:775, 788, 806` and GraphActionParityTests
 ConnectionsPanelTests, GraphTableViewTests, GraphConfigTests and
 GraphDiagramTests move to Rust facts (named in 0b-4..0b-12); the Swift
 tests that remain assert the host: ConnectionsPanelTests — the nesting
-by `parent_id`, the snippet overlay, the busy reason; GraphTableViewTests
-— the column adapters over the specs, the `stableKey` identity, the
-action extensions, the busy hints, the token lifecycle (a delayed
-result, a reordered pair of same-generation results under different
-needles, a failed query rolling back, a stale generation dropped, a
-preset publishing rows and the default sort together with its headline
-from row zero after a Folder sort); GraphConfigTests — the host I/O
-facts kept verbatim (`testMissingFileReadsDefault`,
+by `parent_id`, the snippet overlay as decoration (an unmatched path
+ignored), the busy reason, the leaf's first load establishing its
+authority and a mutation's tree replacing it; GraphTableViewTests — the
+column adapters over the specs, the `stableKey` identity, the action
+extensions, the busy hints, the token lifecycle (a delayed result, a
+reordered pair of same-generation results under different needles, a
+failed query rolling back, a stale generation dropped, a preset
+publishing rows and the default sort together with its headline from
+row zero after a Folder sort); GraphConfigTests — the host I/O facts
+kept verbatim (`testMissingFileReadsDefault`,
 `testRefusesToClobberUnparseableFile`,
 `testRefusesToDowngradeANewerVersionFile`,
 `testWriterDropsASupersededGeneration`, the byte-intact assertions)
-plus the adapter's error mapping for each GraphConfigError and the
-verbosity load / fallback / save; GraphDiagramTests — the steps through
-core on the fixed layout, the tier boundary through `graph_constants`,
-the topology token (a mutation between adoption and the query is
-dropped), the busy-state omission; GraphKeyCharacterizationTests — the
-old key algorithm beside core's over 0b-D1's witnesses. The Swift edit
-is unrun on this box (0bR-1); the mac lane arbitrates.
+plus the adapter's error mapping for each GraphConfigError, the
+verbosity load / fallback / save, and the pickers' vectors against the
+enum cases; GraphDiagramTests — the steps through core on the fixed
+layout, the tier boundary through `graph_constants`, the topology token
+(a mutation between adoption and the query is dropped; a topology under
+another backend filter is dropped), ONE topology fetch per epoch over a
+settling run (a call count), the drawn edges from the record, the
+busy-state omission; GraphKeyCharacterizationTests — the old key
+algorithm beside core's over 0b-D1's witnesses. The Swift edit is unrun
+on this box (0bR-1); the mac lane arbitrates.
 
-**0b-15 — Tripwires cover the surface, the records and their types.**
-`the_ffi_mirror_covers_every_graph_query_enum` (slate-uniffi) parses
-core's `GraphRowAction`, GraphTableColumn, GraphColorToken,
+**0b-15 — Tripwires cover the surface, the records, their types and the
+vectors.** `the_ffi_mirror_covers_every_graph_query_enum` (slate-uniffi)
+parses core's `GraphRowAction`, GraphTableColumn, GraphColorToken,
 `GraphRingStyle` and GraphConfigError against their mirrors both ways,
 the a11y mirror test's parser reused, with each arm count pinned (5, 9,
 8, 4, 2) and, for GraphConfigError, each variant's payload field names.
 `the_ffi_mirror_exports_every_graph_query`: core declares
-`GRAPH_QUERY_SURFACE: &[&str]` — the twenty-four names in 0b-2's table —
-a core test asserts each is a `pub fn` of `graph_queries`,
-`graph_config` or the session, and the uniffi test asserts each is
-exported from `lib.rs` (a `pub fn name(` under `#[uniffi::export]` or a
-`VaultSession` method). `the_ffi_records_mirror_core_field_for_field`:
-every `pub struct` in the two modules AND `GraphNode` in `graph.rs` is
-parsed for its `(field, type)` pairs and compared, in order, against the
-mirror of the same name in `lib.rs`, the types compared as text after
-the one alias map core→FFI (`NodeKind`→`GraphNodeKind`,
-`GraphNeighborhoodCounts` and `GraphFilter` to their mirrors, `usize`
+GRAPH_QUERY_SURFACE — the twenty-two names in 0b-2's table — a core
+test asserts each is a `pub fn` of `graph_queries`, `graph_config` or
+the session, and the uniffi test asserts each is exported from `lib.rs`
+(a `pub fn name(` under `#[uniffi::export]` or a `VaultSession` method).
+`the_ffi_records_mirror_core_field_for_field`: every `pub struct` in the
+two modules AND `GraphNode` in `graph.rs` is parsed for its `(field,
+type)` pairs and compared, in order, against the mirror of the same name
+in `lib.rs`, the types compared as text after the one alias map
+core→FFI (`NodeKind`→`GraphNodeKind`, path prefixes dropped, `usize`
 disallowed) — a width or an `Option` that drifts fails here, not in a
-host. `graph_constants_are_the_named_constants` asserts every
-`GraphConstants` field against its constant. The Windows
-`ParityHarnessCensus` gains the artifact and the three facts (0b-13),
-and GraphQuerySurfaceCensus asserts by reflection that every name in
-core's surface list exists on the generated `SlateUniffiMethods` or
+host. `option_vectors_are_the_enum_arms` (core): `graph_color_tokens()`,
+`graph_ring_styles()`, `graph_table_columns()` and the per-kind
+`graph_row_actions` are exactly their enums' arms in declaration order,
+and every tag round-trips. `graph_constants_are_the_named_constants`
+asserts every `GraphConstants` field against its constant. The Windows
+`ParityHarnessCensus` gains the artifact and the four facts (0b-13), and
+GraphQuerySurfaceCensus asserts by reflection that every name in core's
+surface list exists on the generated `SlateUniffiMethods` or
 `VaultSession` (the C# spelling), the list read from core's source; the
 Swift twin references each name once in `ParityHarnessTests.swift` so
 the binding is compile-checked. ConnectionsPanelTests,
 GraphTableViewTests, GraphConfigTests and GraphDiagramTests keep the
 host-side cases and lose the schema cases, each named in 0b-14.
 
-### Round 1 ledger (25 findings; disposition by revision 2, re-verified by round 2)
+### Round 1 ledger (25 findings; disposition by revision 2, re-verified by rounds 2 and 3)
 
 | # | Finding (severity) | Disposition |
 |---|---|---|
-| IG0b-1 | generation-less ids (B) | remained after rev 2 — taken by design A in rev 3: every result carries `generation`; the tree carries its counts so the leaf pairs nothing; the held generation and recovery per consumer class |
+| IG0b-1 | generation-less ids (B) | discharged by design A: every result carries `generation`; the authorities and their identities |
 | IG0b-2 | the Unresolved preset inexpressible (B) | discharged — `GraphVisibilityQuery { filter, name_query, kind_only }` |
-| IG0b-3 | accessible neighbours left in Swift (B) | discharged — 0b-6b neighbour records; rev 3 carries them in the topology entry |
+| IG0b-3 | accessible neighbours left in Swift (B) | discharged — the topology entry's neighbour records; the self-edge recorded as 0b-D9 (IG0b-49) |
 | IG0b-4 | rows without every cell's text (B) | discharged — `cells` of nine |
-| IG0b-5 | external sort not atomic (B) | discharged for sorts; the preset case taken by design A (IG0b-28) |
-| IG0b-6 | config ABI incomplete (B) | discharged on the IDL; enforcement under 0b-15's typed record test (IG0b-23) |
+| IG0b-5 | external sort not atomic (B) | discharged — one publish; the preset case by design A |
+| IG0b-6 | config ABI incomplete (B) | discharged — the IDL; the typed record test |
 | IG0b-7 | label-only groups vs p2_spec (B) | discharged — 0bD-9 / 0b-D7 |
-| IG0b-8 | occurrence ids carry node ids (B) | discharged — key-built ids; the guard by design C (IG0b-31) |
-| IG0b-9 | the coverage census self-referential (B) | remained after rev 2 — taken by design C: three facts against the inventory and the pins, exact cardinality, four mutations |
-| IG0b-10 | the migration leaves consumers behind (B) | discharged — 0b-14 by site |
+| IG0b-8 | occurrence ids carry node ids (B) | discharged — key-built ids; the schema walk (design C) |
+| IG0b-9 | the coverage census self-referential (B) | discharged by design C's rule: a typed schema over every value, a pin per section, a mutation per key-bearing location (IG0b-45) |
+| IG0b-10 | the migration leaves consumers behind (B) | discharged — 0b-14 names `rebuildEdges` and the pickers too (IG0b-43, -47) |
 | IG0b-11 | label priority nondeterministic (M) | discharged — `labeled` |
-| IG0b-12 | the key's source divergence unrecorded (M) | remained (the account was wrong) — 0b-D1 rewritten in rev 3 with the 7-bit rule and the characterization test (IG0b-34) |
-| IG0b-13 | the comparator claim false (M) | remained for Folder — 0b-D2 extended in rev 3 (IG0b-35) |
-| IG0b-14 | natural digits not total (M) | remained for the exhausted prefix — stated in rev 3 |
-| IG0b-15 | two filter implementations, trim divergence (M) | remained for the `İ` claim — removed in rev 3 (IG0b-34); the count path now the rows' (design B) |
+| IG0b-12 | the key's source divergence unrecorded (M) | discharged — 0b-D1 with the 7-bit rule, the characterization test, the summary corrected (IG0b-52) |
+| IG0b-13 | the comparator claim false (M) | discharged — 0b-D2 with Folder |
+| IG0b-14 | natural digits not total (M) | discharged — the prefix rule |
+| IG0b-15 | two filter implementations, trim divergence (M) | discharged — one production fold; the count from the rows |
 | IG0b-16 | sorted keys false under `preserve_order` (M) | discharged — the canonical writer |
-| IG0b-17 | no decode truth table (M) | remained for depth and non-finite — rev 3's table (IG0b-33, -38) |
+| IG0b-17 | no decode truth table (M) | discharged — the table classifies the parsed value (IG0b-39, -50) |
 | IG0b-18 | verbosity decoded, never applied (M) | discharged — 0b-14 "config" |
-| IG0b-19 | eligibility vs runtime admission (M) | remained for the Diagram's omission — 0b-9 states each site's shipped behaviour |
-| IG0b-20 | hot-loop FFI (M) | remained — taken by design B: the topology, the statics, the count from the rows |
+| IG0b-19 | eligibility vs runtime admission (M) | discharged — 0b-9 states each site's shipped behaviour |
+| IG0b-20 | hot-loop FFI (M) | discharged by design B's rule: one record per epoch, never per frame (IG0b-48), the statics, the count from the rows |
 | IG0b-21 | the parity scenario unenumerated (M) | discharged — the graph vault and the vectors; enforcement by design C |
 | IG0b-22 | ghost path platform-dependent (M) | discharged — 0b-11 |
-| IG0b-23 | tripwires cover enums only (M) | remained — 0b-15 compares `(field, type)` pairs, includes `GraphNode`, checks the error payloads |
+| IG0b-23 | tripwires cover enums only (M) | discharged — 0b-15's `(field, type)` pairs, `GraphNode`, the payloads, the vectors |
 | IG0b-24 | step edge cases unspecified (m) | discharged — 0b-10 |
-| IG0b-25 | artifact ordering ambiguous (m) | discharged — byte order; eleven keys (IG0b-37) |
+| IG0b-25 | artifact ordering ambiguous (m) | discharged — the serializer's byte order stated as the serializer's (IG0b-44); eleven keys |
 
 ### Round 2 — thirteen findings, dispositions; rule 5 invoked
 
 Round 2's verdict: revise, with eight live blockers, three of them
 created by revision 2's fixes — rule 5, which makes the round count
-double, so rule 4's stop applies at round 2. The design pass above is
+double, so rule 4's stop applied at round 2. The design pass above is
 that stop; the dispositions follow from it.
 
 | Finding | Severity | Disposition |
 |---|---|---|
-| IG0b-26 | BLOCKER | taken — 0bD-12: the revision names supersede the spec's seed names; §2 rows B–K and PR C/D/E "Consumes" amended in the same PR to `graph_visibility`, `graph_topology`, `graph_table_rows`, `graph_table_columns`, `graph_config_decode/encode` |
-| IG0b-27 | BLOCKER (created by rev 2) | taken by design B — `graph_table_columns` returns ordered specs; the grid is built from the vector; the Swift `ordered` literal never exists |
+| IG0b-26 | BLOCKER | taken — 0bD-12: the revision names supersede the spec's seed names; §2 rows B–K, §4 PR 0b and PR A–E amended in the same PR (completed for §4 and PR A in revision 4, IG0b-46) |
+| IG0b-27 | BLOCKER (created by rev 2) | taken by design B — `graph_table_columns` returns ordered specs; the grid is built from the vector; generalised in revision 4 to every ordered inventory (IG0b-47) |
 | IG0b-28 | BLOCKER | taken by design A — a preset is one token that sets filter, kind, needle and the default sort; rows, the accepted sort and the headline publish together; the after-Folder case is a mac test |
-| IG0b-29 | BLOCKER (created by rev 2) | taken by design A — recovery per consumer class: snapshot consumers re-fetch the snapshot, layout consumers refresh and adopt, the leaf's tree carries its counts |
-| IG0b-30 | BLOCKER | taken by design A — the load token is (session, the full request, seq); every input change advances seq; publication checks the token in every field and the held generation; the reordered same-generation pair is a mac test |
-| IG0b-31 | BLOCKER (created by rev 2) | taken by design C — artifact-only shapes, `center_id` forbidden, the presence of `occurrence` asserted, the four serializer mutations; the cardinality fact (IG0b-9) |
-| IG0b-32 | MAJOR | taken — 0b-D8 records the strict version rule against the mac's `as? Int` classification, read and write; the byte-intact cases per category are host tests |
-| IG0b-33 | MAJOR | taken — the depth truth table in 0b-12: clamp then truncate, every representation, clamped on encode |
-| IG0b-34 | MAJOR | taken — 0b-D1 rewritten: Foundation's 7-bit allowed set encodes every non-ASCII byte, so mac wrote `g:caf%C3%A9` where core writes `g:café`; the `İ` filter claim withdrawn (both match); GraphKeyCharacterizationTests carries the old algorithm so the table is executable on the mac lane |
-| IG0b-35 | MAJOR | taken — 0b-D2 and 0b-7 record Folder: fold-natural, then raw folder bytes, in the requested direction, then the ascending label order; equal-fold folders are a witness |
-| IG0b-36 | MAJOR | taken — 0b-12 and 0b-14: the host I/O and actor facts stay Swift verbatim; only the schema cases move |
+| IG0b-29 | BLOCKER (created by rev 2) | taken by design A — recovery per consumer class; the leaf's tree is its own authority (revision 4, IG0b-41) |
+| IG0b-30 | BLOCKER | taken by design A — the load token is (session, the full request, seq); every input change advances seq; publication checks the token in every field and the authority's identity |
+| IG0b-31 | BLOCKER (created by rev 2) | taken by design C — artifact-only shapes, `center_id` forbidden, and in revision 4 the schema walk over every value (IG0b-45) |
+| IG0b-32 | MAJOR | taken — 0b-D8 records the strict version rule against the mac's `as? Int` classification; restated over the parsed value in revision 4 (IG0b-39) |
+| IG0b-33 | MAJOR | taken — the depth rule in 0b-12: an integral value clamped, the mac's classification kept (IG0b-50) |
+| IG0b-34 | MAJOR | taken — 0b-D1 rewritten: Foundation's 7-bit allowed set encodes every non-ASCII byte; the `İ` filter claim withdrawn; GraphKeyCharacterizationTests carries the old algorithm |
+| IG0b-35 | MAJOR | taken — 0b-D2 and 0b-7 record Folder |
+| IG0b-36 | MAJOR | taken — the host I/O and actor facts stay Swift verbatim |
 | IG0b-37 | MINOR | taken — eleven sections; the census asserts the exact key set |
 | IG0b-38 | MINOR | taken — invalid JSON and overflowing exponents are `Unparseable`; the non-finite rule is encode's only |
+
+### Round 3 — fourteen findings, dispositions; rule 5 again
+
+Round 3's verdict: revise, with nine blockers, three created by revision
+3 — rule 5 again — and the design pass judged not to close any of its
+classes. Revision 4 restates each model as a rule; the dispositions
+follow from the rules.
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| IG0b-39 | BLOCKER (created by rev 3) | taken — 0b-12 classifies the PARSED VALUE: `1.0000000000000001` is `1.0` in `f64` and reads as 1, stated; no `arbitrary_precision`; the witness and the `u64` boundary pinned |
+| IG0b-40 | BLOCKER | taken by design A's rule — the diagram's authority is (the layout handle, its backend filter, its generation); a topology under another filter is dropped; a mac test |
+| IG0b-41 | BLOCKER (created by rev 3) | taken by design A's rule — a result that IS the authority replaces it: the leaf's first load establishes the tree, a mutation's tree replaces it; a mac test |
+| IG0b-42 | BLOCKER | taken — the snippet overlay is decoration (0bR-4): keyed by path, an unmatched path ignored, re-paired by the leaf's generation refresh; the structure never depends on it; the owner may overrule toward a bundled record |
+| IG0b-43 | BLOCKER | taken by design B's rule — `GraphTopology.edges`, `rebuildEdges` draws them, the artifact's `topology.edges`, `topology_carries_the_visible_edges` |
+| IG0b-44 | BLOCKER (created by rev 3) | refuted in part, clarified — the serializer SORTS the snapshot section into byte order itself (`CompareUtf8`, the twin's `utf8` comparison), so the list equals the byte-ordered inventory; 0b-13 now says so and names core's own order for the topology and table sections |
+| IG0b-45 | BLOCKER | taken by design C's rule — the schema walk over every value with the inventory and the numeric allow-list, a pin for each of the eleven sections, a mutation per key-bearing location and per section |
+| IG0b-46 | BLOCKER | taken — spec §4 PR 0b Goal/Builds/Behavior/Hand-off and PR A Consumes/Builds amended to 0b-2's surface and the D1–D9 policy (0bD-12) |
+| IG0b-47 | BLOCKER | taken by design B's rule — `graph_color_tokens` / `graph_ring_styles` vectors; the pickers and `allCases` built from them; pinned against the arms on both lanes |
+| IG0b-48 | MAJOR | taken by design B's rule — the topology per SEMANTIC EPOCH, cached across settling frames; a call-count fact |
+| IG0b-49 | MAJOR | taken — 0b-D9 records the self-edge: not a neighbour in core, the mac's diagram content listed the node itself, its tree did not; owner-recorded |
+| IG0b-50 | MAJOR | taken — the depth keeps the mac's integral classification: a fractional value is the default; no divergence |
+| IG0b-51 | MINOR | taken — `graph_neighbors` yields `neighbors: []` for an absent or invisible id; every session query is `Result<_, VaultError>` |
+| IG0b-52 | MINOR | taken — 0b-D1's summary: the stored `NodeKey::Ghost` over `target_raw` against the displayed label |
 
 ### Decisions
 
@@ -1923,9 +2047,10 @@ that stop; the dispositions follow from it.
   `parent_id`, not a recursive record: both hosts rebuild a hierarchy
   from a list in one pass, and no binding has to carry a self-referential
   record.
-- **0bD-2 — Snippets stay host-side.** The depth-one snippet overlay
-  reads the host's note bundle, not the graph; the tree carries paths so
-  the host can key it.
+- **0bD-2 — Snippets stay host-side, as decoration.** The depth-one
+  snippet overlay reads the host's note bundle, not the graph; the tree
+  carries paths so the host can key it; the structure never depends on
+  it (0bR-4).
 - **0bD-3 — Config I/O is host-designated; the schema and merge policy
   are core's.** Atomic temp-and-rename, the single-writer actor and its
   generation gate stay in Swift (§2 row F's tier-3 half) with their
@@ -1939,9 +2064,9 @@ that stop; the dispositions follow from it.
 - **0bD-5 — The artifact is keyed by `stable_key`** and excludes
   `pagerank`, the modified fields and every numeric id (0b-13).
 - **0bD-6 (revised) — Session queries return generation-tagged
-  results and hosts publish by token**, not pure functions over
-  marshalled data: one query surface (R-A), and design A makes a stale
-  or out-of-order answer detectable (0b-2b).
+  results and hosts publish by token against an authority**, not pure
+  functions over marshalled data: one query surface (R-A), and design A
+  makes a stale, mismatched or out-of-order answer detectable (0b-2b).
 - **0bD-7 — The `verbosity` key lands in the schema now** (0aD-6), so
   PR C's menu and a future mac switch have a field to write — and the mac
   applies it on load from this PR (0b-14).
@@ -1959,22 +2084,32 @@ that stop; the dispositions follow from it.
 - **0bD-10 — Occurrence ids are built from stable keys** (0b-4), so the
   tree's ids are byte-stable across generations and lanes and the
   artifact can carry them.
-- **0bD-11 (revised) — Per-node data comes in one topology record**
-  (0b-6b) and constant tables are fetched once per process: one FFI
-  crossing per rebuild; the scalar forms remain for the inspector and
-  the tests.
-- **0bD-12 — The contracts' names supersede the spec's seed names.** §2
-  rows B–K and PR C/D/E's "Consumes" were written before the queries
-  existed; this PR amends them to 0b-2's names with a note pointing
-  here, so one document is normative for the surface.
+- **0bD-11 (revised) — Per-node and per-edge data come in one topology
+  record per semantic epoch** (0b-6b), and constant tables are fetched
+  once per process: one FFI crossing per epoch, none per frame; the
+  scalar forms remain for the inspector and the tests.
+- **0bD-12 (extended) — The contracts' names supersede the spec's seed
+  names.** §2 rows B–K, §4 PR 0b and PR A–E's "Consumes" and "Builds"
+  were written before the queries existed; this PR amends them to 0b-2's
+  names with a note pointing here, so one document is normative for the
+  surface.
+- **0bD-13 — Every ordered inventory a host iterates is a core vector**
+  (design B): the columns, the palette, the ring styles, the actions per
+  kind — the host builds its grids, pickers and `allCases` from the
+  vector, never from a literal.
+- **0bD-14 — Numbers are classified by their parsed value** (0b-12): the
+  workspace parses a non-integer token to `f64` and no arbitrary
+  precision is wanted; two tokens with one `f64` value are one value, and
+  the rule says so rather than promising a distinction the parser cannot
+  make.
 
 ### Recorded divergences (owner-recorded; off-limits for re-litigation)
 
-- **0b-D1 — The stable key's source, fold and encoding** (0b-3):
-  `ghost_key` over the label; Unicode lowercase over `en_US_POSIX`; Rust
-  alphanumerics bare over Foundation's 7-bit percent-encoding of every
-  non-ASCII byte — executable on the mac lane by the characterization
-  test.
+- **0b-D1 — The stable key's source, fold and encoding** (0b-3): the
+  stored `NodeKey::Ghost` over `target_raw` against the displayed label;
+  Unicode lowercase over `en_US_POSIX`; Rust alphanumerics bare over
+  Foundation's 7-bit percent-encoding of every non-ASCII byte —
+  executable on the mac lane by the characterization test.
 - **0b-D2 — Label and folder order are core's natural fold with the
   raw-bytes tier**, not `localizedStandardCompare` with the mac's two
   table tie-breaks, the tree's none and the Folder column's none (0b-5,
@@ -1990,21 +2125,30 @@ that stop; the dispositions follow from it.
   (0b-12).
 - **0b-D7 — Group matching is label-only** where p2_spec §P2-4's sentence
   also names folder and tag (0bD-9).
-- **0b-D8 — A `version` that cannot be classified refuses the file**,
-  on read and on write, where the mac decoded it and later overwrote it
-  (0b-12).
+- **0b-D8 — A `version` whose parsed value cannot be classified refuses
+  the file**, on read and on write, where the mac decoded it and later
+  overwrote it (0b-12).
+- **0b-D9 — A self-link is not a neighbour** (0b-6b): the mac's diagram
+  content listed the node's own label for a self-link where its tree
+  dropped it; core drops it from both, and keeps it among the drawn
+  edges.
 
 ### Accepted risks
 
 - **0bR-1 — The Swift migration is unrun on this box.** The mac lane
   arbitrates; a red lane is fixed here, not waived.
 - **0bR-2 — Node ids are scan-order indices.** The artifact never
-  writes one (the guard proves it); the census would show a key-order
-  difference if the lanes disagreed on anything but ids.
+  writes one (the schema walk proves it); the census would show a
+  key-order difference if the lanes disagreed on anything but ids.
 - **0bR-3 — Floats are out of the artifact.** `pagerank` and the
   layout are not 0b queries; the diameter is written as a rounded
   integer; the spatial section's inputs are integers and its outputs
   labels; the config's encoded text is core's own bytes.
+- **0bR-4 — The leaf's snippets are decoration from a second payload.**
+  A mutation between the tree and the bundle can leave a snippet stale or
+  missing until the leaf's generation refresh re-pairs them; no
+  structural claim depends on a snippet, and an unmatched path is
+  ignored.
 
 ### §W-G register (seeded from spec §2; the close-out re-greps the Windows tree against it)
 
@@ -2013,9 +2157,9 @@ that stop; the dispositions follow from it.
 | A | the announcer grammar | moved (PR 0a, #1179) |
 | B | the Connections tree | moved — `graph_connections_tree` with its counts; deleted `ConnectionsPanel.swift:375–499`'s derivation |
 | C | the node identity | moved — `GraphNode.stable_key`, `graph_stable_key_for_path`; deleted `GraphViewState.swift:57–78` |
-| D | visible neighbours and the content cap | moved — the topology entry's `neighbors`, `graph_neighbors` (the cap 0a's); deleted `GraphDiagramView.swift:856–874`'s derivation and `:1221–1228` |
+| D | visible neighbours and the content cap | moved — the topology entry's `neighbors` and the topology's `edges`, `graph_neighbors` (the cap 0a's); deleted `GraphDiagramView.swift:856–874`'s derivation, `:702–722`'s edge filter and `:1221–1228` |
 | E | the name filter and the visible set | moved — `graph_visibility`, `graph_topology`, `graph_label_matches`; deleted `AppState+GraphConfig.swift:16–20`, `AppState+GraphTable.swift:228–238`'s predicate, `GraphDiagramView.swift:385–408, 640–648` |
-| F | the config schema and policy | moved — `graph_config_decode/encode` and the group rules; the I/O host-designated; deleted `GraphConfigStore.swift:131–202` |
+| F | the config schema and policy | moved — `graph_config_decode/encode`, the group rules, the option vectors; the I/O host-designated; deleted `GraphConfigStore.swift:131–202`, the hand-written `allCases` in `GraphConfig.swift:109–142` |
 | G | the table columns | moved — `graph_table_rows`, `graph_table_columns`; deleted `GraphTableView.swift:444–628` |
 | H | the constants | moved — `graph_constants`, `graph_node_diameter` |
 | I | the action set | moved — `graph_row_actions`, `graph_row_action_title`; deleted `GraphViewState.swift:15–48`; runtime admission host (0bD-8) |
@@ -2035,6 +2179,7 @@ that stop; the dispositions follow from it.
 `label_order_is_natural_folded_and_total`, `filter_ids_fold_case_and_marks`,
 `labeled_is_the_capped_priority_set`,
 `topology_is_the_visible_nodes_with_their_neighbours`,
+`topology_carries_the_visible_edges`,
 `neighbors_are_unique_visible_and_ordered`,
 `table_rows_sort_is_the_mac_comparator`, `table_cells_are_nine_and_formatted`,
 `table_columns_are_the_ordered_specs`, `modified_text_is_utc_minutes`,
@@ -2050,28 +2195,33 @@ that stop; the dispositions follow from it.
 (round-trip, the empty object, unknown keys, the two refusals, clamps,
 first-match, the ring cycle), `verbosity_defaults_to_standard`,
 `decode_truth_table`, `encode_is_canonical_bytes`,
-`encode_preserves_unknown_keys_and_refuses_the_two_cases`.
+`encode_preserves_unknown_keys_and_refuses_the_two_cases`,
+`option_vectors_are_the_enum_arms`.
 `crates/slate-uniffi/src/lib.rs`: `the_ffi_mirror_covers_every_graph_query_enum`,
 `the_ffi_mirror_exports_every_graph_query`,
 `the_ffi_records_mirror_core_field_for_field`.
 `apps/slate-windows/tests/SlateWindows.Tests/Censuses/ParityHarnessCensus.cs`:
 `graph_queries.json` byte for byte; GraphQueriesArtifactMatchesTheVaultInventory;
-GraphQueriesArtifactCarriesThePinnedVectors; GraphQueriesArtifactCarriesNoNodeIds.
-`Censuses/GraphQuerySurfaceCensus.cs`: the surface by reflection.
+GraphQueriesArtifactCarriesThePinnedVectors; GraphQueriesArtifactMatchesItsSchema;
+GraphQueriesArtifactCarriesNoNodeIds. `Censuses/GraphQuerySurfaceCensus.cs`:
+the surface by reflection.
 
 ### Tests that pin PR 0b (Task 0b-2, the mac half)
 
 `apps/slate-mac/Tests/SlateMacTests/ParityHarnessTests.swift`: the
 `graph_queries` twin and the surface references. ConnectionsPanelTests:
-the adapter's nesting by `parent_id`, the snippet overlay, the busy
-reason. GraphTableViewTests: the column adapters over the specs, the
-`stableKey` identity, the token lifecycle (delayed, reordered under
+the adapter's nesting by `parent_id`, the snippet overlay as
+decoration, the busy reason, the leaf's authority (first load,
+replacement). GraphTableViewTests: the column adapters over the specs,
+the `stableKey` identity, the token lifecycle (delayed, reordered under
 different needles, failed, stale generation, the preset after a Folder
 sort). GraphConfigTests: the host I/O facts verbatim, the error mapping,
-the writer's generation gate, the verbosity load, fallback and save.
-GraphDiagramTests: the steps through core on the fixed layout, the tier
-boundary through `graph_constants`, the topology token, the busy-state
-omission. GraphActionParityTests: the extensions over core's statics.
-GraphKeyCharacterizationTests: 0b-D1 executable.
+the writer's generation gate, the verbosity load, fallback and save,
+the option vectors against the enum cases. GraphDiagramTests: the steps
+through core on the fixed layout, the tier boundary through
+`graph_constants`, the topology token (generation, backend filter), one
+fetch per epoch while settling, the drawn edges from the record, the
+busy-state omission. GraphActionParityTests: the extensions over core's
+vectors. GraphKeyCharacterizationTests: 0b-D1 executable.
 
 <!-- end of the graph contracts document -->
