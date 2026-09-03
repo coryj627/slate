@@ -517,7 +517,11 @@ public sealed class ContractsCitationCensus
                 // TH-12 bound the reconciliation, taking the
                 // section to 165; 164 sits above the pre-task population
                 // of 158 — a thirteenth time.
-                164),
+                //
+                // TH-13 bound the sweep and the close-out, taking the
+                // section to 192; 191 sits above the pre-task population
+                // of 165 — a fourteenth time.
+                191),
             (
                 "Reconciliation",
                 "## Issue reconciliation (#745)",

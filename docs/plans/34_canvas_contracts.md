@@ -13152,6 +13152,109 @@ fact bit); M2 C-unit's T1 record row dropped — two same-id keys
 collapsed (both bit); M3 a ledgered merge commit altered (the ancestry
 fact bit); M4 an issue record removed (the counts fact bit). All bitten.
 
+### TH-13 — The mutation sweep consolidated, the process record, the gates as run
+
+**The sweep (H10, IH-52).** One byte-restored mutation per predicate
+the section added, consolidated from the task records above with the
+three the records had not attacked, run here:
+
+| Predicate | Mutation | Task | Bit |
+|---|---|---|---|
+| The E2E undo chain (`AuthoringLoopThenUndoChainRestoresTheCommittedBytes`) | `RunHistory` returning without applying — the bytes differ | TH-1 M1 | yes |
+| The byte baseline | a byte appended to the opened copy of the committed fixture — the pre-verb equality fails | TH-13 M3 | yes |
+| The sort leg (`OpenSampleExposesOutlineTableAndScene`) | the Type comparator keyed on the reversed kind word | TH-0 M1 | yes |
+| The verbosity predicate (`AnnouncementGrammarConformsPerVerbosity`) | the document's verbosity forced to Standard | TH-0 M2 | yes |
+| The navigator budget and the windowing bound (`LargeCanvasOpensNavigatesAndWindowsUnderBudget`) | a 60 ms sleep in the adjacent step; the window test answering true for every node | TH-2 M1, M2 | yes |
+| `EveryCanvasFixtureIsScriptedOrExcluded` | the exclusion map removed | TH-3 M1 | yes |
+| The nonempty and terminal-change semantics (`TheUnknownFieldsScenarioKeepsItsOpaqueFieldsInTheTerminalBytes`, the scenario census) | a scenario's terminal hash forced equal to its original | TH-3 M2 | yes |
+| `EveryCanvasFixtureIsReadOrExcluded` | `cycle.canvas` dropped from the read artifact | TH-3 M3 | yes |
+| The mac golden divergence (the Swift twin's three tests) | — not attackable on this box (no Swift toolchain); the mac lane's census is the gate (HR-1) | — | owed to mac CI |
+| The trigger ledger's count and site facts (`CanvasTriggerParityCensus`) | a row removed; a row's member pointed at one that does not construct the key | TH-4 M1, M2 | yes |
+| A trigger member that stops constructing its key | the create failure and New Card's failure back to the generic arm | TH-4 M3, M4 | yes |
+| The zoom context, percent and follow (`TheZoomVerbsSpeakCoresZoomEventWithTheirContext`, `TheFollowToggleSpeaksBothStates`, `AViewportVerbThroughThePresenterMovesTheInstalledZoom`) | the context dropped; the follow state negated; the percent read before the commit | TH-5 M1–M3 | yes |
+| The quarantine speaker (`AQuarantinedStackSpeaksTheTruthfulSentenceNotNothingToUndo`) | the quarantine arm removed — "nothing to undo" again | TH-6 M1 | yes |
+| The reopen and heading consumers (`TheReopenFailureBannerIsCoresSentence`, `ACanvasOriginHeadingMissSpeaksTheCanvasReasonOnce`, TH-11's miss fact) | the banner back to host text; the miss passed to the shell as the editor's sentence | TH-6 M2, M3; TH-11 M4 | yes |
+| The no-Edit-menu fact (`TheWindowsShellHasNoEditMenuForTheTitleArms`) | an Undo menu item in the main menu | TH-13 M1 | yes |
+| The picker label and the marks literal (`ThePickerRowsCarryTheLabelClassOverSpeakableNames`, `CanvasLabelClassCensus`) | the label over `Title` again; the literal ", marked" restored | TH-7 M1, M4 | yes |
+| The bounds FFI (`TheCanvasBoundsAreCoresUnderTheLeaseAndNoneWhenRetired`, `FitCanvasContainsAndCentresCoresBounds`) | the host union restored in the renderer | TH-7 M2 | yes |
+| The bounds lease | the answer cached and returned after retirement | TH-13 M2 | yes |
+| The zoom Value (`TheZoomValueIsCoresRenderMinusItsPeriod`) | the Value re-spelled with a percent sign | TH-7 M3 | yes |
+| The §W-C census — row set, control type, Name source, pattern, evidence, axe label (`WcMatrixCanvasEvidenceCensus`) | a row deleted; the card control type wrong; the Name source wrong; the pattern dropped; a bogus evidence name; an axe label removed | TH-8 M1–M6 | yes |
+| Validation 14 and 13 (`DeliveryEvidenceCensus`, the generator) | `#745` remapped to `canvasSurfaces` alone; a marker moved to a call-only name; the surface row a literal | TH-9 M1–M3 | yes |
+| The AT checklist (`TheAtChecklistCarriesTsTenItemsWithTheirTwinsPending`) | a dictated command dropped; a human cell pre-filled; a twin renamed | TH-10 M1–M3 | yes |
+| The E14 landings (TH-11's three facts) | the block typing lost; the anchor dropped; the still-active guard inverted | TH-11 M1–M3 | yes |
+| The reconciliation's key rows and ancestry (`CanvasReconciliationCensus`) | a row omitted; two same-id keys collapsed; a merge commit altered; an issue row removed | TH-12 M1–M4 | yes |
+
+**The process record (§5.2, IH-53), as it ran.** `dotnet format` on
+the slnx after every Windows edit batch, before the gated build; the
+unit suite and the censuses locally after every task, each test step
+on the build's own "Build succeeded" line (a `--no-build` run after a
+failed build reports the stale binary green — recorded once in §G2,
+and gated against since); the eight canvas journeys run locally ONCE
+as a serialized smoke after the last shell change, with no screen
+reader running and never concurrent with the unit suite — optional by
+the spec's own text, and what ARBITRATES them is CI's shell
+accessibility gate, every lane's log read for failures rather than
+test names; a shell-wide fix (TH-11's re-route of the miss) preceded
+the smoke, so the smoke IS the full journey rerun after it; the
+post-implementation codex adversarial pass over the diff before the PR
+opens, its findings addressed or refuted in the round record. One
+full-suite run failed a single clipboard fact outside this section's
+reach (`CodeCopyButtonCopiesTheSourceAndAnnounces`, the
+CLIPBRD_E_CANT_OPEN class §G2 recorded); it passed alone and in the
+full rerun that followed, and nothing was committed on the failing
+run. The smoke itself: the eight canvas journeys passed locally on 2026-09-02, eight of eight in 1 m 34 s, with no screen reader running; CI's shell gate runs them again on the PR's head and arbitrates.
+
+### §H close-out — the proof landed, the gates recorded, the issue reconciled
+
+Fourteen tasks, the ledger swept. What §H leaves behind: the end-to-end
+suite in the mac shape through the production seams — the committed
+`sample.canvas` opened, projected three ways, authored, undone to its
+own bytes, and the large canvas under budget — with the §K roll-up in
+`BENCHMARKS.md`; the Swift scenario twin and the censuses that refuse a
+silent canvas fixture on either lane; the trigger ledger generated from
+the binding and both source trees, every key's Windows trigger a fact or
+a designation with its reason, and the five unconsumed arms consumed
+(a zoom, a toggle, a quarantined stack, a failed reopen, a missing
+heading) through result-bearing seams; the §W-G register closed by a
+re-grep with its three findings repaired at the designated seams; the
+matrix's eight canvas rows true of the surfaces cell by cell, the
+surface row derived from issue-level evidence, the generator with
+declaration and scope-completeness teeth; the AT checklist with T's ten
+items for UIA and every human cell Pending; E14 verified at the
+workspace with exact landings; and the reconciliation as the final
+section — the ledger verified by ancestry, 315 keys generated to their
+evidence, the registers indexed, the decisions resolved, the fifteen
+inputs filed as ten issues, E13 open and said so.
+
+The section's discoveries, honestly counted: the grid's sort driven
+through its own command rather than a header click, so the sort leg is
+the user's route (TH-0); `SelectionStepRead` being a descriptor lookup,
+so the navigator's budget measures the navigator (TH-2); the two
+"foreign" fixtures the foreign gate refused twice, which were canonical
+all along (TH-3); field initialisers hiding trigger members from a
+declaration regex, sibling classes sharing a member's name, and a card
+editor state that was unreachable rather than defensive (TH-4); the
+mounted renderer's zoom step answering one step from 1.0 as 125 (TH-5);
+the two Edit-menu title arms with no Edit menu, designated rather than
+invented (TH-6, HD-9); a picker fact that could only bite over a
+fixture with duplicate titles (TH-7); journey ids that are quoted
+strings, not declared names, and `<` as a false terminator (TH-9);
+the canvas document retired at the tab-set boundary before an
+asynchronous miss could reach its announcer — TH-6's route corrected
+to the shell's (TH-11); C-unit numbering its implementation record's
+tasks independently of its obligations, and a depth-one CI clone that
+could not answer an ancestry question (TH-12).
+
+Owed to the mac lane, restated: the Swift twin and its two census
+facts are unrun on this box (HR-1) — a red mac lane is fixed here, not
+waived; the six mac issues (#1165–#1170) and the t0 contract issue
+(#1171). Owed to core: the clone op (#1172), the degraded canvas
+(#1173), E13's typed reason (#1174). Owed to the owner: the human AT
+pass (HD-3), the two designated title arms (HD-9), item 7 of the
+acceptance list, and the issue's own closure — H does not close #745
+(HD-6).
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
@@ -18425,20 +18528,20 @@ not keyed is not claimed as keyed.
 | §H | contract | H7 | TH-9 | — |
 | §H | contract | H8 | TH-10 | — |
 | §H | contract | H9 | TH-12 | `ContractsCitationCensus`, `EveryLedgeredMergeIsAnAncestorOfThisHead`, `CanvasReconciliationCensus` |
-| §H | contract | H10 | unevidenced | — |
+| §H | contract | H10 | TH-13 | — |
 | §H | decision | HD-1 | TH-1 | `AuthoringLoopThenUndoChainRestoresTheCommittedBytes`, `CanvasCommitCardEdit`, `SubmitGroupMarked`, `AttachPresenter` |
 | §H | decision | HD-2 | TH-3 | — |
-| §H | decision | HD-3 | TH-9 | — |
+| §H | decision | HD-3 | TH-9, §H close-out | — |
 | §H | decision | HD-4 | TH-12 | `EveryLedgeredMergeIsAnAncestorOfThisHead`, `CanvasReconciliationCensus` |
 | §H | decision | HD-5 | TH-9 | — |
-| §H | decision | HD-6 | TH-11 | — |
+| §H | decision | HD-6 | TH-11, §H close-out | — |
 | §H | decision | HD-7 | TH-7 | `CanvasModeController`, `CanvasOrderNodes`, `CanvasPlaceInsideGroup`, `CanvasGroupRectAround`, `CanvasAutoSides`, `CanvasProximityOrder`, `CanvasConstants` |
 | §H | decision | HD-8 | TH-12 | `EveryLedgeredMergeIsAnAncestorOfThisHead`, `CanvasReconciliationCensus` |
-| §H | decision | HD-9 | unevidenced | — |
+| §H | decision | HD-9 | §H close-out | `SelectionStepRead` |
 | §H | divergence | HD-D1 | TH-2 | `LargeCanvasOpensNavigatesAndWindowsUnderBudget`, `CanvasPeerTopology`, `CanvasViewportState`, `SelectionStepRead` |
 | §H | divergence | HD-D2 | unevidenced | — |
 | §H | divergence | HD-D3 | TH-4 | `CanvasTriggerParityCensus`, `TheLedgerHasARowForEveryStructuralKeyAndNoOther`, `EveryWindowsSiteConstructsItsKeyAndEveryFactAssertsIt`, `EveryMacSiteSpellsItsKey`, `TheWindowsShellHasNoEditMenuForTheTitleArms`, `CanvasFollowSelectionToggled`, `UndoQuarantined`, `RedoQuarantined`, +5 more |
-| §H | risk | HR-1 | TH-3 | — |
+| §H | risk | HR-1 | TH-3, TH-13, §H close-out | `AuthoringLoopThenUndoChainRestoresTheCommittedBytes`, `OpenSampleExposesOutlineTableAndScene`, `AnnouncementGrammarConformsPerVerbosity`, `LargeCanvasOpensNavigatesAndWindowsUnderBudget`, `EveryCanvasFixtureIsScriptedOrExcluded`, `TheUnknownFieldsScenarioKeepsItsOpaqueFieldsInTheTerminalBytes`, `EveryCanvasFixtureIsReadOrExcluded`, `CanvasTriggerParityCensus`, +16 more |
 | §H | risk | HR-2 | unevidenced | — |
 | §H | risk | HR-3 | unevidenced | — |
 | §VA | vocabulary | VA-1 | unevidenced | — |
@@ -18508,62 +18611,62 @@ not keyed is not claimed as keyed.
 
 | Id | Head | Recorded |
 |---|---|---|
-| CD-1 | No standalone overlap events. | Recorded divergences, line 13524 |
-| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 13535 |
-| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 13542 |
-| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 13559 |
-| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 13567 |
-| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 13578 |
-| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 13589 |
-| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 13601 |
-| CD-9 | `towardOther` is dropped. | Recorded divergences, line 13608 |
-| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 13618 |
-| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 13635 |
-| CD-12 | The family nests under one top-level variant | Recorded divergences, line 13646 |
-| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 13666 |
-| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 13686 |
-| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 13710 |
-| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 13745 |
-| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 13756 |
-| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 13764 |
-| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 13775 |
-| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 13784 |
-| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 13798 |
-| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 13814 |
-| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 13835 |
-| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 13859 |
-| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 13865 |
-| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 13885 |
-| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 13915 |
-| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 13946 |
-| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 13963 |
-| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 13975 |
-| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 13991 |
-| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14003 |
-| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14019 |
-| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14034 |
-| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14067 |
-| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14090 |
-| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14103 |
-| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14119 |
-| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 14419 |
-| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 14454 |
-| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 14487 |
-| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 14515 |
-| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 14524 |
-| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 14542 |
-| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 14558 |
-| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 14637 |
-| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 14660 |
-| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 14718 |
+| CD-1 | No standalone overlap events. | Recorded divergences, line 13627 |
+| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 13638 |
+| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 13645 |
+| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 13662 |
+| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 13670 |
+| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 13681 |
+| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 13692 |
+| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 13704 |
+| CD-9 | `towardOther` is dropped. | Recorded divergences, line 13711 |
+| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 13721 |
+| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 13738 |
+| CD-12 | The family nests under one top-level variant | Recorded divergences, line 13749 |
+| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 13769 |
+| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 13789 |
+| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 13813 |
+| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 13848 |
+| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 13859 |
+| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 13867 |
+| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 13878 |
+| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 13887 |
+| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 13901 |
+| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 13917 |
+| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 13938 |
+| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 13962 |
+| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 13968 |
+| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 13988 |
+| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14018 |
+| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14049 |
+| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14066 |
+| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14078 |
+| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14094 |
+| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14106 |
+| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14122 |
+| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14137 |
+| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14170 |
+| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14193 |
+| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14206 |
+| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14222 |
+| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 14522 |
+| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 14557 |
+| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 14590 |
+| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 14618 |
+| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 14627 |
+| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 14645 |
+| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 14661 |
+| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 14740 |
+| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 14763 |
+| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 14821 |
 
 | Id | Head | Recorded |
 |---|---|---|
-| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 14758 |
-| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 14770 |
-| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 14777 |
-| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 14786 |
-| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 14792 |
+| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 14861 |
+| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 14873 |
+| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 14880 |
+| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 14889 |
+| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 14895 |
 
 **(d) Owner decisions D-1…D-7, with their resolution and evidence.**
 
