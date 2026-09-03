@@ -127,24 +127,26 @@ extension AppState {
             // announce "settled" on a LATER initial build (finding 8).
             graphForcesSettlePending = true
         }
-        if let phrase = Self.forcesChangePhrase(old: old, new: forces) {
-            graphAnnouncer.announceForceValue(phrase)
+        if let change = Self.changedForce(old: old, new: forces) {
+            graphAnnouncer.announce(
+                .graphForceValue(control: change.control, percent: change.percent))
         }
         scheduleGraphConfigSave()
     }
 
-    /// The spoken "control value" for the ONE force that changed (nil if
-    /// none did) — e.g. "Repel force 70 percent". Pure + `nonisolated` so
-    /// it's unit-testable off the main actor.
-    nonisolated static func forcesChangePhrase(
+    /// The ONE force that changed and its resting percent (nil if none
+    /// did) — the payload of `GraphA11yEvent.graphForceValue`, whose copy
+    /// is core's (W6-2 PR 0a). Pure + `nonisolated` so it's unit-testable
+    /// off the main actor.
+    nonisolated static func changedForce(
         old: GraphForcesConfig, new: GraphForcesConfig
-    ) -> String? {
-        func pct(_ v: Double) -> Int { Int((v * 100).rounded()) }
-        if new.center != old.center { return "Center force \(pct(new.center)) percent" }
-        if new.repel != old.repel { return "Repel force \(pct(new.repel)) percent" }
-        if new.link != old.link { return "Link force \(pct(new.link)) percent" }
+    ) -> (control: GraphForceControl, percent: UInt32)? {
+        func pct(_ v: Double) -> UInt32 { UInt32(max(0, (v * 100).rounded())) }
+        if new.center != old.center { return (.center, pct(new.center)) }
+        if new.repel != old.repel { return (.repel, pct(new.repel)) }
+        if new.link != old.link { return (.link, pct(new.link)) }
         if new.linkDistance != old.linkDistance {
-            return "Link distance \(pct(new.linkDistance)) percent"
+            return (.linkDistance, pct(new.linkDistance))
         }
         return nil
     }
@@ -175,7 +177,7 @@ extension AppState {
     }
 
     /// Persist the last-used projection mode (restored on the next open).
-    func setGraphMode(_ mode: GraphTabMode) {
+    func setGraphMode(_ mode: GraphSurfaceMode) {
         graphConfig.mode = mode
         scheduleGraphConfigSave()
     }

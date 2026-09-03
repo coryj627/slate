@@ -111,7 +111,9 @@ extension AppState {
                 self.connectionsLoadedPath = path
                 self.connectionsError = nil
                 if speak {
-                    self.graphAnnouncer.announce(.summary(hood.audioSummary))
+                    // Typed over the counts the record carries (contracts doc 0a-7).
+                    self.graphAnnouncer.announce(
+                        .graphNeighborhoodSummary(counts: hood.summaryCounts))
                 }
             case .failure(let error):
                 self.connectionsError = self.humanReadable(error)
@@ -120,7 +122,8 @@ extension AppState {
                 self.connectionsLoadedPath = path
                 if speak {
                     self.graphAnnouncer.announce(
-                        .error("Couldn't load connections: \(self.humanReadable(error))"))
+                        .graphBlocked(
+                            reason: .connectionsLoadFailed(message: self.humanReadable(error))))
                 }
             }
         }
@@ -165,7 +168,7 @@ extension AppState {
         workspace.activeLeaf = .connections
         loadConnections()
         focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
-        graphAnnouncer.announce(.status("Connections panel."))
+        graphAnnouncer.announce(.graphStatus(note: .connectionsPanel))
     }
 
     /// Re-root the leaf on `path` (the row-level / Bases "Show
@@ -209,7 +212,7 @@ extension AppState {
         // Table/Diagram reflect it. Real note ⇒ the "p:" key.
         graphSelectedNodeKey = GraphNodeKey.make(path: path, label: "")
         // Label only; the authoritative summary follows from the load.
-        graphAnnouncer.announce(.reRooted(label: filename(of: path)))
+        graphAnnouncer.announce(.graphReRooted(label: filename(of: path)))
     }
 
     /// `⌘[`: pop one re-root step, restoring the prior view exactly —
@@ -233,7 +236,7 @@ extension AppState {
         // Table/Diagram follow the leaf back rather than lingering on the
         // forward destination (P2-5 review finding 5).
         graphSelectedNodeKey = GraphNodeKey.make(path: prior.effective, label: "")
-        graphAnnouncer.announce(.reRooted(label: filename(of: prior.effective)))
+        graphAnnouncer.announce(.graphReRooted(label: filename(of: prior.effective)))
         return true
     }
 
@@ -284,14 +287,14 @@ extension AppState {
                 self.installRenameForCreatedEntry(
                     path: path, isDirectory: false, session: session)
                 self.graphAnnouncer.announce(
-                    .status("Created note \((path as NSString).lastPathComponent)."))
+                    .graphStatus(note: .noteCreated(name: (path as NSString).lastPathComponent)))
                 // The create bumped the graph generation; refresh the
                 // rooted neighborhood so the ghost row updates.
                 self.refreshConnectionsIfGraphChanged()
             case .failure(let error):
                 self.lastError = self.humanReadable(error)
                 self.graphAnnouncer.announce(
-                    .error("Couldn't create note: \(self.humanReadable(error))"))
+                    .graphBlocked(reason: .noteCreateFailed(message: self.humanReadable(error))))
             }
         }
         recordPendingStructuralTask(task)
