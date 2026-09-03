@@ -3124,8 +3124,8 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Equal(A11yPriority.High, refusal.Priority);
         Assert.Equal(
             SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
-                new CanvasA11yEvent.CanvasActionFailed(
-                    CanvasFailedAction.CanvasAction, "setup.exe"))).Text,
+                new CanvasA11yEvent.CanvasBlocked(
+                    new CanvasBlockedReason.FileTypeNotOpenable("setup.exe")))).Text,
             refusal.Text);
     }
 

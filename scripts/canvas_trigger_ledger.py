@@ -52,6 +52,7 @@ DESIGNATED = {
         "CanvasHistoryQuarantinedTitle": "mac's undo stack has no basis quarantine (TE-2/TE-4 are Windows's mechanism) — with no Edit menu on Windows either, an orphaned label arm, owed to an owner decision",
         "CanvasBlocked/UndoQuarantined": "mac's undo stack has no basis quarantine (TE-2/TE-4 are Windows's); mac's `.quarantine` is BatchTrash's path quarantine, another mechanism",
         "CanvasBlocked/RedoQuarantined": "mac's undo stack has no basis quarantine (TE-2/TE-4 are Windows's)",
+        "CanvasBlocked/FileTypeNotOpenable": "Windows-only (CD-38): mac attempts any existing non-Markdown target through its default-app opener and speaks CanvasFileNotFound when it declines — #1169; consumed on mac when #1169 adopts the gate (E13D-2)",
         "CanvasMutationRefused/RefreshPending": "Windows-only (§E TE-0): the landed-but-unindexed refresh state has no mac twin",
     },
 }

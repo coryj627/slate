@@ -30,7 +30,7 @@ public sealed class CanvasReconciliationCensus
 
     /// <summary>The pinned key total and Verified count — the same two
     /// constants the script asserts (`EXPECTED_KEYS`, `EXPECTED_VERIFIED`).</summary>
-    private const int ExpectedKeys = 327; // 315 at PR H + PR E13's 12 heads (contracts, decisions, risks)
+    private const int ExpectedKeys = 328; // 315 at PR H + PR E13's 12 heads + VA-3
     private const int ExpectedVerified = 60;
 
     private static string RepoRoot => SourceText.RepoRoot();

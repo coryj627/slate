@@ -534,6 +534,14 @@ pub enum CanvasBlockedReason {
     ReopenFailed {
         message: String,
     },
+    /// W6-1 PR E13 (#1174, E13-1): the shell-execution gate's typed
+    /// reason — a file card whose target is neither a note nor media is
+    /// not opened from the canvas (CD-38). `target` is the vault-relative
+    /// path as the card carries it (E13D-4), the same string
+    /// `CanvasFileNotFound` speaks for the same kind of card.
+    FileTypeNotOpenable {
+        target: String,
+    },
 }
 
 /// The filter clause Where-am-I discloses (t0 §1.4). One spelling —
@@ -2709,6 +2717,11 @@ impl CanvasA11yEvent {
                     "Canvas could not be reopened. The previous snapshot is read-only. \
                      {message}"
                 ),
+                CanvasBlockedReason::FileTypeNotOpenable { target } => {
+                    format!(
+                        "{target} is not a note or media file, so it was not opened from the canvas."
+                    )
+                }
             },
             CanvasActionFailed { action, detail } => {
                 format!("{} failed: {detail}", action.verb())
@@ -4266,6 +4279,16 @@ fn canvas_corpus() -> Vec<CanvasA11yEvent> {
                 message: "The file moved.".into(),
             },
         },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::FileTypeNotOpenable {
+                target: "setup.exe".into(),
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::FileTypeNotOpenable {
+                target: "tools/setup.exe".into(),
+            },
+        },
         CanvasActionFailed {
             action: CanvasFailedAction::NewCard,
             detail: "the file is read-only".into(),
@@ -5044,6 +5067,14 @@ mod tests {
                 High,
                 "Canvas could not be reopened. The previous snapshot is read-only. The file moved.",
             ),
+            (
+                High,
+                "setup.exe is not a note or media file, so it was not opened from the canvas.",
+            ),
+            (
+                High,
+                "tools/setup.exe is not a note or media file, so it was not opened from the canvas.",
+            ),
             (High, "New card failed: the file is read-only"),
             (High, "New group failed: the file is read-only"),
             (High, "New canvas failed: the file is read-only"),
@@ -5432,6 +5463,31 @@ mod tests {
         }
     }
 
+    /// W6-1 PR E13 (E13-1, IE13-12): the arm's witnesses are EXACTLY the
+    /// two ordered payloads — a bare target and a nested one — so a
+    /// deleted witness fails here on its own, not only through the stale
+    /// golden row or artifact entry it leaves behind.
+    #[test]
+    fn file_type_not_openable_has_exactly_its_two_ordered_witnesses() {
+        let targets: Vec<String> = corpus()
+            .iter()
+            .filter_map(|event| match event {
+                A11yEvent::Canvas {
+                    event:
+                        CanvasA11yEvent::CanvasBlocked {
+                            reason: CanvasBlockedReason::FileTypeNotOpenable { target },
+                        },
+                } => Some(target.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            targets,
+            vec!["setup.exe".to_owned(), "tools/setup.exe".to_owned()],
+            "FileTypeNotOpenable's witnesses must be the bare and the nested target, in that order"
+        );
+    }
+
     /// The nested-enum table above must not silently fall behind the
     /// module: every closed `Canvas*` parameter enum declared here is
     /// listed, so adding one without a coverage site fails HERE rather
@@ -5748,7 +5804,8 @@ mod tests {
                 | CanvasBlockedReason::NoteCreateFailed { .. }
                 | CanvasBlockedReason::NoteRetargetFailed { .. }
                 | CanvasBlockedReason::HeadingNotFound { .. }
-                | CanvasBlockedReason::ReopenFailed { .. } => None,
+                | CanvasBlockedReason::ReopenFailed { .. }
+                | CanvasBlockedReason::FileTypeNotOpenable { .. } => None,
             },
             CanvasActionFailed { action, .. } => match action {
                 CanvasFailedAction::NewCard

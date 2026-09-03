@@ -333,7 +333,9 @@ no parser over this crate can derive it.
 51 variants of `CanvasA11yEvent`, all reached through the single
 `A11yEvent::Canvas { event }` wrapper (0a-1b); **179** corpus entries,
 artifact 259 → **438**. 0a-1 landed 165; the rest are 0a-2's cardinality
-*(PR H's count, TH-4: the family is 53 variants and the corpus carries 187 canvas entries, 446 in all — the two arms that landed after this paragraph are `CanvasViewportNoPane`, `CanvasHistoryQuarantinedTitle`, with their eight witnesses.)*
+*(PR H's count, TH-4: the family is 53 variants and the corpus carries 187 canvas entries, 446 in all — the two arms that landed after this paragraph are `CanvasViewportNoPane`, `CanvasHistoryQuarantinedTitle`, with their eight witnesses. PR E13's count: the family is still 53
+variants; `CanvasBlockedReason` is 18 arms; the corpus carries 189
+canvas entries, 448 in all — the two witnesses of `FileTypeNotOpenable`.)*
 boundary witnesses (contract 0a-14) — the count of those lives in the
 test that requires them, not here. `V` = the `CanvasVerbosity`
 parameter.
@@ -384,7 +386,7 @@ Coalescing class: `nav` / `filter` / `—` (immediate). All priorities
 | `CanvasHistoryApplied` | `verb, name` | `Undid: ⟨name⟩` ‖ `Redid: ⟨name⟩` | | — | `CanvasAnnouncer.swift:212–213`; `AppState+Canvas.swift:606,636` |
 | `CanvasUndoMenuTitle` | `verb, name` | `⟨Undo‖Redo⟩ ⟨Name⟩` (leading char only), bare verb when empty — LABEL | | — | `AppState.swift:3987–3990` |
 | `CanvasStatus` | `note` (26 arms) | see the status table below | | — | 60+ sites; see below |
-| `CanvasBlocked` | `reason` (15 arms) | see the blocked table below | **High** | — | see below |
+| `CanvasBlocked` | `reason` (18 arms — 15 at PR 0a, §E's two quarantine arms, PR E13's `FileTypeNotOpenable`) | see the blocked table below | **High** | — | see below |
 | `CanvasActionFailed` | `action` (12 arms), `detail` | `⟨Verb⟩ failed: ⟨detail⟩` — New card · New group · New canvas · Move · Placement · Align · Create · Remove · Duplicate · Create connected card · Canvas action · Where am I | **High** | — | `AppState+CanvasActions.swift:110,146,220–221,230–231,474,569,613`; `AppState+CanvasCreate.swift:226,327`; `AppState+CanvasExtras.swift:93–94,206`; `AppState+Canvas.swift:332,576,580` |
 | `CanvasSaveConflict` | — | `The canvas changed on disk. Reload it to continue — your action was not applied.` | **High** | — | `AppState+Canvas.swift:571–574` |
 | `CanvasFileNotFound` | `target` | `⟨target⟩ is missing from the vault. Use Locate File to repoint this card.` | **High** | — | `CanvasContainerView.swift:180–183` |
@@ -415,7 +417,9 @@ readable.` — Canvas 304) · `Empty` (`Canvas is empty.` — Canvas 310) ·
 `NotInAGroup { title }` (Create 291/306) ·
 `NoConnection { forward, ordinal? }` (Navigation 109–111).
 
-**`CanvasBlockedReason` (15 arms, all High).** `ModeBusy`
+**`CanvasBlockedReason` (18 arms, all High — fifteen at PR 0a; §E's
+TE-2 added `UndoQuarantined` and `RedoQuarantined`; PR E13 added
+`FileTypeNotOpenable { target }`, corrected here by PR E13, E13-5).** `ModeBusy`
 (`A move or resize is in progress. Return to place it or Escape to
 cancel first.` — Canvas 553/591/621, Extras 266–269 — four copies) ·
 `UndoBlocked` (Canvas 611–612) · `RedoBlocked` (Canvas 639–640) ·
@@ -428,7 +432,10 @@ cancel first.` — Canvas 553/591/621, Extras 266–269 — four copies) ·
 `NoteCreateFailed { path, message }` (Extras 362–364) ·
 `NoteRetargetFailed { path, message }` (Extras 365–368) ·
 `HeadingNotFound { heading, filename }` (Extras 421–424) ·
-`ReopenFailed { message }` (`CanvasContainerView.swift:449–451`).
+`ReopenFailed { message }` (`CanvasContainerView.swift:449–451`) ·
+`UndoQuarantined` / `RedoQuarantined` (§E TE-2: Windows's basis
+quarantine; no mac site) · `FileTypeNotOpenable { target }` (PR E13:
+Windows's shell-execution gate, CD-38; no mac site — #1169).
 
 ### Tests that pin PR 0a
 
@@ -3472,7 +3479,8 @@ discriminant families (`CanvasStatusNote`, `CanvasBlockedReason`,
 each selects a sentence and has a trigger of its own — while the payload
 qualifiers (`CanvasZoomContext`, `CanvasResizePreset`,
 `CanvasOverlapTransition`, the verbosity) are data one trigger carries
-and do not split a key (IH-37): 113 keys over 53 arms. The 187 full
+and do not split a key (IH-37): 113 keys over 53 arms at PR H, 114 with
+PR E13's `FileTypeNotOpenable`. The 187 full
 identities `A11yEventIdentity` renders stay the RENDERING corpus
 (`A11yCorpusCensus`). A site is `file#member`; a fact is a Windows test
 that constructs the key; a note names the owner-recorded designation
@@ -3568,6 +3576,7 @@ where a platform never fires the key.
 | `CanvasBlocked/NoteRetargetFailed` | `AppState+CanvasExtras.swift#canvasConvertToNote` | `CanvasDocumentViewModel.cs#SpeakNoteRetargetFailed` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasBlocked/HeadingNotFound` | `AppState+CanvasExtras.swift#canvasOpenFileAtHeading` | `WorkspaceViewModel.Canvas.cs#RouteCanvasAnchorAnnouncement` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ACanvasOriginHeadingMissSpeaksTheCanvasReasonOnce`, `CanvasDocumentTests.cs#AFileCardAnchorMissThroughTheWorkspaceSpeaksTheCanvasReasonOnce` |  |
 | `CanvasBlocked/ReopenFailed` | `CanvasContainerView.swift#announceCanvasRetargetFailure` | `CanvasDocumentViewModel.cs#RetargetAbsent` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheReopenFailureBannerIsCoresSentence` |  |
+| `CanvasBlocked/FileTypeNotOpenable` | — | `CanvasDocumentViewModel.cs#ActivateFileCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheProductionMediaSeamOpensMediaAndRefusesEverythingElse`, `CanvasTableTests.cs#ActivationRunsTheSameSeamTheOutlineDoesIncludingTheMediaGate` | mac designated: Windows-only (CD-38): mac attempts any existing non-Markdown target through its default-app opener and speaks CanvasFileNotFound when it declines — #1169; consumed on mac when #1169 adopts the gate (E13D-2) |
 | `CanvasActionFailed/NewCard` | `AppState+CanvasActions.swift#canvasNewCard` | `CanvasDocumentViewModel.cs#CanvasNewCard` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/NewGroup` | `AppState+CanvasActions.swift#canvasNewGroup`, `AppState+CanvasActions.swift#canvasPromptNewGroup`, `AppState+CanvasActions.swift#id` | `CanvasDocumentViewModel.cs#CanvasNewGroup`, `CanvasDocumentViewModel.cs#SubmitGroupMarked` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/NewCanvas` | `AppState+CanvasActions.swift#canvasNewCanvasFile` | `FilesSidebarViewModel.cs#CanvasCreateFailure` | `A11yCorpusCensus.cs#Corpus`, `FileManagementTests.cs#AFailedCanvasCreationIsCoresSentence` |  |
@@ -3578,7 +3587,7 @@ where a platform never fires the key.
 | `CanvasActionFailed/RemoveFromGroup` | `AppState+CanvasCreate.swift#canvasRemoveFromGroup` | `CanvasDocumentViewModel.cs#CanvasRemoveFromGroup` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/Duplicate` | `AppState+CanvasExtras.swift#canvasDuplicate` | `CanvasDocumentViewModel.cs#CanvasDuplicate` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasActionFailed/CreateConnectedCard` | `AppState+CanvasExtras.swift#canvasCreateConnectedCard` | `CanvasDocumentViewModel.cs#CanvasCreateConnectedCard` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasActionFailed/CanvasAction` | `AppState+Canvas.swift#canvasApply` | `CanvasDocumentViewModel.cs#ActivateFileCard`, `CanvasDocumentViewModel.cs#PrepareConnectAction`, `CanvasDocumentViewModel.cs#RequestVaultPick` (+7) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing`, `CanvasDocumentTests.cs#TheProductionMediaSeamOpensMediaAndRefusesEverythingElse` (+1) |  |
+| `CanvasActionFailed/CanvasAction` | `AppState+Canvas.swift#canvasApply` | `CanvasDocumentViewModel.cs#ActivateFileCard`, `CanvasDocumentViewModel.cs#PrepareConnectAction`, `CanvasDocumentViewModel.cs#RequestVaultPick` (+7) | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing` |  |
 | `CanvasActionFailed/WhereAmI` | `AppState+Canvas.swift#canvasWhereAmI` | `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasSaveConflict` | `AppState+Canvas.swift#canvasApply` | `CanvasCardEditorViewModel.cs#CommitOnEscape`, `CanvasMutationFunnel.cs#AnnounceAdmission`, `CanvasMutationFunnel.cs#Transact` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#AnAnnouncementFromAForeignThreadMarshalsHome`, `CanvasAnnouncerTests.cs#AnErrorIsAssertiveAndDropsPendingNavigationRatherThanFlushingIt` (+1) |  |
 | `CanvasFileNotFound` | `CanvasContainerView.swift#activate` | `CanvasDocumentViewModel.cs#ActivateFileCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#AFileCardWithNoVaultTargetSaysSoAndStaysNavigable`, `CanvasDocumentTests.cs#AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing` |  |
@@ -12268,7 +12277,10 @@ approval on that head; merge on the standing conditions.
   close-out PR does not invent vocabulary in passing. E13 is
   reconciled as OPEN with the core issue filed; the owner may rule it
   a prerequisite repair, in which case it lands as its own stacked
-  slice before H merges.
+  slice before H merges. *Forward pointer (PR E13, IE13-13): the slice
+  landed after H as §E13; its E13D-2 supersedes the "mac consumption"
+  clause above — mac consumes the arm when #1169 adopts the gate — and
+  the key is mac-designated until then.*
 - **HD-9 — Canonical consumption gaps found by the sweep are repaired
   here where the Windows trigger exists, and designated only where
   the surface does not.** Six of the eight unconsumed arms have their
@@ -13545,6 +13557,124 @@ gain the post-E13 counts (IE13-16).
 | TE13-3 | The records: §0a's paragraph, row and note; CD-38's discharge; HD-8's pointer; VA-3; the reconciliation's (f) and pins; the citation floor | E13-5, IE13-13, IE13-16, IE13-18 |
 | TE13-4 | The mutations, each byte-restored, the classifier's compile failure recorded; the process record; the close-out | E13-6, E13-7, IE13-17 |
 
+### Implementation records
+
+### TE13-0 — Core and the FFI: the arm, its sentence, its two witnesses, and a coverage test that sees every family
+
+`CanvasBlockedReason` gains `FileTypeNotOpenable { target }` after
+`ReopenFailed`, rendered *"⟨target⟩ is not a note or media file, so it
+was not opened from the canvas."*; the Blocked family's priority
+(High) and immediacy are unchanged and pinned where they were; the
+classifier `spoken_cardinality` carries the arm in its exhaustive
+match. `corpus()` gains the two witnesses after `ReopenFailed`'s —
+`setup.exe`, then `tools/setup.exe` — and the golden table their two
+rows; the artifact was regenerated through
+`committed_corpus_artifact_matches_the_vocabulary`'s own path
+(`SLATE_REGENERATE_FIXTURES=1`), 448 entries, 189 canvas, as E13-1
+states and the artifact itself confirms (446 and 187 before). The new
+`file_type_not_openable_has_exactly_its_two_ordered_witnesses` asserts
+the arm's witnesses are exactly those two payloads in that order
+(IE13-12). The uniffi mirror gains the arm and its `From` mapping, and
+`the_ffi_mirror_covers_every_core_a11y_variant` now reads the eighteen
+nested families from CANVAS_NESTED_ENUMS in core's own source —
+the scan starting past the constant's type signature, comment lines
+dropped, the count asserted eighteen — comparing core and mirror arm
+sets both ways, with the arm count pinned EXACTLY for
+`CanvasStatusNote` (28), `CanvasBlockedReason` (18),
+`CanvasFailedAction` (12) and `CanvasMutationRefusal` (7), and a floor
+of two for the rest (IE13-14, IE13-15). `cargo fmt` and `cargo clippy
+--tests -D warnings` clean on both crates; `slate-core`'s a11y tests
+(11) and `slate-uniffi`'s lib tests (84) green.
+
+### TE13-1 — The bindings regenerated, both mirrors, the designation in both authorities
+
+`apps/slate-windows/generate-bindings.ps1` rebuilt the release
+cdylib and regenerated the C# bindings (never committed); the Windows
+mirror (`A11yCorpusCensus`) and the mac mirror
+(`A11yCorpusCensusTests.swift`) each gain the two entries after
+`ReopenFailed`'s, so both corpus-order tests pass and the Windows
+census renders both through the real FFI to core's text and priority.
+The mac designation is written in `DESIGNATED["mac"]` of
+`scripts/canvas_trigger_ledger.py` and in `MacDesignated` of
+`CanvasTriggerParityCensus`, reading what mac does — attempts any
+existing non-Markdown target through its default-app opener and
+speaks CanvasFileNotFound when it declines (#1169), consumed when
+#1169 adopts the gate (E13D-2).
+
+### TE13-2 — The Windows gate speaks it; the ledger at 114
+
+`ActivateFileCard`'s refusal at CD-38's gate speaks
+`CanvasBlocked(FileTypeNotOpenable(target))` with the same target
+string, before any closure is consulted; the media-open failure below
+it keeps the generic arm. `TheProductionMediaSeamOpensMediaAndRefusesEverythingElse`
+and `ActivationRunsTheSameSeamTheOutlineDoesIncludingTheMediaGate`
+assert the typed render byte for byte and High;
+`AMediaFileThatExistsButCannotBeOpenedRefusesRatherThanClaimingItIsMissing`
+keeps its generic expectation. The trigger ledger regenerated from
+the new bindings reads 114 structural keys — the new key with its
+Windows site (`ActivateFileCard`), its facts and the mac designation
+— and `CanvasTriggerParityCensus`'s pinned key count is bumped to 114
+on purpose, its four facts green.
+
+### TE13-3 — The records, and the floors
+
+§0a's `CanvasBlockedReason` paragraph reads eighteen arms with the
+three later arms named and their sections cited; its event-table row
+reads eighteen; the counts note reads 189 and 448 beside PR H's
+count; the trigger ledger's preamble reads 114 beside 113 (IE13-16);
+CD-38 carries its discharge note; HD-8 carries the forward pointer to
+E13D-2 (IE13-13); the "Vocabulary additions" register carries VA-3;
+the reconciliation's (f) reads E13 CLOSED with the supersession
+named, and its pinned totals read 328 — the section's twelve heads
+and VA-3, no other bump. The bare `FileTypeNotOpenable` is named here
+so the citation census sees the arm (IE13-18); the section's citation
+floor is set one below its population after these records.
+
+### TE13-4 — The mutations, the process, the close-out
+
+Mutations, each byte-restored, each against its named gate: the
+sentence altered → `corpus_renders_the_shipped_strings` (bit); both
+witnesses removed → `every_canvas_variant_and_arm_is_represented_in_the_corpus`
+(bit); the nested witness alone removed → the two-witness test (bit)
+while the arm-coverage test stayed green, which is IE13-12's point;
+the artifact's last entry dropped → the artifact test (bit); the FFI
+arm and mapping removed → the extended coverage test (bit); the FFI
+arm mis-mapped to `LinkOpenFailed`, the native library rebuilt → the
+Windows corpus census's identity check (bit), the library rebuilt
+again after the restore and the census green; an entry dropped from
+the Windows mirror → the mirror-order test (bit); `CanvasBlocked`
+pinned to the navigation class in core's one list → both coalescing
+switch-list tests (bit); the Windows site back to the generic arm →
+the two facts and the trigger census's site fact (bit); the mac
+designation dropped from the script → `--report` exit 1 (bit), and
+dropped from the census → `EveryMacSiteSpellsItsKey` (bit); the arm
+omitted from `spoken_cardinality` → the test target's compile
+failure, E0004 non-exhaustive patterns, recorded before the byte was
+restored (IE13-17). The Swift mirror entry's removal is owed to the
+mac lane (E13R-1). Two of my chains had defects of their own, caught
+and repaired before any record was written: a restore that used
+repo-relative paths from the wrong directory, and a classifier
+mutation checked against the library build when the classifier lives
+in the test module.
+
+The process, as it ran (E13-6): `cargo fmt` and clippy after the
+Rust edits; the Rust suites; the bindings regenerated as CI does;
+`dotnet format` after every Windows batch; the affected facts and
+censuses after each task on a fresh build; the full Windows unit
+suite; the eight canvas journeys as a serialized smoke with no screen
+reader running; then the PR and its gate.
+
+### §E13 close-out — the typed reason landed, the STOP discharged
+
+Five tasks, the eight-row ledger swept. What §E13 leaves behind: one
+arm with one sentence, spoken by the Windows gate that CD-38 built and
+witnessed twice in the corpus; a coverage test that can no longer miss
+a nested family or a skipped arm; a ledger of 114 keys; the records
+corrected where they had gone stale; and #1174 closed by this PR. Owed
+to mac: consumption of the arm when #1169 adopts the gate (E13D-2,
+HD-8's forward pointer); the Swift mirror edit, unrun here, arbitrated
+by mac's lane (E13R-1).
+
 ---
 
 ## §W-G canonical-consumption audit (seeded from the spec §2 table; closed in PR H)
@@ -13909,6 +14039,18 @@ cannot fail, so there is no state for a mapping to answer about.
 
 Same five-place lockstep as VA-1, and the §W-D artifact diff is again
 **five lines, purely additive**.
+
+**VA-3 — `CanvasBlockedReason::FileTypeNotOpenable { target }`** (PR
+E13, #1174). *"⟨target⟩ is not a note or media file, so it was not
+opened from the canvas."* — High, the Blocked family, immediate.
+
+Spoken by Windows's shell-execution gate (CD-38) when a file card's
+target is neither a note nor media. No mac string corresponds: mac
+attempts any existing non-Markdown target through its default-app
+opener (#1169), so the sentence is an addition, and the key is
+mac-designated until #1169 adopts the gate (E13D-2). Two witnesses
+(`setup.exe`, `tools/setup.exe` — the nested path spoken as written,
+E13D-4); the artifact diff is purely additive.
 
 ---
 
@@ -14517,7 +14659,10 @@ will** (controller security ruling, fix round 3). PR A's media arm
 untrusted input — it arrives over sync, from a shared vault, from
 Obsidian — so a `{"type":"file","file":"setup.exe"}` node ran on one
 Enter. The default-app open is therefore gated to MEDIA by extension;
-everything else is refused, audibly, and never launched.
+everything else is refused, audibly, and never launched. *The STOP
+this divergence recorded — the refusal riding the generic
+failed-action arm for want of a typed reason — is discharged by PR E13
+(#1174): the refusal is core's `FileTypeNotOpenable` with the target.*
 
 **The gate's set is core's — copied at first because core did not
 export it, ASKED FOR since §E TE-0.** `canvas::model::media_class`
@@ -18577,7 +18722,7 @@ not keyed is not claimed as keyed.
 
 <!-- reconciliation:generated:start -->
 
-**(b) Contract → evidence — 327 keys, one row each, keyed (section, kind, id).** Generated by `scripts/canvas_reconciliation.py` from the document's own records: "discharged by" lists the record subsections of the key's section that cite the id; "pinned by" the long identifiers those paragraphs backtick, each checked against the Windows tree. "unevidenced" is a key no record cites.
+**(b) Contract → evidence — 328 keys, one row each, keyed (section, kind, id).** Generated by `scripts/canvas_reconciliation.py` from the document's own records: "discharged by" lists the record subsections of the key's section that cite the id; "pinned by" the long identifiers those paragraphs backtick, each checked against the Windows tree. "unevidenced" is a key no record cites.
 
 | Section | Kind | Id | Discharged by | Pinned by |
 |---|---|---|---|---|
@@ -18834,20 +18979,21 @@ not keyed is not claimed as keyed.
 | §H | risk | HR-1 | TH-3, TH-13, §H close-out | `AuthoringLoopThenUndoChainRestoresTheCommittedBytes`, `OpenSampleExposesOutlineTableAndScene`, `AnnouncementGrammarConformsPerVerbosity`, `LargeCanvasOpensNavigatesAndWindowsUnderBudget`, `EveryCanvasFixtureIsScriptedOrExcluded`, `TheUnknownFieldsScenarioKeepsItsOpaqueFieldsInTheTerminalBytes`, `EveryCanvasFixtureIsReadOrExcluded`, `CanvasTriggerParityCensus`, +16 more |
 | §H | risk | HR-2 | unevidenced | — |
 | §H | risk | HR-3 | unevidenced | — |
-| §E13 | contract | E13-1 | The task loop | — |
+| §E13 | contract | E13-1 | The task loop, TE13-0 | `CanvasBlockedReason`, `CanvasStatusNote`, `CanvasFailedAction`, `CanvasMutationRefusal` |
 | §E13 | contract | E13-2 | The task loop | — |
 | §E13 | contract | E13-3 | The task loop | — |
 | §E13 | contract | E13-4 | The task loop | — |
 | §E13 | contract | E13-5 | The task loop | — |
-| §E13 | contract | E13-6 | The task loop | — |
+| §E13 | contract | E13-6 | The task loop, TE13-4 | — |
 | §E13 | contract | E13-7 | The task loop | — |
 | §E13 | decision | E13D-1 | unevidenced by id — §E13's pinning list is not keyed per contract | — |
-| §E13 | decision | E13D-2 | unevidenced by id — §E13's pinning list is not keyed per contract | — |
+| §E13 | decision | E13D-2 | TE13-1, TE13-3, §E13 close-out | `A11yCorpusCensus`, `CanvasTriggerParityCensus`, `CanvasBlockedReason`, `FileTypeNotOpenable` |
 | §E13 | decision | E13D-3 | unevidenced by id — §E13's pinning list is not keyed per contract | — |
 | §E13 | decision | E13D-4 | unevidenced by id — §E13's pinning list is not keyed per contract | — |
-| §E13 | risk | E13R-1 | unevidenced by id — §E13's pinning list is not keyed per contract | — |
+| §E13 | risk | E13R-1 | TE13-4, §E13 close-out | `EveryMacSiteSpellsItsKey` |
 | §VA | vocabulary | VA-1 | unevidenced | — |
 | §VA | vocabulary | VA-2 | unevidenced | — |
+| §VA | vocabulary | VA-3 | unevidenced | — |
 | Verified during implementation | verified | V-1 | its own bullet | — |
 | Verified during implementation | verified | V-2 | its own bullet | — |
 | Verified during implementation | verified | V-3 | its own bullet | — |
@@ -18913,62 +19059,62 @@ not keyed is not claimed as keyed.
 
 | Id | Head | Recorded |
 |---|---|---|
-| CD-1 | No standalone overlap events. | Recorded divergences, line 13917 |
-| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 13928 |
-| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 13935 |
-| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 13952 |
-| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 13960 |
-| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 13971 |
-| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 13982 |
-| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 13994 |
-| CD-9 | `towardOther` is dropped. | Recorded divergences, line 14001 |
-| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 14011 |
-| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 14028 |
-| CD-12 | The family nests under one top-level variant | Recorded divergences, line 14039 |
-| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 14059 |
-| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 14079 |
-| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 14103 |
-| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 14138 |
-| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 14149 |
-| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 14157 |
-| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 14168 |
-| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 14177 |
-| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 14191 |
-| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 14207 |
-| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 14228 |
-| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 14252 |
-| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 14258 |
-| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 14278 |
-| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14308 |
-| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14339 |
-| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14356 |
-| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14368 |
-| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14384 |
-| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14396 |
-| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14412 |
-| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14427 |
-| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14460 |
-| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14483 |
-| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14496 |
-| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14512 |
-| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 14812 |
-| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 14847 |
-| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 14880 |
-| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 14908 |
-| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 14917 |
-| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 14935 |
-| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 14951 |
-| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15030 |
-| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 15053 |
-| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 15111 |
+| CD-1 | No standalone overlap events. | Recorded divergences, line 14059 |
+| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 14070 |
+| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 14077 |
+| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 14094 |
+| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 14102 |
+| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 14113 |
+| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 14124 |
+| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 14136 |
+| CD-9 | `towardOther` is dropped. | Recorded divergences, line 14143 |
+| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 14153 |
+| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 14170 |
+| CD-12 | The family nests under one top-level variant | Recorded divergences, line 14181 |
+| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 14201 |
+| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 14221 |
+| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 14245 |
+| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 14280 |
+| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 14291 |
+| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 14299 |
+| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 14310 |
+| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 14319 |
+| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 14333 |
+| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 14349 |
+| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 14370 |
+| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 14394 |
+| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 14400 |
+| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 14420 |
+| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14450 |
+| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14481 |
+| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14498 |
+| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14510 |
+| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14526 |
+| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14538 |
+| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14554 |
+| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14569 |
+| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14602 |
+| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14625 |
+| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14638 |
+| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14654 |
+| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 14957 |
+| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 14992 |
+| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 15025 |
+| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 15053 |
+| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 15062 |
+| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 15080 |
+| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 15096 |
+| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15175 |
+| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 15198 |
+| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 15256 |
 
 | Id | Head | Recorded |
 |---|---|---|
-| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 15151 |
-| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 15163 |
-| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 15170 |
-| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 15179 |
-| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 15185 |
+| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 15296 |
+| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 15308 |
+| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 15315 |
+| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 15324 |
+| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 15330 |
 
 **(d) Owner decisions D-1…D-7, with their resolution and evidence.**
 
@@ -19007,12 +19153,13 @@ and cites #745.
 
 ### (f) The PR E hand-offs, as they stand
 
-- **E13 is OPEN.** The typed refused-open reason does not exist: no
-  `CanvasBlockedReason` arm, no rendering, no corpus witness, no
-  mirrors, no mac consumption. The Windows refusal (CD-38) rides the
-  generic failed-action arm, CD-38 records the STOP point, and the core
-  issue is filed (core-3 above). H does not claim closure (HD-8); the
-  owner may rule it a prerequisite slice.
+- **E13 is CLOSED by PR E13 (#1174; the PR number is recorded in
+  §E13's close-out).** The typed refused-open reason exists:
+  `CanvasBlockedReason::FileTypeNotOpenable { target }`, its render,
+  two corpus witnesses, the FFI arm and both host mirrors, and the
+  Windows refusal (CD-38) speaks it — CD-38's STOP is discharged. Mac
+  consumption lands with #1169, HD-8's clause superseded by E13D-2
+  with the precedent applied and "owner may overrule" recorded.
 - **E14 is verified, at the workspace.** TH-11's three facts open a
   canvas through `WorkspaceViewModel`, activate a file card on the
   document the workspace holds and pump the asynchronous resolution:

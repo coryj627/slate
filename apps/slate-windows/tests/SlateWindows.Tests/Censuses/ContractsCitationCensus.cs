@@ -535,9 +535,9 @@ public sealed class ContractsCitationCensus
                 // one risk, the pinning tests — a small section with a
                 // floor of its own (IE13-19).
                 3_000,
-                // A DESIGN floor at revision 1: the citations are existing
-                // names; the floor rises with the records.
-                12),
+                // TE13-3 bound the section after its records, taking it
+                // to 44; 43 sits one below the population.
+                43),
             (
                 "Reconciliation",
                 "## Issue reconciliation (#745)",
