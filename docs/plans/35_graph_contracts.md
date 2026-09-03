@@ -33,13 +33,15 @@ to a relay + coalescer (Task 0a-2); `corpus.json` gains the graph
 family; the residue census drops 29 → 28; §W-D becomes provable for the
 graph. **Copy rule: shipped mac strings move verbatim** (0a-16 names the
 authority per phrase); this PR does not redesign wording. This section
-is at revision 5: round 1 returned sixteen findings, round 2 twelve,
+is at revision 6: round 1 returned sixteen findings, round 2 twelve,
 round 3 twelve, and round 3's verdict invoked the protocol's stopping
 rule 4 — three consecutive rounds of blockers in one subsystem, twice
 over — so revision 4 opened with the design pass that rule demands.
-Round 4 found Subsystem A closed by it and Subsystem B not yet: its ten
-findings are taken in revision 5, which audits the WHOLE schema against
-design B(i)'s reachability rule rather than one variant.
+Round 4 found Subsystem A closed by it and Subsystem B not yet; revision
+5 audited the whole schema against design B(i)'s reachability rule;
+round 5 froze Subsystem A and returned seven findings on B — the row
+copy's two CONSTRUCTORS impose relations the audit had not modelled,
+and two spec spots remained — taken in revision 6.
 
 **What stands today.** `GraphAnnouncer.swift` (239 lines): a
 `GraphVerbosity` enum mirroring the canvas's — declared, defaulted to
@@ -158,8 +160,8 @@ regeneration path, never by hand), the FFI mirror
 positional, so the graph family is **appended** after the canvas
 family's last entry (`CanvasStatus { Loading }`, `a11y.rs:4491–4493`);
 every pre-existing index is untouched. The witness matrix (0a-17) is
-the ordered list of the graph's entries: **71** of them, the artifact
-growing from 448 to **519**; `the_graph_witnesses_are_exactly_the_matrix_in_order`
+the ordered list of the graph's entries: **73** of them, the artifact
+growing from 448 to **521**; `the_graph_witnesses_are_exactly_the_matrix_in_order`
 (0a-19) is the executable form of the matrix.
 
 **0a-2b — The schema, literally.** Every type below is a uniffi record
@@ -215,14 +217,15 @@ witness that violates one.
 
 | Payload | Invariant the host guarantees |
 |---|---|
-| `GraphRowCopy` | a Ghost's copy speaks `references` (its inbound reference count) and ignores `in_links`/`out_links`, which carry the node's degrees unchanged; `embed` is independent of `kind` (a ghost reached only by `![[…]]` is a Ghost with `embed`) |
+| `GraphRowCopy` | built by exactly two constructors — the Connections row (`ConnectionsPanel.swift:424–435`: `references = in_links + in_embeds`, `embed` = reached by embeds only) and the diagram row (`GraphDiagramModel.swift:97–106`: `references = in_links`, `embed = false`) — so `references ≥ in_links` always, with equality from the diagram; an Attachment or a Ghost has no file to link FROM, so `out_links == 0` for both; a Ghost's copy speaks `references`, a Note's or Attachment's its degrees; `embed` is independent of `kind` |
+| `GraphSnapshotCounts` | `orphans ≤ notes` — an orphan is a Note |
 | `GraphNeighborhoodCounts.depth` | 1..=3 — the session clamps before it exports |
 | `GraphFilterCount` | `shown ≤ total` — the needle narrows the fetched set |
 | `GraphForceValue.percent` | 0..=100 — a slider's value ×100, rounded |
-| `GraphZoom.percent` | ≥ 1 — the viewport's scale ×100, rounded |
-| `GraphWhereAmI` | a Ghost only while ghosts are shown (Normal with `ghosts_shown`, or UnresolvedOnly), an Attachment only while attachments are shown, a Note only under Normal; under `orphans_only` the selection is a Note with `in_links == 0 && out_links == 0`; under a non-empty needle the selected label contains the trimmed needle, case-insensitively |
+| `GraphZoom.percent`, `GraphWhereAmI.zoom_percent` | 10..=400 — the shared viewport clamps its scale to 0.1…4.0 (`CanvasRendererView.swift:12–13`) |
+| `GraphWhereAmI` | the selection is a DIAGRAM row (`references == in_links`, `embed == false`, the kind rules above); a Ghost only while ghosts are shown (Normal with `ghosts_shown`, or UnresolvedOnly), an Attachment only while attachments are shown, a Note only under Normal; under `orphans_only` the selection is a Note with `in_links == 0 && out_links == 0`; under a non-empty needle the selected label contains the trimmed needle under mac's predicate — case- AND diacritic-insensitive (`graphNameMatches`, `AppState+GraphConfig.swift:16–20`; core folds with NFD, drops combining marks, lowercases) |
 | `GraphTierSummary.count` | above the tier-B threshold (1,500 as shipped, `GraphDiagramView.swift`; §2 row H moves the constant) |
-| `GraphNeighborsContent.labels` | unique labels in the host's visible traversal order; the cap is core's |
+| `GraphNeighborsContent.labels` | one label per unique visible neighbour ID, in the host's traversal order — the TEXT may repeat (`a/Foo.md` and `b/Foo.md` both say `Foo`); the cap is core's |
 
 **0a-3 — The inventory is the design of Subsystem A, and every tripwire
 reads it by key.** (i) Core declares `GRAPH_NESTED_ENUMS: &[NestedEnum]`
@@ -296,16 +299,19 @@ keeps. The needle: the substituted value is the TRIMMED needle
 (Unicode White_Space at both ends — Rust's `str::trim`; mac hands the
 raw field value over and core trims), and a needle empty after trimming
 is omitted; the matrix witnesses the Unicode rule with U+00A0 (no-break
-space) and U+2003 (em space), not ASCII spaces alone. The filter clause
-is the closed `GraphWhereAmIFilter` (design B(i)); the payload
-invariants of 0a-2b are the host's and the matrix obeys them. The seven
-matrix witnesses cover: an orphan Note ("Alone", 0/0) under Normal with
-all three toggles on and a needle it contains; UnresolvedOnly with a
-Ghost selected at each reference cardinality (2, 0, 1); NoSelection with
-a needle of U+00A0 U+2003 (trimmed empty → omitted); Normal with
-attachments shown and ghosts hidden with an Attachment (1/2) selected;
-and "Alpha" (3/1) with the needle U+2003`alpha`U+00A0 trimmed to
-`alpha`. Pinned by `graph_where_am_i_renders_every_state_exactly`,
+space) and U+2003 (em space), not ASCII spaces alone, and the
+diacritic-insensitive match with "Café" under the needle `cafe`. The
+filter clause is the closed `GraphWhereAmIFilter` (design B(i)); the
+payload invariants of 0a-2b are the host's and the matrix obeys them.
+The eight matrix witnesses cover: an orphan Note ("Alone", 0/0) under
+Normal with all three toggles on and a needle it contains;
+UnresolvedOnly with a Ghost selected at each reference cardinality
+(2, 0, 1 — each with `in_links == references`, the diagram's
+constructor); NoSelection with a needle of U+00A0 U+2003 (trimmed
+empty → omitted); Normal with attachments shown and ghosts hidden with
+an Attachment (1 in, 0 out) selected; "Alpha" (3/1) with the needle
+U+2003`alpha`U+00A0 trimmed to `alpha`; and "Café" (2/4) under the
+needle `cafe`. Pinned by `graph_where_am_i_renders_every_state_exactly`,
 `graph_where_am_i_witnesses_are_host_reachable` and
 `graph_witnesses_obey_the_payload_invariants`.
 
@@ -485,6 +491,8 @@ round finding.
 | T68 | `GraphDiagramView.swift:1115` | hover tooltip `⟨label⟩ — ⟨in⟩ in / ⟨out⟩ out` | composed label | label inventory (PR D) | §W-C |
 | T69 | `GraphAnnouncer.swift` (rewritten), the `GraphVerbosity` extension | `title`: `Terse` / `Standard` / `Verbose` | static label | label inventory (PR C) | §W-C |
 | T70 | `GraphAnnouncer.swift` (rewritten), the `GraphSurfaceMode` extension | `title`: `Table` / `Diagram` | static label | label inventory (PR A) | §W-C |
+| T71 | `GraphConfig.swift:109–110, 125` | `GraphColorToken.title` — the colour picker's options, `rawValue.capitalized`: `Red`, `Orange`, `Yellow`, `Green`, `Teal`, `Blue`, `Purple`, `Pink` (consumed by T47's picker, `GraphInspectorView.swift:89–93`) | static label | label inventory (PR E), the eight ordered | §W-C |
+| T72 | `GraphConfig.swift:130–131` | `GraphRingStyle` — the ring picker's options, `rawValue.capitalized`: `Solid`, `Dashed`, `Double`, `Dotted` (consumed by T48's picker, `GraphInspectorView.swift:94–98`) | static label | label inventory (PR E), the four ordered | §W-C |
 | X1 | `GraphConfigStore.swift:42–110, 251` | the store's thrown and logged error texts | **excluded — not user-facing**: a read failure is discarded and the defaults apply (`AppState+GraphConfig.swift:48–52`); a write failure reaches `NSLog` only (`GraphConfigStore.swift:251`); neither is spoken or shown | — | — |
 
 **0a-13 — The one already-canonical site becomes a relay that keeps
@@ -516,7 +524,7 @@ assistive technology reads them as an element's name or content:
 dual-use by recorded divergence (0a-D3): `GraphStatus{NoConnections}`
 and `GraphStatus{LoadingConnections}` are static labels on mac (T8, T9)
 and posted on Windows when the leaf takes focus in that state. Every
-other label in the manifest (T1–T7, T10–T70) is §W-C label class,
+other label in the manifest (T1–T7, T10–T72) is §W-C label class,
 carried by the inventory of the PR that lands the surface, and is NOT
 in this vocabulary.
 
@@ -579,13 +587,14 @@ other count — degrees in the row copy, the tier count
 presets, filter counts, percents, the depth — renders bare, and the
 matrix's witnesses at 1024 and 2000 pin the bare behaviour.
 
-**0a-17 — The witness matrix is ordered and pinned.** Seventy-one
+**0a-17 — The witness matrix is ordered and pinned.** Seventy-three
 entries, appended in this order after `CanvasStatus { Loading }`; the
-artifact total becomes 519.
+artifact total becomes 521. Every row copy obeys its constructor: a
+row's `references` is written beside its degrees as `in/out/refs`.
 
 | Variant | Witnesses (in order) |
 |---|---|
-| `GraphRow` (10) | Standard Note "Alpha" 3/1 · Standard Ghost "Missing Note" references 2 · Standard Note "Pic" 1/0 embed · Terse Note "Alpha" · Verbose Note "Hub" 1024/0 (bare) · Standard Attachment "diagram.png" 0/2 · Standard Ghost "Draft" references 0 · Standard Ghost "Todo" references 1 · Standard Note "Alone" 0/0 · Standard Ghost "Missing" references 1 embed |
+| `GraphRow` (10) | Standard Note "Alpha" 3/1/3 · Standard Ghost "Missing Note" 2/0/2 · Standard Note "Pic" 1/0/1 embed · Terse Note "Alpha" 3/1/3 · Verbose Note "Hub" 1024/3/1024 (bare) · Standard Attachment "diagram.png" 2/0/2 · Standard Ghost "Draft" 0/0/0 · Standard Ghost "Todo" 1/0/1 · Standard Note "Alone" 0/0/0 · Standard Ghost "Missing" 1/0/1 embed |
 | `GraphReRooted` (1) | "Alpha" |
 | `GraphSnapshotSummary` (7) | 247 / 1,032 / 12 / 3 · 1 / 1 / 0 / 0 (second sentence omitted) · 0 / 0 / 0 / 0 · 40 / 60 / 1 / 1, filtered · 5 / 9 / 0 / 2 · 3 / 4 / 2 / 0 (unresolved zero rendered) · 1,200 / 3,400 / 1,000 / 1,001 (all four grouped) |
 | `GraphNeighborhoodSummary` (5) | "Alpha" 3/1, 7 notes, depth 1 · "Hub" 1,032/4, 1,206 notes, depth 3 · "diagram.png" 0/0, 0 notes, depth 2 · "Solo" 1/1, 1 notes, depth 1 · "Hub2" 4/1,032, 12 notes, depth 2 (out grouped) |
@@ -596,22 +605,22 @@ artifact total becomes 519.
 | `GraphPinned` (2) | true · false |
 | `GraphZoom` (2) | 125 plain · 63 fit |
 | `GraphMode` (2) | Table · Diagram |
-| `GraphWhereAmI` (7) | Node "Alone" 0/0 component 2, zoom 100, Normal{orphans only, attachments shown, ghosts shown}, needle "alo" · Node Ghost "Missing Note" references 2, component 0, zoom 250, UnresolvedOnly, needle None · NoSelection, zoom 100, Normal{false, false, ghosts shown}, needle Some(U+00A0 U+2003) (trimmed empty → omitted) · Node Attachment "diagram.png" 1/2 component 7, zoom 50, Normal{false, attachments shown, ghosts hidden} · Node "Alpha" 3/1 component 2, zoom 100, Normal{false, false, ghosts shown}, needle Some(U+2003 `alpha` U+00A0) (trimmed to `alpha`) · Node Ghost "Draft" references 0, component 1, zoom 100, UnresolvedOnly · Node Ghost "Todo" references 1, component 3, zoom 80, UnresolvedOnly |
+| `GraphWhereAmI` (8) | Node "Alone" 0/0/0 component 2, zoom 100, Normal{orphans only, attachments shown, ghosts shown}, needle "alo" · Node Ghost "Missing Note" 2/0/2, component 0, zoom 250, UnresolvedOnly, needle None · NoSelection, zoom 100, Normal{false, false, ghosts shown}, needle Some(U+00A0 U+2003) (trimmed empty → omitted) · Node Attachment "diagram.png" 1/0/1 component 7, zoom 50, Normal{false, attachments shown, ghosts hidden} · Node "Alpha" 3/1/3 component 2, zoom 100, Normal{false, false, ghosts shown}, needle Some(U+2003 `alpha` U+00A0) (trimmed to `alpha`) · Node Ghost "Draft" 0/0/0, component 1, zoom 100, UnresolvedOnly · Node Ghost "Todo" 1/0/1, component 3, zoom 80, UnresolvedOnly · Node "Café" 2/4/2 component 5, zoom 200, Normal{false, false, ghosts shown}, needle "cafe" |
 | `GraphTierEntered` (1) | — |
 | `GraphTierSummary` (2) | 2000 · 1501 |
-| `GraphNeighborsContent` (5) | ten labels (the cap, no overflow) · eleven labels (`and 1 more`) · fifty-two labels (`and 42 more`) · one label · labels [] |
+| `GraphNeighborsContent` (6) | ten labels (the cap, no overflow) · eleven labels (`and 1 more`) · fifty-two labels (`and 42 more`) · one label · labels [] · two neighbours both labelled "Foo" (text repeats, ids differ) |
 | `GraphStatus` (6) | Opened · AlreadyOpen · ConnectionsPanel · NoteCreated "Draft.md" · NoConnections · LoadingConnections |
 | `GraphBlocked` (3) | LoadFailed "io error" · ConnectionsLoadFailed "io error" · NoteCreateFailed "exists" |
 
-10 + 1 + 7 + 5 + 10 + 3 + 4 + 1 + 2 + 2 + 2 + 7 + 1 + 2 + 5 + 6 + 3 = **71**;
-448 + 71 = **519**. This table is the authority, the arithmetic is
-shown, and `the_graph_family_witness_count_is_pinned` asserts 71.
+10 + 1 + 7 + 5 + 10 + 3 + 4 + 1 + 2 + 2 + 2 + 8 + 1 + 2 + 6 + 6 + 3 = **73**;
+448 + 73 = **521**. This table is the authority, the arithmetic is
+shown, and `the_graph_family_witness_count_is_pinned` asserts 73.
 
 **0a-19 — The matrix is executable and lossless.**
 `the_graph_witnesses_are_exactly_the_matrix_in_order` asserts the graph
 entries of `corpus()`, rendered as their full Debug identities (the
 same strings the artifact's `event` field carries — every field, no
-markers), equal an ordered literal list of the 71 identities above;
+markers), equal an ordered literal list of the 73 identities above;
 deleting, substituting, reordering or editing ANY field of a witness
 fails here on its own, not only in the golden and the artifact (the
 E13 precedent, `file_type_not_openable_has_exactly_its_two_ordered_witnesses`,
@@ -807,11 +816,29 @@ lesson: a codex round reads the local tree, not the pushed head).
 | IG0a-49 | BLOCKER (created by rev 4) | taken — the funnel guard strips `//` comment lines before scanning |
 | IG0a-50 | MINOR (carried) | taken — U+00A0 and U+2003 witnesses, all-whitespace and padded |
 
+### Round 5 — seven findings, dispositions; Subsystem A frozen
+
+Round 5's verdict: Subsystem A may freeze at revision 5 (its
+named-field inventory, the keyed tripwire, both conversion directions
+and the census checks all verified); Subsystem B's audit had skipped
+the row copy's constructor relations and two spec spots. Taken in
+revision 6.
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| IG0a-51 | BLOCKER (carried) | taken — the invariants table models the two constructors (`references ≥ in_links`, equality from the diagram; Attachment and Ghost `out_links == 0`), `orphans ≤ notes`, zoom 10..=400; `graph_witnesses_obey_the_payload_invariants` asserts every `GraphRow`, `GraphSnapshotSummary`, `GraphZoom` and Where-am-I witness against them; every row copy in the matrix rewritten with its `references` |
+| IG0a-52 | BLOCKER (carried) | taken — Where-am-I's rows are diagram rows (`references == in_links`, `embed == false`); an eighth witness ("Café" 2/4) carries the out-many cell; 73 / 521 |
+| IG0a-53 | BLOCKER (carried) | taken — §2 row A names the events; the one quoted string left in the spec is the control name "Connects to" |
+| IG0a-54 | BLOCKER (carried) | taken — PR A's empty case no longer cites a preset; PR C says the headline supersedes the summary (mac's rule, `AppState+GraphTable.swift:195–199`); PR D consumes `GraphRow` and `GraphMode` |
+| IG0a-55 | MAJOR (created by rev 5) | taken — one label per unique neighbour ID, text may repeat; the uniqueness assertion removed; the "Foo, Foo" witness |
+| IG0a-56 | MAJOR (created by rev 5) | taken — the needle predicate is mac's, case- and diacritic-insensitive; core folds with NFD and drops combining marks; the "Café"/`cafe` witness |
+| IG0a-57 | MAJOR (missed) | taken — T71 and T72, the two ordered option sets |
+
 ### Tests that pin PR 0a
 
 `crates/slate-core/src/a11y.rs`: `corpus_renders_the_shipped_strings`
-(71 golden rows), `committed_corpus_artifact_matches_the_vocabulary`
-(519), `every_graph_variant_and_arm_is_represented_in_the_corpus`,
+(73 golden rows), `committed_corpus_artifact_matches_the_vocabulary`
+(521), `every_graph_variant_and_arm_is_represented_in_the_corpus`,
 `every_graph_parameter_enum_is_listed_for_coverage`,
 `the_graph_family_occupies_one_top_level_variant`,
 `a11y_event_top_level_count_is_pinned`,

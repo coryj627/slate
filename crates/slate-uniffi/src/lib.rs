@@ -3244,19 +3244,6 @@ impl From<core::graph::NodeKind> for GraphNodeKind {
     }
 }
 
-/// The reverse direction (W6-2 PR 0a, #746): a host constructs the
-/// a11y row copy from the kind it was handed, so the kind must travel
-/// back into core without a second enum (contracts doc 0aD-4).
-impl From<GraphNodeKind> for core::graph::NodeKind {
-    fn from(k: GraphNodeKind) -> Self {
-        match k {
-            GraphNodeKind::Note => core::graph::NodeKind::Note,
-            GraphNodeKind::Attachment => core::graph::NodeKind::Attachment,
-            GraphNodeKind::Ghost => core::graph::NodeKind::Ghost,
-        }
-    }
-}
-
 /// Edge kind in the link graph. Mirrors `slate_core::graph::EdgeKind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum GraphEdgeKind {
@@ -3355,78 +3342,6 @@ impl From<GraphFilter> for core::graph::GraphFilter {
     }
 }
 
-/// FFI mirror of [`core::graph::GraphSnapshotCounts`] (W6-2 PR 0a,
-/// #746): the counts the whole-graph summary speaks, exported so a host
-/// raises `GraphA11yEvent::GraphSnapshotSummary` from the record it was
-/// handed and counts nothing itself (contracts doc 0a-7). Both
-/// directions: core fills it, a host hands it back inside the event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
-pub struct GraphSnapshotCounts {
-    pub notes: u64,
-    pub links: u64,
-    pub orphans: u64,
-    pub unresolved: u64,
-    pub filtered: bool,
-}
-
-impl From<core::graph::GraphSnapshotCounts> for GraphSnapshotCounts {
-    fn from(c: core::graph::GraphSnapshotCounts) -> Self {
-        GraphSnapshotCounts {
-            notes: c.notes,
-            links: c.links,
-            orphans: c.orphans,
-            unresolved: c.unresolved,
-            filtered: c.filtered,
-        }
-    }
-}
-
-impl From<GraphSnapshotCounts> for core::graph::GraphSnapshotCounts {
-    fn from(c: GraphSnapshotCounts) -> Self {
-        core::graph::GraphSnapshotCounts {
-            notes: c.notes,
-            links: c.links,
-            orphans: c.orphans,
-            unresolved: c.unresolved,
-            filtered: c.filtered,
-        }
-    }
-}
-
-/// FFI mirror of [`core::graph::GraphNeighborhoodCounts`] (W6-2 PR 0a).
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct GraphNeighborhoodCounts {
-    pub center_label: String,
-    pub in_links: u32,
-    pub out_links: u32,
-    pub note_count: u64,
-    pub depth: u32,
-}
-
-impl From<core::graph::GraphNeighborhoodCounts> for GraphNeighborhoodCounts {
-    fn from(c: core::graph::GraphNeighborhoodCounts) -> Self {
-        GraphNeighborhoodCounts {
-            center_label: c.center_label,
-            in_links: c.in_links,
-            out_links: c.out_links,
-            note_count: c.note_count,
-            depth: c.depth,
-        }
-    }
-}
-
-impl From<GraphNeighborhoodCounts> for core::graph::GraphNeighborhoodCounts {
-    fn from(c: GraphNeighborhoodCounts) -> Self {
-        core::graph::GraphNeighborhoodCounts {
-            center_label: c.center_label,
-            in_links: c.in_links,
-            out_links: c.out_links,
-            note_count: c.note_count,
-            depth: c.depth,
-        }
-    }
-}
-
 /// Whole-graph projection under a filter (#552). Node order is
 /// key-sorted; edge order is (source, target, kind) — deterministic.
 #[derive(Debug, Clone, uniffi::Record)]
@@ -3436,10 +3351,8 @@ pub struct GraphSnapshot {
     pub generation: u64,
     /// Pre-rendered VoiceOver summary, e.g. `"247 notes, 1,032 links.
     /// 12 orphans, 3 unresolved targets."` (format normative in
-    /// p0_spec §P0-3) — rendered from `summary_counts`.
+    /// p0_spec §P0-3).
     pub audio_summary: String,
-    /// The counts `audio_summary` was rendered from (W6-2 PR 0a).
-    pub summary_counts: GraphSnapshotCounts,
 }
 
 impl From<core::graph::GraphSnapshot> for GraphSnapshot {
@@ -3449,7 +3362,6 @@ impl From<core::graph::GraphSnapshot> for GraphSnapshot {
             edges: s.edges.into_iter().map(Into::into).collect(),
             generation: s.generation,
             audio_summary: s.audio_summary,
-            summary_counts: s.summary_counts.into(),
         }
     }
 }
@@ -3462,8 +3374,6 @@ pub struct GraphNeighborhood {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
     pub audio_summary: String,
-    /// The counts `audio_summary` was rendered from (W6-2 PR 0a).
-    pub summary_counts: GraphNeighborhoodCounts,
 }
 
 impl From<core::graph::GraphNeighborhood> for GraphNeighborhood {
@@ -3474,7 +3384,6 @@ impl From<core::graph::GraphNeighborhood> for GraphNeighborhood {
             nodes: n.nodes.into_iter().map(Into::into).collect(),
             edges: n.edges.into_iter().map(Into::into).collect(),
             audio_summary: n.audio_summary,
-            summary_counts: n.summary_counts.into(),
         }
     }
 }
@@ -7364,11 +7273,6 @@ pub enum A11yEvent {
     Canvas {
         event: CanvasA11yEvent,
     },
-    /// The graph announcer family (W6-2 0a, #746) — the second nested
-    /// engine, one top-level variant.
-    Graph {
-        event: GraphA11yEvent,
-    },
     HostComposed {
         text: String,
         priority: A11yPriority,
@@ -8323,325 +8227,6 @@ impl From<CanvasA11yEvent> for core::a11y::CanvasA11yEvent {
     }
 }
 
-// --- Graph announcement vocabulary mirrors (W6-2 PR 0a, #746) --------------
-// 1:1 with `core::a11y`'s graph family (contracts doc 35_graph_contracts.md
-// 0a-2b). No logic here — every conversion is a field-for-field move.
-
-/// FFI mirror of [`core::a11y::GraphVerbosity`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum GraphVerbosity {
-    Terse,
-    Standard,
-    Verbose,
-}
-
-impl From<GraphVerbosity> for core::a11y::GraphVerbosity {
-    fn from(v: GraphVerbosity) -> Self {
-        use core::a11y::GraphVerbosity as C;
-        match v {
-            GraphVerbosity::Terse => C::Terse,
-            GraphVerbosity::Standard => C::Standard,
-            GraphVerbosity::Verbose => C::Verbose,
-        }
-    }
-}
-
-/// FFI mirror of [`core::a11y::GraphRowCopy`]; `kind` is the graph
-/// surface's own [`GraphNodeKind`], travelling back through the reverse
-/// mapping (0aD-4).
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct GraphRowCopy {
-    pub label: String,
-    pub kind: GraphNodeKind,
-    pub in_links: u32,
-    pub out_links: u32,
-    pub references: u32,
-    pub embed: bool,
-}
-
-impl From<GraphRowCopy> for core::a11y::GraphRowCopy {
-    fn from(r: GraphRowCopy) -> Self {
-        core::a11y::GraphRowCopy {
-            label: r.label,
-            kind: r.kind.into(),
-            in_links: r.in_links,
-            out_links: r.out_links,
-            references: r.references,
-            embed: r.embed,
-        }
-    }
-}
-
-/// FFI mirror of [`core::a11y::GraphPresetOutcome`].
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
-pub enum GraphPresetOutcome {
-    Orphans { count: u64 },
-    Unresolved { count: u64 },
-    MostLinked { label: String, in_links: u32 },
-    NoNotesToRank,
-}
-
-impl From<GraphPresetOutcome> for core::a11y::GraphPresetOutcome {
-    fn from(o: GraphPresetOutcome) -> Self {
-        use GraphPresetOutcome as F;
-        use core::a11y::GraphPresetOutcome as C;
-        match o {
-            F::Orphans { count } => C::Orphans { count },
-            F::Unresolved { count } => C::Unresolved { count },
-            F::MostLinked { label, in_links } => C::MostLinked { label, in_links },
-            F::NoNotesToRank => C::NoNotesToRank,
-        }
-    }
-}
-
-/// FFI mirror of [`core::a11y::GraphForceControl`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum GraphForceControl {
-    Center,
-    Repel,
-    Link,
-    LinkDistance,
-}
-
-impl From<GraphForceControl> for core::a11y::GraphForceControl {
-    fn from(c: GraphForceControl) -> Self {
-        use core::a11y::GraphForceControl as C;
-        match c {
-            GraphForceControl::Center => C::Center,
-            GraphForceControl::Repel => C::Repel,
-            GraphForceControl::Link => C::Link,
-            GraphForceControl::LinkDistance => C::LinkDistance,
-        }
-    }
-}
-
-/// FFI mirror of [`core::a11y::GraphSurfaceMode`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum GraphSurfaceMode {
-    Table,
-    Diagram,
-}
-
-impl From<GraphSurfaceMode> for core::a11y::GraphSurfaceMode {
-    fn from(m: GraphSurfaceMode) -> Self {
-        use core::a11y::GraphSurfaceMode as C;
-        match m {
-            GraphSurfaceMode::Table => C::Table,
-            GraphSurfaceMode::Diagram => C::Diagram,
-        }
-    }
-}
-
-/// FFI mirror of [`core::a11y::GraphWhereAmISelection`]. `NoSelection`
-/// rather than `None`: the generated Swift `.none` would collide with
-/// `Optional.none` (the canvas's `Unstated` precedent).
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
-pub enum GraphWhereAmISelection {
-    Node { row: GraphRowCopy, component: u32 },
-    NoSelection,
-}
-
-impl From<GraphWhereAmISelection> for core::a11y::GraphWhereAmISelection {
-    fn from(s: GraphWhereAmISelection) -> Self {
-        use GraphWhereAmISelection as F;
-        use core::a11y::GraphWhereAmISelection as C;
-        match s {
-            F::Node { row, component } => C::Node {
-                row: row.into(),
-                component,
-            },
-            F::NoSelection => C::NoSelection,
-        }
-    }
-}
-
-/// FFI mirror of [`core::a11y::GraphWhereAmIFilter`] — the closed set of
-/// host-reachable filter states (contracts doc design B(i)).
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
-pub enum GraphWhereAmIFilter {
-    Normal {
-        orphans_only: bool,
-        attachments_shown: bool,
-        ghosts_shown: bool,
-    },
-    UnresolvedOnly,
-}
-
-impl From<GraphWhereAmIFilter> for core::a11y::GraphWhereAmIFilter {
-    fn from(f: GraphWhereAmIFilter) -> Self {
-        use GraphWhereAmIFilter as F;
-        use core::a11y::GraphWhereAmIFilter as C;
-        match f {
-            F::Normal {
-                orphans_only,
-                attachments_shown,
-                ghosts_shown,
-            } => C::Normal {
-                orphans_only,
-                attachments_shown,
-                ghosts_shown,
-            },
-            F::UnresolvedOnly => C::UnresolvedOnly,
-        }
-    }
-}
-
-/// FFI mirror of [`core::a11y::GraphStatusNote`].
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
-pub enum GraphStatusNote {
-    Opened,
-    AlreadyOpen,
-    ConnectionsPanel,
-    NoteCreated { name: String },
-    NoConnections,
-    LoadingConnections,
-}
-
-impl From<GraphStatusNote> for core::a11y::GraphStatusNote {
-    fn from(n: GraphStatusNote) -> Self {
-        use GraphStatusNote as F;
-        use core::a11y::GraphStatusNote as C;
-        match n {
-            F::Opened => C::Opened,
-            F::AlreadyOpen => C::AlreadyOpen,
-            F::ConnectionsPanel => C::ConnectionsPanel,
-            F::NoteCreated { name } => C::NoteCreated { name },
-            F::NoConnections => C::NoConnections,
-            F::LoadingConnections => C::LoadingConnections,
-        }
-    }
-}
-
-/// FFI mirror of [`core::a11y::GraphBlockedReason`].
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
-pub enum GraphBlockedReason {
-    LoadFailed { message: String },
-    ConnectionsLoadFailed { message: String },
-    NoteCreateFailed { message: String },
-}
-
-impl From<GraphBlockedReason> for core::a11y::GraphBlockedReason {
-    fn from(r: GraphBlockedReason) -> Self {
-        use GraphBlockedReason as F;
-        use core::a11y::GraphBlockedReason as C;
-        match r {
-            F::LoadFailed { message } => C::LoadFailed { message },
-            F::ConnectionsLoadFailed { message } => C::ConnectionsLoadFailed { message },
-            F::NoteCreateFailed { message } => C::NoteCreateFailed { message },
-        }
-    }
-}
-
-/// FFI mirror of [`core::a11y::GraphA11yEvent`] — the graph family,
-/// nested so one engine costs one top-level `A11yEvent` variant.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
-pub enum GraphA11yEvent {
-    GraphRow {
-        verbosity: GraphVerbosity,
-        row: GraphRowCopy,
-    },
-    GraphReRooted {
-        label: String,
-    },
-    GraphSnapshotSummary {
-        counts: GraphSnapshotCounts,
-    },
-    GraphNeighborhoodSummary {
-        counts: GraphNeighborhoodCounts,
-    },
-    GraphPreset {
-        outcome: GraphPresetOutcome,
-    },
-    GraphFilterCount {
-        shown: u32,
-        total: u32,
-    },
-    GraphForceValue {
-        control: GraphForceControl,
-        percent: u32,
-    },
-    GraphLayoutSettled,
-    GraphPinned {
-        pinned: bool,
-    },
-    GraphZoom {
-        fit: bool,
-        percent: u32,
-    },
-    GraphMode {
-        mode: GraphSurfaceMode,
-    },
-    GraphWhereAmI {
-        selection: GraphWhereAmISelection,
-        zoom_percent: u32,
-        filter: GraphWhereAmIFilter,
-        name_filter: Option<String>,
-    },
-    GraphTierEntered,
-    GraphTierSummary {
-        count: u32,
-    },
-    GraphNeighborsContent {
-        labels: Vec<String>,
-    },
-    GraphStatus {
-        note: GraphStatusNote,
-    },
-    GraphBlocked {
-        reason: GraphBlockedReason,
-    },
-}
-
-impl From<GraphA11yEvent> for core::a11y::GraphA11yEvent {
-    fn from(e: GraphA11yEvent) -> Self {
-        use GraphA11yEvent as F;
-        use core::a11y::GraphA11yEvent as C;
-        match e {
-            F::GraphRow { verbosity, row } => C::GraphRow {
-                verbosity: verbosity.into(),
-                row: row.into(),
-            },
-            F::GraphReRooted { label } => C::GraphReRooted { label },
-            F::GraphSnapshotSummary { counts } => C::GraphSnapshotSummary {
-                counts: counts.into(),
-            },
-            F::GraphNeighborhoodSummary { counts } => C::GraphNeighborhoodSummary {
-                counts: counts.into(),
-            },
-            F::GraphPreset { outcome } => C::GraphPreset {
-                outcome: outcome.into(),
-            },
-            F::GraphFilterCount { shown, total } => C::GraphFilterCount { shown, total },
-            F::GraphForceValue { control, percent } => C::GraphForceValue {
-                control: control.into(),
-                percent,
-            },
-            F::GraphLayoutSettled => C::GraphLayoutSettled,
-            F::GraphPinned { pinned } => C::GraphPinned { pinned },
-            F::GraphZoom { fit, percent } => C::GraphZoom { fit, percent },
-            F::GraphMode { mode } => C::GraphMode { mode: mode.into() },
-            F::GraphWhereAmI {
-                selection,
-                zoom_percent,
-                filter,
-                name_filter,
-            } => C::GraphWhereAmI {
-                selection: selection.into(),
-                zoom_percent,
-                filter: filter.into(),
-                name_filter,
-            },
-            F::GraphTierEntered => C::GraphTierEntered,
-            F::GraphTierSummary { count } => C::GraphTierSummary { count },
-            F::GraphNeighborsContent { labels } => C::GraphNeighborsContent { labels },
-            F::GraphStatus { note } => C::GraphStatus { note: note.into() },
-            F::GraphBlocked { reason } => C::GraphBlocked {
-                reason: reason.into(),
-            },
-        }
-    }
-}
-
 impl From<A11yEvent> for core::a11y::A11yEvent {
     fn from(e: A11yEvent) -> Self {
         use A11yEvent as F;
@@ -8984,9 +8569,6 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::TemplatePickerOpened { count } => C::TemplatePickerOpened { count },
             F::TemplateNoteCreated { name, template } => C::TemplateNoteCreated { name, template },
             F::Canvas { event } => C::Canvas {
-                event: event.into(),
-            },
-            F::Graph { event } => C::Graph {
                 event: event.into(),
             },
             F::HostComposed { text, priority } => C::HostComposed {
@@ -11637,12 +11219,7 @@ mod tests {
             .map(|(at, marker)| {
                 let rest = &body[at + marker.len()..];
                 let outer = head(rest);
-                // A nested family's inner constructor is named after its
-                // wrapper (`new CanvasA11yEvent.` under `Canvas`, `new
-                // GraphA11yEvent.` under `Graph`) — W6-2 0a generalised the
-                // marker so a second family cannot satisfy a first's slot.
-                let inner_marker = format!("new {outer}A11yEvent.");
-                match rest.split_once(inner_marker.as_str()) {
+                match rest.split_once("new CanvasA11yEvent.") {
                     Some((before, inner)) if !before.contains("new A11yEvent.") => {
                         format!("{outer}/{}", head(inner))
                     }
@@ -11763,7 +11340,6 @@ mod tests {
 
     fn pinned_coalescing_classes(
         core_source: &str,
-        family: &str,
     ) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
         use std::collections::{BTreeMap, BTreeSet};
 
@@ -11786,11 +11362,7 @@ mod tests {
             };
             found_a_class = true;
             let entry = pinned.entry(class.to_string()).or_default();
-            // FAMILY-QUALIFIED (W6-2 0a): the one list carries both the
-            // canvas's and the graph's members under shared class names,
-            // and each host switch is compared against its own family.
-            let family_marker = format!("[`{family}::");
-            for (at, marker) in rest.match_indices(family_marker.as_str()) {
+            for (at, marker) in rest.match_indices("[`CanvasA11yEvent::") {
                 let name: String = rest[at + marker.len()..]
                     .chars()
                     .take_while(|c| c.is_ascii_alphanumeric())
@@ -11798,20 +11370,17 @@ mod tests {
                 entry.insert(lower_first(&name));
             }
         }
-        // A class the other family alone populates is not this family's.
-        pinned.retain(|_, names| !names.is_empty());
         assert!(
-            found_a_class && !pinned.is_empty(),
-            "the class-key doc comment parsed to nothing for {family}; its shape changed"
+            found_a_class && pinned.values().all(|names| !names.is_empty()),
+            "the class-key doc comment parsed to nothing; its shape changed"
         );
 
         // Every name the doc comment carries must still BE a variant —
         // a rename that misses the comment is the other way this rots.
         let variants: BTreeSet<String> = {
-            let needle = format!("pub enum {family} {{");
             let decl = core_source
-                .find(needle.as_str())
-                .unwrap_or_else(|| panic!("{family} declaration"));
+                .find("pub enum CanvasA11yEvent {")
+                .expect("CanvasA11yEvent declaration");
             let body = &core_source[decl..];
             let body = &body[..body.find("\n}\n").expect("enum terminator")];
             body.lines()
@@ -11831,7 +11400,7 @@ mod tests {
             for name in names {
                 assert!(
                     variants.contains(name),
-                    "the {class} class lists {name}, which is not a {family} variant"
+                    "the {class} class lists {name}, which is not a CanvasA11yEvent variant"
                 );
             }
         }
@@ -11850,7 +11419,7 @@ mod tests {
         )
         .expect("mac announcer source");
 
-        let pinned = pinned_coalescing_classes(&core_source, "CanvasA11yEvent");
+        let pinned = pinned_coalescing_classes(&core_source);
 
         // --- The copy: mac's switch ----------------------------------
         let switch = swift
@@ -11894,64 +11463,6 @@ mod tests {
         );
     }
 
-    /// The graph family's copy of the same tripwire (W6-2 0a, #746;
-    /// contracts doc 0a-9): mac's `GraphAnnouncer` switch routes exactly
-    /// the four graph classes the one list pins. The Windows twin arrives
-    /// with PR A's `GraphAnnouncer.cs`; until then the Windows assertion
-    /// covers the canvas file alone, by design.
-    #[test]
-    fn the_mac_graph_coalescing_switch_matches_the_pinned_class_list() {
-        use std::collections::{BTreeMap, BTreeSet};
-
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
-            .expect("core a11y source");
-        let swift = std::fs::read_to_string(
-            manifest.join("../../apps/slate-mac/Sources/SlateMac/Graph/GraphAnnouncer.swift"),
-        )
-        .expect("mac graph announcer source");
-
-        let pinned = pinned_coalescing_classes(&core_source, "GraphA11yEvent");
-        assert_eq!(pinned.len(), 4, "the graph family pins four classes (0a-9)");
-
-        let switch = swift
-            .split_once("func coalescingClass(of event: GraphA11yEvent) -> EventClass?")
-            .expect("mac graph coalescing switch")
-            .1;
-        let switch = switch
-            .split_once("default:")
-            .expect("the switch's default arm")
-            .0;
-
-        let mut mac: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        for arm in switch.split("case ").skip(1) {
-            let (cases, tail) = arm.split_once(':').expect("case arm ends in a colon");
-            let class: String = tail
-                .split_once("return .")
-                .expect("case arm returns a class")
-                .1
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric())
-                .collect();
-            let entry = mac.entry(class).or_default();
-            for (at, _) in cases.match_indices('.') {
-                let name: String = cases[at + 1..]
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric())
-                    .collect();
-                if !name.is_empty() {
-                    entry.insert(name);
-                }
-            }
-        }
-
-        assert_eq!(
-            mac, pinned,
-            "mac's graph coalescing switch and the class list core pins (0a-9) disagree. \
-             Left is GraphAnnouncer.swift, right is the a11y.rs doc comment."
-        );
-    }
-
     /// The Windows twin of the tripwire above (W6-1 PR C, #745).
     ///
     /// 0b-17 pinned the MAC copy of the one class list and its own
@@ -11979,7 +11490,7 @@ mod tests {
         )
         .expect("windows announcer source");
 
-        let pinned = pinned_coalescing_classes(&core_source, "CanvasA11yEvent");
+        let pinned = pinned_coalescing_classes(&core_source);
 
         // --- The copy: the C# switch expression ----------------------
         // Bounded to the switch body, and terminated at the discard arm
@@ -12123,11 +11634,7 @@ mod tests {
         // stopped seeing (say) half of `A11yEvent`'s ~198 variants
         // would still clear a 40-variant bar while the difference-set
         // assertion below quietly compared two truncated sets.
-        for (enum_name, floor) in [
-            ("A11yEvent", 100usize),
-            ("CanvasA11yEvent", 40),
-            ("GraphA11yEvent", 15),
-        ] {
+        for (enum_name, floor) in [("A11yEvent", 100usize), ("CanvasA11yEvent", 40)] {
             let mirror_variants = variant_names_of(&mirror, enum_name);
             let core_variants = variant_names_of(&core_source, enum_name);
             assert!(
@@ -12206,103 +11713,25 @@ mod tests {
             }
             families
         }
-        /// One row of the graph's inventory (W6-2 0a, contracts doc 0a-3 —
-        /// the round-3 design pass): read BY KEY out of core's
-        /// `GRAPH_NESTED_ENUMS`, whose rows are `NestedEnum { core, mirror,
-        /// path, sites }` with named fields, so this consumer takes exactly
-        /// the three facts it needs and nothing positional.
-        struct GraphInventoryRow {
-            core: String,
-            mirror: String,
-            path: String,
-        }
-        fn graph_inventory_rows(core_source: &str) -> Vec<GraphInventoryRow> {
-            fn field(row: &str, key: &str) -> String {
-                let marker = format!("{key}: \"");
-                let at = row
-                    .find(&marker)
-                    .unwrap_or_else(|| panic!("an inventory row lacks `{key}`: {row}"));
-                let rest = &row[at + marker.len()..];
-                rest[..rest.find('"').expect("closing quote")].to_string()
-            }
-            let decl = core_source
-                .find("const GRAPH_NESTED_ENUMS")
-                .expect("core's graph nested-enum inventory");
-            let start = decl
-                + core_source[decl..]
-                    .find("= &[")
-                    .expect("the inventory's table")
-                + 4;
-            let end = start
-                + core_source[start..]
-                    .find("\n    ];")
-                    .expect("the inventory's terminator");
-            let code: String = core_source[start..end]
-                .lines()
-                .filter(|line| !line.trim_start().starts_with("//"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            code.split("NestedEnum {")
-                .skip(1)
-                .map(|row| GraphInventoryRow {
-                    core: field(row, "core"),
-                    mirror: field(row, "mirror"),
-                    path: field(row, "path"),
-                })
-                .collect()
-        }
-
-        let canvas_families = nested_families_of(&core_source);
+        let families = nested_families_of(&core_source);
         assert_eq!(
-            canvas_families.len(),
+            families.len(),
             18,
-            "core's canvas nested-enum inventory lists {} families; this test knows eighteen — \
+            "core's nested-enum inventory lists {} families; this test knows eighteen — \
              extend both or neither",
-            canvas_families.len()
-        );
-        let graph_rows = graph_inventory_rows(&core_source);
-        assert_eq!(
-            graph_rows.len(),
-            9,
-            "core's graph nested-enum inventory lists {} rows; this test knows nine",
-            graph_rows.len()
+            families.len()
         );
         let exact: std::collections::BTreeMap<&str, usize> = [
             ("CanvasStatusNote", 28usize),
             ("CanvasBlockedReason", 18),
             ("CanvasFailedAction", 12),
             ("CanvasMutationRefusal", 7),
-            ("GraphVerbosity", 3),
-            ("GraphPresetOutcome", 4),
-            ("GraphForceControl", 4),
-            ("GraphSurfaceMode", 2),
-            ("GraphWhereAmISelection", 2),
-            ("GraphWhereAmIFilter", 2),
-            ("GraphStatusNote", 6),
-            ("GraphBlockedReason", 3),
-            ("NodeKind", 3),
         ]
         .into_iter()
         .collect();
-        // (core, mirror, source): the canvas's families mirror under their
-        // own names in a11y.rs; the graph's rows say so themselves.
-        let families: Vec<(String, String, Option<String>)> = canvas_families
-            .into_iter()
-            .map(|name| (name.clone(), name, None))
-            .chain(
-                graph_rows
-                    .into_iter()
-                    .map(|row| (row.core, row.mirror, Some(row.path))),
-            )
-            .collect();
-        for (family, mirror_name, path) in &families {
-            let family_source = match path {
-                Some(path) => std::fs::read_to_string(manifest.join("../slate-core").join(path))
-                    .unwrap_or_else(|_| panic!("{family}'s source at {path}")),
-                None => core_source.clone(),
-            };
-            let core_variants = variant_names_of(&family_source, family);
-            let mirror_variants = variant_names_of(&mirror, mirror_name);
+        for family in &families {
+            let core_variants = variant_names_of(&core_source, family);
+            let mirror_variants = variant_names_of(&mirror, family);
             match exact.get(family.as_str()) {
                 Some(&count) => assert_eq!(
                     core_variants.len(),

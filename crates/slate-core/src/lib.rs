@@ -56,7 +56,6 @@ pub mod frontmatter;
 pub mod graph;
 pub mod graph_layout;
 pub mod graph_metrics;
-pub mod graph_summary;
 pub mod history_prefs;
 mod line_index;
 pub mod link_resolver;

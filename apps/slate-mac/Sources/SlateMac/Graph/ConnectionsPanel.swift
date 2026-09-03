@@ -236,11 +236,7 @@ struct ConnectionsPanel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(
-            a11yRender(
-                event: .graph(
-                    event: .graphRow(verbosity: appState.graphAnnouncer.verbosity, row: row.rowCopy))
-            ).text)
+        .accessibilityLabel(appState.graphAnnouncer.rowPhrase(row.rowRef))
         .accessibilityHint(
             disabledReason
                 ?? (row.isGhost ? "Unresolved. Choose Create note to add it." : "Opens the note."))
@@ -366,12 +362,10 @@ struct ConnectionRow: Identifiable {
     /// renders a leaf with no disclosure chevron.
     var nestedOrNil: [ConnectionRow]? { nested.isEmpty ? nil : nested }
 
-    /// The row's P1 copy data for `GraphA11yEvent.graphRow` (core renders
-    /// it; W6-2 PR 0a).
-    var rowCopy: GraphRowCopy {
-        GraphRowCopy(
-            label: label, kind: isGhost ? .ghost : (isAttachment ? .attachment : .note),
-            inLinks: linksIn, outLinks: linksOut, references: references, embed: isEmbed)
+    var rowRef: GraphRowRef {
+        GraphRowRef(
+            label: label, linksIn: linksIn, linksOut: linksOut,
+            isGhost: isGhost, references: references, isEmbed: isEmbed)
     }
 }
 
