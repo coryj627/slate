@@ -159,7 +159,7 @@ struct GraphConfigStore {
                 link: clampD(fo["link"], 0, 1, 0.5),
                 linkDistance: clampD(fo["linkDistance"], 0, 1, 0.5))
         }
-        if let m = root["mode"] as? String, let mode = GraphTabMode(rawValue: m) {
+        if let m = root["mode"] as? String, let mode = GraphSurfaceMode(persistenceTag: m) {
             config.mode = mode
         }
         if let depth = root["connectionsDepth"] as? Int {
@@ -189,7 +189,7 @@ struct GraphConfigStore {
             "center": c.forces.center, "repel": c.forces.repel, "link": c.forces.link,
             "linkDistance": c.forces.linkDistance,
         ]
-        root["mode"] = c.mode.rawValue
+        root["mode"] = c.mode.persistenceTag
         root["connectionsDepth"] = c.connectionsDepth
     }
 

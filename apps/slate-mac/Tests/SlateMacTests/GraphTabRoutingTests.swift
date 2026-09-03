@@ -155,22 +155,27 @@ final class GraphTabRoutingTests: XCTestCase {
         XCTAssertNil(state.workspace.activeGroupTab(forPath: "graph"))
     }
 
-    /// The filter-count text is computed from the FRESH snapshot + the
-    /// current text needle (round 2 finding 7), so a post-fetch
-    /// announcement can't drift from the view's synchronous one.
-    func testGraphFilterCountText() async throws {
+    /// The filter count is computed from the FRESH snapshot + the current
+    /// text needle (round 2 finding 7), so a post-fetch announcement can't
+    /// drift from the view's synchronous one. The tuple feeds the one
+    /// gated entry; the copy is core's (W6-2 PR 0a).
+    func testGraphFilterCountFollowsTheNeedle() async throws {
         let state = try await makeAppState()
         state.openGraphTab()
         try await pollUntil { state.graphTableSnapshot != nil }
         let snap = try XCTUnwrap(state.graphTableSnapshot)
         let total = snap.nodes.count
         state.graphTableTextFilter = ""
-        XCTAssertEqual(state.graphFilterCountText(snap), "\(total) of \(total) shown")
+        let all = state.graphFilterCount(snap)
+        XCTAssertEqual(all.shown, UInt32(total))
+        XCTAssertEqual(all.total, UInt32(total))
         state.graphTableTextFilter = "a"
         let shown = snap.nodes.filter {
             $0.label.range(of: "a", options: [.caseInsensitive, .diacriticInsensitive]) != nil
         }.count
-        XCTAssertEqual(state.graphFilterCountText(snap), "\(shown) of \(total) shown")
+        let narrowed = state.graphFilterCount(snap)
+        XCTAssertEqual(narrowed.shown, UInt32(shown))
+        XCTAssertEqual(narrowed.total, UInt32(total))
     }
 
     /// The orphans preset (P1-3 #556) activates the graph tab with the
@@ -238,7 +243,7 @@ final class GraphTabRoutingTests: XCTestCase {
         state.openGraphPreset(.orphans)
         try await pollUntil { state.graphTableSnapshot != nil && !state.graphTableLoading }
         let snap = try XCTUnwrap(state.graphTableSnapshot)
-        let expected = state.graphPresetAnnouncement(.orphans, snap: snap)
+        let expected = a11yRender(event: .graph(event: state.graphPresetEvent(.orphans, snap: snap))).text
         XCTAssertEqual(
             posts.filter { $0 == expected }.count, 1,
             "preset headline announced exactly once from the fresh snapshot")

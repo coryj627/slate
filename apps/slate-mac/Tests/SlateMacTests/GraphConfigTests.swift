@@ -94,20 +94,26 @@ final class GraphConfigTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), future)
     }
 
-    func testForcesChangePhraseNamesTheOneChangedControl() {
+    /// The changed control and its resting percent are the event's
+    /// payload; the spoken copy is core's golden (W6-2 PR 0a).
+    func testChangedForceNamesTheOneChangedControl() {
         let base = GraphForcesConfig.default  // all 0.5
         var repel = base
         repel.repel = 0.7
-        XCTAssertEqual(AppState.forcesChangePhrase(old: base, new: repel), "Repel force 70 percent")
+        let repelChange = AppState.changedForce(old: base, new: repel)
+        XCTAssertEqual(repelChange?.control, .repel)
+        XCTAssertEqual(repelChange?.percent, 70)
         var center = base
         center.center = 0.25
-        XCTAssertEqual(
-            AppState.forcesChangePhrase(old: base, new: center), "Center force 25 percent")
+        let centerChange = AppState.changedForce(old: base, new: center)
+        XCTAssertEqual(centerChange?.control, .center)
+        XCTAssertEqual(centerChange?.percent, 25)
         var dist = base
         dist.linkDistance = 1.0
-        XCTAssertEqual(
-            AppState.forcesChangePhrase(old: base, new: dist), "Link distance 100 percent")
-        XCTAssertNil(AppState.forcesChangePhrase(old: base, new: base), "no change ⇒ nothing spoken")
+        let distChange = AppState.changedForce(old: base, new: dist)
+        XCTAssertEqual(distChange?.control, .linkDistance)
+        XCTAssertEqual(distChange?.percent, 100)
+        XCTAssertNil(AppState.changedForce(old: base, new: base), "no change ⇒ nothing spoken")
     }
 
     func testWriterDropsASupersededGeneration() async throws {
