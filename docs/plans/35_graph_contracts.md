@@ -2491,31 +2491,51 @@ carrying core's `audio_summary` verbatim. Default landing is the Table
 (P locked decision 1; §P-A). The Diagram (PR D), the presets, the filter
 and the config (PR C) and the Connections leaf (PR B) are later slices;
 this section pins what they will attach to. The section is at revision
-3: round 1 returned nineteen findings (ten blockers) and revision 2
+4: round 1 returned nineteen findings (ten blockers) and revision 2
 answered each at the line it named; round 2 discharged twelve and
 returned sixteen more, two blockers — both in the tab-liveness
 subsystem and both CREATED by revision 2's three-site hook, the
 protocol's rule 5, so that round counts double, and with round 1's
 lifecycle blockers that is three consecutive rounds of blockers in one
-subsystem: rule 4's stop. Revision 3 opens with the design pass for
-that subsystem, written as a RULE that names the funnel the shell
-already has, and answers the fourteen majors and minors beside it; both
-ledgers are below. Every seam is cited at the line it sits on at `main`
-after PR 0b (#1180) merged; a stale spec citation is corrected here
-rather than repeated (0bD-12).
+subsystem: rule 4's stop; revision 3 opened with the design pass for
+that subsystem, a rule naming the funnel the shell already has. Round 3
+discharged thirteen of the sixteen and returned seventeen more, six
+blockers, four of them created by revision 3's own text — a false
+premise about the open path (the graph opens into a NEW tab), a cause
+consumed by the wrong funnel call, a reopen order neither host can
+produce, and an Open rule that could not recover from an error — rule
+5 for the second consecutive round. Revision 4 does what PR 0b's
+revision 4 did: it restates rule L so that each class the round found
+is caught by the rule's own terms — three liveness levels, a cause
+scoped to its mutation and consumed only by the graph's own transition,
+the mac's load guard as the load rule, one scheduling primitive that
+never runs a receiver inside the mutation that started it — and
+answers the eleven majors and minors beside it; the three ledgers are
+below. The standing precedent (E13's, applied to PR 0a at round 6 and
+to PR 0b at round 4) freezes a section whose round's blockers the
+previous fix created, with that round's findings as a ledger the task
+loop discharges by code: if round 4 returns such blockers, revision 5
+freezes under it — precedent applied; the owner may overrule. Every
+seam is cited at the line it sits on at `main` after PR 0b (#1180)
+merged; a stale spec citation is corrected here rather than repeated
+(0bD-12).
 
 **What stands today.** The Windows shell already has the singleton's
 LIFECYCLE and nothing of its surface: `OpenGraph()` opens
-`WorkspaceItemKind.Graph` at the literal path `graph:singleton` into the
-CURRENT tab (`WorkspaceViewModel.cs:1946–1947`; restore coerces every
-graph tab to that token, `WorkspacePersistence.cs:377`); `TryOpenItem`
-collapses a second open onto the one tab through `TryFocusGlobalGraph`
-(`WorkspaceViewModel.Layout.cs:103–108, 178–192`), which sets the owning
-group and tab active and requests editor focus, and otherwise REPLACES
-the active tab's item in place (`:141–172`: `ReplaceItem` `:154`, the
-attach funnel `:161`, the release sweeps `:162–164`, `ActiveGroup.ActiveTab
-= active` `:170` — a same-reference assignment the setter ignores) —
-`AddTab` runs only for a new-tab or split target (`:117–128`); the split
+`WorkspaceItemKind.Graph` at the literal path `graph:singleton` with the
+NEW-TAB target, always (`WorkspaceViewModel.cs:1946–1948`,
+`WorkspaceOpenTarget.NewTab`; restore coerces every graph tab to that
+token, `WorkspacePersistence.cs:377`); `TryOpenItem` collapses a second
+open onto the one tab through `TryFocusGlobalGraph`
+(`WorkspaceViewModel.Layout.cs:103–108, 178–192`), which assigns
+`ActiveGroup = owner` FIRST and `owner.ActiveTab = graph` SECOND — two
+assignments, each a funnel call — and requests editor focus; otherwise
+the new-tab arm adds the tab to the active group and activates it
+(`AddTab(ActiveGroup, item, activate: true)`, `:128–131`). The graph
+never takes the current-tab replace arm (`:141–172`) and never meets
+the dirty gate (`:143–151`): the note the reader was editing keeps its
+tab. `AddTab` attaches at `:211` and adds the tab to its group at `:217`
+(activation `:218–221`); the split
 refusal announces `GraphOpensSinglePane` (`:229–233`), the duplicate
 refusal is silent (`:424–428`), the split command is disabled on a
 graph tab (`:294–295`), and reopening a closed graph tab announces
@@ -2542,9 +2562,10 @@ The paths that change the effective tab all end there: the header click
 cycle chords (`CycleTab`, `Layout.cs:509–518`), the close of a
 neighbouring tab (`group.ActiveTab = successor`, `:322–326`), the pane
 focus (`SelectGroupFromKeyboardFocus`, `:56–66`; `FocusPane`, `:520`),
-the replace arm (through the outermost-mutation hook), the restore
-(`:1616`), and every `OpenGraph()` and `ReopenClosedTab` (through
-`Activate` or the outermost-mutation hook). The tab renders the
+the restore (`:1616`), and every `OpenGraph()` and `ReopenClosedTab`
+(through `Activate`, twice for a graph in another group, and the
+outermost-mutation hook) — round 3 traced every assignment and found
+none that misses it. The tab renders the
 placeholder: `IsPlaceholder` is true for anything that is not markdown,
 base, saved query, dashboard or canvas (`WorkspaceViewModel.cs:323–324`),
 `KindLabel` says "Graph" (`:330`), and `PlaceholderText` composes the
@@ -2561,10 +2582,9 @@ whose doc-comment (`:1042–1059`) names its five call sites —
 `CanvasAnnouncerCensus.TheAttachFunnelDocCommentNamesEveryCallSite`
 (`CanvasAnnouncerCensus.cs:221–222`) fails when the comment and the
 sites disagree. The funnel runs BEFORE the tab is live: `AddTab`
-attaches at `:211` and adds the tab to its group at `:217` (activation
-`:218–221`); `RestoreNode` attaches before the group holds the tab, and
-the workspace's root is assigned only when `Restore` returns
-(`WorkspaceViewModel.cs:1615`). The canvas registry starts its
+attaches before it adds; `RestoreNode` attaches before the group holds
+the tab, and the workspace's root is assigned only when `Restore`
+returns (`WorkspaceViewModel.cs:1615`). The canvas registry starts its
 document's `Load()` inside the attach (`WorkspaceViewModel.Canvas.cs:150–152`),
 which a canvas can afford (it announces nothing on open) and the graph
 cannot (rule L). The canvas is otherwise the per-tab template: the
@@ -2580,7 +2600,8 @@ before the vault lifecycle disposes the workspace and then the session
 (`VaultLifecycleViewModel.cs:928–936`); the canvas's publication is ONE
 immutable record installed through a compare-exchange slot
 (`Canvas/CanvasPublicationSlot.cs:220–222` the one read, `:235–254` the
-publish under a gate that refuses reentry). The grid substrate is
+publish under a gate that refuses reentry, `:270–282` the
+compare-exchange that installs the successor). The grid substrate is
 `AccessibleDataGrid`: `Bind(columns, rows, summary, accessibilityLabel,
 rowAudioDescription, rowActions, exportProducer, rowActivated)`
 (`Grids/AccessibleDataGrid.cs:429–437`), the `Announce` seam a funnel
@@ -2625,11 +2646,14 @@ and the re-seat under `_syncingSelection` because the substrate's
 silent restore still raises `CurrentRowChanged`). Off-dispatcher work
 rides `PanelWorkScheduler` (`Panels/PanelWorkScheduler.cs:16`:
 `StartWork` `:76–94` — inline when synchronous `:82–85`, else a tracked
-`Task.Run` through the PRIVATE `TrackWork` `:90–93` — `RunIfLive`
-`:103–110`, `Post` `:194` inline when synchronous or without a UI
-context `:190`, `DrainForTests` `:174`, `Shutdown` `:59`; its doc
-`:9–15` says subclasses guard their own publishes with generation or
-request tokens), and `AccessibilityNotificationDispatcher.Post` renders
+`Task.Run` through the PRIVATE `TrackWork` `:157–172` — `RunIfLive`
+`:103–110`, `RunGatedAsync` `:121–155` ("ALWAYS hand the body to the
+pool, never run it inline"), `Post` `:190–203` inline when synchronous
+OR when no UI context was captured, `DrainForTests` and
+`WhenWorkDrained` `:174–188` waiting for the TRACKED tasks only — a
+callback `Post` queued to a context is not among them — `Shutdown`
+`:59`; its doc `:9–15` says subclasses guard their own publishes with
+generation or request tokens), and `AccessibilityNotificationDispatcher.Post` renders
 and raises (`:22–26, 36–51`). The vault-event listener is
 `UiVaultEventListener` (`VaultLifecycleViewModel.cs:1703–1723`), built
 at `:435–439` with three delegates — the error and file-change arms
@@ -2667,10 +2691,12 @@ env-gated test (`ChordTableTests.cs:31`, the SLATE_CHORDS_UPDATE
 variable) whose projection preserves `deliveryEvidence`
 (`ChordTable.cs:481–489`; `chords.json:2148`), validated by
 `generate-parity-matrix.py:802–809`. The benchmarks project selects
-suites by flag (`Program.cs:12–17`, `--canvas`, `--validate-budgets`)
-and asserts a budget per report with a `PASS`/`MISS` line and a
-non-zero exit (the `--canvas` arm; the class shape
-`CanvasRendererBenchmarks.cs:17–21`); the canvas's §K fact runs in BOTH
+suites by flag (`Program.cs:12–17`, `--canvas`, `--validate-budgets`);
+its `--canvas` arm RUNS `CanvasOpenBenchmarks` and discards that
+summary (`:27`), then gates only the renderer suite's reports against
+a name-keyed budget table, failing on a missing median or an unlisted
+report, with a `PASS`/`MISS` line per report and a non-zero exit
+(`:28–57`; the class shape `CanvasRendererBenchmarks.cs:17–21`); the canvas's §K fact runs in BOTH
 scheduling modes (`CanvasDocumentTests.cs:4813–4852`, the W4-5 lesson
 the protocol records: "test the mode users run",
 `24_red_team_protocol.md:71–73`); `w_c_matrix.md` rows are ten columns
@@ -2701,13 +2727,15 @@ after it themselves (`BasesOpenRow`, `WorkspaceViewModel.Bases.cs:473–481`).
 The parity harness pins the artifact's `all` query as the INCLUSIVE
 filter — attachments and ghosts in, orphans-only off
 (`tools/ParityHarness/SurfaceSerializer.cs:1191, 1196`) — not core's
-default. The binding already carries everything this PR consumes:
+default; the mac twin serializer is `ParityHarnessTests.swift`'s
+`graphQueriesArtifact` (`:305–308`, "key for key and in the same
+order"). The binding already carries everything this PR consumes:
 `GraphGeneration()`, `GraphSnapshot(filter)`, `GraphTableRows(query,
 sort)` on the session (`lib.rs:1323, 1301, 1379–1383`); the free
 `GraphTableColumns()`, `GraphRowActions(kind)`, `GraphSurfaceModes()`,
 `GraphStableKeyForPath(path)` (`lib.rs:3922, 3794, 4195, 3596`); the
 records `GraphSnapshot` (`nodes`, `edges`, `generation`,
-`audio_summary`, the counts — NO filter, `graph.rs:315–326`),
+`audio_summary`, `summary_counts` — NO filter, `graph.rs:319–330`),
 `GraphTableRow` (`stable_key`, `node_id`, `label`, `path`, `kind`, nine
 `cells`, the five counts, `component`, `modified_ms`), `GraphTableRows`
 (`generation`, `total`, `rows` — nothing else, `graph_queries.rs:620–626`),
@@ -2730,16 +2758,30 @@ the singleton, activates it (`:60–70`, which runs `activateGraphTab`
 and so INVOKES the load) and then announces `GraphStatus{Opened}`
 unconditionally (`:72`) — the load is asynchronous, so the audible
 order is Opened, then the summary; `activateGraphTab` (`:80–118`)
-returns at its same-tab guard (`:81–83`), else loads the config,
-applies the persisted filter and calls `loadGraphTable` (`:105–109`) —
-every activation of the tab through `activateTab` reloads and speaks
-the summary, and `restoreWorkspaceLayout` calls `activateTab` for the
-restored active tab (`AppState.swift:4177–4179`), so a restored active
-graph tab speaks its summary at launch; `reopenClosedTab` calls
-`openGraphTab()` and then posts `reopenedGraph` (`:3612–3614`), so a
-reopened graph tab speaks Opened, the summary and the shell's reopen
-line; `AlreadyOpen` is posted by Duplicate Tab (`newTab()`,
-`:3266–3269`), not by `openGraphTab`; `releaseGraphStateIfUnreferenced`
+returns at its guard ONLY when the tab is already the active group's
+active tab AND a snapshot is held (`:81–83` — "same-tab no-op"; a
+same-tab call with no snapshot falls through and loads), else parks,
+selects the tab (`:93`), loads the config, applies the persisted filter
+on a fresh open and calls `loadGraphTable` (`:105–109`) — so switching
+TO the graph tab reloads and speaks the summary, a pane focus onto a
+group whose active tab is a loaded graph does not (`focusPane`
+`AppState.swift:4350–4363`: `focusGroup` first, then
+`enterEditorGroup` → `selectTab` of the group's active tab
+`:4388–4393`, which reaches the guard with the tab already active), and
+`restoreWorkspaceLayout` calls `activateTab` for the restored active
+tab (`:4177–4179`), so a restored active graph tab speaks its summary
+at launch; `reopenClosedTab` calls `openGraphTab()` and IMMEDIATELY
+posts `reopenedGraph` (`:3612–3614`) while the summary arrives from the
+detached load, so a reopened graph tab speaks Opened, the reopen line,
+then the summary; `AlreadyOpen` is posted by Duplicate Tab (`newTab()`,
+`:3266–3269`), not by `openGraphTab`; the refresh probe runs only while
+a graph tab is the active tab of SOME group (`anyGraphTabVisible`,
+`AppState.swift:3037–3047` — "currently rendered somewhere, not merely
+open in a background position"), speech only while it is the active
+group's (`graphTabActive`, `:3031–3035`), and a probe that finds a
+changed generation issues a load that SUPERSEDES an in-flight one
+through the load sequence (`refreshGraphTableIfGraphChanged`,
+`AppState+GraphTable.swift:477–503`); `releaseGraphStateIfUnreferenced`
 resets every field on the last close and cancels the announcer's
 pending speech (`:131–150`, the default sort literal `:135`, the seen
 generation `:149`, `cancelPending` `:150`); `loadGraphTable`
@@ -2761,24 +2803,32 @@ sort back and announces `GraphBlocked{LoadFailed}` while the published
 snapshot and rows stand, `:348–353`) and `setGraphTableSort`
 (`:359–362`); `revalidateGraphSelection(against:)` drops the shared key
 when the SNAPSHOT's nodes no longer carry it (`:370–375`).
-`GraphTableView.swift` binds the ACCEPTED sort to the grid and writes a
-REQUEST (`:213–226`), binds the selection straight to
-`graphSelectedNodeKey` (`:239–244`; `AppState.swift:3108`), switches
-loading → error → empty → grid (`:246–260`; "Loading graph…"
-`:300–307`, "Graph error: …" `:309–316`, "No notes match the current
-filters." `:257`), filters nothing itself (`:320`), binds the grid with
-the summary, the label "Graph, data grid", the local-sort-off flag,
-activation and MODIFIED activation, the row actions and the relay
-(`:322–341`), and activates through one gate (`:343–365`): plain
-activation opens in the current tab through `openFile`, which posts
-NO graph event (`:363`), ⌘Return / ⌘-double-click in a new tab
-(`:347–352`), and a GHOST activates Create note under the
-structural-mutation admission (`:359–361`,
-`createNoteFromGhost(targetRaw:)`, `AppState+Connections.swift:256–298`:
-admit, `createExclusive` with empty content off the main actor, the
-structural refresh, the undo-stack barrier, `openFile(path, target:
-.currentTab)` FIRST and then ONE `GraphStatus{NoteCreated{name}}`,
-`:294–298`); it builds every column from `graphTableColumns()`
+`GraphTableView.swift` carries its `tabID` (`:208`), binds the
+ACCEPTED sort to the grid and writes a REQUEST (`:213–226`), binds the
+selection straight to `graphSelectedNodeKey` (`:239–244`;
+`AppState.swift:3108`), switches loading → error → empty → grid
+(`:246–260`; "Loading graph…" `:300–307`; the error view shows the raw
+message and carries "Graph error: {message}" as its ACCESSIBILITY label
+`:309–316`; "No notes match the current filters." `:257`), filters
+nothing itself (`:320`), binds the grid with the summary, the label
+"Graph, data grid", the local-sort-off flag, activation and MODIFIED
+activation, the row actions and the relay — and NO row description: the
+mac grid's rows carry no P1 row label, only their cells (`:322–341`;
+the grid's row-description default is nil, `AccessibleDataGrid.swift:208–221`),
+and activates through one gate (`:343–375`): `focusOwningGroup` first —
+the tab's own group is made active so `.currentTab` and `.newTab`
+resolve in THIS pane (`:372–375`) — then plain activation opens in the
+current tab through `openFile`, which posts NO graph event (`:363`),
+⌘Return / ⌘-double-click in a new tab (`:347–352`), and a GHOST
+activates Create note under the structural-mutation admission
+(`:359–361`, `createNoteFromGhost(targetRaw:)`,
+`AppState+Connections.swift:256–310`: admit, `createExclusive` with
+EMPTY content off the main actor `:271`, the structural refresh, the
+undo-stack barrier, `openFile(path, target: .currentTab)` `:294`, the
+created entry's inline RENAME `:295–296`, then ONE
+`GraphStatus{NoteCreated{name}}` `:297–298` — after the open attempt,
+unconditionally; the failure arm `GraphBlocked{NoteCreateFailed}`
+`:302–305`); it builds every column from `graphTableColumns()`
 (`:451–478`; no column is listed in Swift). The mac grid defers an
 ENGINE-BACKED sort's `GridSorted` until the reload that adopts the
 owner's committed rows, and drops it if the owner reverts
@@ -2813,83 +2863,122 @@ section carries sixteen entries — the `all` query under eight columns ×
 two directions, every column but Modified — of twelve rows each keyed
 by `stable_key`, and no summary text (`parity_golden/graph_queries.json`).
 
-### Design pass (protocol rule 4, reached through rule 5) — subsystem L, the graph tab's liveness, modelled as a rule
+### Design pass (protocol rule 4, reached through rule 5 twice) — subsystem L, the graph tab's liveness, modelled as a rule
 
 Round 1 found the attach funnel running before the tab was live and
 the open sequence inverted under synchronous scheduling (IGA-3);
-revision 2 answered with a hook at three named sites; round 2 found the
-dominant open path — `OpenGraph()` replaces the current tab's item and
-never reaches `AddTab` — and five activation paths outside those sites
-(IGA-20), and a reopen rule that forbade the only hooks that could load
-it (IGA-21): both blockers created by the fix, in one subsystem, after
-round 1's blockers there. The description of sites was the defect; the
-rule below names the FUNNEL, not the sites, so that the next path the
-shell grows (a chord, a binding, a mutation) is covered because it
-must end where every path already ends.
+revision 2 answered with a hook at three named sites; round 2 found
+activation paths outside those sites (IGA-20) and a reopen rule that
+forbade its only hooks (IGA-21); revision 3 named the funnel and a
+cause field; round 3 found the funnel right and the rule's TERMS wrong
+— the open path misdescribed (IGA-36), the cause consumed by a funnel
+call that saw another tab (IGA-37), a reopen order neither host makes
+(IGA-38), an Open that could not restart a failed load (IGA-39), a
+probe that could lose a generation (IGA-40), the row actions unaddressed
+to their pane (IGA-41), a liveness level the mac has and the rule
+lacked (IGA-44), a pane focus the mac does not reload (IGA-45). Each is
+a term of the rule restated below, written so that its next instance
+is decided by the term and not by a site list.
 
-- **Rule L — the document follows the effective active tab through
-  the one funnel the shell already has.** The effective active tab is
-  `ActiveGroup.ActiveTab`, and every path that changes it — the header
-  click, the cycle chords, the close of a neighbour, the pane focus,
-  the replace arm, the restore, every open and reopen — already ends in
-  `SyncPanels()` (`WorkspaceViewModel.cs:1725–1749`), because the
-  `ActiveGroup` setter, `Activate`, the outermost-mutation hook, the end
-  of `Restore` and the rename all call it (the citations above). The
-  graph adds ONE line there: GraphFollowActiveTab(), which reads
-  `ActiveGroup.ActiveTab`, decides whether the graph tab BECAME
-  effective-active (it was not on the previous call and is now), and
-  on that transition alone starts the document's load with the
-  announcement policy of the CAUSE the explicit paths set. Nothing
-  else in the shell starts a graph load: the attach funnel seats and
-  never starts (the canvas's `:150–152` is the canvas's), and a census
-  asserts that the document's load entry points have exactly one
-  caller outside the document, the follow method.
-- **The cause is a workspace field the explicit paths set and the
-  follow method consumes.** Three paths set it before their mutation
-  runs: `OpenGraph()` sets Open; `ReopenClosedTab` sets Reopen; the
-  restore sets Restore (its `_restoring` window). Every other path
-  leaves it at its default, Activation. The follow method reads the
-  field, clears it, and applies the policy — the mac's, path by path:
-  Open → `GraphStatus{Opened}` then a pair with the summary, or, when
-  the graph tab was ALREADY effective-active, `Opened` alone and no
-  load (`openGraphTab` announces on every call, `:72`; `activateGraphTab`
-  returns at its same-tab guard, `:81–83`); Activation → a pair with
-  the summary and no `Opened` (`activateTab` → `activateGraphTab` →
-  `loadGraphTable`, `:105–109`); Restore → a pair with the summary and
-  no `Opened` (`restoreWorkspaceLayout` → `activateTab`,
-  `AppState.swift:4177–4179`); Reopen → `Opened`, a pair with the
-  summary, and the shell's `ReopenedGraph` after them
-  (`reopenClosedTab` → `openGraphTab()` then `reopenedGraph`,
-  `:3612–3614`; the Windows reopen arms keep their existing
-  `ReopenedGraph`, `Layout.cs:463, 475`, which now follows the
-  family's two). A graph tab that STOPS being effective-active (the
-  reader switches away) loads nothing and announces nothing; the
-  document stays, its rows stand, and the probe (A-3) keeps it current
-  while the tab exists. The announcement order within a policy is
-  fixed by construction — the status is posted, then the load is
-  started — so it holds in both scheduling modes (the summary is posted
-  by the load's receiver, after).
-- **Liveness has two levels, and each gate names its level.** LIVE:
-  a graph tab exists in any group — the document exists, the probe
-  runs, results may publish. EFFECTIVE-ACTIVE: the graph tab is
-  `ActiveGroup.ActiveTab` — announcements may be spoken (the mac's
-  `graphTabActive` at `:215, 343, 350`). A result decides whether to
-  speak at dispatch from the effective-active level THEN; a result for
-  a document that is no longer live drops (A-2). Retirement is the
-  transition out of LIVE (A-1).
-- **The facts enumerate the paths, and the census closes the class.**
-  One fact per path — fresh `OpenGraph()` into the current tab (the
-  replace arm), `OpenGraph()` into a new tab (`AddTab`, when the
-  current tab is dirty-refused or the target is new-tab),
-  `OpenGraph()` with the tab active, `OpenGraph()` with the tab in a
-  background group, the header click, both cycle chords, the close of
-  the neighbour that makes the graph tab current, the pane focus onto
-  a group whose active tab is the graph, the restore with the graph
-  tab active, the restore with the graph tab in a non-active group and
-  its later activation, both reopen arms — each asserting the exact
-  announcement sequence and the load count, in both scheduling modes;
-  and the census that no workspace source calls the document's load
-  outside the follow method.
+- **Term 1 — the funnel.** The effective active tab is
+  `ActiveGroup.ActiveTab`, and every path that changes it ends in
+  `SyncPanels()` (`WorkspaceViewModel.cs:1725–1749`; the setter, `Activate`,
+  the outermost-mutation hook, the end of `Restore`, the rename — the
+  citations above, traced assignment by assignment in round 3). The
+  graph adds ONE line there, GraphFollowActiveTab(), and NOTHING else in
+  the shell starts a graph load — a census asserts the document's load
+  entry points have that one caller outside the document. The attach
+  funnel seats and never starts.
+- **Term 2 — three liveness levels, the mac's.** LIVE: a graph tab
+  exists in any group — the document exists and a publication may
+  install. VISIBLE: the graph tab is its group's active tab, in ANY
+  group — the probe runs (the mac's `anyGraphTabVisible`,
+  `AppState.swift:3037–3047`). EFFECTIVE: visible and its group is the
+  active group — announcements are spoken (the mac's `graphTabActive`,
+  `:3031–3035`). Each gate names its level: the probe VISIBLE, the
+  receiver's speech decision EFFECTIVE at dispatch, the publication
+  LIVE. A hidden graph (open behind another tab) is not probed — the
+  next activation loads it (Term 4).
+- **Term 3 — the follow method classifies, and acts on transitions
+  only.** It computes the graph's level from `ActiveGroup.ActiveTab` and
+  the groups, compares with the classification it cached on its
+  previous call (the level and the tab OBJECT, so a tab replaced in
+  place is a change), stores the new one, and acts only when the graph
+  BECAME effective. Two kinds of transition are distinguished by what
+  changed: BY TAB — the graph was not visible and is now effective (its
+  group's active tab changed to it, or a new graph tab was added
+  active); BY GROUP — the graph was already visible and its group
+  became the active group (the `ActiveGroup` setter's funnel call,
+  `Layout.cs:49`, with `ActiveTab` unchanged).
+- **Term 4 — the load rule is the mac's guard.** The mac loads on every
+  `activateGraphTab` except when the tab is already the active group's
+  active tab AND a snapshot is held (`AppState+GraphTable.swift:81–83`).
+  In Term 3's words: a transition BY TAB always loads (a pair with the
+  summary); a transition BY GROUP loads only when no READY publication
+  is held (the pane-focus case, `AppState.swift:4350–4363, 4388–4393`);
+  an explicit Open with the graph ALREADY effective loads only when no
+  READY publication is held (the same guard; LOADING and ERROR hold
+  none, so an Open after a failure restarts the pair); a restore is a
+  transition BY TAB (the restored document holds nothing). A load
+  started by this rule is a PAIR with the summary policy of the cause;
+  the probe's loads are silent (A-3).
+- **Term 5 — the cause is scoped to its mutation and consumed only by
+  the graph's own transition.** The workspace holds a pending cause —
+  Open, set by `OpenGraph()` before its mutation; Reopen, set by
+  `ReopenClosedTab` before its mutation, for a graph record; Restore,
+  set for the `_restoring` window. A funnel call that finds the graph
+  NOT effective leaves the cause pending (the first of
+  `TryFocusGlobalGraph`'s two assignments makes another group active
+  with its own active tab, `Layout.cs:188`; the graph becomes effective
+  at the second, `:189`). The funnel call that finds the graph's
+  transition, or an explicit Open with the graph already effective,
+  consumes the cause. The outermost-mutation hook
+  (`WorkspaceViewModel.Persistence.cs:163–169`, the last funnel call of
+  the mutation) clears an unconsumed cause, so a cause never leaks into
+  the next path; a path outside any mutation (the header click's
+  binding, the cycle chord) never sets one and reads Activation.
+- **Term 6 — the announcement policy per cause, the mac's.** Open:
+  `GraphStatus{Opened}` always (`openGraphTab`, `:72`), then the pair
+  when Term 4 says so. Activation and Restore: no status; the summary
+  when the pair publishes. Reopen: `Opened`, then the shell's
+  `ReopenedGraph` at its existing sites — immediately after the
+  activation, `Layout.cs:463` and `:475` — then the summary when the
+  pair publishes (the mac's order, `AppState.swift:3612–3614`: the
+  reopen line is posted synchronously, the summary by the detached
+  load); a reopen of a graph tab that still exists (`:461–467`) is an
+  Open of that tab with the reopen line after it. The status is posted
+  before the load starts and the summary is posted by the receiver,
+  which never runs inside the mutation that started the load (Term 7),
+  so `Opened` precedes the reopen line precedes the summary in EVERY
+  mode; a failed pair puts `GraphBlocked{LoadFailed}` where the summary
+  would be.
+- **Term 7 — one scheduling primitive, never inline.** Every graph body
+  — pair, rows only, probe, create — runs through
+  StartWorkAlwaysAsync(compute, apply) (A-2): compute on the pool,
+  apply marshalled to the captured dispatcher, the tracked task
+  completing after the apply. The receiver therefore never runs inside
+  the mutation that started it, in production or in a test, and the
+  order of Term 6 is a property of the design, not of a mode.
+- **The facts enumerate the paths; the census closes the class.** One
+  fact per path, each asserting the announcement sequence and the load
+  count in both scheduling modes: `OpenGraph()` with no graph tab (the
+  new-tab arm); `OpenGraph()` with the graph effective and READY (Opened
+  alone, no load); `OpenGraph()` with the graph effective in ERROR
+  (Opened, the pair restarts); `OpenGraph()` with the graph hidden in
+  another group (two funnel calls, the cause survives the first, one
+  load); `OpenGraph()` with the graph visible in another group (BY
+  GROUP with Open: the mac's guard reloads because its active tab was
+  another group's — Opened, the pair); the header click; both cycle
+  chords; the close of the neighbour that makes the graph current; the
+  pane focus onto a group whose active tab is a READY graph (no load,
+  no status); the same onto a graph in ERROR (the pair); the restore
+  with the graph effective (the summary); the restore with the graph in
+  a non-active group and its later activation; both reopen arms
+  (Opened, the reopen line, the summary; and the failure arm); an Open
+  followed by an Activation (no leak); an Open whose mutation is
+  refused before the graph transitions (the cause cleared at the
+  boundary). And the census: no workspace source calls the document's
+  load outside the follow method.
 
 ### Design — three rules, carried from PR 0b's pass
 
@@ -2910,11 +2999,12 @@ rule has a Windows instance this section derives its contracts from.
   (`GraphSnapshot` has no filter, `GraphTableRows` has generation,
   total and rows only). A pair is validated from its envelope — the
   envelope's filter equals the envelope's query filter equals the
-  current request's, and the rows' generation equals the snapshot's —
-  and then REPLACES the authority and the rows as one immutable
-  publication record installed in one property swap; a rows-only
-  result is validated against the HELD publication (filter and
-  generation) and installs a new record carrying the held snapshot with
+  current request's, the envelope's query and sort equal the request's, and the rows'
+  generation equals the snapshot's — and then REPLACES the authority
+  and the rows as one immutable publication record installed in one
+  property swap; a rows-only result is validated against the HELD
+  publication (filter and generation) and against the request (query
+  and sort) and installs a new record carrying the held snapshot with
   the new rows and accepted sort. The token is (document instance,
   session identity, lifecycle generation, the full request record,
   `seq`); a stale, mismatched, out-of-order result installs nothing; a
@@ -2969,9 +3059,9 @@ attach and gives the tab a `Graph` property with the canvas's shape
 names — and `TheAttachFunnelDocCommentNamesEveryCallSite` — cover the
 graph without a sixth site, and so the attach can run before the tab
 is in its group without a load running against a tab that is not yet
-live. The LOAD starts from rule L's follow method in `SyncPanels`, with
-the cause's policy, on the transition into effective-active, and from
-nowhere else (the census). Retirement: when the last graph tab in the
+live. The LOAD starts from rule L's follow method in `SyncPanels`, under
+Terms 3 to 6, and from nowhere else (the census); the document is
+created with NO publication, so its first transition loads. Retirement: when the last graph tab in the
 workspace closes (the tab-set boundary the canvas sweep uses,
 `WorkspaceViewModel.Canvas.cs:286–301`), the workspace calls
 RetireGraphDocument: the document's `seq` advances (an in-flight result
@@ -2995,20 +3085,36 @@ and a fact asserts a graph tab's placeholder text is never shown.
 Pinned by facts: one document across two opens and a restore; the
 attach at each of the five sites seats and starts nothing (no FFI
 call, no announcement); rule L's path facts, each with its exact
-sequence and load count, in both scheduling modes; the release on last
-close (seq advanced, shutdown, pending speech dropped, publication
+sequence and load count, in both scheduling modes; the graph's open
+never touches the current tab (a dirty note keeps its tab and its
+text, GraphOpenKeepsTheDirtyNote); the release on last close (seq advanced, shutdown, pending speech dropped, publication
 retired, drain tracked) with a BLOCKED worker and a pending
 announcement that never land; a fresh document on reopen; teardown
 with a live document and with a retired one still draining, across a
 vault close and reopen; the placeholder gone.
 
 **A-2 — The load is 0b's design A on Windows: a pair or rows only, one
-token, one envelope, one publication record, both scheduling modes.**
-The document's `Load(kind, announce)` issues a token — (this document,
-the `VaultSession` reference the body is started against, the
-lifecycle generation, the request record `{query: GraphVisibilityQuery,
-sort: GraphTableSort}`, `seq` incremented) — and starts ONE `StartWork`
-body. A PAIR body calls `GraphSnapshot(filter)` then
+token, one envelope, one publication record, one scheduling primitive,
+both scheduling modes.** `PanelWorkScheduler` gains a protected
+primitive, StartWorkAlwaysAsync(compute, apply): the compute runs on
+the pool through the private `TrackWork` (`:157–172`) and `RunIfLive`
+(`:103–110`) in EVERY mode — never inline, the `RunGatedAsync` rule at
+`:143–154` made unconditional — and the apply runs where the captured
+UI context posts it when one was captured, else on the completing
+worker; the tracked task completes AFTER the apply, so `DrainForTests`
+and the teardown drain wait for the apply too (today's `Post` is
+outside the tracked set, `:190–203`). The graph document uses this
+primitive for EVERY body — pair, rows only, probe, create — and none
+other; its `synchronousForTests` selects the no-context mode, where
+facts drain and then assert, and the production mode is a
+DispatcherSynchronizationContext with a pumped DispatcherFrame
+(the canvas's `:4835–4843` shape). A receiver therefore never runs
+inside the mutation that started its body, in any mode (rule L, Term
+7). The document's `Load(kind, announce)` issues a token — (this
+document, the `VaultSession` reference the body is started against,
+the lifecycle generation, the request record `{query:
+GraphVisibilityQuery, sort: GraphTableSort}`, `seq` incremented) — and
+starts ONE body. A PAIR body calls `GraphSnapshot(filter)` then
 `GraphTableRows(query, sort)` (the mac's `:189–200`); a ROWS-ONLY body
 calls `GraphTableRows(query, sort)` alone (the mac's `:332`; P1's "once
 per generation", `p1_spec.md:67`). The body returns an envelope — the
@@ -3019,16 +3125,19 @@ time, reading the document's fields when it runs (the canvas's
 (i) the token's document is this document and not retired, its session
 is the current session, its lifecycle generation is current, and its
 `seq` and request equal the document's current ones — else drop; (ii)
-for a PAIR, the envelope's filter equals the envelope's query filter
-equals the request's, and the rows' `generation` equals the candidate
-snapshot's — else drop and issue a silent pair (the two crossings
-straddled a rebuild); for ROWS ONLY, the held publication's filter
-equals the envelope's query filter and the rows' `generation` equals
-the held snapshot's — else drop and issue a silent pair; (iii) build
-ONE immutable GraphPublication record — the snapshot, its filter, its
-generation, the rows, the total, the accepted sort, the summary text,
-the node-key set, the load state — and install it in ONE property
-swap (the canvas slot's shape, `CanvasPublicationSlot.cs:220–254`);
+the envelope's query equals the request's query and the envelope's
+sort equals the request's sort — else drop; for a PAIR, the envelope's
+filter equals the envelope's query filter, and the rows' `generation`
+equals the candidate snapshot's — else drop and issue a silent pair
+(the two crossings straddled a rebuild); for ROWS ONLY, the held
+publication's filter equals the envelope's query filter and the rows'
+`generation` equals the held snapshot's — else drop and issue a silent
+pair; (iii) build ONE immutable GraphPublication record — the snapshot,
+its filter, its generation, the rows, the total, the accepted sort, the
+summary text, the load state; no derived index of the snapshot (spec
+R-A: no surface caches a derived structure; membership questions scan
+`Snapshot.Nodes`) — and install it in ONE property swap (the canvas
+slot's shape, `CanvasPublicationSlot.cs:220–254, 270–282`);
 every observer binds from that record, so no `PropertyChanged` handler
 can see a candidate snapshot with old rows or new rows with an old
 total, and the surface re-binds from the record it is handed. A
@@ -3048,12 +3157,16 @@ closed during the fetch publishes nothing and announces nothing. The
 follow method's transitions, the sort and the probe share this ONE
 receiver. Pinned by facts, each a theory over `synchronousForTests`
 true AND false (the canvas's `:4821–4824` shape; the production arm
-drains with `DrainForTests` and a real dispatcher frame): a stale `seq`
-drops; a request mismatch drops; a document mismatch drops (a result
-addressed to a retired document); a session mismatch drops after a
-vault reopen; an injected envelope whose snapshot and rows disagree on
-generation drops and re-fetches, and the re-fetch publishes; an
-injected envelope whose filter disagrees with its query drops; a
+pumps a dispatcher frame and drains; the primitive's own facts: the
+compute never runs on the calling thread in either mode, the apply
+runs on the dispatcher when one was captured, and `DrainForTests`
+returns only after the apply): a stale `seq` drops; a request mismatch
+drops; a document mismatch drops (a result addressed to a retired
+document); a session mismatch drops after a vault reopen; an injected
+envelope whose snapshot and rows disagree on generation drops and
+re-fetches, and the re-fetch publishes; an injected envelope whose
+filter disagrees with its query drops; injected envelopes whose name
+needle, kind overlay or sort disagree with the request each drop; a
 rows-only result under a changed generation drops and the pair that
 follows publishes; every observer callback sees a self-consistent
 record (a handler that reads the record's rows and total during the
@@ -3071,26 +3184,28 @@ becomes `(phase, seen) => _enqueueUi(() => HandleIndexPhase(generation,
 phase, seen))`, and HandleIndexPhase acts only on
 `IndexPhase.ScanFinished` under the same lifecycle check
 `HandleFileChange` uses (`:715`) — both calling the workspace's
-NotifyGraphOfVaultChange, which, when a graph document exists AND a
-graph tab is LIVE, calls the document's Probe. `PanelWorkScheduler`
-gains a protected, tracked primitive, StartWorkAlwaysAsync(body): a
-`Task.Run` through the same private `TrackWork` (`:90–93`) and
-`RunIfLive` (`:103–110`) in EVERY mode — synchronous mode included —
-so `DrainForTests` waits for it; the probe and the create (A-8) are the
-two bodies that use it, because the listener callbacks may arrive with
-session locks held and forbid a synchronous session call
-(`session.rs:700–702, 707`), and a test's inline `_enqueueUi` would
-otherwise call `GraphGeneration()` inside the listener's frame. The
-body reads `GraphGeneration()` and posts it; the dispatcher side
-compares it with the held publication's generation and, on a
-difference, issues a SILENT pair (the mac's `loadGraphTable(announce:
-.silent)`, `:302`): no summary, no filter count, no status — the rows,
-the total and the summary region update under the reader. A burst
-coalesces by the token — every probe result that finds a change issues
-a fresh `seq`, so only the last pair publishes; a probe that arrives
-while a pair is in flight is dropped (the pair will read the newest
-generation). The probe is not debounced by the sidebar's 150 ms ticket
-(`:767–776`). Pinned by facts: a Slate write that changes the graph (a
+NotifyGraphOfVaultChange, which, when a graph document exists AND the
+graph tab is VISIBLE (rule L, Term 2 — the mac's `anyGraphTabVisible`;
+a hidden graph is not probed and loads on its next activation), calls
+the document's Probe. The probe's compute runs through
+StartWorkAlwaysAsync (A-2) — never inline — because the listener
+callbacks may arrive with session locks held and forbid a synchronous
+session call (`session.rs:700–702, 707`), and a test's inline
+`_enqueueUi` would otherwise call `GraphGeneration()` inside the
+listener's frame; the compute reads `GraphGeneration()` and the apply
+decides: when a READY publication is held and the probed generation
+differs from its generation, issue a SILENT pair with a fresh `seq`
+(the mac's `loadGraphTable(announce: .silent)`, `:302`) — a pair
+already in flight is thereby SUPERSEDED, its result dropping at step
+(i) (the mac's load sequence, `:488–491`), so a generation that arose
+after the in-flight pair's crossings is never lost; when NO
+publication is held or the held one is not READY (a first pair or a
+retry in flight), the probed generation is kept as a HIGH-WATER MARK
+and, when the next pair publishes with a generation below it, a silent
+pair follows. A silent pair announces nothing: no summary, no filter
+count, no status — the rows, the total and the summary region update
+under the reader. The probe is not debounced by the sidebar's 150 ms
+ticket (`:767–776`). Pinned by facts: a Slate write that changes the graph (a
 save adding a link) reloads silently and the announcer records
 nothing; an external edit surfaces at the scan-finished arm and
 reloads; a save that does not change the generation issues no pair
@@ -3100,14 +3215,19 @@ listener driven with an INLINE enqueue delegate makes no session call
 inside the listener's frame — asserted with a call-stack sentinel (a
 scoped flag the listener sets around its callback, checked by the test
 session's `GraphGeneration` wrapper), not with thread identities; a
-burst of five events yields one published pair.
+burst of five events yields one published pair; a generation that
+arises after an in-flight pair fetched both its results and before it
+applies ends in a publication at the newer generation (the gated
+fact, the canvas's publish-gate seam shape); a hidden graph is not
+probed and its next activation loads the newer generation.
 
 **A-4 — Load states, with the mac's labels.** The surface has four
 states, in this precedence: LOADING while a pair is in flight and the
 publication holds no snapshot (the label "Loading graph…", accessible
 "Loading graph.", `GraphTableView.swift:300–307`); ERROR when the last
-PAIR failed (the label "Graph error: {message}", `:309–316`, the message
-core's `VaultError` text humanised as the shell does elsewhere; the
+PAIR failed (the visible text is the raw message, core's `VaultError`
+text humanised as the shell does elsewhere, and the view's accessible
+name is "Graph error: {message}" — the mac's split, `:309–316`; the
 announcement `GraphBlocked{LoadFailed{message}}`, High); EMPTY when the
 snapshot is held and the rows are empty (the label "No notes match the
 current filters.", `:257`; the summary region still carries
@@ -3188,10 +3308,18 @@ GraphAnnouncer.RenderLabel(event), which calls `A11yRender` and returns
 the text, so the relay stays the one file that renders (A-10). The
 verbosity is Standard in this PR (AD-6; PR C's menu and the config's
 `verbosity` key set it). The rendering is 0a's corpus row, so the
-row's Name is P1's copy byte-for-byte and no template is typed here.
-`rowItemStatus` returns the Kind cell (`Cells[8]`, core's
-`kind_label`) — the mac has no item status; a recorded Windows-only
-enrichment (A-D1, AD-2) that adds nothing to the Name. Pinned by facts:
+row's Name is P1's copy byte-for-byte and no template is typed here
+(the mac speaks the same copy on row focus through its announcer's
+`GraphRow`, not as a row label).
+`rowItemStatus` returns the Kind cell — the cell at the index where
+`GraphTableColumn.Kind` sits in the fetched column vector, never a
+typed position; a census forbids a `Cells[<digit>]` literal under
+`Graph/` — the mac has no item status; a recorded Windows-only
+enrichment (A-D1, AD-2). The row NAME itself is a recorded divergence
+too: the mac grid's rows carry no P1 row label — its `GraphTableView`
+passes no row description and the cells alone are read
+(`GraphTableView.swift:322–341`) — where the spec requires the Windows
+row's Name to be the P1 copy (A-D3). Pinned by facts:
 a realized row's `AutomationProperties.Name` equals the corpus
 rendering for a note, an attachment and a ghost, and its ItemStatus
 the Kind cell; a row realized after a scroll carries its own name; an
@@ -3205,9 +3333,9 @@ unchanged).
 authority; the summary region is `audio_summary` verbatim.** The
 grid's current row writes `GraphViewState.SelectedKey` (the row's
 `StableKey`; the mac's `graphSelectedNodeKey`, `AppState.swift:3108`).
-The DOCUMENT revalidates the key at every pair publication against the
-record's node-key set, clearing it only when the node is gone from the
-SNAPSHOT (the mac's `revalidateGraphSelection(against:)`, `:370–375`)
+The DOCUMENT revalidates the key at every pair publication by scanning
+the record's `Snapshot.Nodes` for the key (no derived set, spec R-A),
+clearing it only when the node is gone from the SNAPSHOT (the mac's `revalidateGraphSelection(against:)`, `:370–375`)
 — never against the rows, so a key hidden by PR C's name or kind
 overlay survives; the SURFACE, after each publication, re-seats the
 grid's current row on the row whose key equals `SelectedKey` and, when
@@ -3244,10 +3372,18 @@ in File Tree, Create note, each `Name = spec.Title` from the vector that
 carries it — with `IsVisible = row => vector(row.Kind).Contains(action)`,
 so a note or attachment shows the four navigation actions and a ghost
 shows Create note; nothing typed, nothing reordered, no crossing per
-row. Each action's `Execute` calls a seam on the document the
-workspace wires at attach (the bases' `OpenRowFromSurface`,
-`WorkspaceViewModel.Bases.cs:1338`): Open and Open in New Tab → the
-workspace's OpenGraphRowFromSurface(path, target, after) (A-9); Reveal
+row. Every action and activation is ADDRESSED: the surface captures its
+graph tab and the tab's group when the action is invoked (the mac's
+`tabID` and `focusOwningGroup`, `GraphTableView.swift:208, 372–375`),
+and the workspace seam makes that group and tab active FIRST — through
+`Activate(group, tab)`, `Layout.cs:68–93` — so a current-tab or new-tab
+open lands in the graph's own pane and not in whichever pane holds
+focus when an asynchronous body completes; an address whose tab is
+gone (the graph retired meanwhile) is refused silently. Each action's
+`Execute` calls a seam on the document the workspace wires at attach
+(the bases' `OpenRowFromSurface`, `WorkspaceViewModel.Bases.cs:1338`):
+Open and Open in New Tab → the workspace's
+OpenGraphRowFromSurface(address, path, target, after) (A-9); Reveal
 in File Tree → the files sidebar's new SelectPathFromSurface(path),
 which expands the ancestors, selects the node and focuses the tree (the
 mac's meaning; AD-11); Show connections → a seam PR B fills; Create
@@ -3259,18 +3395,23 @@ surface-neutral interface with the same two members and TYPED outcomes
 exception's, which the sidebar's arm at
 `FilesSidebarViewModel.CanvasNotes.cs:35–37` discards today; the canvas
 keeps matching by type) and `Unavailable` keeps its one meaning, the
-session-work refusal at shutdown (`:24–31`). The create runs in
-StartWorkAlwaysAsync (A-3; never on the dispatcher, never inline), and
-its result posts to the dispatcher where, under the token's liveness
-checks: `Landed` → `NoteLanded(path, caveat)` (the barrier, the tree
-refresh, the caveat spoken the sidebar's way), then the open in the
-current tab through OpenGraphRowFromSurface with `after` = ONE
-`A11yEvent::Graph(GraphStatus{NoteCreated{leaf}})` — posted by the
-WORKSPACE after the successful open (the mac's order,
-`AppState+Connections.swift:294–298`: open, then one `NoteCreated`), and
-by the workspace because the open replaced the graph tab and retired
-the relay (A-1; AD-8 records the one graph-family event posted from
-outside `Graph/`); `Exists(message)` and `Failed(message)` →
+session-work refusal at shutdown (`:24–31`). The create runs through
+StartWorkAlwaysAsync (A-2; never on the dispatcher, never inline) with
+EMPTY content (the mac's `:271`), and its apply, under the token's
+liveness checks: `Landed` → `NoteLanded(path, caveat)` (the barrier,
+the tree refresh, the caveat spoken the sidebar's way), then the open
+in the current tab of the ADDRESSED pane through OpenGraphRowFromSurface
+— the current tab there is the graph tab, which is never dirty, so the
+dirty gate (`Layout.cs:143–151`) cannot refuse it — then ONE
+`A11yEvent::Graph(GraphStatus{NoteCreated{leaf}})` posted by the
+WORKSPACE after the open ATTEMPT, whatever the open returned (the
+mac's order and its unconditional post, `AppState+Connections.swift:294–298`:
+the note exists on disk, so the completion is truthful even when the
+open is refused), and by the workspace because the open replaced the
+graph tab and retired the relay (A-1; AD-8 records the one
+graph-family event posted from outside `Graph/`); the mac then installs
+an inline rename for the created entry (`:295–296`) — Windows does not
+(A-D4); `Exists(message)` and `Failed(message)` →
 `GraphBlocked{NoteCreateFailed{message}}` through the relay (High; the
 mac's `createExclusive` failure arm); `Unavailable` → nothing: the
 session is shutting down and the token is dead (a retired-token drop);
@@ -3280,12 +3421,16 @@ reason when the seam reports one — Windows has no structural-mutation
 gate today, so Create note is admitted, and the seam's reason is the
 hook a future gate fills — and Show connections is disabled without a
 reason until PR B wires its seam (AD-3, AR-2). A disabled action is
-still LISTED. Pinned by facts: the visible names per kind equal the
-kind's vector in order; the crossing count for the actions is three
-for a 1-row and a 10,000-row grid; each enabled action reaches its seam
-with the row's path or ghost path; Create note runs its create off the
-dispatcher, lands, opens, and ONE `NoteCreated` posts after the open —
-no `OpenedFile`; `Exists` and `Failed` each announce their High event
+still LISTED. Pinned
+by facts: the visible names per kind equal the kind's vector in order;
+the crossing count for the actions is three for a 1-row and a
+10,000-row grid; each enabled action reaches its seam with the row's
+path or ghost path and the graph's own group is made active first (a
+graph visible in a non-focused pane opens in ITS pane); Create note
+runs its create off the dispatcher with empty content, lands, opens in
+the graph's pane, and ONE `NoteCreated` posts after the open — no
+`OpenedFile`; a refused open after a landed create still posts
+`NoteCreated`; `Exists` and `Failed` each announce their High event
 with the message and open nothing; `Unavailable` announces nothing; a
 vault close during the create lands nothing; Show connections is
 present and disabled, and setting its seam enables it.
@@ -3299,10 +3444,11 @@ double-click deliver `rowActivated`. The graph wires `rowActivated` to
 Open (current tab) and `rowActivatedModified` to Open in New Tab, and
 for a GHOST both deliver Create note under the same admission (the
 mac's one gate, `GraphTableView.swift:357–365`). The open is the
-workspace's OpenGraphRowFromSurface(path, target, after): it runs
+workspace's OpenGraphRowFromSurface(address, path, target, after): it
+makes the addressed group and tab active (A-8), runs
 `OpenPathCore(path, target)` under the workspace mutation
-(`WorkspaceViewModel.cs:1869–1870, 1928`) and, on success, posts the
-`after` event through the WORKSPACE's announcer (`_announce`) — for
+(`WorkspaceViewModel.cs:1869–1870, 1928–1944`) and, on success, posts
+the `after` event through the WORKSPACE's announcer (`_announce`) — for
 Open and Open in New Tab that is `OpenedFile(leaf)`, the shell's
 convention for a surface open (the bases', `BasesOpenRow`,
 `WorkspaceViewModel.Bases.cs:473–481`), where the mac's `openFile`
@@ -3310,13 +3456,17 @@ posts nothing (`:363`) — a recorded Windows-only announcement (A-D2);
 for the create it is the one `NoteCreated` (A-8); the graph family
 posts no event of its own on activation. The event rides the workspace
 and not the relay because opening in the current tab replaces the
-graph tab and retires the document (A-1). A failed open (the path no
-longer resolves) posts nothing and the workspace's own refusal stands.
-Pinned by facts: plain activation of a note reaches the seam with
-`CurrentTab` and `OpenedFile` posts through the workspace after the
+graph tab and retires the document (A-1). `OpenPathCore` opens any non-blank path — it checks nothing on disk
+(`:1930–1935`; a note deleted since the snapshot opens as the shell's
+missing-file tab, the shell's business, and the next probe drops the
+row) — so the only refusal is the dirty gate's, which the graph's own
+pane cannot raise (A-8); a refused open posts nothing. Pinned by facts:
+plain activation of a note reaches the seam with `CurrentTab` in the
+graph's pane and `OpenedFile` posts through the workspace after the
 graph document retired; modified activation reaches it with `NewTab`
 and the graph document stays; a ghost's plain and modified activation
-both enter the create funnel; a failed open posts nothing.
+both enter the create funnel; a path deleted since the snapshot opens
+and posts `OpenedFile` like any other.
 
 **A-10 — One relay, walled by path; the sequences.** GraphAnnouncer is
 the Windows twin of `GraphAnnouncer.swift` and the sibling of
@@ -3353,13 +3503,13 @@ reads `Graph/GraphAnnouncer.cs`'s switch and compares membership per
 class both ways with the list core pins, as the mac's
 `the_mac_graph_coalescing_switch_matches_the_pinned_class_list`
 (`lib.rs:12864–12914`) and the Windows canvas twin (`:12916–12932`)
-do. The sequences are rule L's: Open into a tab that was not
-effective-active → `GraphStatus{Opened}` then `GraphSnapshotSummary`;
-Open with the tab effective-active → `Opened` alone; Activation and
-Restore → the summary alone; Reopen → `Opened`, the summary, then the
-shell's `ReopenedGraph`; a load failure → the status the cause owes,
-then `GraphBlocked{LoadFailed}` and never the summary; none of these is
-coalesced. Pinned by facts: the class membership (both hosts'
+do. The sequences are rule L's Term 6: Open → `GraphStatus{Opened}`, then
+`GraphSnapshotSummary` when Term 4 loads; Open with the graph effective
+and READY → `Opened` alone; Activation by tab and Restore → the summary
+alone; Activation by group → nothing when READY, the summary otherwise;
+Reopen → `Opened`, the shell's `ReopenedGraph`, then the summary; a
+load failure → the status the cause owes, then `GraphBlocked{LoadFailed}`
+where the summary would be; none of these is coalesced. Pinned by facts: the class membership (both hosts'
 switch-list tests); the window, latest-wins and the High flush in a
 Windows GraphAnnouncerTests twin of the canvas's; each sequence, in
 both scheduling modes; Shutdown drops a pending navigation event;
@@ -3402,9 +3552,10 @@ stays pending until PR F.
 **A-13 — Persistence and the singleton twins.** The singleton restore
 collapse stands as tested (`W1WorkspaceRedTeamTests.cs:336–378`) and
 now seats the ONE document on the surviving tab; rule L's Restore
-policy loads it with the summary when it is the effective-active tab,
-and a graph tab restored into a non-active group loads when it first
-becomes effective-active. The mac routing suite's PR-A cases gain
+cause loads it with the summary when it is the effective tab, and a
+graph tab restored into a non-active group loads when it first
+becomes effective (a transition BY TAB or, if it was its group's active
+tab, BY GROUP with no publication held — both load). The mac routing suite's PR-A cases gain
 Windows twins in `W1WorkspaceRedTeamTests`: GraphTabLoadsSnapshot (the
 document publishes over a real session), GraphTabNotAddressableByPath
 (`OpenPath("graph:singleton")` opens no tab),
@@ -3432,7 +3583,8 @@ filter as the pair's argument (the test session's recorded calls). The
 summary is compared to the ARTIFACT's: this PR adds `summary` to each
 table entry of the `graph_queries` artifact — core's `audio_summary`
 under the entry's filter — in both serializers (the harness's
-`SurfaceSerializer` and the mac twin `graphQueriesArtifact.swift`),
+`SurfaceSerializer` and the mac twin, `ParityHarnessTests.swift`'s
+`graphQueriesArtifact`, `:305–308`),
 regenerates the golden through the harness, extends the schema-walk
 census with the new string key, and the fact asserts the record's
 summary equals the entry's `summary` byte for byte (AD-13; the mac
@@ -3449,13 +3601,22 @@ GraphOpenBenchmarks beside `CanvasOpenBenchmarks` (the class shape
 1k and 10k notes (core's `generate_linked_vault` shape, built into a
 temp vault and scanned), the workloads are the snapshot under the
 default filter, the table rows under the default sort, and the
-document's open through to the first publication. P set no host-side
-marshalling budget (locked decision 10 budgets the layout and the
-backend, `00_program.md:24`); the budgets asserted are Windows host
-budgets this PR sets — 500 ms median for the open-to-publication
-workload at 10k, 100 ms at 1k, the canvas's first-derivation precedent
-— and the spec's "against P's budgets" is amended to name them (AD-7,
-AD-9); a miss is a finding for the task loop, not a waiver. The medians
+document's open through to the first publication, each at 1k and 10k —
+six reports. The `--graph` arm CAPTURES the suite's `Summary` (the
+`--canvas` arm discards its open suite's, `Program.cs:27`, and gates
+only the renderer's, `:28–57` — the shape is copied, the omission is
+not) and walks a pinned inventory: every (workload, scale) has an
+entry, each entry names a budget or is marked measurement-only, a
+report missing from the inventory or an inventory entry without a
+report fails the run, and every budgeted entry prints its `PASS`/`MISS`
+line. P set no host-side marshalling budget (locked decision 10 budgets
+the layout and the backend, `00_program.md:24`); the budgets asserted
+are Windows host budgets this PR sets — 500 ms median for
+open-to-publication at 10k, 100 ms at 1k, the canvas's
+first-derivation precedent; the snapshot and rows workloads are
+measurement-only, their medians recorded — and the spec's "against
+P's budgets" is amended to name them (AD-7, AD-9); a miss is a finding
+for the task loop, not a waiver. The medians
 land in `BENCHMARKS.md` under "Milestone W6-2 — graph through the C#
 binding" (spec §4 PR F item 2 opens that section; this PR writes its
 first rows). P1's virtualisation test (`p1_spec.md:73`) is a Windows
@@ -3483,8 +3644,8 @@ matrix row's (A-12).
 
 **A-17 — Tripwires and censuses this PR adds or extends; what the
 citation census does and does not guarantee.** The two directory
-censuses (A-10); the no-typed-header census (A-5); the one-caller
-census of rule L (A-1); the switch-list twin (A-10);
+censuses (A-10); the no-typed-header census (A-5); the no-typed-cell-
+index census (A-6); the one-caller census of rule L (A-1); the switch-list twin (A-10);
 `TheAttachFunnelDocCommentNamesEveryCallSite` unchanged and green with
 the graph arm; a placeholder census: no `WorkspaceItemKind` that has a
 surface is a placeholder (Graph joins canvas); the view-state census
@@ -3516,21 +3677,27 @@ line check, and AD-10 records the scope.
   vector is core's and admission is the host's (0bD-8); a disabled
   action with no reason is the honest state between the two merges
   (AR-2).
-- **AD-4 — The document is a `PanelWorkScheduler`, its publication is
-  one record, and the row is the record.** One worker body per epoch
-  through `StartWork` (the probe and the create through
-  StartWorkAlwaysAsync), publishes through `Post`, validated at dispatch
-  time, installed as one immutable GraphPublication in one property
-  swap; the grid binds `GraphTableRow` records directly — the cells
-  vector is the projection and a wrapper would be a second one.
+- **AD-4 — The document is a `PanelWorkScheduler` with ONE scheduling
+  primitive, its publication is one record, and the row is the
+  record.** Every body — pair, rows only, probe, create — runs through
+  StartWorkAlwaysAsync(compute, apply): compute on the pool, apply on
+  the captured dispatcher, the tracked task complete after the apply;
+  the document never uses the inline `StartWork` or `Post`, so a
+  receiver never runs inside the mutation that started it and the
+  drains wait for the apply (A-2). Validated at dispatch time, installed
+  as one immutable GraphPublication in one property swap; the grid
+  binds `GraphTableRow` records directly — the cells vector is the
+  projection and a wrapper would be a second one.
 - **AD-5 — The probe is a workspace notification on both listener
-  arms, and rides the always-async primitive.** `HandleFileChange`
-  already fans out to bases and history; the graph is one more line
-  there and one new marshalled arm for `ScanFinished` (A-3), gated on a
-  live tab, and the token absorbs bursts — no debounce, no second
-  generation counter. The probe's session call runs on a tracked
-  worker in every mode because the listener forbids synchronous
-  reentry and a test's inline enqueue would otherwise produce it.
+  arms, gated VISIBLE, superseding.** `HandleFileChange` already fans
+  out to bases and history; the graph is one more line there and one
+  new marshalled arm for `ScanFinished` (A-3), gated on a VISIBLE graph
+  tab (the mac's), issuing a superseding silent pair on a changed
+  generation and keeping a high-water mark while no READY publication
+  is held — no debounce, no second generation counter. The probe's
+  session call runs on the pool in every mode because the listener
+  forbids synchronous reentry and a test's inline enqueue would
+  otherwise produce it.
 - **AD-6 — Verbosity is Standard in this PR.** The document carries the
   field and the row name reads it; PR C's menu and the config key
   (0bD-7) set it. The Terse fact is written now.
@@ -3541,15 +3708,18 @@ line check, and AD-10 records the scope.
   measured medians beside them, and the spec's §K line names them
   (AD-9).
 - **AD-8 — Create note is the sidebar's two-phase seam with typed
-  outcomes, opened first and announced once by the workspace.** The
-  ghost's path is core's (0b-11), the create is the sidebar's
-  worker-safe phase and dispatcher-side landing (the canvas's
+  outcomes, addressed to the graph's pane, opened first and announced
+  once by the workspace after the attempt.** The ghost's path is
+  core's (0b-11), the content empty (the mac's), the create is the
+  sidebar's worker-safe phase and dispatcher-side landing (the canvas's
   precedent, generalised, `Exists` gaining its message), the open is the
-  workspace's, and the family's `NoteCreated` is the ONE graph-family
-  event posted from outside `Graph/` — by the workspace, after the
-  open, because the open retires the relay (A-8). The directory
-  censuses wall `Graph/`; this one posting site is named in the
-  announcement-seam census's exemptions and asserted to be the only one.
+  workspace's in the addressed pane, and the family's `NoteCreated` is
+  the ONE graph-family event posted from outside `Graph/` — by the
+  workspace, after the open attempt and regardless of its result,
+  because the note exists and the open retires the relay (A-8). The
+  directory censuses wall `Graph/`; this one posting site is named in
+  the announcement-seam census's exemptions and asserted to be the only
+  one.
 - **AD-9 — The spec's stale or superseded lines are corrected here,
   not repeated** (0bD-12): `WorkspaceViewModel.cs:289–300` → `:296–309`;
   `AppState+GraphTable.swift:195–199` → `:235–243`; "`ChordScope.Graph`"
@@ -3571,13 +3741,16 @@ line check, and AD-10 records the scope.
   meaning, so it is parity, and the sidebar's own "Reveal in File
   Explorer" (FD-5) is a different verb under a similar name — a
   clarification, not a divergence.
-- **AD-12 — Rule L's cause is a field, not a parameter.** `SyncPanels`
-  has no arguments and five callers; threading a cause through them
-  would touch every caller for a value only three of them know. The
-  explicit paths set the field before their mutation and the follow
-  method clears it on read; a fact asserts a cause never leaks past
-  the mutation that set it (an Open followed by an Activation speaks
-  the Activation's sequence).
+- **AD-12 — Rule L's cause is a mutation-scoped field, not a
+  parameter.** `SyncPanels` has no arguments and five callers;
+  threading a cause through them would touch every caller for a value
+  only three of them know. The explicit paths set the field before
+  their mutation; the follow method consumes it only at the graph's own
+  transition (or at an explicit Open with the graph already effective),
+  leaving it pending across a funnel call that saw another tab; the
+  outermost-mutation hook clears whatever was not consumed (Term 5).
+  Facts: a cause never leaks past its mutation, and survives the two
+  funnel calls of `TryFocusGlobalGraph`.
 - **AD-13 — The `graph_queries` artifact's table entries gain
   `summary`.** Spec §4 requires the summary byte-identical over the
   shared corpus and the 0b artifact carried none; adding the string to
@@ -3588,9 +3761,17 @@ line check, and AD-10 records the scope.
 - **AD-14 — The dirty note's survival is pinned as the observable, not
   the mechanism.** The mac parks its one shared editor buffer before
   the graph tab takes the pane (`AppState+GraphTable.swift:63, 90`); the
-  Windows editors are per tab and nothing is displaced; both hosts
-  keep the dirty text — GraphOpenKeepsTheDirtyNote pins that (A-13),
-  and no divergence is recorded.
+  Windows graph opens into a NEW tab and never touches the current one
+  (`WorkspaceViewModel.cs:1946–1948`); both hosts keep the dirty text —
+  GraphOpenKeepsTheDirtyNote pins that (A-13), and no divergence is
+  recorded.
+- **AD-15 — Rule L's load rule IS the mac's guard, transcribed.** The
+  mac has one decision — load unless the tab is already the active
+  group's active tab with a snapshot held (`:81–83`) — reached from
+  every activation path; Terms 3 and 4 transcribe it into the shell's
+  transition vocabulary (by tab, by group, already effective) rather
+  than enumerating paths, so a path the shell grows later is decided by
+  the same guard.
 
 ### Recorded divergences (owner-recorded; off-limits for re-litigation)
 
@@ -3602,6 +3783,15 @@ line check, and AD-10 records the scope.
   bases'), where the mac's `openFile` posts nothing
   (`GraphTableView.swift:363`). The create path posts one
   `NoteCreated` on both.
+- **A-D3 — The Windows row's Name is the P1 row copy; the mac's rows
+  carry no row label** (A-6): the spec requires the Name on Windows,
+  the mac grid passes no row description (`GraphTableView.swift:322–341`)
+  and speaks the copy on row focus through its announcer instead; the
+  cells are identical on both.
+- **A-D4 — A ghost's created note is not handed to inline rename on
+  Windows** (A-8): the mac installs a rename for the created entry
+  (`AppState+Connections.swift:295–296`); on Windows the note keeps the
+  ghost's name and the sidebar's F2 renames it.
 
 ### Mac details recorded while reading (not this issue's to fix)
 
@@ -3611,10 +3801,10 @@ line check, and AD-10 records the scope.
   Duplicate Tab (`AppState.swift:3266–3269`) and nowhere else. Windows
   follows: Open on the effective-active tab speaks `Opened` alone (rule
   L), and `AlreadyOpen` stays unused by this PR.
-- Whether a pane-focus change onto a group whose active tab is the
-  graph reloads on the mac (`workspace.focusGroup` against
-  `activateTab`) is read in the task loop; Windows treats it as an
-  Activation (rule L), and a difference found is recorded then (AR-6).
+- A pane focus onto a group whose active tab is a loaded graph does
+  not reload on the mac (`focusPane` → `focusGroup` → `enterEditorGroup`
+  → `selectTab` → the guard, `AppState.swift:4350–4363, 4388–4393`);
+  rule L's Term 4 transcribes that (no load BY GROUP when READY).
 
 ### Accepted risks
 
@@ -3632,31 +3822,34 @@ line check, and AD-10 records the scope.
 - **AR-5 — The sidebar's select-path seam is new** and its behaviour
   (expand, select, focus) is pinned by a fact, not by the journey; the
   journey asserts the action is listed and reaches the seam.
-- **AR-6 — One mac detail is read at task time** (the pane-focus
-  reload); Windows pins its side now, and a difference found is
-  recorded as a divergence in the task-loop record.
+- **AR-6 — The always-async primitive changes the scheduler's test
+  contract for one document.** The graph's "synchronous" mode is the
+  no-context mode with a drain, not the inline mode the other panels
+  use; a fact that forgets to drain reads a stale publication. The
+  primitive's own facts (A-2) and the canvas-shaped production arm are
+  the guard.
 
 ### Round 1 ledger (nineteen findings; disposition by revision 2, re-verified by round 2, the remainders closed by revision 3)
 
 | # | Finding | Disposition |
 |---|---|---|
-| IGA-1 | The receiver validated a replacement against the authority it replaces | Rule A: a pair validates from its ENVELOPE (revision 3, IGA-22) and replaces in one record; rows-only validates against the held publication (A-2) |
+| IGA-1 | The receiver validated a replacement against the authority it replaces | Rule A: a pair validates from its ENVELOPE — filter, query AND sort against the request (revision 4, IGA-43) — and replaces in one record; rows-only validates against the held publication and the request (A-2) |
 | IGA-2 | Every sort re-read the snapshot | Pair vs rows-only requests; a sort fetches rows only; call-count facts (A-2, A-5) — discharged |
-| IGA-3 | Attach before liveness; synchronous mode inverted the open sequence; `ReopenedGraph` duplicated | Attach seats only; rule L's follow method in `SyncPanels` with the cause's policy (revision 3, IGA-20/21) |
+| IGA-3 | Attach before liveness; synchronous mode inverted the open sequence; `ReopenedGraph` duplicated | Attach seats only; rule L's follow method with Terms 3–7 (revision 4: the cause scoped, the mac's guard, the mac's reopen order, one never-inline primitive) |
 | IGA-4 | `rowAudioDescription` is not the UIA row Name | `rowAutomationName` and `rowItemStatus` seams; `RenderLabel` (A-6, AD-2) — discharged |
-| IGA-5 | `HandleFileChange` misses scan-finished; inline reentry hazard | The index-phase arm; StartWorkAlwaysAsync and the call-stack sentinel (revision 3, IGA-24) |
+| IGA-5 | `HandleFileChange` misses scan-finished; inline reentry hazard | The index-phase arm; the always-async primitive and the call-stack sentinel (A-2, A-3) — discharged |
 | IGA-6 | Retirement not connected to the teardown drain; announcer not shut down | RetireGraphDocument; ShutdownGraphDocument in `Dispose`'s drain (A-1, A-10) — discharged |
 | IGA-7 | External sorting produced no announcement | `GridSorted` once on adoption (A-5, AD-9) — discharged |
 | IGA-8 | Per-row action fetch; the grid takes one list | Three vectors once per document, unioned, `IsVisible` per row (A-8) — discharged |
-| IGA-9 | `CreateReporting` is not the shell's complete create seam | The two-phase seam with TYPED outcomes, opened first, announced once by the workspace (revision 3, IGA-26/27) |
+| IGA-9 | `CreateReporting` is not the shell's complete create seam | The two-phase seam with typed outcomes, ADDRESSED to the graph's pane, opened first, announced once after the attempt (revision 4, IGA-41) |
 | IGA-10 | The production scheduling path unpinned | Theories over both modes (A-2, A-10, A-14) — discharged |
 | IGA-11 | Selection cleared against the rows | Revalidated against the record's node-key set (A-7) — discharged |
 | IGA-12 | Bind's restore overwrote `SelectedKey` | The syncing guard (A-7) — discharged |
 | IGA-13 | Ghost activation and modified activation misread | The create funnel; `rowActivatedModified` (A-9) — discharged |
 | IGA-14 | `OpenPath` announces nothing; A-D2 false | OpenGraphRowFromSurface with its `after` event (A-9) — discharged |
 | IGA-15 | The view state's shape unpinned | The five fields, defaults, ownership, the no-shadow census (A-1, A-17) — discharged |
-| IGA-16 | 10k virtualisation evidence missing | The live-container fact under Standard virtualisation (revision 3, IGA-29) |
-| IGA-17 | Failure publication contradicted itself and the mac | Two failure arms: pair → ERROR without a snapshot; rows-only → READY stands, the sort rolls back, the High event (revision 3, IGA-25) |
+| IGA-16 | 10k virtualisation evidence missing | The live-container fact under Standard virtualisation (A-15) — discharged |
+| IGA-17 | Failure publication contradicted itself and the mac | Two failure arms: pair → ERROR without a snapshot; rows-only → READY stands, the sort rolls back, the High event (A-2, A-4) — discharged |
 | IGA-18 | Drifted line ranges; the census cannot see them | Corrected; the census's scope recorded (A-17, AD-10) — discharged |
 | IGA-19 | A-D4 was not a divergence | Moved to AD-11 — discharged |
 
@@ -3664,29 +3857,52 @@ line check, and AD-10 records the scope.
 
 | # | Finding | Disposition |
 |---|---|---|
-| IGA-20 | The three-site hook missed the replace arm and five activation paths | Rule L: the follow method in `SyncPanels`, which every path already reaches; one fact per path; the one-caller census (design pass, A-1) |
-| IGA-21 | Reopen had to load while its only hooks were forbidden | Reopen is a cause with the mac's policy: `Opened`, the summary, then the shell's `ReopenedGraph` (rule L, A-10) |
-| IGA-22 | The candidate snapshot carries no filter | The worker ENVELOPE carries the filter, the query and the sort it used; the pair validates from it; the injected-mismatch facts (rule A, A-2) |
+| IGA-20 | The three-site hook missed the replace arm and five activation paths | Rule L: the follow method in `SyncPanels`, which every path reaches (round 3 traced them all); the open path corrected — a NEW tab, no replace arm (revision 4, IGA-36); the cause scoped to its mutation (IGA-37) |
+| IGA-21 | Reopen had to load while its only hooks were forbidden | Reopen is a cause with the mac's order: `Opened`, the shell's `ReopenedGraph`, then the summary (revision 4, IGA-38) |
+| IGA-22 | The candidate snapshot carries no filter | The worker ENVELOPE carries the filter, the query and the sort it used; the pair validates all three against the request (revision 4, IGA-43) |
 | IGA-23 | A dispatcher callback is serialized, not observer-atomic | One immutable GraphPublication installed in one property swap, the canvas slot's shape; the self-consistent-observer fact (rule A, A-2, AD-4) |
-| IGA-24 | No tracked always-async primitive; the thread-id fact unsound | StartWorkAlwaysAsync (protected, tracked, every mode); the call-stack sentinel replaces thread identities (A-3, AD-5) |
+| IGA-24 | No tracked always-async primitive; the thread-id fact unsound | StartWorkAlwaysAsync(compute, apply): tracked through the apply, the apply on the captured dispatcher (revision 4, IGA-42); the call-stack sentinel (A-2, A-3) |
 | IGA-25 | Pair and rows-only failures conflated | Two arms: pair → ERROR record without a snapshot; rows-only → nothing installed, sort rolled back, READY stands, the High event (A-2, A-4) |
 | IGA-26 | `Exists` has no message; `Unavailable` means shutdown | Typed outcomes: `Exists(message)`; `Unavailable` is a retired-token drop; the busy-reason mapping removed (A-8) |
-| IGA-27 | Two announcements on a ghost create; activation parity unrecorded | Open first, ONE `NoteCreated` by the workspace after it (the mac's order); `OpenedFile` on activation recorded as A-D2 (A-8, A-9, AD-8) |
+| IGA-27 | Two announcements on a ghost create; activation parity unrecorded | Open first, ONE `NoteCreated` by the workspace after the ATTEMPT (revision 4, IGA-41); `OpenedFile` on activation recorded as A-D2 (A-8, A-9, AD-8) |
 | IGA-28 | The artifact test used the wrong filter and no artifact summary | The pair under the entry's filter (the harness's inclusive `all`); `summary` added to the artifact's table entries in both serializers (A-14, AD-13) |
 | IGA-29 | Recycled-row facts impossible under Standard virtualisation | The seams applied per newly realized row and cleared on unload; the live-container count; "cache length", not "recycling slack" (A-6, A-15) |
-| IGA-30 | The `AlreadyOpen` decision cited Duplicate Tab | Open on the effective-active tab speaks `Opened` alone, the mac's; `AlreadyOpen` unused; the citation corrected (rule L, mac details) |
+| IGA-30 | The `AlreadyOpen` decision cited Duplicate Tab | Open on the effective tab speaks `Opened` and loads unless READY — the mac's guard, not "no load" (revision 4, IGA-39); `AlreadyOpen` unused |
 | IGA-31 | Silent restore was an unrecorded divergence | Restore speaks the summary, the mac's (`activateTab` at restore); no divergence (rule L, AD-9) |
 | IGA-32 | The announcer census could be bypassed by a nested same-name file | Exempt the normalised path, assert exactly one relay, scan `Graph/**/*.cs` (A-10) |
 | IGA-33 | A-D3 was an implementation difference | Moved to AD-14 with the shared observable pinned (A-13) |
 | IGA-34 | Non-P budgets substituted silently | Named as Windows host budgets; the spec's §K line amended (AD-7, AD-9) |
 | IGA-35 | The default-sort export absent from the spec's Consumes list | Added; AD-9 records it with the core, FFI, binding and census obligations (A-5, AD-1, AD-9) |
 
+### Round 3 ledger (seventeen findings; disposition by revision 4)
+
+| # | Finding | Disposition |
+|---|---|---|
+| IGA-36 | Rule L was built on a current-tab `OpenGraph` path that does not exist | `OpenGraph()` opens with the new-tab target, always; the replace-arm and dirty-fallback facts removed; the dirty note keeps its tab by construction (what stands today, A-1, AD-14) |
+| IGA-37 | Clear-on-read consumed the cause at the wrong funnel call | The cause is mutation-scoped: consumed only at the graph's own transition, pending across a call that saw another tab, cleared by the outermost-mutation hook (Term 5, AD-12) |
+| IGA-38 | The reopen order was impossible and not the mac's | `Opened`, the shell's `ReopenedGraph` at its existing sites, then the summary from the receiver — the mac's `:3612–3614`; the failure arm (Term 6, A-10) |
+| IGA-39 | "Opened alone when effective" blocked recovery from ERROR | The mac's guard transcribed: no load only when READY; LOADING, ERROR and no-publication restart the pair (Term 4, AD-15) |
+| IGA-40 | A probe dropped during an in-flight pair lost a later generation | A changed generation issues a superseding silent pair; a high-water mark while no READY publication is held; the gated fact (A-3, AD-5) |
+| IGA-41 | Row actions unaddressed to the graph's pane; a landed create could be silent | Every action captures its tab and group and the seam activates them first (the mac's `focusOwningGroup`); `NoteCreated` after the attempt regardless of the open's result; empty content; the rename divergence (A-8, A-9, AD-8, A-D4) |
+| IGA-42 | The always-async primitive lacked dispatcher-side, drainable completion | StartWorkAlwaysAsync(compute, apply): the apply on the captured dispatcher, the tracked task complete after it; the graph's only primitive; the two modes redefined (A-2, AD-4, AR-6) |
+| IGA-43 | The envelope validated only the filter and generation | Query and sort validated against the request in both receivers; three more injected-mismatch facts (rule A, A-2) |
+| IGA-44 | The mac's VISIBLE level was missing | Three levels: LIVE, VISIBLE (the probe), EFFECTIVE (speech) (Term 2, A-3) |
+| IGA-45 | Pane focus does not reload on the mac; AR-6 deferred a known fact | A transition BY GROUP loads only when no READY publication is held; the mac path cited; AR-6 replaced (Term 4, mac details) |
+| IGA-46 | "The Name is identical" was false | A-D3: the Windows row's Name is the P1 copy, the mac's rows carry no row label (A-6) |
+| IGA-47 | The disappeared-path refusal fact could not be written | `OpenPathCore` opens any non-blank path; the claim removed; the deleted-path fact pins the shell's behaviour (A-9) |
+| IGA-48 | The node-key set was a derived cache | Membership scans `Snapshot.Nodes`; no derived index in the record (A-2, A-7) |
+| IGA-49 | `Cells[8]` re-typed the column order | The Kind cell's index from the fetched vector; a census forbids `Cells[<digit>]` under `Graph/` (A-6, A-17) |
+| IGA-50 | The cited runner gated only the renderer; two workloads had no budget | The `--graph` arm captures its `Summary` and walks a pinned inventory — budgets or measurement-only per entry, a missing or unlisted report fails (A-15) |
+| IGA-51 | The error label conflated visible text and accessible name | The raw message visible, "Graph error: …" as the accessible name — the mac's split (A-4) |
+| IGA-52 | Three citations drifted | `graph.rs:319–330`; `CanvasPublicationSlot.cs:270–282`; `ParityHarnessTests.swift`'s `graphQueriesArtifact` `:305–308` (what stands today, A-14) |
+
 ### Tests that pin PR A
 
 - Windows facts: GraphDocumentTests (A-1, A-2, A-3, A-4, A-7, A-8, A-9,
   A-14 — the load, reorder, close-during-fetch, generation-retry and
-  teardown facts as theories over both scheduling modes; rule L's path
-  facts), GraphTableTests (A-5, A-6, A-11, A-15's virtualisation),
+  teardown facts as theories over both scheduling modes; the
+  primitive's own facts; rule L's path facts), GraphTableTests (A-5,
+  A-6, A-11, A-15's virtualisation),
   GraphAnnouncerTests (A-10); `W1WorkspaceRedTeamTests` twins (A-13);
   `ChordTableTests` (A-12); the censuses of A-17; the FlaUI journey
   (A-16); GraphOpenBenchmarks (A-15).
