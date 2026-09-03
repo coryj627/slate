@@ -1146,6 +1146,536 @@ public static class SurfaceSerializer
 
     private static string Slash(string path) => path.Replace('\\', '/');
 
+    // --- W6-2 PR 0b: the graph_queries section (contract 0b-13) -----------
+    //
+    // The pinned input lists below are DUPLICATED in the mac twin
+    // (apps/slate-mac/Tests/SlateMacTests/ParityHarnessTests.swift,
+    // `graphQueriesArtifact`), the same way the canvas lists are: the twins
+    // cannot share a source file, so each carries its own copy and the
+    // committed golden arbitrates. Every id in the artifact is a
+    // `stable_key`, never a numeric node id (0bR-2; the census's no-id
+    // guard proves it).
+
+    /// Copy a fixture tree, folders included (the graph vault's nested
+    /// note is a witness).
+    public static void CopyTree(string source, string target)
+    {
+        Directory.CreateDirectory(target);
+        foreach (string dir in Directory.GetDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(target, Path.GetRelativePath(source, dir)));
+        }
+        foreach (string file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+        {
+            File.Copy(file, Path.Combine(target, Path.GetRelativePath(source, file)));
+        }
+    }
+
+    /// UTF-8 byte order — the artifact's list order (0b-13), the same
+    /// order the Swift twin's `utf8` comparison yields.
+    public static int CompareUtf8(string a, string b)
+    {
+        byte[] x = System.Text.Encoding.UTF8.GetBytes(a);
+        byte[] y = System.Text.Encoding.UTF8.GetBytes(b);
+        int n = Math.Min(x.Length, y.Length);
+        for (int i = 0; i < n; i++)
+        {
+            if (x[i] != y[i])
+            {
+                return x[i] - y[i];
+            }
+        }
+        return x.Length - y.Length;
+    }
+
+    public static readonly GraphFilter GraphInclusiveFilter = new GraphFilter(true, true, false);
+
+    /// The visibility queries the artifact pins: the inclusive filter under
+    /// ten needles, the default filter, the Unresolved preset's kind
+    /// overlay, and orphans-only.
+    public static readonly (string Name, GraphVisibilityQuery Query)[] PinnedGraphQueries =
+    {
+        ("all", new GraphVisibilityQuery(GraphInclusiveFilter, "", null)),
+        ("all:hub", new GraphVisibilityQuery(GraphInclusiveFilter, "hub", null)),
+        ("all:HUB", new GraphVisibilityQuery(GraphInclusiveFilter, "HUB", null)),
+        ("all:café", new GraphVisibilityQuery(GraphInclusiveFilter, "café", null)),
+        ("all:cafe", new GraphVisibilityQuery(GraphInclusiveFilter, "cafe", null)),
+        ("all:ghost", new GraphVisibilityQuery(GraphInclusiveFilter, "ghost", null)),
+        ("all:istanbul", new GraphVisibilityQuery(GraphInclusiveFilter, "istanbul", null)),
+        ("all:padded-2", new GraphVisibilityQuery(GraphInclusiveFilter, "  2  ", null)),
+        ("all:newline-10", new GraphVisibilityQuery(GraphInclusiveFilter, "\n10\n", null)),
+        ("all:zzz", new GraphVisibilityQuery(GraphInclusiveFilter, "zzz", null)),
+        ("default", new GraphVisibilityQuery(new GraphFilter(false, true, false), "", null)),
+        ("all:ghosts-only", new GraphVisibilityQuery(GraphInclusiveFilter, "", GraphNodeKind.Ghost)),
+        ("orphans", new GraphVisibilityQuery(new GraphFilter(true, true, true), "", null)),
+    };
+
+    /// The sixteen table sorts: each non-Modified column both ways.
+    /// Modified is deliberately absent: its order is the checkout time.
+    public static readonly (GraphTableColumn Column, bool Ascending, string Name)[] PinnedGraphTableSorts =
+    {
+        (GraphTableColumn.Note, true, "note asc"), (GraphTableColumn.Note, false, "note desc"),
+        (GraphTableColumn.LinksIn, true, "links_in asc"), (GraphTableColumn.LinksIn, false, "links_in desc"),
+        (GraphTableColumn.LinksOut, true, "links_out asc"), (GraphTableColumn.LinksOut, false, "links_out desc"),
+        (GraphTableColumn.EmbedsIn, true, "embeds_in asc"), (GraphTableColumn.EmbedsIn, false, "embeds_in desc"),
+        (GraphTableColumn.EmbedsOut, true, "embeds_out asc"), (GraphTableColumn.EmbedsOut, false, "embeds_out desc"),
+        (GraphTableColumn.Component, true, "component asc"), (GraphTableColumn.Component, false, "component desc"),
+        (GraphTableColumn.Folder, true, "folder asc"), (GraphTableColumn.Folder, false, "folder desc"),
+        (GraphTableColumn.Kind, true, "kind asc"), (GraphTableColumn.Kind, false, "kind desc"),
+    };
+
+    /// The (centre path, depth) pairs the connections section pins.
+    public static readonly (string Path, uint Depth)[] PinnedGraphConnections =
+    {
+        ("hub.md", 1),
+        ("hub.md", 2),
+        ("hub.md", 3),
+        ("notes/nested/deep.md", 2),
+        ("10.md", 1),
+        ("self.md", 1),
+    };
+
+    /// The ghost targets the ghost_paths section pins (0b-11's cases).
+    public static readonly string[] PinnedGraphGhostTargets =
+    {
+        "Ghost One",
+        "./Ghost One",
+        "/ghost two",
+        "notes/Foo.MD",
+        "dir/",
+        ".md",
+        "a\\b",
+        "café",
+    };
+
+    /// The spatial point table, labelled a–d (ids are local to the table
+    /// and never written): a at the origin, b right, c below, d diagonal.
+    public static readonly (string Label, GraphPoint Point)[] PinnedGraphSpatialPoints =
+    {
+        ("a", new GraphPoint(1, 0.0, 0.0)),
+        ("b", new GraphPoint(2, 10.0, 0.0)),
+        ("c", new GraphPoint(3, 0.0, 10.0)),
+        ("d", new GraphPoint(4, 10.0, 10.0)),
+    };
+
+    /// a's neighbours: d alone, so the neighbour-first rule is visible.
+    public static readonly ulong[] PinnedGraphSpatialNeighbors = { 4 };
+
+    /// The four unit axes, from a.
+    public static readonly (long Dx, long Dy)[] PinnedGraphSpatialDirections = { (1, 0), (0, 1), (-1, 0), (0, -1) };
+
+    /// The structural order, by label.
+    public static readonly string[] PinnedGraphStructuralOrder = { "a", "b", "c", "d" };
+
+    /// The config text the config section decodes and re-encodes: a
+    /// nested unknown key, a mixed groups array, out-of-range values, a
+    /// fractional force, no verbosity.
+    public const string PinnedGraphConfigInput =
+        "{\"version\":1,\"futureThing\":{\"keep\":true,\"nested\":{\"z\":1,\"a\":[1,2]}},"
+        + "\"filters\":{\"includeAttachments\":true,\"nameQuery\":\"café\"},"
+        + "\"groups\":[{\"query\":\"project\",\"colorToken\":\"green\",\"ringStyle\":\"dashed\"},7,{\"colorToken\":\"blue\"},"
+        + "{\"query\":\"x\",\"colorToken\":\"mauve\",\"ringStyle\":\"wavy\"}],"
+        + "\"display\":{\"nodeSizeMultiplier\":100,\"textFadeZoom\":null},"
+        + "\"forces\":{\"repel\":9.0,\"center\":-3,\"link\":0.25},"
+        + "\"mode\":\"diagram\",\"connectionsDepth\":99}";
+
+    public static string GraphKindName(GraphNodeKind kind) => kind switch
+    {
+        GraphNodeKind.Note => "note",
+        GraphNodeKind.Attachment => "attachment",
+        GraphNodeKind.Ghost => "ghost",
+        _ => throw new InvalidOperationException($"unmapped GraphNodeKind {kind}"),
+    };
+
+    private static void GraphKeyList(CanonicalJson j, IEnumerable<string> keys)
+    {
+        j.Raw("[");
+        int k = 0;
+        foreach (string key in keys)
+        {
+            if (k++ > 0)
+            {
+                j.Raw(",");
+            }
+            j.Str(key);
+        }
+        j.Raw("]");
+    }
+
+    private static void GraphOptionalString(CanonicalJson j, string? value)
+    {
+        if (value == null)
+        {
+            j.Null();
+        }
+        else
+        {
+            j.Str(value);
+        }
+    }
+
+    /// <summary>
+    /// Vault-level artifact: the W6-2 PR 0b structural queries over the
+    /// graph vault — the snapshot keyed by stable key in byte order, the
+    /// visible sets under every pinned query, the table under every pinned
+    /// sort (the nine cells minus Modified, named), the Connections trees
+    /// with key-built occurrence ids, each node's visible neighbours, the
+    /// ghost paths, the spatial and structural steps by label, the
+    /// constants, the action set per kind, and the config round-trip.
+    /// </summary>
+    public static string GraphQueriesArtifact(VaultSession session)
+    {
+        var all = PinnedGraphQueries[0].Query;
+        var read = SlateUniffiMethods.GraphConfigDecode(PinnedGraphConfigInput);
+        var cfg = read.Config;
+        var snapshot = session.GraphSnapshot(GraphInclusiveFilter);
+        var keyOf = new Dictionary<ulong, string>();
+        foreach (var n in snapshot.Nodes)
+        {
+            keyOf[n.Id] = n.StableKey;
+        }
+        var byKey = snapshot.Nodes
+            .OrderBy(n => n, Comparer<GraphNode>.Create((a, b) => CompareUtf8(a.StableKey, b.StableKey)))
+            .ToList();
+        IEnumerable<string> KeysOf(IEnumerable<ulong> ids) => ids.Select(id => keyOf[id]);
+
+        var j = new CanonicalJson();
+        j.Raw("{\"snapshot\":[");
+        for (int i = 0; i < byKey.Count; i++)
+        {
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            var n = byKey[i];
+            j.Raw("{\"key\":").Str(n.StableKey)
+             .Raw(",\"label\":").Str(n.Label)
+             .Raw(",\"kind\":").Str(GraphKindName(n.Kind))
+             .Raw(",\"path\":");
+            GraphOptionalString(j, n.Path == null ? null : Slash(n.Path));
+            j.Raw(",\"in_links\":").Num((ulong)n.InLinks)
+             .Raw(",\"out_links\":").Num((ulong)n.OutLinks)
+             .Raw(",\"in_embeds\":").Num((ulong)n.InEmbeds)
+             .Raw(",\"out_embeds\":").Num((ulong)n.OutEmbeds)
+             .Raw(",\"component\":").Num((ulong)n.Component)
+             .Raw(",\"is_orphan\":").Bool(n.IsOrphan)
+             .Raw("}");
+        }
+        j.Raw("]");
+
+        j.Raw(",\"visibility\":[");
+        for (int q = 0; q < PinnedGraphQueries.Length; q++)
+        {
+            if (q > 0)
+            {
+                j.Raw(",");
+            }
+            var (name, query) = PinnedGraphQueries[q];
+            var v = session.GraphVisibility(query);
+            j.Raw("{\"query\":").Str(name)
+             .Raw(",\"total\":").Num(v.Total)
+             .Raw(",\"visible\":");
+            GraphKeyList(j, KeysOf(v.Ids));
+            j.Raw(",\"labeled\":");
+            GraphKeyList(j, KeysOf(v.Labeled));
+            j.Raw("}");
+        }
+        j.Raw("]");
+
+        // The topology for the `all` query under the pinned config's groups
+        // (0b-6b): the nodes and the visible edges, each in core's order,
+        // the curve as an integer, every endpoint a key.
+        j.Raw(",\"topology\":{\"nodes\":[");
+        var topology = session.GraphTopology(all, cfg);
+        for (int i = 0; i < topology.Nodes.Length; i++)
+        {
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            var n = topology.Nodes[i];
+            j.Raw("{\"key\":").Str(n.StableKey)
+             .Raw(",\"diameter_x100\":").Num((long)Math.Round(n.Diameter * 100))
+             .Raw(",\"group\":");
+            if (n.Group == null)
+            {
+                j.Null();
+            }
+            else
+            {
+                j.Num((ulong)n.Group.Value);
+            }
+            j.Raw(",\"labeled\":").Bool(n.Labeled).Raw(",\"neighbors\":");
+            GraphKeyList(j, n.Neighbors.Select(x => x.StableKey));
+            j.Raw("}");
+        }
+        j.Raw("],\"edges\":[");
+        for (int e = 0; e < topology.Edges.Length; e++)
+        {
+            if (e > 0)
+            {
+                j.Raw(",");
+            }
+            var edge = topology.Edges[e];
+            // `from_key` / `to_key`: the schema walk types values by name,
+            // and `from`/`to` (the step sections' labels) and `target` (the
+            // ghost-path pin) are taken.
+            j.Raw("{\"from_key\":").Str(keyOf[edge.SourceId])
+             .Raw(",\"to_key\":").Str(keyOf[edge.TargetId])
+             .Raw(",\"kind\":").Str(edge.Kind == GraphEdgeKind.Embed ? "embed" : "link")
+             .Raw("}");
+        }
+        j.Raw("]}");
+
+        j.Raw(",\"table\":[");
+        for (int s = 0; s < PinnedGraphTableSorts.Length; s++)
+        {
+            if (s > 0)
+            {
+                j.Raw(",");
+            }
+            var (column, ascending, name) = PinnedGraphTableSorts[s];
+            var result = session.GraphTableRows(all, new GraphTableSort(column, ascending));
+            j.Raw("{\"query\":").Str("all").Raw(",\"sort\":").Str(name)
+             .Raw(",\"total\":").Num(result.Total).Raw(",\"rows\":[");
+            for (int r = 0; r < result.Rows.Length; r++)
+            {
+                if (r > 0)
+                {
+                    j.Raw(",");
+                }
+                var row = result.Rows[r];
+                // The nine cells minus Modified (index 6), named.
+                j.Raw("{\"key\":").Str(row.StableKey)
+                 .Raw(",\"note\":").Str(row.Cells[0])
+                 .Raw(",\"links_in\":").Str(row.Cells[1])
+                 .Raw(",\"links_out\":").Str(row.Cells[2])
+                 .Raw(",\"embeds_in\":").Str(row.Cells[3])
+                 .Raw(",\"embeds_out\":").Str(row.Cells[4])
+                 .Raw(",\"component\":").Str(row.Cells[5])
+                 .Raw(",\"folder\":").Str(Slash(row.Cells[7]))
+                 .Raw(",\"kind\":").Str(row.Cells[8])
+                 .Raw("}");
+            }
+            j.Raw("]}");
+        }
+        j.Raw("]");
+
+        j.Raw(",\"connections\":[");
+        for (int c = 0; c < PinnedGraphConnections.Length; c++)
+        {
+            if (c > 0)
+            {
+                j.Raw(",");
+            }
+            var (path, depth) = PinnedGraphConnections[c];
+            var tree = session.GraphConnectionsTree(path, depth, GraphInclusiveFilter);
+            j.Raw("{\"path\":").Str(path)
+             .Raw(",\"depth\":").Num((ulong)depth)
+             .Raw(",\"center_key\":").Str(tree.CenterKey)
+             .Raw(",\"tree_depth\":").Num((ulong)tree.Depth)
+             .Raw(",\"summary\":{\"center_label\":").Str(tree.SummaryCounts.CenterLabel)
+             .Raw(",\"in_links\":").Num((ulong)tree.SummaryCounts.InLinks)
+             .Raw(",\"out_links\":").Num((ulong)tree.SummaryCounts.OutLinks)
+             .Raw(",\"note_count\":").Num(tree.SummaryCounts.NoteCount)
+             .Raw(",\"depth\":").Num((ulong)tree.SummaryCounts.Depth)
+             .Raw("}");
+            foreach (var (name, list) in new[] { ("incoming", tree.Incoming), ("outgoing", tree.Outgoing) })
+            {
+                j.Raw(",\"" + name + "\":[");
+                for (int r = 0; r < list.Length; r++)
+                {
+                    if (r > 0)
+                    {
+                        j.Raw(",");
+                    }
+                    var row = list[r];
+                    j.Raw("{\"occurrence\":").Str(row.Id)
+                     .Raw(",\"parent\":");
+                    GraphOptionalString(j, row.ParentId);
+                    j.Raw(",\"level\":").Num((ulong)row.Level)
+                     .Raw(",\"key\":").Str(row.StableKey)
+                     .Raw(",\"kind\":").Str(GraphKindName(row.Kind))
+                     .Raw(",\"embed_only\":").Bool(row.EmbedOnly)
+                     .Raw(",\"references\":").Num((ulong)row.References)
+                     .Raw("}");
+                }
+                j.Raw("]");
+            }
+            j.Raw("}");
+        }
+        j.Raw("]");
+
+        j.Raw(",\"ghost_paths\":[");
+        for (int g = 0; g < PinnedGraphGhostTargets.Length; g++)
+        {
+            if (g > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"target\":").Str(PinnedGraphGhostTargets[g])
+             .Raw(",\"path\":").Str(SlateUniffiMethods.GraphGhostNotePath(PinnedGraphGhostTargets[g]))
+             .Raw("}");
+        }
+        j.Raw("]");
+
+        var points = PinnedGraphSpatialPoints.Select(p => p.Point).ToArray();
+        string? LabelOf(ulong? id) =>
+            id == null ? null : PinnedGraphSpatialPoints.First(p => p.Point.Id == id.Value).Label;
+        j.Raw(",\"spatial\":[");
+        for (int t = 0; t < PinnedGraphSpatialDirections.Length; t++)
+        {
+            if (t > 0)
+            {
+                j.Raw(",");
+            }
+            var (dx, dy) = PinnedGraphSpatialDirections[t];
+            ulong? to = SlateUniffiMethods.GraphSpatialStep(
+                points, PinnedGraphSpatialNeighbors, points[0].Id, dx, dy);
+            j.Raw("{\"from\":").Str("a")
+             .Raw(",\"dx\":").Num(dx)
+             .Raw(",\"dy\":").Num(dy)
+             .Raw(",\"to\":");
+            GraphOptionalString(j, LabelOf(to));
+            j.Raw("}");
+        }
+        j.Raw("]");
+
+        j.Raw(",\"structural\":[");
+        var ids = PinnedGraphStructuralOrder
+            .Select(label => PinnedGraphSpatialPoints.First(p => p.Label == label).Point.Id)
+            .ToArray();
+        bool first = true;
+        foreach (string? from in PinnedGraphStructuralOrder.Select(l => (string?)l).Append(null))
+        {
+            foreach (bool forward in new[] { true, false })
+            {
+                if (!first)
+                {
+                    j.Raw(",");
+                }
+                first = false;
+                ulong? fromId = from == null ? null : PinnedGraphSpatialPoints.First(p => p.Label == from).Point.Id;
+                ulong? to = SlateUniffiMethods.GraphStructuralStep(ids, fromId, forward);
+                j.Raw("{\"from\":");
+                GraphOptionalString(j, from);
+                j.Raw(",\"forward\":").Bool(forward).Raw(",\"to\":");
+                GraphOptionalString(j, LabelOf(to));
+                j.Raw("}");
+            }
+        }
+        j.Raw("]");
+
+        var constants = SlateUniffiMethods.GraphConstants();
+        j.Raw(",\"constants\":{\"tier_b_threshold\":").Num((ulong)constants.TierBThreshold)
+         .Raw(",\"label_cap\":").Num((ulong)constants.LabelCap)
+         .Raw(",\"connections_depth_min\":").Num((ulong)constants.ConnectionsDepthMin)
+         .Raw(",\"connections_depth_max\":").Num((ulong)constants.ConnectionsDepthMax)
+         .Raw(",\"node_diameter_min\":").Num((long)constants.NodeDiameterMin)
+         .Raw(",\"node_diameter_max\":").Num((long)constants.NodeDiameterMax)
+         .Raw(",\"neighbor_label_cap\":").Num((ulong)constants.NeighborLabelCap)
+         .Raw(",\"diameter_at_0\":").Num((long)SlateUniffiMethods.GraphNodeDiameter(0))
+         .Raw(",\"diameter_at_1000000\":").Num((long)SlateUniffiMethods.GraphNodeDiameter(1000000))
+         .Raw("}");
+
+        j.Raw(",\"actions\":[");
+        var kinds = new[] { GraphNodeKind.Note, GraphNodeKind.Attachment, GraphNodeKind.Ghost };
+        for (int k = 0; k < kinds.Length; k++)
+        {
+            if (k > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"kind\":").Str(GraphKindName(kinds[k])).Raw(",\"actions\":[");
+            var actions = SlateUniffiMethods.GraphRowActions(kinds[k]);
+            for (int a = 0; a < actions.Length; a++)
+            {
+                if (a > 0)
+                {
+                    j.Raw(",");
+                }
+                j.Str(actions[a].Title);
+            }
+            j.Raw("]}");
+        }
+        j.Raw("]");
+
+        j.Raw(",\"config\":{\"input\":").Str(PinnedGraphConfigInput)
+         .Raw(",\"unknown_json\":").Str(read.UnknownJson)
+         .Raw(",\"include_attachments\":").Bool(cfg.Filters.IncludeAttachments)
+         .Raw(",\"name_query\":").Str(cfg.Filters.NameQuery)
+         .Raw(",\"group_count\":").Num((ulong)cfg.Groups.Length)
+         .Raw(",\"group_tags\":[");
+        var tokens = SlateUniffiMethods.GraphColorTokens();
+        var rings = SlateUniffiMethods.GraphRingStyles();
+        for (int g = 0; g < cfg.Groups.Length; g++)
+        {
+            if (g > 0)
+            {
+                j.Raw(",");
+            }
+            var group = cfg.Groups[g];
+            j.Str(tokens.First(t => t.Token == group.ColorToken).Tag + "/"
+                + rings.First(r => r.Style == group.RingStyle).Tag);
+        }
+        j.Raw("],\"palette\":[");
+        for (int p = 0; p < tokens.Length; p++)
+        {
+            if (p > 0)
+            {
+                j.Raw(",");
+            }
+            j.Str(tokens[p].Tag + "/" + tokens[p].Title);
+        }
+        j.Raw("],\"ring_styles\":[");
+        for (int r = 0; r < rings.Length; r++)
+        {
+            if (r > 0)
+            {
+                j.Raw(",");
+            }
+            j.Str(rings[r].Tag + "/" + rings[r].Title);
+        }
+        j.Raw("],\"modes\":[");
+        var modes = SlateUniffiMethods.GraphSurfaceModes();
+        for (int m = 0; m < modes.Length; m++)
+        {
+            if (m > 0)
+            {
+                j.Raw(",");
+            }
+            j.Str(modes[m].Tag + "/" + modes[m].Title);
+        }
+        j.Raw("],\"verbosities\":[");
+        var levels = SlateUniffiMethods.GraphVerbosities();
+        for (int v = 0; v < levels.Length; v++)
+        {
+            if (v > 0)
+            {
+                j.Raw(",");
+            }
+            j.Str(levels[v].Tag + "/" + levels[v].Title);
+        }
+        j.Raw("],\"connections_depth\":").Num((ulong)cfg.ConnectionsDepth)
+         .Raw(",\"mode\":").Str(cfg.Mode == GraphSurfaceMode.Diagram ? "diagram" : "table")
+         .Raw(",\"verbosity\":").Str(cfg.Verbosity switch
+         {
+             GraphVerbosity.Terse => "terse",
+             GraphVerbosity.Verbose => "verbose",
+             _ => "standard",
+         })
+         .Raw(",\"repel_x100\":").Num((long)Math.Round(cfg.Forces.Repel * 100))
+         .Raw(",\"center_x100\":").Num((long)Math.Round(cfg.Forces.Center * 100))
+         .Raw(",\"link_x100\":").Num((long)Math.Round(cfg.Forces.Link * 100))
+         .Raw(",\"node_size_x100\":").Num((long)Math.Round(cfg.Display.NodeSizeMultiplier * 100))
+         .Raw(",\"encoded\":").Str(SlateUniffiMethods.GraphConfigEncode(cfg, PinnedGraphConfigInput))
+         .Raw(",\"encoded_fresh\":").Str(SlateUniffiMethods.GraphConfigEncode(SlateUniffiMethods.GraphConfigDefault(), null))
+         .Raw("}");
+
+        j.Raw("}");
+        return j + "\n";
+    }
+
     // --- W6-1 PR 0b: the canvas_queries section (contract 0b-15) ----------
     //
     // The three pinned input lists below are DUPLICATED in the mac twin

@@ -92,7 +92,7 @@ struct GraphInspectorView: View {
             .labelsHidden()
             .accessibilityLabel("Group \(index + 1) colour")
             Picker("Ring", selection: groupRingBinding(index)) {
-                ForEach(GraphRingStyle.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                ForEach(GraphRingStyle.allCases, id: \.self) { Text($0.title).tag($0) }
             }
             .labelsHidden()
             .accessibilityLabel("Group \(index + 1) ring style")

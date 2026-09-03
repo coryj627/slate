@@ -54,8 +54,9 @@ final class GraphDiagramModel: ObservableObject {
 
     /// Tier boundary (spec §P2-3): above this visible-node count the
     /// renderer drops to a tiled summary and routes accessibility to the
-    /// Table mode (which always has every node).
-    static let tierBThreshold = 1500
+    /// Table mode (which always has every node). Core's constant (0b-8),
+    /// fetched once.
+    static let tierBThreshold = Int(AppState.graphConstantsOnce.tierBThreshold)
 
     init(
         session: LayoutSession, filter: GraphFilter, nodeIDs: [UInt64],
@@ -120,4 +121,13 @@ final class GraphDiagramModel: ObservableObject {
         if let sel = selection, nodesByID[sel] == nil { selection = nil }
         pinned = pinned.filter { nodesByID[$0] != nil }
     }
+}
+
+/// The diagram's semantic epoch (W6-2 PR 0b, design B): the topology is
+/// fetched when this changes and cached across the settling frames.
+struct GraphTopologyEpoch: Equatable {
+    let layout: ObjectIdentifier
+    let generation: UInt64
+    let query: GraphVisibilityQuery
+    let config: GraphConfig
 }

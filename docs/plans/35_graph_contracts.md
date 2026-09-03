@@ -2129,6 +2129,150 @@ discharges by code. **Precedent applied; the owner may overrule.**
 | IG0b-63 | MAJOR | ledger — discharged in the frozen text (0b-D3 extended to group matching) and by code: the characterization witness |
 | IG0b-64 | MAJOR | ledger — discharged in the frozen text (design B, 0b-14: at least two non-converged frames per epoch, one more fetch per changed component) and by code |
 
+### Task loop — records (PR 0b)
+
+**TG0b-0 — Baselines.** `GraphNode` twelve fields; the FFI graph
+records at `lib.rs:3227–3480`; `crates/slate-core/tests/fixtures/parity_golden`
+30 artifacts; the markdown vault untouched; no `graph_queries.rs`, no
+`graph_config.rs`, no graph vault; the graph citation census floor 7
+over 8 at revision 5, before the code existed; GRAPH_QUERY_SURFACE
+twenty-three names by the frozen text.
+
+**TG0b-1 — Core: the two modules, the session, the fold.**
+`crates/slate-core/src/graph_queries.rs` (the constants, the stable key
+and its encoder, the fold and the predicate, `GraphVisibilityQuery` /
+`GraphVisibility` / `visibility`, `GraphNeighbor` / `GraphNeighbors` /
+`neighbors`, `GraphTopologyNode` / `GraphTopology` / `topology` with the
+visible edges, the segment-wise natural order and `label_order`,
+`GraphTableColumn` / `GraphTableColumnSpec` / `table_columns`,
+`GraphTableSort`, `GraphTableRow` with its nine `cells` /
+`GraphTableRows` / `table_rows` / `compare_rows`, `GraphRowAction` /
+`GraphRowActionSpec` / `row_actions`, `ghost_note_path`, `GraphPoint` /
+`spatial_step` / `structural_step`, `GraphConnectionRow` /
+`GraphConnectionsTree` with `summary_counts` / `connections_tree` with
+key-built occurrence ids, GRAPH_QUERY_SURFACE) and
+`crates/slate-core/src/graph_config.rs` (the two enums with tags and
+titles, the option-table specs and `color_tokens` / `ring_styles` /
+`surface_modes` / `verbosities`, the five records, GraphConfigError,
+`GraphConfigRead`, `default`, the version rule over the parsed value,
+`decode` with the truth table and the `as_i64`-first depth, the
+canonical writer, `matching_group`, `next_group_style`); `GraphNode`
+gains `stable_key` (filled by `graph_node_payload`); the session's
+`graph_neighborhood` splits into the lock and `graph_neighborhood_locked`
+so `graph_connections_tree` reads the payload and the generation under
+ONE lock; `graph_visibility`, `graph_topology`, `graph_neighbors`,
+`graph_table_rows` on the session; 0a's test fold delegates to the one
+production definition. Facts: 27 in `graph_queries` (the five tree
+facts with the counts, the key and its encoder, the fold and the visible
+set, the capped priority set, the topology's nodes and its edges, the
+neighbours, the natural order with the exhausted prefix and the
+thousand-digit run, the comparator with Folder's tiers, the nine cells,
+the column specs, the UTC minute, the constants, the curve, the tier,
+the parity action set, the steps and their totality, the ghost path's
+sixteen cases, the surface list), 10 in `graph_config` (the eight schema
+facts, the truth table with the `f64` witness and the `i64` depth
+boundary, the canonical bytes, the option vectors), the session's
+`session_results_carry_the_generation_they_read` (37 in
+`session::tests::graph` green with it), a11y's 25 unchanged.
+
+**TG0b-2 — FFI: the mirrors and the three tripwires.** Twenty-two
+records mirrored field for field (`GraphConstants`, `GraphVisibilityQuery`,
+`GraphVisibility`, `GraphNeighbor`, `GraphNeighbors`, `GraphTopologyNode`,
+`GraphTopology`, `GraphPoint`, `GraphTableColumnSpec`, `GraphTableSort`,
+`GraphTableRow`, `GraphTableRows`, `GraphConnectionRow`,
+`GraphConnectionsTree`, `GraphFilterConfig`, `GraphGroup`, `GraphDisplay`,
+`GraphForcesConfig`, `GraphConfig`, `GraphConfigRead`, `GraphGroupStyle`,
+`GraphColorTokenSpec`, `GraphRingStyleSpec`, `GraphSurfaceModeSpec`,
+`GraphVerbositySpec`, `GraphRowActionSpec`), five enums both ways,
+GraphConfigError as a uniffi error, `GraphFilter` and `GraphEdge` gain
+`PartialEq`/`Eq` so the new records can derive it, the core→FFI
+direction for `GraphSurfaceMode` and `GraphVerbosity`, the nineteen free
+functions and the four session methods of 0b-2. Tripwires:
+`the_ffi_mirror_covers_every_graph_query_enum` (5, 9, 8, 4, 2 and the
+error payloads), `the_ffi_mirror_exports_every_graph_query` (the
+twenty-three names, each under `#[uniffi::export]` or on
+`VaultSession`), `the_ffi_records_mirror_core_field_for_field` (every
+`(field, type)` pair of the two modules' records and of `GraphNode`,
+`GraphEdge`, `GraphFilter` and `GraphNeighborhoodCounts`, under the alias
+map) — 6 green in the crate.
+
+**TG0b-3 — The graph vault, the harness, the golden, the censuses.**
+`crates/slate-core/tests/fixtures/graph_vault/` (`hub.md`, `2.md`,
+`10.md`, `010.md`, `notes/nested/deep.md`, `self.md`, `orphan.md`,
+`pic.png`); `SurfaceSerializer.GraphQueriesArtifact` with the pinned
+vectors (thirteen queries, sixteen sorts, six connections, eight targets,
+the labelled point table, the structural order, the config input),
+`CopyTree` and `CompareUtf8`; Program.cs's `--graph-fixtures` pass (31
+artifacts); the golden `graph_queries.json` and the example
+`crates/slate-core/tests/fixtures/graph_queries.example.json` (eleven
+keys). The four facts plus the reflection census
+(`GraphQuerySurfaceCensus.EveryCoreGraphQueryIsBound`, the list read from
+core's source): 16 of 16 in the parity and surface census run, the
+byte-for-byte fact over all 31 artifacts among them. Discharges recorded in the code against the
+frozen text: the topology's edge endpoints are written as `from_key` /
+`to_key` (0b-13 said `from` / `to` — the schema walk types values by
+name, and `from` / `to` are the step sections' labels while `target` is
+the ghost-path pin), and the UTC witness's timestamp names the minute it
+actually is.
+
+**TG0b-4 — Mac (Task 0b-2), unrun on this box (0bR-1).**
+`g0b-mac-edits.py` applies 0b-14 site by site: `GraphViewState.swift`,
+`GraphConfig.swift` and the two extensions in `GraphAnnouncer.swift`
+read core's vectors; `GraphConfigStore.swift` keeps the I/O and maps
+GraphConfigError; `AppState+GraphConfig.swift` applies and persists
+the verbosity; `AppState+Connections.swift` loads the tree as one
+record; `AppState.swift` holds the query, the token state and the
+snapshot's filter; `AppState+GraphTable.swift` issues tokens, publishes
+rows and the accepted sort together and reads the preset headline from
+the result; `AppState+GraphDiagram.swift` accepts a topology against the
+layout's filter and generation; `GraphDiagramView.swift` fetches per
+epoch, draws the record's edges and reads the entry for the row copy,
+the neighbours, the styling and the actions; `GraphTableView.swift`
+builds its columns from the specs; `ConnectionsPanel.swift` nests core's
+rows; the tests named in 0b-14 with GraphKeyCharacterizationTests. The
+mac lane arbitrates; a red lane is fixed here.
+
+**TG0b-5 — Mutations.** Twenty-one, each byte-restored, each caught
+by exactly the fact that guards it (`g0b-mutations.py`, the working
+tree for the Rust ones and the committed golden's text for the artifact
+ones — what a mutated serializer would have written). Rust: M1 the tree
+keeps the self-edge → `tree_omits_a_self_edge_from_both_lists`; M2
+more leading zeros sort first → `label_order_is_natural_folded_and_total`;
+M3 the fold keeps combining marks → `filter_ids_fold_case_and_marks`; M4
+eight cells → `table_cells_are_nine_and_formatted`; M5 lowercase hex in
+the key → `stable_key_percent_encodes_by_rust_alphanumerics`; M6 no
+cosine threshold → `spatial_step_prefers_neighbours_then_falls_back`;
+M7 a fractional version accepted → `decode_truth_table`; M8 the writer
+without the canonical pass → `encode_is_canonical_bytes`; M9 topology
+neighbours ignore visibility →
+`topology_is_the_visible_nodes_with_their_neighbours`; M10 a mirror
+field widens (`in_links: u64`) →
+`the_ffi_records_mirror_core_field_for_field`; M11 a surface name
+dropped → `graph_query_surface_names_pub_fns`. Artifact: M12 a
+forbidden property → GraphQueriesArtifactCarriesNoNodeIds; M13 a node
+dropped, M14 a topology node duplicated, M15 a table row duplicated →
+GraphQueriesArtifactMatchesTheVaultInventory; M16 a section dropped, M17
+a section reordered, M18 a pin field dropped →
+GraphQueriesArtifactCarriesThePinnedVectors; M19 a level-1 parent, M20 a
+numeric id under a key list, M21 a numeric id under an edge endpoint →
+GraphQueriesArtifactMatchesItsSchema.
+
+**TG0b-6 — Gates.** `cargo test --workspace`: 1,996 passed, 6 failed
+— the five `session::tests::dir_tree` censuses this box always fails
+(OS error 123; CI-Windows is the oracle, the standing note) and
+`perf_guard_root_listing_under_100ms_on_10k_files`, a wall-clock guard
+that failed under the 536-second workspace run with three dotnet build
+servers resident and passed in isolation in 11 seconds, untouched by
+this PR. `cargo clippy --workspace --all-targets -- -D warnings` clean;
+`cargo fmt --check` clean; `dotnet format` clean; the whole Windows test
+project 2,065 of 2,065. The rebuild from a clean code tree
+(`g0b-rebuild.sh`: the scripts, fmt, build, the facts, the tripwires,
+clippy, the bindings, the golden, the censuses) is the reproduction; it
+ran green on its fourth pass after three corrections — the FFI derives
+`GraphFilter` / `GraphEdge` lacked, the clippy lints in the facts and
+the `Leaf` alias, and the two schema-walk name collisions that gave the
+edges their `from_key` / `to_key` names.
+
 ### Decisions
 
 - **0bD-1 — The tree is flat pre-order rows** with `level` and

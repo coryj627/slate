@@ -1874,3 +1874,67 @@ fn live_graph_save_emits_exactly_one_modified() {
     assert_eq!(events[0].kind, FileChangeKind::Modified);
     assert_eq!(events[0].path, "a.md");
 }
+
+/// W6-2 PR 0b (contracts doc 0b-2b): every session result carries the
+/// generation of the index it read, so a host can discard an answer that
+/// belongs to a snapshot it no longer holds — the mutation-between-calls
+/// case.
+#[test]
+fn session_results_carry_the_generation_they_read() {
+    use crate::graph::GraphFilter;
+    use crate::graph_queries::{GraphTableSort, GraphVisibilityQuery};
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"[[b]]").unwrap();
+        p.write_file("b.md", b"").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let q = GraphVisibilityQuery {
+        filter: GraphFilter::default(),
+        name_query: String::new(),
+        kind_only: None,
+    };
+    let snapshot = session.graph_snapshot(GraphFilter::default()).unwrap();
+    let before = session.graph_visibility(&q).unwrap();
+    assert_eq!(before.generation, snapshot.generation);
+    assert_eq!((before.total, before.ids.len()), (2, 2));
+
+    // A mutation between the snapshot and the next query.
+    session.save_text("a.md", "[[b]] and [[c]]", None).unwrap();
+    let after = session.graph_visibility(&q).unwrap();
+    assert_ne!(
+        after.generation, snapshot.generation,
+        "the query read a newer index than the snapshot the host holds"
+    );
+    assert_eq!(after.generation, session.graph_generation());
+    assert_eq!(
+        after.ids.len(),
+        3,
+        "the ids are the new index's (the ghost joined)"
+    );
+    let rows = session
+        .graph_table_rows(&q, GraphTableSort::default())
+        .unwrap();
+    assert_eq!(
+        (rows.generation, rows.total, rows.rows.len()),
+        (after.generation, 3, 3)
+    );
+    let neighbors = session.graph_neighbors(&q, after.ids[0]).unwrap();
+    assert_eq!(neighbors.generation, after.generation);
+    let topology = session
+        .graph_topology(&q, &crate::graph_config::GraphConfig::default())
+        .unwrap();
+    assert_eq!(
+        (topology.generation, topology.nodes.len()),
+        (after.generation, 3)
+    );
+    let tree = session
+        .graph_connections_tree("a.md", 1, GraphFilter::default())
+        .unwrap();
+    assert_eq!(tree.generation, after.generation);
+    assert_eq!(tree.outgoing.len(), 2);
+    assert!(
+        tree.outgoing
+            .iter()
+            .all(|r| !r.id.contains(&r.node_id.to_string()) || r.id.contains('%'))
+    );
+}

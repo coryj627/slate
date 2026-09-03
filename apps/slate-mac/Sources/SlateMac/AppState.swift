@@ -2932,7 +2932,9 @@ final class AppState: ObservableObject {
     @Published var connectionsRootPath: String?
     /// The neighborhood payload (structure + metrics + pre-rendered
     /// `audioSummary`) for the current root+depth.
-    @Published var connectionsNeighborhood: GraphNeighborhood?
+    /// The Connections tree core derives for the leaf (W6-2 PR 0b, 0b-4):
+    /// the rows AND the neighbourhood's counts, one record per load.
+    @Published var connectionsTree: GraphConnectionsTree?
     /// Depth-1 snippet source (spec §P1-1: rows show snippets from the
     /// existing `Backlink`/`OutgoingLink` data at depth 1).
     @Published var connectionsBundle: NoteLoadBundle?
@@ -2969,6 +2971,24 @@ final class AppState: ObservableObject {
     /// The whole-graph snapshot backing the Graph tab's Table mode,
     /// fetched once per generation and sorted/filtered client-side.
     @Published var graphTableSnapshot: GraphSnapshot?
+    /// The table rows core formats and orders for the accepted request
+    /// (W6-2 PR 0b, 0b-7); the grid shows them as given.
+    @Published var graphTableRows: [GraphTableRow] = []
+    /// The node count under the backend filter alone (the count's total).
+    @Published var graphTableTotal: UInt64 = 0
+    /// The table's ACCEPTED sort — published with the rows it ordered
+    /// (design A); the default hubs-first (Links in descending).
+    @Published var graphTableSort = GraphTableSort(column: .linksIn, ascending: false)
+    /// The table's REQUESTED sort while a load is in flight, nil at rest.
+    @Published var graphTableRequestedSort: GraphTableSort?
+    /// The table's load sequence — every input change advances it, and a
+    /// result whose token carries an older value is dropped whole.
+    var graphTableSeq: UInt64 = 0
+    /// The table request the last token carried (the query and the sort).
+    var graphTableRequest: GraphTableRequest?
+    /// The backend filter the held snapshot was fetched under — half of
+    /// the snapshot's identity (design A): `GraphSnapshot` carries none.
+    var graphTableSnapshotFilter: GraphFilter?
     /// Backend filter (a snapshot re-fetch on change): Attachments /
     /// Unresolved (= ghosts) / Orphans-only toggles — exactly
     /// `GraphFilter` semantics (spec §P1-2). Defaults: attachments off,
@@ -2984,6 +3004,19 @@ final class AppState: ObservableObject {
     /// by presets; cleared by any manual filter-bar toggle so it never
     /// becomes hidden state the user can't see or undo.
     @Published var graphTableKindFilter: GraphNodeKind?
+    /// The ONE visibility record both projections hold (W6-2 PR 0b, 0b-2):
+    /// the backend filter, the name needle, the preset's kind overlay.
+    var graphVisibilityQuery: GraphVisibilityQuery {
+        GraphVisibilityQuery(
+            filter: graphTableFilter, nameQuery: graphTableTextFilter, kindOnly: graphTableKindFilter)
+    }
+    /// The diagram's topology source (W6-2 PR 0b, 0b-6b): nil means the
+    /// session query; tests inject a source over a synthetic model. The
+    /// third argument is the held (layout) generation the answer must match.
+    var graphTopologySource: ((GraphVisibilityQuery, GraphConfig, UInt64) -> GraphTopology?)?
+    /// The topology the diagram last accepted (0b-6b): Where-am-I reads its
+    /// entry for the selection, the same record the view renders.
+    var graphDiagramTopology: GraphTopology?
     /// A preset (orphans / unresolved / most-linked) awaiting its
     /// post-load announcement — set by `openGraphPreset`, consumed once
     /// the fresh snapshot publishes so the count/hub is spoken from real
@@ -3064,7 +3097,7 @@ final class AppState: ObservableObject {
     var graphForcesSettlePending = false
     /// The graph tab's SHARED selected-node key (Milestone P, P2-5 #561 —
     /// the `GraphViewState` selection channel). The ONE cross-projection-
-    /// stable identity (`GraphNodeKey`: `"p:<path>"` / `"g:<label>"`, never
+    /// stable identity (core's `stableKey`: `"p:<path>"` / `"g:<ghost key>"`, never
     /// a generation-volatile `UInt64`). The Table binds its row selection to
     /// this; the Diagram mirrors it to/from `GraphDiagramModel.selection`;
     /// Connections re-rooting writes it — so a selection in any projection

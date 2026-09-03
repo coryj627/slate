@@ -605,7 +605,7 @@ final class FileTreeDragDropTests: XCTestCase {
 
         XCTAssertEqual(
             state.graphSelectedNodeKey,
-            GraphNodeKey.make(path: "a.md", label: ""),
+            graphStableKeyForPath(path: "a.md"),
             "the explicit graph target must remain on the same-root command")
         XCTAssertEqual(state.workspace.activeLeaf, .connections)
     }

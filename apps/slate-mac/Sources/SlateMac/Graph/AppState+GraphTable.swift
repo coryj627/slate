@@ -17,11 +17,26 @@ enum GraphPreset {
     case mostLinked
 }
 
+/// A table request: the complete input core answers (W6-2 PR 0b,
+/// design A) — the visibility query and the sort.
+struct GraphTableRequest: Equatable {
+    var query: GraphVisibilityQuery
+    var sort: GraphTableSort
+}
+
+/// A load token: the request and the sequence it was issued under. A
+/// result publishes only when its token equals the current one in every
+/// field AND its generation equals the held snapshot's (0b-2b).
+struct GraphTableToken: Equatable {
+    let request: GraphTableRequest
+    let seq: UInt64
+}
+
 /// Graph tab, Table mode (Milestone P, P1-2 #555): the whole vault
 /// graph as a sortable, filterable grid — the global graph projected
-/// accessibly, and (until P2 adds the diagram) the sole Graph-tab mode.
-/// Backed by `graph_snapshot`, fetched once per generation and
-/// sorted/filtered client-side.
+/// accessibly. Backed by `graph_snapshot` for the summary and the
+/// selection, and by `graph_table_rows` for the rows core formats and
+/// orders (W6-2 PR 0b, 0b-7); the host sorts and filters nothing.
 extension AppState {
     /// Open (or activate the existing) Graph tab. Workspace-GLOBAL
     /// singleton: activate an existing `.graph` tab in ANY split group
@@ -114,6 +129,13 @@ extension AppState {
     /// or a stale preset filter — never bleeds into the next.
     func resetGraphTableState() {
         graphTableSnapshot = nil
+        graphTableSnapshotFilter = nil
+        graphTableRows = []
+        graphTableTotal = 0
+        graphTableSort = GraphTableSort(column: .linksIn, ascending: false)
+        graphTableRequestedSort = nil
+        graphTableRequest = nil
+        graphTableSeq += 1
         graphTableError = nil
         graphTableLoading = false
         graphTableTextFilter = ""
@@ -154,14 +176,28 @@ extension AppState {
         graphTableLoadSeq += 1
         let seq = graphTableLoadSeq
         let filter = graphTableFilter
+        // A preset is a request like any other (design A): it sets the
+        // DEFAULT sort in the same token as its filter, kind and needle.
+        let token = issueGraphTableToken(
+            sort: graphTablePendingPreset != nil
+                ? GraphTableSort(column: .linksIn, ascending: false) : graphTableSort)
         graphTableLoading = true
 
         Task { [weak self] in
-            let result: Result<GraphSnapshot, VaultError> =
+            // The snapshot (the summary, the selection's held generation)
+            // and the rows core orders for the token's request (0b-7).
+            let result: Result<(GraphSnapshot, GraphTableRows), VaultError> =
                 await Task.detached(priority: .userInitiated) {
-                    do { return .success(try session.graphSnapshot(filter: filter)) }
-                    catch let e as VaultError { return .failure(e) }
-                    catch { return .failure(.Io(message: error.localizedDescription)) }
+                    do {
+                        let snap = try session.graphSnapshot(filter: filter)
+                        let rows = try session.graphTableRows(
+                            query: token.request.query, sort: token.request.sort)
+                        return .success((snap, rows))
+                    } catch let e as VaultError {
+                        return .failure(e)
+                    } catch {
+                        return .failure(.Io(message: error.localizedDescription))
+                    }
                 }.value
 
             if let gate = self?.graphTablePublishGate { await gate() }
@@ -177,10 +213,17 @@ extension AppState {
             // since switched away.
             let speak = announce != .silent && self.graphTabActive
             switch result {
-            case .success(let snap):
+            case .success(let (snap, rows)):
+                // The snapshot and the filter it was fetched under publish
+                // together — the authority's identity (design A).
                 self.graphTableSnapshot = snap
+                self.graphTableSnapshotFilter = filter
                 self.graphTableError = nil
                 self.graphTableSeenGraphGeneration = snap.generation
+                // ONE publish (design A): rows, then the accepted sort. A
+                // token that no longer matches drops the rows and keeps the
+                // snapshot; the reissue is the newer token's load.
+                let published = self.receiveGraphTableRows(token: token, result: rows)
                 // Drop a shared selection whose node is gone from the fresh
                 // snapshot — at the PUBLISH point, so it fires even while the
                 // Table view isn't mounted (e.g. a delete during Diagram
@@ -191,9 +234,11 @@ extension AppState {
                 // can't replay a stale preset announcement (P1-3 #556).
                 let preset = self.graphTablePendingPreset
                 self.graphTablePendingPreset = nil
-                guard speak else { return }
+                guard speak, published else { return }
                 if let preset {
-                    self.graphAnnouncer.announce(self.graphPresetEvent(preset, snap: snap))
+                    // The headline is THIS result's (design A): row zero under
+                    // the default sort, or the published count.
+                    self.graphAnnouncer.announce(self.graphPresetEvent(preset, rows: rows))
                     return
                 }
                 switch announce {
@@ -202,9 +247,9 @@ extension AppState {
                     self.graphAnnouncer.announce(
                         .graphSnapshotSummary(counts: snap.summaryCounts))
                 case .filterCount:
-                    let count = self.graphFilterCount(snap)
+                    // The count is the rows result's (design B): one path.
                     self.graphAnnouncer.announceFilterCount(
-                        shown: count.shown, total: count.total,
+                        shown: UInt32(rows.rows.count), total: UInt32(rows.total),
                         gate: { [weak self] in self?.graphTabActive == true })
                 case .silent:
                     break
@@ -212,6 +257,7 @@ extension AppState {
             case .failure(let error):
                 self.graphTableError = self.humanReadable(error)
                 self.graphTableSnapshot = nil
+                self.failGraphTableRows(token: token)
                 if speak {
                     self.graphAnnouncer.announce(
                         .graphBlocked(reason: .loadFailed(message: self.humanReadable(error))))
@@ -220,32 +266,110 @@ extension AppState {
         }
     }
 
-    /// The filter count for `snap` under the current client-side text
-    /// filter — the single source of truth the view's synchronous
-    /// announcement and the post-fetch announcement both use, so the two
-    /// paths can't drift (round 2 finding 7). The payload of the gated
-    /// `announceFilterCount`; core renders the copy (W6-2 PR 0a).
-    func graphFilterCount(_ snap: GraphSnapshot) -> (shown: UInt32, total: UInt32) {
-        let total = snap.nodes.count
-        let needle = graphTableTextFilter.trimmingCharacters(in: .whitespaces)
-        let shown =
-            needle.isEmpty
-            ? total
-            : snap.nodes.filter {
-                $0.label.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-            }.count
-        return (UInt32(shown), UInt32(total))
+    // MARK: - The load token (W6-2 PR 0b, design A)
+
+    /// Issue the next token: every input change advances the sequence and
+    /// records the request; `sort` is the requested sort until its rows
+    /// publish.
+    @discardableResult
+    func issueGraphTableToken(sort: GraphTableSort) -> GraphTableToken {
+        graphTableSeq += 1
+        let request = GraphTableRequest(query: graphVisibilityQuery, sort: sort)
+        graphTableRequest = request
+        graphTableRequestedSort = sort == graphTableSort ? nil : sort
+        return GraphTableToken(request: request, seq: graphTableSeq)
+    }
+
+    /// Publish a rows result under its token (design A): the token must
+    /// equal the current one in EVERY field and the result's generation
+    /// must equal the held snapshot's, else the result is dropped whole
+    /// (0b-2b) — and, on a generation mismatch, the snapshot is re-fetched
+    /// so the held value catches up. On success the rows and the accepted
+    /// sort publish in ONE synchronous assignment, rows first. Returns
+    /// whether the result published.
+    @discardableResult
+    func receiveGraphTableRows(token: GraphTableToken, result: GraphTableRows) -> Bool {
+        guard token.seq == graphTableSeq, token.request == graphTableRequest else { return false }
+        // The authority's identity (design A): the filter the held snapshot
+        // was fetched under AND its generation. Filter-B rows never land
+        // on a filter-A snapshot; a generation mismatch re-fetches.
+        if let held = graphTableSnapshotFilter, held != token.request.query.filter {
+            graphTableRequestedSort = nil
+            return false
+        }
+        if let snap = graphTableSnapshot, snap.generation != result.generation {
+            graphTableRequestedSort = nil
+            loadGraphTable(announce: .silent)
+            return false
+        }
+        graphTableRows = result.rows
+        graphTableTotal = result.total
+        graphTableSort = token.request.sort
+        graphTableRequestedSort = nil
+        return true
+    }
+
+    /// A failed query rolls the request back to the accepted state.
+    func failGraphTableRows(token: GraphTableToken) {
+        guard token.seq == graphTableSeq else { return }
+        graphTableRequestedSort = nil
+    }
+
+    /// The grid asked for a sort, or an input changed under the accepted
+    /// sort: issue a token and query the rows; the receiver publishes rows
+    /// and the accepted sort together or drops the result.
+    func requestGraphTableRows(sort: GraphTableSort? = nil) {
+        let token = issueGraphTableToken(sort: sort ?? graphTableSort)
+        guard let session = currentSession else {
+            failGraphTableRows(token: token)
+            return
+        }
+        Task { [weak self] in
+            let result: Result<GraphTableRows, VaultError> =
+                await Task.detached(priority: .userInitiated) {
+                    do {
+                        return .success(
+                            try session.graphTableRows(
+                                query: token.request.query, sort: token.request.sort))
+                    } catch let e as VaultError {
+                        return .failure(e)
+                    } catch {
+                        return .failure(.Io(message: error.localizedDescription))
+                    }
+                }.value
+            guard let self, self.currentSession === session else { return }
+            switch result {
+            case .success(let rows):
+                if self.receiveGraphTableRows(token: token, result: rows), self.graphTabActive {
+                    self.graphAnnouncer.announceFilterCount(
+                        shown: UInt32(rows.rows.count), total: UInt32(rows.total),
+                        gate: { [weak self] in self?.graphTabActive == true })
+                }
+            case .failure(let error):
+                self.failGraphTableRows(token: token)
+                if self.graphTabActive {
+                    self.graphAnnouncer.announce(
+                        .graphBlocked(reason: .loadFailed(message: self.humanReadable(error))))
+                }
+            }
+        }
+    }
+
+    /// The grid's sort request (0b-14): a token change like any other.
+    func setGraphTableSort(_ sort: GraphTableSort) {
+        guard sort != graphTableSort || graphTableRequestedSort != nil else { return }
+        requestGraphTableRows(sort: sort)
     }
 
     /// Drop the shared cross-projection selection if the node it names is
     /// no longer in `snap` — deleted, or dropped by a backend-filter change
-    /// (P2-5 review finding 4). Keyed by the stable `GraphNodeKey`, so it's
+    /// (P2-5 review finding 4). Keyed by core's `stableKey`, so it's
     /// robust across id-reassigning generation bumps. Called at the snapshot
     /// publish point (view-independent) AND from the Table's generation
     /// `onChange`, so a churn during Diagram mode doesn't strand a stale key.
     func revalidateGraphSelection(against snap: GraphSnapshot) {
         guard let key = graphSelectedNodeKey else { return }
-        if !snap.nodes.contains(where: { GraphNodeKey.make(for: $0) == key }) {
+        if !snap.nodes.contains(where: { $0.stableKey == key }) {
             graphSelectedNodeKey = nil
         }
     }
@@ -333,37 +457,21 @@ extension AppState {
         }
     }
 
-    /// The headline event for a preset, computed from the fresh snapshot
-    /// (P1-3; the copy is core's since W6-2 PR 0a). Orphans/unresolved
-    /// carry the shown count; most-linked names the top row under the
-    /// grid's default sort.
-    func graphPresetEvent(_ preset: GraphPreset, snap: GraphSnapshot) -> GraphA11yEvent {
+    /// The headline event for a preset, from THE PUBLISHED RESULT (P1-3;
+    /// the copy is core's since W6-2 PR 0a; design A): orphans and
+    /// unresolved carry the published count — the rows core returned for
+    /// the preset's query, kind overlay included — and most-linked names
+    /// row zero under the default sort the preset requested.
+    func graphPresetEvent(_ preset: GraphPreset, rows: GraphTableRows) -> GraphA11yEvent {
         switch preset {
         case .orphans:
-            return .graphPreset(
-                outcome: .orphans(count: UInt64(graphPresetShownCount(snap, kind: nil))))
+            return .graphPreset(outcome: .orphans(count: UInt64(rows.rows.count)))
         case .unresolved:
-            return .graphPreset(
-                outcome: .unresolved(count: UInt64(graphPresetShownCount(snap, kind: .ghost))))
+            return .graphPreset(outcome: .unresolved(count: UInt64(rows.rows.count)))
         case .mostLinked:
-            // The top row is what the grid shows at row 0 under the
-            // default Links-in-descending sort (label/key tie-break) —
-            // reuse the exact comparator so the spoken hub matches.
-            let rows = snap.nodes.map { GraphTableRow(node: $0, folder: "") }
-            guard
-                let top = rows.sorted(by: {
-                    GraphTableColumn.linksIn.directionalComparator($0, $1, ascending: false)
-                }).first
-            else { return .graphPreset(outcome: .noNotesToRank) }
+            guard let top = rows.rows.first else { return .graphPreset(outcome: .noNotesToRank) }
             return .graphPreset(outcome: .mostLinked(label: top.label, inLinks: top.linksIn))
         }
-    }
-
-    /// Rows shown for a preset = the fetched nodes narrowed by the
-    /// client-side kind filter (presets clear the text filter).
-    private func graphPresetShownCount(_ snap: GraphSnapshot, kind: GraphNodeKind?) -> Int {
-        guard let kind else { return snap.nodes.count }
-        return snap.nodes.filter { $0.kind == kind }.count
     }
 
     /// Re-probe `graph_generation()` after a `VaultEventListener` event
@@ -411,12 +519,6 @@ extension AppState {
         graphTableLoadSeq == scheduledEpoch
             && anyGraphTabVisible
             && probedGeneration != graphTableSeenGraphGeneration
-    }
-
-    /// The parent folder of a vault path (empty = vault root); the
-    /// Folder column. Ghost nodes (no path) show empty.
-    func folder(of path: String) -> String {
-        (path as NSString).deletingLastPathComponent
     }
 
     /// Reveal a note in the file tree (the graph table's + Connections

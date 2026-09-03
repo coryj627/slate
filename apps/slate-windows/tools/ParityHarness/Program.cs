@@ -10,6 +10,7 @@
 //   dotnet run --project apps/slate-windows/tools/ParityHarness -- \
 //     --fixtures crates/slate-core/tests/fixtures/markdown --out <dir> \
 //     [--canvas-fixtures crates/slate-core/tests/fixtures/canvas]
+//     [--graph-fixtures crates/slate-core/tests/fixtures/graph_vault]
 //
 // `--canvas-fixtures` adds the W6-1 PR 0b `canvas_queries` section
 // (§W-A). The canvas corpus gets its OWN temp vault: mixing it into the
@@ -26,6 +27,7 @@ string? outDir = null;
 string? scenarios = null;
 string? canvasFixtures = null;
 string? canvasScenarios = null;
+string? graphFixtures = null;
 bool mutations = args.Contains("--mutations");
 for (int i = 0; i < args.Length - 1; i++)
 {
@@ -48,6 +50,10 @@ for (int i = 0; i < args.Length - 1; i++)
     if (args[i] == "--canvas-scenarios")
     {
         canvasScenarios = args[i + 1];
+    }
+    if (args[i] == "--graph-fixtures")
+    {
+        graphFixtures = args[i + 1];
     }
 }
 
@@ -192,6 +198,16 @@ try
         artifacts += 2;
     }
 
+    // W6-2 PR 0b (§W-A `graph_queries`, contract 0b-13): the graph vault
+    // is its own corpus with its own temp vault (0bD-4 revised) — the
+    // witnesses the section needs are not in the markdown corpus, and
+    // adding them there would perturb every earlier artifact.
+    if (graphFixtures != null)
+    {
+        WriteArtifact(Path.Combine(outDir, "graph_queries.json"), GraphSection(graphFixtures));
+        artifacts += 1;
+    }
+
     Console.WriteLine($"parity-harness: {artifacts} artifacts -> {outDir}");
     return 0;
 }
@@ -236,6 +252,32 @@ static (string Queries, string Read) CanvasSections(string canvasFixtures)
         return (
             SurfaceSerializer.CanvasQueriesArtifact(session, canvasFiles),
             SurfaceSerializer.CanvasReadArtifact(session, canvasFiles));
+    }
+    finally
+    {
+        try
+        {
+            Directory.Delete(root, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+}
+
+static string GraphSection(string graphFixtures)
+{
+    string root = Path.Combine(Path.GetTempPath(), $"parity-graph-{Guid.NewGuid():N}");
+    try
+    {
+        SurfaceSerializer.CopyTree(graphFixtures, root);
+        using var session = VaultSession.OpenFilesystem(root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        return SurfaceSerializer.GraphQueriesArtifact(session);
     }
     finally
     {

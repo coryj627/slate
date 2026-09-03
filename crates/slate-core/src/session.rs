@@ -1939,11 +1939,24 @@ impl VaultSession {
         depth: u32,
         filter: crate::graph::GraphFilter,
     ) -> Result<crate::graph::GraphNeighborhood, VaultError> {
-        let depth = depth.clamp(1, 3);
         let conn = self.conn.lock().expect("session connection mutex");
         let mut guard = self.graph.lock().expect("graph index mutex");
         self.graph_ensure_built(&conn, &mut guard)?;
         let index = guard.as_ref().expect("graph index just ensured");
+        self.graph_neighborhood_locked(&conn, index, path, depth, filter)
+    }
+
+    /// The neighbourhood under a HELD lock (W6-2 PR 0b): the tree query
+    /// reads it and the generation in one critical section (0b-2b).
+    fn graph_neighborhood_locked(
+        &self,
+        conn: &Connection,
+        index: &crate::graph::GraphIndex,
+        path: &str,
+        depth: u32,
+        filter: crate::graph::GraphFilter,
+    ) -> Result<crate::graph::GraphNeighborhood, VaultError> {
+        let depth = depth.clamp(1, 3);
         let metrics = self.graph_metrics_cached(index);
 
         let center_key = crate::graph::NodeKey::Path(path.to_string());
@@ -1960,7 +1973,7 @@ impl VaultSession {
 
         // Key-sorted node order = filtered_nodes retained to members.
         let filtered = index.filtered_nodes(&filter, is_orphan);
-        let mtimes = file_mtimes(&conn)?;
+        let mtimes = file_mtimes(conn)?;
         let nodes: Vec<crate::graph::GraphNode> = filtered
             .iter()
             .filter(|(id, _)| member_ids.contains(id))
@@ -2006,6 +2019,80 @@ impl VaultSession {
             edges,
             audio_summary,
             summary_counts,
+        })
+    }
+
+    /// The Connections tree for `path` (W6-2 PR 0b, contracts doc 0b-4):
+    /// the neighbourhood payload split, merged, ordered and nested as
+    /// flat pre-order rows — one function of `graph_neighborhood`'s
+    /// output, tagged with the generation read under the same lock.
+    pub fn graph_connections_tree(
+        &self,
+        path: &str,
+        depth: u32,
+        filter: crate::graph::GraphFilter,
+    ) -> Result<crate::graph_queries::GraphConnectionsTree, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut guard = self.graph.lock().expect("graph index mutex");
+        self.graph_ensure_built(&conn, &mut guard)?;
+        let index = guard.as_ref().expect("graph index just ensured");
+        let hood = self.graph_neighborhood_locked(&conn, index, path, depth, filter)?;
+        Ok(crate::graph_queries::connections_tree(
+            &hood,
+            index.generation(),
+        ))
+    }
+
+    /// The visible set under a query (0b-6): the ids that pass the needle
+    /// and the kind overlay, the label-priority subset, the total under
+    /// the backend filter, and the generation read (0b-2b).
+    pub fn graph_visibility(
+        &self,
+        query: &crate::graph_queries::GraphVisibilityQuery,
+    ) -> Result<crate::graph_queries::GraphVisibility, VaultError> {
+        let snapshot = self.graph_snapshot(query.filter)?;
+        Ok(crate::graph_queries::visibility(&snapshot, query))
+    }
+
+    /// The topology under a query and a config (0b-6b, design B): every
+    /// visible node with its key, label, kind, in-links, diameter, group,
+    /// label slot and visible neighbours — one record per rebuild.
+    pub fn graph_topology(
+        &self,
+        query: &crate::graph_queries::GraphVisibilityQuery,
+        config: &crate::graph_config::GraphConfig,
+    ) -> Result<crate::graph_queries::GraphTopology, VaultError> {
+        let snapshot = self.graph_snapshot(query.filter)?;
+        Ok(crate::graph_queries::topology(&snapshot, query, config))
+    }
+
+    /// The VISIBLE neighbours of `id` under a query (0b-6b): both
+    /// directions, unique, in the snapshot's edge order.
+    pub fn graph_neighbors(
+        &self,
+        query: &crate::graph_queries::GraphVisibilityQuery,
+        id: u64,
+    ) -> Result<crate::graph_queries::GraphNeighbors, VaultError> {
+        let snapshot = self.graph_snapshot(query.filter)?;
+        let visible = crate::graph_queries::visibility(&snapshot, query).ids;
+        Ok(crate::graph_queries::GraphNeighbors {
+            generation: snapshot.generation,
+            neighbors: crate::graph_queries::neighbors(&snapshot, &visible, id),
+        })
+    }
+
+    /// The table rows under a query, core-formatted and in `sort`'s
+    /// order (0b-7).
+    pub fn graph_table_rows(
+        &self,
+        query: &crate::graph_queries::GraphVisibilityQuery,
+        sort: crate::graph_queries::GraphTableSort,
+    ) -> Result<crate::graph_queries::GraphTableRows, VaultError> {
+        let snapshot = self.graph_snapshot(query.filter)?;
+        Ok(crate::graph_queries::GraphTableRows {
+            generation: snapshot.generation,
+            total: snapshot.nodes.len() as u64,
+            rows: crate::graph_queries::table_rows(&snapshot, query, sort),
         })
     }
 
@@ -9000,6 +9087,7 @@ fn graph_node_payload(
     let m = metrics.get(&data.key);
     crate::graph::GraphNode {
         id,
+        stable_key: crate::graph_queries::stable_key(&data.key),
         modified_ms: path.as_deref().and_then(|p| mtimes.get(p).copied()),
         path,
         label: data.label.clone(),

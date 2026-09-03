@@ -1,0 +1,176 @@
+{
+  "snapshot": [
+    {
+      "key": "g:café",
+      "label": "café",
+      "kind": "ghost",
+      "path": null,
+      "in_links": 1,
+      "out_links": 0,
+      "in_embeds": 0,
+      "out_embeds": 0,
+      "component": 0,
+      "is_orphan": false
+    }
+  ],
+  "visibility": [
+    {
+      "query": "all",
+      "total": 12,
+      "visible": [
+        "p:010.md"
+      ],
+      "labeled": [
+        "p:010.md"
+      ]
+    }
+  ],
+  "topology": {
+    "nodes": [
+      {
+        "key": "p:010.md",
+        "diameter_x100": 1216,
+        "group": null,
+        "labeled": true,
+        "neighbors": [
+          "p:hub.md"
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "from_key": "p:010.md",
+        "to_key": "p:hub.md",
+        "kind": "embed"
+      }
+    ]
+  },
+  "table": [
+    {
+      "query": "all",
+      "sort": "note asc",
+      "total": 12,
+      "rows": [
+        {
+          "key": "p:2.md",
+          "note": "2",
+          "links_in": "2",
+          "links_out": "1",
+          "embeds_in": "0",
+          "embeds_out": "0",
+          "component": "0",
+          "folder": "",
+          "kind": "Note"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "path": "hub.md",
+      "depth": 1,
+      "center_key": "p:hub.md",
+      "tree_depth": 1,
+      "summary": {
+        "center_label": "hub",
+        "in_links": 2,
+        "out_links": 9,
+        "note_count": 5,
+        "depth": 1
+      },
+      "incoming": [
+        {
+          "occurrence": "in/p%3A2%2Emd",
+          "parent": null,
+          "level": 1,
+          "key": "p:2.md",
+          "kind": "note",
+          "embed_only": false,
+          "references": 2
+        }
+      ],
+      "outgoing": [
+        {
+          "occurrence": "out/p%3A2%2Emd",
+          "parent": null,
+          "level": 1,
+          "key": "p:2.md",
+          "kind": "note",
+          "embed_only": false,
+          "references": 2
+        }
+      ]
+    }
+  ],
+  "ghost_paths": [
+    {
+      "target": "Ghost One",
+      "path": "Ghost One.md"
+    }
+  ],
+  "spatial": [
+    {
+      "from": "a",
+      "dx": 1,
+      "dy": 0,
+      "to": "d"
+    }
+  ],
+  "structural": [
+    {
+      "from": "a",
+      "forward": true,
+      "to": "b"
+    }
+  ],
+  "constants": {
+    "tier_b_threshold": 1500,
+    "label_cap": 200,
+    "connections_depth_min": 1,
+    "connections_depth_max": 3,
+    "node_diameter_min": 8,
+    "node_diameter_max": 28,
+    "neighbor_label_cap": 10,
+    "diameter_at_0": 8,
+    "diameter_at_1000000": 28
+  },
+  "actions": [
+    {
+      "kind": "note",
+      "actions": [
+        "Open"
+      ]
+    }
+  ],
+  "config": {
+    "input": "{\"version\":1,\"futureThing\":{\"keep\":true,\"nested\":{\"z\":1,\"a\":[1,2]}},\"filters\":{\"includeAttachments\":true,\"nameQuery\":\"café\"},\"groups\":[{\"query\":\"project\",\"colorToken\":\"green\",\"ringStyle\":\"dashed\"},7,{\"colorToken\":\"blue\"},{\"query\":\"x\",\"colorToken\":\"mauve\",\"ringStyle\":\"wavy\"}],\"display\":{\"nodeSizeMultiplier\":100,\"textFadeZoom\":null},\"forces\":{\"repel\":9.0,\"center\":-3,\"link\":0.25},\"mode\":\"diagram\",\"connectionsDepth\":99}",
+    "unknown_json": "{\"futureThing\":{\"keep\":true,\"nested\":{\"a\":[1,2],\"z\":1}}}",
+    "include_attachments": true,
+    "name_query": "café",
+    "group_count": 2,
+    "group_tags": [
+      "green/dashed"
+    ],
+    "palette": [
+      "red/Red"
+    ],
+    "ring_styles": [
+      "solid/Solid"
+    ],
+    "modes": [
+      "table/Table"
+    ],
+    "verbosities": [
+      "terse/Terse"
+    ],
+    "connections_depth": 3,
+    "mode": "diagram",
+    "verbosity": "standard",
+    "repel_x100": 100,
+    "center_x100": 0,
+    "link_x100": 25,
+    "node_size_x100": 200,
+    "encoded": "{\n  \"connectionsDepth\": 3,\n  \"display\": {\n    \"arrows\": false,\n    \"linkThickness\": 1.0,\n    \"nodeSizeMultiplier\": 2.0,\n    \"textFadeZoom\": 0.55\n  },\n  \"filters\": {\n    \"includeAttachments\": true,\n    \"includeGhosts\": true,\n    \"nameQuery\": \"café\",\n    \"orphansOnly\": false\n  },\n  \"forces\": {\n    \"center\": 0.0,\n    \"link\": 0.25,\n    \"linkDistance\": 0.5,\n    \"repel\": 1.0\n  },\n  \"futureThing\": {\n    \"keep\": true,\n    \"nested\": {\n      \"a\": [\n        1,\n        2\n      ],\n      \"z\": 1\n    }\n  },\n  \"groups\": [\n    {\n      \"colorToken\": \"green\",\n      \"query\": \"project\",\n      \"ringStyle\": \"dashed\"\n    },\n    {\n      \"colorToken\": \"blue\",\n      \"query\": \"x\",\n      \"ringStyle\": \"solid\"\n    }\n  ],\n  \"mode\": \"diagram\",\n  \"verbosity\": \"standard\",\n  \"version\": 1\n}",
+    "encoded_fresh": "{\n  \"connectionsDepth\": 1,\n  \"display\": {\n    \"arrows\": false,\n    \"linkThickness\": 1.0,\n    \"nodeSizeMultiplier\": 1.0,\n    \"textFadeZoom\": 0.55\n  },\n  \"filters\": {\n    \"includeAttachments\": false,\n    \"includeGhosts\": true,\n    \"nameQuery\": \"\",\n    \"orphansOnly\": false\n  },\n  \"forces\": {\n    \"center\": 0.5,\n    \"link\": 0.5,\n    \"linkDistance\": 0.5,\n    \"repel\": 0.5\n  },\n  \"groups\": [],\n  \"mode\": \"table\",\n  \"verbosity\": \"standard\",\n  \"version\": 1\n}"
+  }
+}

@@ -6791,12 +6791,9 @@ mod tests {
     /// diacritic-insensitive containment — folded here as NFD with the
     /// combining marks dropped, then lower-cased.
     fn name_filter_fold(text: &str) -> String {
-        use unicode_normalization::UnicodeNormalization;
-        use unicode_normalization::char::is_combining_mark;
-        text.nfd()
-            .filter(|c| !is_combining_mark(*c))
-            .collect::<String>()
-            .to_lowercase()
+        // ONE definition (W6-2 PR 0b, contracts doc 0b-6): the production
+        // fold in `graph_queries`, which the visibility query itself uses.
+        crate::graph_queries::name_filter_fold(text)
     }
 
     /// A row copy comes from exactly two constructors (contracts doc

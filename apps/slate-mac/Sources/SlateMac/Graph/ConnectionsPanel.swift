@@ -80,7 +80,7 @@ struct ConnectionsPanel: View {
 
     private var currentSummary: String? {
         guard isPayloadCurrent else { return nil }
-        return appState.connectionsNeighborhood?.audioSummary
+        return appState.connectionsTree?.audioSummary
     }
 
     private var isPayloadCurrent: Bool {
@@ -327,10 +327,8 @@ struct ConnectionsPanel: View {
     // MARK: Model
 
     private var model: ConnectionsModel? {
-        guard isPayloadCurrent, let hood = appState.connectionsNeighborhood else { return nil }
-        return ConnectionsModel(
-            hood: hood, bundle: appState.connectionsBundle,
-            depth: AppState.clampConnectionsDepth(appState.connectionsDepth))
+        guard isPayloadCurrent, let tree = appState.connectionsTree else { return nil }
+        return ConnectionsModel(tree: tree, bundle: appState.connectionsBundle)
     }
 }
 
@@ -349,6 +347,8 @@ struct ConnectionRow: Identifiable {
     let id: String
     /// The underlying graph node id (shared across occurrences).
     let nodeId: UInt64
+    /// 1 for a first-hop row; core's `level`.
+    let level: UInt32
     let label: String
     let path: String?
     let targetRaw: String
@@ -359,6 +359,8 @@ struct ConnectionRow: Identifiable {
     let linksIn: UInt32
     let linksOut: UInt32
     let references: UInt32
+    /// Core's cross-projection key (0b-3).
+    let stableKey: String
     let snippet: String?
     var nested: [ConnectionRow] = []
 
@@ -375,41 +377,17 @@ struct ConnectionRow: Identifiable {
     }
 }
 
-/// Splits a `GraphNeighborhood` into first-hop incoming / outgoing rows
-/// (by edge direction from the center), aggregating parallel/typed
-/// edges per neighbor and nesting deeper hops recursively (cycle-safe).
+/// The Connections tree, as core derives it (W6-2 PR 0b, contracts doc
+/// 0b-4): the flat pre-order rows are nested by `parent_id` for
+/// `OutlineGroup`, and the depth-one snippets are overlaid from the note
+/// bundle by path (host data, 0bD-2). Nothing structural is derived here.
 struct ConnectionsModel {
     let incoming: [ConnectionRow]
     let outgoing: [ConnectionRow]
 
     private let byId: [String: ConnectionRow]
 
-    init(hood: GraphNeighborhood, bundle: NoteLoadBundle?, depth: Int) {
-        let nodesById = Dictionary(uniqueKeysWithValues: hood.nodes.map { ($0.id, $0) })
-        let center = hood.centerId
-
-        // Undirected adjacency: node id → set of (neighbor id, kind).
-        // Aggregating here means a node reached by BOTH a link and an
-        // embed edge is ONE neighbor whose kinds are merged — no
-        // duplicate `Identifiable` ids (review round 1 finding 6).
-        var adjacency: [UInt64: [UInt64: Set<GraphEdgeKind>]] = [:]
-        // Direction of the center's own incident edges, for the split.
-        var incomingIds: [UInt64: Set<GraphEdgeKind>] = [:]
-        var outgoingIds: [UInt64: Set<GraphEdgeKind>] = [:]
-        for edge in hood.edges {
-            adjacency[edge.sourceId, default: [:]][edge.targetId, default: []].insert(edge.kind)
-            adjacency[edge.targetId, default: [:]][edge.sourceId, default: []].insert(edge.kind)
-            if edge.sourceId == center, edge.targetId != center {
-                outgoingIds[edge.targetId, default: []].insert(edge.kind)
-            }
-            if edge.targetId == center, edge.sourceId != center {
-                incomingIds[edge.sourceId, default: []].insert(edge.kind)
-            }
-            // A self-edge (center→center) is not a connection to another
-            // note; deliberately omitted from both lists.
-        }
-
-        // Snippet overlay (depth 1).
+    init(tree: GraphConnectionsTree, bundle: NoteLoadBundle?) {
         var inSnippet: [String: String] = [:]
         var outSnippet: [String: String] = [:]
         if let bundle {
@@ -421,68 +399,42 @@ struct ConnectionsModel {
             }
         }
 
-        func leaf(_ id: UInt64, kinds: Set<GraphEdgeKind>, snippet: String?, idString: String)
-            -> ConnectionRow?
-        {
-            guard let node = nodesById[id] else { return nil }
-            let embedOnly = !kinds.contains(.link) && kinds.contains(.embed)
-            return ConnectionRow(
-                id: idString, nodeId: node.id, label: node.label, path: node.path,
-                targetRaw: node.label, isGhost: node.kind == .ghost,
-                isAttachment: node.kind == .attachment, isEmbed: embedOnly,
-                linksIn: node.inLinks, linksOut: node.outLinks,
-                references: node.inLinks + node.inEmbeds, snippet: snippet)
-        }
-
-        // Recursively attach a node's neighbors (undirected), excluding
-        // ancestors on the current path (cycle guard) — so depth 3
-        // actually renders the third hop (review round 1 finding 8).
-        // Child ids extend the parent's path so a diamond descendant
-        // gets a distinct id under each parent (round 2 finding 1).
-        func children(
-            of id: UInt64, ancestors: Set<UInt64>, remaining: Int, parentId: String
-        ) -> [ConnectionRow] {
-            guard remaining > 0 else { return [] }
-            let nextAncestors = ancestors.union([id])
-            var rows: [ConnectionRow] = []
-            for (neighborId, kinds) in adjacency[id] ?? [:] where !nextAncestors.contains(neighborId) {
-                let childId = "\(parentId)/\(neighborId)"
-                guard var row = leaf(neighborId, kinds: kinds, snippet: nil, idString: childId)
-                else { continue }
-                row.nested = children(
-                    of: neighborId, ancestors: nextAncestors, remaining: remaining - 1,
-                    parentId: childId)
-                rows.append(row)
+        func nest(_ flat: [GraphConnectionRow], snippets: [String: String]) -> [ConnectionRow] {
+            // Pre-order with parent ids: a stack of open ancestors nests each
+            // row under the nearest open parent in one pass.
+            var roots: [ConnectionRow] = []
+            var stack: [ConnectionRow] = []
+            func close(to level: UInt32) {
+                while let last = stack.last, last.level >= level {
+                    stack.removeLast()
+                    if var parent = stack.popLast() {
+                        parent.nested.append(last)
+                        stack.append(parent)
+                    } else {
+                        roots.append(last)
+                    }
+                }
             }
-            return rows.sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
-        }
-
-        // depth counts hops from center: first-hop rows, then up to
-        // depth-1 further levels of nesting.
-        let nestDepth = max(0, depth - 1)
-        let ancestors: Set<UInt64> = [center]
-        func firstHop(
-            _ ids: [UInt64: Set<GraphEdgeKind>], snippets: [String: String], prefix: String
-        ) -> [ConnectionRow] {
-            ids.compactMap { (id, kinds) -> ConnectionRow? in
-                let rowId = "\(prefix)/\(id)"
-                guard
-                    var row = leaf(
-                        id, kinds: kinds,
-                        snippet: nodesById[id]?.path.flatMap { snippets[$0] }, idString: rowId)
-                else { return nil }
-                row.nested = children(
-                    of: id, ancestors: ancestors, remaining: nestDepth, parentId: rowId)
-                return row
+            for r in flat {
+                close(to: r.level)
+                let snippet = r.level == 1 ? r.path.flatMap { snippets[$0] } : nil
+                stack.append(
+                    ConnectionRow(
+                        id: r.id, nodeId: r.nodeId, level: r.level, label: r.label, path: r.path,
+                        targetRaw: r.targetRaw, isGhost: r.kind == .ghost,
+                        isAttachment: r.kind == .attachment, isEmbed: r.embedOnly,
+                        linksIn: r.inLinks, linksOut: r.outLinks, references: r.references,
+                        stableKey: r.stableKey, snippet: snippet))
             }
-            .sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
+            close(to: 1)
+            return roots
         }
 
-        self.incoming = firstHop(incomingIds, snippets: inSnippet, prefix: "in")
-        self.outgoing = firstHop(outgoingIds, snippets: outSnippet, prefix: "out")
+        self.incoming = nest(tree.incoming, snippets: inSnippet)
+        self.outgoing = nest(tree.outgoing, snippets: outSnippet)
 
-        // Flat id → row index for keyboard activation (every occurrence,
-        // keyed by its unique path id).
+        // Flat id → row for keyboard activation (every occurrence, keyed by
+        // its unique path id).
         var index: [String: ConnectionRow] = [:]
         func collect(_ rows: [ConnectionRow]) {
             for r in rows {

@@ -26,10 +26,14 @@ extension AppState {
         workspace.activeLeaf == .connections
     }
 
-    /// Clamp any incoming depth into the backend's 1…3 window. Pure —
-    /// `nonisolated` so unit tests can call it off the main actor.
+    /// Core's constants (`graph_constants`, 0b-8), fetched once (design B).
+    nonisolated static let graphConstantsOnce = graphConstants()
+
+    /// Clamp any incoming depth into core's window. Pure — `nonisolated`
+    /// so unit tests can call it off the main actor.
     nonisolated static func clampConnectionsDepth(_ depth: Int) -> Int {
-        min(3, max(1, depth))
+        let c = graphConstantsOnce
+        return min(Int(c.connectionsDepthMax), max(Int(c.connectionsDepthMin), depth))
     }
 
     /// Clear all Connections state — called on vault open/close so a
@@ -38,7 +42,8 @@ extension AppState {
     func resetConnectionsState() {
         connectionsRootPath = nil
         connectionsBackStack = []
-        connectionsNeighborhood = nil
+        connectionsTree = nil
+        connectionsTree = nil
         connectionsBundle = nil
         connectionsLoadedPath = nil
         connectionsError = nil
@@ -58,7 +63,7 @@ extension AppState {
     /// while the leaf is inactive) so only deliberate views speak.
     func loadConnections(announce: Bool = true) {
         guard let session = currentSession, let path = connectionsEffectivePath else {
-            connectionsNeighborhood = nil
+            connectionsTree = nil
             connectionsBundle = nil
             connectionsLoadedPath = nil
             connectionsError = nil
@@ -73,17 +78,20 @@ extension AppState {
         connectionsLoading = true
 
         Task { [weak self] in
-            let result: Result<(GraphNeighborhood, NoteLoadBundle?), VaultError> =
+            let result: Result<(GraphConnectionsTree, NoteLoadBundle?), VaultError> =
                 await Task.detached(priority: .userInitiated) {
                     do {
-                        let hood = try session.graphNeighborhood(
+                        // ONE record per load (W6-2 PR 0b, design A): the tree
+                        // carries the neighbourhood's counts, so the leaf pairs
+                        // nothing across two queries.
+                        let tree = try session.graphConnectionsTree(
                             path: path, depth: depth, filter: filter)
                         let bundle =
                             wantBundle
                             ? try session.noteLoadBundle(
                                 path: path, backlinksPaging: Paging(cursor: nil, limit: 200))
                             : nil
-                        return .success((hood, bundle))
+                        return .success((tree, bundle))
                     } catch let error as VaultError {
                         return .failure(error)
                     } catch {
@@ -105,8 +113,8 @@ extension AppState {
             // finding 2).
             let speak = announce && self.connectionsLeafActiveForView
             switch result {
-            case .success(let (hood, bundle)):
-                self.connectionsNeighborhood = hood
+            case .success(let (tree, bundle)):
+                self.connectionsTree = tree
                 self.connectionsBundle = bundle
                 self.connectionsLoadedPath = path
                 self.connectionsError = nil
@@ -117,7 +125,7 @@ extension AppState {
                 }
             case .failure(let error):
                 self.connectionsError = self.humanReadable(error)
-                self.connectionsNeighborhood = nil
+                self.connectionsTree = nil
                 self.connectionsBundle = nil
                 self.connectionsLoadedPath = path
                 if speak {
@@ -185,7 +193,7 @@ extension AppState {
         // finding 5: the same-root early return must not leave the shared
         // key diverged).
         guard connectionsRootPath != path else {
-            graphSelectedNodeKey = GraphNodeKey.make(path: path, label: "")
+            graphSelectedNodeKey = graphStableKeyForPath(path: path)
             workspace.activeLeaf = .connections
             focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
             return
@@ -210,7 +218,7 @@ extension AppState {
         // Write the SHARED cross-projection selection (P2-5 #561): re-rooting
         // the local graph on `path` makes that the selected node, so the
         // Table/Diagram reflect it. Real note ⇒ the "p:" key.
-        graphSelectedNodeKey = GraphNodeKey.make(path: path, label: "")
+        graphSelectedNodeKey = graphStableKeyForPath(path: path)
         // Label only; the authoritative summary follows from the load.
         graphAnnouncer.announce(.graphReRooted(label: filename(of: path)))
     }
@@ -235,7 +243,7 @@ extension AppState {
         // Back also moves the SHARED selection to the restored node, so the
         // Table/Diagram follow the leaf back rather than lingering on the
         // forward destination (P2-5 review finding 5).
-        graphSelectedNodeKey = GraphNodeKey.make(path: prior.effective, label: "")
+        graphSelectedNodeKey = graphStableKeyForPath(path: prior.effective)
         graphAnnouncer.announce(.graphReRooted(label: filename(of: prior.effective)))
         return true
     }
@@ -301,16 +309,10 @@ extension AppState {
         return task
     }
 
-    /// Map an authored ghost target to a vault path: honor an embedded
-    /// folder, append `.md` when the author gave no extension.
+    /// Map an authored ghost target to a vault path — core's rule (W6-2
+    /// PR 0b, 0b-11): honour an embedded folder, append `.md` when the
+    /// author gave no Markdown extension.
     nonisolated static func ghostNotePath(_ targetRaw: String) -> String {
-        let trimmed = targetRaw.trimmingCharacters(in: .whitespaces)
-        let stripped =
-            trimmed.hasPrefix("./") ? String(trimmed.dropFirst(2))
-            : (trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed)
-        let last = (stripped as NSString).lastPathComponent
-        let hasMarkdownExt = ["md", "markdown", "mdown", "mkd"].contains(
-            (last as NSString).pathExtension.lowercased())
-        return hasMarkdownExt ? stripped : "\(stripped).md"
+        graphGhostNotePath(targetRaw: targetRaw)
     }
 }

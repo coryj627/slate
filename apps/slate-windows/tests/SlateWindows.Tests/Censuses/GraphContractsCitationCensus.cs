@@ -51,7 +51,7 @@ public sealed class GraphContractsCitationCensus
                 // sources and tests it names; the family's own names are
                 // unbackticked until they exist. The floor sits one below the
                 // measured population and rises with the records.
-                7),
+                33),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

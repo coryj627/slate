@@ -255,6 +255,10 @@ impl Default for GraphFilter {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphNode {
     pub id: u64,
+    /// The cross-projection, cross-generation identity (W6-2 PR 0b,
+    /// contracts doc 0b-3): `p:` + the path, or `g:` + the
+    /// percent-encoded ghost key — `graph_queries::stable_key`.
+    pub stable_key: String,
     /// `None` for ghosts.
     pub path: Option<String>,
     pub label: String,
