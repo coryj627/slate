@@ -62,8 +62,11 @@ final class GraphKeyCharacterizationTests: XCTestCase {
         for (label, needle) in [("Café", "cafe"), ("café", "CAFÉ"), ("İstanbul", "istanbul"), ("Alpine", "alp")] {
             XCTAssertEqual(foundation(label, needle), graphLabelMatches(label: label, query: needle), "\(label) / \(needle)")
         }
-        XCTAssertFalse(foundation("Straße", "strasse"))
-        XCTAssertFalse(graphLabelMatches(label: "Straße", query: "strasse"))
+        // The sharp s is where the two folds DIFFER (0b-D3, found by this
+        // test on the mac lane): Foundation's case-insensitive comparison
+        // folds `ß` to `ss`; core's NFD + lowercase leaves it.
+        XCTAssertTrue(foundation("Straße", "strasse"), "Foundation folds the sharp s")
+        XCTAssertFalse(graphLabelMatches(label: "Straße", query: "strasse"), "core does not")
         // The trim: Foundation's `.whitespaces` kept a newline, core drops it.
         XCTAssertTrue(graphLabelMatches(label: "café", query: "\ncafe\n"))
     }

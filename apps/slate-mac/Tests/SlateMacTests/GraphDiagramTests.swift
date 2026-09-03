@@ -951,11 +951,14 @@ final class GraphDiagramTests: XCTestCase {
     func testMutationBetweenAdoptionAndQueryEmptiesTheVisibleSet() throws {
         let session = try makeSession()
         let model = try makeModel(session)
-        let (_, view) = makeView(model, session: session)
+        let (state, view) = makeView(model, session: session)
         view.tickOnceForTesting()
         XCTAssertEqual(view.visibleNodeCountForTesting(), model.nodeCount)
         _ = try session.saveText(path: "d.md", contents: "# D\n[[a]]\n", expectedContentHash: nil)
-        view.tickOnceForTesting()  // rebuild against the OLD layout generation
+        view.tickOnceForTesting()  // the same epoch: the cache paints, nothing is fetched
+        XCTAssertEqual(view.visibleNodeCountForTesting(), model.nodeCount, "no crossing under an unchanged epoch")
+        state.graphTableTextFilter = " "  // a new epoch (the needle changed; an empty fold)
+        view.tickOnceForTesting()  // the fetch answers with the NEWER generation
         XCTAssertEqual(view.visibleNodeCountForTesting(), 0, "a newer-generation topology never lands on an old layout")
     }
 }

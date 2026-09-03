@@ -1475,8 +1475,9 @@ mac's `labelPriorityIDs`, whose ties were unordered; the boundary at
 are different definitions that agree on case, on decomposable
 diacritics (`café` under `cafe`) and on `İ` under `i` (both drop the
 dot), and are not claimed equal beyond the witnesses the
-characterization test (0b-3) pins — `ß` matches `ss` on neither; and the
-trim — mac's `.whitespaces` kept a newline, core's `trim` drops it, so
+characterization test (0b-3) pins — and that test found the sharp s:
+Foundation's case-insensitive comparison matches `Straße` under
+`strasse`, core's NFD + lowercase does not; and the trim — mac's `.whitespaces` kept a newline, core's `trim` drops it, so
 `"\ncafe\n"` matches `café` here and matched nothing there. Both
 projections consume core's answer and apply no predicate of their own;
 the count is the rows result's `rows.count` of `total` (design B).
@@ -2213,7 +2214,10 @@ frozen text: the topology's edge endpoints are written as `from_key` /
 `to_key` (0b-13 said `from` / `to` — the schema walk types values by
 name, and `from` / `to` are the step sections' labels while `target` is
 the ghost-path pin), and the UTC witness's timestamp names the minute it
-actually is.
+actually is; the mac lane's characterization test overturned the
+sharp-s witness (0b-6 said `ß` matches `ss` on neither; Foundation
+matches it), corrected in the frozen text and in 0b-D3 — the test doing
+exactly what 0b-3 built it for.
 
 **TG0b-4 — Mac (Task 0b-2), unrun on this box (0bR-1).**
 `g0b-mac-edits.py` applies 0b-14 site by site: `GraphViewState.swift`,
@@ -2349,7 +2353,9 @@ edges their `from_key` / `to_key` names.
 - **0b-D3 — The name filter, the group matcher and the ghost path trim
   with Rust `trim`** and fold with core's fold, not Foundation's options
   and `.whitespaces` (0b-6, 0b-11, 0b-12); the two folds agree on every
-  pinned witness.
+  pinned witness but the sharp s (`Straße` under `strasse`: Foundation
+  matches, core does not — found by the characterization test on the
+  mac lane, recorded here).
 - **0b-D4 — The Modified cell is `YYYY-MM-DD HH:MM` UTC** (0b-7).
 - **0b-D5 — The config file's bytes are core's canonical writer** —
   sorted keys, serde's pretty form, unknown values re-emitted
