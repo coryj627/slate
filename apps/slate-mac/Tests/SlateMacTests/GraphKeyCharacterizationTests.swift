@@ -64,8 +64,16 @@ final class GraphKeyCharacterizationTests: XCTestCase {
         }
         // The sharp s is where the two folds DIFFER (0b-D3, found by this
         // test on the mac lane): Foundation's case-insensitive comparison
-        // folds `ß` to `ss`; core's NFD + lowercase leaves it.
-        XCTAssertTrue(foundation("Straße", "strasse"), "Foundation folds the sharp s")
+        // folds `ß` to `ss`; core's NFD + lowercase leaves it. This target
+        // builds for macOS only (Package.swift's platforms), so the
+        // Foundation half is the macOS answer by construction — stated
+        // here so any other lane fails loud instead of asserting an
+        // answer nobody measured (codoki, PR #1180).
+        #if os(macOS)
+        XCTAssertTrue(foundation("Straße", "strasse"), "Foundation folds the sharp s on macOS")
+        #else
+        XCTFail("SlateMacTests builds for macOS only; the Foundation witness has no other lane")
+        #endif
         XCTAssertFalse(graphLabelMatches(label: "Straße", query: "strasse"), "core does not")
         // The trim: Foundation's `.whitespaces` kept a newline, core drops it.
         XCTAssertTrue(graphLabelMatches(label: "café", query: "\ncafe\n"))

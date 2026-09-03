@@ -2284,7 +2284,12 @@ and size are both unchanged — Windows file times move with the ~16 ms
 system tick, so a rewrite inside the first write's tick left the stale
 tag rows in place. Root-caused, not a flake: the test now rewrites
 through the session tests' rewrite-until-the-mtime-advances helper, the
-remedy the other slow-path tests already use.
+remedy the other slow-path tests already use. Codoki's round on 2c60824
+flagged the sharp-s witness as platform-dependent — true of Foundation,
+moot for a target that builds for macOS only — and the test now says
+so: the Foundation half sits under an `#if os(macOS)` whose other arm
+fails loud, so no lane ever asserts an answer nobody measured; the
+refutation stands on the thread, the hardening is the discharge.
 
 ### Decisions
 
