@@ -302,6 +302,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          # The W6-1 reconciliation's ancestry gate (CanvasReconciliationCensus)
+          # runs `git merge-base --is-ancestor` over the ledgered merge commits;
+          # a depth-1 clone cannot answer it.
+          fetch-depth: 0
 
       - name: Assert runner architecture matches the cache lineage
         # See the rust-tests twin for the rationale.

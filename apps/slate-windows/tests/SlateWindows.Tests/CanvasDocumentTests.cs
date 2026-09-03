@@ -85,6 +85,25 @@ public sealed class CanvasDocumentTests : IDisposable
         File.WriteAllText(
             Path.Combine(_fixture.Root, "broken.canvas"), "{ this is not json");
         File.WriteAllText(Path.Combine(_fixture.Root, "blank.canvas"), "{}");
+        // §H TH-11 (E14, IH-47): three file cards whose subpaths are a
+        // heading anchor, a block anchor and a heading that does not
+        // exist, over a real note with a real block id — the landing
+        // facts drive the WORKSPACE's own seam, not a fake.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "blocknote.md"),
+            "# Block note\n\nFirst paragraph.\n\nThe referenced paragraph. ^ref1\n\nAfter it.\n");
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "anchors.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"head","type":"file","file":"note0.md","subpath":"#Note 0","x":0,"y":0,"width":240,"height":140},
+                {"id":"blk","type":"file","file":"blocknote.md","subpath":"#^ref1","x":260,"y":0,"width":240,"height":140},
+                {"id":"miss","type":"file","file":"note0.md","subpath":"#Nowhere","x":520,"y":0,"width":240,"height":140}
+              ],
+              "edges": []
+            }
+            """);
     }
 
     private CanvasDocumentViewModel NewDocument(
@@ -1234,12 +1253,12 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Same(successor, workspace.CanvasPromptSheet);
     }
 
-    private WorkspaceViewModel NewWorkspace() =>
+    private WorkspaceViewModel NewWorkspace(Action<A11yEvent>? announce = null) =>
         new(
             _session,
             _fixture.Root,
             () => [],
-            _ => { },
+            announce ?? (_ => { }),
             startInteractionBackgroundWork: false,
             announceRendered: _announced.Add);
 
@@ -1294,6 +1313,60 @@ public sealed class CanvasDocumentTests : IDisposable
             "a surviving document must not hold the closed pane's tab through "
             + "a request nobody can ever deliver.");
     });
+
+    /// <summary>§H TH-6 (H4, H6 row S; IH-17, IH-40): the reopen failure's
+    /// banner is core's <c>ReopenFailed</c> sentence rendered with the move
+    /// as its message — consumed vocabulary, not host composition — while
+    /// the initial-open failure stays host text.</summary>
+    [Fact]
+    public void TheReopenFailureBannerIsCoresSentence()
+    {
+        var thrown = new InvalidOperationException("nothing at the new path");
+        Assert.Equal(
+            CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.ReopenFailed(
+                    "board.canvas moved to gone.canvas: nothing at the new path"))),
+            CanvasPhrase.RetargetAbsent("board.canvas", "gone.canvas", thrown));
+        Assert.StartsWith("Canvas could not be reopened.", CanvasPhrase.RetargetAbsent("a", "b", thrown));
+        Assert.Equal(
+            "This canvas could not be opened: nothing at the new path (board.canvas)",
+            CanvasPhrase.OpenFailed("board.canvas", thrown));
+    }
+
+    /// <summary>§H TH-6 (IH-40), re-routed by TH-11 (E14, IH-47): the
+    /// editor's generic heading miss — and the host-composed block miss —
+    /// from a canvas-origin open become core's canvas reason with the
+    /// subpath and the file, spoken ONCE as the canvas event through the
+    /// shell's announcer (the document may already be retired); a landing
+    /// passes through untouched.</summary>
+    [Fact]
+    public void ACanvasOriginHeadingMissSpeaksTheCanvasReasonOnce()
+    {
+        var shell = new List<A11yEvent>();
+        var anchor = new LinkAnchor("heading", "Missing heading");
+
+        WorkspaceViewModel.RouteCanvasAnchorAnnouncement(
+            anchor, "notes/note0.md", new A11yEvent.HeadingNotFound(), shell.Add);
+        Assert.Equal(
+            new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.HeadingNotFound("Missing heading", "note0.md")),
+            Assert.IsType<A11yEvent.Canvas>(Assert.Single(shell)).Event);
+
+        shell.Clear();
+        var block = new LinkAnchor("block", "abc123");
+        WorkspaceViewModel.RouteCanvasAnchorAnnouncement(
+            block, "note0.md",
+            new A11yEvent.HostComposed("Block abc123 was not found.", A11yPriority.Medium), shell.Add);
+        Assert.Equal(
+            new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.HeadingNotFound("abc123", "note0.md")),
+            Assert.IsType<A11yEvent.Canvas>(Assert.Single(shell)).Event);
+
+        shell.Clear();
+        WorkspaceViewModel.RouteCanvasAnchorAnnouncement(
+            anchor, "note0.md", new A11yEvent.ScrolledToHeading("Found"), shell.Add);
+        Assert.IsType<A11yEvent.ScrolledToHeading>(Assert.Single(shell));
+    }
 
     /// <summary>
     /// A pane that still EXISTS but now shows a different canvas is not a
@@ -3800,6 +3873,109 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.DoesNotContain(survivor.Outline, row => row.NodeId == "question");
     }
 
+    // --- E14: the file card's anchor lands the caret, through the workspace ---
+
+    /// <summary>§H TH-11 (E14, IH-47): a file card whose subpath is a
+    /// heading anchor, activated over the WORKSPACE's own seam, opens the
+    /// note in the current tab and — after the asynchronous resolution is
+    /// pumped — parks the caret EXACTLY at the heading's line and speaks
+    /// the editor's own ScrolledToHeading; the canvas announcer says
+    /// nothing, because a hit is the editor's sentence (HD-6).</summary>
+    [Fact]
+    public void AFileCardHeadingAnchorLandsTheCaretAtTheHeadingThroughTheWorkspace()
+    {
+        var shell = new List<A11yEvent>();
+        using WorkspaceViewModel workspace = NewWorkspace(shell.Add);
+        workspace.OpenPath("anchors.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        Assert.Equal(CanvasLoadState.Ready, document.State);
+        _announced.Clear();
+
+        Assert.Equal(CanvasActivation.Navigated, document.Activate(Row(document, "head")));
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        Assert.Equal("note0.md", tab.Path);
+        PumpUntil(() => tab.AnchorNavigationPublishCountForTests == 1);
+
+        Assert.Equal(tab.Text.IndexOf("# Note 0", StringComparison.Ordinal), tab.EditorCaretOffset);
+        // The shell also speaks the tab open itself; the anchor's sentence
+        // is the editor's, once, and no miss rides beside it.
+        Assert.Equal("Note 0", Assert.Single(shell.OfType<A11yEvent.ScrolledToHeading>()).Heading);
+        Assert.DoesNotContain(shell, e => e is A11yEvent.HeadingNotFound);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Empty(_announced);
+    }
+
+    /// <summary>§H TH-11 (E14, IH-47): the block twin — a
+    /// <c>#^id</c> subpath is a block anchor (A13), the caret lands
+    /// exactly at the block's line and the editor speaks its own
+    /// "Scrolled to block" sentence.</summary>
+    [Fact]
+    public void AFileCardBlockAnchorLandsTheCaretAtTheBlockThroughTheWorkspace()
+    {
+        var shell = new List<A11yEvent>();
+        using WorkspaceViewModel workspace = NewWorkspace(shell.Add);
+        workspace.OpenPath("anchors.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        Assert.Equal(new LinkAnchor("block", "ref1"), document.AnchorFor("blk"));
+        _announced.Clear();
+
+        Assert.Equal(CanvasActivation.Navigated, document.Activate(Row(document, "blk")));
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        Assert.Equal("blocknote.md", tab.Path);
+        PumpUntil(() => tab.AnchorNavigationPublishCountForTests == 1);
+
+        Assert.Equal(
+            tab.Text.IndexOf("The referenced paragraph", StringComparison.Ordinal),
+            tab.EditorCaretOffset);
+        Assert.Equal(
+            "Scrolled to block ref1.",
+            Assert.Single(shell.OfType<A11yEvent.HostComposed>()).Text);
+        Assert.DoesNotContain(shell, e => e is A11yEvent.HeadingNotFound);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Empty(_announced);
+    }
+
+    /// <summary>§H TH-11 (E14, IH-47; TH-6's consumer at the workspace
+    /// level): a heading the note does not have opens the note, leaves the
+    /// caret where it was, and is spoken ONCE as the canvas reason with
+    /// the heading and the file — through the shell, because the canvas
+    /// document is already retired once the note replaced it in the
+    /// current tab (the defect this fact found in TH-6's route); the
+    /// editor's generic miss never reaches the shell.</summary>
+    [Fact]
+    public void AFileCardAnchorMissThroughTheWorkspaceSpeaksTheCanvasReasonOnce()
+    {
+        var shell = new List<A11yEvent>();
+        using WorkspaceViewModel workspace = NewWorkspace(shell.Add);
+        workspace.OpenPath("anchors.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            workspace.ActiveGroup.ActiveTab!.Canvas);
+        _announced.Clear();
+
+        Assert.Equal(CanvasActivation.Navigated, document.Activate(Row(document, "miss")));
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        Assert.Equal("note0.md", tab.Path);
+        int caretBefore = tab.EditorCaretOffset;
+        PumpUntil(() => tab.AnchorNavigationPublishCountForTests == 1);
+
+        Assert.Equal(caretBefore, tab.EditorCaretOffset);
+        Assert.DoesNotContain(shell, e => e is A11yEvent.HeadingNotFound or A11yEvent.ScrolledToHeading);
+        Assert.DoesNotContain(shell, e => e is A11yEvent.HostComposed h && h.Text.Contains("not found", StringComparison.Ordinal));
+        // The document is RETIRED by now — the note replaced it in the
+        // current tab — so the reason cannot come through its announcer.
+        Assert.True(document.AnnouncerForTests.IsRetired);
+        Assert.Equal(
+            new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.HeadingNotFound("Nowhere", "note0.md")),
+            Assert.IsType<A11yEvent.Canvas>(Assert.Single(shell.OfType<A11yEvent.Canvas>())).Event);
+        Assert.Empty(_announced);
+    }
+
     // --- B4: the gate is physical and fails closed -------------------------
 
     /// <summary>
@@ -4979,6 +5155,151 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>§H TH-7 (H6, HD-7): the card picker's rows carry the label
+    /// class over the SPEAKABLE name — the field the outline reads
+    /// (CD-30) — through the one helper, not a fourth composition over
+    /// the title.</summary>
+    [Fact]
+    public void ThePickerRowsCarryTheLabelClassOverSpeakableNames()
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        document.SeatSelectionSilently("loose");
+        CanvasCardPickerModel picker = document.BuildCardPickerModel();
+        CanvasOutlineRow question = document.Outline.First(row => row.NodeId == "question");
+        CanvasCardPickerRow row = Assert.Single(picker.Rows, r => r.NodeId == "question");
+        Assert.Equal(
+            CanvasPhrase.PickerRowLabel(question.Kind, question.SpeakableName, question.GroupPath),
+            row.Label);
+        Assert.Equal("Text card \"Core question\", in Research", row.Label);
+        document.Shutdown();
+
+        // Where the title repeats, the speakable name and the title DIFFER
+        // — the committed cycle fixture has two cards titled "Same" — and
+        // the label carries the speakable one.
+        File.Copy(
+            CanvasEndToEndTests.CommittedFixture("cycle.canvas"),
+            Path.Combine(_fixture.Root, "cycle.canvas"), overwrite: true);
+        CanvasDocumentViewModel cycle = NewDocument("cycle.canvas");
+        cycle.Load();
+        cycle.SeatSelectionSilently("a");
+        CanvasCardPickerModel cyclePicker = cycle.BuildCardPickerModel();
+        CanvasOutlineRow renamed = Assert.Single(
+            cycle.Outline, r => r.Title == "Same" && r.SpeakableName != r.Title);
+        CanvasCardPickerRow renamedRow = Assert.Single(cyclePicker.Rows, r => r.NodeId == renamed.NodeId);
+        Assert.Equal(
+            CanvasPhrase.PickerRowLabel(renamed.Kind, renamed.SpeakableName, renamed.GroupPath),
+            renamedRow.Label);
+        Assert.Contains(renamed.SpeakableName, renamedRow.Label);
+        Assert.DoesNotContain("\"Same\", in", renamedRow.Label);
+        cycle.Shutdown();
+    }
+
+    /// <summary>§H TH-7 (H6, IH-42; §W-G row H): the canvas's extent the
+    /// renderer fits to is CORE's <c>canvas_bounds</c>, read through the
+    /// document under the lease — equal to core's answer on another
+    /// handle of the same bytes, and null once the document is shut down
+    /// and the lease gone.</summary>
+    [Fact]
+    public void TheCanvasBoundsAreCoresUnderTheLeaseAndNoneWhenRetired()
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        CanvasRect live = Assert.IsType<CanvasRect>(document.CurrentBounds());
+
+        CanvasOpenInfo twin = _session.OpenCanvas("board.canvas");
+        try
+        {
+            CanvasRect core = Assert.IsType<CanvasRect>(_session.CanvasBounds(twin.Handle));
+            Assert.Equal(core, live);
+        }
+        finally
+        {
+            _session.CloseCanvas(twin.Handle);
+        }
+        // The group frame is part of the extent (core's rule), so the
+        // bounds reach the group's own top-left, not the first card's.
+        Assert.Equal(-40.0, live.X);
+        Assert.Equal(-40.0, live.Y);
+
+        document.Shutdown();
+        Assert.Null(document.CurrentBounds());
+    }
+
+    /// <summary>§H TH-7 (H6, IH-42): Fit Canvas contains and centres core's
+    /// bounds under the named rules — the zoom is the smaller of the two
+    /// padded ratios clamped to [0.1, 4.0], and the bounds' centre lands
+    /// on the view's centre — and answers the fit's context.</summary>
+    [Fact]
+    public void FitCanvasContainsAndCentresCoresBounds() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+
+        CanvasRect bounds = Assert.IsType<CanvasRect>(document.CurrentBounds());
+        var outcome = Assert.IsType<CanvasViewportOutcome.Zoomed>(
+            surface.VisualForTests.Viewport(CanvasViewportVerb.FitCanvas));
+        Assert.Equal(CanvasZoomContext.FitCanvas, outcome.Context);
+
+        CanvasViewportState fitted = surface.VisualForTests.Engine.CommittedViewport;
+        double padding = CanvasViewportState.FitPadding;
+        double expectedZoom = Math.Clamp(
+            Math.Min(
+                (fitted.ViewWidth - (padding * 2)) / bounds.Width,
+                (fitted.ViewHeight - (padding * 2)) / bounds.Height),
+            CanvasViewportState.MinZoom,
+            CanvasViewportState.MaxZoom);
+        Assert.Equal(expectedZoom, fitted.Zoom, 9);
+        Assert.Equal(fitted.ZoomPercent, outcome.Percent);
+        // The bounds' centre maps to the view's centre: contained, centred.
+        double centreX = (bounds.X + (bounds.Width / 2)) * fitted.Zoom + fitted.PanX;
+        double centreY = (bounds.Y + (bounds.Height / 2)) * fitted.Zoom + fitted.PanY;
+        Assert.Equal(fitted.ViewWidth / 2, centreX, 6);
+        Assert.Equal(fitted.ViewHeight / 2, centreY, 6);
+        Assert.True(bounds.X * fitted.Zoom + fitted.PanX >= 0, "the left edge is inside the view");
+        Assert.True((bounds.X + bounds.Width) * fitted.Zoom + fitted.PanX <= fitted.ViewWidth, "the right edge is inside the view");
+        document.Shutdown();
+    });
+
+    /// <summary>§H TH-7 (H6, IH-43; §W-G row I): the renderer's read-only
+    /// zoom Value is core's render of <c>CanvasZoom</c> for the committed
+    /// percent, minus its single terminal period — at the seed and after a
+    /// step.</summary>
+    [Fact]
+    public void TheZoomValueIsCoresRenderMinusItsPeriod() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("board.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(surface.VisualForTests);
+        var value = (System.Windows.Automation.Provider.IValueProvider)peer.GetPattern(PatternInterface.Value);
+
+        string Expected()
+        {
+            uint percent = surface.VisualForTests.Engine.CommittedViewport.ZoomPercent;
+            string rendered = CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasZoom(null, percent));
+            Assert.EndsWith(".", rendered);
+            return rendered[..^1];
+        }
+
+        Assert.Equal(Expected(), value.Value);
+        Assert.Equal("Zoom 100 percent", value.Value);
+        Assert.IsType<CanvasViewportOutcome.Zoomed>(
+            surface.VisualForTests.Viewport(CanvasViewportVerb.ZoomIn));
+        Assert.Equal(Expected(), value.Value);
+        Assert.Equal("Zoom 125 percent", value.Value);
+        document.Shutdown();
+    });
+
     /// <summary>§D D14 end to end: a viewport verb through the
     /// presenter seam moves the engine's installed zoom — the
     /// pane-addressed route, no cache consulted.</summary>
@@ -4993,10 +5314,12 @@ public sealed class CanvasDocumentTests : IDisposable
         host.UpdateLayout();
         PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
 
-        Assert.True(
-            ((ICanvasSurfacePresenter)surface).ViewportCommand(
-                CanvasViewportVerb.ZoomIn),
-            "the pane refused a viewport verb with a mounted renderer.");
+        // §H TH-5 (IH-39): the REAL renderer answers with what it committed
+        // — one zoom step from 1.0 is 125 percent, no context.
+        var zoomedOutcome = Assert.IsType<CanvasViewportOutcome.Zoomed>(
+            ((ICanvasSurfacePresenter)surface).ViewportCommand(CanvasViewportVerb.ZoomIn));
+        Assert.Equal(125u, zoomedOutcome.Percent);
+        Assert.Null(zoomedOutcome.Context);
         PumpUntil(() =>
             surface.VisualForTests.Engine.Current is { } zoomed
             && zoomed.Viewport.Zoom > 1.0);

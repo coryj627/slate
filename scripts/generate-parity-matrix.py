@@ -757,6 +757,33 @@ COMMAND_STATUS_OVERRIDES = {
 }
 
 
+_DECLARATION_HEAD = re.compile(
+    r"^[ \t]*(?:\[[^\]]*\][ \t]*)*(?:public|internal|private|protected)\b[^;{=(]*?\b(?P<name>\w+)[ \t]*(?:\(|\{|=>|=|;|\r?$)",
+    re.MULTILINE,
+)
+_TYPE_HEAD = re.compile(r"\b(?:class|record|interface|enum|struct)[ \t]+(?P<name>\w+)\b")
+
+
+_CODE_ONLY = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:[^"\\\n]|\\.)*"', re.S)
+
+
+def declares(text: str, marker: str) -> bool:
+    """Whether `marker` is DECLARED in the C# text: a type head, or an
+    accessible member head (a method, constructor, property, event or
+    field) whose name is the marker. A name that appears only as a
+    call, an argument, a comment or a string literal does not declare —
+    comments and strings are stripped before the heads are read (review
+    round 1, IH-58)."""
+    text = _CODE_ONLY.sub("", text)
+    for m in _TYPE_HEAD.finditer(text):
+        if m.group("name") == marker:
+            return True
+    for m in _DECLARATION_HEAD.finditer(text):
+        if m.group("name") == marker:
+            return True
+    return False
+
+
 def load_delivery_evidence(
     cmd_rows: list[tuple[str, str, str, str, str]],
 ) -> dict[str, dict[str, str]]:
@@ -795,8 +822,19 @@ def load_delivery_evidence(
                 path = REPO / relative
                 if not path.is_file():
                     fail(f"delivery-evidence file does not exist: {relative}")
-                if not marker or marker not in path.read_text(encoding="utf-8"):
+                text = path.read_text(encoding="utf-8")
+                if not marker or marker not in text:
                     fail(f"delivery-evidence marker {marker!r} missing from {relative}")
+                # (13) W6-1 §H TH-9 (H7, IH-19, IH-45): a marker into C# names a
+                # DECLARATION — a type, a method, a constructor, a property, an
+                # event or a field — not a substring that could live in a
+                # comment or an unrelated call.
+                # A TEST anchor may instead name an automation id the journey
+                # drives — a quoted string the file reads, never a comment.
+                if relative.endswith(".cs") and not declares(text, marker) and not (
+                    kind == "tests" and f'"{marker}"' in text
+                ):
+                    fail(f"delivery-evidence marker {marker!r} is not a declaration in {relative}")
 
     delivered_commands = {
         cid for cid, _, _, _, issue in cmd_rows
@@ -816,6 +854,10 @@ def load_delivery_evidence(
     expected_issues = {
         "#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728", "#735", "#736",
         "#737", "#738", "#739", "#740", "#741", "#742", "#743", "#744",
+        # W6-1 §H TH-9 (H7): the canvas issue, evidenced by the `canvas`
+        # aggregate group — anchors from every command group and the
+        # close-out gates (validation 14 makes the aggregate complete).
+        "#745",
     }
     if set(issue_map) != expected_issues:
         fail(
@@ -825,6 +867,24 @@ def load_delivery_evidence(
     for issue, group_name in issue_map.items():
         if group_name not in groups:
             fail(f"issue {issue} references unknown evidence group {group_name!r}")
+        # (14) W6-1 §H TH-9 (H7, IH-18): an issue's group is SCOPE-COMPLETE —
+        # for every command group any of the issue's commands maps to, the
+        # issue's group carries one of that group's implementation anchors
+        # and one of its test anchors; one command group never stands for
+        # the issue.
+        issue_number = issue.split(" ", 1)[0]
+        command_groups = {
+            command_map[cid]
+            for cid, _, _, _, row_issue in cmd_rows
+            if row_issue.startswith(issue_number) and cid in command_map
+        }
+        for command_group in sorted(command_groups - {group_name}):
+            for kind in ("implementation", "tests"):
+                if not set(groups[group_name][kind]) & set(groups[command_group][kind]):
+                    fail(
+                        f"issue {issue} group {group_name!r} carries no {kind} anchor "
+                        f"of command group {command_group!r}"
+                    )
 
     return {"commands": command_map, "issues": issue_map}
 
@@ -872,6 +932,8 @@ def issue_delivery_status(
         return W5_2_STATUS
     if issue_number == "#743":
         return W5_3_STATUS
+    if issue_number == "#745":
+        return W6_1_STATUS
     return IMPLEMENTED_STATUS
 
 
@@ -1015,7 +1077,7 @@ def main() -> int:
         "file verbs, the Move-To picker, structural undo, and the mutation "
         "harness) |"
     )
-    a("| Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | pending |")
+    a(f"| Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | {issue_delivery_status('#745 (W6-1)', delivery_evidence)} |")
     a("| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | pending |")
     a("")
     a("## Settings surface")

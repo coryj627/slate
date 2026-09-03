@@ -2169,9 +2169,19 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             redo ? UndoStack.SnapshotRedo() : UndoStack.SnapshotUndo();
         if (snapshot is null)
         {
-            // Quarantined or empty: the OFFERED read is the gate
-            // (basis quarantine, TE-4), and an unoffered stack has
-            // nothing true to run - the status arm says so.
+            // The OFFERED read is the gate (basis quarantine, TE-4).
+            // §H TH-6 (IH-40, TE-2's deferred speaker): a QUARANTINED
+            // stack has entries that apply to an earlier revision, and
+            // says so with core's truthful sentence; only an EMPTY stack
+            // has nothing to undo.
+            if (redo ? UndoStack.RedoQuarantined : UndoStack.UndoQuarantined)
+            {
+                Speak(new CanvasA11yEvent.CanvasBlocked(
+                    redo
+                        ? new CanvasBlockedReason.RedoQuarantined()
+                        : new CanvasBlockedReason.UndoQuarantined()));
+                return;
+            }
             Speak(new CanvasA11yEvent.CanvasStatus(
                 redo
                     ? new CanvasStatusNote.NothingToRedo()
@@ -2309,29 +2319,41 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             operation,
             handle =>
             {
-                CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
-                CanvasPlacement placement = _session.CanvasPlaceNew(
-                    handle,
-                    operation.Anchor,
-                    constants.DefaultCardW,
-                    constants.DefaultCardH,
-                    null,
-                    []);
-                relative = placement.Relative;
-                string id = SlateUniffiMethods.CanvasNewId();
-                operation.CreatedId = id;
-                return new CanvasAction(
-                    "create card",
-                    [
-                        new CanvasOp.CreateNode(
-                            id,
-                            new CanvasNodeContent.Text(string.Empty),
-                            placement.X,
-                            placement.Y,
-                            constants.DefaultCardW,
-                            constants.DefaultCardH,
-                            null),
-                    ]);
+                // §H TH-4 (H4): the placement query's refusal is New Card's
+                // OWN failed-action arm — mac's .newCard — not the funnel's
+                // generic one (the shared prepare clause, IG2-26).
+                try
+                {
+                    CanvasConstants constants = SlateUniffiMethods.CanvasConstants();
+                    CanvasPlacement placement = _session.CanvasPlaceNew(
+                        handle,
+                        operation.Anchor,
+                        constants.DefaultCardW,
+                        constants.DefaultCardH,
+                        null,
+                        []);
+                    relative = placement.Relative;
+                    string id = SlateUniffiMethods.CanvasNewId();
+                    operation.CreatedId = id;
+                    return new CanvasAction(
+                        "create card",
+                        [
+                            new CanvasOp.CreateNode(
+                                id,
+                                new CanvasNodeContent.Text(string.Empty),
+                                placement.X,
+                                placement.Y,
+                                constants.DefaultCardW,
+                                constants.DefaultCardH,
+                                null),
+                        ]);
+                }
+                catch (VaultException e)
+                {
+                    Speak(new CanvasA11yEvent.CanvasActionFailed(
+                        CanvasFailedAction.NewCard, e.Message));
+                    return null;
+                }
             },
             "create card",
             confirm: () => new CanvasA11yEvent.CanvasCreated(
@@ -3028,17 +3050,25 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NotATextCard()));
             return null;
         }
-        CanvasEditorSeed? seed = null;
-        if (_slot.Current.Lease is { } lease)
+        // §H PR review round 1 (IH-55): on Windows rows and lease retire
+        // together, so a text row with no handle is not a reachable
+        // state — and a retired announcer would refuse the sentence in
+        // any case. Nothing is spoken from a state that cannot occur;
+        // mac's CardEditorUnavailable is DESIGNATED on Windows in the
+        // trigger ledger with that reason. A handle whose text cannot
+        // be read is the blocked arm below.
+        if (_slot.Current.Lease is not { } lease || _slot.Current.Retired)
         {
-            _ = lease.Invoke(
-                () =>
-                {
-                    CanvasPublication now = _slot.Current;
-                    return !now.Retired && now.Names(lease);
-                },
-                handle => seed = _session.CanvasEditorSeed(handle, nodeId));
+            return null;
         }
+        CanvasEditorSeed? seed = null;
+        _ = lease.Invoke(
+            () =>
+            {
+                CanvasPublication now = _slot.Current;
+                return !now.Retired && now.Names(lease);
+            },
+            handle => seed = _session.CanvasEditorSeed(handle, nodeId));
         if (seed is null)
         {
             Speak(new CanvasA11yEvent.CanvasBlocked(
@@ -4759,6 +4789,27 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// compares its seed against THIS (IE-18's re-validation).</summary>
     internal string? PublishedBasis => _slot.Current.Population?.ContentHash;
 
+    /// <summary>§H TH-7 (H6, IH-42; §W-G row H): the canvas's extent is
+    /// core's <c>canvas_bounds</c> — every node including group frames —
+    /// read under the lease so the answer is the CURRENT handle's, and
+    /// null once the publication is retired or no lease stands. The
+    /// renderer's fit reads this, never a host union.</summary>
+    internal CanvasRect? CurrentBounds()
+    {
+        CanvasRect? bounds = null;
+        if (_slot.Current.Lease is { } lease)
+        {
+            _ = lease.Invoke(
+                () =>
+                {
+                    CanvasPublication now = _slot.Current;
+                    return !now.Retired && now.Names(lease);
+                },
+                handle => bounds = _session.CanvasBounds(handle));
+        }
+        return bounds;
+    }
+
     /// <summary>§E TE-6: the card picker's rows — CORE's proximity
     /// order over the lease (anchor = the selection; reading-order
     /// ties; groups included), labelled the palette way. The model
@@ -4790,14 +4841,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 .Select(id =>
                 {
                     CanvasOutlineRow row = _rows[id];
-                    string type = row.Kind == "group"
-                        ? "Group"
-                        : $"{char.ToUpperInvariant(row.Kind[0])}{row.Kind[1..]} card";
-                    string container = row.GroupPath.Length > 0
-                        ? row.GroupPath[^1]
-                        : "canvas";
+                    // §H TH-7 (H6, HD-7): the label class, not a fourth copy
+                    // — the speakable name (CD-30) through the one helper.
                     return new CanvasCardPickerRow(
-                        id, $"{type} \"{row.Title}\", in {container}");
+                        id, CanvasPhrase.PickerRowLabel(row.Kind, row.SpeakableName, row.GroupPath));
                 }));
     }
 
@@ -5104,6 +5151,31 @@ internal static class CanvasPhrase
             word[..lead].ToUpperInvariant(), word[lead..]);
     }
 
+    /// <summary>§H TH-7 (H6, IH-44): the label class's shared clauses — the
+    /// ONE spelling of ", marked", of the container a row sits in, and of
+    /// the picker row's label — so no sink composes a second copy.
+    /// <see cref="RowStatus"/> composes from them.</summary>
+    public const string MarkedSuffix = ", marked";
+
+    /// <summary>The container a row sits in: its innermost group's title,
+    /// or null for the canvas itself — from core's group path.</summary>
+    public static string? ContainerOf(IReadOnlyList<string> groupPath)
+    {
+        ArgumentNullException.ThrowIfNull(groupPath);
+        return groupPath.Count > 0 ? groupPath[^1] : null;
+    }
+
+    /// <summary>The container clause's word: the group's title, else
+    /// "canvas" (t0 §3's positional status).</summary>
+    public static string ContainerClause(string? container) => container ?? "canvas";
+
+    /// <summary>The card picker's row label: the card reference over the
+    /// SPEAKABLE name (CD-30's rule, the same field the outline reads),
+    /// then the container clause — the third composition of the P/Q label
+    /// class, routed through the same two helpers.</summary>
+    public static string PickerRowLabel(string kind, string speakableName, IReadOnlyList<string> groupPath) =>
+        CardReference(kind, speakableName) + ", in " + ContainerClause(ContainerOf(groupPath));
+
     /// <summary>t0 §1.2 standard context + §3 inspectability (contract
     /// A10): position, colour and marked state are pull-readable, never
     /// announcement-only. The mac <c>nodeValue</c> twin minus the
@@ -5116,14 +5188,14 @@ internal static class CanvasPhrase
         bool marked,
         bool filtered = false)
     {
-        string status = $"{ordinalN} of {totalM} in {container ?? "canvas"}";
+        string status = $"{ordinalN} of {totalM} in {ContainerClause(container)}";
         if (colorName is { Length: > 0 } color)
         {
             status += $", {color}";
         }
         if (marked)
         {
-            status += ", marked";
+            status += MarkedSuffix;
         }
         if (filtered)
         {
@@ -5166,8 +5238,14 @@ internal static class CanvasPhrase
     public static string OpenFailed(string path, Exception exception) =>
         $"This canvas could not be opened: {exception.Message} ({path})";
 
+    /// <summary>§H TH-6 (IH-17, IH-40): the reopen failure is core's
+    /// <c>ReopenFailed</c> sentence, rendered with the move as its message
+    /// — the banner consumes the vocabulary instead of composing its own.
+    /// The initial-open failure above stays host text (§W-G row S).</summary>
     public static string RetargetAbsent(string from, string to, Exception exception) =>
-        $"{from} moved to {to}, which could not be reopened: {exception.Message}";
+        CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasBlocked(
+            new CanvasBlockedReason.ReopenFailed(
+                $"{from} moved to {to}: {exception.Message}")));
 }
 
 /// <summary>§E TE-5c: the connection editor's direction radio, mapped

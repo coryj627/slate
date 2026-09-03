@@ -59,13 +59,14 @@ internal interface ICanvasSurfacePresenter
     bool CanMoveWithinProjection(bool forward);
 
     /// <summary>Answer a viewport verb on THIS pane's visual surface
-    /// (§D D7, task TD-5). False when this pane has no visual renderer
-    /// to address — the caller owns the no-pane refusal, because the
-    /// presenter answers for one pane and the refusal speaks for the
-    /// document. TD-6's renderer implements the true; until it mounts,
-    /// every pane answers false and the refusal is the honest
-    /// sentence.</summary>
-    bool ViewportCommand(CanvasViewportVerb verb);
+    /// (§D D7, task TD-5) with what it COMMITTED (§H TH-5, IH-39): the
+    /// zoom percent with its context, or the follow state, so the
+    /// navigator can speak core's event with the exact payload; a pane
+    /// that acted silently says so, and one with no visual renderer to
+    /// address answers Refused — the caller owns the no-pane refusal,
+    /// because the presenter answers for one pane and the refusal speaks
+    /// for the document.</summary>
+    CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb);
 
     /// <summary>Put keyboard focus on a row, silently (contract C12).
     /// False when the row could not take it — gone, filtered out, or
@@ -1413,9 +1414,23 @@ internal sealed class CanvasNavigator
                 new CanvasStatusNote.NothingSelected()));
             return;
         }
-        if (_presenter is { } pane && pane.ViewportCommand(verb))
+        // §H TH-5 (IH-39): the pane answers with what it committed, and
+        // the navigator speaks core's event with that payload — the
+        // §W-D consumer the sweep found missing. A silent outcome is
+        // mac's own silence (an empty canvas has nothing to fit); a
+        // refusal, or no pane, is the typed no-pane sentence (ID-7).
+        switch (_presenter?.ViewportCommand(verb))
         {
-            return;
+            case CanvasViewportOutcome.Zoomed zoomed:
+                Announce(new CanvasA11yEvent.CanvasZoom(zoomed.Context, zoomed.Percent));
+                return;
+            case CanvasViewportOutcome.FollowChanged follow:
+                Announce(new CanvasA11yEvent.CanvasFollowSelectionToggled(follow.Following));
+                return;
+            case CanvasViewportOutcome.SilentOutcome:
+                return;
+            default:
+                break;
         }
         Announce(new CanvasA11yEvent.CanvasViewportNoPane());
     }
@@ -1816,4 +1831,32 @@ internal sealed class CanvasNavigator
     /// <summary>Through the DOCUMENT's announce boundary, so a verb
     /// invoked on a retired canvas composes nothing (contract C7).</summary>
     private void Announce(CanvasA11yEvent @event) => _document.Speak(@event);
+}
+
+/// <summary>§H TH-5 (IH-39): what a pane's viewport verb COMMITTED —
+/// the payload core's <c>CanvasZoom</c> and
+/// <c>CanvasFollowSelectionToggled</c> events need, which a bool could
+/// not carry. <see cref="Silent"/> is a pane that acted, or had nothing
+/// to act on, and speaks nothing (mac's empty-canvas fit);
+/// <see cref="Refused"/> is a pane that could not act.</summary>
+internal abstract record CanvasViewportOutcome
+{
+    private CanvasViewportOutcome()
+    {
+    }
+
+    internal static CanvasViewportOutcome Silent { get; } = new SilentOutcome();
+
+    internal static CanvasViewportOutcome Refused { get; } = new RefusedOutcome();
+
+    /// <summary>The committed zoom, as the percent core renders, with
+    /// the context the verb implies (fit, zoom to selection) or none.</summary>
+    internal sealed record Zoomed(uint Percent, CanvasZoomContext? Context) : CanvasViewportOutcome;
+
+    /// <summary>The committed follow-selection state.</summary>
+    internal sealed record FollowChanged(bool Following) : CanvasViewportOutcome;
+
+    internal sealed record SilentOutcome : CanvasViewportOutcome;
+
+    internal sealed record RefusedOutcome : CanvasViewportOutcome;
 }

@@ -129,4 +129,22 @@ public sealed class CanvasScenarioCensus
             Assert.Equal(a, b);
         }
     }
+
+    /// <summary>§H TH-3: the unknown-fields scenario proves what its name
+    /// claims — the root key, the node's opaque keys and the edge's
+    /// waypoints survive the mutations and the inverse walk in the
+    /// terminal bytes core wrote, so a future core that dropped what it
+    /// does not model would change this golden.</summary>
+    [Fact]
+    public void TheUnknownFieldsScenarioKeepsItsOpaqueFieldsInTheTerminalBytes()
+    {
+        using var artifact = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllBytes(Path.Combine(GoldenDir, "c7_unknown_fields_preserved.json")));
+        string terminal = artifact.RootElement.GetProperty("terminalBytes").GetString()!;
+        foreach (string key in (string[])["slateMeta", "futureFlag", "\"nested\"", "waypoints", "trailingRootKey", "altText"])
+        {
+            Assert.Contains(key, terminal);
+        }
+    }
+
 }

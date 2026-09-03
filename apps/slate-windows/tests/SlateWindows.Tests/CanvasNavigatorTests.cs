@@ -4275,6 +4275,132 @@ public sealed class CanvasNavigatorTests : IDisposable
         }
     }
 
+    /// <summary>§H TH-5 (H4, IH-39): the five zoom verbs speak core's
+    /// <c>CanvasZoom</c> with the percent and context the pane COMMITTED
+    /// — no context for a step or actual size, Fit canvas and Zoomed to
+    /// selection for theirs — the §W-D consumer Windows never had. The
+    /// pane answers through the result-bearing seam; a silent outcome
+    /// speaks nothing (mac's empty-canvas fit), a refusal the typed
+    /// no-pane sentence.</summary>
+    [Fact]
+    public void TheZoomVerbsSpeakCoresZoomEventWithTheirContext()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        document.SeatSelectionSilently("question");
+        var pane = new OutcomePane();
+        document.Navigator.AttachPresenter(pane);
+
+        (Action Verb, CanvasViewportOutcome Outcome, CanvasA11yEvent Spoken)[] table =
+        [
+            (document.Navigator.ZoomIn,
+                new CanvasViewportOutcome.Zoomed(125, null),
+                new CanvasA11yEvent.CanvasZoom(null, 125)),
+            (document.Navigator.ZoomOut,
+                new CanvasViewportOutcome.Zoomed(80, null),
+                new CanvasA11yEvent.CanvasZoom(null, 80)),
+            (document.Navigator.ActualSize,
+                new CanvasViewportOutcome.Zoomed(100, null),
+                new CanvasA11yEvent.CanvasZoom(null, 100)),
+            (document.Navigator.FitCanvas,
+                new CanvasViewportOutcome.Zoomed(80, CanvasZoomContext.FitCanvas),
+                new CanvasA11yEvent.CanvasZoom(CanvasZoomContext.FitCanvas, 80)),
+            (document.Navigator.ZoomToSelection,
+                new CanvasViewportOutcome.Zoomed(150, CanvasZoomContext.ZoomedToSelection),
+                new CanvasA11yEvent.CanvasZoom(CanvasZoomContext.ZoomedToSelection, 150)),
+        ];
+        foreach ((Action verb, CanvasViewportOutcome outcome, CanvasA11yEvent spoken) in table)
+        {
+            pane.Next = outcome;
+            Drain(document);
+            verb();
+            document.AnnouncerForTests.FlushForTests();
+            Assert.Equal(
+                CanvasAnnouncer.RenderLabel(spoken),
+                Assert.Single(_announced).Text);
+        }
+
+        // A silent outcome speaks nothing; a refusal speaks the no-pane sentence.
+        pane.Next = CanvasViewportOutcome.Silent;
+        Drain(document);
+        document.Navigator.FitCanvas();
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Empty(_announced);
+        pane.Next = CanvasViewportOutcome.Refused;
+        Drain(document);
+        document.Navigator.ZoomIn();
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(
+            CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasViewportNoPane()),
+            Assert.Single(_announced).Text);
+        Assert.Equal(
+            [
+                CanvasViewportVerb.ZoomIn, CanvasViewportVerb.ZoomOut, CanvasViewportVerb.ActualSize,
+                CanvasViewportVerb.FitCanvas, CanvasViewportVerb.ZoomToSelection,
+                CanvasViewportVerb.FitCanvas, CanvasViewportVerb.ZoomIn,
+            ],
+            pane.Verbs);
+    }
+
+    /// <summary>§H TH-5 (H4, IH-39): the follow toggle speaks core's
+    /// <c>CanvasFollowSelectionToggled</c> with the state the pane
+    /// committed — both states.</summary>
+    [Fact]
+    public void TheFollowToggleSpeaksBothStates()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var pane = new OutcomePane();
+        document.Navigator.AttachPresenter(pane);
+        foreach (bool following in (bool[])[false, true])
+        {
+            pane.Next = new CanvasViewportOutcome.FollowChanged(following);
+            Drain(document);
+            document.Navigator.ToggleFollowSelection();
+            document.AnnouncerForTests.FlushForTests();
+            Assert.Equal(
+                CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasFollowSelectionToggled(following)),
+                Assert.Single(_announced).Text);
+        }
+    }
+
+    /// <summary>The seam's shape: the committed viewport's percent is one
+    /// rule — banker's rounding of zoom × 100 — read by the outcome and
+    /// the renderer's Value alike.</summary>
+    [Fact]
+    public void TheZoomPercentIsOneRule()
+    {
+        CanvasViewportState seed = CanvasViewportState.Seed().WithViewSize(800, 600);
+        Assert.Equal(100u, seed.ZoomPercent);
+        Assert.Equal(125u, seed.ZoomedIn(400, 300).ZoomPercent);
+        Assert.Equal(80u, seed.ZoomedOut(400, 300).ZoomPercent);
+    }
+
+    private sealed class OutcomePane : ICanvasSurfacePresenter
+    {
+        public CanvasViewportOutcome Next { get; set; } = CanvasViewportOutcome.Refused;
+
+        public List<CanvasViewportVerb> Verbs { get; } = [];
+
+        public CanvasSurfaceKind Projection => CanvasSurfaceKind.Visual;
+
+        public bool ProjectionHasFocus => true;
+
+        public bool CanMoveWithinProjection(bool forward) => false;
+
+        public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb)
+        {
+            Verbs.Add(verb);
+            return Next;
+        }
+
+        public bool FocusRow(string nodeId) => false;
+
+        public bool FocusProjection() => false;
+
+        public bool DismissTransientRegion() => false;
+
+        public object? Owner => null;
+    }
+
     /// <summary>§D D7 / obligation ID-7, task TD-5: a viewport verb on
     /// a READY canvas with no pane to address answers the typed
     /// no-pane refusal — not silence, and not a false percent. (Until
@@ -4322,7 +4448,7 @@ public sealed class CanvasNavigatorTests : IDisposable
 
         public bool CanMoveWithinProjection(bool forward) => false;
 
-        public bool ViewportCommand(CanvasViewportVerb verb) => false;
+        public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) => CanvasViewportOutcome.Refused;
 
         public bool FocusRow(string nodeId) => false;
 
@@ -4390,7 +4516,7 @@ public sealed class CanvasNavigatorTests : IDisposable
 
         public bool CanMoveWithinProjection(bool forward) => false;
 
-        public bool ViewportCommand(CanvasViewportVerb verb) => true;
+        public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) => CanvasViewportOutcome.Silent;
 
         public bool FocusRow(string nodeId) => false;
 

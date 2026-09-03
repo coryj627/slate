@@ -405,8 +405,8 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// verb through ITS renderer's engine — structural addressing, no
     /// cache consulted. False only with no model to act for, which is
     /// the navigator's cue to speak the typed no-pane refusal.</summary>
-    public bool ViewportCommand(CanvasViewportVerb verb) =>
-        Model is not null && _visual.Viewport(verb);
+    public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) =>
+        Model is not null ? _visual.Viewport(verb) : CanvasViewportOutcome.Refused;
 
     public bool FocusProjection()
     {

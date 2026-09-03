@@ -1345,7 +1345,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
             if (created is null)
             {
-                ReportFailure($"Could not create canvas {attempted}: no free name.");
+                ReportFailure(CanvasCreateFailure($"{attempted}: no free name"));
                 return;
             }
 
@@ -1374,8 +1374,30 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not create canvas {attempted}: {exception.Message}");
+            ReportFailure(CanvasCreateFailure($"{attempted}: {exception.Message}"));
         }
+    }
+
+    /// <summary>§H TH-4 (H4), review round 1 (IH-54): a failed canvas
+    /// creation is core's <c>CanvasActionFailed</c> with mac's NewCanvas
+    /// arm — the EVENT, announced as itself through the typed overload
+    /// below, never re-wrapped as host text: an observer receives
+    /// <c>A11yEvent.Canvas</c> carrying the arm, at core's priority.</summary>
+    internal static A11yEvent CanvasCreateFailure(string detail) =>
+        new A11yEvent.Canvas(
+            new CanvasA11yEvent.CanvasActionFailed(CanvasFailedAction.NewCanvas, detail));
+
+    /// <summary>The typed twin of the host-text failure report: the status
+    /// shows core's render, the announcer receives the event unchanged.</summary>
+    internal void ReportFailure(A11yEvent failure)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+        Status = SlateUniffiMethods.A11yRender(failure).Text;
+        if (IsRefreshingTree)
+        {
+            _statusToReassert = Status;
+        }
+        _announce(failure);
     }
 
     // RenameSelected moved to FilesSidebarViewModel.FileManagement.cs

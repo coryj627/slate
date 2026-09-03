@@ -1374,6 +1374,35 @@ public sealed class FileManagementTests
     /// create — core's canonical bytes, never a host literal; the new
     /// document gets its OWN tab (mac's rule: replacing the current tab
     /// could destroy an unsaved buffer's only owner); the sentence is
+    /// <summary>§H TH-4 (H4): a failed canvas creation is core's
+    /// <c>CanvasActionFailed</c> with mac's NewCanvas arm — the two host
+    /// sentences the sidebar composed ("Could not create canvas …") are
+    /// gone; the render carries the attempted name and the reason.</summary>
+    [Fact]
+    public async Task AFailedCanvasCreationIsCoresSentence()
+    {
+        // Review round 1 (IH-54): the failure is the typed event, and the
+        // sidebar announces THAT event — not a host line carrying its text.
+        A11yEvent failure = FilesSidebarViewModel.CanvasCreateFailure("Untitled Canvas.canvas: no free name");
+        var typed = Assert.IsType<A11yEvent.Canvas>(failure);
+        Assert.Equal(
+            new CanvasA11yEvent.CanvasActionFailed(CanvasFailedAction.NewCanvas, "Untitled Canvas.canvas: no free name"),
+            typed.Event);
+        string sentence = SlateUniffiMethods.A11yRender(failure).Text;
+        Assert.Contains("Untitled Canvas.canvas: no free name", sentence);
+        Assert.DoesNotContain("Could not create canvas Untitled", sentence);
+
+        using FixtureVault fixture = FixtureVault.Create(1, "canvas-create-failure");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        announced.Clear();
+        rig.Sidebar.ReportFailure(failure);
+        A11yEvent delivered = Assert.Single(announced);
+        Assert.Same(failure, delivered);
+        Assert.Equal(sentence, rig.Sidebar.Status);
+    }
+
     /// <summary>§E TE-10 (IE-21/IE-22): New Canvas is the vault-scoped
     /// create - core's canonical bytes, never a host literal; the new
     /// document gets its OWN tab (mac's rule: replacing the current tab

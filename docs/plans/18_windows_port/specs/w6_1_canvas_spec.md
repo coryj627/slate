@@ -43,7 +43,7 @@ apps/slate-windows/src/SlateWindows/Canvas/
   CanvasPickers/*.xaml            PR E/F card picker, color/group/connection/direction pickers, vault-file picker, marks list (PR G)
 ```
 
-Rules that bind every PR (each is a contract row in `docs/plans/33_canvas_contracts.md`, §5.1):
+Rules that bind every PR (each is a contract row in `docs/plans/34_canvas_contracts.md`, §5.1):
 
 - **R-A One funnel.** Every mutation is `CanvasMutationFunnel.Apply(CanvasAction)`; no other code calls `canvas_apply`. Bulk = one `CanvasAction`, one write, one undo entry, one announcement. Mode-transient geometry (PR F) is the one carved exception (t4 pipeline): the UI holds hypothetical rects, queries `canvas_check_overlap` per step, commits one action on Return, discards on Esc with no backend call.
 - **R-B One selection.** `CanvasSelection` lives on the document; panes showing the same canvas share it (mac R8); marks clear when the last tab for the path closes; arrows move `Selected`, never mutate `Marked`.
@@ -59,7 +59,7 @@ Rules that bind every PR (each is a contract row in `docs/plans/33_canvas_contra
 
 ## 2. The §W-G canonical-consumption audit — seed register
 
-What the mac canvas derives in Swift, sorted by tier. **Tier 1 and 2 move to core (PR 0a/0b) with the mac consuming the new API in the same PR and the Swift derivation deleted** — the W0.5 pattern (decision 5): core API + mac consumes + census/tests prove behavior unchanged. **Tier 3 is host-by-designation** — recorded here so the audit is explicit, not silent. This table is the seed of the named `§W-G register` in `33_canvas_contracts.md`; the Windows close-out (PR H) re-greps `apps/slate-windows/src/SlateWindows/Canvas/` against it.
+What the mac canvas derives in Swift, sorted by tier. **Tier 1 and 2 move to core (PR 0a/0b) with the mac consuming the new API in the same PR and the Swift derivation deleted** — the W0.5 pattern (decision 5): core API + mac consumes + census/tests prove behavior unchanged. **Tier 3 is host-by-designation** — recorded here so the audit is explicit, not silent. This table is the seed of the named `§W-G register` in `34_canvas_contracts.md`; the Windows close-out (PR H) re-greps `apps/slate-windows/src/SlateWindows/Canvas/` against it.
 
 | # | Swift-derived pocket (file:line) | Core today | Tier | Target (PR) |
 |---|---|---|---|---|
@@ -113,7 +113,7 @@ PR 0b  core: structural queries + constants + ids + filter (+mac)    ─┼─�
 
 ## 4. Per-PR specs
 
-Each PR section lists: **Goal · Consumes · Builds · Behavior pinned · Tests · Evidence/acceptance · Hand-off.** "Contracts" means the numbered rows the PR adds to `33_canvas_contracts.md` *before* its round 1 (§5.1).
+Each PR section lists: **Goal · Consumes · Builds · Behavior pinned · Tests · Evidence/acceptance · Hand-off.** "Contracts" means the numbered rows the PR adds to `34_canvas_contracts.md` *before* its round 1 (§5.1).
 
 ### PR 0a — Canvas announcer vocabulary → core (Rust + uniffi + mac + censuses)
 
@@ -302,7 +302,7 @@ Each PR section lists: **Goal · Consumes · Builds · Behavior pinned · Tests 
 6. **§W-G** — the canonical-consumption audit register closed: re-grep `apps/slate-windows/src/SlateWindows/Canvas/` against §2 (no reading-order/containment/placement/phrasing math; viewport + transient arithmetic + state machines only), recorded with the grep.
 7. **Matrix** — `scripts/generate-parity-matrix.py` re-run; all `slate.canvas.*` + `slate.file.newCanvas` rows "implemented; local gates green ⟨date⟩; interactive CI + human AT pending" or waived-with-reason; the "Accessible canvas (T parity)" surface row implemented; `chords.json` carries every canvas row with delivery evidence (the generator's twelve validations pass).
 8. **JAWS/NVDA canvas checklist** — `docs/plans/18_windows_port/reports/w6_1_canvas_at_checklist.md`: T's `at_smoke_checklist.md` re-expressed for UIA in the W7-4 format (NVDA + JAWS columns; Narrator smoke): outline walk (names, n-of-m, color names, connection rows with direction+label), table (headers, sort announcement), visual (peer traversal pans the window, no dead end, Invoke selects), keyboard-only tab-through of header/surfaces/sheets with a visible focus ring, **Windows Speech Recognition/Voice Access** "show numbers" on the renderer + five dictated commands (the Voice Control twin — record the tool used), Switch-access equivalent (mode cycle via visible controls), braille inspectability (mode/marks/filter readable from Values), text scaling 225 %, all four Contrast themes + one customized, Reduce Motion. Executed by a named tester on a recorded build/OS/AT version per the `w3_1_nvda_field_verification.md` form. Items that need the human pass stay "Pending" in `w_c_matrix.md` until recorded — release residual, never silently green.
-9. **Issue reconciliation** — a final section in `33_canvas_contracts.md`: every contract row → evidence; every divergence/accepted risk re-listed; owner decisions D-1..D-n resolved; upstream issues filed (§0 item 8); help-doc hand-off to W8-6 (the Windows chord column for `docs/help/canvas.md` per decision 20 — the prose is shared, chords substituted from `chords.json`).
+9. **Issue reconciliation** — a final section in `34_canvas_contracts.md`: every contract row → evidence; every divergence/accepted risk re-listed; owner decisions D-1..D-n resolved; upstream issues filed (§0 item 8); help-doc hand-off to W8-6 (the Windows chord column for `docs/help/canvas.md` per decision 20 — the prose is shared, chords substituted from `chords.json`).
 
 **Acceptance (issue close).** PRs 0a–G merged; the E2E suite green on CI; all gates above recorded; `w6_spec.md` §W6-1 checkbox rows ticked with dates; the human AT checklist executed or explicitly listed as the release residual with the owner's sign-off.
 
@@ -312,7 +312,7 @@ Each PR section lists: **Goal · Consumes · Builds · Behavior pinned · Tests 
 
 ### 5.1 The contracts document (precondition 0 of the red-team protocol)
 
-`docs/plans/33_canvas_contracts.md` — **one** document for the issue (PR = section), landed as its own commit **before** each PR's round 1, per [`24_red_team_protocol.md`](../../24_red_team_protocol.md). Contract ids are prefixed by PR letter (`0a-1…`, `A1…`, `B1…`) so rounds can cite them unambiguously (contract numbering is per-wave; this issue is its own wave). Named registers: **§W-G canonical-consumption audit** (seeded from §2, closed in H), **recorded divergences (Windows vs mac)**, **accepted risks** (off-limits for re-litigation), **mac details recorded while reading (not this issue's to fix)**, **owner decisions** (§6), **verified during implementation**. Each PR section carries the code citations that evidence its contracts and appends its per-round record.
+`docs/plans/34_canvas_contracts.md` — **one** document for the issue (PR = section), landed as its own commit **before** each PR's round 1, per [`24_red_team_protocol.md`](../../24_red_team_protocol.md). Contract ids are prefixed by PR letter (`0a-1…`, `A1…`, `B1…`) so rounds can cite them unambiguously (contract numbering is per-wave; this issue is its own wave). Named registers: **§W-G canonical-consumption audit** (seeded from §2, closed in H), **recorded divergences (Windows vs mac)**, **accepted risks** (off-limits for re-litigation), **mac details recorded while reading (not this issue's to fix)**, **owner decisions** (§6), **verified during implementation**. Each PR section carries the code citations that evidence its contracts and appends its per-round record.
 
 ### 5.2 Definition of done per PR (in addition to the wave DoD)
 

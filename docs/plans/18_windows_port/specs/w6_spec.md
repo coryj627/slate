@@ -17,7 +17,7 @@ Program: [00_program.md](../00_program.md) (decision 14; DoD §W-A/§W-C/§W-D).
 
 ## W6-1 · Canvas (Milestone T parity) — PR series 1
 
-**Detailed executable spec: [w6_1_canvas_spec.md](w6_1_canvas_spec.md)** — per-PR goal/consumes/builds/behavior/tests/evidence, the §W-G audit register, the owner decisions, and the chord mapping. The series (each PR runs the full contracts → red-team → codex → CI → codoki loop; contracts in `docs/plans/33_canvas_contracts.md`, one document, one section per PR):
+**Detailed executable spec: [w6_1_canvas_spec.md](w6_1_canvas_spec.md)** — per-PR goal/consumes/builds/behavior/tests/evidence, the §W-G audit register, the owner decisions, and the chord mapping. The series (each PR runs the full contracts → red-team → codex → CI → codoki loop; contracts in `docs/plans/34_canvas_contracts.md`, one document, one section per PR):
 
 | PR | Slice | Gate |
 |---|---|---|
@@ -34,13 +34,13 @@ Program: [00_program.md](../00_program.md) (decision 14; DoD §W-A/§W-C/§W-D).
 
 The original scope items, retained as the acceptance checklist (each maps to the PRs named):
 
-1. Consumes the canonical layer T built: parser/model/derivation (reading order, containment, adjacency, summaries), `canvas_apply` FFI, placement engine, scene/outline/table projections, op-log undo. **None of that is re-derived** (§W-G); every Swift-derived need moves to core first (decision 14) — **PR 0a/0b**, closed by the §W-G register in PR H.
-2. The T interaction contract is the behavioral spec: mode stack (move/resize/connect/…), Esc-commits ladder, navigator command layer, mark-then-act multi-select, announcer grammar + verbosity + "Where am I?" — re-hosted on WPF with the canonical announcement events (§W-D rows for the whole announcer corpus) — **PR 0a, C, F, G**.
-3. Projections: outline (tree peer), table (W4-1 substrate), visual renderer with per-card UIA elements + windowing — the renderer's AT model mirrors the mac per-card AX element design, with SelectionItem/Selection patterns — **PR A, B, D**.
-4. Authoring parity: full T verb set (create/delete/color/group/connect/edit/duplicate/convert/locate…), card editor, pickers, and nearest-preset naming (core-owned). Slate-owned dark/light canvas fills use the shared W1-1 token set and meet the APCA acceptance inherited from T. Under Windows Contrast themes, semantic roles collapse onto compatible dynamic `SystemColors` pairs and preserve meaning with text/icons/borders rather than color alone; user-customized system colors are not APCA-gated. This issue records the canvas-specific checks, while W8-2 locks the shared dark/light pairs and Contrast-theme behavior behind CI/UI automation — **PR D, E, F, G**.
-5. Dynamic Type equivalent: renderer labels respect Windows text scaling — **PR D**.
-6. §W-A rows: scene/outline/table/apply round-trips byte-identical; §K-scale budgets re-verified through the binding (canvas benches' fixture sizes) — **PR A, 0b, E; recorded H**.
-7. JAWS/NVDA canvas checklist (T's `at_smoke_checklist.md` re-expressed for UIA) executed and recorded (W7-4 owns the format) — **PR H**.
+- [x] 1. Consumes the canonical layer T built: parser/model/derivation (reading order, containment, adjacency, summaries), `canvas_apply` FFI, placement engine, scene/outline/table projections, op-log undo. **None of that is re-derived** (§W-G); every Swift-derived need moves to core first (decision 14) — **PR 0a/0b**, closed by the §W-G register in PR H. — *evidence 2026-08-24 (0a #1154, 0b #1155; §W-G closed in H, TH-7)*
+- [x] 2. The T interaction contract is the behavioral spec: mode stack (move/resize/connect/…), Esc-commits ladder, navigator command layer, mark-then-act multi-select, announcer grammar + verbosity + "Where am I?" — re-hosted on WPF with the canonical announcement events (§W-D rows for the whole announcer corpus) — **PR 0a, C, F, G**. — *evidence 2026-09-02 (C #1158, C-unit #1159, F #1162, G #1163)*
+- [x] 3. Projections: outline (tree peer), table (W4-1 substrate), visual renderer with per-card UIA elements + windowing — the renderer's AT model mirrors the mac per-card AX element design, with SelectionItem/Selection patterns — **PR A, B, D**. — *evidence 2026-09-01 (A #1156, B #1157, D #1160)*
+- [x] 4. Authoring parity: full T verb set (create/delete/color/group/connect/edit/duplicate/convert/locate…), card editor, pickers, and nearest-preset naming (core-owned). Slate-owned dark/light canvas fills use the shared W1-1 token set and meet the APCA acceptance inherited from T. Under Windows Contrast themes, semantic roles collapse onto compatible dynamic `SystemColors` pairs and preserve meaning with text/icons/borders rather than color alone; user-customized system colors are not APCA-gated. This issue records the canvas-specific checks, while W8-2 locks the shared dark/light pairs and Contrast-theme behavior behind CI/UI automation — **PR D, E, F, G**. — *evidence 2026-09-02 (E #1161, F #1162, G #1163, G2 #1164)*
+- [x] 5. Dynamic Type equivalent: renderer labels respect Windows text scaling — **PR D**. — *evidence 2026-09-01 (D #1160)*
+- [x] 6. §W-A rows: scene/outline/table/apply round-trips byte-identical; §K-scale budgets re-verified through the binding (canvas benches' fixture sizes) — **PR A, 0b, E; recorded H**. — *evidence 2026-09-01 (A #1156, 0b #1155, E #1161; recorded in H — TH-2, TH-3)*
+- [ ] 7. JAWS/NVDA canvas checklist (T's `at_smoke_checklist.md` re-expressed for UIA) executed, or listed as the release residual with the owner's sign-off (W7-4 owns the format) — **PR H**. — *the release residual: `reports/w6_1_canvas_at_checklist.md`, every human cell Pending; ticked on the owner's sign-off*
 
 ## W6-2 · Graph view (Milestone P parity) — PR series 2
 

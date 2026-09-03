@@ -122,6 +122,59 @@ public sealed class CanvasMutationTests : IDisposable
         document.Shutdown();
     }
 
+    /// <summary>§H TH-6 (H4, IH-40; TE-2's deferred speaker): a stack
+    /// QUARANTINED by a reload onto a changed basis is not an empty one —
+    /// undo and redo speak core's truthful sentence, "the canvas changed
+    /// on disk, and this entry applies to an earlier revision", not
+    /// "nothing to undo"; the entries stand, quarantined, for the
+    /// revision that returns.</summary>
+    [Fact]
+    public void AQuarantinedStackSpeaksTheTruthfulSentenceNotNothingToUndo()
+    {
+        CanvasDocumentViewModel document = Open();
+        document.CanvasNewCard();
+        document.CanvasUndo();
+        Assert.NotNull(document.UndoStack.SnapshotRedo());
+        document.CanvasRedo();
+        Assert.NotNull(document.UndoStack.SnapshotUndo());
+
+        // The disk changes under the document and a RELOAD observes it:
+        // the stack rebases onto the new basis and every entry is
+        // quarantined — offered nothing, holding everything.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            DiskBytes().Replace("\"nodes\"", "\"nodes\" ", StringComparison.Ordinal));
+        document.Load();
+        Assert.True(document.UndoStack.UndoQuarantined, "premise: the undo entry is quarantined");
+
+        _announced.Clear();
+        document.CanvasUndo();
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(
+            CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.UndoQuarantined())),
+            Assert.Single(_announced).Text);
+        Assert.True(document.UndoStack.UndoQuarantined, "the entry must stand for the revision that returns");
+
+        // Redo: the same truth, from the redo side, after one entry is undone
+        // on the new basis and then quarantined by another change.
+        document.CanvasNewCard();
+        document.CanvasUndo();
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            DiskBytes().Replace("\"edges\"", "\"edges\" ", StringComparison.Ordinal));
+        document.Load();
+        Assert.True(document.UndoStack.RedoQuarantined, "premise: the redo entry is quarantined");
+        _announced.Clear();
+        document.CanvasRedo();
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(
+            CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasBlocked(
+                new CanvasBlockedReason.RedoQuarantined())),
+            Assert.Single(_announced).Text);
+        document.Shutdown();
+    }
+
     /// <summary>§E TE-11 (ED-1/IE-9): an undo against a disk that
     /// moved WITHOUT a reload hits the write conflict, the entry
     /// returns exactly where it was, and the blocked arm speaks -
@@ -1163,7 +1216,7 @@ public sealed class CanvasMutationTests : IDisposable
 
         public object? Owner => null;
 
-        public bool ViewportCommand(CanvasViewportVerb verb) => false;
+        public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) => CanvasViewportOutcome.Refused;
 
         public bool FocusRow(string nodeId)
         {
@@ -2116,7 +2169,7 @@ public sealed class CanvasMutationTests : IDisposable
 
         public object? Owner => null;
 
-        public bool ViewportCommand(CanvasViewportVerb verb) => false;
+        public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) => CanvasViewportOutcome.Refused;
 
         public bool FocusRow(string nodeId) => false;
 
@@ -2405,7 +2458,7 @@ public sealed class CanvasMutationTests : IDisposable
 
         public object? Owner => owner;
 
-        public bool ViewportCommand(CanvasViewportVerb verb) => false;
+        public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) => CanvasViewportOutcome.Refused;
 
         public bool FocusRow(string nodeId) => false;
 

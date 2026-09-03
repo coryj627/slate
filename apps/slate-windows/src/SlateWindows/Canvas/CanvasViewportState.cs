@@ -39,6 +39,13 @@ internal sealed class CanvasViewportState
 
     internal double Zoom { get; }
 
+    /// <summary>The zoom as the integer percent core's <c>CanvasZoom</c>
+    /// carries and the renderer's Value shows: <c>Math.Round</c> of
+    /// zoom × 100 — .NET's default banker's rounding at an exact half,
+    /// the expression the Value used before this became its one home
+    /// (§H TH-5, TH-7).</summary>
+    internal uint ZoomPercent => (uint)Math.Round(Zoom * 100);
+
     internal double PanX { get; }
 
     internal double PanY { get; }

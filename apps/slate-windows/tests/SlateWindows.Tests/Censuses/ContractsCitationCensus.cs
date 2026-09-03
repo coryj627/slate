@@ -404,7 +404,7 @@ public sealed class ContractsCitationCensus
             (
                 "G2",
                 "## PR G2 — the verb residue: front doors for §E's verbs, and the parity extras",
-                "## §W-G canonical-consumption audit",
+                "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled",
                 // A young section pins below its honest size and
                 // rises with its records, as §G's did.
                 6_000,
@@ -453,6 +453,91 @@ public sealed class ContractsCitationCensus
                 // section to 222; 221 sits above the pre-task population
                 // of 204 — a tenth time.
                 221),
+            (
+                "H",
+                "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled",
+                "## §W-G canonical-consumption audit",
+                // The close-out section: contracts over the nine
+                // deliverables, then the task records; it pins below its
+                // honest size and rises with its records, as §G2's did.
+                6_000,
+                // A DESIGN floor, the standing convention: revision 1's
+                // citations are EXISTING names (the harnesses, the
+                // benchmarks, the matrix generator's seams); 4 sits above
+                // the empty section and below the first record.
+                //
+                // TH-0 bound the end-to-end class with its open and grammar facts, taking the
+                // section to 66; 65 sits above the pre-task population
+                // of 61 — a first time.
+                //
+                // TH-1 bound the authoring loop and the undo chain, taking the
+                // section to 71; 70 sits above the pre-task population
+                // of 66 — a second time.
+                //
+                // TH-2 bound the large canvas and the §K roll-up, taking the
+                // section to 79; 78 sits above the pre-task population
+                // of 71 — a third time.
+                //
+                // TH-3 bound the scenario twin and the fixture censuses, taking the
+                // section to 80; 79 sits above the pre-task population
+                // of 79 — a fourth time.
+                //
+                // TH-5 bound the viewport consumers, taking the
+                // section to 88; 87 sits above the pre-task population
+                // of 80 — a fifth time.
+                //
+                // TH-6 bound the remaining consumers, taking the
+                // section to 95; 94 sits above the pre-task population
+                // of 88 — a sixth time.
+                //
+                // TH-7 bound the §W-G close-out, taking the
+                // section to 113; 112 sits above the pre-task population
+                // of 95 — a seventh time.
+                //
+                // TH-4 bound the trigger ledger and its census, taking the
+                // section to 139; 138 sits above the pre-task population
+                // of 113 — an eighth time.
+                //
+                // TH-8 bound the §W-C rows and their manifest census, taking the
+                // section to 144; 143 sits above the pre-task population
+                // of 139 — a ninth time.
+                //
+                // TH-9 bound the matrix and the validator's teeth, taking the
+                // section to 150; 149 sits above the pre-task population
+                // of 144 — a tenth time.
+                //
+                // TH-10 bound the AT checklist, taking the
+                // section to 152; 151 sits above the pre-task population
+                // of 150 — an eleventh time.
+                //
+                // TH-11 bound E14 at the workspace, taking the
+                // section to 158; 157 sits above the pre-task population
+                // of 152 — a twelfth time.
+                //
+                // TH-12 bound the reconciliation, taking the
+                // section to 165; 164 sits above the pre-task population
+                // of 158 — a thirteenth time.
+                //
+                // TH-13 bound the sweep and the close-out, taking the
+                // section to 192; 191 sits above the pre-task population
+                // of 165 — a fourteenth time.
+                //
+                // RR-1 bound the review round: two Python constants the record
+                // named are not shell identifiers and are unbackticked, so the
+                // section stands at 191; 190 sits one below it — a fifteenth
+                // time.
+                190),
+            (
+                "Reconciliation",
+                "## Issue reconciliation (#745)",
+                "<!-- end of the contracts document -->",
+                // §H TH-12 (H9): the final section — the ledger, the
+                // generated tables, the issues, the hand-offs and the
+                // residuals; a citation floor of its own.
+                20_000,
+                // TH-12 bound the section at its birth, taking it to
+                // 658; 658 sits one below the population of 659.
+                658),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
@@ -1123,7 +1208,15 @@ public sealed class ContractsCitationCensus
         (
             "§G2",
             "## PR G2 — the verb residue: front doors for §E's verbs, and the parity extras",
+            "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled"),
+        (
+            "§H",
+            "## PR H — the close-out: the end-to-end proof, the gates recorded, the issue reconciled",
             "## §W-G canonical-consumption audit"),
+        (
+            "reconciliation",
+            "## Issue reconciliation (#745)",
+            "<!-- end of the contracts document -->"),
         (
             "divergences",
             "## Recorded divergences (owner-recorded; off-limits for re-litigation)",

@@ -894,3 +894,76 @@ app and the FlaUI journey. Windows x64 laptop, Release.
 | `FirstWindowedDerivation` | **0.018 ms** | 500 ms | First windowed topology over 2,000 cards (viewport + 1-viewport margin). |
 | `PanWindowHop` | **0.023 ms** | 100 ms | A pan's re-derivation — window churn and edge re-test. |
 | `SelectionStepRead` | **<0.001 ms** | 50 ms | The descriptor lookup a selection step's ring redraw costs. |
+
+## Milestone W6-1 — canvas through the C# binding — 2026-09-02 (#745)
+
+The §K roll-up the W6-1 spec asks PR H for, over the two per-PR
+sections above (W6-1 PR A, W6-1 §D), re-measured at close-out on the
+same committed 2,000-node fixture (`large_2000.canvas`). Three runners,
+each named with what it measures; four spec budgets, each with the
+place that asserts it; and one benchmark that is NOT a spec budget,
+recorded as what it is.
+
+Environment: **QEMU Virtual CPU version 2.5+ (Standard PC Q35 + ICH9),
+20 GB**, Windows 11 Pro x64 build 26200, .NET SDK 10.0.400 / .NET
+10.0.11, `rustc 1.97.1`, Release `slate_uniffi.dll`, tests in Debug.
+The same virtualized box as the PR A row — not the bare metal the
+W2-1/W2-2 rows were measured on, and not the mac laptop of the
+Milestone T Wave 5 row; the sets are not comparable to each other.
+
+Runner `CanvasOpenBenchmarks` and `CanvasRendererBenchmarks`
+(`apps/slate-windows/benchmarks/SlateWindows.Benchmarks/`),
+BenchmarkDotNet 0.15.8, three warmups and fifteen measured iterations,
+the budget arm on:
+
+```powershell
+dotnet run --project apps/slate-windows/benchmarks/SlateWindows.Benchmarks `
+  --configuration Release -- --canvas --validate-budgets
+```
+
+**Marshalling (PR A's row, re-run):**
+
+| Benchmark | Median | What it adds |
+|---|---:|---|
+| `Open` (baseline) | **36.29 ms** | `open_canvas`: parse + derive + the fenced index write + registry insert. |
+| `OpenAndOutline` | 38.53 ms | + ~2.2 ms marshalling 2,000 `CanvasOutlineRow`s. |
+| `OpenAndTable` | 39.62 ms | + ~3.3 ms marshalling 2,000 `CanvasTableRow`s. |
+| `OpenAndScene` | 38.66 ms | + ~2.4 ms marshalling the scene. |
+| `OpenAndEveryProjection` | 42.25 ms | + ~6.0 ms for all three behind one open — what the document pays on a load. |
+
+**Derivation (§D's row, re-run; the runner's budget arm exits non-zero on a MISS):**
+
+| Bench | p50 | Budget | Verdict | Meaning |
+|---|---:|---:|---|---|
+| `FirstWindowedDerivation` | **0.020 ms** | 500 ms | PASS | First windowed peer topology over 2,000 cards (viewport + 1-viewport margin). |
+| `PanWindowHop` | **0.022 ms** | 100 ms | PASS | A pan's re-derivation — window churn and edge re-test. |
+| `SelectionStepRead` | **13 ns** | 50 ms | PASS | The descriptor lookup a selection step's ring redraw costs — a dictionary read, NOT the navigator step the spec's §K row names (see below). |
+
+**End to end (PR H's row):** measured by
+`CanvasEndToEndTests.LargeCanvasOpensNavigatesAndWindowsUnderBudget`
+(the real `VaultSession` + the document view-model, `synchronousForTests`,
+`Stopwatch`; the fact asserts every budget so a regression fails CI, and
+the recorded values show the headroom):
+
+| Measure | Recorded | Budget | Notes |
+|---|---:|---:|---|
+| Open (load + outline + table + scene + publish) | **45.1 ms** | 500 ms | 2,000 outline rows ready. |
+| First windowed derivation | **0.382 ms** | 500 ms | 39 of 2,000 placements materialised at 1600 × 1200 — windowing bounds the UIA tree (the fact asserts fewer than 600). |
+| Per-pan window hop | **0.149 ms** | 100 ms | Ten viewport hops of (−400, −250) each, averaged. |
+| Per-step navigator traversal | **0.018 ms** | 50 ms | Fifty `CanvasNavigator.NextCard` steps on the real navigator over the real document, averaged — the §K measurement the benchmark's descriptor lookup is not. |
+
+**The four spec budgets and where each is asserted.** Open under 500 ms:
+`CanvasDocumentTests.LargeCanvasOutlineBuildsUnderBudget` (both
+scheduling modes) and the E2E fact. First windowed derivation under
+500 ms and a pan's hop under 100 ms: the benchmark runner's exit code
+(`--validate-budgets`) AND the E2E fact. A navigator step under 50 ms:
+the E2E fact only — `SelectionStepRead` measures the descriptor lookup
+and is kept under the same 50 ms line for the ring redraw's sake, not as
+the navigator's budget.
+
+**Scope, honestly.** The Windows numbers measure the derivation the
+presentation engine runs and the navigator's own step; the draw and the
+UIA re-frame ride the app and the FlaUI journeys (§D TD-7, §H HD-D1).
+The mac row above (3.9 / 2.8 / 0.18 ms) timed a real `NSView` rebuild
+on a laptop; these are not the same operation on the same machine, and
+no ratio between them is claimed.
