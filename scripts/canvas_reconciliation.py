@@ -50,7 +50,7 @@ SHELL = os.path.join(ROOT, "apps", "slate-windows")
 # or a Verified bullet does not regenerate a smaller table and bless it;
 # it fails here until the pin is bumped on purpose. CanvasReconciliationCensus
 # carries the same two constants.
-EXPECTED_KEYS = 326  # 315 at PR H + PR E13's seven contracts, three decisions, one risk
+EXPECTED_KEYS = 327  # 315 at PR H + PR E13's 12 heads (contracts, decisions, risks)
 EXPECTED_VERIFIED = 60
 START = "<!-- reconciliation:generated:start -->"
 END = "<!-- reconciliation:generated:end -->"
