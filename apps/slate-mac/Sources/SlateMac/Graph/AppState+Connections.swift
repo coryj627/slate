@@ -121,7 +121,7 @@ extension AppState {
                 if speak {
                     // Typed over the counts the record carries (contracts doc 0a-7).
                     self.graphAnnouncer.announce(
-                        .graphNeighborhoodSummary(counts: hood.summaryCounts))
+                        .graphNeighborhoodSummary(counts: tree.summaryCounts))
                 }
             case .failure(let error):
                 self.connectionsError = self.humanReadable(error)

@@ -96,7 +96,9 @@ final class GraphDiagramTests: XCTestCase {
             nodes: visible.map { id in
                 let n = model.node(id)!
                 return GraphTopologyNode(
-                    id: id, stableKey: n.stableKey, label: n.label, kind: n.kind, inLinks: n.inLinks,
+                    id: id, stableKey: n.stableKey, label: n.label, path: n.path, kind: n.kind,
+                    inLinks: n.inLinks, outLinks: n.outLinks, inEmbeds: n.inEmbeds, outEmbeds: n.outEmbeds,
+                    component: n.component, isOrphan: n.isOrphan,
                     diameter: graphNodeDiameter(inLinks: n.inLinks),
                     group: graphConfigMatchingGroup(config: config, label: n.label),
                     labeled: labeled.contains(id),

@@ -930,7 +930,7 @@ final class GraphDiagramNSView: NSView {
             guard let node = model.node(element.nodeId), let p = positions[element.nodeId] else {
                 continue
             }
-            let d = scaledDiameter(inLinks: node.inLinks) * (viewport?.scale ?? 1)
+            let d = scaledDiameter(of: element.nodeId, inLinks: node.inLinks) * (viewport?.scale ?? 1)
             let center = layoutToView(p)
             element.setAccessibilityFrame(
                 screenRect(
@@ -948,7 +948,7 @@ final class GraphDiagramNSView: NSView {
             selectionAccentLayer.path = nil
             return
         }
-        let diameter = scaledDiameter(inLinks: node.inLinks) * (viewport?.scale ?? 1)
+        let diameter = scaledDiameter(of: selected, inLinks: node.inLinks) * (viewport?.scale ?? 1)
         let center = layoutToView(p)
         let ringRect = CGRect(
             x: center.x - diameter / 2 - 4, y: center.y - diameter / 2 - 4,
@@ -977,7 +977,7 @@ final class GraphDiagramNSView: NSView {
                     guard let p = positions[id], let node = model.node(id),
                         visibleSet.contains(id)
                     else { continue }
-                    let radius = scaledDiameter(inLinks: node.inLinks) / 2 + 2  // layout, +slop
+                    let radius = scaledDiameter(of: id, inLinks: node.inLinks) / 2 + 2  // layout, +slop
                     let dist = hypot(p.x - lp.x, p.y - lp.y)
                     if dist <= radius, best == nil || dist < best!.dist { best = (id, dist) }
                 }

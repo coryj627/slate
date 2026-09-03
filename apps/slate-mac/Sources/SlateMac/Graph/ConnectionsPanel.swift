@@ -80,7 +80,11 @@ struct ConnectionsPanel: View {
 
     private var currentSummary: String? {
         guard isPayloadCurrent else { return nil }
-        return appState.connectionsTree?.audioSummary
+        // The leaf's summary is core's rendering of the tree's counts (0b-4;
+        // the copy is 0a's `GraphNeighborhoodSummary`).
+        return appState.connectionsTree.map {
+            a11yRender(event: .graph(event: .graphNeighborhoodSummary(counts: $0.summaryCounts))).text
+        }
     }
 
     private var isPayloadCurrent: Bool {

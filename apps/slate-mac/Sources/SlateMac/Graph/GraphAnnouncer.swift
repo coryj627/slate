@@ -21,7 +21,7 @@ extension GraphVerbosity: Codable, CaseIterable {
     /// 0b-12, design B), fetched once: no level is listed here.
     static let specs: [GraphVerbositySpec] = graphVerbosities()
 
-    public static var allCases: [GraphVerbosity] { specs.map(\\.verbosity) }
+    public static var allCases: [GraphVerbosity] { specs.map(\.verbosity) }
 
     /// Settings picker label (t0 §1.2 level names) — core's title.
     var title: String { Self.specs.first { $0.verbosity == self }?.title ?? "" }
@@ -56,7 +56,7 @@ extension GraphSurfaceMode: CaseIterable {
     /// 0b-12, design B), fetched once: the mode switcher iterates this.
     static let specs: [GraphSurfaceModeSpec] = graphSurfaceModes()
 
-    public static var allCases: [GraphSurfaceMode] { specs.map(\\.mode) }
+    public static var allCases: [GraphSurfaceMode] { specs.map(\.mode) }
 
     var title: String { Self.specs.first { $0.mode == self }?.title ?? "" }
 
