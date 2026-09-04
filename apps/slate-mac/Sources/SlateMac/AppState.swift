@@ -2978,7 +2978,7 @@ final class AppState: ObservableObject {
     @Published var graphTableTotal: UInt64 = 0
     /// The table's ACCEPTED sort — published with the rows it ordered
     /// (design A); the default hubs-first (Links in descending).
-    @Published var graphTableSort = GraphTableSort(column: .linksIn, ascending: false)
+    @Published var graphTableSort = graphTableDefaultSort()
     /// The table's REQUESTED sort while a load is in flight, nil at rest.
     @Published var graphTableRequestedSort: GraphTableSort?
     /// The table's load sequence — every input change advances it, and a

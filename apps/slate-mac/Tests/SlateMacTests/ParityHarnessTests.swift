@@ -390,11 +390,15 @@ final class ParityHarnessTests: XCTestCase {
         j.raw("]}")
 
         j.raw(",\"table\":[")
+        // W6-2 PR A (AD-13): the summary the table's surface reads, under the
+        // entry's filter — core's `audio_summary`, byte-identical on both lanes.
+        let tableSummary = try session.graphSnapshot(filter: all.filter).audioSummary
         for (s, sort) in pinnedGraphTableSorts.enumerated() {
             if s > 0 { j.raw(",") }
             let result = try session.graphTableRows(
                 query: all, sort: GraphTableSort(column: sort.0, ascending: sort.1))
             j.raw("{\"query\":").str("all").raw(",\"sort\":").str(sort.2)
+                .raw(",\"summary\":").str(tableSummary)
                 .raw(",\"total\":").num(result.total).raw(",\"rows\":[")
             for (r, row) in result.rows.enumerated() {
                 if r > 0 { j.raw(",") }

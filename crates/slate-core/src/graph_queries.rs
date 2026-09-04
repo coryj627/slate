@@ -41,6 +41,7 @@ pub const GRAPH_QUERY_SURFACE: &[&str] = &[
     "graph_stable_key_for_path",
     "graph_label_matches",
     "graph_table_columns",
+    "graph_table_default_sort",
     "graph_constants",
     "graph_node_diameter",
     "graph_row_actions",
@@ -594,6 +595,13 @@ impl Default for GraphTableSort {
             ascending: false,
         }
     }
+}
+
+/// The preset-free default sort, FETCHED by both hosts (W6-2 PR A, AD-1):
+/// an inventory of one is still an inventory (0bD-13), so no host types
+/// `LinksIn, descending` for itself.
+pub fn table_default_sort() -> GraphTableSort {
+    GraphTableSort::default()
 }
 
 /// One graph-table row: the nine cells core-formatted in column order,
@@ -2391,6 +2399,19 @@ mod tests {
                 "{name} names no pub fn in graph_queries, graph_config or the session"
             );
         }
-        assert_eq!(GRAPH_QUERY_SURFACE.len(), 23);
+        assert_eq!(GRAPH_QUERY_SURFACE.len(), 24);
+    }
+
+    // --- W6-2 PR A, A-5 / AD-1: the default sort is fetched ------------------
+
+    #[test]
+    fn table_default_sort_is_the_default() {
+        assert_eq!(table_default_sort(), GraphTableSort::default());
+        assert_eq!(table_default_sort().column, GraphTableColumn::LinksIn);
+        assert!(!table_default_sort().ascending, "hubs first (spec §P1-2)");
+        assert!(
+            GRAPH_QUERY_SURFACE.contains(&"graph_table_default_sort"),
+            "the surface names it"
+        );
     }
 }
