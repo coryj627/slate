@@ -1484,7 +1484,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         bool? startInteractionBackgroundWork = null,
         AppPreferencesStore? preferencesStore = null,
         Func<string, bool>? externalOpener = null,
-        Action<RenderedAnnouncement>? announceRendered = null)
+        Action<RenderedAnnouncement>? announceRendered = null,
+        Func<int>? lifecycleGeneration = null)
     {
         _session = session;
         _persistence = new WorkspacePersistence(vaultRoot);
@@ -1492,6 +1493,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         _expandedDirectoryPaths = expandedDirectoryPaths;
         _announce = announce;
         _announceRendered = announceRendered ?? (_ => { });
+        // Rule A / AD-8 (IPB-1): the lifecycle's generation is a
+        // CONSTRUCTION input — the restore below can seat a persisted graph
+        // tab and start its first load before this constructor returns, and
+        // that load's token must carry the generation the lifecycle will
+        // compare it against. A host without a lifecycle reads a constant.
+        LifecycleGeneration = lifecycleGeneration ?? (static () => 0);
         // Unspecified = the host decides (#1129). Background
         // interaction work needs a UI thread to come back to: every
         // panel's publish posts to the SynchronizationContext captured

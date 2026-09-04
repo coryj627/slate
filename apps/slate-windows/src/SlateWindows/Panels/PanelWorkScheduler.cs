@@ -17,6 +17,9 @@ internal abstract class PanelWorkScheduler : BindableBase
 {
     private readonly object _workLock = new();
     private readonly HashSet<Task> _pendingWork = [];
+    // The always-async applies posted to the owner context and not yet
+    // run — settled by Shutdown (IPB-3).
+    private readonly HashSet<TaskCompletionSource> _pendingApplies = [];
     private readonly SynchronizationContext? _uiContext;
     private readonly bool _synchronous;
     private volatile bool _isShutDown;
@@ -70,8 +73,28 @@ internal abstract class PanelWorkScheduler : BindableBase
         SynchronizationContext.Current is DispatcherSynchronizationContext;
 
     /// <summary>Workspace teardown: refuse new work. Subclasses
-    /// override to also invalidate their in-flight publishes.</summary>
-    internal virtual void Shutdown() => _isShutDown = true;
+    /// override to also invalidate their in-flight publishes. The flag
+    /// flips under the work lock, so the always-async admission (IPB-2)
+    /// is one transition with it: a compute is either admitted before the
+    /// flip — and the drain waits for it — or never starts. Every apply
+    /// still pending on the owner context is SETTLED here (IPB-3): the
+    /// apply itself is refused after shutdown, and a teardown that blocks
+    /// the owner's thread while it drains could otherwise never see the
+    /// posted callback complete the tracked task.</summary>
+    internal virtual void Shutdown()
+    {
+        TaskCompletionSource[] pending;
+        lock (_workLock)
+        {
+            _isShutDown = true;
+            pending = [.. _pendingApplies];
+            _pendingApplies.Clear();
+        }
+        foreach (TaskCompletionSource applied in pending)
+        {
+            _ = applied.TrySetResult();
+        }
+    }
 
     /// <summary>Hold every background body until a workspace-level
     /// prerequisite has landed. W4-5: a citation render issued before
@@ -264,7 +287,18 @@ internal abstract class PanelWorkScheduler : BindableBase
         (bool Admitted, T Result) computed = await Task.Run(() =>
         {
             BeforeComputeForTests?.Invoke();
-            return _isShutDown ? (false, default(T)!) : (true, compute());
+            // Admission and the shutdown flip are ONE transition under the
+            // work lock (IPB-2): a compute admitted here started before the
+            // flip and the drain waits for it; one that reads the flag set
+            // never starts.
+            lock (_workLock)
+            {
+                if (_isShutDown)
+                {
+                    return (false, default(T)!);
+                }
+            }
+            return (true, compute());
         }).ConfigureAwait(false);
         if (!computed.Admitted)
         {
@@ -280,6 +314,16 @@ internal abstract class PanelWorkScheduler : BindableBase
             return;
         }
         var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_workLock)
+        {
+            if (_isShutDown)
+            {
+                // Shut down between the compute and the post: nothing to
+                // apply, and no promise for a teardown to wait on.
+                return;
+            }
+            _ = _pendingApplies.Add(applied);
+        }
         _uiContext.Post(
             _ =>
             {
@@ -292,7 +336,11 @@ internal abstract class PanelWorkScheduler : BindableBase
                 }
                 finally
                 {
-                    applied.SetResult();
+                    lock (_workLock)
+                    {
+                        _ = _pendingApplies.Remove(applied);
+                    }
+                    _ = applied.TrySetResult();
                 }
             },
             null);

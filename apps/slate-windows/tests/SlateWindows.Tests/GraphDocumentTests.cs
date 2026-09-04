@@ -73,7 +73,10 @@ public sealed class GraphDocumentTests
         /// stated over (the graph family plus <c>ReopenedGraph</c>).</summary>
         public List<string> Timeline { get; } = [];
 
-        public Host(string root)
+        /// <param name="lifecycleGeneration">The lifecycle's counter the
+        /// workspace is CONSTRUCTED with (IPB-1); a fact's constant by
+        /// default.</param>
+        public Host(string root, Func<int>? lifecycleGeneration = null)
         {
             Session = VaultSession.OpenFilesystem(root);
             using var cancel = new CancelToken();
@@ -95,7 +98,8 @@ public sealed class GraphDocumentTests
                 {
                     GraphLines.Add(line.Text);
                     Timeline.Add(line.Text);
-                });
+                },
+                lifecycleGeneration: lifecycleGeneration);
         }
 
         public GraphDocumentViewModel Document => Workspace.GraphDocument!;
@@ -493,17 +497,22 @@ public sealed class GraphDocumentTests
             // envelope carries G1 while, on the dispatcher, the world moves
             // to G2 and the probe runs against the held READY G1 snapshot.
             using var gate = new ManualResetEventSlim(false);
+            using var reached = new ManualResetEventSlim(false);
             bool armed = true;
             document.FetchGateForTests = () =>
             {
                 if (armed)
                 {
                     armed = false;
+                    reached.Set();
                     gate.Wait(TimeSpan.FromSeconds(10));
                 }
             };
             document.ViewState.Filter = new GraphFilter(true, true, false);
             GraphLoadToken inFlight = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            // The pair has made BOTH crossings at G1 before the world moves
+            // (IPB-6): its envelope is the stale one by construction.
+            Assert.True(reached.Wait(TimeSpan.FromSeconds(10)), "the pair never reached the gate");
             _ = host.Session.CreateExclusive("theta.md", "# Theta\n\n[[a]]\n");
             host.Workspace.NotifyGraphOfVaultChange();
             // The probe's apply issues the superseding silent pair: a fresh
@@ -837,13 +846,53 @@ public sealed class GraphDocumentTests
             string note = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note).Path!;
             host.Workspace.OpenPath(note, WorkspaceOpenTarget.NewTab);
             Assert.True(host.Workspace.GraphTabIsVisible() is false);
+            int loads = host.Workspace.GraphLoadsForTests;
             host.Timeline.Clear();
 
             host.Workspace.ReopenClosedTabCommand.Execute(null);
             host.Settle();
 
             Assert.Equal([Opened(), Reopened(), Summary(document)], host.Timeline);
+            Assert.Equal(loads + 1, host.Workspace.GraphLoadsForTests);
             Assert.True(host.Workspace.GraphTabIsEffective());
+        });
+    }
+
+    /// <summary>The reopen's failure arm (Term 6): `Opened`, the reopen
+    /// line, then `LoadFailed` where the summary would have been.</summary>
+    [Fact]
+    public void AReopenWhosePairFailsSpeaksOpenedTheReopenLineThenTheFailure()
+    {
+        using GraphVault vault = GraphVault.Copy("reopen-failure");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            host.Workspace.CloseActiveTabCommand.Execute(null);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            string note = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note).Path!;
+            host.Workspace.OpenPath(note, WorkspaceOpenTarget.NewTab);
+            bool armed = true;
+            document.FetchGateForTests = () =>
+            {
+                if (armed)
+                {
+                    armed = false;
+                    throw new InvalidOperationException("injected reopen failure");
+                }
+            };
+            int loads = host.Workspace.GraphLoadsForTests;
+            host.Timeline.Clear();
+
+            host.Workspace.ReopenClosedTabCommand.Execute(null);
+            host.Settle();
+
+            Assert.Equal([Opened(), Reopened(), LoadFailed("injected reopen failure")], host.Timeline);
+            Assert.Equal(loads + 1, host.Workspace.GraphLoadsForTests);
+            Assert.Equal(GraphLoadState.Error, document.Publication.State);
         });
     }
 
@@ -860,6 +909,7 @@ public sealed class GraphDocumentTests
             host.Settle();
             host.Workspace.CloseActiveTabCommand.Execute(null);
             Assert.Null(host.Workspace.GraphDocument);
+            int loads = host.Workspace.GraphLoadsForTests;
             host.Timeline.Clear();
 
             host.Workspace.ReopenClosedTabCommand.Execute(null);
@@ -868,6 +918,7 @@ public sealed class GraphDocumentTests
             GraphDocumentViewModel document = host.Document;
             Assert.Equal(GraphLoadState.Ready, document.Publication.State);
             Assert.Equal([Opened(), Reopened(), Summary(document)], host.Timeline);
+            Assert.Equal(loads + 1, host.Workspace.GraphLoadsForTests);
         });
     }
 
@@ -885,12 +936,20 @@ public sealed class GraphDocumentTests
             using var host = new Host(vault.Root);
             (WorkspaceGroupViewModel graphGroup, WorkspaceGroupViewModel other) = host.GraphVisibleInAnUnfocusedPane();
             var revealed = new List<string>();
-            host.Workspace.GraphRevealInSidebar = revealed.Add;
+            WorkspaceGroupViewModel? activeAtReveal = null;
+            host.Workspace.GraphRevealInSidebar = path =>
+            {
+                // The address is active WHEN the seam runs (IPB-4), not
+                // merely afterwards.
+                activeAtReveal = host.Workspace.ActiveGroup;
+                revealed.Add(path);
+            };
             GraphTableRow note = host.Document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note);
             Assert.Same(other, host.Workspace.ActiveGroup);
 
             host.Document.Execute(GraphRowAction.Reveal, note);
 
+            Assert.Same(graphGroup, activeAtReveal);
             Assert.Same(graphGroup, host.Workspace.ActiveGroup);
             Assert.True(host.Workspace.GraphTabIsEffective());
             Assert.Equal([note.Path], revealed);
@@ -981,9 +1040,8 @@ public sealed class GraphDocumentTests
         using GraphVault vault = GraphVault.Copy("create-lifecycle");
         PumpedDispatcher.Run(() =>
         {
-            using var host = new Host(vault.Root);
             int generation = 1;
-            host.Workspace.LifecycleGeneration = () => Volatile.Read(ref generation);
+            using var host = new Host(vault.Root, () => Volatile.Read(ref generation));
             var creator = new RecordingCreator(host.Session, beforeCreate: () => Interlocked.Increment(ref generation));
             host.Workspace.GraphNoteCreator = creator;
             host.Workspace.OpenGraph();
@@ -1001,6 +1059,175 @@ public sealed class GraphDocumentTests
             Assert.Empty(creator.Landed);
             Assert.DoesNotContain(host.ShellEvents, e => e is A11yEvent.Graph);
             Assert.DoesNotContain(host.Workspace.Groups.SelectMany(g => g.Tabs), t => t.Path == expectedPath);
+        });
+    }
+
+    /// <summary>A create parked while the reader moves on (IPB-4, IGA-56):
+    /// the address captured at invocation is no longer current at
+    /// completion, so the visual open is suppressed — and the completion
+    /// activates nothing — while the landing's bookkeeping and the ONE
+    /// `NoteCreated` still happen.</summary>
+    [Fact]
+    public void ACreateThatLandsAfterTheReaderMovedCompletesWithTheOpenSuppressed()
+    {
+        using GraphVault vault = GraphVault.Copy("create-reader-moved");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            using var gate = new ManualResetEventSlim(false);
+            var creator = new RecordingCreator(host.Session, beforeCreate: () => gate.Wait(TimeSpan.FromSeconds(10)));
+            host.Workspace.GraphNoteCreator = creator;
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            GraphTableRow ghost = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Ghost);
+            string expectedPath = SlateUniffiMethods.GraphGhostNotePath(ghost.Label);
+            string note = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note).Path!;
+
+            document.Activate(ghost, modified: false);
+            // The reader moves to a note while the create is parked.
+            host.Workspace.OpenPath(note, WorkspaceOpenTarget.NewTab);
+            WorkspaceTabViewModel moved = host.Workspace.ActiveGroup.ActiveTab!;
+            Assert.False(moved.IsGraph);
+            host.ShellEvents.Clear();
+            gate.Set();
+            PumpedDispatcher.PumpUntilDrained(host.Workspace.DrainGraphNoteCreationForTests());
+            PumpedDispatcher.Drain();
+
+            Assert.Equal([expectedPath], creator.Landed);
+            Assert.Same(moved, host.Workspace.ActiveGroup.ActiveTab);
+            Assert.True(File.Exists(Path.Combine(vault.Root, expectedPath)));
+            Assert.DoesNotContain(host.Workspace.Groups.SelectMany(g => g.Tabs), t => t.Path == expectedPath);
+            A11yEvent created = Assert.Single(host.ShellEvents, e => e is A11yEvent.Graph);
+            Assert.IsType<GraphStatusNote.NoteCreated>(
+                Assert.IsType<GraphA11yEvent.GraphStatus>(((A11yEvent.Graph)created).Event).Note);
+        });
+    }
+
+    /// <summary>IPB-1: a persisted graph tab is restored and loaded INSIDE
+    /// the workspace's constructor, so the generation its token carries
+    /// must be the lifecycle's — handed in at construction — or the
+    /// restored graph never publishes. Under a non-zero lifecycle counter
+    /// the restore reaches READY and speaks the summary alone (Activation).</summary>
+    [Fact]
+    public void ARestoredGraphTabLoadsUnderTheLifecyclesGenerationAndSpeaksTheSummary()
+    {
+        using GraphVault vault = GraphVault.Copy("restore-lifecycle");
+        PumpedDispatcher.Run(() =>
+        {
+            var persistence = new WorkspacePersistence(vault.Root);
+            WorkspaceGroupState group = new(
+                Guid.NewGuid(),
+                null,
+                [new WorkspaceTabState(Guid.NewGuid(), new WorkspaceItemState(WorkspaceItemKind.Graph, "graph:singleton"))]);
+            persistence.Save(new WorkspaceSnapshot(WorkspacePersistence.SchemaVersion, group.Id, group, null, []));
+
+            int generation = 7;
+            using var host = new Host(vault.Root, () => Volatile.Read(ref generation));
+            Assert.True(host.Workspace.ActiveGroup.ActiveTab!.IsGraph);
+            GraphDocumentViewModel document = host.Document;
+            host.Settle();
+
+            Assert.Equal(GraphLoadState.Ready, document.Publication.State);
+            Assert.Equal([Summary(document)], host.GraphLines);
+            Assert.Equal(1, host.Workspace.GraphLoadsForTests);
+            // The counter the workspace reads IS the lifecycle's, and a
+            // token carries it — a workspace that read a constant of its
+            // own would agree with itself and still be wrong (the sweep's
+            // `ipb1-provider-not-injected`).
+            Assert.Equal(7, host.Workspace.LifecycleGeneration());
+            GraphLoadToken token = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            Assert.Equal(7, token.LifecycleGeneration);
+            host.Settle();
+            generation = 8;
+            Assert.Equal(8, document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent).LifecycleGeneration);
+            host.Settle();
+        });
+    }
+
+    /// <summary>IPB-3: the workspace's teardown drains the graph's work on
+    /// the owner's own thread WITHOUT pumping it. A pair parked in the
+    /// worker is released from another thread; the tracked task must then
+    /// complete without an apply ever running on the blocked dispatcher —
+    /// the shutdown settles the pending apply — so the bounded drain
+    /// returns promptly, nothing installs, and the document is retired.</summary>
+    [Fact]
+    public void ATeardownDrainsAParkedPairWithoutPumpingTheDispatcher()
+    {
+        using GraphVault vault = GraphVault.Copy("teardown-drain");
+        PumpedDispatcher.Run(() =>
+        {
+            var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            GraphPublication before = document.Publication;
+            int installs = 0;
+            document.PublicationInstalled += _ => installs++;
+            using var gate = new ManualResetEventSlim(false);
+            using var reached = new ManualResetEventSlim(false);
+            document.FetchGateForTests = () =>
+            {
+                reached.Set();
+                gate.Wait(TimeSpan.FromSeconds(10));
+            };
+            document.ViewState.Filter = new GraphFilter(true, true, false);
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            Assert.True(reached.Wait(TimeSpan.FromSeconds(10)), "the pair never reached the gate");
+            // The release comes from the pool, 200 ms into the teardown's
+            // synchronous wait; this thread never pumps.
+            _ = Task.Delay(200).ContinueWith(_ => gate.Set(), TaskScheduler.Default);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            host.Workspace.Dispose();
+            clock.Stop();
+
+            Assert.True(document.IsRetired);
+            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), $"the teardown took {clock.Elapsed}");
+            Assert.True(document.WhenAllWorkDrained().IsCompleted, "tracked work outlived the teardown");
+            PumpedDispatcher.Drain();
+            Assert.Equal(0, installs);
+            Assert.Same(before, document.Publication);
+            host.Session.Dispose();
+        });
+    }
+
+    /// <summary>IPB-3, the other half: the pair's compute FINISHED and its
+    /// apply is already queued on the owner's thread when the teardown
+    /// starts blocking that thread. The shutdown settles the queued apply,
+    /// so the bounded drain returns promptly; the callback runs later and
+    /// applies nothing (the sweep's `ipb3-teardown-stalls`).</summary>
+    [Fact]
+    public void ATeardownDrainsAPostedApplyWithoutPumpingTheDispatcher()
+    {
+        using GraphVault vault = GraphVault.Copy("teardown-posted");
+        PumpedDispatcher.Run(() =>
+        {
+            var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            GraphPublication before = document.Publication;
+            int installs = 0;
+            document.PublicationInstalled += _ => installs++;
+            using var computed = new ManualResetEventSlim(false);
+            document.FetchGateForTests = computed.Set;
+            document.ViewState.Filter = new GraphFilter(true, true, false);
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            Assert.True(computed.Wait(TimeSpan.FromSeconds(10)), "the pair never computed");
+            // The envelope is posted to this thread within microseconds of
+            // the gate; this thread does not pump it.
+            Thread.Sleep(100);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            host.Workspace.Dispose();
+            clock.Stop();
+
+            Assert.True(document.IsRetired);
+            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), $"the teardown took {clock.Elapsed}");
+            Assert.True(document.WhenAllWorkDrained().IsCompleted, "tracked work outlived the teardown");
+            PumpedDispatcher.Drain();
+            Assert.Equal(0, installs);
+            Assert.Same(before, document.Publication);
+            host.Session.Dispose();
         });
     }
 

@@ -72,7 +72,13 @@ internal sealed class GraphTableView : UserControl
         }
         else
         {
+            // No model (the tab replaced in place, the surface detached):
+            // the grid drops the rows and every delegate that captured the
+            // old document beside going silent — a retired document must
+            // not stay reachable through a bound grid (codoki on
+            // 1de19b4; the null arm IPA-1 made reachable).
             view._grid.Announce = _ => { };
+            view._grid.Bind([], [], summary: string.Empty, accessibilityLabel: GridLabel);
         }
     }
 

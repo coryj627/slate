@@ -991,7 +991,14 @@ internal sealed class VaultLifecycleViewModel
             _confirmDirtyNavigation,
             _confirmDirtyClose,
             preferencesStore: new AppPreferencesStore(),
-            announceRendered: _announceRendered);
+            announceRendered: _announceRendered,
+            // Rule A / AD-8 (IPA-6, IPB-1): the graph's load token and the
+            // create's completion carry THIS lifecycle's generation and
+            // compare it at dispatch — the same counter the listener arms
+            // are guarded by — handed in at construction because the
+            // restore can seat a persisted graph tab and start its first
+            // load before the constructor returns.
+            lifecycleGeneration: () => _generation);
         // W4-8 (SD6/SDR-5): hand the workspace an admission gate over
         // the LIFECYCLE's per-path set instead of letting it keep its
         // own flag, which would die with it. Installed before the
@@ -1040,10 +1047,6 @@ internal sealed class VaultLifecycleViewModel
         // target of "Reveal in File Tree".
         workspace.GraphNoteCreator = sidebar;
         workspace.GraphRevealInSidebar = capturedSidebar.SelectPathFromSurface;
-        // Rule A / AD-8 (IPA-6): the graph's load token and the create's
-        // completion carry THIS lifecycle's generation and compare it at
-        // dispatch — the same counter the listener arms are guarded by.
-        workspace.LifecycleGeneration = () => _generation;
         switcher.OpenRequested += QuickSwitcher_OpenRequested;
         switcher.Dismissed += QuickSwitcher_Dismissed;
 

@@ -335,10 +335,16 @@ public class GraphOpenBenchmarks
             }
             rows = document.Publication.Rows.Count;
             int expected = Notes + Notes / 100;
-            if (rows != expected)
+            int nodes = document.Publication.Snapshot!.Nodes.Length;
+            ulong total = document.Publication.Total;
+            if (rows != expected || nodes != expected || total != (ulong)expected)
             {
+                // IPB-9: the SNAPSHOT's population and the publication's
+                // total, not only the projected rows — a truncated snapshot
+                // beside correctly sized rows is not a whole population.
                 throw new InvalidOperationException(
-                    $"the publication carries {rows} rows; the synthetic vault has {expected}.");
+                    $"the publication carries {rows} rows over {nodes} nodes (total {total}); "
+                    + $"the synthetic vault has {expected}.");
             }
             document.Retire();
         }

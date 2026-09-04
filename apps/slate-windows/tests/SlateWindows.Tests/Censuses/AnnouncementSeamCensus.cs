@@ -591,10 +591,12 @@ public sealed class AnnouncementSeamCensus
         foreach (string file in files)
         {
             CSharpSource source = CSharpSource.LoadPath(file);
-            string name = Path.GetFileName(file);
-            // The relay is exempt by its NORMALIZED path at the root of
-            // Graph/ — never by basename (IPA-7; IGA-32's nested-name bypass).
-            if (Path.GetRelativePath(root, file).Replace('\\', '/') == "GraphAnnouncer.cs")
+            // Every file exemption is by NORMALIZED path at the root of
+            // Graph/ — never by basename (IPA-7, IPB-5; IGA-32's nested-name
+            // bypass): the relay, and the document whose named seams are
+            // exempted below.
+            string name = Path.GetRelativePath(root, file).Replace('\\', '/');
+            if (name == "GraphAnnouncer.cs")
             {
                 continue;
             }
@@ -684,6 +686,32 @@ public sealed class AnnouncementSeamCensus
                 }
                 MethodDeclarationSyntax? owner = creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
                 outsideSites.Add($"{relative}:{owner?.Identifier.ValueText}");
+            }
+            // IPB-5: the shapes the textual rule cannot see are forbidden
+            // outright across the shell — a `using` alias (which could name
+            // the graph family under another word) and a target-typed or
+            // pre-built argument handed to an announce delegate.
+            foreach (UsingDirectiveSyntax directive in source.Root.DescendantNodes().OfType<UsingDirectiveSyntax>())
+            {
+                if (directive.Alias is not null
+                    && directive.NamespaceOrType.ToString().Contains("A11yEvent", StringComparison.Ordinal))
+                {
+                    outsideSites.Add($"{relative}:using alias {directive.Alias.Name}");
+                }
+            }
+            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (call.Expression is not IdentifierNameSyntax callee
+                    || !callee.Identifier.ValueText.EndsWith("announce", StringComparison.OrdinalIgnoreCase)
+                    || call.ArgumentList.Arguments.Count != 1)
+                {
+                    continue;
+                }
+                if (call.ArgumentList.Arguments[0].Expression is ImplicitObjectCreationExpressionSyntax)
+                {
+                    MethodDeclarationSyntax? owner = call.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
+                    outsideSites.Add($"{relative}:{owner?.Identifier.ValueText} (target-typed new)");
+                }
             }
         }
         Assert.Equal(

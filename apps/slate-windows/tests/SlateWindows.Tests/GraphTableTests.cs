@@ -28,8 +28,15 @@ public sealed class GraphTableTests
         public List<string> GraphLines { get; } = [];
 
         public Host(int notes, string label)
+            : this(FixtureVault.Create(notes, label))
         {
-            Vault = FixtureVault.Create(notes, label);
+        }
+
+        /// <summary>Over a vault the fact shaped itself (the 10k fact's
+        /// ghost-heavy one); the host owns and disposes it.</summary>
+        public Host(FixtureVault vault)
+        {
+            Vault = vault;
             Session = VaultSession.OpenFilesystem(Vault.Root);
             using var cancel = new CancelToken();
             Session.ScanInitial(cancel);
@@ -260,12 +267,52 @@ public sealed class GraphTableTests
         });
     }
 
+    /// <summary>A null model (the tab replaced in place, the surface
+    /// detached) leaves NOTHING bound: the rows and every delegate that
+    /// captured the old document go with the model, so a retired document
+    /// is not reachable through the grid (codoki on 1de19b4).</summary>
+    [Fact]
+    public void ANullModelUnbindsTheRowsAndTheDelegatesWithTheDocument()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "graph-null-model");
+            GraphDocumentViewModel document = host.Open();
+            var view = new GraphTableView { Model = document };
+            DataGrid grid = view.GridForTests.Grid;
+            Assert.True(grid.Items.Count >= 3);
+            Assert.NotEmpty(grid.Columns);
+
+            view.Model = null;
+
+            Assert.Empty(grid.Items);
+            Assert.Empty(grid.Columns);
+            Assert.Null(view.Model);
+        });
+    }
+
+    /// <summary>The 10k-row vault is GHOST-heavy on purpose: a hundred
+    /// notes each linking to a hundred unresolved targets give the table
+    /// ten thousand ghost rows for a hundred files, so the fact measures
+    /// the grid's virtualisation rather than the disk (the CI runner
+    /// timed out at the harness's two-minute budget on ten thousand
+    /// files; this box needed 110 seconds of it).</summary>
     [Fact]
     public void TenThousandRowsStayVirtualisedAndTheActionInventoryStaysThree()
     {
         RunSta(() =>
         {
-            using var host = new Host(10_000, "graph-10k");
+            FixtureVault vault = FixtureVault.Create(100, "graph-10k");
+            for (int note = 0; note < 100; note++)
+            {
+                var body = new System.Text.StringBuilder($"# Note {note}\n\n");
+                for (int target = 0; target < 100; target++)
+                {
+                    body.Append($"[[Missing {note}-{target}]] ");
+                }
+                File.WriteAllText(Path.Combine(vault.Root, $"note{note}.md"), body.Append('\n').ToString());
+            }
+            using var host = new Host(vault);
             GraphDocumentViewModel document = host.Open();
             Assert.True(document.Publication.Rows.Count >= 10_000);
             var view = new GraphTableView { Model = document };

@@ -87,6 +87,34 @@ public sealed class GraphAnnouncerCensus
                     offenders.Add($"{label}: new A11yEvent.Graph(…)");
                 }
             }
+            // IPB-5: the textual rule above can be dodged by a type alias, a
+            // target-typed `new`, or an event built elsewhere and handed to
+            // the workspace's delegate — so under Graph/ no `using` alias
+            // exists at all, and every call on an announce delegate passes
+            // exactly one EXPLICIT construction of a non-graph shell event.
+            foreach (UsingDirectiveSyntax directive in source.Root.DescendantNodes().OfType<UsingDirectiveSyntax>())
+            {
+                if (directive.Alias is not null)
+                {
+                    offenders.Add($"{label}: using alias {directive.Alias.Name}");
+                }
+            }
+            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (call.Expression is not IdentifierNameSyntax callee
+                    || !callee.Identifier.ValueText.EndsWith("announce", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                bool explicitShellEvent = call.ArgumentList.Arguments.Count == 1
+                    && call.ArgumentList.Arguments[0].Expression is ObjectCreationExpressionSyntax created
+                    && created.Type.ToString().StartsWith("A11yEvent.", StringComparison.Ordinal)
+                    && !created.Type.ToString().EndsWith(".Graph", StringComparison.Ordinal);
+                if (!explicitShellEvent)
+                {
+                    offenders.Add($"{label}: {callee.Identifier.ValueText}({call.ArgumentList.Arguments})");
+                }
+            }
         }
         Assert.True(
             offenders.Count == 0,

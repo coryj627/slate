@@ -630,16 +630,32 @@ public sealed class W1WorkspaceRedTeamTests
             Graph.GraphDocumentViewModel first = workspace.GraphDocument!;
             Assert.True(workspace.ActiveGroup.ActiveTab!.IsGraph);
             Graph.GraphPublication before = first.Publication;
-            // Work in flight at the boundary: a probe whose apply is refused.
-            workspace.NotifyGraphOfVaultChange();
+            int installs = 0;
+            first.PublicationInstalled += _ => installs++;
+            // Work PROVABLY in flight at the boundary (IPB-10): a pair over
+            // a changed filter parked in the worker after its crossings —
+            // a result that WOULD install a different publication if the
+            // retirement let it through.
+            using var gate = new ManualResetEventSlim(false);
+            using var reached = new ManualResetEventSlim(false);
+            first.FetchGateForTests = () =>
+            {
+                reached.Set();
+                gate.Wait(TimeSpan.FromSeconds(10));
+            };
+            first.ViewState.Filter = new GraphFilter(true, true, false);
+            _ = first.Load(Graph.GraphLoadKind.Pair, Graph.GraphAnnouncePolicy.Silent);
+            Assert.True(reached.Wait(TimeSpan.FromSeconds(10)), "the pair never reached the gate");
 
             workspace.ClosePaneCommand.Execute(null);
 
             Assert.Single(workspace.Groups);
             Assert.Null(workspace.GraphDocument);
             Assert.True(first.IsRetired);
+            gate.Set();
             PumpedDispatcher.PumpUntilDrained(first.WhenAllWorkDrained());
             PumpedDispatcher.Drain();
+            Assert.Equal(0, installs);
             Assert.Same(before, first.Publication);
 
             workspace.OpenGraph();

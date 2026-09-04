@@ -52,11 +52,12 @@ internal sealed partial class WorkspaceViewModel
     /// has no structural-mutation gate today.</summary>
     public Func<string?>? GraphCreateAdmissionReason { get; set; }
 
-    /// <summary>Rule A / AD-8 (IPA-6): the vault lifecycle's generation —
-    /// carried by every load token and every create completion, compared
-    /// at dispatch. The lifecycle installs it; a bare workspace reads a
-    /// constant.</summary>
-    public Func<int> LifecycleGeneration { get; set; } = static () => 0;
+    /// <summary>Rule A / AD-8 (IPA-6, IPB-1): the vault lifecycle's
+    /// generation — carried by every load token and every create
+    /// completion, compared at dispatch. A CONSTRUCTION input (the restore
+    /// can start the first load inside the constructor); a bare workspace
+    /// reads a constant.</summary>
+    public Func<int> LifecycleGeneration { get; }
 
     /// <summary>Test seam: how many funnel calls started a graph load.</summary>
     internal int GraphLoadsForTests { get; private set; }

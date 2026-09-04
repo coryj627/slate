@@ -4356,6 +4356,92 @@ build; the journey passed locally in 9 seconds after the fix (18 seconds to the 
 the accessibility projects build; the Rust and mac lanes untouched by
 this pass.
 
+**TGA-10 — The standing gate on `1de19b4`, and the second codex pass.**
+Three things arrived on the new head. Codoki re-reviewed the whole PR
+and COMMENTED with one Medium finding on `GraphTableView.cs:75`: when
+`Model` becomes null the grid keeps the previously bound rows and the
+delegates that captured the old document, so a retired document stays
+reachable — a consequence of IPA-1's fix, since before it the tab never
+dropped its document on an in-place replacement; verified and accepted:
+the null arm now rebinds the grid to an empty column and row set beside
+silencing `Announce`, pinned by a GraphTableTests fact that nulls the
+model and asserts an empty grid. The Windows app lane failed at
+`GraphTableTests.TenThousandRowsStayVirtualisedAndTheActionInventoryStaysThree`
+— "STA test body timed out" at the harness's 120-second `Join` — a fact
+that passed on `ed92f9d`'s run and passes here: measured on this box it
+took 1 minute 50 seconds, ten seconds under the budget. Not a flake: a
+fact with no headroom, dominated by ten thousand FILES written and
+scanned rather than by the grid it measures. The vault is now
+ghost-heavy — a hundred notes each linking to a hundred unresolved
+targets, ten thousand ghost rows for a hundred files — and the fact runs
+in 2 seconds, where the ten-thousand-file vault needed 110 on this box. The second codex pass at xhigh over the fix commit returned
+ten findings, IPB-1..10 (three blockers, five majors, two minors), each
+verified; nine discharged by code and one recorded: (IPB-1, rule A) the
+workspace's constructor restores a persisted graph tab and starts its
+first load INSIDE the constructor, before the lifecycle installed the
+generation provider, so a restored graph's token carried 0 and was
+dropped at dispatch against the real counter — a regression IPA-6
+introduced; the provider is now a CONSTRUCTOR input (`lifecycleGeneration`,
+handed in by `InitializeWorkspace`), pinned by a fact that persists a
+graph tab, constructs the workspace under a non-zero counter, and
+asserts READY with the summary alone; (IPB-2, Term 7) the pool-side
+check was a plain read — admission and the shutdown flip now share the
+work lock, one transition: a compute admitted before the flip is drained,
+one that reads the flag set never starts (the residual — a compute that
+started before the flip runs to completion — is the bounded pre-session
+drain's purpose, A-1); (IPB-3, A-1/A-2) the tracked task completes after
+the posted apply, and the workspace's teardown blocks the dispatcher
+while it drains, so a body between compute and apply could never
+complete and every close during graph work waited the full bound —
+`Shutdown` now SETTLES every pending apply (the apply is refused after
+shutdown anyway) and refuses to post a new one, pinned by a scheduler
+fact whose apply is queued on a thread that never pumps and by a
+workspace fact that parks a pair, disposes on the owner's thread without
+pumping, and asserts the teardown returned within seconds with nothing
+installed; (IPB-4, A-8/A-9) the frozen text's immutable `(group, tab)`
+address handed through every seam versus the code's resolution of the
+singleton's tab and group at invocation — RECORDED as deviation (viii)
+below rather than built, and the two facts codex asked for added: the
+reveal captures the active group AT the seam's call, and a create parked
+while the reader moves to a note completes with the open suppressed and
+`NoteCreated` spoken; (IPB-5, A-17) the censuses' textual shapes — under
+`Graph/` no `using` alias exists and every call on an announce delegate
+passes exactly one explicit construction of a non-graph shell event, the
+document's seam exemptions match by normalised path like the relay's,
+and across the shell an alias naming the family or a target-typed `new`
+handed to an announce delegate is an offender; the residual that a
+pre-built graph event handed by identifier outside `Graph/` is unseen is
+stated here — a semantic census is a later slice; (IPB-6, A-3) the
+supersession fact now waits for the pair to REACH the gate before the
+world moves, so the parked envelope is stale by construction; (IPB-7,
+Terms 4/6) the hidden and recreated reopen facts assert exactly one load,
+and the reopen's failure arm is pinned — `Opened`, `ReopenedGraph`,
+`LoadFailed`; (IPB-8) the scheduler facts capture one drain, pump it to
+completion and observe it; (IPB-9, A-15) the runner requires the
+snapshot's node count and the publication's total to equal the synthetic
+population, not only the rows; (IPB-10, A-1) the pane-close fact parks a
+pair over a changed filter — a result that WOULD install — before the
+close, and asserts nothing installed after the release. Deviation
+(viii): the address of contracts A-8/A-9 is resolved by the workspace at
+invocation as the singleton graph tab and its owning group
+(`FocusGraphAddress`), activated then, and captured for the completion's
+comparison — one graph tab exists at most, so the immutable record the
+frozen text names collapses to that resolution; a completion never
+activates. Mutations: 46 in the sweep (7 for this pass —
+the provider not injected, the pending applies left unsettled, the post
+after shutdown admitted, the null model keeping its rows, a `using`
+alias under `Graph/`, the retirement skipped at the pane close); the
+first run left two SURVIVORS, both weak facts rather than sound code —
+the restore fact accepted a workspace agreeing with its own constant
+(it now asserts the counter is the lifecycle's and that a token carries
+it, 7 then 8) and the teardown fact reached the post refusal rather than
+the settle (a second teardown fact queues the apply BEFORE the teardown
+blocks the thread) — and the survivors' mutations were re-run against
+the strengthened facts: 46 caught.
+Gates: 2142 Windows facts on a fresh build; the journey passed locally in 8 seconds;
+`dotnet format` clean; the benchmarks and the accessibility projects
+build.
+
 ### Tests that pin PR A
 
 - Windows facts: GraphDocumentTests (A-1, A-2, A-3, A-4, A-7, A-8, A-9,
@@ -4365,11 +4451,15 @@ this pass.
   over a merged timeline, the addressed Reveal and Create from an
   unfocused pane, the lifecycle generation in the token and in the
   create's completion, the injected pair failure, the parked pair's
-  supersession), GraphTableTests (A-5, A-6, A-11, A-15's
-  virtualisation; the reordered vector handed to the document),
-  GraphAnnouncerTests (A-10); PanelWorkSchedulerTests (A-2; the
-  pool-side liveness check); `W1WorkspaceRedTeamTests` twins (A-13; the
-  graph tab replaced in place, the pane close as a boundary);
+  supersession; after TGA-10: the restore under the lifecycle's
+  generation, the teardown that drains without pumping, the create
+  parked while the reader moved, the reopen's failure arm),
+  GraphTableTests (A-5, A-6, A-11, A-15's virtualisation over the
+  ghost-heavy vault; the reordered vector handed to the document; the
+  null model unbound), GraphAnnouncerTests (A-10);
+  PanelWorkSchedulerTests (A-2; the pool-side liveness check; the
+  settled apply); `W1WorkspaceRedTeamTests` twins (A-13; the graph tab
+  replaced in place, the pane close as a boundary with a parked pair);
   `ChordTableTests` (A-12); the censuses of A-17 (the graph-family
   construction under `Graph/`, the relay by normalised path, the one
   posting site, the lookup keyed by the vector); the FlaUI journey

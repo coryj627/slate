@@ -191,7 +191,11 @@ public sealed class PanelWorkSchedulerTests
             var probe = new Probe(synchronousForTests: false);
             probe.BeforeComputeForTests = probe.Shutdown;
             probe.Run();
-            Assert.True(pump(() => probe.DrainAll().IsCompleted), "the tracked task completed");
+            // ONE drain, pumped to completion and OBSERVED (IPB-8): a
+            // faulted drain is complete too.
+            Task drain = probe.DrainAll();
+            Assert.True(pump(() => drain.IsCompleted), "the tracked task completed");
+            drain.GetAwaiter().GetResult();
             Assert.Null(probe.ComputeThread);
             Assert.Equal(0, probe.Applies);
         });
@@ -207,8 +211,38 @@ public sealed class PanelWorkSchedulerTests
         {
             var probe = new Probe(synchronousForTests: false);
             probe.Run(beforeComputeReturns: probe.Shutdown);
-            Assert.True(pump(() => probe.DrainAll().IsCompleted), "the tracked task completed");
+            Task drain = probe.DrainAll();
+            Assert.True(pump(() => drain.IsCompleted), "the tracked task completed");
+            drain.GetAwaiter().GetResult();
             Assert.NotNull(probe.ComputeThread);
+            Assert.Equal(0, probe.Applies);
+        });
+    }
+
+    /// <summary>IPB-3: an apply posted to the owner context and not yet
+    /// run is SETTLED by the shutdown, so a teardown that blocks the
+    /// owner's thread while it drains sees the tracked task complete —
+    /// the apply never runs.</summary>
+    [Fact]
+    public void AShutdownSettlesAPendingApplySoTheDrainCompletesWithoutTheOwnerPumping()
+    {
+        WithPumpedContext(pump =>
+        {
+            var probe = new Probe(synchronousForTests: false);
+            using var computed = new ManualResetEventSlim(false);
+            probe.Run(beforeComputeReturns: computed.Set);
+            // The compute finished and its apply is queued on THIS thread,
+            // which does not pump: without the settle the drain below could
+            // never complete.
+            Assert.True(computed.Wait(TimeSpan.FromSeconds(10)), "the compute never ran");
+            Thread.Sleep(50);
+            probe.Shutdown();
+            Task drain = probe.DrainAll();
+            Assert.True(drain.Wait(TimeSpan.FromSeconds(5)), "the drain waited on an apply the owner could not run");
+            drain.GetAwaiter().GetResult();
+            Assert.Equal(0, probe.Applies);
+            // The queued callback runs later and applies nothing.
+            Assert.True(pump(() => true));
             Assert.Equal(0, probe.Applies);
         });
     }
