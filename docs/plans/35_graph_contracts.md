@@ -4537,6 +4537,53 @@ scan folds the same shapes. Mutations added for this pass: the refused post reth
 a fresh build; `dotnet format` clean; the graph journey passed locally in 8 seconds; the
 benchmarks and the accessibility projects build.
 
+**TGA-13 — The standing gate MET on `cfd968a`, and the fifth codex pass.**
+On `cfd968a` every CI lane passed — the shell accessibility gate
+included, the canvas undo journey of TGA-12 among the forty-three green
+— codoki APPROVED the head ("no issues found") and the PR carried zero
+unresolved threads: the gate the program names was met on that head.
+The fifth codex pass at xhigh over the fourth pass's commit returned no
+blocker, three majors and two minors, IPE-1..5, each verified: (IPE-1,
+A-2/AD-4) WPF's `DispatcherSynchronizationContext.Post` discards the
+operation it enqueues, and a dispatcher that has shut down ABORTS the
+operation instead of throwing, so a promise posted to a dead dispatcher
+by a scheduler nobody shut down would await forever — the owner
+Dispatcher is now captured at construction (a dispatcher context is
+always constructed on its dispatcher's thread) and the apply posts
+through `BeginInvoke`, refusing when the dispatcher has started shutting
+down and withdrawing the promise when the operation is aborted, with
+the context's `Post` kept for a non-dispatcher owner; pinned by a fact
+over a REAL dispatcher run on its own thread and shut down before the
+body posts — the drain completes without pumping, nothing applies,
+nothing faults; (IPE-2, A-15) the fact's ceiling was six capacities —
+codex's premise that WPF's default cache is one PAGE each side is
+refuted by the measurement (the substrate's grid scrolls by item with a
+one-item cache each side, read from the panel), but the multiplier was
+unjustified; measured again, WPF's Standard virtualisation cleans
+containers up neither on every measure nor on a timer — pumping for
+700 ms after a jump left two pages live — but lets about four pages
+accumulate before it unloads back to one, so the ceiling is FIVE
+capacities, the smallest integer above the observed cadence, stated
+with its reason, and a panel that never unloads exceeds it within five
+pages; (IPE-3, Term 7) the inline-context fact could not see the lock's
+position because a monitor re-enters — a BLOCKING context now parks the
+post and a shutdown from another thread must complete while it is
+parked, which it cannot if the post is made under the lock; (IPE-4) the
+seam ran outside the try and a throwing seam faulted tracked work — it
+is now non-faulting, its comment and the ownership comment corrected
+(a callback posted after the flip fails to claim), pinned by a
+throwing-seam fact; (IPE-5, A-17) the workspace's rendered-announcement
+delegate escaped the reference rule — under `Graph/` `_announceRendered`
+is referenced exactly once, as the argument of the root
+`new GraphAnnouncer(…)`, and any other reference is an offender.
+Mutations added: the aborted post left unwithdrawn (the dead-dispatcher
+fact), the post moved back under the lock (the blocking-context fact),
+the seam's guard removed (the throwing-seam fact), the rendered delegate
+captured under `Graph/` (the announcer census); the whole sweep re-run:
+56 caught of 56. Gates: 2147 Windows facts on a
+fresh build; `dotnet format` clean; the graph journey passed locally in 8 seconds; the
+benchmarks and the accessibility projects build. The post-implementation loop has now run five passes, each returning fewer and lesser findings than the last (thirteen, ten, five, five, five; no blocker since the second) while the gate the program names has been met on two consecutive heads. A sixth pass runs over this commit; by the standing precedent its findings, if any, are carried in the PR conversation as the owner's ledger rather than as further commits — precedent applied; the owner may overrule.
+
 ### Tests that pin PR A
 
 - Windows facts: GraphDocumentTests (A-1, A-2, A-3, A-4, A-7, A-8, A-9,

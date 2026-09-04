@@ -105,6 +105,7 @@ public sealed class GraphAnnouncerCensus
         string[] relays = [.. GraphSources().Where(file => Relative(file) == TheRelay)];
         Assert.Single(relays);
         var offenders = new List<string>();
+        int relaySeeds = 0;
         foreach (string file in GraphSources())
         {
             string label = Relative(file);
@@ -209,11 +210,34 @@ public sealed class GraphAnnouncerCensus
                 }
                 offenders.Add($"{label}: reference {reference.Identifier.ValueText} outside a validated call");
             }
+            // IPE-5: the workspace's RENDERED-announcement delegate is the
+            // relay's one input — under Graph/ it is referenced exactly once,
+            // as the argument of the root `new GraphAnnouncer(…)`; any other
+            // reference (a direct call, a capture, a hand-off) is an
+            // offender, or the one-relay wall has a second door.
+            foreach (IdentifierNameSyntax reference in source.Root.DescendantNodes().OfType<IdentifierNameSyntax>())
+            {
+                if (reference.Identifier.ValueText != "_announceRendered")
+                {
+                    continue;
+                }
+                bool seedsTheRelay = reference.Parent is ArgumentSyntax argument
+                    && argument.Parent is ArgumentListSyntax list
+                    && list.Parent is ObjectCreationExpressionSyntax relayCreation
+                    && relayCreation.Type.ToString().EndsWith("GraphAnnouncer", StringComparison.Ordinal);
+                if (seedsTheRelay)
+                {
+                    relaySeeds++;
+                    continue;
+                }
+                offenders.Add($"{label}: _announceRendered referenced outside the relay's construction");
+            }
         }
         Assert.True(
             offenders.Count == 0,
             "graph code must announce through GraphAnnouncer (contract A-10), never directly:\n"
             + string.Join("\n", offenders));
+        Assert.Equal(1, relaySeeds);
     }
 
     /// <summary>The relay is the one file that renders (contract A-10):

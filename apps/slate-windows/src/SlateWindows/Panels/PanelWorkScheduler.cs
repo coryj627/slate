@@ -39,7 +39,17 @@ internal abstract class PanelWorkScheduler : BindableBase
     {
         _uiContext = ownerContext;
         _synchronous = synchronousForTests;
+        // IPE-1: a dispatcher context is always constructed ON its
+        // dispatcher's thread (the graph installs the constructing thread's
+        // dispatcher when none is current; a current dispatcher context
+        // means this thread owns one), so the owner Dispatcher itself is
+        // known here — and its BeginInvoke returns the operation, which a
+        // shut-down dispatcher ABORTS rather than throwing; the always-async
+        // apply posts through it so an aborted post withdraws its promise.
+        _ownerDispatcher = ownerContext is DispatcherSynchronizationContext ? Dispatcher.CurrentDispatcher : null;
     }
+
+    private readonly Dispatcher? _ownerDispatcher;
 
     protected bool IsShutDown => _isShutDown;
 
@@ -48,10 +58,11 @@ internal abstract class PanelWorkScheduler : BindableBase
     /// for a teardown that lands between queueing and pickup.</summary>
     internal Action? BeforeComputeForTests { get; set; }
 
-    /// <summary>Test seam (IPC-2): runs under the work lock the instant an
-    /// always-async apply has been QUEUED on the owner context — the
-    /// deterministic barrier a fact waits on before shutting down, so it
-    /// exercises the settle and not the pre-post refusal.</summary>
+    /// <summary>Test seam (IPC-2, IPD-1, IPE-4): runs OUTSIDE the work lock
+    /// the instant an always-async apply has been registered and posted to
+    /// the owner context — the deterministic barrier a fact waits on before
+    /// shutting down, so it exercises the settle and not the pre-post
+    /// refusal. A seam that throws faults no tracked work.</summary>
     internal Action? ApplyQueuedForTests { get; set; }
 
     /// <summary>Whether this scheduler runs bodies inline (test mode)
@@ -356,49 +367,80 @@ internal abstract class PanelWorkScheduler : BindableBase
         // The post and the seam run OUTSIDE the lock (IPD-1): a context
         // whose Post runs the callback inline, blocks, or throws must not
         // do so under the work lock. A shutdown between the registration
-        // and the post settles and clears the promise; the callback then
-        // fails to claim it and applies nothing. A post that throws
-        // withdraws the promise so no teardown waits on it.
+        // and the post settles and clears the promise; a callback posted
+        // after the flip then fails to CLAIM it and applies nothing. A post
+        // the owner refuses — a context whose Post throws, or a dispatcher
+        // that has shut down and ABORTS the operation instead (IPE-1) —
+        // withdraws the promise so no teardown waits on it and the tracked
+        // task completes without faulting.
+        void Callback(object? _)
+        {
+            bool claimed;
+            lock (_workLock)
+            {
+                claimed = _pendingApplies.Remove(applied);
+            }
+            try
+            {
+                if (claimed)
+                {
+                    apply(result);
+                }
+            }
+            finally
+            {
+                _ = applied.TrySetResult();
+            }
+        }
+        void Withdraw()
+        {
+            lock (_workLock)
+            {
+                _ = _pendingApplies.Remove(applied);
+            }
+            _ = applied.TrySetResult();
+        }
         try
         {
-            _uiContext.Post(
-                _ =>
+            if (_ownerDispatcher is { } dispatcher)
+            {
+                if (dispatcher.HasShutdownStarted)
                 {
-                    bool claimed;
-                    lock (_workLock)
-                    {
-                        claimed = _pendingApplies.Remove(applied);
-                    }
-                    try
-                    {
-                        if (claimed)
-                        {
-                            apply(result);
-                        }
-                    }
-                    finally
-                    {
-                        _ = applied.TrySetResult();
-                    }
-                },
-                null);
+                    Withdraw();
+                    return;
+                }
+                DispatcherOperation operation = dispatcher.BeginInvoke(DispatcherPriority.Normal, new SendOrPostCallback(Callback), null);
+                operation.Aborted += (_, _) => Withdraw();
+                if (operation.Status == DispatcherOperationStatus.Aborted)
+                {
+                    Withdraw();
+                }
+            }
+            else
+            {
+                _uiContext.Post(Callback, null);
+            }
         }
         catch (Exception exception) when (
             exception is not OutOfMemoryException
                 and not StackOverflowException
                 and not AccessViolationException)
         {
-            // The owner context refused the post (a dispatcher shutting
-            // down): the result is lost like a refused apply, the promise
-            // withdrawn, and the tracked task completes without faulting.
-            lock (_workLock)
-            {
-                _ = _pendingApplies.Remove(applied);
-            }
-            _ = applied.TrySetResult();
+            Withdraw();
             return;
         }
-        ApplyQueuedForTests?.Invoke();
+        try
+        {
+            ApplyQueuedForTests?.Invoke();
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            // A test seam that throws is the test's defect, not tracked
+            // work's fault (IPE-4).
+        }
         await applied.Task.ConfigureAwait(false);
     }
 

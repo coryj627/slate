@@ -302,6 +302,99 @@ public sealed class PanelWorkSchedulerTests
         Assert.NotNull(probe.ApplyThread);
     }
 
+    /// <summary>A context whose Post BLOCKS until released (IPE-3): while it
+    /// blocks, a shutdown on another thread must complete — which it cannot
+    /// if the post is made under the work lock the shutdown needs.</summary>
+    private sealed class BlockingContext : SynchronizationContext
+    {
+        public ManualResetEventSlim Posting { get; } = new(false);
+        public ManualResetEventSlim Release { get; } = new(false);
+
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+            Posting.Set();
+            _ = Release.Wait(TimeSpan.FromSeconds(10));
+            d(state);
+        }
+    }
+
+    [Fact]
+    public async Task AShutdownCompletesWhileAPostIsBlockedBecauseThePostIsOutsideTheLock()
+    {
+        var context = new BlockingContext();
+        var probe = new Probe(context);
+        probe.Run();
+        Assert.True(context.Posting.Wait(TimeSpan.FromSeconds(10)), "the post never started");
+        // The post is parked. A shutdown from THIS thread must finish
+        // promptly — the lock it takes is not held across the post.
+        Task shutdown = Task.Run(probe.Shutdown);
+        Assert.True(await Task.WhenAny(shutdown, Task.Delay(TimeSpan.FromSeconds(3))) == shutdown, "the shutdown blocked behind the post");
+        context.Release.Set();
+        Task drain = probe.DrainAll();
+        Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the drain never completed");
+        await drain;
+        // The released callback fails to claim the settled promise.
+        Assert.Equal(0, probe.Applies);
+        Assert.Equal(0, probe.FaultedWorkForTests);
+    }
+
+    /// <summary>A REAL dispatcher that has shut down (IPE-1): WPF aborts the
+    /// posted operation instead of throwing, so the promise must be
+    /// withdrawn through the operation — the drain completes without any
+    /// pumping, nothing applies, nothing faults.</summary>
+    [Fact]
+    public async Task AShutDownDispatcherAbortsThePostAndTheTrackedTaskStillCompletes()
+    {
+        Probe? probe = null;
+        Dispatcher? dispatcher = null;
+        using var ready = new ManualResetEventSlim(false);
+        var thread = new Thread(() =>
+        {
+            dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
+            probe = new Probe(synchronousForTests: false);
+            ready.Set();
+            Dispatcher.Run();
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "the dispatcher thread never started");
+        Assert.NotNull(probe);
+        Assert.NotNull(dispatcher);
+        Assert.True(probe.HasContext);
+        dispatcher.InvokeShutdown();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "the dispatcher never shut down");
+        Assert.True(dispatcher.HasShutdownFinished);
+
+        probe.Run();
+        Task drain = probe.DrainAll();
+        Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the drain waited on a post the dead dispatcher will never run");
+        await drain;
+        Assert.NotNull(probe.ComputeThread);
+        Assert.Equal(0, probe.Applies);
+        await Task.Delay(50);
+        Assert.Equal(0, probe.FaultedWorkForTests);
+    }
+
+    /// <summary>A seam that throws is the test's defect (IPE-4): tracked
+    /// work does not fault and the apply still lands.</summary>
+    [Fact]
+    public void AThrowingSeamFaultsNoTrackedWork()
+    {
+        WithPumpedContext(pump =>
+        {
+            var probe = new Probe(synchronousForTests: false);
+            probe.ApplyQueuedForTests = () => throw new InvalidOperationException("a hostile seam");
+            probe.Run();
+            Assert.True(pump(() => probe.Applies == 1), "the apply landed");
+            Task drain = probe.DrainAll();
+            Assert.True(pump(() => drain.IsCompleted), "the drain completed");
+            drain.GetAwaiter().GetResult();
+            Assert.True(pump(() => probe.FaultedWorkForTests == 0));
+            Assert.Equal(0, probe.FaultedWorkForTests);
+        });
+    }
+
     [Fact]
     public async Task AContextThatRefusesThePostCompletesTheTrackedTaskWithoutAFault()
     {
