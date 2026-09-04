@@ -693,16 +693,20 @@ public sealed class AnnouncementSeamCensus
             // pre-built argument handed to an announce delegate.
             foreach (UsingDirectiveSyntax directive in source.Root.DescendantNodes().OfType<UsingDirectiveSyntax>())
             {
-                if (directive.Alias is not null
+                // An alias OR a static import naming the family (IPC-3):
+                // either lets a bare `Graph` name the event.
+                if ((directive.Alias is not null || directive.StaticKeyword.RawKind != 0)
                     && directive.NamespaceOrType.ToString().Contains("A11yEvent", StringComparison.Ordinal))
                 {
-                    outsideSites.Add($"{relative}:using alias {directive.Alias.Name}");
+                    outsideSites.Add($"{relative}:using directive {directive.NamespaceOrType}");
                 }
             }
             foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                if (call.Expression is not IdentifierNameSyntax callee
-                    || !callee.Identifier.ValueText.EndsWith("announce", StringComparison.OrdinalIgnoreCase)
+                // The callee normalised to its terminal identifier (IPC-3).
+                string? calleeName = GraphAnnouncerCensus.TerminalIdentifier(call.Expression);
+                if (calleeName is null
+                    || !calleeName.EndsWith("announce", StringComparison.OrdinalIgnoreCase)
                     || call.ArgumentList.Arguments.Count != 1)
                 {
                     continue;

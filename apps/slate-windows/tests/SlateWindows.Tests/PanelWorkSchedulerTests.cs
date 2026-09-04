@@ -229,21 +229,25 @@ public sealed class PanelWorkSchedulerTests
         WithPumpedContext(pump =>
         {
             var probe = new Probe(synchronousForTests: false);
-            using var computed = new ManualResetEventSlim(false);
-            probe.Run(beforeComputeReturns: computed.Set);
-            // The compute finished and its apply is queued on THIS thread,
-            // which does not pump: without the settle the drain below could
-            // never complete.
-            Assert.True(computed.Wait(TimeSpan.FromSeconds(10)), "the compute never ran");
-            Thread.Sleep(50);
+            using var queued = new ManualResetEventSlim(false);
+            probe.ApplyQueuedForTests = queued.Set;
+            probe.Run();
+            // The apply is QUEUED on this thread — the seam fires under the
+            // work lock the instant it is (IPC-2) — and this thread does not
+            // pump: without the settle the drain below could never complete.
+            Assert.True(queued.Wait(TimeSpan.FromSeconds(10)), "the apply was never queued");
             probe.Shutdown();
             Task drain = probe.DrainAll();
             Assert.True(drain.Wait(TimeSpan.FromSeconds(5)), "the drain waited on an apply the owner could not run");
             drain.GetAwaiter().GetResult();
             Assert.Equal(0, probe.Applies);
-            // The queued callback runs later and applies nothing.
-            Assert.True(pump(() => true));
+            // The queued callback RUNS now — a frame behind it — finds its
+            // promise already settled, and applies nothing.
+            bool frameRan = false;
+            _ = Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, () => frameRan = true);
+            Assert.True(pump(() => frameRan), "the late callback's frame never ran");
             Assert.Equal(0, probe.Applies);
+            Assert.True(probe.DrainAll().IsCompleted);
         });
     }
 }

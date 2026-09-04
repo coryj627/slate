@@ -48,6 +48,12 @@ internal abstract class PanelWorkScheduler : BindableBase
     /// for a teardown that lands between queueing and pickup.</summary>
     internal Action? BeforeComputeForTests { get; set; }
 
+    /// <summary>Test seam (IPC-2): runs under the work lock the instant an
+    /// always-async apply has been QUEUED on the owner context — the
+    /// deterministic barrier a fact waits on before shutting down, so it
+    /// exercises the settle and not the pre-post refusal.</summary>
+    internal Action? ApplyQueuedForTests { get; set; }
+
     /// <summary>Whether this scheduler runs bodies inline (test mode)
     /// — for the rare subclass step that must choose between inline
     /// and pool execution OUTSIDE StartWork (e.g. a post-shutdown
@@ -307,43 +313,56 @@ internal abstract class PanelWorkScheduler : BindableBase
         T result = computed.Result;
         if (_uiContext is null)
         {
-            if (!_isShutDown)
+            // No owner context: the apply runs here, owned by this tracked
+            // task, admitted under the same lock as the flip (IPC-1).
+            lock (_workLock)
             {
-                apply(result);
+                if (_isShutDown)
+                {
+                    return;
+                }
             }
+            apply(result);
             return;
         }
+        // ONE owner for the apply (IPC-1): the promise is QUEUED under the
+        // lock — registered and posted as one transition against the
+        // shutdown flip — and the callback CLAIMS it under the lock before
+        // applying. Shutdown settles only what is still queued; a claimed
+        // apply runs to completion and settles itself, so the tracked task
+        // never completes under a running apply and no callback is posted
+        // after the flip.
         var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_workLock)
         {
             if (_isShutDown)
             {
-                // Shut down between the compute and the post: nothing to
-                // apply, and no promise for a teardown to wait on.
                 return;
             }
             _ = _pendingApplies.Add(applied);
-        }
-        _uiContext.Post(
-            _ =>
-            {
-                try
+            _uiContext.Post(
+                _ =>
                 {
-                    if (!_isShutDown)
-                    {
-                        apply(result);
-                    }
-                }
-                finally
-                {
+                    bool claimed;
                     lock (_workLock)
                     {
-                        _ = _pendingApplies.Remove(applied);
+                        claimed = _pendingApplies.Remove(applied);
                     }
-                    _ = applied.TrySetResult();
-                }
-            },
-            null);
+                    try
+                    {
+                        if (claimed)
+                        {
+                            apply(result);
+                        }
+                    }
+                    finally
+                    {
+                        _ = applied.TrySetResult();
+                    }
+                },
+                null);
+            ApplyQueuedForTests?.Invoke();
+        }
         await applied.Task.ConfigureAwait(false);
     }
 

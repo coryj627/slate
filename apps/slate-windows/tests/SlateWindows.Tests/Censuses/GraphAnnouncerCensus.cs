@@ -35,6 +35,20 @@ public sealed class GraphAnnouncerCensus
     private static string Relative(string file) =>
         Path.GetRelativePath(GraphSourceRoot(), file).Replace('\\', '/');
 
+    /// <summary>The terminal identifier of a DELEGATE callee (IPC-3): a
+    /// bare name, a this- or base-qualified name (<c>this._announce</c>),
+    /// or either under parentheses; null for anything else — a method on
+    /// another object (<c>_announcer.Announce(…)</c>, the relay seam the
+    /// seam census governs) is not a delegate call.</summary>
+    internal static string? TerminalIdentifier(ExpressionSyntax expression) => expression switch
+    {
+        IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+        MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax or BaseExpressionSyntax } access
+            => access.Name.Identifier.ValueText,
+        ParenthesizedExpressionSyntax parenthesized => TerminalIdentifier(parenthesized.Expression),
+        _ => null,
+    };
+
     /// <summary>Contract A-10 / R-C: no graph source announces on its own;
     /// exactly one relay exists, at the root of the directory.</summary>
     [Fact]
@@ -94,15 +108,19 @@ public sealed class GraphAnnouncerCensus
             // exactly one EXPLICIT construction of a non-graph shell event.
             foreach (UsingDirectiveSyntax directive in source.Root.DescendantNodes().OfType<UsingDirectiveSyntax>())
             {
-                if (directive.Alias is not null)
+                // IPC-3: `using static …A11yEvent;` would let a bare `new
+                // Graph(…)` dodge the suffix rule — no static import either.
+                if (directive.Alias is not null || directive.StaticKeyword.RawKind != 0)
                 {
-                    offenders.Add($"{label}: using alias {directive.Alias.Name}");
+                    offenders.Add($"{label}: using directive {directive.NamespaceOrType}");
                 }
             }
             foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                if (call.Expression is not IdentifierNameSyntax callee
-                    || !callee.Identifier.ValueText.EndsWith("announce", StringComparison.OrdinalIgnoreCase))
+                // The callee normalised to its terminal identifier (IPC-3):
+                // `_announce(…)`, `this._announce(…)`, `(_announce)(…)`.
+                string? calleeName = TerminalIdentifier(call.Expression);
+                if (calleeName is null || !calleeName.EndsWith("announce", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -112,7 +130,7 @@ public sealed class GraphAnnouncerCensus
                     && !created.Type.ToString().EndsWith(".Graph", StringComparison.Ordinal);
                 if (!explicitShellEvent)
                 {
-                    offenders.Add($"{label}: {callee.Identifier.ValueText}({call.ArgumentList.Arguments})");
+                    offenders.Add($"{label}: {calleeName}({call.ArgumentList.Arguments})");
                 }
             }
         }

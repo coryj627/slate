@@ -29,7 +29,7 @@ internal sealed partial class WorkspaceViewModel
         {
             return;
         }
-        WorkspaceTabViewModel? address = GraphTab();
+        (WorkspaceGroupViewModel Group, WorkspaceTabViewModel Tab)? address = GraphAddress();
         int generation = LifecycleGeneration();
         _graphNoteCreation.Run(
             () => creator.TryCreateNote(path, string.Empty),
@@ -44,7 +44,7 @@ internal sealed partial class WorkspaceViewModel
     /// is dropped whole: its session, sidebar and workspace are gone.</summary>
     private void GraphNoteCreationCompleted(
         string path,
-        WorkspaceTabViewModel? address,
+        (WorkspaceGroupViewModel Group, WorkspaceTabViewModel Tab)? address,
         int generation,
         ISurfaceNoteCreator creator,
         NoteCreateResult result)
@@ -57,9 +57,15 @@ internal sealed partial class WorkspaceViewModel
         {
             case NoteCreateResult.Landed landed:
                 creator.NoteLanded(path);
-                bool addressCurrent = address is not null
-                    && ReferenceEquals(GraphTab(), address)
-                    && ReferenceEquals(ActiveGroup.ActiveTab, address);
+                // Both identities of the captured address (IPC-4): the same
+                // tab, still owned by the same group, that group active and
+                // the tab its active one.
+                bool addressCurrent = address is { } captured
+                    && Groups.Contains(captured.Group)
+                    && captured.Group.Tabs.Contains(captured.Tab)
+                    && ReferenceEquals(ActiveGroup, captured.Group)
+                    && ReferenceEquals(captured.Group.ActiveTab, captured.Tab)
+                    && captured.Tab.IsGraph;
                 if (addressCurrent)
                 {
                     RunWorkspaceMutation(() => _ = OpenPathCore(path, WorkspaceOpenTarget.CurrentTab));

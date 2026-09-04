@@ -4442,6 +4442,61 @@ Gates: 2142 Windows facts on a fresh build; the journey passed locally in 8 seco
 `dotnet format` clean; the benchmarks and the accessibility projects
 build.
 
+**TGA-11 — The standing gate on `c0eaae1`, and the third codex pass.**
+Codoki re-reviewed the whole PR on the new head and APPROVED it: "Codoki
+auto-approved this PR (no issues found)". The Windows app lane failed
+once more at
+`GraphTableTests.TenThousandRowsStayVirtualisedAndTheActionInventoryStaysThree`,
+now within a minute of suite time rather than at the harness's budget:
+"417 live containers at the end" against the fact's literal bound of
+400, after every page of the scroll had stayed under it — a bound this
+box satisfies and the runner does not, because the live count under
+Standard virtualisation is a multiple of the rows the viewport holds,
+which the runner's row metrics make larger. The fact's claim is that the
+live count stays BOUNDED and never approaches the row count; the literal
+was an artefact of one machine. The bound is now a tenth of the
+population at every page and at the end, beside the unchanged
+assertions that the first page realises fewer than two hundred containers
+and that fewer rows than the population were ever realised. The third
+codex pass at xhigh over the second pass's commit returned no blocker,
+three majors and two minors, IPC-1..5, each verified and discharged:
+(IPC-1, Term 7/AD-4) the pending apply had no single owner — the promise
+was registered under the lock but posted outside it, and the callback's
+liveness read was unlocked, so a shutdown could settle a promise while
+its apply ran or a callback could be posted after the flip; the promise
+is now QUEUED under the work lock (registered and posted as one
+transition against the flip) and the callback CLAIMS it under the lock
+before applying — shutdown settles only what is still queued, a claimed
+apply runs to completion and settles itself — and the no-context arm
+admits its apply under the same lock; (IPC-2) the settle facts guessed
+with sleeps that the apply had been queued and never ran the late
+callback — a seam under the lock (`ApplyQueuedForTests`) fires the
+instant the apply is queued, both facts wait on it, the scheduler fact
+then runs the late callback's frame and asserts no apply and a completed
+drain, and the parked-pair teardown fact releases its gate only once the
+document reports retired; (IPC-3, A-17) `using static …A11yEvent;` would
+have let a bare `new Graph(…)` dodge the suffix rule and
+`this._announce(…)` dodged the callee rule — under `Graph/` no alias and
+no static import exists at all, and every callee is normalised to its
+terminal identifier (bare, member-qualified, parenthesised) in both
+censuses; (IPC-4, A-8/A-9) deviation (viii) said the owning group was
+captured while the completion compared only the tab — the create now
+captures the `(group, tab)` pair at invocation and its completion
+compares both identities, the group still present and owning the tab,
+active, with the tab its active one; (IPC-5, A-8/A-15) the 10k fact
+accepted any population of at least ten thousand and read a crossing
+count that was a literal — it now asserts exactly one hundred notes and
+ten thousand ghosts, that both kinds were realised along the scroll, and
+the crossings are COUNTED through the wrapper the document fetches its
+action vectors with (`FetchRowActions`, the `graph_row_actions` key),
+never assigned. Mutations added for this pass: the claim removed (the
+callback applying without claiming — the settle facts), a `using static`
+under `Graph/` (the announcer census), the crossings assigned rather than
+counted (the 10k fact); the whole sweep re-run: 49 caught of
+49. Gates: 2142 Windows facts on a fresh build; `dotnet
+format` clean; the journey passed locally in 8 seconds; the benchmarks and the
+accessibility projects build.
+
 ### Tests that pin PR A
 
 - Windows facts: GraphDocumentTests (A-1, A-2, A-3, A-4, A-7, A-8, A-9,

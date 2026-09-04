@@ -314,13 +314,29 @@ public sealed class GraphTableTests
             }
             using var host = new Host(vault);
             GraphDocumentViewModel document = host.Open();
-            Assert.True(document.Publication.Rows.Count >= 10_000);
+            // The population exactly (IPC-5): a hundred notes AND ten
+            // thousand ghosts — a projection that lost every note would
+            // still clear a bare "at least ten thousand".
+            Assert.Equal(100, document.Publication.Rows.Count(r => r.Kind == GraphNodeKind.Note));
+            Assert.Equal(10_000, document.Publication.Rows.Count(r => r.Kind == GraphNodeKind.Ghost));
+            Assert.Equal(10_100, document.Publication.Rows.Count);
             var view = new GraphTableView { Model = document };
             DataGrid grid = view.GridForTests.Grid;
             int loaded = 0;
             int unloaded = 0;
-            grid.LoadingRow += (_, _) => loaded++;
+            var kindsRealized = new HashSet<GraphNodeKind>();
+            grid.LoadingRow += (_, e) =>
+            {
+                loaded++;
+                _ = kindsRealized.Add(((GraphTableRow)e.Row.Item).Kind);
+            };
             grid.UnloadingRow += (_, _) => unloaded++;
+            // The live bound is a TENTH of the population: the count under
+            // Standard virtualisation is a multiple of the rows the viewport
+            // holds, which a runner's row metrics make larger than this
+            // box's (417 against a literal 400 on CI); the claim is
+            // "bounded, never the row count", not one machine's number.
+            const int LiveBound = 1_000;
             var window = new System.Windows.Window
             {
                 Content = view,
@@ -340,18 +356,23 @@ public sealed class GraphTableTests
                 {
                     grid.ScrollIntoView(document.Publication.Rows[Math.Min(document.Publication.Rows.Count - 1, (page + 1) * 500)]);
                     grid.UpdateLayout();
-                    Assert.True(loaded - unloaded < 400, $"{loaded - unloaded} live containers after page {page}");
+                    Assert.True(loaded - unloaded < LiveBound, $"{loaded - unloaded} live containers after page {page}");
                 }
                 grid.ScrollIntoView(document.Publication.Rows[^1]);
                 grid.UpdateLayout();
-                Assert.True(loaded - unloaded < 400, $"{loaded - unloaded} live containers at the end");
+                Assert.True(loaded - unloaded < LiveBound, $"{loaded - unloaded} live containers at the end");
                 Assert.True(loaded < document.Publication.Rows.Count, "every row was realized");
+                // Both kinds were realised along the way (the ghosts lead
+                // under links-in descending; the notes close the table).
+                Assert.Contains(GraphNodeKind.Ghost, kindsRealized);
+                Assert.Contains(GraphNodeKind.Note, kindsRealized);
             }
             finally
             {
                 window.Close();
             }
             Assert.Equal(3, document.ActionInventoryCrossings);
+            Assert.Equal(3, document.CrossingsForTests["graph_row_actions"]);
         });
     }
 }

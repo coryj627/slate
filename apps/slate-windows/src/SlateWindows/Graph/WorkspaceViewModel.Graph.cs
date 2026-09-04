@@ -100,6 +100,24 @@ internal sealed partial class WorkspaceViewModel
     private WorkspaceTabViewModel? GraphTab() =>
         Groups.SelectMany(group => group.Tabs).FirstOrDefault(tab => tab.IsGraph);
 
+    /// <summary>The graph's ADDRESS (contracts A-8, A-9; deviation (viii),
+    /// IPC-4): the singleton tab and the group that owns it now, captured
+    /// as a pair so a completion compares both identities.</summary>
+    private (WorkspaceGroupViewModel Group, WorkspaceTabViewModel Tab)? GraphAddress()
+    {
+        foreach (WorkspaceGroupViewModel group in Groups)
+        {
+            foreach (WorkspaceTabViewModel tab in group.Tabs)
+            {
+                if (tab.IsGraph)
+                {
+                    return (group, tab);
+                }
+            }
+        }
+        return null;
+    }
+
     /// <summary>Rule L, Term 2 — VISIBLE: the graph tab is its group's
     /// active tab, in any group (the mac's <c>anyGraphTabVisible</c>).</summary>
     internal bool GraphTabIsVisible() =>

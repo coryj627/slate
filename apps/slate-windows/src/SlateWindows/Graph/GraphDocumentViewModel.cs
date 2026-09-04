@@ -118,11 +118,13 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         SurfaceModes = SlateUniffiMethods.GraphSurfaceModes();
         _actionsByKind = new Dictionary<GraphNodeKind, IReadOnlyList<GraphRowActionSpec>>
         {
-            [GraphNodeKind.Note] = SlateUniffiMethods.GraphRowActions(GraphNodeKind.Note),
-            [GraphNodeKind.Attachment] = SlateUniffiMethods.GraphRowActions(GraphNodeKind.Attachment),
-            [GraphNodeKind.Ghost] = SlateUniffiMethods.GraphRowActions(GraphNodeKind.Ghost),
+            [GraphNodeKind.Note] = FetchRowActions(GraphNodeKind.Note),
+            [GraphNodeKind.Attachment] = FetchRowActions(GraphNodeKind.Attachment),
+            [GraphNodeKind.Ghost] = FetchRowActions(GraphNodeKind.Ghost),
         };
-        ActionInventoryCrossings = 3;
+        // COUNTED through the wrapper, never a literal (IPC-5): a fourth
+        // crossing anywhere would show here.
+        ActionInventoryCrossings = CrossingsForTests["graph_row_actions"];
         ViewState = new GraphViewState();
         _publication = GraphPublication.Initial(ViewState.Filter, DefaultSort);
     }
@@ -283,7 +285,16 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         ["graph_snapshot"] = 0,
         ["graph_table_rows"] = 0,
         ["graph_generation"] = 0,
+        ["graph_row_actions"] = 0,
     };
+
+    /// <summary>The per-kind action vector, fetched ONCE per kind at
+    /// construction and COUNTED (IPC-5).</summary>
+    private IReadOnlyList<GraphRowActionSpec> FetchRowActions(GraphNodeKind kind)
+    {
+        CrossingsForTests["graph_row_actions"]++;
+        return SlateUniffiMethods.GraphRowActions(kind);
+    }
 
     // --- The row copy (contract A-6) --------------------------------------
 

@@ -1174,9 +1174,19 @@ public sealed class GraphDocumentTests
             document.ViewState.Filter = new GraphFilter(true, true, false);
             _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
             Assert.True(reached.Wait(TimeSpan.FromSeconds(10)), "the pair never reached the gate");
-            // The release comes from the pool, 200 ms into the teardown's
-            // synchronous wait; this thread never pumps.
-            _ = Task.Delay(200).ContinueWith(_ => gate.Set(), TaskScheduler.Default);
+            // The release comes from the pool ONLY once the teardown has
+            // retired the document (IPC-2's deterministic barrier: the
+            // retirement happens inside Dispose, before its bounded wait);
+            // this thread never pumps.
+            _ = Task.Run(() =>
+            {
+                var spin = new SpinWait();
+                while (!document.IsRetired)
+                {
+                    spin.SpinOnce();
+                }
+                gate.Set();
+            });
             var clock = System.Diagnostics.Stopwatch.StartNew();
             host.Workspace.Dispose();
             clock.Stop();
@@ -1209,14 +1219,14 @@ public sealed class GraphDocumentTests
             GraphPublication before = document.Publication;
             int installs = 0;
             document.PublicationInstalled += _ => installs++;
-            using var computed = new ManualResetEventSlim(false);
-            document.FetchGateForTests = computed.Set;
+            using var queued = new ManualResetEventSlim(false);
+            document.ApplyQueuedForTests = queued.Set;
             document.ViewState.Filter = new GraphFilter(true, true, false);
             _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
-            Assert.True(computed.Wait(TimeSpan.FromSeconds(10)), "the pair never computed");
-            // The envelope is posted to this thread within microseconds of
-            // the gate; this thread does not pump it.
-            Thread.Sleep(100);
+            // The envelope's apply is QUEUED on this thread — the seam fires
+            // under the work lock the instant it is (IPC-2) — and this
+            // thread does not pump it.
+            Assert.True(queued.Wait(TimeSpan.FromSeconds(10)), "the apply was never queued");
             var clock = System.Diagnostics.Stopwatch.StartNew();
             host.Workspace.Dispose();
             clock.Stop();
