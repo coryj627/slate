@@ -641,6 +641,22 @@ W6_1_STATUS = (
     "interactive CI + human AT pending"
 )
 
+# W6-2 PR A (#746): the graph's delivered rows carry the date THEIR gates
+# went green, not W1's — a W6-2 row that fell through to the W1 status
+# claimed gates from before the branch existed (IPA-13).
+W6_2_STATUS = (
+    "implemented; local gates green 2026-09-03; "
+    "interactive CI + human AT pending"
+)
+
+W6_2_DELIVERED_COMMANDS = {
+    # W6-2 PR A (#746, contract A-12): the graph tab's one chordless row,
+    # executable through the palette and the registrar; B–E add the leaf's,
+    # the navigator's and the diagram's rows in the PR that makes each
+    # executable (B12's rule).
+    "slate.graph.openTab",
+}
+
 W6_1_DELIVERED_COMMANDS = {
     # PR A / PR B / §D TD-6: the three projections that exist.
     "slate.canvas.showOutline",
@@ -840,7 +856,8 @@ def load_delivery_evidence(
         cid for cid, _, _, _, issue in cmd_rows
         if issue.startswith(("#720", "#721", "#722", "#723", "#724", "#725"))
     } | W3_DELIVERED_COMMANDS | W4_DELIVERED_COMMANDS | W5_2_DELIVERED_COMMANDS \
-        | W5_3_DELIVERED_COMMANDS | W5_4_DELIVERED_COMMANDS | W6_1_DELIVERED_COMMANDS
+        | W5_3_DELIVERED_COMMANDS | W5_4_DELIVERED_COMMANDS | W6_1_DELIVERED_COMMANDS \
+        | W6_2_DELIVERED_COMMANDS
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
         missing = sorted(delivered_commands - mapped_commands)
@@ -858,6 +875,8 @@ def load_delivery_evidence(
         # aggregate group — anchors from every command group and the
         # close-out gates (validation 14 makes the aggregate complete).
         "#745",
+        # W6-2 PR A: the graph issue, evidenced by the `graph` group.
+        "#746",
     }
     if set(issue_map) != expected_issues:
         fail(
@@ -910,6 +929,8 @@ def command_delivery_status(
         return W5_4_STATUS
     if command_id in W6_1_DELIVERED_COMMANDS:
         return W6_1_STATUS
+    if command_id in W6_2_DELIVERED_COMMANDS:
+        return W6_2_STATUS
     return (
         W2_IMPLEMENTED_STATUS
         if issue.startswith(("#381", "#724", "#725"))
@@ -934,6 +955,8 @@ def issue_delivery_status(
         return W5_3_STATUS
     if issue_number == "#745":
         return W6_1_STATUS
+    if issue_number == "#746":
+        return W6_2_STATUS
     return IMPLEMENTED_STATUS
 
 

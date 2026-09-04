@@ -17,18 +17,53 @@ internal abstract class PanelWorkScheduler : BindableBase
 {
     private readonly object _workLock = new();
     private readonly HashSet<Task> _pendingWork = [];
+    // The always-async applies posted to the owner context and not yet
+    // run — settled by Shutdown (IPB-3).
+    private readonly HashSet<TaskCompletionSource> _pendingApplies = [];
     private readonly SynchronizationContext? _uiContext;
     private readonly bool _synchronous;
     private volatile bool _isShutDown;
     private Task? _prerequisite;
 
     protected PanelWorkScheduler(bool synchronousForTests)
+        : this(synchronousForTests, SynchronizationContext.Current)
     {
-        _uiContext = SynchronizationContext.Current;
-        _synchronous = synchronousForTests;
     }
 
+    /// <summary>W6-2 PR A (contract A-2): a subclass that must apply on a
+    /// serialized owner context names it here — the graph document
+    /// installs the constructing thread's dispatcher context when none
+    /// is current, the deterministic single-thread context of the
+    /// round-4 ledger's IGA-53.</summary>
+    protected PanelWorkScheduler(bool synchronousForTests, SynchronizationContext? ownerContext)
+    {
+        _uiContext = ownerContext;
+        _synchronous = synchronousForTests;
+        // IPE-1: a dispatcher context is always constructed ON its
+        // dispatcher's thread (the graph installs the constructing thread's
+        // dispatcher when none is current; a current dispatcher context
+        // means this thread owns one), so the owner Dispatcher itself is
+        // known here — and its BeginInvoke returns the operation, which a
+        // shut-down dispatcher ABORTS rather than throwing; the always-async
+        // apply posts through it so an aborted post withdraws its promise.
+        _ownerDispatcher = ownerContext is DispatcherSynchronizationContext ? Dispatcher.CurrentDispatcher : null;
+    }
+
+    private readonly Dispatcher? _ownerDispatcher;
+
     protected bool IsShutDown => _isShutDown;
+
+    /// <summary>Test seam (IPA-5): runs on the pool immediately before the
+    /// always-async compute's liveness check — the deterministic stand-in
+    /// for a teardown that lands between queueing and pickup.</summary>
+    internal Action? BeforeComputeForTests { get; set; }
+
+    /// <summary>Test seam (IPC-2, IPD-1, IPE-4): runs OUTSIDE the work lock
+    /// the instant an always-async apply has been registered and posted to
+    /// the owner context — the deterministic barrier a fact waits on before
+    /// shutting down, so it exercises the settle and not the pre-post
+    /// refusal. A seam that throws faults no tracked work.</summary>
+    internal Action? ApplyQueuedForTests { get; set; }
 
     /// <summary>Whether this scheduler runs bodies inline (test mode)
     /// — for the rare subclass step that must choose between inline
@@ -55,8 +90,28 @@ internal abstract class PanelWorkScheduler : BindableBase
         SynchronizationContext.Current is DispatcherSynchronizationContext;
 
     /// <summary>Workspace teardown: refuse new work. Subclasses
-    /// override to also invalidate their in-flight publishes.</summary>
-    internal virtual void Shutdown() => _isShutDown = true;
+    /// override to also invalidate their in-flight publishes. The flag
+    /// flips under the work lock, so the always-async admission (IPB-2)
+    /// is one transition with it: a compute is either admitted before the
+    /// flip — and the drain waits for it — or never starts. Every apply
+    /// still pending on the owner context is SETTLED here (IPB-3): the
+    /// apply itself is refused after shutdown, and a teardown that blocks
+    /// the owner's thread while it drains could otherwise never see the
+    /// posted callback complete the tracked task.</summary>
+    internal virtual void Shutdown()
+    {
+        TaskCompletionSource[] pending;
+        lock (_workLock)
+        {
+            _isShutDown = true;
+            pending = [.. _pendingApplies];
+            _pendingApplies.Clear();
+        }
+        foreach (TaskCompletionSource applied in pending)
+        {
+            _ = applied.TrySetResult();
+        }
+    }
 
     /// <summary>Hold every background body until a workspace-level
     /// prerequisite has landed. W4-5: a citation render issued before
@@ -154,6 +209,14 @@ internal abstract class PanelWorkScheduler : BindableBase
         await Task.Run(() => RunIfLive(body)).ConfigureAwait(false);
     }
 
+    private int _faultedWork;
+
+    /// <summary>Test seam: how many tracked bodies FAULTED. Tracked tasks
+    /// never fault by contract — a body reports its failure as a value —
+    /// and a completed task leaves the pending set, so a drain cannot
+    /// observe a fault; a fact asserts this stays zero.</summary>
+    internal int FaultedWorkForTests => Volatile.Read(ref _faultedWork);
+
     private void TrackWork(Task work)
     {
         lock (_workLock)
@@ -163,6 +226,10 @@ internal abstract class PanelWorkScheduler : BindableBase
         _ = work.ContinueWith(
             completed =>
             {
+                if (completed.IsFaulted)
+                {
+                    _ = Interlocked.Increment(ref _faultedWork);
+                }
                 lock (_workLock)
                 {
                     _ = _pendingWork.Remove(completed);
@@ -199,6 +266,205 @@ internal abstract class PanelWorkScheduler : BindableBase
         else
         {
             _uiContext.Post(_ => action(), null);
+        }
+    }
+
+    /// <summary>Whether a UI context was captured at construction —
+    /// the fact a subclass that refuses to run without one asks
+    /// (W6-2 PR A, contract A-2: the graph document has no inline
+    /// mode).</summary>
+    protected bool HasUiContext => _uiContext is not null;
+
+    /// <summary>
+    /// W6-2 PR A (contracts A-2, AD-4; the round-4 ledger's IGA-42, 53,
+    /// 60): compute on the pool in EVERY mode — never inline, the
+    /// <see cref="RunGatedAsync"/> rule made unconditional — and apply on
+    /// the owner context captured at construction, with the tracked task
+    /// completing AFTER the apply, so the drains wait for the apply too.
+    /// Without a captured context the apply runs where the compute
+    /// finished; a subclass that cannot accept that refuses construction
+    /// (<see cref="HasUiContext"/>). The compute must not throw (the
+    /// tracked-tasks-never-fault rule); a failure is a value it returns.
+    /// </summary>
+    protected void StartWorkAlwaysAsync<T>(Func<T> compute, Action<T> apply)
+    {
+        ArgumentNullException.ThrowIfNull(compute);
+        ArgumentNullException.ThrowIfNull(apply);
+        if (_isShutDown)
+        {
+            return;
+        }
+        TrackWork(RunAlwaysAsync(compute, apply));
+    }
+
+    private async Task RunAlwaysAsync<T>(Func<T> compute, Action<T> apply)
+    {
+        if (_prerequisite is { } gate)
+        {
+            await gate.ConfigureAwait(false);
+        }
+        if (_isShutDown)
+        {
+            return;
+        }
+        // The last gate before the compute, ON THE POOL (IPA-5): teardown
+        // can land between the check above and the pool picking the body
+        // up — <see cref="RunIfLive"/>'s rule, which StartWork already
+        // applies — so a compute that would touch a session the lifecycle
+        // has disposed is refused where it would start, not where it was
+        // queued. A refused compute applies nothing.
+        (bool Admitted, T Result) computed = await Task.Run(() =>
+        {
+            BeforeComputeForTests?.Invoke();
+            // Admission and the shutdown flip are ONE transition under the
+            // work lock (IPB-2): a compute admitted here started before the
+            // flip and the drain waits for it; one that reads the flag set
+            // never starts.
+            lock (_workLock)
+            {
+                if (_isShutDown)
+                {
+                    return (false, default(T)!);
+                }
+            }
+            return (true, compute());
+        }).ConfigureAwait(false);
+        if (!computed.Admitted)
+        {
+            return;
+        }
+        T result = computed.Result;
+        if (_uiContext is null)
+        {
+            // No owner context: the apply runs here, owned by this tracked
+            // task, admitted under the same lock as the flip (IPC-1).
+            lock (_workLock)
+            {
+                if (_isShutDown)
+                {
+                    return;
+                }
+            }
+            apply(result);
+            return;
+        }
+        // ONE owner for the apply (IPC-1): the promise is QUEUED under the
+        // lock — registered and posted as one transition against the
+        // shutdown flip — and the callback CLAIMS it under the lock before
+        // applying. Shutdown settles only what is still queued; a claimed
+        // apply runs to completion and settles itself, so the tracked task
+        // never completes under a running apply and no callback is posted
+        // after the flip.
+        var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_workLock)
+        {
+            if (_isShutDown)
+            {
+                return;
+            }
+            _ = _pendingApplies.Add(applied);
+        }
+        // The post and the seam run OUTSIDE the lock (IPD-1): a context
+        // whose Post runs the callback inline, blocks, or throws must not
+        // do so under the work lock. A shutdown between the registration
+        // and the post settles and clears the promise; a callback posted
+        // after the flip then fails to CLAIM it and applies nothing. A post
+        // the owner refuses — a context whose Post throws, or a dispatcher
+        // that has shut down and ABORTS the operation instead (IPE-1) —
+        // withdraws the promise so no teardown waits on it and the tracked
+        // task completes without faulting.
+        void Callback(object? _)
+        {
+            bool claimed;
+            lock (_workLock)
+            {
+                claimed = _pendingApplies.Remove(applied);
+            }
+            try
+            {
+                if (claimed)
+                {
+                    apply(result);
+                }
+            }
+            finally
+            {
+                _ = applied.TrySetResult();
+            }
+        }
+        void Withdraw()
+        {
+            lock (_workLock)
+            {
+                _ = _pendingApplies.Remove(applied);
+            }
+            _ = applied.TrySetResult();
+        }
+        try
+        {
+            if (_ownerDispatcher is { } dispatcher)
+            {
+                if (dispatcher.HasShutdownStarted)
+                {
+                    Withdraw();
+                    return;
+                }
+                DispatcherOperation operation = dispatcher.BeginInvoke(DispatcherPriority.Normal, new SendOrPostCallback(Callback), null);
+                operation.Aborted += (_, _) => Withdraw();
+                if (operation.Status == DispatcherOperationStatus.Aborted)
+                {
+                    Withdraw();
+                }
+            }
+            else
+            {
+                _uiContext.Post(Callback, null);
+            }
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            Withdraw();
+            return;
+        }
+        try
+        {
+            ApplyQueuedForTests?.Invoke();
+        }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            // A test seam that throws is the test's defect, not tracked
+            // work's fault (IPE-4).
+        }
+        await applied.Task.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The FIXED-POINT drain (W6-2 PR A, IGA-60): <see cref="WhenWorkDrained"/>
+    /// snapshots the tracked set once, so a body an apply enqueued after the
+    /// snapshot — the silent replacement pair A-2 requires — could still be
+    /// running when it returned. This waits, re-snapshots, and returns only
+    /// when nothing tracked remains.
+    /// </summary>
+    internal async Task WhenAllWorkDrained()
+    {
+        while (true)
+        {
+            Task[] snapshot;
+            lock (_workLock)
+            {
+                snapshot = [.. _pendingWork];
+            }
+            if (snapshot.Length == 0)
+            {
+                return;
+            }
+            await Task.WhenAll(snapshot).ConfigureAwait(false);
         }
     }
 }

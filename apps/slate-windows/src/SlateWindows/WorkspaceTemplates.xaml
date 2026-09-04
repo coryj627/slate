@@ -4,7 +4,8 @@
                     xmlns:panels="clr-namespace:SlateWindows.Panels"
                     xmlns:reading="clr-namespace:SlateWindows.Reading"
                     xmlns:bases="clr-namespace:SlateWindows.Bases"
-                    xmlns:canvas="clr-namespace:SlateWindows.Canvas">
+                    xmlns:canvas="clr-namespace:SlateWindows.Canvas"
+                    xmlns:graph="clr-namespace:SlateWindows.Graph">
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
     <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
     <local:AxisToOrientationConverter x:Key="AxisToOrientationConverter" />
@@ -447,6 +448,12 @@
             <canvas:CanvasSurfaceView Grid.Row="1"
                                       Model="{Binding Canvas}"
                                       Visibility="{Binding IsCanvasVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            <!-- W6-2 PR A (#746): the graph tab body — the placeholder
+                 retired for Graph; the same shared cell and visibility
+                 discipline as the canvas. -->
+            <graph:GraphSurfaceView Grid.Row="1"
+                                    Model="{Binding Graph}"
+                                    Visibility="{Binding IsGraphVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- Keep the modal interaction surface in the tab's presentation
                  source so UIA ownership is stable across providers. The
                  transparent layer intentionally makes Close/Escape the only

@@ -1428,6 +1428,9 @@ public static class SurfaceSerializer
         j.Raw("]}");
 
         j.Raw(",\"table\":[");
+        // W6-2 PR A (AD-13): the summary the table's surface reads, under the
+        // entry's filter — core's `audio_summary`, byte-identical on both lanes.
+        string tableSummary = session.GraphSnapshot(all.Filter).AudioSummary;
         for (int s = 0; s < PinnedGraphTableSorts.Length; s++)
         {
             if (s > 0)
@@ -1437,6 +1440,7 @@ public static class SurfaceSerializer
             var (column, ascending, name) = PinnedGraphTableSorts[s];
             var result = session.GraphTableRows(all, new GraphTableSort(column, ascending));
             j.Raw("{\"query\":").Str("all").Raw(",\"sort\":").Str(name)
+             .Raw(",\"summary\":").Str(tableSummary)
              .Raw(",\"total\":").Num(result.Total).Raw(",\"rows\":[");
             for (int r = 0; r < result.Rows.Length; r++)
             {

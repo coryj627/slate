@@ -1077,6 +1077,11 @@ internal sealed partial class WorkspaceViewModel
         {
             tab.AttachCanvasDocument(CanvasDocumentFor(tab.Path));
         }
+        else if (tab.IsGraph)
+        {
+            // W6-2 PR A (contract A-1): seat only; rule L starts the load.
+            AttachGraphDocumentTo(tab);
+        }
     }
 
     /// <summary>The queries-leaf state (the mac BaseQueriesState twin):

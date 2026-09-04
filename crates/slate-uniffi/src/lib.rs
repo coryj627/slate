@@ -3892,6 +3892,15 @@ impl From<GraphTableSort> for core::graph_queries::GraphTableSort {
     }
 }
 
+impl From<core::graph_queries::GraphTableSort> for GraphTableSort {
+    fn from(s: core::graph_queries::GraphTableSort) -> Self {
+        GraphTableSort {
+            column: s.column.into(),
+            ascending: s.ascending,
+        }
+    }
+}
+
 /// FFI mirror of [`core::graph_queries::GraphTableColumnSpec`] (0b-7):
 /// the ordered column model a grid is built from.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -3927,6 +3936,13 @@ pub fn graph_table_columns() -> Vec<GraphTableColumnSpec> {
             header: s.header,
         })
         .collect()
+}
+
+/// The preset-free default sort (W6-2 PR A, AD-1): fetched by both hosts,
+/// typed by neither. Handle-free.
+#[uniffi::export]
+pub fn graph_table_default_sort() -> GraphTableSort {
+    core::graph_queries::table_default_sort().into()
 }
 
 /// FFI mirror of [`core::graph_queries::GraphTableRow`] (0b-7): the nine
@@ -13000,6 +13016,64 @@ mod tests {
         );
     }
 
+    /// The Windows GRAPH twin (W6-2 PR A, #746, contract A-10): the graph
+    /// relay's switch against the four classes core pins on the graph
+    /// family (0a-9), membership per class in both directions — the same
+    /// scrape as the canvas twin above, keyed on `Graph/GraphAnnouncer.cs`.
+    #[test]
+    fn the_windows_graph_coalescing_switch_matches_the_pinned_class_list() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
+            .expect("core a11y source");
+        let csharp = std::fs::read_to_string(
+            manifest.join("../../apps/slate-windows/src/SlateWindows/Graph/GraphAnnouncer.cs"),
+        )
+        .expect("windows graph announcer source");
+
+        let pinned = pinned_coalescing_classes(&core_source, "GraphA11yEvent");
+        assert_eq!(pinned.len(), 4, "the graph family pins four classes (0a-9)");
+
+        let switch = csharp
+            .split_once("CoalescingClassOf(GraphA11yEvent @event) => @event switch")
+            .expect("windows graph coalescing switch")
+            .1;
+        let switch = switch
+            .split_once("_ => null,")
+            .expect("the switch's discard arm")
+            .0;
+        let switch = strip_csharp_comments(switch);
+        let switch = switch.as_str();
+
+        let mut windows: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut cursor = 0usize;
+        for (at, marker) in switch.match_indices("=> EventClass.") {
+            let class: String = switch[at + marker.len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            let entry = windows.entry(lower_first(&class)).or_default();
+            let patterns = &switch[cursor..at];
+            for (name_at, name_marker) in patterns.match_indices("GraphA11yEvent.") {
+                let name: String = patterns[name_at + name_marker.len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                if !name.is_empty() {
+                    entry.insert(lower_first(&name));
+                }
+            }
+            cursor = at + marker.len();
+        }
+
+        assert_eq!(
+            windows, pinned,
+            "the Windows graph coalescing switch and the class list core pins (0a-9) \
+             disagree. Left is Graph/GraphAnnouncer.cs, right is the a11y.rs doc comment."
+        );
+    }
+
     /// The FFI mirror must carry EVERY core variant.
     ///
     /// `From<A11yEvent> for core::a11y::A11yEvent` is exhaustive, so the
@@ -13385,7 +13459,7 @@ mod tests {
         let mirror = std::fs::read_to_string(manifest.join("src/lib.rs")).expect("mirror source");
         let surface = core::graph_queries::GRAPH_QUERY_SURFACE;
         assert!(
-            surface.len() >= 23,
+            surface.len() >= 24,
             "the surface list shrank to {}",
             surface.len()
         );

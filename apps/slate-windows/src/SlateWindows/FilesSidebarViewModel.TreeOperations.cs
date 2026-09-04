@@ -388,6 +388,9 @@ internal sealed partial class FilesSidebarViewModel
         // reconciliation (red team, a11y 2).
         ConsumePendingRenameArm();
         ConsumePendingSelection();
+        // W6-2 PR A (contract A-8): a surface's "Reveal in File Tree" whose
+        // node the previous tree had not materialised.
+        ConsumePendingSurfaceSelection();
         ReconcileSelectionAfterPublication();
 
         // Project the AUTHORITATIVE checked set onto the published

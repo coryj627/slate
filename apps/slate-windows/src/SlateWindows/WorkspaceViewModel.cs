@@ -320,8 +320,25 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     public bool IsCanvasVisible => IsCanvas;
 
+    public bool IsGraph => Item.Kind == WorkspaceItemKind.Graph;
+
+    /// <summary>W6-2 PR A (#746, contract A-1): the ONE graph document,
+    /// seated by the attach funnel on every graph tab; null on every
+    /// other tab kind.</summary>
+    public Graph.GraphDocumentViewModel? Graph { get; private set; }
+
+    internal void AttachGraphDocument(Graph.GraphDocumentViewModel document)
+    {
+        Graph = document;
+        OnPropertyChanged(nameof(Graph));
+    }
+
+    public bool IsGraphVisible => IsGraph;
+
+    /// <summary>W6-2 PR A: the placeholder retired for Graph — every kind
+    /// with a surface is off this list.</summary>
     public bool IsPlaceholder =>
-        !IsMarkdown && !IsBase && !IsSavedQueryTab && !IsDashboardTab && !IsCanvas;
+        !IsMarkdown && !IsBase && !IsSavedQueryTab && !IsDashboardTab && !IsCanvas && !IsGraph;
     public string KindLabel => Item.Kind switch
     {
         WorkspaceItemKind.Canvas => "Canvas",
@@ -416,9 +433,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         Base = null;
         Dashboard = null;
         Canvas = null;
+        // W6-2 PR A (contract A-9; the post-implementation pass's IPA-1):
+        // a note opened INTO the graph's tab replaces the graph — the
+        // document leaves the tab here and the release sweep retires it.
+        Graph = null;
         OnPropertyChanged(nameof(Base));
         OnPropertyChanged(nameof(Dashboard));
         OnPropertyChanged(nameof(Canvas));
+        OnPropertyChanged(nameof(Graph));
         // The staleness verdict belongs to the PREVIOUS note
         // (adversarial round 10): a reused current tab must not make
         // the replacement note inherit it — every identity guard
@@ -1275,6 +1297,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(IsBaseVisible));
         OnPropertyChanged(nameof(IsDashboardVisible));
         OnPropertyChanged(nameof(IsCanvasVisible));
+        // W6-2 PR A (IPA-1): graph → note is the same in-place kind change;
+        // without these the graph surface stayed Visible over the opened
+        // note (the journey's Enter step, deterministic on CI and locally).
+        OnPropertyChanged(nameof(IsGraph));
+        OnPropertyChanged(nameof(IsGraphVisible));
     }
 }
 
@@ -1457,7 +1484,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         bool? startInteractionBackgroundWork = null,
         AppPreferencesStore? preferencesStore = null,
         Func<string, bool>? externalOpener = null,
-        Action<RenderedAnnouncement>? announceRendered = null)
+        Action<RenderedAnnouncement>? announceRendered = null,
+        Func<int>? lifecycleGeneration = null)
     {
         _session = session;
         _persistence = new WorkspacePersistence(vaultRoot);
@@ -1465,6 +1493,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         _expandedDirectoryPaths = expandedDirectoryPaths;
         _announce = announce;
         _announceRendered = announceRendered ?? (_ => { });
+        // Rule A / AD-8 (IPB-1): the lifecycle's generation is a
+        // CONSTRUCTION input — the restore below can seat a persisted graph
+        // tab and start its first load before this constructor returns, and
+        // that load's token must carry the generation the lifecycle will
+        // compare it against. A host without a lifecycle reads a constant.
+        LifecycleGeneration = lifecycleGeneration ?? (static () => 0);
         // Unspecified = the host decides (#1129). Background
         // interaction work needs a UI thread to come back to: every
         // panel's publish posts to the SynchronizationContext captured
@@ -1746,6 +1780,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // same synchronous instance).
         EnsureActiveTabProperties(
             synchronousForTests: !_startInteractionBackgroundWork);
+        // W6-2 PR A (rule L, Term 1): the graph follows the effective tab
+        // through THIS funnel and nothing else.
+        GraphFollowActiveTab();
     }
 
     /// <summary>External links launch through the shell (the default
@@ -1943,9 +1980,16 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         return false;
     }
 
-    public void OpenGraph() => RunWorkspaceMutation(() => OpenItem(
-        new WorkspaceItemState(WorkspaceItemKind.Graph, "graph:singleton"),
-        WorkspaceOpenTarget.NewTab));
+    public void OpenGraph()
+    {
+        // W6-2 PR A (rule L, Term 5): the explicit Open sets its cause
+        // before the mutation; the follow method consumes it at the
+        // graph's transition, the boundary clears what was not consumed.
+        SetGraphCause(GraphActivationCause.Open);
+        RunWorkspaceMutation(() => OpenItem(
+            new WorkspaceItemState(WorkspaceItemKind.Graph, "graph:singleton"),
+            WorkspaceOpenTarget.NewTab));
+    }
 
     public bool SaveAll()
     {
@@ -2184,6 +2228,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // W6-1 PR A (contract A1/A17): canvas documents hold the shared
         // session and a native handle on exactly the same terms.
         ShutdownCanvasDocuments(basesDrains);
+        // W6-2 PR A (contract A-1): the graph document and its create
+        // worker into the same bounded pre-session drain.
+        ShutdownGraphDocument(basesDrains);
         // Retires the dock document/dashboard into the tracked set.
         ClearBasesDock();
         if (BaseQueryBuilderSheet is { } openBuilder)

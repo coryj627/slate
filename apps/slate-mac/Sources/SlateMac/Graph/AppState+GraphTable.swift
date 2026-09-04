@@ -132,7 +132,7 @@ extension AppState {
         graphTableSnapshotFilter = nil
         graphTableRows = []
         graphTableTotal = 0
-        graphTableSort = GraphTableSort(column: .linksIn, ascending: false)
+        graphTableSort = graphTableDefaultSort()
         graphTableRequestedSort = nil
         graphTableRequest = nil
         graphTableSeq += 1
@@ -180,7 +180,7 @@ extension AppState {
         // DEFAULT sort in the same token as its filter, kind and needle.
         let token = issueGraphTableToken(
             sort: graphTablePendingPreset != nil
-                ? GraphTableSort(column: .linksIn, ascending: false) : graphTableSort)
+                ? graphTableDefaultSort() : graphTableSort)
         graphTableLoading = true
 
         Task { [weak self] in

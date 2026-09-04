@@ -531,4 +531,194 @@ public sealed class AnnouncementSeamCensus
             .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
             .OrderBy(file => file, StringComparer.Ordinal);
     }
+
+    /// <summary>
+    /// W6-2 PR A (#746), contract A-10: the graph twin of the canvas arm
+    /// above, keyed on <c>Graph/</c>. The residue is the document's
+    /// <c>AnnouncerForTests</c>; the posters are the relay's members that
+    /// reach <c>Emit</c>; the named seams are the document's own — the
+    /// status the workspace asks for, the effective-gated announce, the
+    /// grid's relay seam and the surface's adoption line — and each must
+    /// be hit or the census exempts nothing.
+    /// </summary>
+    [Fact]
+    public void NoGraphCodeReachesTheAnnouncerExceptThroughTheBoundary()
+    {
+        CSharpSource announcer = CSharpSource.Load("Graph", "GraphAnnouncer.cs");
+        string[] posters =
+        [
+            .. announcer.Root.DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Where(method => method.DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+                    .Any(call => call.Expression
+                        is IdentifierNameSyntax { Identifier.ValueText: "Emit" }))
+                .Select(method => method.Identifier.ValueText)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal),
+        ];
+        Assert.NotEmpty(posters);
+        Assert.Contains("Announce", posters);
+        Assert.Contains("Relay", posters);
+
+        CSharpSource document = CSharpSource.Load("Graph", "GraphDocumentViewModel.cs");
+        const string BoundaryFile = "GraphDocumentViewModel.cs";
+        string[] residue =
+        [
+            .. document.Root.DescendantNodes()
+                .OfType<PropertyDeclarationSyntax>()
+                .Where(property => property.ExpressionBody?.Expression
+                        is IdentifierNameSyntax field
+                    && field.Identifier.ValueText
+                        .EndsWith("announcer", StringComparison.OrdinalIgnoreCase))
+                .Select(property => property.Identifier.ValueText),
+        ];
+        Assert.Equal(["AnnouncerForTests"], residue);
+
+        (string Member, string Why)[] seams =
+        [
+            ("AnnounceStatus", "rule L's status the workspace asks for (Term 6)"),
+            ("AnnounceIfEffective", "the effective-gated announce (Term 2: speech at EFFECTIVE)"),
+            ("GridRelaySeam", "the grid's canonical events ride the relay uncoalesced"),
+            ("RelayGridEvent", "the surface's GridSorted on adoption (contract A-5)"),
+        ];
+        var seamsFound = new HashSet<string>(StringComparer.Ordinal);
+        var offenders = new List<string>();
+        string root = Path.Combine(SourceText.ShellSourceRoot(), "Graph");
+        Assert.True(Directory.Exists(root), $"the graph source root is missing: {root}");
+        string[] files = [.. Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.Ordinal)];
+        Assert.NotEmpty(files);
+        foreach (string file in files)
+        {
+            CSharpSource source = CSharpSource.LoadPath(file);
+            // Every file exemption is by NORMALIZED path at the root of
+            // Graph/ — never by basename (IPA-7, IPB-5; IGA-32's nested-name
+            // bypass): the relay, and the document whose named seams are
+            // exempted below.
+            string name = Path.GetRelativePath(root, file).Replace('\\', '/');
+            if (name == "GraphAnnouncer.cs")
+            {
+                continue;
+            }
+            var reaches = new List<SyntaxNode>();
+            foreach (MemberAccessExpressionSyntax access in source.Root
+                .DescendantNodes()
+                .OfType<MemberAccessExpressionSyntax>())
+            {
+                bool acquires = residue.Contains(access.Name.Identifier.ValueText, StringComparer.Ordinal);
+                bool posts = posters.Contains(access.Name.Identifier.ValueText)
+                    && CSharpSource.Normalize(access.Expression)
+                        .EndsWith("announcer", StringComparison.OrdinalIgnoreCase);
+                if (acquires || posts)
+                {
+                    reaches.Add(access);
+                }
+            }
+            foreach (IdentifierNameSyntax bare in source.Root
+                .DescendantNodes()
+                .OfType<IdentifierNameSyntax>())
+            {
+                if (!residue.Contains(bare.Identifier.ValueText, StringComparer.Ordinal)
+                    || (bare.Parent is MemberAccessExpressionSyntax qualified && qualified.Name == bare))
+                {
+                    continue;
+                }
+                reaches.Add(bare);
+            }
+            foreach (SyntaxNode reach in reaches)
+            {
+                MemberDeclarationSyntax? owner = reach.Ancestors()
+                    .OfType<MemberDeclarationSyntax>()
+                    .FirstOrDefault(member =>
+                        member is MethodDeclarationSyntax or PropertyDeclarationSyntax);
+                string ownerName = owner switch
+                {
+                    MethodDeclarationSyntax method => method.Identifier.ValueText,
+                    PropertyDeclarationSyntax property => property.Identifier.ValueText,
+                    _ => "<top level>",
+                };
+                if (name == BoundaryFile && seams.Any(seam => seam.Member == ownerName))
+                {
+                    _ = seamsFound.Add(ownerName);
+                    continue;
+                }
+                if (name == BoundaryFile && ownerName == "AnnouncerForTests")
+                {
+                    // The residue's own declaration.
+                    continue;
+                }
+                offenders.Add($"{name}:{ownerName} — {CSharpSource.Normalize(reach)}");
+            }
+        }
+        Assert.True(
+            offenders.Count == 0,
+            "graph code reaches the announcer's post surface outside the document's named seams: "
+            + string.Join("; ", offenders));
+        string[] unusedSeams =
+            [.. seams.Where(seam => !seamsFound.Contains(seam.Member)).Select(seam => $"{seam.Member} ({seam.Why})")];
+        Assert.True(
+            unusedSeams.Length == 0,
+            "a named graph seam never reached the announcer, so this census is exempting nothing there: "
+            + string.Join("; ", unusedSeams));
+
+        // AD-8 (IPA-7): the ONE graph-family posting site outside Graph/ —
+        // the create funnel's workspace completion, in a ROOT partial —
+        // named here and asserted to be the only one in the shell.
+        string shellRoot = SourceText.ShellSourceRoot();
+        var outsideSites = new List<string>();
+        foreach (string file in Directory.EnumerateFiles(shellRoot, "*.cs", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(shellRoot, file).Replace('\\', '/');
+            if (relative.StartsWith("Graph/", StringComparison.Ordinal)
+                || relative.StartsWith("obj/", StringComparison.Ordinal)
+                || relative.Contains("/obj/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            CSharpSource source = CSharpSource.LoadPath(file);
+            foreach (ObjectCreationExpressionSyntax creation in source.Root
+                .DescendantNodes()
+                .OfType<ObjectCreationExpressionSyntax>())
+            {
+                if (!creation.Type.ToString().EndsWith("A11yEvent.Graph", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                MethodDeclarationSyntax? owner = creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
+                outsideSites.Add($"{relative}:{owner?.Identifier.ValueText}");
+            }
+            // IPB-5: the shapes the textual rule cannot see are forbidden
+            // outright across the shell — a `using` alias (which could name
+            // the graph family under another word) and a target-typed or
+            // pre-built argument handed to an announce delegate.
+            foreach (UsingDirectiveSyntax directive in source.Root.DescendantNodes().OfType<UsingDirectiveSyntax>())
+            {
+                // An alias OR a static import naming the family (IPC-3):
+                // either lets a bare `Graph` name the event.
+                if ((directive.Alias is not null || directive.StaticKeyword.RawKind != 0)
+                    && directive.NamespaceOrType.ToString().Contains("A11yEvent", StringComparison.Ordinal))
+                {
+                    outsideSites.Add($"{relative}:using directive {directive.NamespaceOrType}");
+                }
+            }
+            foreach ((IdentifierNameSyntax callee, ArgumentListSyntax arguments) in GraphAnnouncerCensus.DelegateCalls(source.Root))
+            {
+                // The callee normalised to its terminal identifier (IPC-3,
+                // IPD-5): bare, this-qualified, `.Invoke`, `?.Invoke`.
+                if (!callee.Identifier.ValueText.EndsWith("announce", StringComparison.OrdinalIgnoreCase)
+                    || arguments.Arguments.Count != 1)
+                {
+                    continue;
+                }
+                if (arguments.Arguments[0].Expression is ImplicitObjectCreationExpressionSyntax)
+                {
+                    MethodDeclarationSyntax? owner = callee.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
+                    outsideSites.Add($"{relative}:{owner?.Identifier.ValueText} (target-typed new)");
+                }
+            }
+        }
+        Assert.Equal(
+            ["WorkspaceViewModel.GraphCreate.cs:GraphNoteCreationCompleted"],
+            outsideSites.Distinct().OrderBy(site => site, StringComparer.Ordinal));
+    }
 }

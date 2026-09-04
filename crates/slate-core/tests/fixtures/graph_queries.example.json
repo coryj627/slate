@@ -49,6 +49,7 @@
     {
       "query": "all",
       "sort": "note asc",
+      "summary": "7 notes, 17 links. 1 orphans, 4 unresolved targets. Filtered.",
       "total": 12,
       "rows": [
         {

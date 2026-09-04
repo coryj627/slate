@@ -8200,6 +8200,183 @@ public sealed class ShellAccessibilityTests
     /// window size. The same route `GridConformanceTests` reads cells
     /// by.
     /// </summary>
+    /// <summary>
+    /// W6-2 PR A (#746), contract A-16 (§W-C): the graph table journey —
+    /// open the graph through the palette's `Open Graph` (the mac's label,
+    /// byte-identical), wait for
+    /// the grid, assert the mode switcher and core's nine headers, read a
+    /// realized row's Name (P1's copy) and ItemStatus (the kind), read the
+    /// summary region, sort by Ctrl+Alt+S and assert the indicator moved,
+    /// activate a row and assert the note opened, and run axe over the
+    /// table.
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void GraphSurfaces_TableSortSelectionAndActivation_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-graph-table-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Graph Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(Path.Combine(vaultRoot, "Alpha.md"), "# Alpha\n\nLinks to [[Beta]] and [[Gamma]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Beta.md"), "# Beta\n\nLinks to [[Alpha]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Gamma.md"), "# Gamma\n\nLinks to [[Alpha]] and [[Missing Note]].\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-graph-table-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "Graph table"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            // The chordless row, through the palette (contract A-12).
+            window.SetForeground();
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+            AutomationElement search = WaitForElement(window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
+            search.Patterns.Value.Pattern.SetValue("Open Graph");
+            AutomationElement results = WaitForElement(window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
+            AutomationElement? row = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            row = results
+                                .FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                                .FirstOrDefault(item => item.Name.StartsWith("Open Graph", StringComparison.Ordinal));
+                            return row is not null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the palette never listed Open Graph");
+            row!.Patterns.SelectionItem.Pattern.Select();
+            PressKey(VirtualKeyShort.ENTER);
+
+            AutomationElement grid = WaitForElement(window, "GraphTableGrid", TimeSpan.FromSeconds(20));
+            Assert.True(grid.Patterns.Grid.IsSupported, "the graph table must expose Grid");
+            Assert.True(grid.Patterns.Table.IsSupported, "the graph table must expose Table");
+            Assert.Equal("Graph, data grid", grid.Properties.Name.Value);
+
+            // Contract A-11: the switcher, Table live and Diagram disabled.
+            AutomationElement tableChoice = WaitForElement(window, "GraphMode.table", TimeSpan.FromSeconds(10));
+            AutomationElement diagramChoice = WaitForElement(window, "GraphMode.diagram", TimeSpan.FromSeconds(10));
+            Assert.True(tableChoice.Properties.IsEnabled.Value, "the Table item must be enabled");
+            Assert.False(diagramChoice.Properties.IsEnabled.Value, "the Diagram item must be disabled until PR D");
+
+            // Contract A-5: core's nine headers in core's order.
+            string[] expectedHeaders = ["Note", "Links in", "Links out", "Embeds in", "Embeds out", "Component", "Modified", "Folder", "Kind"];
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => grid.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.HeaderItem)).Length >= 9,
+                    TimeSpan.FromSeconds(10)),
+                "the graph table never materialized its nine column headers");
+            Assert.Equal(
+                expectedHeaders,
+                grid.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.HeaderItem))
+                    .Select(header => header.Properties.Name.Value)
+                    .Take(9)
+                    .ToArray());
+
+            // Contract A-7: the summary region carries core's summary verbatim.
+            AutomationElement summary = WaitForElement(window, "GraphTableGridSummary", TimeSpan.FromSeconds(10));
+            Assert.StartsWith("Summary: ", summary.Properties.Name.Value, StringComparison.Ordinal);
+            Assert.Contains("notes", summary.Properties.Name.Value, StringComparison.Ordinal);
+
+            // Contract A-6: a realized row's Name is P1's copy and its
+            // ItemStatus the kind. The default sort is links-in descending,
+            // so Alpha (two in-links) is the first row.
+            AutomationElement firstCell = WaitForCellStartingWith(grid, "Note: ");
+            AutomationElement firstRow = firstCell.Parent;
+            Assert.StartsWith("Alpha", firstRow.Properties.Name.Value, StringComparison.Ordinal);
+            Assert.Equal("Note", firstRow.Properties.ItemStatus.Value);
+
+            // Contract A-5: Ctrl+Alt+S on the focused Note column sorts by
+            // it, and the realized column is then ascending.
+            ReassertForegroundForAChord(window);
+            firstCell.Focus();
+            AssertEventuallyFocused(firstCell, "the graph table's first cell never took focus");
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_S);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        string[] notes = TypeColumn(grid);
+                        return notes.Length > 1 && notes.SequenceEqual(notes.OrderBy(v => v, StringComparer.Ordinal));
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Ctrl+Alt+S did not sort the Note column ascending; the column "
+                + $"reads [{string.Join(", ", TypeColumn(grid))}]");
+
+            AssertAxeClean(process, "graph-table");
+
+            // Contract A-9: Enter opens the row's note in the graph's pane.
+            AutomationElement alphaCell = WaitForCellStartingWith(grid, "Note: Alpha");
+            ReassertForegroundForAChord(window);
+            alphaCell.Focus();
+            AssertEventuallyFocused(alphaCell, "the Alpha cell never took focus");
+            PressKey(VirtualKeyShort.ENTER);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphTableGrid")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "Enter on Alpha did not replace the graph tab with the note");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.Properties.Name.Value.Contains("Alpha", StringComparison.Ordinal)
+                        || window.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.TabItem))
+                            .Any(tab => tab.Name.StartsWith("Alpha", StringComparison.Ordinal)),
+                    TimeSpan.FromSeconds(10)),
+                "the Alpha note never opened");
+        }
+        finally
+        {
+            if (process is { HasExited: false })
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(5000);
+            }
+            process?.Dispose();
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static string[] TypeColumn(AutomationElement grid)
     {
         FlaUI.Core.Patterns.IGridPattern pattern = grid.Patterns.Grid.Pattern;

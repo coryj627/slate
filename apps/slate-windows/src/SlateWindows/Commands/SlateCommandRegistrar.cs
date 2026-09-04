@@ -495,6 +495,9 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.CanvasShowVisual] =
                 host => host.Workspace?.CanvasShowVisualCommand,
 
+            // Graph (W6-2 #746, PR A, contract A-12): the one chordless row.
+            [ChordTable.Ids.GraphOpenTab] = host => host.Workspace?.OpenGraphCommand,
+
             // Canvas navigator, filter, Where-am-I and modes (W6-1 PR C,
             // contract C1). Every movement row stays enabled on a canvas
             // in ANY load state: the navigator's state mapping is what

@@ -49,7 +49,8 @@ public class GraphQuerySurfaceCensus
     public void EveryCoreGraphQueryIsBound()
     {
         var surface = CoreSurface();
-        Assert.True(surface.Count >= 23, $"the surface list holds {surface.Count} names");
+        // W6-2 PR A (A-5): `graph_table_default_sort` joined the surface.
+        Assert.True(surface.Count >= 24, $"the surface list holds {surface.Count} names");
         foreach (string name in surface)
         {
             string method = PascalCase(name);
