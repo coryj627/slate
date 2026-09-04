@@ -201,4 +201,95 @@ internal abstract class PanelWorkScheduler : BindableBase
             _uiContext.Post(_ => action(), null);
         }
     }
+
+    /// <summary>Whether a UI context was captured at construction —
+    /// the fact a subclass that refuses to run without one asks
+    /// (W6-2 PR A, contract A-2: the graph document has no inline
+    /// mode).</summary>
+    protected bool HasUiContext => _uiContext is not null;
+
+    /// <summary>
+    /// W6-2 PR A (contracts A-2, AD-4; the round-4 ledger's IGA-42, 53,
+    /// 60): compute on the pool in EVERY mode — never inline, the
+    /// <see cref="RunGatedAsync"/> rule made unconditional — and apply on
+    /// the owner context captured at construction, with the tracked task
+    /// completing AFTER the apply, so the drains wait for the apply too.
+    /// Without a captured context the apply runs where the compute
+    /// finished; a subclass that cannot accept that refuses construction
+    /// (<see cref="HasUiContext"/>). The compute must not throw (the
+    /// tracked-tasks-never-fault rule); a failure is a value it returns.
+    /// </summary>
+    protected void StartWorkAlwaysAsync<T>(Func<T> compute, Action<T> apply)
+    {
+        ArgumentNullException.ThrowIfNull(compute);
+        ArgumentNullException.ThrowIfNull(apply);
+        if (_isShutDown)
+        {
+            return;
+        }
+        TrackWork(RunAlwaysAsync(compute, apply));
+    }
+
+    private async Task RunAlwaysAsync<T>(Func<T> compute, Action<T> apply)
+    {
+        if (_prerequisite is { } gate)
+        {
+            await gate.ConfigureAwait(false);
+        }
+        if (_isShutDown)
+        {
+            return;
+        }
+        T result = await Task.Run(compute).ConfigureAwait(false);
+        if (_uiContext is null)
+        {
+            if (!_isShutDown)
+            {
+                apply(result);
+            }
+            return;
+        }
+        var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _uiContext.Post(
+            _ =>
+            {
+                try
+                {
+                    if (!_isShutDown)
+                    {
+                        apply(result);
+                    }
+                }
+                finally
+                {
+                    applied.SetResult();
+                }
+            },
+            null);
+        await applied.Task.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The FIXED-POINT drain (W6-2 PR A, IGA-60): <see cref="WhenWorkDrained"/>
+    /// snapshots the tracked set once, so a body an apply enqueued after the
+    /// snapshot — the silent replacement pair A-2 requires — could still be
+    /// running when it returned. This waits, re-snapshots, and returns only
+    /// when nothing tracked remains.
+    /// </summary>
+    internal async Task WhenAllWorkDrained()
+    {
+        while (true)
+        {
+            Task[] snapshot;
+            lock (_workLock)
+            {
+                snapshot = [.. _pendingWork];
+            }
+            if (snapshot.Length == 0)
+            {
+                return;
+            }
+            await Task.WhenAll(snapshot).ConfigureAwait(false);
+        }
+    }
 }

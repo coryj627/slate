@@ -54,6 +54,11 @@ internal sealed class AccessibleDataGrid : UserControl
     private AccessibleGridColumn? _rowHeaderColumn;
     private object? _lastAnnouncedRow;
     private (int ColumnIndex, bool Ascending)? _activeSort;
+    // W6-2 PR A (contracts A-6, A-9; AD-2): the row-name, item-status and
+    // modified-activation seams — generic, the graph their first user.
+    private Func<object, string?>? _rowAutomationName;
+    private Func<object, string?>? _rowItemStatus;
+    private Action<object>? _rowActivatedModified;
     private string _typeAheadBuffer = string.Empty;
     private DateTime _typeAheadLast = DateTime.MinValue;
     private AccessibilityNotificationDispatcher? _dispatcher;
@@ -126,6 +131,7 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.MouseDoubleClick += OnActivationDoubleClick;
         _grid.ContextMenuOpening += OnContextMenuOpening;
         _grid.LoadingRow += OnLoadingRow;
+        _grid.UnloadingRow += OnUnloadingRow;
         _grid.ItemContainerGenerator.StatusChanged += (_, _) =>
         {
             // The subscriber check comes BEFORE the post, not inside the
@@ -205,6 +211,33 @@ internal sealed class AccessibleDataGrid : UserControl
         if (_rowHeaderColumn is { } primary)
         {
             e.Row.Header = primary.Cell(e.Row.Item);
+        }
+        // W6-2 PR A (contract A-6): the UIA row Name and ItemStatus are
+        // the consuming surface's delegates, applied per REALIZED row —
+        // Standard virtualization creates and discards containers, never
+        // reuses them, so every container carries its own row's values.
+        if (_rowAutomationName is { } name)
+        {
+            AutomationProperties.SetName(e.Row, name(e.Row.Item) ?? string.Empty);
+        }
+        if (_rowItemStatus is { } status)
+        {
+            AutomationProperties.SetItemStatus(e.Row, status(e.Row.Item) ?? string.Empty);
+        }
+    }
+
+    /// <summary>The unloading half of the row seams: a container that
+    /// leaves the viewport drops the name and status it carried, so a
+    /// stale value cannot outlive its row.</summary>
+    private void OnUnloadingRow(object? sender, DataGridRowEventArgs e)
+    {
+        if (_rowAutomationName is not null)
+        {
+            e.Row.ClearValue(AutomationProperties.NameProperty);
+        }
+        if (_rowItemStatus is not null)
+        {
+            e.Row.ClearValue(AutomationProperties.ItemStatusProperty);
         }
     }
 
@@ -434,10 +467,16 @@ internal sealed class AccessibleDataGrid : UserControl
         Func<object, string?>? rowAudioDescription = null,
         IReadOnlyList<AccessibleGridRowAction>? rowActions = null,
         Func<ExportFormat, string>? exportProducer = null,
-        Action<object>? rowActivated = null)
+        Action<object>? rowActivated = null,
+        Func<object, string?>? rowAutomationName = null,
+        Func<object, string?>? rowItemStatus = null,
+        Action<object>? rowActivatedModified = null)
     {
         ArgumentNullException.ThrowIfNull(columns);
         ArgumentNullException.ThrowIfNull(rows);
+        _rowAutomationName = rowAutomationName;
+        _rowItemStatus = rowItemStatus;
+        _rowActivatedModified = rowActivatedModified;
         // The user's sort is a user decision, and a re-publish is not
         // the user changing their mind. Dropping it here meant that
         // typing one character into a consuming surface's filter box
@@ -903,15 +942,34 @@ internal sealed class AccessibleDataGrid : UserControl
                 }
             }
         }
-        if (e.Key != Key.Enter || _rowActivated is null)
+        if (e.Key != Key.Enter)
         {
             return;
         }
+        // W6-2 PR A (contract A-9): Ctrl+Enter is the MODIFIED activation
+        // (the mac's ⌘Return) when the surface bound one; a surface that
+        // bound none keeps the plain arm for both, as before.
+        e.Handled = ActivateCurrentRow(
+            modified: e.KeyboardDevice.Modifiers.HasFlag(ModifierKeys.Control));
+    }
+
+    /// <summary>The one activation seam both input arms reach (Enter /
+    /// double-click, with or without Ctrl): the plain handler, or the
+    /// modified one when the surface bound it and the gesture carried
+    /// the modifier. Returns whether a row was activated.</summary>
+    internal bool ActivateCurrentRow(bool modified)
+    {
+        Action<object>? handler = modified ? _rowActivatedModified ?? _rowActivated : _rowActivated;
+        if (handler is null)
+        {
+            return false;
+        }
         if (_grid.CurrentCell.Item is { } item && _items.Contains(item))
         {
-            _rowActivated(item);
-            e.Handled = true;
+            handler(item);
+            return true;
         }
+        return false;
     }
 
     // --- W4-6 in-grid editing (contract C7/C8): the substrate owns
@@ -1182,11 +1240,8 @@ internal sealed class AccessibleDataGrid : UserControl
         {
             return;
         }
-        if (_grid.CurrentCell.Item is { } item && _items.Contains(item))
-        {
-            _rowActivated(item);
-            e.Handled = true;
-        }
+        e.Handled = ActivateCurrentRow(
+            modified: Keyboard.Modifiers.HasFlag(ModifierKeys.Control));
     }
 
     private void OnTypeAhead(object sender, TextCompositionEventArgs e)

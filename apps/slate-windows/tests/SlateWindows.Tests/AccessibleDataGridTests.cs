@@ -953,6 +953,108 @@ public sealed class AccessibleDataGridTests
         });
     }
 
+    /// <summary>W6-2 PR A (contract A-6, AD-2): the row-name and
+    /// item-status seams are applied per REALIZED row and cleared when
+    /// the container unloads — Standard virtualization creates and
+    /// discards containers, so a newly realized row carries its own
+    /// values and an unloaded one carries none.</summary>
+    [Fact]
+    public void RowNameAndItemStatusSeamsFollowRealizedRows()
+    {
+        RunSta(() =>
+        {
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            grid.Bind(
+                Columns(), People, "3 rows.", "People",
+                rowAutomationName: row => $"row {((Person)row).Name}",
+                rowItemStatus: row => ((Person)row).Role);
+            var window = new System.Windows.Window
+            {
+                Content = grid,
+                Width = 400,
+                Height = 300,
+                ShowInTaskbar = false,
+                WindowStyle = System.Windows.WindowStyle.None,
+            };
+            window.Show();
+            try
+            {
+                grid.Grid.UpdateLayout();
+                var realized = (DataGridRow?)grid.Grid.ItemContainerGenerator.ContainerFromItem(People[1]);
+                Assert.NotNull(realized);
+                Assert.Equal("row Alice", AutomationProperties.GetName(realized));
+                Assert.Equal("Dev", AutomationProperties.GetItemStatus(realized));
+
+                // A re-bind with different rows discards the old
+                // containers: the one we held unloads and drops its values;
+                // the new rows' containers carry theirs.
+                grid.Bind(
+                    Columns(), new object[] { new Person("Dana", "QA") }, "1 row.", "People",
+                    rowAutomationName: row => $"row {((Person)row).Name}",
+                    rowItemStatus: row => ((Person)row).Role);
+                grid.Grid.UpdateLayout();
+                Assert.Equal(string.Empty, AutomationProperties.GetName(realized));
+                Assert.Equal(string.Empty, AutomationProperties.GetItemStatus(realized));
+                var fresh = (DataGridRow?)grid.Grid.ItemContainerGenerator.ContainerFromIndex(0);
+                Assert.NotNull(fresh);
+                Assert.Equal("row Dana", AutomationProperties.GetName(fresh));
+                Assert.Equal("QA", AutomationProperties.GetItemStatus(fresh));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>W6-2 PR A (contract A-9): the modified activation seam.
+    /// Ctrl+Enter and Ctrl+double-click reach the modified handler when
+    /// the surface bound one; a surface that bound none keeps the plain
+    /// handler for both gestures, as before.</summary>
+    [Fact]
+    public void ModifiedActivationReachesItsHandlerAndFallsBackToPlain()
+    {
+        RunSta(() =>
+        {
+            object? plain = null;
+            object? modified = null;
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            grid.Bind(
+                Columns(), People, "3 rows.", "People",
+                rowActivated: row => plain = row,
+                rowActivatedModified: row => modified = row);
+            grid.Grid.CurrentCell = new DataGridCellInfo(People[2], grid.Grid.Columns[0]);
+
+            Assert.True(grid.ActivateCurrentRow(modified: true));
+            Assert.Same(People[2], modified);
+            Assert.Null(plain);
+
+            Assert.True(grid.ActivateCurrentRow(modified: false));
+            Assert.Same(People[2], plain);
+
+            // Without a modified handler the modifier is ignored.
+            plain = null;
+            modified = null;
+            grid.Bind(Columns(), People, "3 rows.", "People", rowActivated: row => plain = row);
+            grid.Grid.CurrentCell = new DataGridCellInfo(People[0], grid.Grid.Columns[0]);
+            Assert.True(grid.ActivateCurrentRow(modified: true));
+            Assert.Same(People[0], plain);
+            Assert.Null(modified);
+
+            // The keyboard arm: a plain Enter still reaches the plain
+            // handler through the routed event.
+            plain = null;
+            grid.Grid.RaiseEvent(new KeyEventArgs(
+                Keyboard.PrimaryDevice,
+                System.Windows.PresentationSource.FromVisual(grid.Grid)
+                    ?? new System.Windows.Interop.HwndSource(0, 0, 0, 0, 0, "t", IntPtr.Zero),
+                0,
+                Key.Enter)
+            { RoutedEvent = System.Windows.UIElement.PreviewKeyDownEvent });
+            Assert.Same(People[0], plain);
+        });
+    }
+
     private static void RunSta(Action body)
     {
         Exception? failure = null;
