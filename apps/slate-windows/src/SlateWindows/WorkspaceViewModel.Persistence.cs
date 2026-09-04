@@ -166,6 +166,9 @@ internal sealed partial class WorkspaceViewModel
                 // (current-tab navigation) — re-derive the panels'
                 // note once per outermost mutation.
                 SyncPanels();
+                // W6-2 PR A (rule L, Term 5): the outermost boundary
+                // clears a graph cause the transition did not consume.
+                ClearGraphCauseAtMutationBoundary();
             }
         }
     }

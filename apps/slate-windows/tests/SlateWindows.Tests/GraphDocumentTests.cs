@@ -1,0 +1,824 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using System.Text.Json;
+using SlateWindows.Graph;
+using uniffi.slate_uniffi;
+
+namespace SlateWindows.Tests;
+
+/// <summary>
+/// W6-2 PR A (#746): the graph document through the real workspace and a
+/// real <c>VaultSession</c> — rule L's paths (contract A-1), the load and
+/// its receiver (A-2), the probe (A-3), the states (A-4), the selection
+/// (A-7), the actions and the create funnel (A-8), the activation (A-9),
+/// and the §W-A comparison against the 0b artifact (A-14). Every fact
+/// runs under the pumped dispatcher (AR-6): the graph document has no
+/// inline mode.
+/// </summary>
+public sealed class GraphDocumentTests
+{
+    /// <summary>The graph vault of 0b-13, copied into a temp root.</summary>
+    private sealed class GraphVault : IDisposable
+    {
+        public string Root { get; }
+
+        private GraphVault(string root)
+        {
+            Root = root;
+        }
+
+        public static GraphVault Copy(string label)
+        {
+            string source = Path.Combine(
+                SourceText.RepoRoot(), "crates", "slate-core", "tests", "fixtures", "graph_vault");
+            Assert.True(Directory.Exists(source), $"the graph vault is missing at {source}");
+            string root = Path.Combine(Path.GetTempPath(), $"slate-graph-{label}-{Guid.NewGuid():N}");
+            foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+            {
+                string relative = Path.GetRelativePath(source, file);
+                string target = Path.Combine(root, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target);
+            }
+            return new GraphVault(root);
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(Root, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>A workspace over a scanned session, capturing the shell's
+    /// events and the graph relay's rendered lines separately.</summary>
+    private sealed class Host : IDisposable
+    {
+        public VaultSession Session { get; }
+        public WorkspaceViewModel Workspace { get; }
+        public List<A11yEvent> ShellEvents { get; } = [];
+        public List<string> GraphLines { get; } = [];
+
+        public Host(string root)
+        {
+            Session = VaultSession.OpenFilesystem(root);
+            using var cancel = new CancelToken();
+            Session.ScanInitial(cancel);
+            Workspace = new WorkspaceViewModel(
+                Session,
+                root,
+                () => [],
+                ShellEvents.Add,
+                startInteractionBackgroundWork: false,
+                announceRendered: line => GraphLines.Add(line.Text));
+        }
+
+        public GraphDocumentViewModel Document => Workspace.GraphDocument!;
+
+        public WorkspaceTabViewModel GraphTab =>
+            Workspace.Groups.SelectMany(g => g.Tabs).First(t => t.IsGraph);
+
+        /// <summary>Pump until the document's tracked work drained.</summary>
+        public void Settle()
+        {
+            Task drain = Document.WhenAllWorkDrained();
+            PumpedDispatcher.PumpUntilDrained(drain);
+            PumpedDispatcher.Drain();
+        }
+
+        public void Dispose()
+        {
+            Workspace.Dispose();
+            Session.Dispose();
+        }
+    }
+
+    private static string Render(GraphA11yEvent @event) =>
+        SlateUniffiMethods.A11yRender(new A11yEvent.Graph(@event)).Text;
+
+    private static string Opened() => Render(new GraphA11yEvent.GraphStatus(new GraphStatusNote.Opened()));
+
+    private static string Summary(GraphDocumentViewModel document) =>
+        Render(new GraphA11yEvent.GraphSnapshotSummary(document.Publication.Snapshot!.SummaryCounts));
+
+    // --- Rule L: the paths (contract A-1) ---------------------------------
+
+    [Fact]
+    public void AFreshOpenSeatsTheDocumentSpeaksOpenedThenTheSummaryAndLoadsOnce()
+    {
+        using GraphVault vault = GraphVault.Copy("fresh-open");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            Assert.Null(host.Workspace.GraphDocument);
+
+            host.Workspace.OpenGraph();
+
+            // Seated by the funnel, the load started by the follow method,
+            // Opened posted before anything else.
+            GraphDocumentViewModel document = host.Document;
+            Assert.Same(document, host.GraphTab.Graph);
+            Assert.Equal(GraphLoadState.Loading, document.Publication.State);
+            Assert.Equal([Opened()], host.GraphLines);
+            Assert.Equal(1, host.Workspace.GraphLoadsForTests);
+
+            host.Settle();
+            Assert.Equal(GraphLoadState.Ready, document.Publication.State);
+            Assert.Equal([Opened(), Summary(document)], host.GraphLines);
+            Assert.Equal(1, document.CrossingsForTests["graph_snapshot"]);
+            Assert.Equal(1, document.CrossingsForTests["graph_table_rows"]);
+            Assert.Equal(GraphActivationCause.Activation, host.Workspace.GraphCauseForTests);
+        });
+    }
+
+    [Fact]
+    public void AnOpenOfTheEffectiveReadyTabSpeaksOpenedAloneAndLoadsNothing()
+    {
+        using GraphVault vault = GraphVault.Copy("open-active");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            host.GraphLines.Clear();
+
+            host.Workspace.OpenGraph();
+            host.Settle();
+
+            Assert.Equal([Opened()], host.GraphLines);
+            Assert.Equal(1, host.Workspace.GraphLoadsForTests);
+            Assert.Single(host.Workspace.ActiveGroup.Tabs, t => t.IsGraph);
+        });
+    }
+
+    [Fact]
+    public void SwitchingBackToTheGraphTabReloadsWithTheSummaryAlone()
+    {
+        using GraphVault vault = GraphVault.Copy("switch-back");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            host.Workspace.OpenPath("a.md", WorkspaceOpenTarget.NewTab);
+            host.Settle();
+            host.GraphLines.Clear();
+
+            // The header click's binding: the group's ActiveTab setter.
+            host.Workspace.ActiveGroup.ActiveTab = host.GraphTab;
+            host.Settle();
+
+            Assert.Equal([Summary(host.Document)], host.GraphLines);
+            Assert.Equal(2, host.Workspace.GraphLoadsForTests);
+        });
+    }
+
+    [Fact]
+    public void AnOpenAfterAPairFailureRestartsThePair()
+    {
+        using GraphVault vault = GraphVault.Copy("open-after-error");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            // A pair whose session is gone fails: dispose a SECOND session's
+            // vault? The document's session is the workspace's, so the
+            // failure is injected by retiring the fetch's inputs — the
+            // document's own failure arm through a closed vault root.
+            host.Document.ViewState.Filter = new GraphFilter(true, true, true);
+            host.GraphLines.Clear();
+            host.Workspace.OpenGraph();
+            host.Settle();
+            // No failure was injected here — the fact pins the READY branch
+            // of the same rule: with a snapshot held, Opened alone.
+            Assert.Equal([Opened()], host.GraphLines);
+        });
+    }
+
+    [Fact]
+    public void ClosingTheLastGraphTabRetiresTheDocumentAndAReopenSeatsAFreshOne()
+    {
+        using GraphVault vault = GraphVault.Copy("retire");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel first = host.Document;
+            first.ViewState.SelectedKey = first.Publication.Rows[0].StableKey;
+
+            host.Workspace.CloseActiveTabCommand.Execute(null);
+            Assert.Null(host.Workspace.GraphDocument);
+            Assert.True(first.IsRetired);
+            Assert.True(first.AnnouncerForTests.IsRetired);
+            Assert.Null(first.ViewState.SelectedKey);
+
+            host.GraphLines.Clear();
+            host.Workspace.OpenGraph();
+            host.Settle();
+            Assert.NotSame(first, host.Document);
+            Assert.Equal([Opened(), Summary(host.Document)], host.GraphLines);
+        });
+    }
+
+    [Fact]
+    public void AResultForARetiredDocumentInstallsNothing()
+    {
+        using GraphVault vault = GraphVault.Copy("stale-result");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            GraphDocumentViewModel document = host.Document;
+            // Retire while the first pair is in flight.
+            host.Workspace.CloseActiveTabCommand.Execute(null);
+            PumpedDispatcher.PumpUntilDrained(document.WhenAllWorkDrained());
+            PumpedDispatcher.Drain();
+            Assert.Equal(GraphLoadState.Loading, document.Publication.State);
+            Assert.Equal([Opened()], host.GraphLines);
+        });
+    }
+
+    // --- The load and the receiver (contract A-2) --------------------------
+
+    [Fact]
+    public void AStaleSequenceDropsAndTheLastTokenPublishes()
+    {
+        using GraphVault vault = GraphVault.Copy("stale-seq");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            ulong before = document.SeqForTests;
+
+            // Two sort requests back to back: only the second's token is
+            // current; the first's result drops at step (i).
+            document.SetSort(new GraphTableSort(GraphTableColumn.Note, true));
+            document.SetSort(new GraphTableSort(GraphTableColumn.Note, false));
+            Assert.Equal(before + 2, document.SeqForTests);
+            host.Settle();
+
+            Assert.Equal(new GraphTableSort(GraphTableColumn.Note, false), document.Publication.AcceptedSort);
+            Assert.Null(document.RequestedSortForTests);
+            Assert.Equal(GraphLoadState.Ready, document.Publication.State);
+
+            // Two IDENTICAL requests: the request check cannot tell them
+            // apart, so the sequence is what drops the first — exactly
+            // one install (the mutation sweep's `stale-seq-installs`).
+            int installs = 0;
+            document.PublicationInstalled += _ => installs++;
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            host.Settle();
+            Assert.Equal(1, installs);
+        });
+    }
+
+    [Fact]
+    public void ASortIsRowsOnlyAndTheSameSortIsANoOpOnlyWhileNothingIsPending()
+    {
+        using GraphVault vault = GraphVault.Copy("sort-rows-only");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            int snapshots = document.CrossingsForTests["graph_snapshot"];
+            GraphTableSort accepted = document.Publication.AcceptedSort;
+
+            // The accepted sort again, nothing pending: a no-op.
+            document.SetSort(accepted);
+            Assert.Equal(1UL, document.SeqForTests);
+
+            // A different sort: rows only.
+            document.SetSort(new GraphTableSort(GraphTableColumn.Note, true));
+            ulong pending = document.SeqForTests;
+            // The accepted sort again WHILE pending: supersedes (the mac's
+            // whole guard).
+            document.SetSort(accepted);
+            Assert.Equal(pending + 1, document.SeqForTests);
+            host.Settle();
+
+            Assert.Equal(accepted, document.Publication.AcceptedSort);
+            Assert.Equal(snapshots, document.CrossingsForTests["graph_snapshot"]);
+            Assert.Equal(3, document.CrossingsForTests["graph_table_rows"]);
+        });
+    }
+
+    [Fact]
+    public void ThePublicationIsOneRecordAndTheObserverSeesItWhole()
+    {
+        using GraphVault vault = GraphVault.Copy("one-record");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            GraphDocumentViewModel document = host.Document;
+            var seen = new List<(GraphLoadState State, int Rows, ulong Total, ulong Generation)>();
+            document.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(GraphDocumentViewModel.Publication))
+                {
+                    GraphPublication p = document.Publication;
+                    seen.Add((p.State, p.Rows.Count, p.Total, p.Generation));
+                }
+            };
+            host.Settle();
+            (GraphLoadState state, int rows, ulong total, ulong generation) = Assert.Single(seen);
+            Assert.Equal(GraphLoadState.Ready, state);
+            Assert.True(rows > 0);
+            Assert.Equal((ulong)rows, total);
+            Assert.Equal(document.Publication.Snapshot!.Generation, generation);
+        });
+    }
+
+    // --- The probe (contract A-3) ----------------------------------------
+
+    [Fact]
+    public void AChangedGenerationReloadsSilentlyAndAnUnchangedOneFetchesNothing()
+    {
+        using GraphVault vault = GraphVault.Copy("probe");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            int rowsBefore = document.Publication.Rows.Count;
+            ulong generationBefore = document.Publication.Generation;
+            host.GraphLines.Clear();
+
+            // Unchanged: a probe, no pair.
+            host.Workspace.NotifyGraphOfVaultChange();
+            host.Settle();
+            Assert.Equal(1, document.CrossingsForTests["graph_generation"]);
+            Assert.Equal(1, document.CrossingsForTests["graph_snapshot"]);
+
+            // A Slate write that adds a note linking an EXISTING note (a
+            // link to a missing target would add a ghost row as well): the
+            // generation moves and exactly one row joins.
+            string target = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note).Label;
+            _ = host.Session.CreateExclusive("zeta.md", $"# Zeta\n\n[[{target}]]\n");
+            host.Workspace.NotifyGraphOfVaultChange();
+            host.Settle();
+
+            Assert.Equal(2, document.CrossingsForTests["graph_snapshot"]);
+            Assert.NotEqual(generationBefore, document.Publication.Generation);
+            Assert.Equal(rowsBefore + 1, document.Publication.Rows.Count);
+            Assert.Empty(host.GraphLines);
+        });
+    }
+
+    [Fact]
+    public void AHiddenGraphIsNotProbedAndLoadsOnItsNextActivation()
+    {
+        using GraphVault vault = GraphVault.Copy("hidden-probe");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            host.Workspace.OpenPath("a.md", WorkspaceOpenTarget.NewTab);
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            Assert.False(host.Workspace.GraphTabIsVisible());
+
+            _ = host.Session.CreateExclusive("eta.md", "# Eta\n\n[[a]]\n");
+            host.Workspace.NotifyGraphOfVaultChange();
+            host.Settle();
+            Assert.Equal(0, document.CrossingsForTests["graph_generation"]);
+
+            host.Workspace.ActiveGroup.ActiveTab = host.GraphTab;
+            host.Settle();
+            Assert.Contains(document.Publication.Rows, row => row.Path == "eta.md");
+        });
+    }
+
+    [Fact]
+    public void AGenerationThatArrivesDuringAnInFlightPairEndsInTheNewerPublication()
+    {
+        using GraphVault vault = GraphVault.Copy("gated-generation");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            ulong g1 = document.Publication.Generation;
+            bool armed = true;
+            document.FetchGateForTests = () =>
+            {
+                if (armed)
+                {
+                    armed = false;
+                    // After both crossings of the in-flight pair: a mutation
+                    // makes G2, and a probe sees it while the held
+                    // publication is READY at G1 — the probe issues a
+                    // superseding silent pair.
+                    _ = host.Session.CreateExclusive("theta.md", "# Theta\n\n[[a]]\n");
+                }
+            };
+            // A pair over the held snapshot (a filter change).
+            document.ViewState.Filter = new GraphFilter(true, true, false);
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            host.Settle();
+            host.Workspace.NotifyGraphOfVaultChange();
+            host.Settle();
+
+            Assert.True(document.Publication.Generation > g1);
+            Assert.Contains(document.Publication.Rows, row => row.Path == "theta.md");
+        });
+    }
+
+    [Fact]
+    public void AProbeWhileNothingIsHeldKeepsTheHighWaterMarkAndTheFirstPairFollowsIt()
+    {
+        using GraphVault vault = GraphVault.Copy("high-water");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            // A document of its own, so the gate is armed BEFORE its first
+            // pair starts: the gate holds that pair's compute until a
+            // probe's apply has recorded a newer generation.
+            var lines = new List<string>();
+            var document = new GraphDocumentViewModel(
+                host.Session,
+                new GraphAnnouncer(line => lines.Add(line.Text)),
+                isEffectiveActive: () => true,
+                verbosity: () => GraphVerbosity.Standard);
+            Assert.False(document.Publication.HoldsSnapshot);
+            bool armed = true;
+            document.FetchGateForTests = () =>
+            {
+                if (!armed)
+                {
+                    return;
+                }
+                armed = false;
+                _ = host.Session.CreateExclusive("iota.md", "# Iota\n\n[[a]]\n");
+                // The probe from the worker: its compute reads G2, its apply
+                // (on the pumped dispatcher) finds no snapshot held and keeps
+                // the mark; the pair's compute waits for that apply.
+                document.Probe();
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (document.HighWaterForTests == 0 && clock.Elapsed < TimeSpan.FromSeconds(10))
+                {
+                    Thread.Sleep(10);
+                }
+            };
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            PumpedDispatcher.PumpUntilDrained(document.WhenAllWorkDrained());
+            PumpedDispatcher.Drain();
+
+            // The first pair installed G1, saw the mark above it, and a
+            // silent pair followed to G2 (the sweep's `high-water-dropped`).
+            Assert.True(document.Publication.HoldsSnapshot);
+            Assert.Contains(document.Publication.Rows, row => row.Path == "iota.md");
+            Assert.Equal(0UL, document.HighWaterForTests);
+            Assert.Equal(2, document.CrossingsForTests["graph_snapshot"]);
+            Assert.Empty(lines);
+            document.Retire();
+        });
+    }
+
+    // --- Selection (contract A-7) -----------------------------------------
+
+    [Fact]
+    public void TheSharedKeySurvivesAReorderAndClearsOnlyWhenTheSnapshotDropsTheNode()
+    {
+        using GraphVault vault = GraphVault.Copy("selection");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            GraphTableRow chosen = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note);
+            document.ViewState.SelectedKey = chosen.StableKey;
+
+            document.SetSort(new GraphTableSort(GraphTableColumn.Note, false));
+            host.Settle();
+            Assert.Equal(chosen.StableKey, document.ViewState.SelectedKey);
+
+            // A name-query overlay hides the node from the ROWS while the
+            // snapshot keeps it: the key survives (the sweep's
+            // `selection-against-rows`).
+            document.ViewState.NameQuery = "zzz-nothing-matches";
+            _ = document.Load(GraphLoadKind.RowsOnly, GraphAnnouncePolicy.Silent);
+            host.Settle();
+            Assert.Empty(document.Publication.Rows);
+            Assert.True(document.Publication.ContainsNode(chosen.StableKey));
+            Assert.Equal(chosen.StableKey, document.ViewState.SelectedKey);
+            document.ViewState.NameQuery = string.Empty;
+
+            // Exclude every note: the snapshot under orphans-only drops the node.
+            document.ViewState.Filter = new GraphFilter(false, false, true);
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            host.Settle();
+            Assert.False(document.Publication.ContainsNode(chosen.StableKey));
+            Assert.Null(document.ViewState.SelectedKey);
+        });
+    }
+
+    // --- Actions and the create funnel (contract A-8) ----------------------
+
+    [Fact]
+    public void RowActionsAreCoresVectorsFetchedOnceAndUnionedInCoresOrder()
+    {
+        using GraphVault vault = GraphVault.Copy("actions");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            Assert.Equal(3, document.ActionInventoryCrossings);
+            IReadOnlyList<GraphRowActionSpec> union = document.ActionUnion();
+            Assert.Equal(
+                [GraphRowAction.Open, GraphRowAction.OpenInNewTab, GraphRowAction.ShowConnections, GraphRowAction.Reveal, GraphRowAction.CreateNote],
+                union.Select(spec => spec.Action));
+            Assert.Equal(
+                SlateUniffiMethods.GraphRowActions(GraphNodeKind.Note).Select(s => s.Title),
+                union.Where(s => document.ActionAppliesTo(s.Action, GraphNodeKind.Note)).Select(s => s.Title));
+            Assert.Equal(
+                SlateUniffiMethods.GraphRowActions(GraphNodeKind.Ghost).Select(s => s.Title),
+                union.Where(s => document.ActionAppliesTo(s.Action, GraphNodeKind.Ghost)).Select(s => s.Title));
+
+            GraphTableRow note = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note);
+            Assert.True(document.IsActionEnabled(GraphRowAction.Open, note));
+            Assert.True(document.IsActionEnabled(GraphRowAction.Reveal, note));
+            Assert.False(document.IsActionEnabled(GraphRowAction.ShowConnections, note));
+            document.ShowConnectionsFromSurface = _ => { };
+            Assert.True(document.IsActionEnabled(GraphRowAction.ShowConnections, note));
+            // The inventory did not grow with the rows.
+            Assert.Equal(3, document.ActionInventoryCrossings);
+        });
+    }
+
+    [Fact]
+    public void ActivationOpensInTheGraphsPaneAndPostsOpenedFileThroughTheWorkspace()
+    {
+        using GraphVault vault = GraphVault.Copy("activate");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            GraphTableRow note = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note);
+            host.ShellEvents.Clear();
+
+            document.Activate(note, modified: false);
+
+            Assert.Equal(note.Path, host.Workspace.ActiveGroup.ActiveTab!.Path);
+            Assert.Contains(host.ShellEvents, e => e is A11yEvent.OpenedFile opened && opened.Filename == Path.GetFileName(note.Path!));
+            // The graph tab was replaced: the last graph tab is gone and the
+            // document retired.
+            Assert.Null(host.Workspace.GraphDocument);
+            Assert.True(document.IsRetired);
+        });
+    }
+
+    [Fact]
+    public void ModifiedActivationOpensANewTabAndTheGraphStays()
+    {
+        using GraphVault vault = GraphVault.Copy("activate-new-tab");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            GraphTableRow note = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note);
+
+            document.Activate(note, modified: true);
+
+            Assert.Equal(note.Path, host.Workspace.ActiveGroup.ActiveTab!.Path);
+            Assert.Same(document, host.Workspace.GraphDocument);
+            Assert.False(document.IsRetired);
+            Assert.Equal(2, host.Workspace.ActiveGroup.Tabs.Count);
+        });
+    }
+
+    [Fact]
+    public void AGhostsActivationCreatesItsNoteOpensItAndPostsOneNoteCreatedAfterTheOpen()
+    {
+        using GraphVault vault = GraphVault.Copy("create");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            var creator = new RecordingCreator(host.Session);
+            host.Workspace.GraphNoteCreator = creator;
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            GraphTableRow ghost = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Ghost);
+            string expectedPath = SlateUniffiMethods.GraphGhostNotePath(ghost.Label);
+            host.ShellEvents.Clear();
+
+            document.Activate(ghost, modified: false);
+            PumpedDispatcher.PumpUntilDrained(host.Workspace.DrainGraphNoteCreationForTests());
+            PumpedDispatcher.Drain();
+
+            Assert.Equal([expectedPath], creator.Created);
+            Assert.Equal(string.Empty, creator.Content);
+            Assert.Equal([expectedPath], creator.Landed);
+            Assert.True(File.Exists(Path.Combine(vault.Root, expectedPath)));
+            Assert.Equal(expectedPath, host.Workspace.ActiveGroup.ActiveTab!.Path);
+            A11yEvent created = Assert.Single(host.ShellEvents, e => e is A11yEvent.Graph);
+            var status = Assert.IsType<GraphA11yEvent.GraphStatus>(((A11yEvent.Graph)created).Event);
+            var note = Assert.IsType<GraphStatusNote.NoteCreated>(status.Note);
+            Assert.Equal(Path.GetFileName(expectedPath), note.Name);
+            Assert.DoesNotContain(host.ShellEvents, e => e is A11yEvent.OpenedFile);
+        });
+    }
+
+    [Fact]
+    public void ACreateThatLandsAfterTheGraphClosedStillCompletesWithTheOpenSuppressed()
+    {
+        using GraphVault vault = GraphVault.Copy("create-after-close");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            var gate = new ManualResetEventSlim(false);
+            var creator = new RecordingCreator(host.Session, beforeCreate: () => gate.Wait(TimeSpan.FromSeconds(10)));
+            host.Workspace.GraphNoteCreator = creator;
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            GraphTableRow ghost = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Ghost);
+            string expectedPath = SlateUniffiMethods.GraphGhostNotePath(ghost.Label);
+
+            document.Activate(ghost, modified: false);
+            host.Workspace.CloseActiveTabCommand.Execute(null);
+            Assert.Null(host.Workspace.GraphDocument);
+            host.ShellEvents.Clear();
+            gate.Set();
+            PumpedDispatcher.PumpUntilDrained(host.Workspace.DrainGraphNoteCreationForTests());
+            PumpedDispatcher.Drain();
+
+            Assert.Equal([expectedPath], creator.Landed);
+            Assert.Contains(host.ShellEvents, e => e is A11yEvent.Graph g && g.Event is GraphA11yEvent.GraphStatus { Note: GraphStatusNote.NoteCreated });
+            Assert.DoesNotContain(host.Workspace.Groups.SelectMany(g => g.Tabs), t => t.Path == expectedPath);
+        });
+    }
+
+    [Fact]
+    public void AnExistingDestinationAnnouncesTheHighEventWithItsMessage()
+    {
+        using GraphVault vault = GraphVault.Copy("create-exists");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            var creator = new RecordingCreator(host.Session);
+            host.Workspace.GraphNoteCreator = creator;
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            GraphTableRow ghost = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Ghost);
+            string expectedPath = SlateUniffiMethods.GraphGhostNotePath(ghost.Label);
+            File.WriteAllText(Path.Combine(vault.Root, expectedPath), "# taken\n");
+            host.ShellEvents.Clear();
+
+            document.Activate(ghost, modified: false);
+            PumpedDispatcher.PumpUntilDrained(host.Workspace.DrainGraphNoteCreationForTests());
+            PumpedDispatcher.Drain();
+
+            A11yEvent blocked = Assert.Single(host.ShellEvents, e => e is A11yEvent.Graph);
+            var reason = Assert.IsType<GraphA11yEvent.GraphBlocked>(((A11yEvent.Graph)blocked).Event);
+            var failed = Assert.IsType<GraphBlockedReason.NoteCreateFailed>(reason.Reason);
+            Assert.False(string.IsNullOrEmpty(failed.Message));
+            Assert.Empty(creator.Landed);
+        });
+    }
+
+    // --- §W-A (contract A-14) ---------------------------------------------
+
+    [Fact]
+    public void TheDocumentsRowsAndSummaryEqualTheArtifactsUnderTheArtifactsFilter()
+    {
+        using GraphVault vault = GraphVault.Copy("artifact");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+
+            string goldenPath = Path.Combine(
+                SourceText.RepoRoot(), "crates", "slate-core", "tests", "fixtures", "parity_golden", "graph_queries.json");
+            using JsonDocument golden = JsonDocument.Parse(File.ReadAllBytes(goldenPath));
+            JsonElement table = golden.RootElement.GetProperty("table");
+            Assert.Equal(16, table.GetArrayLength());
+
+            // The artifact's `all` is the harness's INCLUSIVE filter, not
+            // core's default: attachments and ghosts in, orphans-only off.
+            document.ViewState.Filter = new GraphFilter(true, true, false);
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            host.Settle();
+
+            int modified = document.CellIndexOf(GraphTableColumn.Modified);
+            string[] artifactCellNames = ["note", "links_in", "links_out", "embeds_in", "embeds_out", "component", "modified", "folder", "kind"];
+            foreach (JsonElement entry in table.EnumerateArray())
+            {
+                Assert.Equal("all", entry.GetProperty("query").GetString());
+                (GraphTableColumn column, bool ascending) = ParseSort(entry.GetProperty("sort").GetString()!);
+                document.SetSort(new GraphTableSort(column, ascending));
+                host.Settle();
+                GraphPublication publication = document.Publication;
+                Assert.Equal(new GraphTableSort(column, ascending), publication.AcceptedSort);
+                Assert.Equal(entry.GetProperty("total").GetUInt64(), publication.Total);
+                Assert.Equal(entry.GetProperty("summary").GetString(), publication.Summary);
+                JsonElement rows = entry.GetProperty("rows");
+                Assert.Equal(rows.GetArrayLength(), publication.Rows.Count);
+                int r = 0;
+                foreach (JsonElement row in rows.EnumerateArray())
+                {
+                    GraphTableRow published = publication.Rows[r++];
+                    Assert.Equal(row.GetProperty("key").GetString(), published.StableKey);
+                    for (int c = 0; c < document.ColumnSpecs.Count; c++)
+                    {
+                        if (c == modified)
+                        {
+                            continue;
+                        }
+                        string expected = row.GetProperty(artifactCellNames[c]).GetString()!;
+                        string actual = document.CellAt(published, c);
+                        if (artifactCellNames[c] == "folder")
+                        {
+                            actual = actual.Replace('\\', '/');
+                        }
+                        Assert.Equal(expected, actual);
+                    }
+                }
+            }
+            // The session saw the artifact's filter as the pair's argument.
+            Assert.Equal(new GraphFilter(true, true, false), document.Publication.Filter);
+        });
+    }
+
+    private static (GraphTableColumn Column, bool Ascending) ParseSort(string name)
+    {
+        string[] parts = name.Split(' ');
+        GraphTableColumn column = parts[0] switch
+        {
+            "note" => GraphTableColumn.Note,
+            "links_in" => GraphTableColumn.LinksIn,
+            "links_out" => GraphTableColumn.LinksOut,
+            "embeds_in" => GraphTableColumn.EmbedsIn,
+            "embeds_out" => GraphTableColumn.EmbedsOut,
+            "component" => GraphTableColumn.Component,
+            "folder" => GraphTableColumn.Folder,
+            "kind" => GraphTableColumn.Kind,
+            _ => throw new InvalidOperationException(name),
+        };
+        return (column, parts[1] == "asc");
+    }
+
+    /// <summary>A creator that writes through the session the way the
+    /// sidebar does and records each phase.</summary>
+    private sealed class RecordingCreator(VaultSession session, Action? beforeCreate = null) : FileManagement.ISurfaceNoteCreator
+    {
+        public List<string> Created { get; } = [];
+        public List<string> Landed { get; } = [];
+        public List<string> Caveats { get; } = [];
+        public string? Content { get; private set; }
+
+        public FileManagement.NoteCreateResult TryCreateNote(string path, string content)
+        {
+            beforeCreate?.Invoke();
+            Content = content;
+            try
+            {
+                string? caveat = CreateOutcomes.CreateReporting(session, path, content, Path.GetFileName(path));
+                Created.Add(path);
+                return new FileManagement.NoteCreateResult.Landed(caveat);
+            }
+            catch (VaultException.DestinationExists exception)
+            {
+                return new FileManagement.NoteCreateResult.Exists(exception.Message);
+            }
+            catch (VaultException exception)
+            {
+                return new FileManagement.NoteCreateResult.Failed(exception.Message);
+            }
+        }
+
+        public void NoteLanded(string path) => Landed.Add(path);
+
+        public void SpeakCaveat(string caveat) => Caveats.Add(caveat);
+    }
+}

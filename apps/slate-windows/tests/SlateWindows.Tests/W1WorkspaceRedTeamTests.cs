@@ -437,6 +437,143 @@ public sealed class W1WorkspaceRedTeamTests
         Assert.Single(workspace.ActiveGroup.Tabs);
     }
 
+    // --- W6-2 PR A (#746), contract A-13: the mac routing suite's twins ---
+
+    private static void Settle(WorkspaceViewModel workspace)
+    {
+        if (workspace.GraphDocument is { } document)
+        {
+            PumpedDispatcher.PumpUntilDrained(document.WhenAllWorkDrained());
+        }
+        PumpedDispatcher.Drain();
+    }
+
+    /// <summary>`testGraphTabLoadsSnapshot`: the document publishes over a
+    /// real session when the tab opens.</summary>
+    [Fact]
+    public void GraphTabLoadsSnapshot()
+    {
+        using FixtureVault fixture = FixtureVault.Create(4, "w1-graph-loads");
+        using VaultSession session = OpenScannedSession(fixture.Root);
+        PumpedDispatcher.Run(() =>
+        {
+            using var workspace = NewWorkspace(session, fixture.Root);
+            workspace.OpenGraph();
+            Settle(workspace);
+            Graph.GraphDocumentViewModel document = Assert.IsType<Graph.GraphDocumentViewModel>(workspace.GraphDocument);
+            Assert.Equal(Graph.GraphLoadState.Ready, document.Publication.State);
+            Assert.Equal(4, document.Publication.Rows.Count);
+            Assert.False(workspace.ActiveGroup.ActiveTab!.IsPlaceholder);
+        });
+    }
+
+    /// <summary>`testGraphTabNotAddressableByPath`: path resolution never
+    /// yields the graph tab, and opening the token as a path makes an
+    /// ordinary missing-file markdown tab, never the graph.</summary>
+    [Fact]
+    public void GraphTabNotAddressableByPath()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "w1-graph-path");
+        using VaultSession session = OpenScannedSession(fixture.Root);
+        PumpedDispatcher.Run(() =>
+        {
+            using var workspace = NewWorkspace(session, fixture.Root);
+            workspace.OpenGraph();
+            Settle(workspace);
+            WorkspaceTabViewModel graph = workspace.ActiveGroup.ActiveTab!;
+            Assert.True(graph.IsGraph);
+
+            workspace.OpenPath("graph:singleton", WorkspaceOpenTarget.NewTab);
+            WorkspaceTabViewModel opened = workspace.ActiveGroup.ActiveTab!;
+            Assert.NotSame(graph, opened);
+            Assert.False(opened.IsGraph);
+            Assert.True(opened.IsMarkdown);
+            Assert.Equal(2, workspace.ActiveGroup.Tabs.Count(tab => tab.IsGraph || tab.Path == "graph:singleton"));
+            Assert.Single(workspace.ActiveGroup.Tabs, tab => tab.IsGraph);
+        });
+    }
+
+    /// <summary>`testRefreshProbeGatedOutWhenLifecycleAdvanced`: a probe
+    /// issued before the workspace's teardown lands nothing after it.</summary>
+    [Fact]
+    public void RefreshProbeGatedOutWhenLifecycleAdvanced()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "w1-graph-probe-lifecycle");
+        using VaultSession session = OpenScannedSession(fixture.Root);
+        PumpedDispatcher.Run(() =>
+        {
+            var workspace = NewWorkspace(session, fixture.Root);
+            workspace.OpenGraph();
+            Settle(workspace);
+            Graph.GraphDocumentViewModel document = workspace.GraphDocument!;
+            Graph.GraphPublication before = document.Publication;
+            workspace.NotifyGraphOfVaultChange();
+            // The teardown retires the document while the probe's compute
+            // may still be on the pool; its apply is refused.
+            workspace.Dispose();
+            PumpedDispatcher.PumpUntilDrained(document.WhenAllWorkDrained());
+            PumpedDispatcher.Drain();
+            Assert.True(document.IsRetired);
+            Assert.Same(before, document.Publication);
+        });
+    }
+
+    /// <summary>`testRefreshGateClosesWithLastGraphTab`: once the last
+    /// graph tab closes, a vault change probes nothing and the next open
+    /// re-fetches through a fresh document.</summary>
+    [Fact]
+    public void RefreshGateClosesWithLastGraphTab()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "w1-graph-gate");
+        using VaultSession session = OpenScannedSession(fixture.Root);
+        PumpedDispatcher.Run(() =>
+        {
+            using var workspace = NewWorkspace(session, fixture.Root);
+            workspace.OpenGraph();
+            Settle(workspace);
+            Graph.GraphDocumentViewModel first = workspace.GraphDocument!;
+            workspace.CloseActiveTabCommand.Execute(null);
+            Assert.Null(workspace.GraphDocument);
+            workspace.NotifyGraphOfVaultChange();
+            PumpedDispatcher.Drain();
+            Assert.Equal(0, first.CrossingsForTests["graph_generation"]);
+
+            workspace.OpenGraph();
+            Settle(workspace);
+            Assert.NotSame(first, workspace.GraphDocument);
+            Assert.Equal(1, workspace.GraphDocument!.CrossingsForTests["graph_snapshot"]);
+        });
+    }
+
+    /// <summary>AD-14, the shared observable: dirty editor text survives
+    /// opening the graph and returning to the note — the Windows graph
+    /// opens into a NEW tab and never touches the current one.</summary>
+    [Fact]
+    public void GraphOpenKeepsTheDirtyNote()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "w1-graph-dirty");
+        using VaultSession session = OpenScannedSession(fixture.Root);
+        PumpedDispatcher.Run(() =>
+        {
+            using var workspace = NewWorkspace(session, fixture.Root);
+            workspace.OpenPath("note0.md");
+            WorkspaceTabViewModel note = workspace.ActiveGroup.ActiveTab!;
+            note.Text += "\nUnsaved graph-open edit.";
+            string dirty = note.Text;
+
+            workspace.OpenGraph();
+            Settle(workspace);
+            Assert.True(workspace.ActiveGroup.ActiveTab!.IsGraph);
+            Assert.Equal(2, workspace.ActiveGroup.Tabs.Count);
+            Assert.Same(note, workspace.ActiveGroup.Tabs[0]);
+            Assert.True(note.IsDirty);
+
+            workspace.ActiveGroup.ActiveTab = note;
+            Assert.Equal(dirty, note.Text);
+            Assert.True(note.IsDirty);
+        });
+    }
+
     private static WorkspaceViewModel NewWorkspace(
         VaultSession session,
         string root,

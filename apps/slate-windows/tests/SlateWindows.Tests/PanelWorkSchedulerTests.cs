@@ -24,11 +24,15 @@ public sealed class PanelWorkSchedulerTests
         public int Applies { get; private set; }
         public bool HasContext => HasUiContext;
 
-        public void Run(Action? afterApply = null)
+        public void Run(Action? afterApply = null, TimeSpan? computeDelay = null)
         {
             StartWorkAlwaysAsync(
                 () =>
                 {
+                    if (computeDelay is { } delay)
+                    {
+                        Thread.Sleep(delay);
+                    }
                     ComputeThread = Environment.CurrentManagedThreadId;
                     return 42;
                 },
@@ -140,14 +144,20 @@ public sealed class PanelWorkSchedulerTests
         // The first apply enqueues a second body — the silent replacement
         // pair of A-2 — after any single snapshot of the tracked set.
         bool chained = false;
-        probe.Run(afterApply: () =>
-        {
-            if (!chained)
+        // Both bodies slow on purpose: the drain starts while the FIRST is
+        // still computing, so a one-shot drain snapshots only that task and
+        // returns while the chained body is still computing (the sweep's
+        // `drain-not-fixed-point`).
+        probe.Run(
+            afterApply: () =>
             {
-                chained = true;
-                probe.Run();
-            }
-        });
+                if (!chained)
+                {
+                    chained = true;
+                    probe.Run(computeDelay: TimeSpan.FromMilliseconds(400));
+                }
+            },
+            computeDelay: TimeSpan.FromMilliseconds(300));
         await probe.DrainAll();
         Assert.Equal(2, probe.Applies);
     }

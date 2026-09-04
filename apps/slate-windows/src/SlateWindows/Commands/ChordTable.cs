@@ -66,6 +66,12 @@ internal enum ChordScope
     /// they carry no chord and <see cref="ChordScope.None"/> through
     /// <c>Reg</c>'s own rule.</summary>
     Canvas,
+
+    /// <summary>The graph surface's own key handling (W6-2 #746). DECLARED
+    /// by PR A (contract A-12) and first used by PR C's chorded rows; PR
+    /// A's one row is chordless and carries <see cref="ChordScope.None"/>
+    /// through <c>Reg</c>'s rule.</summary>
+    Graph,
 }
 
 /// <summary>
@@ -263,6 +269,9 @@ internal static class ChordTable
         public const string BasesBuilderAddGroup = "slate.bases.builder.addGroup";
         public const string BasesBuilderEditCondition = "slate.bases.builder.editCondition";
         public const string BasesBuilderRemoveCondition = "slate.bases.builder.removeCondition";
+
+        // Graph (W6-2 #746, PR A). Ids are byte-identical to mac's.
+        public const string GraphOpenTab = "slate.graph.openTab";
 
         // Canvas (W6-1 #745). Ids are byte-identical to mac's.
         public const string CanvasShowOutline = "slate.canvas.showOutline";
@@ -633,6 +642,7 @@ internal static class ChordTable
         rows.AddRange(EditorRows());
         rows.AddRange(BasesRows());
         rows.AddRange(CanvasRows());
+        rows.AddRange(GraphRows());
         rows.AddRange(SidebarRows());
         rows.AddRange(SurfaceChordRows());
         return [.. rows];
@@ -917,6 +927,20 @@ internal static class ChordTable
     /// mac column shows the real binding rather than reading as an
     /// absence.
     /// </summary>
+    /// <summary>
+    /// W6-2 PR A (#746, contract A-12): the graph's one row — chordless,
+    /// section Graph, scope None by <c>Reg</c>'s rule (the canvas surface
+    /// rows' template). PR B–E add the leaf's, the navigator's and the
+    /// diagram's rows; PR C's chorded rows are the first in
+    /// <see cref="ChordScope.Graph"/>.
+    /// </summary>
+    private static IEnumerable<ChordTableEntry> GraphRows() =>
+    [
+        // The label is the mac's, byte-identical (P3; MacCatalogParityTests).
+        Reg(Ids.GraphOpenTab, "Open Graph", CommandSection.Graph,
+            "Open the vault's graph in its tab, as a sortable table of notes."),
+    ];
+
     private static IEnumerable<ChordTableEntry> CanvasRows() =>
     [
         Reg(Ids.CanvasShowOutline, "Canvas: Show Outline", CommandSection.Canvas,

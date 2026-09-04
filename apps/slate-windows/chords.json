@@ -1498,6 +1498,18 @@
       "registered": true
     },
     {
+      "id": "slate.graph.openTab",
+      "label": "Open Graph",
+      "section": "Graph",
+      "hint": "Open the vault's graph in its tab, as a sortable table of notes.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.sidebar.open",
       "label": "Open",
       "section": "Sidebar",
@@ -2476,6 +2488,18 @@
           "apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasLabelClassCensus.cs#TheLabelClassHasNoSecondComposition",
           "apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasScenarioCensus.cs#CanvasScenarioArtifacts_MatchCommittedGoldensByteForByte"
         ]
+      },
+      "graph": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Graph/GraphDocumentViewModel.cs#GraphDocumentViewModel",
+          "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphFollowActiveTab",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphTableView.cs#GraphTableView"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphDocumentTests.cs#GraphDocumentTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphTableTests.cs#GraphTableTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_TableSortSelectionAndActivation_AreClean"
+        ]
       }
     },
     "commands": {
@@ -2644,7 +2668,8 @@
       "slate.canvas.clearMarks": "canvasMarks",
       "slate.canvas.deleteMarked": "canvasMarks",
       "slate.canvas.groupMarked": "canvasMarks",
-      "slate.canvas.colorMarked": "canvasMarks"
+      "slate.canvas.colorMarked": "canvasMarks",
+      "slate.graph.openTab": "graph"
     },
     "issues": {
       "#720": "vault",
@@ -2665,7 +2690,8 @@
       "#742": "searchOverlay",
       "#743": "templates",
       "#744": "fileManagement",
-      "#745": "canvas"
+      "#745": "canvas",
+      "#746": "graph"
     }
   },
   "chordSurface": [

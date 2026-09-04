@@ -531,4 +531,130 @@ public sealed class AnnouncementSeamCensus
             .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
             .OrderBy(file => file, StringComparer.Ordinal);
     }
+
+    /// <summary>
+    /// W6-2 PR A (#746), contract A-10: the graph twin of the canvas arm
+    /// above, keyed on <c>Graph/</c>. The residue is the document's
+    /// <c>AnnouncerForTests</c>; the posters are the relay's members that
+    /// reach <c>Emit</c>; the named seams are the document's own — the
+    /// status the workspace asks for, the effective-gated announce, the
+    /// grid's relay seam and the surface's adoption line — and each must
+    /// be hit or the census exempts nothing.
+    /// </summary>
+    [Fact]
+    public void NoGraphCodeReachesTheAnnouncerExceptThroughTheBoundary()
+    {
+        CSharpSource announcer = CSharpSource.Load("Graph", "GraphAnnouncer.cs");
+        string[] posters =
+        [
+            .. announcer.Root.DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Where(method => method.DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+                    .Any(call => call.Expression
+                        is IdentifierNameSyntax { Identifier.ValueText: "Emit" }))
+                .Select(method => method.Identifier.ValueText)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal),
+        ];
+        Assert.NotEmpty(posters);
+        Assert.Contains("Announce", posters);
+        Assert.Contains("Relay", posters);
+
+        CSharpSource document = CSharpSource.Load("Graph", "GraphDocumentViewModel.cs");
+        const string BoundaryFile = "GraphDocumentViewModel.cs";
+        string[] residue =
+        [
+            .. document.Root.DescendantNodes()
+                .OfType<PropertyDeclarationSyntax>()
+                .Where(property => property.ExpressionBody?.Expression
+                        is IdentifierNameSyntax field
+                    && field.Identifier.ValueText
+                        .EndsWith("announcer", StringComparison.OrdinalIgnoreCase))
+                .Select(property => property.Identifier.ValueText),
+        ];
+        Assert.Equal(["AnnouncerForTests"], residue);
+
+        (string Member, string Why)[] seams =
+        [
+            ("AnnounceStatus", "rule L's status the workspace asks for (Term 6)"),
+            ("AnnounceIfEffective", "the effective-gated announce (Term 2: speech at EFFECTIVE)"),
+            ("GridRelaySeam", "the grid's canonical events ride the relay uncoalesced"),
+            ("RelayGridEvent", "the surface's GridSorted on adoption (contract A-5)"),
+        ];
+        var seamsFound = new HashSet<string>(StringComparer.Ordinal);
+        var offenders = new List<string>();
+        string root = Path.Combine(SourceText.ShellSourceRoot(), "Graph");
+        Assert.True(Directory.Exists(root), $"the graph source root is missing: {root}");
+        string[] files = [.. Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.Ordinal)];
+        Assert.NotEmpty(files);
+        foreach (string file in files)
+        {
+            CSharpSource source = CSharpSource.LoadPath(file);
+            string name = Path.GetFileName(file);
+            if (name == "GraphAnnouncer.cs")
+            {
+                continue;
+            }
+            var reaches = new List<SyntaxNode>();
+            foreach (MemberAccessExpressionSyntax access in source.Root
+                .DescendantNodes()
+                .OfType<MemberAccessExpressionSyntax>())
+            {
+                bool acquires = residue.Contains(access.Name.Identifier.ValueText, StringComparer.Ordinal);
+                bool posts = posters.Contains(access.Name.Identifier.ValueText)
+                    && CSharpSource.Normalize(access.Expression)
+                        .EndsWith("announcer", StringComparison.OrdinalIgnoreCase);
+                if (acquires || posts)
+                {
+                    reaches.Add(access);
+                }
+            }
+            foreach (IdentifierNameSyntax bare in source.Root
+                .DescendantNodes()
+                .OfType<IdentifierNameSyntax>())
+            {
+                if (!residue.Contains(bare.Identifier.ValueText, StringComparer.Ordinal)
+                    || (bare.Parent is MemberAccessExpressionSyntax qualified && qualified.Name == bare))
+                {
+                    continue;
+                }
+                reaches.Add(bare);
+            }
+            foreach (SyntaxNode reach in reaches)
+            {
+                MemberDeclarationSyntax? owner = reach.Ancestors()
+                    .OfType<MemberDeclarationSyntax>()
+                    .FirstOrDefault(member =>
+                        member is MethodDeclarationSyntax or PropertyDeclarationSyntax);
+                string ownerName = owner switch
+                {
+                    MethodDeclarationSyntax method => method.Identifier.ValueText,
+                    PropertyDeclarationSyntax property => property.Identifier.ValueText,
+                    _ => "<top level>",
+                };
+                if (name == BoundaryFile && seams.Any(seam => seam.Member == ownerName))
+                {
+                    _ = seamsFound.Add(ownerName);
+                    continue;
+                }
+                if (name == BoundaryFile && ownerName == "AnnouncerForTests")
+                {
+                    // The residue's own declaration.
+                    continue;
+                }
+                offenders.Add($"{name}:{ownerName} — {CSharpSource.Normalize(reach)}");
+            }
+        }
+        Assert.True(
+            offenders.Count == 0,
+            "graph code reaches the announcer's post surface outside the document's named seams: "
+            + string.Join("; ", offenders));
+        string[] unusedSeams =
+            [.. seams.Where(seam => !seamsFound.Contains(seam.Member)).Select(seam => $"{seam.Member} ({seam.Why})")];
+        Assert.True(
+            unusedSeams.Length == 0,
+            "a named graph seam never reached the announcer, so this census is exempting nothing there: "
+            + string.Join("; ", unusedSeams));
+    }
 }

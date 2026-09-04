@@ -4027,6 +4027,238 @@ that pins it. Precedent applied; the owner may overrule.
 | IGA-70 | The workspace-post rationale assumed the graph always retires | The rationale is liveness-independent delivery; the existing-missing-file-tab fact (A-8, AD-8) |
 | IGA-71 | The artifact writer's line drifted | `SurfaceSerializer.cs:1430–1462` (what stands today, A-14) |
 
+### Task loop — records (PR A)
+
+**TGA-0 — Baselines.** `main` at d457916 (PR 0b merged at c35c529);
+GRAPH_QUERY_SURFACE twenty-three names; the artifact's table entries
+without a summary; the Windows shell without a `Graph/` directory,
+`ChordScope` ending at `Canvas`, `IsPlaceholder` true for Graph;
+`AccessibleDataGrid.Bind` with eight parameters and one activation
+callback; `PanelWorkScheduler` with `StartWork` (inline when synchronous)
+and a one-shot drain; the mac's default sort typed at three sites.
+
+**TGA-1 — Core, the FFI, the artifact (A-5, A-14; AD-1, AD-13).**
+`table_default_sort()` in `graph_queries.rs` beside `GraphTableSort`'s
+`Default`, the name in the surface list (twenty-four), the free
+`graph_table_default_sort()` with a `From<core GraphTableSort>` mirror in
+`lib.rs`; the core fact `table_default_sort_is_the_default` and the
+surface facts' counts raised on both sides (`GraphQuerySurfaceCensus`
+twenty-four); the mac's `AppState.swift:2981`, `AppState+GraphTable.swift:135,
+183` call `graphTableDefaultSort()`. Both serializers write `summary` per
+table entry — the snapshot's `audio_summary` under the entry's inclusive
+filter, fetched once before the loop — and the golden regenerated with
+only `graph_queries.json` changed ("7 notes, 17 links. 1 orphans, 4
+unresolved targets. Filtered." — the inclusive filter is not the default,
+so the summary says Filtered); the example regenerated. Gates: 28 core
+facts, the six FFI tripwires, clippy, the bindings carry
+`GraphTableDefaultSort`, ten Windows census facts (`ParityHarnessCensus`,
+`GraphQuerySurfaceCensus`, `BindingSurfaceCensus`). Commit 79687e1.
+
+**TGA-2 — The scheduling primitive (A-2; AD-4; IGA-42, 53, 60).**
+`StartWorkAlwaysAsync(compute, apply)`: the compute through the private
+`TrackWork` and `RunIfLive` on the pool in every mode, the apply posted
+to the owner context with a completion the tracked task awaits, so the
+drains wait for the apply; `WhenAllWorkDrained` re-snapshots until the
+tracked set is empty; a second constructor takes the owner context by
+name, and `HasUiContext` says whether one was captured. Five facts in
+`PanelWorkSchedulerTests` — the compute never on the calling thread (a
+theory over both flags), the apply on the context's thread under a
+pumped DispatcherSynchronizationContext, the tracked task complete
+after the apply, the fixed-point drain following work an apply enqueued,
+shutdown stopping both halves. Commit ed786c9 (with TGA-3).
+
+**TGA-3 — The substrate seams (A-6, A-9; AD-2).** `Bind` gains
+`rowAutomationName` and `rowItemStatus`, applied in `OnLoadingRow` and
+cleared by a new `UnloadingRow` handler (Standard virtualisation: a
+container is discarded, never reused), and `rowActivatedModified`;
+Enter and double-click reach one `ActivateCurrentRow(modified)` seam
+that reads Ctrl from the keyboard device and falls back to the plain
+handler when no modified one was bound. Two facts in
+`AccessibleDataGridTests` (the seams follow realized rows and clear on
+unload, in a shown window; the modified activation and its fallback);
+the thirty-four existing facts stand.
+
+**TGA-4 — The graph directory and the shell (A-1..A-4, A-7..A-13).**
+`Graph/GraphViewState.cs` (the five fields; the default filter is
+core's `GraphFilter::default()` — notes and unresolved targets in,
+attachments out — a first draft typed ghosts out and three facts found
+it), `GraphPublication.cs` (the immutable record with `ContainsNode`
+scanning the snapshot's nodes, `FromPair`, `WithRows`, `AsPairFailure`),
+`GraphAnnouncer.cs` (the four classes in the canvas announcer's shape,
+`RenderLabel`, `Shutdown`, `PendingForTests`), `GraphDocumentViewModel.cs`
+(the token with the document instance and the session reference, the
+envelope, the receiver's four steps at dispatch time, the two failure
+arms, the probe superseding on a changed generation and holding a
+high-water mark otherwise, the three action vectors fetched once and
+unioned in `GraphRowAction`'s order, the one cell lookup by column, the
+row copy and `RowName` through `RenderLabel`, `Retire`; the residue
+`AnnouncerForTests` and the named seams `AnnounceStatus`,
+`AnnounceIfEffective`, `GridRelaySeam`, `RelayGridEvent`),
+`GraphTableView.cs` (core's columns from the vector, the records as
+rows, the external sort as a rows-only token, `GridSorted` once on
+adoption, the row seams, the union list of actions with per-kind
+visibility, the syncing guard around bind and re-seat, currency cleared
+without writing the key), `GraphSurfaceView.cs` (the switcher from the
+vector with Diagram disabled, the four states with the mac's visible
+text and accessible names), `Graph/WorkspaceViewModel.Graph.cs` (the
+one document, `AttachGraphDocumentTo` seating only,
+`GraphFollowActiveTab` in `SyncPanels` with the cached classification —
+level and tab object — and the cause consumed at the graph's transition
+or an explicit Open on the effective tab, `ClearGraphCauseAtMutationBoundary`
+in the outermost hook, `ReleaseGraphDocumentIfUnreferenced` beside the
+canvas sweep at both tab-set boundaries, `ShutdownGraphDocument` in
+`Dispose`'s drain, `NotifyGraphOfVaultChange` gated VISIBLE,
+`OpenGraphRowFromSurface` activating the graph's address first and
+posting `OpenedFile`, the create funnel on the workspace-owned
+`GraphNoteCreationWorker` completing under the workspace's life with the
+open when the address is current and ONE `NoteCreated` after the
+attempt, then the caveat; `OpenGraphCommand`). The shell: the tab's
+`Graph` property, `AttachGraphDocument`, `IsGraph`, `IsGraphVisible`,
+`IsPlaceholder` minus Graph; `SyncPanels` ends in the follow method;
+`OpenGraph()` sets the Open cause; `ReopenClosedTab` sets Reopen for a
+graph record; the funnel's graph arm; the vault lifecycle's index-phase
+arm marshalled and `HandleIndexPhase` probing on `ScanFinished`, the
+file-change arm probing beside the bases; the sidebar's
+`ISurfaceNoteCreator` implementation (explicit for `TryCreateNote` —
+the canvas seam shares the parameter list — with `Exists` carrying the
+vault's message) and `SelectPathFromSurface` with a pending selection
+consumed at tree publication; `FileManagement/SurfaceNoteCreation.cs`;
+the template hosts `GraphSurfaceView`; `ChordTable`'s `Ids.GraphOpenTab`,
+`ChordScope.Graph`, `GraphRows()`; the registrar's resolver;
+`ChordTableTests`' scope disposition for Graph; `chords.json`
+regenerated with the row and its delivery evidence (group `graph`, the
+command, issue #746); `generate-parity-matrix.py`'s
+W6_2_DELIVERED_COMMANDS and the issue; the parity matrix row ✓;
+`w_c_matrix.md`'s "Graph table (W6-2 PR A)" row with the census that
+pins it.
+
+**TGA-5 — The facts (A-1..A-16).** `GraphDocumentTests` (twenty facts
+over the graph vault through the real workspace under the pumped
+dispatcher: the fresh open's sequence and one load, Opened alone on the
+effective READY tab, the summary alone on a tab switch, the retirement
+with a fresh document on reopen, a result for a retired document
+installing nothing, the stale sequence dropping, a sort rows-only with
+the mac's whole no-op guard, the one-record observer, the probe's silent
+reload and its no-op on an unchanged generation, the hidden graph
+unprobed, the generation arriving during an in-flight pair ending in the
+newer publication, the selection surviving a reorder and clearing only
+against the snapshot, the three action vectors once and unioned, plain
+activation replacing the graph tab and posting `OpenedFile` through the
+workspace, modified activation in a new tab with the graph standing, a
+ghost's create — off the dispatcher, empty content, landed, opened, one
+`NoteCreated` after, no `OpenedFile` — a create landing after the graph
+closed still completing with the open suppressed, `Exists` announcing
+the High event with its message, and the §W-A comparison: all sixteen
+table entries under the artifact's inclusive filter, every cell but
+Modified, the total and the `summary` byte for byte); `GraphTableTests`
+(seven facts on an STA thread under the pumped dispatcher: core's
+headers in order with Note as row header and the records as rows, the
+header sort as a rows-only token with `GridSorted` once on adoption and
+none for a no-op, the realized row's Name as the corpus copy and its
+ItemStatus the Kind cell with the summary region named "Summary: …",
+the cell lookup by column under a reordered vector, the switcher from
+the vector with Diagram disabled, the states' labels, and 10,000 rows on
+the real substrate with live containers bounded while paging and the
+action inventory at three); `GraphAnnouncerTests` (five: latest-wins,
+the immediate post and the High drop, the relay's priority,
+`RenderLabel` posting nothing, Shutdown dropping a pending line);
+`GraphAnnouncerCensus` (six: no source announces outside the relay,
+the relay is the one file that renders, every grid rides the relay, the
+document's load has one caller — `Graph/WorkspaceViewModel.Graph.cs:GraphFollowActiveTab`
+— only the lookup reads `Cells`, no header typed, no mutable shadow);
+`AnnouncementSeamCensus.NoGraphCodeReachesTheAnnouncerExceptThroughTheBoundary`
+(the residue `AnnouncerForTests`, the four named seams each hit);
+`WcMatrixGraphEvidenceCensus` (three); the five W1 twins
+(`GraphTabLoadsSnapshot`, `GraphTabNotAddressableByPath`,
+`RefreshProbeGatedOutWhenLifecycleAdvanced`, `RefreshGateClosesWithLastGraphTab`,
+`GraphOpenKeepsTheDirtyNote`); the Rust twin
+`the_windows_graph_coalescing_switch_matches_the_pinned_class_list`
+(four classes, both directions); the FlaUI journey
+`GraphSurfaces_TableSortSelectionAndActivation_AreClean` (the palette
+row, the switcher with Diagram disabled, the nine headers, the summary
+region, the first row's Name and ItemStatus, Ctrl+Alt+S sorting the Note
+column ascending, axe `graph-table`, Enter replacing the graph tab with
+the note) — CI's shell gate arbitrates it (AR-1).
+
+**TGA-6 — §K (A-15; AD-7).** `GraphOpenBenchmarks` in the benchmarks
+project with the `--graph` arm capturing its `Summary` and walking the
+pinned inventory of six (workload, notes) entries — the two
+open-to-publication budgets, four measurement-only. Measured on this box
+(`--configuration Release -- --graph --validate-budgets`):
+the snapshot under the default filter 1.053 ms at 1k and 13.618 ms at
+10k; the rows under the default sort 5.831 ms and 80.121 ms (the nine
+core-formatted cells per row, the projection's cost by design); the
+document's open to its first publication 7.522 ms against 100 ms and
+98.069 ms against 500 ms — both PASS, the runner's exit code 0. Recorded
+in `BENCHMARKS.md` ("Milestone W6-2 PR A — graph through the C#
+binding").
+
+**TGA-7 — Mutations.** Twenty-six mutations, each byte-restored, each
+caught by the fact or census named for it. The first pass caught
+twenty-one; five survived because their facts were too weak, not
+because the code was wrong, and the facts were strengthened until each
+mutant died: an identical repeated request (only the sequence can tell
+the two apart — one install), the high-water mark exercised while
+nothing is held (a document of its own, the gate armed before its first
+pair, a probe from the worker), the selection under a name-query
+overlay that empties the rows while the snapshot keeps the node, a
+sort reversal to the accepted sort (no `GridSorted`; the first mutant
+was EQUIVALENT — the answered-request flag already implies the accepted
+sort changed — and was replaced by one that relays on every install),
+and a slow chained body under the one-shot drain. The mutants: the Opened dropped, an Open
+of the effective tab reloading, a tab switch loading nothing, the
+announcer kept alive at retirement, a stale sequence installing, a sort
+fetching a pair, half the no-op guard, the probe ignoring a changed
+generation, a hidden graph probed, the high-water mark dropped, the
+selection revalidated against the rows, a fourth action crossing, the
+`OpenedFile` silenced, the create never opening, a landed create dropped
+after the graph closed, the pair fetched under the default filter
+instead of the request's, `GridSorted` on every publish, the row Name as
+the bare label, the Diagram item enabled, a typed cell index, a typed
+header, a second load caller, the grid's default seam kept, the unload
+keeping the name, a one-shot drain, and the Graph scope scraped from
+nothing.
+
+**TGA-8 — Gates and the verified details.** `cargo test --workspace`:
+1,997 passed, 6 failed — the five `session::tests::dir_tree` censuses
+this box always fails (OS error 123; CI-Windows is the oracle, the
+standing note) and `perf_guard_root_listing_under_100ms_on_10k_files`,
+the wall-clock guard that fails under the 528-second workspace run and
+passed in isolation in 11.16 seconds, untouched by this PR; `cargo
+clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt
+--check` clean; `dotnet format` applied (two test files re-wrapped) and
+clean; the whole Windows test project 2,124 of 2,124 after three
+corrections the full run found — `chords.json` regenerated through the
+projection rather than hand-edited (PINV-5; the delivery evidence is
+preserved by the projection), the row's label made the mac's
+byte-identical "Open Graph" (P3, `MacCatalogParityTests` — the frozen
+text's "Graph: Open Graph" was wrong), and the matrix cell's "until PR
+D" reworded because the staged-claim census reads "PR D" as the
+canvas's shipped PR D; the accessibility test project builds with the
+journey; the benchmarks project builds in Release. Verified during
+implementation, recorded here as the frozen text's discharge: (i) the
+document does not REFUSE construction without a context (A-2's
+sentence) — it installs the constructing thread's dispatcher context as
+its owner when none is current, the deterministic single-thread context
+the round-4 ledger's IGA-53 fix names, so every existing workspace fact
+keeps constructing graph tabs and every graph fact pumps that
+dispatcher; (ii) a rows-only publish speaks the filter count
+(`GraphFilterCount`, the mac's `requestGraphTableRows` `:343–347`),
+coalesced, a mac behaviour the section did not pin — pinned by the
+sort facts' announcement sets; (iii) the create's two outcomes are
+posted from the one workspace site AD-8 names — `NoteCreated` and, for
+`Exists`/`Failed`, `NoteCreateFailed` — so a failure that lands after the
+graph retired is spoken too; (iv) the view state's default filter is
+core's `GraphFilter::default()` with unresolved targets IN; (v)
+`ISurfaceNoteCreator` is the generalisation beside `ICanvasNoteCreator`,
+both implemented by the sidebar, the canvas untouched (the contract's
+"generalised from" read as a sibling rather than a rename); (vi) the
+command row's label is the mac's "Open Graph" byte for byte (P3), not
+A-12's "Graph: Open Graph", and the journey looks for that; (vii) the
+document's `IsRetired` guard in the receiver and the announcer's
+`Shutdown` in `Retire` are what make a result for a retired document
+install nothing and speak nothing (A-1's facts).
+
 ### Tests that pin PR A
 
 - Windows facts: GraphDocumentTests (A-1, A-2, A-3, A-4, A-7, A-8, A-9,

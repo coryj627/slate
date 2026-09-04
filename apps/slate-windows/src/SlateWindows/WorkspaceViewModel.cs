@@ -320,8 +320,25 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     public bool IsCanvasVisible => IsCanvas;
 
+    public bool IsGraph => Item.Kind == WorkspaceItemKind.Graph;
+
+    /// <summary>W6-2 PR A (#746, contract A-1): the ONE graph document,
+    /// seated by the attach funnel on every graph tab; null on every
+    /// other tab kind.</summary>
+    public Graph.GraphDocumentViewModel? Graph { get; private set; }
+
+    internal void AttachGraphDocument(Graph.GraphDocumentViewModel document)
+    {
+        Graph = document;
+        OnPropertyChanged(nameof(Graph));
+    }
+
+    public bool IsGraphVisible => IsGraph;
+
+    /// <summary>W6-2 PR A: the placeholder retired for Graph — every kind
+    /// with a surface is off this list.</summary>
     public bool IsPlaceholder =>
-        !IsMarkdown && !IsBase && !IsSavedQueryTab && !IsDashboardTab && !IsCanvas;
+        !IsMarkdown && !IsBase && !IsSavedQueryTab && !IsDashboardTab && !IsCanvas && !IsGraph;
     public string KindLabel => Item.Kind switch
     {
         WorkspaceItemKind.Canvas => "Canvas",
@@ -1746,6 +1763,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // same synchronous instance).
         EnsureActiveTabProperties(
             synchronousForTests: !_startInteractionBackgroundWork);
+        // W6-2 PR A (rule L, Term 1): the graph follows the effective tab
+        // through THIS funnel and nothing else.
+        GraphFollowActiveTab();
     }
 
     /// <summary>External links launch through the shell (the default
@@ -1943,9 +1963,16 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         return false;
     }
 
-    public void OpenGraph() => RunWorkspaceMutation(() => OpenItem(
-        new WorkspaceItemState(WorkspaceItemKind.Graph, "graph:singleton"),
-        WorkspaceOpenTarget.NewTab));
+    public void OpenGraph()
+    {
+        // W6-2 PR A (rule L, Term 5): the explicit Open sets its cause
+        // before the mutation; the follow method consumes it at the
+        // graph's transition, the boundary clears what was not consumed.
+        SetGraphCause(GraphActivationCause.Open);
+        RunWorkspaceMutation(() => OpenItem(
+            new WorkspaceItemState(WorkspaceItemKind.Graph, "graph:singleton"),
+            WorkspaceOpenTarget.NewTab));
+    }
 
     public bool SaveAll()
     {
@@ -2184,6 +2211,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // W6-1 PR A (contract A1/A17): canvas documents hold the shared
         // session and a native handle on exactly the same terms.
         ShutdownCanvasDocuments(basesDrains);
+        // W6-2 PR A (contract A-1): the graph document and its create
+        // worker into the same bounded pre-session drain.
+        ShutdownGraphDocument(basesDrains);
         // Retires the dock document/dashboard into the tracked set.
         ClearBasesDock();
         if (BaseQueryBuilderSheet is { } openBuilder)

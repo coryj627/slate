@@ -23,8 +23,18 @@ internal abstract class PanelWorkScheduler : BindableBase
     private Task? _prerequisite;
 
     protected PanelWorkScheduler(bool synchronousForTests)
+        : this(synchronousForTests, SynchronizationContext.Current)
     {
-        _uiContext = SynchronizationContext.Current;
+    }
+
+    /// <summary>W6-2 PR A (contract A-2): a subclass that must apply on a
+    /// serialized owner context names it here — the graph document
+    /// installs the constructing thread's dispatcher context when none
+    /// is current, the deterministic single-thread context of the
+    /// round-4 ledger's IGA-53.</summary>
+    protected PanelWorkScheduler(bool synchronousForTests, SynchronizationContext? ownerContext)
+    {
+        _uiContext = ownerContext;
         _synchronous = synchronousForTests;
     }
 

@@ -747,6 +747,9 @@ public sealed class ChordTableTests
             [ChordScope.None] = "no chord to deliver.",
             [ChordScope.Global] = "checked in both directions below, against "
                 + "MainWindow.xaml's KeyBindings plus the imperative allow-list.",
+            [ChordScope.Graph] = "declared by W6-2 PR A (contract A-12) for PR C's "
+                + "chorded rows; no graph chord is delivered yet, so there is "
+                + "nothing to scrape — PR C replaces this entry with its scrape.",
         };
 
     /// <summary>

@@ -641,6 +641,14 @@ W6_1_STATUS = (
     "interactive CI + human AT pending"
 )
 
+W6_2_DELIVERED_COMMANDS = {
+    # W6-2 PR A (#746, contract A-12): the graph tab's one chordless row,
+    # executable through the palette and the registrar; B–E add the leaf's,
+    # the navigator's and the diagram's rows in the PR that makes each
+    # executable (B12's rule).
+    "slate.graph.openTab",
+}
+
 W6_1_DELIVERED_COMMANDS = {
     # PR A / PR B / §D TD-6: the three projections that exist.
     "slate.canvas.showOutline",
@@ -840,7 +848,8 @@ def load_delivery_evidence(
         cid for cid, _, _, _, issue in cmd_rows
         if issue.startswith(("#720", "#721", "#722", "#723", "#724", "#725"))
     } | W3_DELIVERED_COMMANDS | W4_DELIVERED_COMMANDS | W5_2_DELIVERED_COMMANDS \
-        | W5_3_DELIVERED_COMMANDS | W5_4_DELIVERED_COMMANDS | W6_1_DELIVERED_COMMANDS
+        | W5_3_DELIVERED_COMMANDS | W5_4_DELIVERED_COMMANDS | W6_1_DELIVERED_COMMANDS \
+        | W6_2_DELIVERED_COMMANDS
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
         missing = sorted(delivered_commands - mapped_commands)
@@ -858,6 +867,8 @@ def load_delivery_evidence(
         # aggregate group — anchors from every command group and the
         # close-out gates (validation 14 makes the aggregate complete).
         "#745",
+        # W6-2 PR A: the graph issue, evidenced by the `graph` group.
+        "#746",
     }
     if set(issue_map) != expected_issues:
         fail(

@@ -436,7 +436,10 @@ internal sealed class VaultLifecycleViewModel
                 (code, eventPath, message) => _enqueueUi(
                     () => HandleVaultError(generation, code, eventPath, message)),
                 @event => _enqueueUi(() => HandleFileChange(generation, @event)),
-                (_, _) => { });
+                // W6-2 PR A (contract A-3): the index-phase arm, marshalled
+                // like the other two — an external edit surfaces at the next
+                // scan, never as a file change.
+                (phase, filesSeen) => _enqueueUi(() => HandleIndexPhase(generation, phase, filesSeen)));
             _eventListenerToken = _session.RegisterEventListener(_eventListener);
 
             IsVaultOpen = true;
@@ -710,6 +713,18 @@ internal sealed class VaultLifecycleViewModel
         ReportTerminalStatus(message, A11yPriority.High);
     }
 
+    /// <summary>W6-2 PR A (contract A-3): the scan-finished arm — an
+    /// external edit is visible only after a scan, so the graph's probe
+    /// runs here too, under the same lifecycle check.</summary>
+    private void HandleIndexPhase(int generation, IndexPhase phase, ulong filesSeen)
+    {
+        _ = filesSeen;
+        if (generation == _generation && phase == IndexPhase.ScanFinished)
+        {
+            Workspace?.NotifyGraphOfVaultChange();
+        }
+    }
+
     private void HandleFileChange(int generation, FileChangeEvent @event)
     {
         if (generation == _generation)
@@ -751,6 +766,9 @@ internal sealed class VaultLifecycleViewModel
             // C9's vault-event arm — property panel, task toggles,
             // editor saves, and external edits all land here).
             Workspace?.NotifyBasesOfVaultChange(@event.Path);
+            // W6-2 PR A (contract A-3): the graph's generation probe, while
+            // a graph tab is visible.
+            Workspace?.NotifyGraphOfVaultChange();
             // W4-7 (HR-2's vault-event arm): a Modified on the active
             // path appended a version row the save funnel never saw
             // (Bases grid edits, sync, external editors).
@@ -1018,6 +1036,10 @@ internal sealed class VaultLifecycleViewModel
         sidebar.OpenTargetRequested += FileSidebar_OpenTargetRequested;
         // §G2 TG2-6 (IG2-6): the sidebar is the canvas's note creator.
         workspace.CanvasNoteCreator = sidebar;
+        // W6-2 PR A (contracts A-8, AD-11): and the graph's — and the
+        // target of "Reveal in File Tree".
+        workspace.GraphNoteCreator = sidebar;
+        workspace.GraphRevealInSidebar = capturedSidebar.SelectPathFromSurface;
         switcher.OpenRequested += QuickSwitcher_OpenRequested;
         switcher.Dismissed += QuickSwitcher_Dismissed;
 

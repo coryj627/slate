@@ -967,3 +967,37 @@ UIA re-frame ride the app and the FlaUI journeys (§D TD-7, §H HD-D1).
 The mac row above (3.9 / 2.8 / 0.18 ms) timed a real `NSView` rebuild
 on a laptop; these are not the same operation on the same machine, and
 no ratio between them is claimed.
+
+## Milestone W6-2 PR A — graph through the C# binding — 2026-09-03 (#746)
+
+The graph's snapshot marshalling through the C# binding and the document's
+open through to its first publication (contract A-15, AD-7), over
+synthetic linked vaults at 1,000 and 10,000 notes (every note links to
+its successor and back to the first; one unresolved target per hundred
+notes). `GraphOpenBenchmarks`, `dotnet run --project
+apps/slate-windows/benchmarks/SlateWindows.Benchmarks --configuration
+Release -- --graph --validate-budgets`; the runner walks a pinned
+inventory of six (workload, notes) entries and fails on a missing or
+unlisted report. P set no host-side marshalling budget (locked decision
+10 budgets the layout and the backend); the two open-to-publication
+budgets are Windows host budgets on the canvas's first-derivation
+precedent, asserted by the runner's exit code. This box: .NET 10.0.11,
+x64, 15 iterations after 3 warm-ups, medians.
+
+| Workload | Notes | Median | Budget | Result |
+|---|---:|---:|---:|---|
+| `SnapshotDefaultFilter` (`graph_snapshot` under core's default filter) | 1,000 | **1.053 ms** | measurement-only | recorded |
+| `TableRowsDefaultSort` (`graph_table_rows` under the fetched default sort) | 1,000 | **5.831 ms** | measurement-only | recorded |
+| `OpenToPublication` (the document's pair through to the installed publication, under a pumped dispatcher) | 1,000 | **7.522 ms** | 100 ms | PASS |
+| `SnapshotDefaultFilter` | 10,000 | **13.618 ms** | measurement-only | recorded |
+| `TableRowsDefaultSort` | 10,000 | **80.121 ms** | measurement-only | recorded |
+| `OpenToPublication` | 10,000 | **98.069 ms** | 500 ms | PASS |
+
+**Scope, honestly.** The rows workload is five to six times the snapshot's
+at both scales: `graph_table_rows` formats nine cells per row core-side
+and marshals them as strings, which is the projection's cost by design
+(0b-7: core-formatted cells, a host that types nothing). The document's
+open adds the token, the envelope and the dispatcher hop on top of the
+pair — under 20 ms of overhead at 10k. Nothing here measures the grid's
+realization; the 10k virtualisation fact (`GraphTableTests`) pins that
+the live containers stay bounded.

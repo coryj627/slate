@@ -162,6 +162,7 @@ internal sealed partial class WorkspaceViewModel
             ReleaseUnreferencedBaseDocuments();
             ReleaseUnreferencedDashboards();
             ReleaseUnreferencedCanvasDocuments();
+            ReleaseGraphDocumentIfUnreferenced();
             if (peer is not null)
             {
                 active.MirrorDocumentStateFrom(peer);
@@ -319,6 +320,7 @@ internal sealed partial class WorkspaceViewModel
         ReleaseUnreferencedBaseDocuments();
         ReleaseUnreferencedDashboards();
         ReleaseUnreferencedCanvasDocuments();
+        ReleaseGraphDocumentIfUnreferenced();
         WorkspaceTabViewModel? successor = group.Tabs.Count == 0
             ? null
             : group.Tabs[Math.Min(index, group.Tabs.Count - 1)];
@@ -458,6 +460,12 @@ internal sealed partial class WorkspaceViewModel
 
         (WorkspaceItemState item, Guid groupId) = _closedTabs[^1];
         _closedTabs.RemoveAt(_closedTabs.Count - 1);
+        if (item.Kind == WorkspaceItemKind.Graph)
+        {
+            // W6-2 PR A (rule L, Term 6): a reopened graph speaks Opened,
+            // then the shell's line below, then the summary when a load runs.
+            SetGraphCause(GraphActivationCause.Reopen);
+        }
         if (item.Kind == WorkspaceItemKind.Graph && TryFocusGlobalGraph())
         {
             _announce(new A11yEvent.ReopenedGraph());
