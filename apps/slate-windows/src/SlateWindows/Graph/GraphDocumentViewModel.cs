@@ -27,10 +27,12 @@ internal enum GraphAnnouncePolicy
 internal sealed record GraphTableRequest(GraphVisibilityQuery Query, GraphTableSort Sort);
 
 /// <summary>The load token (contract A-2): the document instance, the
-/// session the body was started against, the request, the sequence.</summary>
+/// session the body was started against, the lifecycle generation the
+/// body was started under (IPA-6), the request, the sequence.</summary>
 internal sealed record GraphLoadToken(
     GraphDocumentViewModel Document,
     VaultSession Session,
+    int LifecycleGeneration,
     GraphTableRequest Request,
     ulong Seq,
     GraphLoadKind Kind,
@@ -73,6 +75,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     private readonly GraphAnnouncer _announcer;
     private readonly Func<bool> _isEffectiveActive;
     private readonly Func<GraphVerbosity> _verbosity;
+    private readonly Func<int> _lifecycleGeneration;
     private readonly Dictionary<GraphNodeKind, IReadOnlyList<GraphRowActionSpec>> _actionsByKind;
     private ulong _seq;
     private GraphTableRequest? _request;
@@ -87,7 +90,8 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         GraphAnnouncer announcer,
         Func<bool> isEffectiveActive,
         Func<GraphVerbosity> verbosity,
-        SynchronizationContext? ownerContext = null)
+        SynchronizationContext? ownerContext = null,
+        Func<int>? lifecycleGeneration = null)
         : base(
             synchronousForTests: false,
             ownerContext
@@ -102,6 +106,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         _announcer = announcer;
         _isEffectiveActive = isEffectiveActive;
         _verbosity = verbosity;
+        // Rule A (IPA-6): the lifecycle's generation, read when a body is
+        // started and again at dispatch; a host without a lifecycle (a
+        // fact's bare document, the runner) reads a constant.
+        _lifecycleGeneration = lifecycleGeneration ?? (static () => 0);
         // Design B: every ordered inventory a core vector, fetched ONCE
         // per document — the columns, the default sort, the three
         // per-kind action vectors, the mode switcher's items.
@@ -121,7 +129,16 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
 
     // --- The fetched-once inventories (design B) ------------------------
 
-    public IReadOnlyList<GraphTableColumnSpec> ColumnSpecs { get; }
+    public IReadOnlyList<GraphTableColumnSpec> ColumnSpecs { get; private set; }
+
+    /// <summary>Test seam (contract A-6; IPA-11): swap the column inventory
+    /// so a fact can prove the cell lookup keys by the VECTOR — a reordered
+    /// vector moves the index the lookup answers.</summary>
+    internal void ReplaceColumnInventoryForTests(IReadOnlyList<GraphTableColumnSpec> columns)
+    {
+        ArgumentNullException.ThrowIfNull(columns);
+        ColumnSpecs = columns;
+    }
 
     public GraphTableSort DefaultSort { get; }
 
@@ -334,7 +351,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                 Publication = GraphPublication.Initial(request.Query.Filter, Publication.AcceptedSort);
             }
         }
-        var token = new GraphLoadToken(this, _session, request, _seq, kind, announce);
+        var token = new GraphLoadToken(this, _session, _lifecycleGeneration(), request, _seq, kind, announce);
         StartWorkAlwaysAsync(() => Fetch(token), Receive);
         return token;
     }
@@ -389,10 +406,12 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     private void Receive(GraphLoadEnvelope envelope)
     {
         GraphLoadToken token = envelope.Token;
-        // (i) the token is current in every field.
+        // (i) the token is current in every field — the lifecycle
+        // generation included (IPA-6).
         if (!ReferenceEquals(token.Document, this)
             || _retired
             || !ReferenceEquals(token.Session, _session)
+            || token.LifecycleGeneration != _lifecycleGeneration()
             || token.Seq != _seq
             || _request is null
             || token.Request != _request)
@@ -403,8 +422,13 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         {
             _pairInFlight = false;
         }
-        // (ii) the envelope answers THIS request.
-        if (envelope.Query != token.Request.Query || envelope.Sort != token.Request.Sort)
+        // (ii) the envelope answers THIS request, and its inputs agree
+        // with each other — validated before EITHER arm (IPA-6): a
+        // failure envelope whose filter is not its query's is as foreign
+        // as a success's.
+        if (envelope.Query != token.Request.Query
+            || envelope.Sort != token.Request.Sort
+            || envelope.Filter != envelope.Query.Filter)
         {
             return;
         }
@@ -424,7 +448,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         if (token.Kind == GraphLoadKind.Pair)
         {
             GraphSnapshot snapshot = envelope.Snapshot!;
-            if (envelope.Filter != envelope.Query.Filter || rows.Generation != snapshot.Generation)
+            if (rows.Generation != snapshot.Generation)
             {
                 // The two crossings straddled a rebuild: drop, and read again.
                 _ = Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent, token.Request.Sort);

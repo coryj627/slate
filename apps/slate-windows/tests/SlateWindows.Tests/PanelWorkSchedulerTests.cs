@@ -24,7 +24,7 @@ public sealed class PanelWorkSchedulerTests
         public int Applies { get; private set; }
         public bool HasContext => HasUiContext;
 
-        public void Run(Action? afterApply = null, TimeSpan? computeDelay = null)
+        public void Run(Action? afterApply = null, TimeSpan? computeDelay = null, Action? beforeComputeReturns = null)
         {
             StartWorkAlwaysAsync(
                 () =>
@@ -34,6 +34,7 @@ public sealed class PanelWorkSchedulerTests
                         Thread.Sleep(delay);
                     }
                     ComputeThread = Environment.CurrentManagedThreadId;
+                    beforeComputeReturns?.Invoke();
                     return 42;
                 },
                 value =>
@@ -177,5 +178,38 @@ public sealed class PanelWorkSchedulerTests
         await probe.DrainAll();
         Assert.Equal(0, probe.Applies);
         Assert.Null(probe.ComputeThread);
+    }
+
+    /// <summary>IPA-5: a teardown that lands between queueing the body and
+    /// the pool picking it up — the window StartWork's RunIfLive closes —
+    /// refuses the COMPUTE where it would start, and applies nothing.</summary>
+    [Fact]
+    public void AShutdownBetweenQueueingAndThePoolPickupRefusesTheCompute()
+    {
+        WithPumpedContext(pump =>
+        {
+            var probe = new Probe(synchronousForTests: false);
+            probe.BeforeComputeForTests = probe.Shutdown;
+            probe.Run();
+            Assert.True(pump(() => probe.DrainAll().IsCompleted), "the tracked task completed");
+            Assert.Null(probe.ComputeThread);
+            Assert.Equal(0, probe.Applies);
+        });
+    }
+
+    /// <summary>IPA-5: a teardown after the compute finished and before the
+    /// apply was dispatched skips the apply — the tracked task still
+    /// completes, so the drain returns.</summary>
+    [Fact]
+    public void AShutdownAfterTheComputeAndBeforeTheApplySkipsTheApply()
+    {
+        WithPumpedContext(pump =>
+        {
+            var probe = new Probe(synchronousForTests: false);
+            probe.Run(beforeComputeReturns: probe.Shutdown);
+            Assert.True(pump(() => probe.DrainAll().IsCompleted), "the tracked task completed");
+            Assert.NotNull(probe.ComputeThread);
+            Assert.Equal(0, probe.Applies);
+        });
     }
 }

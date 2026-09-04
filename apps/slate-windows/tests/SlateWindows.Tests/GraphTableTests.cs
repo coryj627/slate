@@ -210,11 +210,16 @@ public sealed class GraphTableTests
             int kind = document.CellIndexOf(GraphTableColumn.Kind);
             Assert.Equal(row.Cells[kind], document.CellOf(row, GraphTableColumn.Kind));
             Assert.Equal(document.ColumnSpecs.Count - 1, kind);
-            // A reordered vector: the lookup is by column, the position moves.
+            // A reordered vector HANDED TO THE DOCUMENT (IPA-11): the lookup
+            // answers the moved position and returns the cell AT that
+            // position — keyed by the vector, never by a typed index.
             IReadOnlyList<GraphTableColumnSpec> reversed = document.ColumnSpecs.Reverse().ToArray();
-            int reversedKind = reversed.ToList().FindIndex(s => s.Column == GraphTableColumn.Kind);
-            Assert.Equal(0, reversedKind);
-            Assert.NotEqual(kind, reversedKind);
+            document.ReplaceColumnInventoryForTests(reversed);
+            Assert.Equal(0, document.CellIndexOf(GraphTableColumn.Kind));
+            Assert.Equal(row.Cells[0], document.CellOf(row, GraphTableColumn.Kind));
+            Assert.Equal(reversed.Count - 1, document.CellIndexOf(GraphTableColumn.Note));
+            Assert.Equal(row.Cells[^1], document.CellOf(row, GraphTableColumn.Note));
+            Assert.NotEqual(kind, document.CellIndexOf(GraphTableColumn.Kind));
         });
     }
 

@@ -23,10 +23,12 @@ internal enum GraphActivationCause
 /// W6-2 PR A (#746): the workspace half of the graph — the ONE document
 /// (contract A-1), rule L's follow method (Terms 1–7), the cause, the
 /// retirement and the teardown drain, the vault-change probe's
-/// notification (A-3), the addressed open (A-9) and the create funnel's
-/// workspace completion (A-8). Under <c>Graph/</c> so the directory
-/// censuses cover it, as the canvas keeps its own workspace partial under
-/// <c>Canvas/</c>.
+/// notification (A-3) and the addressed actions (A-8, A-9). Under
+/// <c>Graph/</c> so the directory censuses cover it, as the canvas keeps
+/// its own workspace partial under <c>Canvas/</c>. The create funnel's
+/// workspace completion — the ONE graph-family posting site outside the
+/// walled directory (AD-8) — lives in the root partial
+/// <c>WorkspaceViewModel.GraphCreate.cs</c> (IPA-7).
 /// </summary>
 internal sealed partial class WorkspaceViewModel
 {
@@ -49,6 +51,12 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>The Create-note admission (0bD-8): null admits. Windows
     /// has no structural-mutation gate today.</summary>
     public Func<string?>? GraphCreateAdmissionReason { get; set; }
+
+    /// <summary>Rule A / AD-8 (IPA-6): the vault lifecycle's generation —
+    /// carried by every load token and every create completion, compared
+    /// at dispatch. The lifecycle installs it; a bare workspace reads a
+    /// constant.</summary>
+    public Func<int> LifecycleGeneration { get; set; } = static () => 0;
 
     /// <summary>Test seam: how many funnel calls started a graph load.</summary>
     internal int GraphLoadsForTests { get; private set; }
@@ -78,9 +86,10 @@ internal sealed partial class WorkspaceViewModel
             _session,
             announcer,
             isEffectiveActive: () => GraphTabIsEffective(),
-            verbosity: () => GraphVerbosity.Standard);
+            verbosity: () => GraphVerbosity.Standard,
+            lifecycleGeneration: () => LifecycleGeneration());
         document.OpenRowFromSurface = (row, target) => OpenGraphRowFromSurface(row.Path!, target);
-        document.RevealRowFromSurface = path => GraphRevealInSidebar?.Invoke(path);
+        document.RevealRowFromSurface = path => RevealGraphRowFromSurface(path);
         document.CreateNoteFromSurface = path => CreateGraphNoteFromSurface(path);
         document.CreateAdmissionReason = () => GraphCreateAdmissionReason?.Invoke();
         return document;
@@ -253,64 +262,22 @@ internal sealed partial class WorkspaceViewModel
         return true;
     }
 
-    // --- The create funnel's workspace completion (contract A-8) ----------
+    // --- The addressed reveal (contract A-9; IPA-4) ------------------------
 
-    /// <summary>The graph asked for a ghost's note: the create runs on the
-    /// workspace's own worker, so a graph closed meanwhile cannot swallow
-    /// the landing; the completion is keyed by this workspace's life.</summary>
-    private void CreateGraphNoteFromSurface(string path)
+    /// <summary>Reveal a row's note in the files sidebar: like every row
+    /// action, addressed at invocation — the graph's group and tab are
+    /// made active first (the round-4 ledger's IGA-41: EVERY action
+    /// captures its tab and group and activates them), then the sidebar's
+    /// select-path seam runs.</summary>
+    internal bool RevealGraphRowFromSurface(string path)
     {
-        if (GraphNoteCreator is not { } creator)
+        ArgumentNullException.ThrowIfNull(path);
+        if (!FocusGraphAddress())
         {
-            return;
+            return false;
         }
-        WorkspaceTabViewModel? address = GraphTab();
-        _graphNoteCreation.Run(
-            () => creator.TryCreateNote(path, string.Empty),
-            result => GraphNoteCreationCompleted(path, address, creator, result));
-    }
-
-    /// <summary>The one site outside <c>Graph/</c> that posts graph-family
-    /// events (AD-8): the create's completion, whatever the graph's
-    /// liveness — the landing's bookkeeping, the open when the address is
-    /// still current, ONE <c>NoteCreated</c> after the attempt, then the
-    /// caveat; or the failure.</summary>
-    private void GraphNoteCreationCompleted(
-        string path,
-        WorkspaceTabViewModel? address,
-        ISurfaceNoteCreator creator,
-        NoteCreateResult result)
-    {
-        switch (result)
-        {
-            case NoteCreateResult.Landed landed:
-                creator.NoteLanded(path);
-                bool addressCurrent = address is not null
-                    && ReferenceEquals(GraphTab(), address)
-                    && ReferenceEquals(ActiveGroup.ActiveTab, address);
-                if (addressCurrent)
-                {
-                    RunWorkspaceMutation(() => _ = OpenPathCore(path, WorkspaceOpenTarget.CurrentTab));
-                }
-                _announce(new A11yEvent.Graph(new GraphA11yEvent.GraphStatus(
-                    new GraphStatusNote.NoteCreated(System.IO.Path.GetFileName(path)))));
-                if (landed.Caveat is { } caveat)
-                {
-                    creator.SpeakCaveat(caveat);
-                }
-                break;
-            case NoteCreateResult.Exists exists:
-                _announce(new A11yEvent.Graph(new GraphA11yEvent.GraphBlocked(
-                    new GraphBlockedReason.NoteCreateFailed(exists.Message))));
-                break;
-            case NoteCreateResult.Failed failed:
-                _announce(new A11yEvent.Graph(new GraphA11yEvent.GraphBlocked(
-                    new GraphBlockedReason.NoteCreateFailed(failed.Message))));
-                break;
-            default:
-                // Unavailable: the session is shutting down — a retired-token drop.
-                break;
-        }
+        GraphRevealInSidebar?.Invoke(path);
+        return true;
     }
 
     /// <summary>Test seam: the create worker's drain.</summary>

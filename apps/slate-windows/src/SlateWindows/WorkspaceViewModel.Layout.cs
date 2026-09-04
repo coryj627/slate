@@ -403,6 +403,9 @@ internal sealed partial class WorkspaceViewModel
         ReleaseUnreferencedBaseDocuments();
         ReleaseUnreferencedDashboards();
         ReleaseUnreferencedCanvasDocuments();
+        // W6-2 PR A (contract A-1; IPA-2): the pane close is the third
+        // tab-set boundary — the last graph tab can leave with its pane.
+        ReleaseGraphDocumentIfUnreferenced();
         RemoveEmptyGroup(group);
         AnnounceActivePane();
         RequestActiveEditorFocus();
@@ -468,6 +471,14 @@ internal sealed partial class WorkspaceViewModel
         }
         if (item.Kind == WorkspaceItemKind.Graph && TryFocusGlobalGraph())
         {
+            // Rule L, Term 6 (IPA-3): a reopen of a tab that still exists
+            // is an Open of that tab with the reopen line AFTER it. The two
+            // assignments above reach the funnel only when a reference
+            // changes; when the graph was already effective they change
+            // nothing, so the follow method is called here, before the
+            // shell's line — `Opened`, `ReopenedGraph`, and no load for an
+            // effective READY tab.
+            SyncPanels();
             _announce(new A11yEvent.ReopenedGraph());
             RaiseCommandStates();
             Persist();

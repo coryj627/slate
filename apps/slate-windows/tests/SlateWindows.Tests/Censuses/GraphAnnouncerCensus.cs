@@ -78,6 +78,14 @@ public sealed class GraphAnnouncerCensus
                 {
                     offenders.Add($"{label}: A11yEvent.HostComposed");
                 }
+                // IPA-7: a graph-family event CONSTRUCTED outside the relay is
+                // a posting site whatever it is handed to — the workspace's
+                // own `_announce` delegate included, which no member access
+                // above can see.
+                if (creation.Type.ToString().EndsWith("A11yEvent.Graph", StringComparison.Ordinal))
+                {
+                    offenders.Add($"{label}: new A11yEvent.Graph(…)");
+                }
             }
         }
         Assert.True(
@@ -202,6 +210,20 @@ public sealed class GraphAnnouncerCensus
         Assert.Equal(
             ["GraphDocumentViewModel.cs:CellAt", "GraphDocumentViewModel.cs:CellAt", "GraphDocumentViewModel.cs:CellOf", "GraphDocumentViewModel.cs:CellOf"],
             readers.OrderBy(r => r, StringComparer.Ordinal));
+        // IPA-11: the permitted helpers key by the VECTOR — CellOf indexes
+        // through CellIndexOf, and neither helper indexes a row by a literal.
+        CSharpSource document = CSharpSource.Load("Graph", "GraphDocumentViewModel.cs");
+        MethodDeclarationSyntax cellOf = document.Method("CellOf");
+        Assert.Contains(
+            cellOf.DescendantNodes().OfType<InvocationExpressionSyntax>(),
+            call => call.Expression is IdentifierNameSyntax { Identifier.ValueText: "CellIndexOf" });
+        foreach (string helper in new[] { "CellOf", "CellAt" })
+        {
+            MethodDeclarationSyntax method = document.Method(helper);
+            Assert.DoesNotContain(
+                method.DescendantNodes().OfType<ElementAccessExpressionSyntax>(),
+                access => access.ArgumentList.Arguments.Any(argument => argument.Expression is LiteralExpressionSyntax));
+        }
     }
 
     /// <summary>Contract A-5: none of core's nine headers is typed under

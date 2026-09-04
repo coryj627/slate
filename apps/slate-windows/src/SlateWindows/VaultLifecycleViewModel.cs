@@ -1040,6 +1040,10 @@ internal sealed class VaultLifecycleViewModel
         // target of "Reveal in File Tree".
         workspace.GraphNoteCreator = sidebar;
         workspace.GraphRevealInSidebar = capturedSidebar.SelectPathFromSurface;
+        // Rule A / AD-8 (IPA-6): the graph's load token and the create's
+        // completion carry THIS lifecycle's generation and compare it at
+        // dispatch — the same counter the listener arms are guarded by.
+        workspace.LifecycleGeneration = () => _generation;
         switcher.OpenRequested += QuickSwitcher_OpenRequested;
         switcher.Dismissed += QuickSwitcher_Dismissed;
 

@@ -55,7 +55,13 @@ internal static class PumpedDispatcher
         Dispatcher.PushFrame(frame);
     }
 
-    /// <summary>Pump until a scheduler's fixed-point drain completes.</summary>
-    public static void PumpUntilDrained(Task drain) =>
+    /// <summary>Pump until a scheduler's fixed-point drain completes — and
+    /// OBSERVE it (IPA-8): a faulted or cancelled drain is complete too,
+    /// and a fact that only waited would hide a scheduler or receiver
+    /// failure behind assertions that need no publication.</summary>
+    public static void PumpUntilDrained(Task drain)
+    {
         Xunit.Assert.True(PumpUntil(() => drain.IsCompleted), "the drain never completed");
+        drain.GetAwaiter().GetResult();
+    }
 }

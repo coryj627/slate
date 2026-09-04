@@ -592,7 +592,9 @@ public sealed class AnnouncementSeamCensus
         {
             CSharpSource source = CSharpSource.LoadPath(file);
             string name = Path.GetFileName(file);
-            if (name == "GraphAnnouncer.cs")
+            // The relay is exempt by its NORMALIZED path at the root of
+            // Graph/ — never by basename (IPA-7; IGA-32's nested-name bypass).
+            if (Path.GetRelativePath(root, file).Replace('\\', '/') == "GraphAnnouncer.cs")
             {
                 continue;
             }
@@ -656,5 +658,36 @@ public sealed class AnnouncementSeamCensus
             unusedSeams.Length == 0,
             "a named graph seam never reached the announcer, so this census is exempting nothing there: "
             + string.Join("; ", unusedSeams));
+
+        // AD-8 (IPA-7): the ONE graph-family posting site outside Graph/ —
+        // the create funnel's workspace completion, in a ROOT partial —
+        // named here and asserted to be the only one in the shell.
+        string shellRoot = SourceText.ShellSourceRoot();
+        var outsideSites = new List<string>();
+        foreach (string file in Directory.EnumerateFiles(shellRoot, "*.cs", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(shellRoot, file).Replace('\\', '/');
+            if (relative.StartsWith("Graph/", StringComparison.Ordinal)
+                || relative.StartsWith("obj/", StringComparison.Ordinal)
+                || relative.Contains("/obj/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            CSharpSource source = CSharpSource.LoadPath(file);
+            foreach (ObjectCreationExpressionSyntax creation in source.Root
+                .DescendantNodes()
+                .OfType<ObjectCreationExpressionSyntax>())
+            {
+                if (!creation.Type.ToString().EndsWith("A11yEvent.Graph", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                MethodDeclarationSyntax? owner = creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
+                outsideSites.Add($"{relative}:{owner?.Identifier.ValueText}");
+            }
+        }
+        Assert.Equal(
+            ["WorkspaceViewModel.GraphCreate.cs:GraphNoteCreationCompleted"],
+            outsideSites.Distinct().OrderBy(site => site, StringComparer.Ordinal));
     }
 }

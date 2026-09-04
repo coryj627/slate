@@ -641,6 +641,14 @@ W6_1_STATUS = (
     "interactive CI + human AT pending"
 )
 
+# W6-2 PR A (#746): the graph's delivered rows carry the date THEIR gates
+# went green, not W1's — a W6-2 row that fell through to the W1 status
+# claimed gates from before the branch existed (IPA-13).
+W6_2_STATUS = (
+    "implemented; local gates green 2026-09-03; "
+    "interactive CI + human AT pending"
+)
+
 W6_2_DELIVERED_COMMANDS = {
     # W6-2 PR A (#746, contract A-12): the graph tab's one chordless row,
     # executable through the palette and the registrar; B–E add the leaf's,
@@ -921,6 +929,8 @@ def command_delivery_status(
         return W5_4_STATUS
     if command_id in W6_1_DELIVERED_COMMANDS:
         return W6_1_STATUS
+    if command_id in W6_2_DELIVERED_COMMANDS:
+        return W6_2_STATUS
     return (
         W2_IMPLEMENTED_STATUS
         if issue.startswith(("#381", "#724", "#725"))
@@ -945,6 +955,8 @@ def issue_delivery_status(
         return W5_3_STATUS
     if issue_number == "#745":
         return W6_1_STATUS
+    if issue_number == "#746":
+        return W6_2_STATUS
     return IMPLEMENTED_STATUS
 
 

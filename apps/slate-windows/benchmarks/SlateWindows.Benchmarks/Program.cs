@@ -318,7 +318,28 @@ public class GraphOpenBenchmarks
                     () => frame.Continue = false);
                 System.Windows.Threading.Dispatcher.PushFrame(frame);
             }
+            // A-15 (IPA-12): the number is a PUBLICATION's, never a failed or
+            // unfinished load's — the drain observed, the budget enforced, a
+            // READY snapshot held over the synthetic vault's whole
+            // population (the notes plus one ghost per hundred).
+            if (!drain.IsCompleted)
+            {
+                throw new TimeoutException("the graph's first pair did not publish within 30 s.");
+            }
+            drain.GetAwaiter().GetResult();
+            if (document.Publication.State != SlateWindows.Graph.GraphLoadState.Ready
+                || !document.Publication.HoldsSnapshot)
+            {
+                throw new InvalidOperationException(
+                    $"the graph's first pair ended in {document.Publication.State}, not a held READY snapshot.");
+            }
             rows = document.Publication.Rows.Count;
+            int expected = Notes + Notes / 100;
+            if (rows != expected)
+            {
+                throw new InvalidOperationException(
+                    $"the publication carries {rows} rows; the synthetic vault has {expected}.");
+            }
             document.Retire();
         }
         finally

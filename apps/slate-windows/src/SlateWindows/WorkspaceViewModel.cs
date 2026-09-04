@@ -433,9 +433,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         Base = null;
         Dashboard = null;
         Canvas = null;
+        // W6-2 PR A (contract A-9; the post-implementation pass's IPA-1):
+        // a note opened INTO the graph's tab replaces the graph — the
+        // document leaves the tab here and the release sweep retires it.
+        Graph = null;
         OnPropertyChanged(nameof(Base));
         OnPropertyChanged(nameof(Dashboard));
         OnPropertyChanged(nameof(Canvas));
+        OnPropertyChanged(nameof(Graph));
         // The staleness verdict belongs to the PREVIOUS note
         // (adversarial round 10): a reused current tab must not make
         // the replacement note inherit it — every identity guard
@@ -1292,6 +1297,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(IsBaseVisible));
         OnPropertyChanged(nameof(IsDashboardVisible));
         OnPropertyChanged(nameof(IsCanvasVisible));
+        // W6-2 PR A (IPA-1): graph → note is the same in-place kind change;
+        // without these the graph surface stayed Visible over the opened
+        // note (the journey's Enter step, deterministic on CI and locally).
+        OnPropertyChanged(nameof(IsGraph));
+        OnPropertyChanged(nameof(IsGraphVisible));
     }
 }
 

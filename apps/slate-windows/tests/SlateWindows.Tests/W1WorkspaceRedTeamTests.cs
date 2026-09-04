@@ -574,6 +574,81 @@ public sealed class W1WorkspaceRedTeamTests
         });
     }
 
+    /// <summary>IPA-1 (contracts A-9, A-16): a note opened INTO the graph's
+    /// tab — Enter on a row — replaces the graph in place, so the
+    /// surface-visibility predicates the templates bind must re-evaluate,
+    /// the document must leave the tab, and the release sweep must retire
+    /// it. The journey's Enter step is this fact's live twin: without the
+    /// notifications the graph surface stayed Visible over the note.</summary>
+    [Fact]
+    public void OpeningARowsNoteOverTheGraphTabRaisesTheGraphVisibilityPredicates()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "w1-graph-replace");
+        using VaultSession session = OpenScannedSession(fixture.Root);
+        PumpedDispatcher.Run(() =>
+        {
+            using var workspace = NewWorkspace(session, fixture.Root);
+            workspace.OpenGraph();
+            Settle(workspace);
+            WorkspaceTabViewModel tab = workspace.ActiveGroup.ActiveTab!;
+            Assert.True(tab.IsGraphVisible);
+            Graph.GraphDocumentViewModel document = workspace.GraphDocument!;
+            var raised = new List<string>();
+            tab.PropertyChanged += (_, e) => raised.Add(e.PropertyName ?? string.Empty);
+
+            Assert.True(workspace.OpenGraphRowFromSurface("note0.md", WorkspaceOpenTarget.CurrentTab));
+
+            Assert.Same(tab, workspace.ActiveGroup.ActiveTab);
+            Assert.True(tab.IsMarkdown);
+            Assert.False(tab.IsGraph);
+            Assert.False(tab.IsGraphVisible);
+            Assert.Null(tab.Graph);
+            Assert.Contains(nameof(WorkspaceTabViewModel.IsGraph), raised);
+            Assert.Contains(nameof(WorkspaceTabViewModel.IsGraphVisible), raised);
+            Assert.Contains(nameof(WorkspaceTabViewModel.Graph), raised);
+            Assert.Null(workspace.GraphDocument);
+            Assert.True(document.IsRetired);
+        });
+    }
+
+    /// <summary>IPA-2 (contract A-1): the pane close is a tab-set boundary
+    /// too — the last graph tab leaving with its pane retires the document
+    /// (work in flight lands nothing), and the next open seats a fresh one.</summary>
+    [Fact]
+    public void ClosingThePaneHoldingTheLastGraphTabRetiresTheDocument()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "w1-graph-pane-close");
+        using VaultSession session = OpenScannedSession(fixture.Root);
+        PumpedDispatcher.Run(() =>
+        {
+            using var workspace = NewWorkspace(session, fixture.Root);
+            workspace.OpenPath("note0.md");
+            workspace.SplitRightCommand.Execute(null);
+            Assert.Equal(2, workspace.Groups.Count);
+            workspace.OpenGraph();
+            Settle(workspace);
+            Graph.GraphDocumentViewModel first = workspace.GraphDocument!;
+            Assert.True(workspace.ActiveGroup.ActiveTab!.IsGraph);
+            Graph.GraphPublication before = first.Publication;
+            // Work in flight at the boundary: a probe whose apply is refused.
+            workspace.NotifyGraphOfVaultChange();
+
+            workspace.ClosePaneCommand.Execute(null);
+
+            Assert.Single(workspace.Groups);
+            Assert.Null(workspace.GraphDocument);
+            Assert.True(first.IsRetired);
+            PumpedDispatcher.PumpUntilDrained(first.WhenAllWorkDrained());
+            PumpedDispatcher.Drain();
+            Assert.Same(before, first.Publication);
+
+            workspace.OpenGraph();
+            Settle(workspace);
+            Assert.NotSame(first, workspace.GraphDocument);
+            Assert.Equal(Graph.GraphLoadState.Ready, workspace.GraphDocument!.Publication.State);
+        });
+    }
+
     private static WorkspaceViewModel NewWorkspace(
         VaultSession session,
         string root,

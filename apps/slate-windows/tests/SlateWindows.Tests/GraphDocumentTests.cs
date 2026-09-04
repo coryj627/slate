@@ -68,6 +68,11 @@ public sealed class GraphDocumentTests
         public List<A11yEvent> ShellEvents { get; } = [];
         public List<string> GraphLines { get; } = [];
 
+        /// <summary>The graph lines AND the shell's reopen line in the order
+        /// they were posted — the projection rule L's Term 6 sequences are
+        /// stated over (the graph family plus <c>ReopenedGraph</c>).</summary>
+        public List<string> Timeline { get; } = [];
+
         public Host(string root)
         {
             Session = VaultSession.OpenFilesystem(root);
@@ -77,15 +82,49 @@ public sealed class GraphDocumentTests
                 Session,
                 root,
                 () => [],
-                ShellEvents.Add,
+                @event =>
+                {
+                    ShellEvents.Add(@event);
+                    if (@event is A11yEvent.ReopenedGraph)
+                    {
+                        Timeline.Add(Reopened());
+                    }
+                },
                 startInteractionBackgroundWork: false,
-                announceRendered: line => GraphLines.Add(line.Text));
+                announceRendered: line =>
+                {
+                    GraphLines.Add(line.Text);
+                    Timeline.Add(line.Text);
+                });
         }
 
         public GraphDocumentViewModel Document => Workspace.GraphDocument!;
 
         public WorkspaceTabViewModel GraphTab =>
             Workspace.Groups.SelectMany(g => g.Tabs).First(t => t.IsGraph);
+
+        /// <summary>Two panes, the graph effective in one; then the OTHER
+        /// pane made active — the graph VISIBLE but not EFFECTIVE, the
+        /// layout the addressed actions (A-8, A-9) are stated against.</summary>
+        public (WorkspaceGroupViewModel GraphGroup, WorkspaceGroupViewModel Other) GraphVisibleInAnUnfocusedPane()
+        {
+            Workspace.OpenGraph();
+            Settle();
+            string note = Document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note).Path!;
+            Workspace.OpenPath(note, WorkspaceOpenTarget.NewTab);
+            Workspace.SplitRightCommand.Execute(null);
+            WorkspaceGroupViewModel other = Workspace.ActiveGroup;
+            Workspace.OpenGraph();
+            Settle();
+            WorkspaceGroupViewModel graphGroup = Workspace.ActiveGroup;
+            Assert.NotSame(other, graphGroup);
+            Assert.True(graphGroup.ActiveTab!.IsGraph);
+            Workspace.SelectGroupFromKeyboardFocus(other);
+            Assert.Same(other, Workspace.ActiveGroup);
+            Assert.True(Workspace.GraphTabIsVisible());
+            Assert.False(Workspace.GraphTabIsEffective());
+            return (graphGroup, other);
+        }
 
         /// <summary>Pump until the document's tracked work drained.</summary>
         public void Settle()
@@ -109,6 +148,11 @@ public sealed class GraphDocumentTests
 
     private static string Summary(GraphDocumentViewModel document) =>
         Render(new GraphA11yEvent.GraphSnapshotSummary(document.Publication.Snapshot!.SummaryCounts));
+
+    private static string Reopened() => SlateUniffiMethods.A11yRender(new A11yEvent.ReopenedGraph()).Text;
+
+    private static string LoadFailed(string message) =>
+        Render(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.LoadFailed(message)));
 
     // --- Rule L: the paths (contract A-1) ---------------------------------
 
@@ -191,17 +235,42 @@ public sealed class GraphDocumentTests
             using var host = new Host(vault.Root);
             host.Workspace.OpenGraph();
             host.Settle();
-            // A pair whose session is gone fails: dispose a SECOND session's
-            // vault? The document's session is the workspace's, so the
-            // failure is injected by retiring the fetch's inputs — the
-            // document's own failure arm through a closed vault root.
-            host.Document.ViewState.Filter = new GraphFilter(true, true, true);
+            GraphDocumentViewModel document = host.Document;
+            // A pair that FAILS (IPA-9): the gate throws inside the worker
+            // after both crossings — the failure arm's envelope, exactly as
+            // a session error produces it. The pair is a BY-TAB activation.
+            bool armed = true;
+            document.FetchGateForTests = () =>
+            {
+                if (armed)
+                {
+                    armed = false;
+                    throw new InvalidOperationException("injected pair failure");
+                }
+            };
+            string note = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note).Path!;
+            host.Workspace.OpenPath(note, WorkspaceOpenTarget.NewTab);
             host.GraphLines.Clear();
-            host.Workspace.OpenGraph();
+            host.Workspace.ActiveGroup.ActiveTab = host.GraphTab;
             host.Settle();
-            // No failure was injected here — the fact pins the READY branch
-            // of the same rule: with a snapshot held, Opened alone.
+            // ERROR without a snapshot, and the failure where the summary
+            // would have been (Term 6's failure arm).
+            Assert.Equal(GraphLoadState.Error, document.Publication.State);
+            Assert.False(document.Publication.HoldsSnapshot);
+            Assert.Equal([LoadFailed("injected pair failure")], host.GraphLines);
+
+            // The explicit Open of the effective ERROR tab restarts the pair
+            // (the mac's guard: no load only when READY, IGA-39) — LOADING
+            // shows, Opened first, then the summary when it publishes.
+            host.GraphLines.Clear();
+            int loads = host.Workspace.GraphLoadsForTests;
+            host.Workspace.OpenGraph();
+            Assert.Equal(GraphLoadState.Loading, document.Publication.State);
             Assert.Equal([Opened()], host.GraphLines);
+            Assert.Equal(loads + 1, host.Workspace.GraphLoadsForTests);
+            host.Settle();
+            Assert.Equal(GraphLoadState.Ready, document.Publication.State);
+            Assert.Equal([Opened(), Summary(document)], host.GraphLines);
         });
     }
 
@@ -408,7 +477,7 @@ public sealed class GraphDocumentTests
     }
 
     [Fact]
-    public void AGenerationThatArrivesDuringAnInFlightPairEndsInTheNewerPublication()
+    public void AGenerationThatArrivesDuringAnInFlightPairSupersedesItAndTheStaleResultInstallsNothing()
     {
         using GraphVault vault = GraphVault.Copy("gated-generation");
         PumpedDispatcher.Run(() =>
@@ -418,28 +487,41 @@ public sealed class GraphDocumentTests
             host.Settle();
             GraphDocumentViewModel document = host.Document;
             ulong g1 = document.Publication.Generation;
+            var installed = new List<GraphPublication>();
+            document.PublicationInstalled += install => installed.Add(install.Current);
+            // The pair PARKS in the worker after both crossings (IPA-10): its
+            // envelope carries G1 while, on the dispatcher, the world moves
+            // to G2 and the probe runs against the held READY G1 snapshot.
+            using var gate = new ManualResetEventSlim(false);
             bool armed = true;
             document.FetchGateForTests = () =>
             {
                 if (armed)
                 {
                     armed = false;
-                    // After both crossings of the in-flight pair: a mutation
-                    // makes G2, and a probe sees it while the held
-                    // publication is READY at G1 — the probe issues a
-                    // superseding silent pair.
-                    _ = host.Session.CreateExclusive("theta.md", "# Theta\n\n[[a]]\n");
+                    gate.Wait(TimeSpan.FromSeconds(10));
                 }
             };
-            // A pair over the held snapshot (a filter change).
             document.ViewState.Filter = new GraphFilter(true, true, false);
-            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
-            host.Settle();
+            GraphLoadToken inFlight = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            _ = host.Session.CreateExclusive("theta.md", "# Theta\n\n[[a]]\n");
             host.Workspace.NotifyGraphOfVaultChange();
+            // The probe's apply issues the superseding silent pair: a fresh
+            // seq while the first pair is still parked.
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => document.SeqForTests > inFlight.Seq),
+                "the probe never superseded the in-flight pair");
+            Assert.Empty(installed);
+            gate.Set();
             host.Settle();
 
-            Assert.True(document.Publication.Generation > g1);
-            Assert.Contains(document.Publication.Rows, row => row.Path == "theta.md");
+            // Exactly ONE install — the superseding pair's; the stale G1
+            // result dropped at step (i) of the receiver.
+            GraphPublication only = Assert.Single(installed);
+            Assert.Same(only, document.Publication);
+            Assert.True(only.Generation > g1);
+            Assert.Contains(only.Rows, row => row.Path == "theta.md");
+            Assert.Equal(new GraphFilter(true, true, false), only.Filter);
         });
     }
 
@@ -702,6 +784,223 @@ public sealed class GraphDocumentTests
             var failed = Assert.IsType<GraphBlockedReason.NoteCreateFailed>(reason.Reason);
             Assert.False(string.IsNullOrEmpty(failed.Message));
             Assert.Empty(creator.Landed);
+        });
+    }
+
+    // --- Rule L, Term 6: the reopen sequences (IPA-3) ----------------------
+
+    /// <summary>A reopen whose graph tab still exists, effective and READY:
+    /// an Open of that tab with the reopen line AFTER it — `Opened`,
+    /// `ReopenedGraph`, no load, no summary (the mac's `:81` guard under
+    /// `openGraphTab`, then `reopenedGraph`).</summary>
+    [Fact]
+    public void AReopenOfTheEffectiveReadyGraphSpeaksOpenedThenTheReopenLineAndLoadsNothing()
+    {
+        using GraphVault vault = GraphVault.Copy("reopen-effective");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            // A closed record that outlives the graph's next open.
+            host.Workspace.CloseActiveTabCommand.Execute(null);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            Assert.True(host.Workspace.GraphTabIsEffective());
+            int loads = host.Workspace.GraphLoadsForTests;
+            host.Timeline.Clear();
+
+            host.Workspace.ReopenClosedTabCommand.Execute(null);
+            host.Settle();
+
+            Assert.Equal([Opened(), Reopened()], host.Timeline);
+            Assert.Equal(loads, host.Workspace.GraphLoadsForTests);
+        });
+    }
+
+    /// <summary>A reopen whose graph tab exists but is hidden behind a note
+    /// in its group: the activation is a transition BY TAB under the Reopen
+    /// cause — `Opened`, the reopen line, then the summary.</summary>
+    [Fact]
+    public void AReopenOfAHiddenGraphSpeaksOpenedTheReopenLineThenTheSummary()
+    {
+        using GraphVault vault = GraphVault.Copy("reopen-hidden");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            host.Workspace.CloseActiveTabCommand.Execute(null);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            string note = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note).Path!;
+            host.Workspace.OpenPath(note, WorkspaceOpenTarget.NewTab);
+            Assert.True(host.Workspace.GraphTabIsVisible() is false);
+            host.Timeline.Clear();
+
+            host.Workspace.ReopenClosedTabCommand.Execute(null);
+            host.Settle();
+
+            Assert.Equal([Opened(), Reopened(), Summary(document)], host.Timeline);
+            Assert.True(host.Workspace.GraphTabIsEffective());
+        });
+    }
+
+    /// <summary>A reopen that recreates the graph tab: `Opened`, the reopen
+    /// line, then the summary — the AddTab arm.</summary>
+    [Fact]
+    public void AReopenThatRecreatesTheGraphTabSpeaksOpenedTheReopenLineThenTheSummary()
+    {
+        using GraphVault vault = GraphVault.Copy("reopen-recreate");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            host.Workspace.CloseActiveTabCommand.Execute(null);
+            Assert.Null(host.Workspace.GraphDocument);
+            host.Timeline.Clear();
+
+            host.Workspace.ReopenClosedTabCommand.Execute(null);
+            host.Settle();
+
+            GraphDocumentViewModel document = host.Document;
+            Assert.Equal(GraphLoadState.Ready, document.Publication.State);
+            Assert.Equal([Opened(), Reopened(), Summary(document)], host.Timeline);
+        });
+    }
+
+    // --- The addressed actions (contracts A-8, A-9; IPA-4) -----------------
+
+    /// <summary>Every action activates its address at invocation (IGA-41):
+    /// Reveal from a graph visible in a pane that is NOT the active group
+    /// makes that pane active before the sidebar seam runs.</summary>
+    [Fact]
+    public void RevealFromAnUnfocusedPaneActivatesTheGraphsPaneFirst()
+    {
+        using GraphVault vault = GraphVault.Copy("reveal-addressed");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            (WorkspaceGroupViewModel graphGroup, WorkspaceGroupViewModel other) = host.GraphVisibleInAnUnfocusedPane();
+            var revealed = new List<string>();
+            host.Workspace.GraphRevealInSidebar = revealed.Add;
+            GraphTableRow note = host.Document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note);
+            Assert.Same(other, host.Workspace.ActiveGroup);
+
+            host.Document.Execute(GraphRowAction.Reveal, note);
+
+            Assert.Same(graphGroup, host.Workspace.ActiveGroup);
+            Assert.True(host.Workspace.GraphTabIsEffective());
+            Assert.Equal([note.Path], revealed);
+        });
+    }
+
+    /// <summary>Create from an unfocused pane: the address is activated at
+    /// invocation, so the landed note opens in the graph's pane (AD-8), and
+    /// the completion compares the address without activating anything.</summary>
+    [Fact]
+    public void CreateFromAnUnfocusedPaneActivatesTheGraphsPaneAndOpensTheNoteThere()
+    {
+        using GraphVault vault = GraphVault.Copy("create-addressed");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            var creator = new RecordingCreator(host.Session);
+            host.Workspace.GraphNoteCreator = creator;
+            (WorkspaceGroupViewModel graphGroup, WorkspaceGroupViewModel other) = host.GraphVisibleInAnUnfocusedPane();
+            GraphTableRow ghost = host.Document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Ghost);
+            string expectedPath = SlateUniffiMethods.GraphGhostNotePath(ghost.Label);
+            Assert.Same(other, host.Workspace.ActiveGroup);
+
+            host.Document.Activate(ghost, modified: false);
+            Assert.Same(graphGroup, host.Workspace.ActiveGroup);
+            PumpedDispatcher.PumpUntilDrained(host.Workspace.DrainGraphNoteCreationForTests());
+            PumpedDispatcher.Drain();
+
+            Assert.Equal([expectedPath], creator.Landed);
+            Assert.Same(graphGroup, host.Workspace.ActiveGroup);
+            Assert.Equal(expectedPath, graphGroup.ActiveTab!.Path);
+            Assert.DoesNotContain(other.Tabs, t => t.Path == expectedPath);
+        });
+    }
+
+    // --- Rule A: the lifecycle generation (IPA-6) --------------------------
+
+    /// <summary>The token carries the lifecycle generation it was started
+    /// under; a result arriving after the lifecycle advanced installs
+    /// nothing and speaks nothing, and the next body under the new
+    /// generation publishes.</summary>
+    [Fact]
+    public void AResultFromAnEarlierLifecycleGenerationInstallsNothing()
+    {
+        using GraphVault vault = GraphVault.Copy("lifecycle-generation");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            int generation = 1;
+            var lines = new List<string>();
+            var document = new GraphDocumentViewModel(
+                host.Session,
+                new GraphAnnouncer(line => lines.Add(line.Text)),
+                isEffectiveActive: () => true,
+                verbosity: () => GraphVerbosity.Standard,
+                lifecycleGeneration: () => Volatile.Read(ref generation));
+            int installs = 0;
+            document.PublicationInstalled += _ => installs++;
+            // The lifecycle advances while the body is on the pool, after
+            // its crossings.
+            document.FetchGateForTests = () => Interlocked.Increment(ref generation);
+            GraphLoadToken token = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Summary);
+            Assert.Equal(1, token.LifecycleGeneration);
+            PumpedDispatcher.PumpUntilDrained(document.WhenAllWorkDrained());
+            PumpedDispatcher.Drain();
+            Assert.Equal(0, installs);
+            Assert.False(document.Publication.HoldsSnapshot);
+            Assert.Empty(lines);
+
+            document.FetchGateForTests = null;
+            GraphLoadToken next = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            Assert.Equal(2, next.LifecycleGeneration);
+            PumpedDispatcher.PumpUntilDrained(document.WhenAllWorkDrained());
+            PumpedDispatcher.Drain();
+            Assert.Equal(1, installs);
+            Assert.True(document.Publication.HoldsSnapshot);
+            document.Retire();
+        });
+    }
+
+    /// <summary>A create whose completion arrives after the lifecycle
+    /// advanced is dropped whole (AD-8): the file landed, but no
+    /// bookkeeping, no open, no announcement — its session and sidebar are
+    /// gone.</summary>
+    [Fact]
+    public void ACreateCompletingAfterTheLifecycleAdvancedIsDroppedWhole()
+    {
+        using GraphVault vault = GraphVault.Copy("create-lifecycle");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            int generation = 1;
+            host.Workspace.LifecycleGeneration = () => Volatile.Read(ref generation);
+            var creator = new RecordingCreator(host.Session, beforeCreate: () => Interlocked.Increment(ref generation));
+            host.Workspace.GraphNoteCreator = creator;
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            GraphTableRow ghost = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Ghost);
+            string expectedPath = SlateUniffiMethods.GraphGhostNotePath(ghost.Label);
+            host.ShellEvents.Clear();
+
+            document.Activate(ghost, modified: false);
+            PumpedDispatcher.PumpUntilDrained(host.Workspace.DrainGraphNoteCreationForTests());
+            PumpedDispatcher.Drain();
+
+            Assert.Equal([expectedPath], creator.Created);
+            Assert.Empty(creator.Landed);
+            Assert.DoesNotContain(host.ShellEvents, e => e is A11yEvent.Graph);
+            Assert.DoesNotContain(host.Workspace.Groups.SelectMany(g => g.Tabs), t => t.Path == expectedPath);
         });
     }
 

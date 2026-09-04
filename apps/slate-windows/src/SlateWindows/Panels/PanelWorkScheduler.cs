@@ -40,6 +40,11 @@ internal abstract class PanelWorkScheduler : BindableBase
 
     protected bool IsShutDown => _isShutDown;
 
+    /// <summary>Test seam (IPA-5): runs on the pool immediately before the
+    /// always-async compute's liveness check — the deterministic stand-in
+    /// for a teardown that lands between queueing and pickup.</summary>
+    internal Action? BeforeComputeForTests { get; set; }
+
     /// <summary>Whether this scheduler runs bodies inline (test mode)
     /// — for the rare subclass step that must choose between inline
     /// and pool execution OUTSIDE StartWork (e.g. a post-shutdown
@@ -250,7 +255,22 @@ internal abstract class PanelWorkScheduler : BindableBase
         {
             return;
         }
-        T result = await Task.Run(compute).ConfigureAwait(false);
+        // The last gate before the compute, ON THE POOL (IPA-5): teardown
+        // can land between the check above and the pool picking the body
+        // up — <see cref="RunIfLive"/>'s rule, which StartWork already
+        // applies — so a compute that would touch a session the lifecycle
+        // has disposed is refused where it would start, not where it was
+        // queued. A refused compute applies nothing.
+        (bool Admitted, T Result) computed = await Task.Run(() =>
+        {
+            BeforeComputeForTests?.Invoke();
+            return _isShutDown ? (false, default(T)!) : (true, compute());
+        }).ConfigureAwait(false);
+        if (!computed.Admitted)
+        {
+            return;
+        }
+        T result = computed.Result;
         if (_uiContext is null)
         {
             if (!_isShutDown)

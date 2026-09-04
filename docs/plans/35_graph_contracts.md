@@ -4259,15 +4259,120 @@ document's `IsRetired` guard in the receiver and the announcer's
 `Shutdown` in `Retire` are what make a result for a retired document
 install nothing and speak nothing (A-1's facts).
 
+**TGA-9 — The post-implementation pass, and the journey's failure it
+explained.** The standing gate found what TGA-8 had not run: the shell
+accessibility gate failed on `ed92f9d` at the journey's Enter step —
+"Enter on Alpha did not replace the graph tab with the note" — on CI and,
+reproduced before any change, on this box in 18 seconds, deterministic
+both times (TGA-8's "builds with the journey" was exactly that: built,
+never run to its last step). A codex pass at xhigh over the branch's
+diff against the frozen text (brief: the contracts most severe first,
+then races and thread affinity, then vacuous facts and evadable
+censuses, then unrecorded mac divergences, then TGA-8's deviations)
+returned thirteen findings, IPA-1..13 — five blockers, seven majors, one
+minor — and the first named the journey's cause. Every one was verified
+against the code before a line changed; none was refuted. Discharged by
+code, most severe first: (IPA-1, A-9/A-16) `ReplaceItem` cleared
+`Base`/`Dashboard`/`Canvas` and `NotifyItemChanged` raised every surface
+predicate EXCEPT `IsGraph`/`IsGraphVisible`, so a note opened into the
+graph's tab left the graph surface Visible over it — the tab now drops
+`Graph` and raises both, pinned by a W1 twin that opens a row's note over
+the graph tab and asserts the predicates, the notifications, the null
+document and the retirement, and by the journey itself, green locally
+after the fix; (IPA-2, A-1) `CloseActivePane` swept bases, dashboards
+and canvases but not the graph — the release sweep runs there too,
+pinned by a twin that closes the pane holding the last graph tab with a
+probe in flight and reopens a fresh document; (IPA-3, Term 6) a reopen
+whose graph tab was already effective changed no reference, so the
+follow method ran only at the outermost boundary, AFTER the shell's
+line — `ReopenedGraph`, `Opened`, the frozen sequence reversed; the
+reopen arm now calls the funnel (`SyncPanels`) before posting the line,
+and three facts over a merged timeline pin the effective READY case
+(`Opened`, `ReopenedGraph`, no load), the hidden-tab case and the
+recreated-tab case (`Opened`, `ReopenedGraph`, summary); (IPA-4, A-8/A-9,
+IGA-41/56) only Open activated its address — Reveal invoked the sidebar
+seam directly and Create merely captured the tab; both now run through
+`FocusGraphAddress` at invocation (`RevealGraphRowFromSurface`; the
+create's invocation), pinned by two-pane facts in which the graph is
+VISIBLE in the pane that is not the active group and each action makes
+that pane active first, the landed note opening there; (IPA-5, Term 7)
+`RunAlwaysAsync` checked `_isShutDown` before `Task.Run` and never
+again before the compute — the window `RunIfLive` closes for `StartWork`
+— so the compute now runs under a liveness check ON THE POOL and a
+refused compute applies nothing, pinned by two scheduler facts through
+a pool-side seam (`BeforeComputeForTests`): a shutdown between queueing
+and pickup refuses the compute; a shutdown after the compute skips the
+apply; (IPA-6, rule A/AD-8) the token carried no lifecycle generation and
+the create's completion was keyed by the worker's life alone — the
+lifecycle now hands the workspace its counter (`LifecycleGeneration`,
+`_generation` at `InitializeWorkspace`), the document reads it into
+every token and compares it at step (i), the create captures it at
+invocation and its completion drops whole when it moved, and the
+envelope's own consistency (filter against query) is validated at step
+(ii) before EITHER arm; pinned by a bare-document fact whose gate
+advances the generation between the crossings and the dispatch (nothing
+installs, nothing speaks, the next token publishes) and a create fact
+whose creator advances it (the file lands, no bookkeeping, no open, no
+event); (IPA-7, AD-8) the one posting site outside `Graph/` sat inside
+`Graph/WorkspaceViewModel.Graph.cs`, the announcer census saw no bare
+`_announce(...)` and the seam census exempted the relay by basename —
+the completion now lives in the root partial
+`WorkspaceViewModel.GraphCreate.cs`, the announcer census treats any
+`A11yEvent.Graph` constructed under `Graph/` outside the relay as a
+posting site, the seam census exempts the relay by its normalised path
+and asserts the root partial's `GraphNoteCreationCompleted` is the ONLY
+site in the shell that constructs a graph-family event; (IPA-8) the
+pumped harness observed only `IsCompleted` — `PumpUntilDrained` now
+rethrows a faulted or cancelled drain; (IPA-9, A-4/Term 6) the
+pair-failure fact said in its own text that no failure was injected —
+it now throws from the fetch gate after the crossings, asserts ERROR
+without a snapshot and `LoadFailed` where the summary would be, then an
+explicit Open showing LOADING, `Opened`, and the summary on READY; (IPA-10,
+A-3) the supersession fact let the pair apply before the probe — the
+pair now PARKS in the worker on a gate while the world moves to G2 and
+the probe issues the superseding pair against the held G1 snapshot, and
+the fact asserts exactly one install, the superseding pair's, with the
+stale G1 result dropping at step (i); (IPA-11, A-6) the reordered-vector
+fact never handed the vector to the document — a test seam
+(`ReplaceColumnInventoryForTests`) does, the lookup answers index 0 for
+Kind and returns the cell AT that index, and the census now requires
+`CellOf` to index through `CellIndexOf` and forbids a literal element
+index in either helper; (IPA-12, A-15) the runner's `OpenToPublication`
+could pass a failed or unfinished load — it now fails on timeout,
+observes the drain, and requires a READY held snapshot carrying the
+synthetic vault's whole population (the notes plus one ghost per
+hundred); (IPA-13, A-12) the matrix generator had no W6-2 branch, so the
+delivered row fell through to W1's 2026-07-20 status — a `W6_2_STATUS`
+dated 2026-09-03 routes the command and the issue, and the matrix is
+regenerated. Mutations: 39 in the sweep, the twenty-six of
+TGA-7 plus thirteen for this pass (each fix reinstated, each new fact
+failing against it — the visibility notifications, the document kept on
+replace, the pane sweep, the reopen funnel call, the unaddressed reveal
+and create, the pool-side check, the unchecked generation in the token
+and in the completion, a posting under `Graph/`, the failure arm, the
+stale sequence against the supersession fact, a literal cell index),
+39 caught. Gates: 2135 Windows facts on a fresh
+build; the journey passed locally in 9 seconds after the fix (18 seconds to the same failure before it); `dotnet format` clean; the benchmarks and
+the accessibility projects build; the Rust and mac lanes untouched by
+this pass.
+
 ### Tests that pin PR A
 
 - Windows facts: GraphDocumentTests (A-1, A-2, A-3, A-4, A-7, A-8, A-9,
   A-14 — the load, reorder, close-during-fetch, generation-retry and
   teardown facts under the pumped dispatcher; the primitive's own
-  facts; rule L's path facts), GraphTableTests (A-5, A-6, A-11, A-15's
-  virtualisation),
-  GraphAnnouncerTests (A-10); `W1WorkspaceRedTeamTests` twins (A-13);
-  `ChordTableTests` (A-12); the censuses of A-17; the FlaUI journey
+  facts; rule L's path facts; after TGA-9: the three reopen sequences
+  over a merged timeline, the addressed Reveal and Create from an
+  unfocused pane, the lifecycle generation in the token and in the
+  create's completion, the injected pair failure, the parked pair's
+  supersession), GraphTableTests (A-5, A-6, A-11, A-15's
+  virtualisation; the reordered vector handed to the document),
+  GraphAnnouncerTests (A-10); PanelWorkSchedulerTests (A-2; the
+  pool-side liveness check); `W1WorkspaceRedTeamTests` twins (A-13; the
+  graph tab replaced in place, the pane close as a boundary);
+  `ChordTableTests` (A-12); the censuses of A-17 (the graph-family
+  construction under `Graph/`, the relay by normalised path, the one
+  posting site, the lookup keyed by the vector); the FlaUI journey
   (A-16); GraphOpenBenchmarks (A-15).
 - Rust: `graph_table_default_sort` is the `Default`; the surface list
   is twenty-four; `the_windows_graph_coalescing_switch_matches_the_pinned_class_list`.
