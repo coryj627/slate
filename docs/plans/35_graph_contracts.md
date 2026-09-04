@@ -4497,6 +4497,46 @@ counted (the 10k fact); the whole sweep re-run: 49 caught of
 format` clean; the journey passed locally in 8 seconds; the benchmarks and the
 accessibility projects build.
 
+**TGA-12 — The standing gate on `fd19a05`, and the fourth codex pass.**
+Codoki APPROVED the head ("no issues found") and its one inline thread
+from `1de19b4` — the null model keeping its rows, discharged in TGA-10 —
+was answered and resolved, so the PR carries zero unresolved threads.
+The Windows app lane passed. The shell accessibility gate failed at a
+CANVAS journey, W6-1's
+`CanvasVerbs_GroupConnectDuplicateLinkConvertAndUndo_AreReachable` —
+"the undo chain never returned to two cards after 12 chords" — with the
+graph journey and the other forty-one green; the journey passes here in 44 seconds, and nothing in this PR's diff reaches the canvas undo chain (the shared scheduler's changes are confined to shutdown and the always-async primitive, which the canvas documents do not use), so it is not called a flake but not root-caused in this record either — the gate re-runs on this push and a second failure on this branch would be chased with the app log. The fourth codex
+pass at xhigh over the third pass's commit returned no blocker, three
+majors and two minors, IPD-1..5, each verified: (IPD-1, Term 7/AD-4)
+the apply's post and the test seam ran under the work lock — a context
+whose `Post` runs the callback inline would apply under the lock, a
+blocking one could invert with `Shutdown`, a throwing seam would fault
+the tracked task; the promise is registered under the lock and posted
+OUTSIDE it, the callback's claim under the lock unchanged, and a post
+the owner context refuses withdraws the promise and completes the
+tracked task without a fault — so TGA-10's "no callback posted after the
+flip" is corrected here to what the design guarantees: a callback may be
+posted after the flip and then fails to CLAIM, applying nothing; pinned
+by two hostile-context facts — a Post that runs the callback inline applies once, on the worker, with no deadlock and a completed drain; a Post that throws applies nothing and faults no tracked task; (IPD-2, A-8/A-9) the `(group, tab)` address could in
+principle be re-satisfied by the same objects re-seated — REFUTED as
+reachable (a closed tab is disposed and never re-added, a closed pane's
+group is never re-added, and the replace arm never seats a Graph item,
+so a tab cannot become the graph again) and HARDENED anyway: the address
+captures the document seated at invocation and the completion requires
+that same document still seated and live; (IPD-3, A-15) the 10k fact's
+bound was a tenth of the population where the frozen text says "the
+viewport's row capacity plus the panel's cache length" — the bound is now READ from the realised panel — the substrate scrolls by item with a one-item cache each side, so the capacity is the viewport's rows plus two, and the ceiling is six times that, because WPF's Standard virtualisation cleans containers up in a deferred pass and this box shows up to 70 live over a 15-row viewport between cleanups — the first page must fit the capacity, unloading must have happened, and the panel's scroll unit is asserted so a pixel-scrolling substrate would fail loudly;
+(IPD-4) the parked-pair release spun on a non-volatile field —
+`_retired` is volatile; (IPD-5, A-17) `_announce.Invoke(…)`,
+`_announce?.Invoke(…)` and `(this)._announce(…)` dodged the callee rule
+— every delegate call is folded to its terminal identifier through
+`.Invoke` and conditional access, and under `Graph/` every OTHER
+reference to the workspace's delegate (captured, passed along, assigned)
+is an offender, so no event built elsewhere can reach it; the outside
+scan folds the same shapes. Mutations added for this pass: the refused post rethrowing (the refusing-context fact), row virtualisation switched off (the 10k fact), a pre-built event handed to the delegate's Invoke under Graph/ (the announcer census); the whole sweep re-run: 52 caught of 52. Gates: 2144 Windows facts on
+a fresh build; `dotnet format` clean; the graph journey passed locally in 8 seconds; the
+benchmarks and the accessibility projects build.
+
 ### Tests that pin PR A
 
 - Windows facts: GraphDocumentTests (A-1, A-2, A-3, A-4, A-7, A-8, A-9,

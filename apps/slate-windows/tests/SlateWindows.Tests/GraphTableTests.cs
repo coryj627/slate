@@ -331,12 +331,6 @@ public sealed class GraphTableTests
                 _ = kindsRealized.Add(((GraphTableRow)e.Row.Item).Kind);
             };
             grid.UnloadingRow += (_, _) => unloaded++;
-            // The live bound is a TENTH of the population: the count under
-            // Standard virtualisation is a multiple of the rows the viewport
-            // holds, which a runner's row metrics make larger than this
-            // box's (417 against a literal 400 on CI); the claim is
-            // "bounded, never the row count", not one machine's number.
-            const int LiveBound = 1_000;
             var window = new System.Windows.Window
             {
                 Content = view,
@@ -349,18 +343,52 @@ public sealed class GraphTableTests
             try
             {
                 grid.UpdateLayout();
+                // The bound is the frozen text's (A-15; IPD-3): the VIEWPORT's
+                // row capacity plus the PANEL's cache length, both READ from
+                // the realised panel — never a literal, never a share of the
+                // population. The substrate scrolls by item with a one-item
+                // cache each side; WPF's Standard virtualisation cleans up
+                // containers in a deferred pass, so up to a few viewports of
+                // containers are live between cleanups (this box: 70 over a
+                // 15-row viewport). Six viewports-plus-cache is the ceiling
+                // a bounded panel stays under and a panel that never unloads
+                // exceeds within a handful of pages.
+                System.Windows.Controls.VirtualizingStackPanel? panel = FindPanel(grid);
+                Assert.NotNull(panel);
+                Assert.Equal(System.Windows.Controls.ScrollUnit.Item, System.Windows.Controls.VirtualizingPanel.GetScrollUnit(grid));
+                int viewportRows = (int)Math.Ceiling(panel.ViewportHeight);
+                System.Windows.Controls.VirtualizationCacheLength cache = System.Windows.Controls.VirtualizingPanel.GetCacheLength(grid);
+                double cacheItems = System.Windows.Controls.VirtualizingPanel.GetCacheLengthUnit(grid) switch
+                {
+                    System.Windows.Controls.VirtualizationCacheLengthUnit.Item => cache.CacheBeforeViewport + cache.CacheAfterViewport,
+                    System.Windows.Controls.VirtualizationCacheLengthUnit.Page => (cache.CacheBeforeViewport + cache.CacheAfterViewport) * viewportRows,
+                    _ => throw new InvalidOperationException("a pixel cache length has no row capacity"),
+                };
+                int capacity = viewportRows + (int)Math.Ceiling(cacheItems);
+                int liveBound = capacity * 6;
+                Assert.True(viewportRows > 0 && viewportRows < document.Publication.Rows.Count / 10, $"the viewport holds {viewportRows} rows");
                 int live = loaded - unloaded;
-                Assert.True(live > 0 && live < 200, $"{live} live containers for the first page");
+                Assert.True(live > 0 && live <= capacity + 2, $"{live} live containers for the first page against a capacity of {capacity}");
                 // Page through: the live count stays bounded, never the row count.
                 for (int page = 0; page < 20; page++)
                 {
                     grid.ScrollIntoView(document.Publication.Rows[Math.Min(document.Publication.Rows.Count - 1, (page + 1) * 500)]);
                     grid.UpdateLayout();
-                    Assert.True(loaded - unloaded < LiveBound, $"{loaded - unloaded} live containers after page {page}");
+                    // The panel's deferred cleanup runs at background priority.
+                    PumpedDispatcher.Drain();
+                    Assert.True(
+                        loaded - unloaded <= liveBound,
+                        $"{loaded - unloaded} live containers after page {page} against a bound of {liveBound} ({viewportRows} rows in the viewport, {cacheItems} cached)");
                 }
                 grid.ScrollIntoView(document.Publication.Rows[^1]);
                 grid.UpdateLayout();
-                Assert.True(loaded - unloaded < LiveBound, $"{loaded - unloaded} live containers at the end");
+                PumpedDispatcher.Drain();
+                Assert.True(
+                    loaded - unloaded <= liveBound,
+                    $"{loaded - unloaded} live containers at the end against a bound of {liveBound}");
+                // Unloading HAPPENED — a panel that only realises would have
+                // twenty pages live — and never every row.
+                Assert.True(unloaded > 0, "no container was ever unloaded");
                 Assert.True(loaded < document.Publication.Rows.Count, "every row was realized");
                 // Both kinds were realised along the way (the ghosts lead
                 // under links-in descending; the notes close the table).
@@ -374,5 +402,25 @@ public sealed class GraphTableTests
             Assert.Equal(3, document.ActionInventoryCrossings);
             Assert.Equal(3, document.CrossingsForTests["graph_row_actions"]);
         });
+    }
+
+    /// <summary>The grid's items panel — the substrate's virtualising
+    /// stack panel — once realised in a shown window.</summary>
+    private static System.Windows.Controls.VirtualizingStackPanel? FindPanel(System.Windows.DependencyObject root)
+    {
+        if (root is System.Windows.Controls.VirtualizingStackPanel panel)
+        {
+            return panel;
+        }
+        int count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (int index = 0; index < count; index++)
+        {
+            System.Windows.Controls.VirtualizingStackPanel? found = FindPanel(System.Windows.Media.VisualTreeHelper.GetChild(root, index));
+            if (found is not null)
+            {
+                return found;
+            }
+        }
+        return null;
     }
 }

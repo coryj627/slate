@@ -701,19 +701,18 @@ public sealed class AnnouncementSeamCensus
                     outsideSites.Add($"{relative}:using directive {directive.NamespaceOrType}");
                 }
             }
-            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            foreach ((IdentifierNameSyntax callee, ArgumentListSyntax arguments) in GraphAnnouncerCensus.DelegateCalls(source.Root))
             {
-                // The callee normalised to its terminal identifier (IPC-3).
-                string? calleeName = GraphAnnouncerCensus.TerminalIdentifier(call.Expression);
-                if (calleeName is null
-                    || !calleeName.EndsWith("announce", StringComparison.OrdinalIgnoreCase)
-                    || call.ArgumentList.Arguments.Count != 1)
+                // The callee normalised to its terminal identifier (IPC-3,
+                // IPD-5): bare, this-qualified, `.Invoke`, `?.Invoke`.
+                if (!callee.Identifier.ValueText.EndsWith("announce", StringComparison.OrdinalIgnoreCase)
+                    || arguments.Arguments.Count != 1)
                 {
                     continue;
                 }
-                if (call.ArgumentList.Arguments[0].Expression is ImplicitObjectCreationExpressionSyntax)
+                if (arguments.Arguments[0].Expression is ImplicitObjectCreationExpressionSyntax)
                 {
-                    MethodDeclarationSyntax? owner = call.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
+                    MethodDeclarationSyntax? owner = callee.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
                     outsideSites.Add($"{relative}:{owner?.Identifier.ValueText} (target-typed new)");
                 }
             }

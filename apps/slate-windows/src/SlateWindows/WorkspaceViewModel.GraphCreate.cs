@@ -29,7 +29,7 @@ internal sealed partial class WorkspaceViewModel
         {
             return;
         }
-        (WorkspaceGroupViewModel Group, WorkspaceTabViewModel Tab)? address = GraphAddress();
+        (WorkspaceGroupViewModel Group, WorkspaceTabViewModel Tab, Graph.GraphDocumentViewModel Document)? address = GraphAddress();
         int generation = LifecycleGeneration();
         _graphNoteCreation.Run(
             () => creator.TryCreateNote(path, string.Empty),
@@ -44,7 +44,7 @@ internal sealed partial class WorkspaceViewModel
     /// is dropped whole: its session, sidebar and workspace are gone.</summary>
     private void GraphNoteCreationCompleted(
         string path,
-        (WorkspaceGroupViewModel Group, WorkspaceTabViewModel Tab)? address,
+        (WorkspaceGroupViewModel Group, WorkspaceTabViewModel Tab, Graph.GraphDocumentViewModel Document)? address,
         int generation,
         ISurfaceNoteCreator creator,
         NoteCreateResult result)
@@ -57,15 +57,19 @@ internal sealed partial class WorkspaceViewModel
         {
             case NoteCreateResult.Landed landed:
                 creator.NoteLanded(path);
-                // Both identities of the captured address (IPC-4): the same
-                // tab, still owned by the same group, that group active and
-                // the tab its active one.
+                // Every identity of the captured address (IPC-4, IPD-2): the
+                // same tab, still owned by the same group, that group active
+                // and the tab its active one, and the SAME document still
+                // seated and live — a tab or group re-seated after leaving
+                // the tree carries a different document.
                 bool addressCurrent = address is { } captured
                     && Groups.Contains(captured.Group)
                     && captured.Group.Tabs.Contains(captured.Tab)
                     && ReferenceEquals(ActiveGroup, captured.Group)
                     && ReferenceEquals(captured.Group.ActiveTab, captured.Tab)
-                    && captured.Tab.IsGraph;
+                    && captured.Tab.IsGraph
+                    && ReferenceEquals(captured.Tab.Graph, captured.Document)
+                    && !captured.Document.IsRetired;
                 if (addressCurrent)
                 {
                     RunWorkspaceMutation(() => _ = OpenPathCore(path, WorkspaceOpenTarget.CurrentTab));

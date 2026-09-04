@@ -198,6 +198,14 @@ internal abstract class PanelWorkScheduler : BindableBase
         await Task.Run(() => RunIfLive(body)).ConfigureAwait(false);
     }
 
+    private int _faultedWork;
+
+    /// <summary>Test seam: how many tracked bodies FAULTED. Tracked tasks
+    /// never fault by contract — a body reports its failure as a value —
+    /// and a completed task leaves the pending set, so a drain cannot
+    /// observe a fault; a fact asserts this stays zero.</summary>
+    internal int FaultedWorkForTests => Volatile.Read(ref _faultedWork);
+
     private void TrackWork(Task work)
     {
         lock (_workLock)
@@ -207,6 +215,10 @@ internal abstract class PanelWorkScheduler : BindableBase
         _ = work.ContinueWith(
             completed =>
             {
+                if (completed.IsFaulted)
+                {
+                    _ = Interlocked.Increment(ref _faultedWork);
+                }
                 lock (_workLock)
                 {
                     _ = _pendingWork.Remove(completed);
@@ -340,6 +352,15 @@ internal abstract class PanelWorkScheduler : BindableBase
                 return;
             }
             _ = _pendingApplies.Add(applied);
+        }
+        // The post and the seam run OUTSIDE the lock (IPD-1): a context
+        // whose Post runs the callback inline, blocks, or throws must not
+        // do so under the work lock. A shutdown between the registration
+        // and the post settles and clears the promise; the callback then
+        // fails to claim it and applies nothing. A post that throws
+        // withdraws the promise so no teardown waits on it.
+        try
+        {
             _uiContext.Post(
                 _ =>
                 {
@@ -361,8 +382,23 @@ internal abstract class PanelWorkScheduler : BindableBase
                     }
                 },
                 null);
-            ApplyQueuedForTests?.Invoke();
         }
+        catch (Exception exception) when (
+            exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
+        {
+            // The owner context refused the post (a dispatcher shutting
+            // down): the result is lost like a refused apply, the promise
+            // withdrawn, and the tracked task completes without faulting.
+            lock (_workLock)
+            {
+                _ = _pendingApplies.Remove(applied);
+            }
+            _ = applied.TrySetResult();
+            return;
+        }
+        ApplyQueuedForTests?.Invoke();
         await applied.Task.ConfigureAwait(false);
     }
 

@@ -17,8 +17,21 @@ public sealed class PanelWorkSchedulerTests
 {
     /// <summary>A scheduler that exposes the primitive and records
     /// where each half ran.</summary>
-    private sealed class Probe(bool synchronousForTests) : PanelWorkScheduler(synchronousForTests)
+    private sealed class Probe : PanelWorkScheduler
     {
+        public Probe(bool synchronousForTests)
+            : base(synchronousForTests)
+        {
+        }
+
+        /// <summary>Over an explicit owner context — the hostile contexts
+        /// of IPD-1 (one whose Post runs the callback inline, one whose
+        /// Post refuses).</summary>
+        public Probe(SynchronizationContext ownerContext)
+            : base(synchronousForTests: false, ownerContext)
+        {
+        }
+
         public int? ComputeThread { get; private set; }
         public int? ApplyThread { get; private set; }
         public int Applies { get; private set; }
@@ -249,5 +262,60 @@ public sealed class PanelWorkSchedulerTests
             Assert.Equal(0, probe.Applies);
             Assert.True(probe.DrainAll().IsCompleted);
         });
+    }
+
+    /// <summary>A context whose Post runs the callback INLINE on the posting
+    /// thread (IPD-1): the apply is claimed and runs once, on the worker,
+    /// outside the scheduler's lock — no deadlock, the drain completes.</summary>
+    private sealed class InlineContext : SynchronizationContext
+    {
+        public int Posts { get; private set; }
+
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+            Posts++;
+            d(state);
+        }
+    }
+
+    /// <summary>A context whose Post REFUSES (IPD-1): a dispatcher already
+    /// shut down — the promise is withdrawn and the tracked task completes
+    /// without a fault.</summary>
+    private sealed class RefusingContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state) =>
+            throw new InvalidOperationException("the owner context refused the post");
+    }
+
+    [Fact]
+    public async Task AContextThatRunsThePostInlineAppliesOnceAndTheDrainCompletes()
+    {
+        var context = new InlineContext();
+        var probe = new Probe(context);
+        Assert.True(probe.HasContext);
+        probe.Run();
+        Task drain = probe.DrainAll();
+        Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the drain never completed");
+        await drain;
+        Assert.Equal(1, context.Posts);
+        Assert.Equal(1, probe.Applies);
+        Assert.NotNull(probe.ApplyThread);
+    }
+
+    [Fact]
+    public async Task AContextThatRefusesThePostCompletesTheTrackedTaskWithoutAFault()
+    {
+        var probe = new Probe(new RefusingContext());
+        probe.Run();
+        Task drain = probe.DrainAll();
+        Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the drain never completed");
+        await drain;
+        Assert.Equal(0, probe.Applies);
+        Assert.NotNull(probe.ComputeThread);
+        // A completed task leaves the pending set, so the drain cannot see
+        // a fault — the scheduler counts them, and the count stays zero
+        // (the sweep's `ipd1-refused-post-faults`).
+        await Task.Delay(50);
+        Assert.Equal(0, probe.FaultedWorkForTests);
     }
 }

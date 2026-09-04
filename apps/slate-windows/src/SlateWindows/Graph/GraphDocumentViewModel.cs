@@ -82,7 +82,9 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     private GraphTableSort? _requestedSort;
     private ulong _highWater;
     private bool _pairInFlight;
-    private bool _retired;
+    // Volatile (IPD-4): read from the pool by the always-async bodies and
+    // by a fact's release barrier; written by Retire on the owner's thread.
+    private volatile bool _retired;
     private GraphPublication _publication;
 
     public GraphDocumentViewModel(

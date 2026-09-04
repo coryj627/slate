@@ -101,17 +101,20 @@ internal sealed partial class WorkspaceViewModel
         Groups.SelectMany(group => group.Tabs).FirstOrDefault(tab => tab.IsGraph);
 
     /// <summary>The graph's ADDRESS (contracts A-8, A-9; deviation (viii),
-    /// IPC-4): the singleton tab and the group that owns it now, captured
-    /// as a pair so a completion compares both identities.</summary>
-    private (WorkspaceGroupViewModel Group, WorkspaceTabViewModel Tab)? GraphAddress()
+    /// IPC-4, IPD-2): the singleton tab, the group that owns it now, and
+    /// the document seated on it — captured together so a completion
+    /// compares all three identities; the document pins the address to
+    /// the graph that was open at invocation, not merely to objects that
+    /// could be re-seated.</summary>
+    private (WorkspaceGroupViewModel Group, WorkspaceTabViewModel Tab, GraphDocumentViewModel Document)? GraphAddress()
     {
         foreach (WorkspaceGroupViewModel group in Groups)
         {
             foreach (WorkspaceTabViewModel tab in group.Tabs)
             {
-                if (tab.IsGraph)
+                if (tab.IsGraph && tab.Graph is { } document)
                 {
-                    return (group, tab);
+                    return (group, tab, document);
                 }
             }
         }

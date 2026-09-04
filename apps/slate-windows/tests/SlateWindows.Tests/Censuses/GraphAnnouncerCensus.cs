@@ -40,14 +40,62 @@ public sealed class GraphAnnouncerCensus
     /// or either under parentheses; null for anything else — a method on
     /// another object (<c>_announcer.Announce(…)</c>, the relay seam the
     /// seam census governs) is not a delegate call.</summary>
-    internal static string? TerminalIdentifier(ExpressionSyntax expression) => expression switch
+    internal static string? TerminalIdentifier(ExpressionSyntax expression) =>
+        TerminalIdentifierNode(expression)?.Identifier.ValueText;
+
+    /// <summary>The identifier NODE a delegate callee resolves to (IPD-5):
+    /// a bare name; a this- or base-qualified name, the qualifier itself
+    /// possibly parenthesised; a delegate's <c>.Invoke</c> over either;
+    /// the whole under parentheses. Null for a method on another object.</summary>
+    internal static IdentifierNameSyntax? TerminalIdentifierNode(ExpressionSyntax expression)
     {
-        IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
-        MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax or BaseExpressionSyntax } access
-            => access.Name.Identifier.ValueText,
-        ParenthesizedExpressionSyntax parenthesized => TerminalIdentifier(parenthesized.Expression),
-        _ => null,
-    };
+        while (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            expression = parenthesized.Expression;
+        }
+        switch (expression)
+        {
+            case IdentifierNameSyntax identifier:
+                return identifier;
+            case MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Invoke" } invoke:
+                return TerminalIdentifierNode(invoke.Expression);
+            case MemberAccessExpressionSyntax access:
+                ExpressionSyntax receiver = access.Expression;
+                while (receiver is ParenthesizedExpressionSyntax inner)
+                {
+                    receiver = inner.Expression;
+                }
+                return receiver is ThisExpressionSyntax or BaseExpressionSyntax ? access.Name as IdentifierNameSyntax : null;
+            case MemberBindingExpressionSyntax { Name.Identifier.ValueText: "Invoke" }:
+                // `x?.Invoke(…)`: the receiver is the conditional access's
+                // expression, resolved by the caller.
+                return null;
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>Every invocation in a tree, with `x?.Invoke(…)` folded to
+    /// its receiver (IPD-5), as (callee identifier node, argument list).</summary>
+    internal static IEnumerable<(IdentifierNameSyntax Callee, ArgumentListSyntax Arguments)> DelegateCalls(SyntaxNode root)
+    {
+        foreach (InvocationExpressionSyntax call in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (call.Expression is MemberBindingExpressionSyntax { Name.Identifier.ValueText: "Invoke" }
+                && call.Parent is ConditionalAccessExpressionSyntax conditional)
+            {
+                if (TerminalIdentifierNode(conditional.Expression) is { } receiver)
+                {
+                    yield return (receiver, call.ArgumentList);
+                }
+                continue;
+            }
+            if (TerminalIdentifierNode(call.Expression) is { } callee)
+            {
+                yield return (callee, call.ArgumentList);
+            }
+        }
+    }
 
     /// <summary>Contract A-10 / R-C: no graph source announces on its own;
     /// exactly one relay exists, at the root of the directory.</summary>
@@ -115,23 +163,51 @@ public sealed class GraphAnnouncerCensus
                     offenders.Add($"{label}: using directive {directive.NamespaceOrType}");
                 }
             }
-            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            // Every call on an announce delegate — the callee normalised
+            // (IPC-3, IPD-5): `_announce(…)`, `this._announce(…)`,
+            // `(this)._announce(…)`, `_announce.Invoke(…)`, `_announce?.Invoke(…)`
+            // — passes exactly one EXPLICIT construction of a non-graph shell
+            // event; and every OTHER reference to such a delegate (captured,
+            // passed along, assigned) is an offender, so no event built
+            // elsewhere can reach it.
+            var validatedCallees = new HashSet<IdentifierNameSyntax>();
+            foreach ((IdentifierNameSyntax callee, ArgumentListSyntax arguments) in DelegateCalls(source.Root))
             {
-                // The callee normalised to its terminal identifier (IPC-3):
-                // `_announce(…)`, `this._announce(…)`, `(_announce)(…)`.
-                string? calleeName = TerminalIdentifier(call.Expression);
-                if (calleeName is null || !calleeName.EndsWith("announce", StringComparison.OrdinalIgnoreCase))
+                string calleeName = callee.Identifier.ValueText;
+                if (!calleeName.EndsWith("announce", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
-                bool explicitShellEvent = call.ArgumentList.Arguments.Count == 1
-                    && call.ArgumentList.Arguments[0].Expression is ObjectCreationExpressionSyntax created
+                bool explicitShellEvent = arguments.Arguments.Count == 1
+                    && arguments.Arguments[0].Expression is ObjectCreationExpressionSyntax created
                     && created.Type.ToString().StartsWith("A11yEvent.", StringComparison.Ordinal)
                     && !created.Type.ToString().EndsWith(".Graph", StringComparison.Ordinal);
                 if (!explicitShellEvent)
                 {
-                    offenders.Add($"{label}: {calleeName}({call.ArgumentList.Arguments})");
+                    offenders.Add($"{label}: {calleeName}({arguments.Arguments})");
                 }
+                _ = validatedCallees.Add(callee);
+            }
+            foreach (IdentifierNameSyntax reference in source.Root.DescendantNodes().OfType<IdentifierNameSyntax>())
+            {
+                // The workspace's delegate by its field name — `_announce`
+                // (its constructor parameter `announce` is declared outside
+                // Graph/; under Graph/ that bare name is the load policy's
+                // parameter) — not the relay's `Announce` method, which the
+                // seam census governs.
+                if (reference.Identifier.ValueText != "_announce"
+                    || validatedCallees.Contains(reference))
+                {
+                    continue;
+                }
+                if (reference.Parent is MemberAccessExpressionSyntax qualified && qualified.Name != reference)
+                {
+                    // `_announce.Something` — the receiver of a member access
+                    // that DelegateCalls did not validate as `.Invoke(…)`.
+                    offenders.Add($"{label}: {qualified}");
+                    continue;
+                }
+                offenders.Add($"{label}: reference {reference.Identifier.ValueText} outside a validated call");
             }
         }
         Assert.True(
