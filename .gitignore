@@ -151,14 +151,6 @@ apps/slate-mac/Sources/slate_uniffiFFI/slate_uniffiFFI.h
 # real past failure, ideally alongside an explicit named regression
 # test (e.g. cr_bearing_incremental_structure_matches_from_source_issue_927).
 
-# graphify build output (knowledge graph, HTML viz, audit report,
-# per-file extraction cache, cumulative cost tracker). All
-# regenerable from source via `/graphify` — committing the snapshot
-# would carry MB-scale binary blobs that rot the moment any file in
-# the repo changes. The `.graphifyignore` config that drives graphify
-# IS committed.
-graphify-out/
-
 # Exceptions to above rules.
 !**/ios/**/default.mode1v3
 !**/ios/**/default.mode2v3
