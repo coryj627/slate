@@ -170,7 +170,7 @@ Each PR section lists: **Goal · Consumes · Builds · Behavior pinned · Tests 
 
 ### PR B — The Connections leaf
 
-**Goal.** The right pane's `connections` leaf (already in the catalogue, `WorkspaceViewModel.cs:1682`) becomes the local graph: core's connections tree at depth 1–3 for the active note, re-root on activation with a back stack, the neighbourhood summary relayed on depth change and re-root, ghost rows that create the note.
+**Goal.** The right pane's `connections` leaf (already in the catalogue, `WorkspaceViewModel.cs:1716` — the `:1682` cited earlier has drifted) becomes the local graph. SPLIT by the owner on 2026-09-05 into two slices (§PR B in `35_graph_contracts.md`, BD-1): **B1** — core's connections tree at depth 1–3 for the note in view, the neighbourhood summary on load and depth change, the depth-one snippets, the generation refresh, ghost rows that create the note, as a standalone surface with its own relay and selection; **B2**, a following PR before PR D — re-root through the Show connections action (NOT on activation: the shipped mac opens on activation and re-roots only on that action, `AppState+Connections.swift:279–294`) with a back stack, `GraphReRooted` then the summary, the table's and the Bases surfaces' Show connections, and the selection shared with the graph document through `GraphViewState` (spec R-B), which is where the amendment of frozen A-1/A-10 is decided.
 
 **Consumes.** 0b's `graph_connections_tree` (the tree with its summary counts — one record per load), `graph_ghost_note_path`, `graph_constants` (the depth clamp); 0a's `GraphReRooted`, `GraphNeighborhoodSummary`, `GraphRow`, `GraphStatus`, `GraphBlocked`; the leaf host (`RightPanePanelsViewModel.cs`) and the note-creation seam.
 
