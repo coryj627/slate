@@ -98,7 +98,13 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             synchronousForTests: false,
             ownerContext
                 ?? SynchronizationContext.Current as DispatcherSynchronizationContext
-                ?? new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher))
+                ?? new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher),
+            // The owner dispatcher, named only when this document CHOSE the
+            // context and therefore knows it (IPF-3): the current dispatcher
+            // context is WPF's own, installed on its dispatcher's thread,
+            // and the fallback is built over this thread's dispatcher. A
+            // context handed in names no dispatcher and posts through itself.
+            ownerContext is null ? Dispatcher.CurrentDispatcher : null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(announcer);
