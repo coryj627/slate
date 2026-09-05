@@ -110,6 +110,15 @@ pub enum VaultError {
         current_mtime_ms: i64,
     },
 
+    /// The bytes LANDED but a post-write step failed before the index
+    /// committed (W6-1 §E TE-0): the write is durable and must be
+    /// treated as a commit — never retried.
+    #[error("saved but not indexed: {detail} (new hash {new_content_hash:?})")]
+    SavedButUnindexed {
+        new_content_hash: String,
+        detail: String,
+    },
+
     /// A version operation refused to serve bytes whose hash doesn't
     /// match the requested version (O-3 #541) — history is corrupt or
     /// inconsistent and the operation failed closed.
@@ -173,6 +182,13 @@ impl From<core::VaultError> for VaultError {
                 expected_content_hash,
                 current_mtime_ms,
             },
+            core::VaultError::SavedButUnindexed {
+                new_content_hash,
+                detail,
+            } => VaultError::SavedButUnindexed {
+                new_content_hash,
+                detail,
+            },
             core::VaultError::HistoryUnavailable { path, reason } => {
                 VaultError::HistoryUnavailable { path, reason }
             }
@@ -230,6 +246,41 @@ pub fn parse_frontmatter_properties(fm_source: String) -> Vec<Property> {
         .into_iter()
         .map(Into::into)
         .collect()
+}
+
+/// The TOP-LEVEL keys of a frontmatter block, in document order.
+///
+/// Add-property surfaces must collision-check against THIS, not against
+/// parsed properties: property records flatten nested mappings
+/// (`person: {name: …}` → `person.name`) and omit untypeable shapes, so a
+/// flat `person` add would look non-colliding and then silently replace the
+/// whole container on write (W4-4 adversarial round 6).
+#[uniffi::export]
+pub fn frontmatter_top_level_keys(fm_source: String) -> Vec<String> {
+    core::frontmatter_top_level_keys(&core::compose_note(&fm_source, ""))
+}
+
+/// The kind a value would ACTUALLY have once stored under `key` and read
+/// back — core's own emit-then-classify round trip, run in memory against a
+/// scratch document. Pure, allocation-only, no vault access.
+///
+/// Hosts building "add property" surfaces must not mirror the classifier:
+/// classification is key-sensitive (`tags:` is always a tag list, case
+/// insensitively) and shape-sensitive (a `YYYY-MM-DD`-shaped string is a
+/// date, `[[x]]` is a wikilink), and every host copy of those rules has
+/// drifted (W4-4 adversarial rounds 3–5). Ask instead: build the candidate
+/// value, call this, and refuse when the answer differs from what the user
+/// picked. `None` means the value can't be stored at all (core rejects it —
+/// e.g. an empty wikilink target or a non-finite float).
+#[uniffi::export]
+pub fn round_trip_property_kind(key: String, value: PropertyValue) -> Option<String> {
+    let core_value: core::PropertyValue = value.into();
+    let source = core::set_property_in_source("", &key, &core_value).ok()?;
+    core::extract_frontmatter(&source)
+        .0
+        .into_iter()
+        .find(|property| property.key == key)
+        .map(|property| Property::from(property).kind)
 }
 
 /// Read a Markdown file from disk and return its headings.
@@ -328,6 +379,10 @@ pub fn census_synthesize_vault_error(arm: String) -> Result<(), VaultError> {
             current_content_hash: "census-current".into(),
             expected_content_hash: "census-expected".into(),
             current_mtime_ms: 42,
+        },
+        "SavedButUnindexed" => VaultError::SavedButUnindexed {
+            new_content_hash: "census-new".into(),
+            detail: "census detail".into(),
         },
         "HistoryUnavailable" => VaultError::HistoryUnavailable {
             path: "census/history.md".into(),
@@ -885,6 +940,14 @@ impl VaultSession {
         Ok(self.inner.read_text(&path)?)
     }
 
+    /// #1077: the spelling the filesystem stores for an EXISTING
+    /// vault-relative entry, or null when nothing exists there. Hosts
+    /// re-seat a missing-from-disk tab with it when its file comes back
+    /// under another spelling (`Ghost.md` → `ghost.md`).
+    pub fn canonical_path(&self, path: String) -> Result<Option<String>, VaultError> {
+        Ok(self.inner.canonical_path(&path)?)
+    }
+
     /// Save UTF-8 text to a vault path, refresh the index, and append a
     /// fine-grained `EditBatch` (or a `WholeFileReplace` snapshot) to the
     /// file's op-log (#378).
@@ -1098,6 +1161,24 @@ impl VaultSession {
         Ok(self.inner.create_exclusive(&path, &content)?.into())
     }
 
+    /// `create_exclusive` with the typed post-publish outcome (#1123):
+    /// `Err` is a REFUSAL (nothing landed); `PublishedUnindexed` means
+    /// the no-replace write landed and the index/commit then failed —
+    /// the bytes are on disk (the hash is reported) and the next scan
+    /// indexes them, so a host finishes its flow as a create and never
+    /// retries under another name. Additive: `create_exclusive` keeps
+    /// its one-error shape for callers that have not adopted this.
+    pub fn create_exclusive_reporting(
+        &self,
+        path: String,
+        content: String,
+    ) -> Result<CreateExclusiveOutcome, VaultError> {
+        Ok(self
+            .inner
+            .create_exclusive_reporting(&path, &content)?
+            .into())
+    }
+
     /// Create-if-absent BYTES write (#910): the binary / non-UTF-8 sibling
     /// of `create_exclusive`. Same no-clobber contract — an occupied
     /// destination (on disk or in the case-insensitive index) is
@@ -1185,6 +1266,30 @@ impl VaultSession {
         Ok(bundle.into())
     }
 
+    /// The bounded panel twin of `note_load_bundle` (W4-2 round 10):
+    /// limits apply in core SQL before anything crosses FFI.
+    pub fn note_link_panels(
+        &self,
+        path: String,
+        backlinks_paging: Paging,
+        outgoing_limit: u32,
+        embed_limit: u32,
+    ) -> Result<NoteLinkPanels, VaultError> {
+        let panels = self.inner.note_link_panels(
+            &path,
+            backlinks_paging.into(),
+            outgoing_limit,
+            embed_limit,
+        )?;
+        Ok(panels.into())
+    }
+
+    /// Bounded outline read (W4-2 round 10); unknown paths return an
+    /// empty page.
+    pub fn note_outline(&self, path: String, limit: u32) -> Result<OutlinePage, VaultError> {
+        Ok(self.inner.note_outline(&path, limit)?.into())
+    }
+
     /// Paged vault-wide audit of unresolved internal links.
     pub fn list_unresolved_links(&self, paging: Paging) -> Result<UnresolvedLinkPage, VaultError> {
         let page = self.inner.list_unresolved_links(paging.into())?;
@@ -1217,6 +1322,69 @@ impl VaultSession {
     /// file-change / scan-finished events, refresh surfaces on change.
     pub fn graph_generation(&self) -> u64 {
         self.inner.graph_generation()
+    }
+
+    /// The visible set under a query (W6-2 PR 0b, contracts doc 0b-6):
+    /// the ids that pass the needle and the kind overlay, the
+    /// label-priority subset, the total under the backend filter, and the
+    /// generation read (0b-2b — discard on mismatch).
+    pub fn graph_visibility(
+        &self,
+        query: GraphVisibilityQuery,
+    ) -> Result<GraphVisibility, VaultError> {
+        Ok(self.inner.graph_visibility(&query.into())?.into())
+    }
+
+    /// The topology under a query and a config (0b-6b, design B): every
+    /// visible node with its key, label, kind, in-links, diameter, group,
+    /// label slot and visible neighbours — one crossing per rebuild.
+    pub fn graph_topology(
+        &self,
+        query: GraphVisibilityQuery,
+        config: GraphConfig,
+    ) -> Result<GraphTopology, VaultError> {
+        Ok(self
+            .inner
+            .graph_topology(&query.into(), &config.into())?
+            .into())
+    }
+
+    /// The VISIBLE neighbours of `id` under a query (0b-6b): both
+    /// directions, unique, in the snapshot's edge order.
+    pub fn graph_neighbors(
+        &self,
+        query: GraphVisibilityQuery,
+        id: u64,
+    ) -> Result<GraphNeighbors, VaultError> {
+        Ok(self.inner.graph_neighbors(&query.into(), id)?.into())
+    }
+
+    /// The Connections tree for `path` (0b-4): flat pre-order rows, split
+    /// by centre incidence, ordered by core's label order, nested
+    /// `depth - 1` further levels, ids built from stable keys.
+    pub fn graph_connections_tree(
+        &self,
+        path: String,
+        depth: u32,
+        filter: GraphFilter,
+    ) -> Result<GraphConnectionsTree, VaultError> {
+        Ok(self
+            .inner
+            .graph_connections_tree(&path, depth, filter.into())?
+            .into())
+    }
+
+    /// The table rows under a query, core-formatted (nine cells) and in
+    /// `sort`'s order (0b-7).
+    pub fn graph_table_rows(
+        &self,
+        query: GraphVisibilityQuery,
+        sort: GraphTableSort,
+    ) -> Result<GraphTableRows, VaultError> {
+        Ok(self
+            .inner
+            .graph_table_rows(&query.into(), sort.into())?
+            .into())
     }
 
     /// Cheap discriminator for interaction caches backed by indexed content.
@@ -1285,8 +1453,10 @@ impl VaultSession {
     }
 
     /// Full-text search. Cancellable via the supplied `cancel`
-    /// token. Reserved scopes (`File`, `Tag`) return
-    /// `VaultError::Cancelled` until those code paths land.
+    /// token. `Vault`, `Folder`, and `Tag` scopes are live (`Tag`
+    /// lists all tagged files on an empty query); the reserved
+    /// `File` scope returns `VaultError::Unsupported` — see
+    /// `SearchScope`.
     pub fn full_text_search(
         &self,
         query: String,
@@ -1327,6 +1497,44 @@ impl VaultSession {
             .into_iter()
             .map(TaskItem::from)
             .collect())
+    }
+
+    /// Bounded per-note task read (W4-3): the panel twin of
+    /// `tasks_for_file`, limited in SQL with true totals alongside.
+    pub fn note_tasks(&self, path: String, limit: u32) -> Result<NoteTasksPage, VaultError> {
+        Ok(self.inner.note_tasks(&path, limit)?.into())
+    }
+
+    /// Repair one path's index after a post-write failure
+    /// (adversarial round 12): `save_text` writes the file before
+    /// the index commit, so a failure in between leaves disk newer
+    /// than the index — hosts call this before re-querying task
+    /// surfaces so the stale index cannot resurrect ghost rows.
+    pub fn reindex_path(&self, path: String) -> Result<(), VaultError> {
+        Ok(self.inner.reindex_path(&path)?)
+    }
+
+    /// Repair-or-contain for the host repair coordinator (W4-3
+    /// adversarial round 31). `Repaired`: index is disk truth.
+    /// `Contained`: a persistent file condition (unreadable,
+    /// non-UTF-8, oversize) was contained honest-empty with a
+    /// self-healing durable marker — task queries are safe, the
+    /// host may release its gate. `Declined`: another process
+    /// committed mid-attempt; retry. Database failures throw.
+    pub fn repair_or_contain_path(
+        &self,
+        path: String,
+    ) -> Result<TaskIndexRepairOutcome, VaultError> {
+        Ok(self.inner.repair_or_contain_path(&path)?.into())
+    }
+
+    /// Cross-process-aware revision for paged index snapshots
+    /// (adversarial round 14): the session-local generation cannot
+    /// see another process committing to the shared cache database;
+    /// this folds SQLite's `data_version` in so paging drift checks
+    /// stay honest across sessions and processes.
+    pub fn tasks_index_revision(&self) -> u64 {
+        self.inner.tasks_index_revision()
     }
 
     /// Paged vault-wide task query. Used by the Mac TasksReviewView
@@ -1481,6 +1689,38 @@ impl VaultSession {
         Ok(self
             .inner
             .resolve_embed_preview(&host_path, &target, alt)?
+            .into())
+    }
+
+    /// Pool-clamped preview (W4-2 round 11): image payloads past the
+    /// caller's remaining note-wide pool never cross the FFI.
+    pub fn resolve_embed_preview_pooled(
+        &self,
+        host_path: String,
+        target: String,
+        alt: Option<String>,
+        image_pool_bytes: u64,
+    ) -> Result<EmbedPreviewResolution, VaultError> {
+        Ok(self
+            .inner
+            .resolve_embed_preview_pooled(&host_path, &target, alt, image_pool_bytes)?
+            .into())
+    }
+
+    /// Resolve one READING-CARD embed (W3-5): preview budgets, nested
+    /// image payloads never marshalled, root image included only when
+    /// it fits `image_budget_bytes` — with its true size reported so
+    /// the caller charges its note-wide pool honestly.
+    pub fn resolve_embed_reading_card(
+        &self,
+        host_path: String,
+        target: String,
+        alt: Option<String>,
+        image_budget_bytes: u64,
+    ) -> Result<EmbedReadingCard, VaultError> {
+        Ok(self
+            .inner
+            .resolve_embed_reading_card(&host_path, &target, alt, image_budget_bytes)?
             .into())
     }
     /// Read a binary attachment from the vault. Used by the read-
@@ -1751,6 +1991,25 @@ impl From<core::sync_detect::SyncProviderKind> for SyncProviderKind {
             K::GoogleDrive => Self::GoogleDrive,
             K::Git => Self::Git,
             K::Syncthing => Self::Syncthing,
+        }
+    }
+}
+
+/// Mirrors `slate_core::TaskIndexRepairOutcome` (W4-3 round 31).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum TaskIndexRepairOutcome {
+    Repaired,
+    Contained,
+    Declined,
+}
+
+impl From<core::TaskIndexRepairOutcome> for TaskIndexRepairOutcome {
+    fn from(o: core::TaskIndexRepairOutcome) -> Self {
+        use core::TaskIndexRepairOutcome as O;
+        match o {
+            O::Repaired => Self::Repaired,
+            O::Contained => Self::Contained,
+            O::Declined => Self::Declined,
         }
     }
 }
@@ -2164,9 +2423,13 @@ pub struct DirNodeSummary {
 #[derive(uniffi::Record)]
 pub struct StructuralReport {
     pub op_id: i64,
-    /// FL6-1: ordered ids that fully reverse this report (newest
-    /// first) — a compound folder+note rename journals two rows and
-    /// `op_id` alone cannot reverse it. Single ops carry `[op_id]`.
+    /// FL6-1: the journal rows this report wrote, newest first — a
+    /// compound folder+note rename journals two and single ops carry
+    /// `[op_id]`. The RECORD, not an executable sequence (#1127):
+    /// `undo_structural` admits only the latest row and journals
+    /// itself, so hosts reverse a compound by re-running the forward
+    /// FFI with inverse arguments; `undo_structural(undo_op_ids[0])`
+    /// is the single-op path.
     pub undo_op_ids: Vec<i64>,
     pub moved: Vec<MovedPath>,
     pub rewritten: Vec<RewriteOutcome>,
@@ -2748,6 +3011,70 @@ impl From<core::NoteLoadBundle> for NoteLoadBundle {
     }
 }
 
+/// FFI mirror of `slate_core::NoteLinkPanels` (W4-2 round 10): the
+/// BOUNDED panel feed — every collection SQL-limited before it
+/// crosses FFI, true totals alongside, no properties.
+#[derive(uniffi::Record)]
+pub struct NoteLinkPanels {
+    pub backlinks: BacklinkPage,
+    pub outgoing_links: Vec<OutgoingLink>,
+    pub outgoing_total: u32,
+    pub embed_links: Vec<OutgoingLink>,
+    pub embed_total: u32,
+}
+
+impl From<core::NoteLinkPanels> for NoteLinkPanels {
+    fn from(p: core::NoteLinkPanels) -> Self {
+        Self {
+            backlinks: p.backlinks.into(),
+            outgoing_links: p.outgoing_links.into_iter().map(Into::into).collect(),
+            outgoing_total: p.outgoing_total,
+            embed_links: p.embed_links.into_iter().map(Into::into).collect(),
+            embed_total: p.embed_total,
+        }
+    }
+}
+
+/// FFI mirror of `slate_core::OutlinePage`.
+#[derive(uniffi::Record)]
+pub struct OutlinePage {
+    pub headings: Vec<Heading>,
+    pub total: u32,
+}
+
+impl From<core::OutlinePage> for OutlinePage {
+    fn from(p: core::OutlinePage) -> Self {
+        Self {
+            headings: p.headings.into_iter().map(Into::into).collect(),
+            total: p.total,
+        }
+    }
+}
+
+/// FFI mirror of `slate_core::NoteTasksPage` (W4-3): the bounded
+/// per-note task read with true totals for the panel header, plus
+/// the file's content hash at read time so snapshot rows can prove
+/// their ordinals still name the same tasks before a toggle
+/// (adversarial round 2).
+#[derive(uniffi::Record)]
+pub struct NoteTasksPage {
+    pub tasks: Vec<TaskItem>,
+    pub total: u32,
+    pub open_total: u32,
+    pub content_hash: String,
+}
+
+impl From<core::NoteTasksPage> for NoteTasksPage {
+    fn from(p: core::NoteTasksPage) -> Self {
+        Self {
+            tasks: p.tasks.into_iter().map(Into::into).collect(),
+            total: p.total,
+            open_total: p.open_total,
+            content_hash: p.content_hash,
+        }
+    }
+}
+
 /// One row in the vault-wide unresolved-links audit.
 #[derive(uniffi::Record)]
 pub struct UnresolvedLink {
@@ -2980,6 +3307,19 @@ impl From<core::graph::NodeKind> for GraphNodeKind {
     }
 }
 
+/// The reverse direction (W6-2 PR 0a, #746): a host constructs the
+/// a11y row copy from the kind it was handed, so the kind must travel
+/// back into core without a second enum (contracts doc 0aD-4).
+impl From<GraphNodeKind> for core::graph::NodeKind {
+    fn from(k: GraphNodeKind) -> Self {
+        match k {
+            GraphNodeKind::Note => core::graph::NodeKind::Note,
+            GraphNodeKind::Attachment => core::graph::NodeKind::Attachment,
+            GraphNodeKind::Ghost => core::graph::NodeKind::Ghost,
+        }
+    }
+}
+
 /// Edge kind in the link graph. Mirrors `slate_core::graph::EdgeKind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum GraphEdgeKind {
@@ -3004,6 +3344,9 @@ impl From<core::graph::EdgeKind> for GraphEdgeKind {
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct GraphNode {
     pub id: u64,
+    /// The cross-projection, cross-generation identity (W6-2 PR 0b,
+    /// 0b-3): `p:` + the path or `g:` + the percent-encoded ghost key.
+    pub stable_key: String,
     /// `None` for ghosts.
     pub path: Option<String>,
     pub label: String,
@@ -3023,6 +3366,7 @@ impl From<core::graph::GraphNode> for GraphNode {
     fn from(n: core::graph::GraphNode) -> Self {
         GraphNode {
             id: n.id,
+            stable_key: n.stable_key,
             path: n.path,
             label: n.label,
             kind: n.kind.into(),
@@ -3040,7 +3384,7 @@ impl From<core::graph::GraphNode> for GraphNode {
 
 /// One collapsed edge (#552): parallel references share an edge with
 /// a reference count. Mirrors `slate_core::graph::GraphEdge`.
-#[derive(Debug, Clone, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct GraphEdge {
     pub source_id: u64,
     pub target_id: u64,
@@ -3061,7 +3405,7 @@ impl From<core::graph::GraphEdge> for GraphEdge {
 
 /// Projection filter (#552). Defaults: attachments off, ghosts on,
 /// all notes. Mirrors `slate_core::graph::GraphFilter`.
-#[derive(Debug, Clone, Copy, uniffi::Record)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct GraphFilter {
     pub include_attachments: bool,
     pub include_ghosts: bool,
@@ -3078,6 +3422,78 @@ impl From<GraphFilter> for core::graph::GraphFilter {
     }
 }
 
+/// FFI mirror of [`core::graph::GraphSnapshotCounts`] (W6-2 PR 0a,
+/// #746): the counts the whole-graph summary speaks, exported so a host
+/// raises `GraphA11yEvent::GraphSnapshotSummary` from the record it was
+/// handed and counts nothing itself (contracts doc 0a-7). Both
+/// directions: core fills it, a host hands it back inside the event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct GraphSnapshotCounts {
+    pub notes: u64,
+    pub links: u64,
+    pub orphans: u64,
+    pub unresolved: u64,
+    pub filtered: bool,
+}
+
+impl From<core::graph::GraphSnapshotCounts> for GraphSnapshotCounts {
+    fn from(c: core::graph::GraphSnapshotCounts) -> Self {
+        GraphSnapshotCounts {
+            notes: c.notes,
+            links: c.links,
+            orphans: c.orphans,
+            unresolved: c.unresolved,
+            filtered: c.filtered,
+        }
+    }
+}
+
+impl From<GraphSnapshotCounts> for core::graph::GraphSnapshotCounts {
+    fn from(c: GraphSnapshotCounts) -> Self {
+        core::graph::GraphSnapshotCounts {
+            notes: c.notes,
+            links: c.links,
+            orphans: c.orphans,
+            unresolved: c.unresolved,
+            filtered: c.filtered,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph::GraphNeighborhoodCounts`] (W6-2 PR 0a).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphNeighborhoodCounts {
+    pub center_label: String,
+    pub in_links: u32,
+    pub out_links: u32,
+    pub note_count: u64,
+    pub depth: u32,
+}
+
+impl From<core::graph::GraphNeighborhoodCounts> for GraphNeighborhoodCounts {
+    fn from(c: core::graph::GraphNeighborhoodCounts) -> Self {
+        GraphNeighborhoodCounts {
+            center_label: c.center_label,
+            in_links: c.in_links,
+            out_links: c.out_links,
+            note_count: c.note_count,
+            depth: c.depth,
+        }
+    }
+}
+
+impl From<GraphNeighborhoodCounts> for core::graph::GraphNeighborhoodCounts {
+    fn from(c: GraphNeighborhoodCounts) -> Self {
+        core::graph::GraphNeighborhoodCounts {
+            center_label: c.center_label,
+            in_links: c.in_links,
+            out_links: c.out_links,
+            note_count: c.note_count,
+            depth: c.depth,
+        }
+    }
+}
+
 /// Whole-graph projection under a filter (#552). Node order is
 /// key-sorted; edge order is (source, target, kind) — deterministic.
 #[derive(Debug, Clone, uniffi::Record)]
@@ -3087,8 +3503,10 @@ pub struct GraphSnapshot {
     pub generation: u64,
     /// Pre-rendered VoiceOver summary, e.g. `"247 notes, 1,032 links.
     /// 12 orphans, 3 unresolved targets."` (format normative in
-    /// p0_spec §P0-3).
+    /// p0_spec §P0-3) — rendered from `summary_counts`.
     pub audio_summary: String,
+    /// The counts `audio_summary` was rendered from (W6-2 PR 0a).
+    pub summary_counts: GraphSnapshotCounts,
 }
 
 impl From<core::graph::GraphSnapshot> for GraphSnapshot {
@@ -3098,6 +3516,7 @@ impl From<core::graph::GraphSnapshot> for GraphSnapshot {
             edges: s.edges.into_iter().map(Into::into).collect(),
             generation: s.generation,
             audio_summary: s.audio_summary,
+            summary_counts: s.summary_counts.into(),
         }
     }
 }
@@ -3110,6 +3529,8 @@ pub struct GraphNeighborhood {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
     pub audio_summary: String,
+    /// The counts `audio_summary` was rendered from (W6-2 PR 0a).
+    pub summary_counts: GraphNeighborhoodCounts,
 }
 
 impl From<core::graph::GraphNeighborhood> for GraphNeighborhood {
@@ -3120,7 +3541,897 @@ impl From<core::graph::GraphNeighborhood> for GraphNeighborhood {
             nodes: n.nodes.into_iter().map(Into::into).collect(),
             edges: n.edges.into_iter().map(Into::into).collect(),
             audio_summary: n.audio_summary,
+            summary_counts: n.summary_counts.into(),
         }
+    }
+}
+
+// --- Graph structural queries (W6-2 PR 0b, #746) -----------------------
+// 1:1 with `slate_core::graph_queries` and `graph_config` (contracts doc
+// 35_graph_contracts.md §PR 0b). No logic here — every conversion is a
+// field-for-field move; the free functions delegate. The record field
+// lists are pinned against core's by
+// `the_ffi_records_mirror_core_field_for_field`.
+
+/// FFI mirror of [`core::graph_queries::GraphConstants`] (0b-8).
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct GraphConstants {
+    pub tier_b_threshold: u32,
+    pub label_cap: u32,
+    pub connections_depth_min: u32,
+    pub connections_depth_max: u32,
+    pub node_diameter_min: f64,
+    pub node_diameter_max: f64,
+    pub neighbor_label_cap: u32,
+}
+
+impl From<core::graph_queries::GraphConstants> for GraphConstants {
+    fn from(c: core::graph_queries::GraphConstants) -> Self {
+        GraphConstants {
+            tier_b_threshold: c.tier_b_threshold,
+            label_cap: c.label_cap,
+            connections_depth_min: c.connections_depth_min,
+            connections_depth_max: c.connections_depth_max,
+            node_diameter_min: c.node_diameter_min,
+            node_diameter_max: c.node_diameter_max,
+            neighbor_label_cap: c.neighbor_label_cap,
+        }
+    }
+}
+
+/// The constants with accessible meaning (0b-8). Handle-free.
+#[uniffi::export]
+pub fn graph_constants() -> GraphConstants {
+    core::graph_queries::constants().into()
+}
+
+/// Node diameter in layout units: `8 + 6·ln(1 + in_links)`, clamped 8..=28.
+#[uniffi::export]
+pub fn graph_node_diameter(in_links: u32) -> f64 {
+    core::graph_queries::node_diameter(in_links)
+}
+
+/// The `p:` stable key for a path the host holds without a node (0b-3).
+#[uniffi::export]
+pub fn graph_stable_key_for_path(path: String) -> String {
+    core::graph_queries::stable_key_for_path(&path)
+}
+
+/// The one name predicate (0b-6): the folded label contains the folded,
+/// trimmed needle; an empty needle matches everything.
+#[uniffi::export]
+pub fn graph_label_matches(label: String, query: String) -> bool {
+    core::graph_queries::label_matches(&label, &query)
+}
+
+/// FFI mirror of [`core::graph_queries::GraphVisibilityQuery`] (0b-2).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphVisibilityQuery {
+    pub filter: GraphFilter,
+    pub name_query: String,
+    pub kind_only: Option<GraphNodeKind>,
+}
+
+impl From<GraphVisibilityQuery> for core::graph_queries::GraphVisibilityQuery {
+    fn from(q: GraphVisibilityQuery) -> Self {
+        core::graph_queries::GraphVisibilityQuery {
+            filter: q.filter.into(),
+            name_query: q.name_query,
+            kind_only: q.kind_only.map(Into::into),
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphVisibility`] (0b-6, 0b-2b).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphVisibility {
+    pub generation: u64,
+    pub total: u64,
+    pub ids: Vec<u64>,
+    pub labeled: Vec<u64>,
+}
+
+impl From<core::graph_queries::GraphVisibility> for GraphVisibility {
+    fn from(v: core::graph_queries::GraphVisibility) -> Self {
+        GraphVisibility {
+            generation: v.generation,
+            total: v.total,
+            ids: v.ids,
+            labeled: v.labeled,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphNeighbor`] (0b-6b).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphNeighbor {
+    pub id: u64,
+    pub stable_key: String,
+    pub label: String,
+}
+
+/// FFI mirror of [`core::graph_queries::GraphNeighbors`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphNeighbors {
+    pub generation: u64,
+    pub neighbors: Vec<GraphNeighbor>,
+}
+
+impl From<core::graph_queries::GraphNeighbors> for GraphNeighbors {
+    fn from(n: core::graph_queries::GraphNeighbors) -> Self {
+        GraphNeighbors {
+            generation: n.generation,
+            neighbors: n
+                .neighbors
+                .into_iter()
+                .map(|x| GraphNeighbor {
+                    id: x.id,
+                    stable_key: x.stable_key,
+                    label: x.label,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTopologyNode`] (0b-6b).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphTopologyNode {
+    pub id: u64,
+    pub stable_key: String,
+    pub label: String,
+    pub path: Option<String>,
+    pub kind: GraphNodeKind,
+    pub in_links: u32,
+    pub out_links: u32,
+    pub in_embeds: u32,
+    pub out_embeds: u32,
+    pub component: u32,
+    pub is_orphan: bool,
+    pub diameter: f64,
+    pub group: Option<u32>,
+    pub labeled: bool,
+    pub neighbors: Vec<GraphNeighbor>,
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTopology`] — one record per
+/// semantic epoch (design B): the visible nodes and the visible edges.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphTopology {
+    pub generation: u64,
+    pub total: u64,
+    pub nodes: Vec<GraphTopologyNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
+impl From<core::graph_queries::GraphTopology> for GraphTopology {
+    fn from(t: core::graph_queries::GraphTopology) -> Self {
+        GraphTopology {
+            generation: t.generation,
+            total: t.total,
+            edges: t.edges.into_iter().map(Into::into).collect(),
+            nodes: t
+                .nodes
+                .into_iter()
+                .map(|n| GraphTopologyNode {
+                    id: n.id,
+                    stable_key: n.stable_key,
+                    label: n.label,
+                    path: n.path,
+                    kind: n.kind.into(),
+                    in_links: n.in_links,
+                    out_links: n.out_links,
+                    in_embeds: n.in_embeds,
+                    out_embeds: n.out_embeds,
+                    component: n.component,
+                    is_orphan: n.is_orphan,
+                    diameter: n.diameter,
+                    group: n.group,
+                    labeled: n.labeled,
+                    neighbors: n
+                        .neighbors
+                        .into_iter()
+                        .map(|x| GraphNeighbor {
+                            id: x.id,
+                            stable_key: x.stable_key,
+                            label: x.label,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphRowAction`] (0b-9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphRowAction {
+    Open,
+    OpenInNewTab,
+    ShowConnections,
+    Reveal,
+    CreateNote,
+}
+
+impl From<core::graph_queries::GraphRowAction> for GraphRowAction {
+    fn from(a: core::graph_queries::GraphRowAction) -> Self {
+        use core::graph_queries::GraphRowAction as C;
+        match a {
+            C::Open => GraphRowAction::Open,
+            C::OpenInNewTab => GraphRowAction::OpenInNewTab,
+            C::ShowConnections => GraphRowAction::ShowConnections,
+            C::Reveal => GraphRowAction::Reveal,
+            C::CreateNote => GraphRowAction::CreateNote,
+        }
+    }
+}
+
+impl From<GraphRowAction> for core::graph_queries::GraphRowAction {
+    fn from(a: GraphRowAction) -> Self {
+        use core::graph_queries::GraphRowAction as C;
+        match a {
+            GraphRowAction::Open => C::Open,
+            GraphRowAction::OpenInNewTab => C::OpenInNewTab,
+            GraphRowAction::ShowConnections => C::ShowConnections,
+            GraphRowAction::Reveal => C::Reveal,
+            GraphRowAction::CreateNote => C::CreateNote,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphRowActionSpec`] (0b-9,
+/// design B): the action and its title.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphRowActionSpec {
+    pub action: GraphRowAction,
+    pub title: String,
+}
+
+/// The ordered actions a node of `kind` is eligible for, with their
+/// titles (0b-9): a host builds its menus, custom actions and `allCases`
+/// from these vectors.
+#[uniffi::export]
+pub fn graph_row_actions(kind: GraphNodeKind) -> Vec<GraphRowActionSpec> {
+    core::graph_queries::row_actions(kind.into())
+        .into_iter()
+        .map(|s| GraphRowActionSpec {
+            action: s.action.into(),
+            title: s.title,
+        })
+        .collect()
+}
+
+/// A ghost target's note path (0b-11). Handle-free.
+#[uniffi::export]
+pub fn graph_ghost_note_path(target_raw: String) -> String {
+    core::graph_queries::ghost_note_path(&target_raw)
+}
+
+/// FFI mirror of [`core::graph_queries::GraphPoint`].
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct GraphPoint {
+    pub id: u64,
+    pub x: f64,
+    pub y: f64,
+}
+
+impl From<GraphPoint> for core::graph_queries::GraphPoint {
+    fn from(p: GraphPoint) -> Self {
+        core::graph_queries::GraphPoint {
+            id: p.id,
+            x: p.x,
+            y: p.y,
+        }
+    }
+}
+
+/// Arrow-key spatial navigation over host positions (0b-10): neighbours
+/// first, then every other point; the scoring is core's.
+#[uniffi::export]
+pub fn graph_spatial_step(
+    points: Vec<GraphPoint>,
+    neighbors: Vec<u64>,
+    from: u64,
+    dx: f64,
+    dy: f64,
+) -> Option<u64> {
+    let points: Vec<core::graph_queries::GraphPoint> = points.into_iter().map(Into::into).collect();
+    core::graph_queries::spatial_step(&points, &neighbors, from, dx, dy)
+}
+
+/// Tab / Shift-Tab over the visible order, wrapping (0b-10).
+#[uniffi::export]
+pub fn graph_structural_step(visible: Vec<u64>, from: Option<u64>, forward: bool) -> Option<u64> {
+    core::graph_queries::structural_step(&visible, from, forward)
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTableColumn`] (0b-7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphTableColumn {
+    Note,
+    LinksIn,
+    LinksOut,
+    EmbedsIn,
+    EmbedsOut,
+    Component,
+    Modified,
+    Folder,
+    Kind,
+}
+
+impl From<GraphTableColumn> for core::graph_queries::GraphTableColumn {
+    fn from(c: GraphTableColumn) -> Self {
+        use core::graph_queries::GraphTableColumn as C;
+        match c {
+            GraphTableColumn::Note => C::Note,
+            GraphTableColumn::LinksIn => C::LinksIn,
+            GraphTableColumn::LinksOut => C::LinksOut,
+            GraphTableColumn::EmbedsIn => C::EmbedsIn,
+            GraphTableColumn::EmbedsOut => C::EmbedsOut,
+            GraphTableColumn::Component => C::Component,
+            GraphTableColumn::Modified => C::Modified,
+            GraphTableColumn::Folder => C::Folder,
+            GraphTableColumn::Kind => C::Kind,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTableSort`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct GraphTableSort {
+    pub column: GraphTableColumn,
+    pub ascending: bool,
+}
+
+impl From<GraphTableSort> for core::graph_queries::GraphTableSort {
+    fn from(s: GraphTableSort) -> Self {
+        core::graph_queries::GraphTableSort {
+            column: s.column.into(),
+            ascending: s.ascending,
+        }
+    }
+}
+
+impl From<core::graph_queries::GraphTableSort> for GraphTableSort {
+    fn from(s: core::graph_queries::GraphTableSort) -> Self {
+        GraphTableSort {
+            column: s.column.into(),
+            ascending: s.ascending,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTableColumnSpec`] (0b-7):
+/// the ordered column model a grid is built from.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphTableColumnSpec {
+    pub column: GraphTableColumn,
+    pub header: String,
+}
+
+impl From<core::graph_queries::GraphTableColumn> for GraphTableColumn {
+    fn from(c: core::graph_queries::GraphTableColumn) -> Self {
+        use core::graph_queries::GraphTableColumn as C;
+        match c {
+            C::Note => GraphTableColumn::Note,
+            C::LinksIn => GraphTableColumn::LinksIn,
+            C::LinksOut => GraphTableColumn::LinksOut,
+            C::EmbedsIn => GraphTableColumn::EmbedsIn,
+            C::EmbedsOut => GraphTableColumn::EmbedsOut,
+            C::Component => GraphTableColumn::Component,
+            C::Modified => GraphTableColumn::Modified,
+            C::Folder => GraphTableColumn::Folder,
+            C::Kind => GraphTableColumn::Kind,
+        }
+    }
+}
+
+/// The nine columns in display order with their headers (0b-7). Handle-free.
+#[uniffi::export]
+pub fn graph_table_columns() -> Vec<GraphTableColumnSpec> {
+    core::graph_queries::table_columns()
+        .into_iter()
+        .map(|s| GraphTableColumnSpec {
+            column: s.column.into(),
+            header: s.header,
+        })
+        .collect()
+}
+
+/// The preset-free default sort (W6-2 PR A, AD-1): fetched by both hosts,
+/// typed by neither. Handle-free.
+#[uniffi::export]
+pub fn graph_table_default_sort() -> GraphTableSort {
+    core::graph_queries::table_default_sort().into()
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTableRow`] (0b-7): the nine
+/// cells in column order plus the raw values.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphTableRow {
+    pub stable_key: String,
+    pub node_id: u64,
+    pub label: String,
+    pub path: Option<String>,
+    pub kind: GraphNodeKind,
+    pub cells: Vec<String>,
+    pub links_in: u32,
+    pub links_out: u32,
+    pub embeds_in: u32,
+    pub embeds_out: u32,
+    pub component: u32,
+    pub modified_ms: Option<i64>,
+}
+
+impl From<core::graph_queries::GraphTableRow> for GraphTableRow {
+    fn from(r: core::graph_queries::GraphTableRow) -> Self {
+        GraphTableRow {
+            stable_key: r.stable_key,
+            node_id: r.node_id,
+            label: r.label,
+            path: r.path,
+            kind: r.kind.into(),
+            cells: r.cells,
+            links_in: r.links_in,
+            links_out: r.links_out,
+            embeds_in: r.embeds_in,
+            embeds_out: r.embeds_out,
+            component: r.component,
+            modified_ms: r.modified_ms,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphTableRows`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphTableRows {
+    pub generation: u64,
+    pub total: u64,
+    pub rows: Vec<GraphTableRow>,
+}
+
+impl From<core::graph_queries::GraphTableRows> for GraphTableRows {
+    fn from(r: core::graph_queries::GraphTableRows) -> Self {
+        GraphTableRows {
+            generation: r.generation,
+            total: r.total,
+            rows: r.rows.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphConnectionRow`] (0b-4).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphConnectionRow {
+    pub id: String,
+    pub level: u32,
+    pub parent_id: Option<String>,
+    pub node_id: u64,
+    pub stable_key: String,
+    pub label: String,
+    pub path: Option<String>,
+    pub target_raw: String,
+    pub kind: GraphNodeKind,
+    pub embed_only: bool,
+    pub in_links: u32,
+    pub out_links: u32,
+    pub references: u32,
+}
+
+impl From<core::graph_queries::GraphConnectionRow> for GraphConnectionRow {
+    fn from(r: core::graph_queries::GraphConnectionRow) -> Self {
+        GraphConnectionRow {
+            id: r.id,
+            level: r.level,
+            parent_id: r.parent_id,
+            node_id: r.node_id,
+            stable_key: r.stable_key,
+            label: r.label,
+            path: r.path,
+            target_raw: r.target_raw,
+            kind: r.kind.into(),
+            embed_only: r.embed_only,
+            in_links: r.in_links,
+            out_links: r.out_links,
+            references: r.references,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_queries::GraphConnectionsTree`] (0b-4):
+/// the rows AND the neighbourhood's counts, one record per load.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphConnectionsTree {
+    pub generation: u64,
+    pub center_id: u64,
+    pub center_key: String,
+    pub depth: u32,
+    pub summary_counts: GraphNeighborhoodCounts,
+    pub incoming: Vec<GraphConnectionRow>,
+    pub outgoing: Vec<GraphConnectionRow>,
+}
+
+impl From<core::graph_queries::GraphConnectionsTree> for GraphConnectionsTree {
+    fn from(t: core::graph_queries::GraphConnectionsTree) -> Self {
+        GraphConnectionsTree {
+            generation: t.generation,
+            center_id: t.center_id,
+            center_key: t.center_key,
+            depth: t.depth,
+            summary_counts: t.summary_counts.into(),
+            incoming: t.incoming.into_iter().map(Into::into).collect(),
+            outgoing: t.outgoing.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+// --- The config schema (0b-12) ---
+
+/// FFI mirror of [`core::graph_config::GraphColorToken`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphColorToken {
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Teal,
+    Blue,
+    Purple,
+    Pink,
+}
+
+impl From<core::graph_config::GraphColorToken> for GraphColorToken {
+    fn from(t: core::graph_config::GraphColorToken) -> Self {
+        use core::graph_config::GraphColorToken as C;
+        match t {
+            C::Red => GraphColorToken::Red,
+            C::Orange => GraphColorToken::Orange,
+            C::Yellow => GraphColorToken::Yellow,
+            C::Green => GraphColorToken::Green,
+            C::Teal => GraphColorToken::Teal,
+            C::Blue => GraphColorToken::Blue,
+            C::Purple => GraphColorToken::Purple,
+            C::Pink => GraphColorToken::Pink,
+        }
+    }
+}
+
+impl From<GraphColorToken> for core::graph_config::GraphColorToken {
+    fn from(t: GraphColorToken) -> Self {
+        use core::graph_config::GraphColorToken as C;
+        match t {
+            GraphColorToken::Red => C::Red,
+            GraphColorToken::Orange => C::Orange,
+            GraphColorToken::Yellow => C::Yellow,
+            GraphColorToken::Green => C::Green,
+            GraphColorToken::Teal => C::Teal,
+            GraphColorToken::Blue => C::Blue,
+            GraphColorToken::Purple => C::Purple,
+            GraphColorToken::Pink => C::Pink,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_config::GraphRingStyle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphRingStyle {
+    Solid,
+    Dashed,
+    Double,
+    Dotted,
+}
+
+impl From<core::graph_config::GraphRingStyle> for GraphRingStyle {
+    fn from(s: core::graph_config::GraphRingStyle) -> Self {
+        use core::graph_config::GraphRingStyle as C;
+        match s {
+            C::Solid => GraphRingStyle::Solid,
+            C::Dashed => GraphRingStyle::Dashed,
+            C::Double => GraphRingStyle::Double,
+            C::Dotted => GraphRingStyle::Dotted,
+        }
+    }
+}
+
+impl From<GraphRingStyle> for core::graph_config::GraphRingStyle {
+    fn from(s: GraphRingStyle) -> Self {
+        use core::graph_config::GraphRingStyle as C;
+        match s {
+            GraphRingStyle::Solid => C::Solid,
+            GraphRingStyle::Dashed => C::Dashed,
+            GraphRingStyle::Double => C::Double,
+            GraphRingStyle::Dotted => C::Dotted,
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_config::GraphColorTokenSpec`] (0b-12,
+/// design B): one entry of the ordered palette.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphColorTokenSpec {
+    pub token: GraphColorToken,
+    pub tag: String,
+    pub title: String,
+}
+
+/// FFI mirror of [`core::graph_config::GraphRingStyleSpec`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphRingStyleSpec {
+    pub style: GraphRingStyle,
+    pub tag: String,
+    pub title: String,
+}
+
+/// The ordered palette with tags and titles (T71): a host builds its
+/// picker and its `allCases` from this vector.
+#[uniffi::export]
+pub fn graph_color_tokens() -> Vec<GraphColorTokenSpec> {
+    core::graph_config::color_tokens()
+        .into_iter()
+        .map(|s| GraphColorTokenSpec {
+            token: s.token.into(),
+            tag: s.tag,
+            title: s.title,
+        })
+        .collect()
+}
+
+/// The ordered ring styles with tags and titles (T72).
+#[uniffi::export]
+pub fn graph_ring_styles() -> Vec<GraphRingStyleSpec> {
+    core::graph_config::ring_styles()
+        .into_iter()
+        .map(|s| GraphRingStyleSpec {
+            style: s.style.into(),
+            tag: s.tag,
+            title: s.title,
+        })
+        .collect()
+}
+
+/// FFI mirror of [`core::graph_config::GraphSurfaceModeSpec`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphSurfaceModeSpec {
+    pub mode: GraphSurfaceMode,
+    pub tag: String,
+    pub title: String,
+}
+
+/// FFI mirror of [`core::graph_config::GraphVerbositySpec`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphVerbositySpec {
+    pub verbosity: GraphVerbosity,
+    pub tag: String,
+    pub title: String,
+}
+
+/// The ordered surface modes with their `graph.json` tags and switcher
+/// titles (0b-12): a host's mode switcher iterates this vector.
+#[uniffi::export]
+pub fn graph_surface_modes() -> Vec<GraphSurfaceModeSpec> {
+    core::graph_config::surface_modes()
+        .into_iter()
+        .map(|s| GraphSurfaceModeSpec {
+            mode: s.mode.into(),
+            tag: s.tag,
+            title: s.title,
+        })
+        .collect()
+}
+
+/// The ordered verbosity levels with their tags and menu titles (0b-12):
+/// a host's Verbosity menu iterates this vector.
+#[uniffi::export]
+pub fn graph_verbosities() -> Vec<GraphVerbositySpec> {
+    core::graph_config::verbosities()
+        .into_iter()
+        .map(|s| GraphVerbositySpec {
+            verbosity: s.verbosity.into(),
+            tag: s.tag,
+            title: s.title,
+        })
+        .collect()
+}
+
+/// FFI mirror of [`core::graph_config::GraphFilterConfig`].
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphFilterConfig {
+    pub include_attachments: bool,
+    pub include_ghosts: bool,
+    pub orphans_only: bool,
+    pub name_query: String,
+}
+
+/// FFI mirror of [`core::graph_config::GraphGroup`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphGroup {
+    pub query: String,
+    pub color_token: GraphColorToken,
+    pub ring_style: GraphRingStyle,
+}
+
+/// FFI mirror of [`core::graph_config::GraphDisplay`].
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphDisplay {
+    pub arrows: bool,
+    pub text_fade_zoom: f64,
+    pub node_size_multiplier: f64,
+    pub link_thickness: f64,
+}
+
+/// FFI mirror of [`core::graph_config::GraphForcesConfig`].
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphForcesConfig {
+    pub center: f64,
+    pub repel: f64,
+    pub link: f64,
+    pub link_distance: f64,
+}
+
+/// FFI mirror of [`core::graph_config::GraphConfig`] — schema v1 plus
+/// `verbosity` (0aD-6).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphConfig {
+    pub filters: GraphFilterConfig,
+    pub groups: Vec<GraphGroup>,
+    pub display: GraphDisplay,
+    pub forces: GraphForcesConfig,
+    pub mode: GraphSurfaceMode,
+    pub connections_depth: u32,
+    pub verbosity: GraphVerbosity,
+}
+
+impl From<core::graph_config::GraphConfig> for GraphConfig {
+    fn from(c: core::graph_config::GraphConfig) -> Self {
+        GraphConfig {
+            filters: GraphFilterConfig {
+                include_attachments: c.filters.include_attachments,
+                include_ghosts: c.filters.include_ghosts,
+                orphans_only: c.filters.orphans_only,
+                name_query: c.filters.name_query,
+            },
+            groups: c
+                .groups
+                .into_iter()
+                .map(|g| GraphGroup {
+                    query: g.query,
+                    color_token: g.color_token.into(),
+                    ring_style: g.ring_style.into(),
+                })
+                .collect(),
+            display: GraphDisplay {
+                arrows: c.display.arrows,
+                text_fade_zoom: c.display.text_fade_zoom,
+                node_size_multiplier: c.display.node_size_multiplier,
+                link_thickness: c.display.link_thickness,
+            },
+            forces: GraphForcesConfig {
+                center: c.forces.center,
+                repel: c.forces.repel,
+                link: c.forces.link,
+                link_distance: c.forces.link_distance,
+            },
+            mode: c.mode.into(),
+            connections_depth: c.connections_depth,
+            verbosity: c.verbosity.into(),
+        }
+    }
+}
+
+impl From<GraphConfig> for core::graph_config::GraphConfig {
+    fn from(c: GraphConfig) -> Self {
+        core::graph_config::GraphConfig {
+            filters: core::graph_config::GraphFilterConfig {
+                include_attachments: c.filters.include_attachments,
+                include_ghosts: c.filters.include_ghosts,
+                orphans_only: c.filters.orphans_only,
+                name_query: c.filters.name_query,
+            },
+            groups: c
+                .groups
+                .into_iter()
+                .map(|g| core::graph_config::GraphGroup {
+                    query: g.query,
+                    color_token: g.color_token.into(),
+                    ring_style: g.ring_style.into(),
+                })
+                .collect(),
+            display: core::graph_config::GraphDisplay {
+                arrows: c.display.arrows,
+                text_fade_zoom: c.display.text_fade_zoom,
+                node_size_multiplier: c.display.node_size_multiplier,
+                link_thickness: c.display.link_thickness,
+            },
+            forces: core::graph_config::GraphForcesConfig {
+                center: c.forces.center,
+                repel: c.forces.repel,
+                link: c.forces.link,
+                link_distance: c.forces.link_distance,
+            },
+            mode: c.mode.into(),
+            connections_depth: c.connections_depth,
+            verbosity: c.verbosity.into(),
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_config::GraphConfigError`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
+pub enum GraphConfigError {
+    #[error("graph.json is unparseable: {reason}")]
+    Unparseable { reason: String },
+    #[error("graph.json is a newer version ({version}); not downgrading")]
+    NewerVersion { version: u64 },
+}
+
+impl From<core::graph_config::GraphConfigError> for GraphConfigError {
+    fn from(e: core::graph_config::GraphConfigError) -> Self {
+        use core::graph_config::GraphConfigError as C;
+        match e {
+            C::Unparseable { reason } => GraphConfigError::Unparseable { reason },
+            C::NewerVersion { version } => GraphConfigError::NewerVersion { version },
+        }
+    }
+}
+
+/// FFI mirror of [`core::graph_config::GraphConfigRead`].
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GraphConfigRead {
+    pub config: GraphConfig,
+    pub unknown_json: String,
+}
+
+/// The default config — what a missing `graph.json` means (0b-12).
+#[uniffi::export]
+pub fn graph_config_default() -> GraphConfig {
+    core::graph_config::default().into()
+}
+
+/// Decode a `graph.json` text (0b-12): defaults, clamps, the version
+/// rule, the unknown keys preserved for the next write.
+#[uniffi::export]
+pub fn graph_config_decode(json: String) -> Result<GraphConfigRead, GraphConfigError> {
+    let read = core::graph_config::decode(&json)?;
+    Ok(GraphConfigRead {
+        config: read.config.into(),
+        unknown_json: read.unknown_json,
+    })
+}
+
+/// Encode a config over the existing file text (0b-12): refuses an
+/// unparseable or newer existing file, preserves unknown top-level keys,
+/// writes canonical bytes.
+#[uniffi::export]
+pub fn graph_config_encode(
+    config: GraphConfig,
+    existing_json: Option<String>,
+) -> Result<String, GraphConfigError> {
+    Ok(core::graph_config::encode(
+        &config.into(),
+        existing_json.as_deref(),
+    )?)
+}
+
+/// The first group whose query matches `label` (0b-12), as an index.
+#[uniffi::export]
+pub fn graph_config_matching_group(config: GraphConfig, label: String) -> Option<u32> {
+    core::graph_config::matching_group(&config.into(), &label).map(|i| i as u32)
+}
+
+/// FFI mirror of [`core::graph_config::GraphGroupStyle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct GraphGroupStyle {
+    pub color_token: GraphColorToken,
+    pub ring_style: GraphRingStyle,
+}
+
+/// The style a new group takes, by its index (0b-12).
+#[uniffi::export]
+pub fn graph_config_next_group_style(group_count: u32) -> GraphGroupStyle {
+    let s = core::graph_config::next_group_style(group_count as usize);
+    GraphGroupStyle {
+        color_token: s.color_token.into(),
+        ring_style: s.ring_style.into(),
     }
 }
 
@@ -3535,6 +4846,42 @@ pub struct SaveReport {
     pub new_mtime_ms: i64,
 }
 
+/// The typed outcome of `create_exclusive_reporting` (#1123). `Committed`
+/// is the ordinary success; `PublishedUnindexed` is the post-publish
+/// failure — bytes on disk at `path` with `content_hash`, not indexed,
+/// `error_message` the failure core saw. The file is REAL: hosts must
+/// not recreate it or pick another name; the next scan indexes it.
+#[derive(uniffi::Enum)]
+pub enum CreateExclusiveOutcome {
+    Committed {
+        report: SaveReport,
+    },
+    PublishedUnindexed {
+        path: String,
+        content_hash: String,
+        error_message: String,
+    },
+}
+
+impl From<core::CreateExclusiveOutcome> for CreateExclusiveOutcome {
+    fn from(outcome: core::CreateExclusiveOutcome) -> Self {
+        match outcome {
+            core::CreateExclusiveOutcome::Committed(report) => Self::Committed {
+                report: report.into(),
+            },
+            core::CreateExclusiveOutcome::PublishedUnindexed {
+                path,
+                content_hash,
+                error,
+            } => Self::PublishedUnindexed {
+                path,
+                content_hash,
+                error_message: error.to_string(),
+            },
+        }
+    }
+}
+
 impl From<core::SaveReport> for SaveReport {
     fn from(r: core::SaveReport) -> Self {
         Self {
@@ -3698,6 +5045,28 @@ impl From<core::EmbedPreviewResolution> for EmbedPreviewResolution {
         Self {
             resolution: preview.resolution.into(),
             truncated: preview.truncated,
+        }
+    }
+}
+
+/// One reading-card resolution (W3-5): nested image payloads are
+/// never marshalled; `image_elided`/`image_len` report the root
+/// payload's budget outcome and true size.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct EmbedReadingCard {
+    pub resolution: EmbedResolution,
+    pub truncated: bool,
+    pub image_elided: bool,
+    pub image_len: u64,
+}
+
+impl From<core::EmbedReadingCard> for EmbedReadingCard {
+    fn from(card: core::EmbedReadingCard) -> Self {
+        Self {
+            resolution: card.resolution.into(),
+            truncated: card.truncated,
+            image_elided: card.image_elided,
+            image_len: card.image_len,
         }
     }
 }
@@ -4312,6 +5681,10 @@ pub struct TaskWithLocation {
     pub task: TaskItem,
     pub path: String,
     pub file_name: String,
+    /// Snapshot content hash (W4-3): a review toggle passes this as
+    /// the expected hash so a stale ordinal can never silently
+    /// toggle a different task.
+    pub content_hash: String,
 }
 
 impl From<core::TaskWithLocation> for TaskWithLocation {
@@ -4320,6 +5693,7 @@ impl From<core::TaskWithLocation> for TaskWithLocation {
             task: t.task.into(),
             path: t.path,
             file_name: t.file_name,
+            content_hash: t.content_hash,
         }
     }
 }
@@ -4543,17 +5917,21 @@ impl From<core::math::MathDisplayStyle> for MathDisplayStyle {
     }
 }
 
+/// The two speech styles MathCAT actually implements (#1056). The
+/// `MathSpeak` variant this enum carried before was never shipped
+/// upstream and silently produced ClearSpeak; hosts migrate a stored
+/// `mathSpeak` tag to `ClearSpeak` — what those users were hearing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum MathSpeechStyle {
     ClearSpeak,
-    MathSpeak,
+    SimpleSpeak,
 }
 
 impl From<MathSpeechStyle> for core::math::MathSpeechStyle {
     fn from(v: MathSpeechStyle) -> Self {
         match v {
             MathSpeechStyle::ClearSpeak => core::math::MathSpeechStyle::ClearSpeak,
-            MathSpeechStyle::MathSpeak => core::math::MathSpeechStyle::MathSpeak,
+            MathSpeechStyle::SimpleSpeak => core::math::MathSpeechStyle::SimpleSpeak,
         }
     }
 }
@@ -5659,6 +7037,22 @@ impl From<Author> for core::Author {
     }
 }
 
+/// A bibliography entry as the HOSTS see it.
+///
+/// Deliberately NOT a mirror of `core::BibEntry`: it omits
+/// `raw_csl_json`, the serialised CSL-JSON blob core keeps so
+/// `render_citation` can hand a complete item to the CSL engine.
+/// Rendering happens entirely inside core, so no host has ever read
+/// that field — verified across both apps, where the only mention was
+/// one Swift test fixture and two comments saying not to parse it.
+///
+/// It is not free to carry. `get_bibliography_entries` returns EVERY
+/// entry, the Windows leaf retains the whole set to run its host-side
+/// search predicate (W4-5 D-4), and core's own guidance is "&lt;10k
+/// entries typically" — so the blob was tens of MB of string decoding
+/// and retention per vault open, entirely for a field nothing could
+/// use. The §W-A parity artifacts already excluded it (W4-5 D-10), so
+/// no golden moves.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct BibEntry {
     pub key: String,
@@ -5671,7 +7065,6 @@ pub struct BibEntry {
     pub url: Option<String>,
     pub publisher: Option<String>,
     pub abstract_text: Option<String>,
-    pub raw_csl_json: String,
 }
 
 impl From<core::BibEntry> for BibEntry {
@@ -5687,7 +7080,6 @@ impl From<core::BibEntry> for BibEntry {
             url: e.url,
             publisher: e.publisher,
             abstract_text: e.abstract_text,
-            raw_csl_json: e.raw_csl_json,
         }
     }
 }
@@ -5705,7 +7097,15 @@ impl From<BibEntry> for core::BibEntry {
             url: e.url,
             publisher: e.publisher,
             abstract_text: e.abstract_text,
-            raw_csl_json: e.raw_csl_json,
+            // EMPTY, and that is correct rather than lossy. This
+            // direction exists only for `reading_inline_segments_source`,
+            // where a host hands back citations core ALREADY rendered so
+            // their runs can be segmented. Nothing on that path consults
+            // the CSL blob — rendering is `render.rs`, which reads it
+            // from core's own BibIndex, never from a host-supplied entry
+            // — and a host could not supply it in any case, because it
+            // no longer crosses the boundary.
+            raw_csl_json: String::new(),
         }
     }
 }
@@ -6465,6 +7865,12 @@ pub enum A11yEvent {
     },
     CommandPaletteNeedsVault,
     SearchNeedsVault,
+    SearchResultsSummary {
+        count: u32,
+    },
+    SearchFailed {
+        message: String,
+    },
     SearchResultOpened {
         filename: String,
         line: u32,
@@ -6661,6 +8067,20 @@ pub enum A11yEvent {
         label: String,
         disabled_reason: Option<String>,
     },
+    PaletteFilterCount {
+        count: u32,
+        query: String,
+    },
+    PaletteCommandFailed {
+        label: String,
+        detail: Option<String>,
+    },
+    PaletteCommandNotFound {
+        id: String,
+    },
+    PaletteCommandUnavailable {
+        reason: String,
+    },
     RecentSearchFocused {
         query: String,
     },
@@ -6708,6 +8128,157 @@ pub enum A11yEvent {
         detail: String,
     },
     BaseRefreshed,
+    BaseWhereAmI {
+        base: String,
+        view: Option<String>,
+        quick_filter: Option<String>,
+    },
+    BaseResultsPopover {
+        audio_summary: String,
+        where_am_i: Option<String>,
+    },
+    BaseQuickFilterResult {
+        shown: u64,
+        total: u64,
+    },
+    BaseRowReorderRefused {
+        label: String,
+    },
+    BaseRowReorderAtBoundary {
+        label: String,
+        at_first: bool,
+    },
+    BaseRowReorderMoved {
+        label: String,
+        moved_up: bool,
+        position: u64,
+        count: u64,
+    },
+    BaseQueryPreviewIdle,
+    BaseQueryPreviewLoading,
+    BaseQueryPreviewReady {
+        audio_summary: String,
+        first_result: Option<String>,
+    },
+    BaseQueryPreviewFailed {
+        detail: String,
+    },
+    BaseSortedByColumn {
+        column: String,
+        ascending: bool,
+    },
+    BaseSortSavedToView {
+        column: String,
+        ascending: bool,
+    },
+    BasesSavedQueryReferenceMissing {
+        reference: String,
+    },
+    BasesSavedQueryMissing,
+    BasesQueriesRefreshFailed {
+        detail: String,
+    },
+    BasesSavedQueryEditing {
+        name: String,
+    },
+    BasesSavedQueryEditFailed {
+        detail: String,
+    },
+    BasesSavedQueryRenameNameNeeded,
+    BasesSavedQueryRenamed {
+        name: String,
+    },
+    BasesSavedQueryRenameFailed {
+        detail: String,
+    },
+    BasesSavedQueryDeleted,
+    BasesSavedQueryDeleteFailed {
+        detail: String,
+    },
+    BasesSavedQueryExportPathNeeded,
+    BasesSavedQueryExported {
+        name: String,
+    },
+    BasesSavedQueryExportFailed {
+        detail: String,
+    },
+    BasesPathOutsideVault,
+    BasesDashboardNameNeeded,
+    BasesDashboardSaved {
+        name: String,
+    },
+    BasesDashboardSaveFailed {
+        detail: String,
+    },
+    BasesDashboardUpdated {
+        name: String,
+    },
+    BasesDashboardUpdateFailed {
+        detail: String,
+    },
+    BasesDashboardSectionStale,
+    BasesDashboardSectionRemoveFailed {
+        detail: String,
+    },
+    BasesDashboardSectionReplaceFailed {
+        detail: String,
+    },
+    BasesDashboardDeleted,
+    BasesDashboardDeleteFailed {
+        detail: String,
+    },
+    BasesDashboardEditFailed {
+        detail: String,
+    },
+    BasesDashboardMissing,
+    BasesDockUpdatedForNote,
+    BasesLinkCopied {
+        name: String,
+    },
+    BasesBacklinksFor {
+        name: String,
+    },
+    BasesViewCopyNoActiveBase,
+    BasesViewCopiedAsMarkdown,
+    BasesViewCopyFailed {
+        detail: String,
+    },
+    BasesRowSelectionNeeded,
+    BasesNoEditableProperty,
+    BasesCellReadOnly {
+        file_metadata: bool,
+    },
+    BasesCellSaved {
+        column: String,
+        value: String,
+    },
+    BasesCellCleared {
+        column: String,
+    },
+    BasesCellRowNoLongerMatches,
+    BasesCellEditFailed {
+        detail: String,
+    },
+    BasesCellEditCanceled,
+    BasesViewExported,
+    BasesViewExportFailed {
+        detail: String,
+    },
+    BasesDataviewConverted,
+    BasesDataviewConversionSaveFailed {
+        detail: String,
+    },
+    BasesQuickFilterChoiceCanceled {
+        verb: String,
+    },
+    BasesCellMustBeFiniteNumber,
+    BasesCellMustBeWholeNumber,
+    BasesCellMustBeFiniteDecimal,
+    BasesCellMustBeBoolean,
+    BasesCellMustBeDate,
+    BasesRefreshUpdated {
+        audio_summary: String,
+    },
     DataviewConversionFailed {
         detail: String,
     },
@@ -6721,6 +8292,38 @@ pub enum A11yEvent {
     ReadingNavLanded {
         target: ReadingNavTarget,
         text: String,
+    },
+    GridSorted {
+        column: String,
+        ascending: bool,
+    },
+    GridRowMoved {
+        description: String,
+        focused_cell: String,
+    },
+    GridCellMoved {
+        column: String,
+        value: String,
+    },
+    GridGroup {
+        label: String,
+        row_count: u32,
+        summary: Option<String>,
+    },
+    TemplatePickerOpened {
+        count: u32,
+    },
+    TemplateNoteCreated {
+        name: String,
+        template: String,
+    },
+    Canvas {
+        event: CanvasA11yEvent,
+    },
+    /// The graph announcer family (W6-2 0a, #746) — the second nested
+    /// engine, one top-level variant.
+    Graph {
+        event: GraphA11yEvent,
     },
     HostComposed {
         text: String,
@@ -6738,6 +8341,8 @@ pub enum ReadingNavTarget {
     Table,
     Embed,
     CodeBlock,
+    Math,
+    Diagram,
 }
 
 impl From<ReadingNavTarget> for core::a11y::ReadingNavTarget {
@@ -6752,6 +8357,1264 @@ impl From<ReadingNavTarget> for core::a11y::ReadingNavTarget {
             F::Table => C::Table,
             F::Embed => C::Embed,
             F::CodeBlock => C::CodeBlock,
+            F::Math => C::Math,
+            F::Diagram => C::Diagram,
+        }
+    }
+}
+
+// The canvas announcement vocabulary's closed parameter sets (W6-1
+// 0a, #745): 1:1 mirrors of the `slate_core::a11y` enums, no logic.
+// See that module for what each one means and why it is closed.
+
+/// FFI mirror of [`core::a11y::CanvasVerbosity`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasVerbosity {
+    Terse,
+    Standard,
+    Verbose,
+}
+
+impl From<CanvasVerbosity> for core::a11y::CanvasVerbosity {
+    fn from(v: CanvasVerbosity) -> Self {
+        use core::a11y::CanvasVerbosity as C;
+        match v {
+            CanvasVerbosity::Terse => C::Terse,
+            CanvasVerbosity::Standard => C::Standard,
+            CanvasVerbosity::Verbose => C::Verbose,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasOverlapTransition`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasOverlapTransition {
+    Onset,
+    Cleared,
+}
+
+impl From<CanvasOverlapTransition> for core::a11y::CanvasOverlapTransition {
+    fn from(t: CanvasOverlapTransition) -> Self {
+        use core::a11y::CanvasOverlapTransition as C;
+        match t {
+            CanvasOverlapTransition::Onset => C::Onset,
+            CanvasOverlapTransition::Cleared => C::Cleared,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasMode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasMode {
+    Move,
+    Resize,
+    Connect,
+}
+
+impl From<CanvasMode> for core::a11y::CanvasMode {
+    fn from(m: CanvasMode) -> Self {
+        use core::a11y::CanvasMode as C;
+        match m {
+            CanvasMode::Move => C::Move,
+            CanvasMode::Resize => C::Resize,
+            CanvasMode::Connect => C::Connect,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasModeObject`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasModeObject {
+    Card { title: String },
+    Cards { count: u32 },
+}
+
+impl From<CanvasModeObject> for core::a11y::CanvasModeObject {
+    fn from(o: CanvasModeObject) -> Self {
+        use core::a11y::CanvasModeObject as C;
+        match o {
+            CanvasModeObject::Card { title } => C::Card { title },
+            CanvasModeObject::Cards { count } => C::Cards { count },
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasTransientVerb`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasTransientVerb {
+    Move,
+    Resize,
+}
+
+impl From<CanvasTransientVerb> for core::a11y::CanvasTransientVerb {
+    fn from(v: CanvasTransientVerb) -> Self {
+        use core::a11y::CanvasTransientVerb as C;
+        match v {
+            CanvasTransientVerb::Move => C::Move,
+            CanvasTransientVerb::Resize => C::Resize,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasResizePreset`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasResizePreset {
+    DefaultSize,
+    FitToContent,
+}
+
+impl From<CanvasResizePreset> for core::a11y::CanvasResizePreset {
+    fn from(p: CanvasResizePreset) -> Self {
+        use core::a11y::CanvasResizePreset as C;
+        match p {
+            CanvasResizePreset::DefaultSize => C::DefaultSize,
+            CanvasResizePreset::FitToContent => C::FitToContent,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasSurfaceKind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasSurfaceKind {
+    Outline,
+    Table,
+    Visual,
+}
+
+impl From<CanvasSurfaceKind> for core::a11y::CanvasSurfaceKind {
+    fn from(s: CanvasSurfaceKind) -> Self {
+        use core::a11y::CanvasSurfaceKind as C;
+        match s {
+            CanvasSurfaceKind::Outline => C::Outline,
+            CanvasSurfaceKind::Table => C::Table,
+            CanvasSurfaceKind::Visual => C::Visual,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasZoomContext`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasZoomContext {
+    FitCanvas,
+    ZoomedToSelection,
+}
+
+impl From<CanvasZoomContext> for core::a11y::CanvasZoomContext {
+    fn from(z: CanvasZoomContext) -> Self {
+        use core::a11y::CanvasZoomContext as C;
+        match z {
+            CanvasZoomContext::FitCanvas => C::FitCanvas,
+            CanvasZoomContext::ZoomedToSelection => C::ZoomedToSelection,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasDeleteTarget`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasDeleteTarget {
+    Card {
+        kind_label: String,
+        title: String,
+    },
+    Group {
+        label: String,
+    },
+    Cards {
+        count: u32,
+    },
+    Connection {
+        direction: CanvasEdgeDirection,
+        other_title: String,
+        label: Option<String>,
+    },
+}
+
+impl From<CanvasDeleteTarget> for core::a11y::CanvasDeleteTarget {
+    fn from(t: CanvasDeleteTarget) -> Self {
+        use core::a11y::CanvasDeleteTarget as C;
+        match t {
+            CanvasDeleteTarget::Card { kind_label, title } => C::Card { kind_label, title },
+            CanvasDeleteTarget::Group { label } => C::Group { label },
+            CanvasDeleteTarget::Cards { count } => C::Cards { count },
+            CanvasDeleteTarget::Connection {
+                direction,
+                other_title,
+                label,
+            } => C::Connection {
+                direction: direction.into(),
+                other_title,
+                label,
+            },
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasFailedAction`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasFailedAction {
+    NewCard,
+    NewGroup,
+    NewCanvas,
+    MoveIntoGroup,
+    Placement,
+    Align,
+    Create,
+    RemoveFromGroup,
+    Duplicate,
+    CreateConnectedCard,
+    CanvasAction,
+    WhereAmI,
+}
+
+impl From<CanvasFailedAction> for core::a11y::CanvasFailedAction {
+    fn from(a: CanvasFailedAction) -> Self {
+        use core::a11y::CanvasFailedAction as C;
+        match a {
+            CanvasFailedAction::NewCard => C::NewCard,
+            CanvasFailedAction::NewGroup => C::NewGroup,
+            CanvasFailedAction::NewCanvas => C::NewCanvas,
+            CanvasFailedAction::MoveIntoGroup => C::MoveIntoGroup,
+            CanvasFailedAction::Placement => C::Placement,
+            CanvasFailedAction::Align => C::Align,
+            CanvasFailedAction::Create => C::Create,
+            CanvasFailedAction::RemoveFromGroup => C::RemoveFromGroup,
+            CanvasFailedAction::Duplicate => C::Duplicate,
+            CanvasFailedAction::CreateConnectedCard => C::CreateConnectedCard,
+            CanvasFailedAction::CanvasAction => C::CanvasAction,
+            CanvasFailedAction::WhereAmI => C::WhereAmI,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasMutationRefusal`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasMutationRefusal {
+    Opening,
+    Reopening,
+    RetargetFailed,
+    Unavailable,
+    ReadOnly,
+    CardEditorUnavailable,
+    RefreshPending,
+}
+
+impl From<CanvasMutationRefusal> for core::a11y::CanvasMutationRefusal {
+    fn from(r: CanvasMutationRefusal) -> Self {
+        use core::a11y::CanvasMutationRefusal as C;
+        match r {
+            CanvasMutationRefusal::Opening => C::Opening,
+            CanvasMutationRefusal::Reopening => C::Reopening,
+            CanvasMutationRefusal::RetargetFailed => C::RetargetFailed,
+            CanvasMutationRefusal::Unavailable => C::Unavailable,
+            CanvasMutationRefusal::ReadOnly => C::ReadOnly,
+            CanvasMutationRefusal::CardEditorUnavailable => C::CardEditorUnavailable,
+            CanvasMutationRefusal::RefreshPending => C::RefreshPending,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasHistoryVerb`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasHistoryVerb {
+    Undo,
+    Redo,
+}
+
+impl From<CanvasHistoryVerb> for core::a11y::CanvasHistoryVerb {
+    fn from(v: CanvasHistoryVerb) -> Self {
+        use core::a11y::CanvasHistoryVerb as C;
+        match v {
+            CanvasHistoryVerb::Undo => C::Undo,
+            CanvasHistoryVerb::Redo => C::Redo,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasFilterState`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasFilterState {
+    Inactive,
+    Active { matched: u32, total: u32 },
+}
+
+impl From<CanvasFilterState> for core::a11y::CanvasFilterState {
+    fn from(f: CanvasFilterState) -> Self {
+        use core::a11y::CanvasFilterState as C;
+        match f {
+            CanvasFilterState::Inactive => C::Inactive,
+            CanvasFilterState::Active { matched, total } => C::Active { matched, total },
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasModeRestoration`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasModeRestoration {
+    /// Cancelled without a restoration statement — the degenerate
+    /// path where the document went away before the restore could
+    /// run. (Named `Unstated` rather than `None` so the Swift
+    /// binding cannot collide with `Optional.none`.)
+    Unstated,
+    CardsReturned {
+        count: u32,
+    },
+    SizeRestored,
+    BackAt {
+        title: String,
+    },
+}
+
+impl From<CanvasModeRestoration> for core::a11y::CanvasModeRestoration {
+    fn from(r: CanvasModeRestoration) -> Self {
+        use core::a11y::CanvasModeRestoration as C;
+        match r {
+            CanvasModeRestoration::Unstated => C::Unstated,
+            CanvasModeRestoration::CardsReturned { count } => C::CardsReturned { count },
+            CanvasModeRestoration::SizeRestored => C::SizeRestored,
+            CanvasModeRestoration::BackAt { title } => C::BackAt { title },
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasPlaceVerb`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasPlaceVerb {
+    Moved,
+    Duplicated,
+}
+
+impl From<CanvasPlaceVerb> for core::a11y::CanvasPlaceVerb {
+    fn from(v: CanvasPlaceVerb) -> Self {
+        use core::a11y::CanvasPlaceVerb as C;
+        match v {
+            CanvasPlaceVerb::Moved => C::Moved,
+            CanvasPlaceVerb::Duplicated => C::Duplicated,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasOpenTarget`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasOpenTarget {
+    DefaultApp,
+    Browser,
+}
+
+impl From<CanvasOpenTarget> for core::a11y::CanvasOpenTarget {
+    fn from(t: CanvasOpenTarget) -> Self {
+        use core::a11y::CanvasOpenTarget as C;
+        match t {
+            CanvasOpenTarget::DefaultApp => C::DefaultApp,
+            CanvasOpenTarget::Browser => C::Browser,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasStatusNote`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasStatusNote {
+    NothingSelected,
+    NoMarks,
+    NotAGroup,
+    NotATextCard,
+    NotAFileCard,
+    NoGroups,
+    NoNotesInVault,
+    NoMediaInVault,
+    NoFilesToPointAt,
+    OnlyTextCardsConvert,
+    NoConnections,
+    PickOutsideMovingSet,
+    PickDifferentTarget,
+    NoChanges,
+    NotReadable,
+    Empty,
+    EndOfCanvas,
+    StartOfCanvas,
+    AtCanvasLevel,
+    NoCardsMatchFilter,
+    NothingToUndo,
+    NothingToRedo,
+    GroupIsEmpty { label: String },
+    NoOutgoingPath { title: String },
+    NotInAGroup { title: String },
+    NoConnection { forward: bool, ordinal: Option<u32> },
+    Reopening,
+    Loading,
+}
+
+impl From<CanvasStatusNote> for core::a11y::CanvasStatusNote {
+    fn from(n: CanvasStatusNote) -> Self {
+        use CanvasStatusNote as F;
+        use core::a11y::CanvasStatusNote as C;
+        match n {
+            F::NothingSelected => C::NothingSelected,
+            F::NoMarks => C::NoMarks,
+            F::NotAGroup => C::NotAGroup,
+            F::NotATextCard => C::NotATextCard,
+            F::NotAFileCard => C::NotAFileCard,
+            F::NoGroups => C::NoGroups,
+            F::NoNotesInVault => C::NoNotesInVault,
+            F::NoMediaInVault => C::NoMediaInVault,
+            F::NoFilesToPointAt => C::NoFilesToPointAt,
+            F::OnlyTextCardsConvert => C::OnlyTextCardsConvert,
+            F::NoConnections => C::NoConnections,
+            F::PickOutsideMovingSet => C::PickOutsideMovingSet,
+            F::PickDifferentTarget => C::PickDifferentTarget,
+            F::NoChanges => C::NoChanges,
+            F::NotReadable => C::NotReadable,
+            F::Empty => C::Empty,
+            F::EndOfCanvas => C::EndOfCanvas,
+            F::StartOfCanvas => C::StartOfCanvas,
+            F::AtCanvasLevel => C::AtCanvasLevel,
+            F::NoCardsMatchFilter => C::NoCardsMatchFilter,
+            F::NothingToUndo => C::NothingToUndo,
+            F::NothingToRedo => C::NothingToRedo,
+            F::GroupIsEmpty { label } => C::GroupIsEmpty { label },
+            F::NoOutgoingPath { title } => C::NoOutgoingPath { title },
+            F::NotInAGroup { title } => C::NotInAGroup { title },
+            F::NoConnection { forward, ordinal } => C::NoConnection { forward, ordinal },
+            F::Reopening => C::Reopening,
+            F::Loading => C::Loading,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasBlockedReason`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasBlockedReason {
+    ModeBusy,
+    UndoBlocked,
+    RedoBlocked,
+    UndoQuarantined,
+    RedoQuarantined,
+    LinkOpenFailed,
+    AlignWouldOverlap,
+    NotAUrl,
+    CardTextUnreadable,
+    NotePathMustEndInMd,
+    NoFreeSpaceInGroup { label: String },
+    NotePathExists { path: String, on_disk: bool },
+    NoteReadFailed { message: String },
+    NoteCreateFailed { path: String, message: String },
+    NoteRetargetFailed { path: String, message: String },
+    HeadingNotFound { heading: String, filename: String },
+    ReopenFailed { message: String },
+    FileTypeNotOpenable { target: String },
+}
+
+impl From<CanvasBlockedReason> for core::a11y::CanvasBlockedReason {
+    fn from(r: CanvasBlockedReason) -> Self {
+        use CanvasBlockedReason as F;
+        use core::a11y::CanvasBlockedReason as C;
+        match r {
+            F::ModeBusy => C::ModeBusy,
+            F::UndoBlocked => C::UndoBlocked,
+            F::RedoBlocked => C::RedoBlocked,
+            F::UndoQuarantined => C::UndoQuarantined,
+            F::RedoQuarantined => C::RedoQuarantined,
+            F::LinkOpenFailed => C::LinkOpenFailed,
+            F::AlignWouldOverlap => C::AlignWouldOverlap,
+            F::NotAUrl => C::NotAUrl,
+            F::CardTextUnreadable => C::CardTextUnreadable,
+            F::NotePathMustEndInMd => C::NotePathMustEndInMd,
+            F::NoFreeSpaceInGroup { label } => C::NoFreeSpaceInGroup { label },
+            F::NotePathExists { path, on_disk } => C::NotePathExists { path, on_disk },
+            F::NoteReadFailed { message } => C::NoteReadFailed { message },
+            F::NoteCreateFailed { path, message } => C::NoteCreateFailed { path, message },
+            F::NoteRetargetFailed { path, message } => C::NoteRetargetFailed { path, message },
+            F::HeadingNotFound { heading, filename } => C::HeadingNotFound { heading, filename },
+            F::ReopenFailed { message } => C::ReopenFailed { message },
+            F::FileTypeNotOpenable { target } => C::FileTypeNotOpenable { target },
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::CanvasA11yEvent`] — the canvas family,
+/// nested so one engine costs one top-level `A11yEvent` variant
+/// (uniffi caps an enum at 256).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasA11yEvent {
+    CanvasMovedTo {
+        verbosity: CanvasVerbosity,
+        kind_label: String,
+        title: String,
+        ordinal_n: u32,
+        total_m: u32,
+        container: Option<String>,
+        connection_count: u32,
+        color_name: Option<String>,
+        marked: bool,
+    },
+    CanvasGroupEntered {
+        label: String,
+        count: u32,
+    },
+    CanvasGroupLeft {
+        label: String,
+    },
+    CanvasConnectionTraversed {
+        direction: CanvasEdgeDirection,
+        kind_label: String,
+        title: String,
+        label: Option<String>,
+    },
+    CanvasTracePathEnd {
+        titles: Vec<String>,
+    },
+    CanvasMoveRelative {
+        descs: Vec<CanvasRelativeDesc>,
+        overlap: Option<CanvasOverlapTransition>,
+    },
+    CanvasResizeGeometry {
+        preset: Option<CanvasResizePreset>,
+        width: u32,
+        height: u32,
+        overlap: Option<CanvasOverlapTransition>,
+    },
+    CanvasResizeClamped,
+    CanvasModeEntered {
+        mode: CanvasMode,
+        object: CanvasModeObject,
+    },
+    CanvasModeRejected {
+        active_mode: CanvasMode,
+    },
+    CanvasModeCommitted {
+        verb: CanvasTransientVerb,
+        object: CanvasModeObject,
+    },
+    CanvasModeEndedWithoutEffect {
+        mode: CanvasMode,
+    },
+    CanvasModeCancelled {
+        mode: CanvasMode,
+        restoration: CanvasModeRestoration,
+    },
+    CanvasCreated {
+        kind_label: String,
+        title: String,
+        relative: CanvasRelativeDesc,
+    },
+    CanvasFileCreated {
+        name: String,
+    },
+    CanvasConnectedCardCreated {
+        relative: CanvasRelativeDesc,
+        origin_title: String,
+    },
+    CanvasConnected {
+        from_title: String,
+        to_title: String,
+        label: Option<String>,
+    },
+    CanvasConnectionUpdated {
+        label: Option<String>,
+    },
+    CanvasMovedIntoGroup {
+        label: String,
+    },
+    CanvasRemovedFromGroup {
+        label: String,
+    },
+    CanvasColorSet {
+        title: String,
+        color: Option<CanvasColor>,
+    },
+    CanvasRenamedGroup {
+        label: String,
+    },
+    CanvasCardUpdated {
+        title: String,
+    },
+    CanvasCardRetargeted {
+        title: String,
+        path: String,
+    },
+    CanvasCardPlaced {
+        verb: CanvasPlaceVerb,
+        title: String,
+        relative: CanvasRelativeDesc,
+    },
+    CanvasCardAligned {
+        title: String,
+        target_title: String,
+    },
+    CanvasConvertedToNote {
+        path: String,
+    },
+    CanvasDeleted {
+        target: CanvasDeleteTarget,
+        verbosity: CanvasVerbosity,
+        undo_chord: String,
+    },
+    CanvasBulkMoved {
+        count: u32,
+        relative: CanvasRelativeDesc,
+    },
+    CanvasBulkColorSet {
+        count: u32,
+        color: Option<CanvasColor>,
+    },
+    CanvasGrouped {
+        count: u32,
+        label: String,
+    },
+    CanvasBulkDuplicated {
+        count: u32,
+    },
+    CanvasMarkToggled {
+        marked: bool,
+        title: String,
+        count: u32,
+    },
+    CanvasMarksCleared {
+        count: u32,
+    },
+    CanvasFilterCount {
+        matched: u32,
+    },
+    CanvasFilterCleared {
+        total: u32,
+    },
+    CanvasZoom {
+        context: Option<CanvasZoomContext>,
+        percent: u32,
+    },
+    CanvasFollowSelectionToggled {
+        following: bool,
+    },
+    CanvasViewportNoPane,
+    CanvasSurfaceShown {
+        surface: CanvasSurfaceKind,
+    },
+    CanvasHistoryApplied {
+        verb: CanvasHistoryVerb,
+        name: String,
+    },
+    CanvasUndoMenuTitle {
+        verb: CanvasHistoryVerb,
+        name: String,
+    },
+    CanvasHistoryQuarantinedTitle {
+        verb: CanvasHistoryVerb,
+    },
+    CanvasStatus {
+        note: CanvasStatusNote,
+    },
+    CanvasBlocked {
+        reason: CanvasBlockedReason,
+    },
+    CanvasActionFailed {
+        action: CanvasFailedAction,
+        detail: String,
+    },
+    CanvasSaveConflict,
+    CanvasFileNotFound {
+        target: String,
+    },
+    CanvasOpened {
+        title: String,
+        target: CanvasOpenTarget,
+    },
+    CanvasMutationRefused {
+        reason: CanvasMutationRefusal,
+    },
+    CanvasLoadedDegraded {
+        skipped: u32,
+    },
+    CanvasEmptyOnboarding {
+        new_card_chord: String,
+        palette_chord: String,
+    },
+    CanvasWhereAmI {
+        kind_label: String,
+        title: String,
+        group_path: Vec<String>,
+        ordinal_n: u32,
+        total_m: u32,
+        connection_count: u32,
+        in_count: u32,
+        out_count: u32,
+        color_name: Option<String>,
+        marked: bool,
+        mode: Option<CanvasMode>,
+        filter: CanvasFilterState,
+    },
+}
+
+impl From<CanvasA11yEvent> for core::a11y::CanvasA11yEvent {
+    fn from(e: CanvasA11yEvent) -> Self {
+        use CanvasA11yEvent as F;
+        use core::a11y::CanvasA11yEvent as C;
+        match e {
+            F::CanvasMovedTo {
+                verbosity,
+                kind_label,
+                title,
+                ordinal_n,
+                total_m,
+                container,
+                connection_count,
+                color_name,
+                marked,
+            } => C::CanvasMovedTo {
+                verbosity: verbosity.into(),
+                kind_label,
+                title,
+                ordinal_n,
+                total_m,
+                container,
+                connection_count,
+                color_name,
+                marked,
+            },
+            F::CanvasGroupEntered { label, count } => C::CanvasGroupEntered { label, count },
+            F::CanvasGroupLeft { label } => C::CanvasGroupLeft { label },
+            F::CanvasConnectionTraversed {
+                direction,
+                kind_label,
+                title,
+                label,
+            } => C::CanvasConnectionTraversed {
+                direction: direction.into(),
+                kind_label,
+                title,
+                label,
+            },
+            F::CanvasTracePathEnd { titles } => C::CanvasTracePathEnd { titles },
+            F::CanvasMoveRelative { descs, overlap } => C::CanvasMoveRelative {
+                descs: descs.into_iter().map(Into::into).collect(),
+                overlap: overlap.map(Into::into),
+            },
+            F::CanvasResizeGeometry {
+                preset,
+                width,
+                height,
+                overlap,
+            } => C::CanvasResizeGeometry {
+                preset: preset.map(Into::into),
+                width,
+                height,
+                overlap: overlap.map(Into::into),
+            },
+            F::CanvasResizeClamped => C::CanvasResizeClamped,
+            F::CanvasModeEntered { mode, object } => C::CanvasModeEntered {
+                mode: mode.into(),
+                object: object.into(),
+            },
+            F::CanvasModeRejected { active_mode } => C::CanvasModeRejected {
+                active_mode: active_mode.into(),
+            },
+            F::CanvasModeCommitted { verb, object } => C::CanvasModeCommitted {
+                verb: verb.into(),
+                object: object.into(),
+            },
+            F::CanvasModeEndedWithoutEffect { mode } => {
+                C::CanvasModeEndedWithoutEffect { mode: mode.into() }
+            }
+            F::CanvasModeCancelled { mode, restoration } => C::CanvasModeCancelled {
+                mode: mode.into(),
+                restoration: restoration.into(),
+            },
+            F::CanvasCreated {
+                kind_label,
+                title,
+                relative,
+            } => C::CanvasCreated {
+                kind_label,
+                title,
+                relative: relative.into(),
+            },
+            F::CanvasFileCreated { name } => C::CanvasFileCreated { name },
+            F::CanvasConnectedCardCreated {
+                relative,
+                origin_title,
+            } => C::CanvasConnectedCardCreated {
+                relative: relative.into(),
+                origin_title,
+            },
+            F::CanvasConnected {
+                from_title,
+                to_title,
+                label,
+            } => C::CanvasConnected {
+                from_title,
+                to_title,
+                label,
+            },
+            F::CanvasConnectionUpdated { label } => C::CanvasConnectionUpdated { label },
+            F::CanvasMovedIntoGroup { label } => C::CanvasMovedIntoGroup { label },
+            F::CanvasRemovedFromGroup { label } => C::CanvasRemovedFromGroup { label },
+            F::CanvasColorSet { title, color } => C::CanvasColorSet {
+                title,
+                color: color.map(Into::into),
+            },
+            F::CanvasRenamedGroup { label } => C::CanvasRenamedGroup { label },
+            F::CanvasCardUpdated { title } => C::CanvasCardUpdated { title },
+            F::CanvasCardRetargeted { title, path } => C::CanvasCardRetargeted { title, path },
+            F::CanvasCardPlaced {
+                verb,
+                title,
+                relative,
+            } => C::CanvasCardPlaced {
+                verb: verb.into(),
+                title,
+                relative: relative.into(),
+            },
+            F::CanvasCardAligned {
+                title,
+                target_title,
+            } => C::CanvasCardAligned {
+                title,
+                target_title,
+            },
+            F::CanvasConvertedToNote { path } => C::CanvasConvertedToNote { path },
+            F::CanvasDeleted {
+                target,
+                verbosity,
+                undo_chord,
+            } => C::CanvasDeleted {
+                target: target.into(),
+                verbosity: verbosity.into(),
+                undo_chord,
+            },
+            F::CanvasBulkMoved { count, relative } => C::CanvasBulkMoved {
+                count,
+                relative: relative.into(),
+            },
+            F::CanvasBulkColorSet { count, color } => C::CanvasBulkColorSet {
+                count,
+                color: color.map(Into::into),
+            },
+            F::CanvasGrouped { count, label } => C::CanvasGrouped { count, label },
+            F::CanvasBulkDuplicated { count } => C::CanvasBulkDuplicated { count },
+            F::CanvasMarkToggled {
+                marked,
+                title,
+                count,
+            } => C::CanvasMarkToggled {
+                marked,
+                title,
+                count,
+            },
+            F::CanvasMarksCleared { count } => C::CanvasMarksCleared { count },
+            F::CanvasFilterCount { matched } => C::CanvasFilterCount { matched },
+            F::CanvasFilterCleared { total } => C::CanvasFilterCleared { total },
+            F::CanvasZoom { context, percent } => C::CanvasZoom {
+                context: context.map(Into::into),
+                percent,
+            },
+            F::CanvasFollowSelectionToggled { following } => {
+                C::CanvasFollowSelectionToggled { following }
+            }
+            F::CanvasViewportNoPane => C::CanvasViewportNoPane,
+            F::CanvasSurfaceShown { surface } => C::CanvasSurfaceShown {
+                surface: surface.into(),
+            },
+            F::CanvasHistoryApplied { verb, name } => C::CanvasHistoryApplied {
+                verb: verb.into(),
+                name,
+            },
+            F::CanvasUndoMenuTitle { verb, name } => C::CanvasUndoMenuTitle {
+                verb: verb.into(),
+                name,
+            },
+            F::CanvasHistoryQuarantinedTitle { verb } => {
+                C::CanvasHistoryQuarantinedTitle { verb: verb.into() }
+            }
+            F::CanvasStatus { note } => C::CanvasStatus { note: note.into() },
+            F::CanvasBlocked { reason } => C::CanvasBlocked {
+                reason: reason.into(),
+            },
+            F::CanvasActionFailed { action, detail } => C::CanvasActionFailed {
+                action: action.into(),
+                detail,
+            },
+            F::CanvasSaveConflict => C::CanvasSaveConflict,
+            F::CanvasFileNotFound { target } => C::CanvasFileNotFound { target },
+            F::CanvasOpened { title, target } => C::CanvasOpened {
+                title,
+                target: target.into(),
+            },
+            F::CanvasMutationRefused { reason } => C::CanvasMutationRefused {
+                reason: reason.into(),
+            },
+            F::CanvasLoadedDegraded { skipped } => C::CanvasLoadedDegraded { skipped },
+            F::CanvasEmptyOnboarding {
+                new_card_chord,
+                palette_chord,
+            } => C::CanvasEmptyOnboarding {
+                new_card_chord,
+                palette_chord,
+            },
+            F::CanvasWhereAmI {
+                kind_label,
+                title,
+                group_path,
+                ordinal_n,
+                total_m,
+                connection_count,
+                in_count,
+                out_count,
+                color_name,
+                marked,
+                mode,
+                filter,
+            } => C::CanvasWhereAmI {
+                kind_label,
+                title,
+                group_path,
+                ordinal_n,
+                total_m,
+                connection_count,
+                in_count,
+                out_count,
+                color_name,
+                marked,
+                mode: mode.map(Into::into),
+                filter: filter.into(),
+            },
+        }
+    }
+}
+
+// --- Graph announcement vocabulary mirrors (W6-2 PR 0a, #746) --------------
+// 1:1 with `core::a11y`'s graph family (contracts doc 35_graph_contracts.md
+// 0a-2b). No logic here — every conversion is a field-for-field move.
+
+/// FFI mirror of [`core::a11y::GraphVerbosity`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphVerbosity {
+    Terse,
+    Standard,
+    Verbose,
+}
+
+impl From<core::a11y::GraphVerbosity> for GraphVerbosity {
+    fn from(v: core::a11y::GraphVerbosity) -> Self {
+        use core::a11y::GraphVerbosity as C;
+        match v {
+            C::Terse => GraphVerbosity::Terse,
+            C::Standard => GraphVerbosity::Standard,
+            C::Verbose => GraphVerbosity::Verbose,
+        }
+    }
+}
+
+impl From<GraphVerbosity> for core::a11y::GraphVerbosity {
+    fn from(v: GraphVerbosity) -> Self {
+        use core::a11y::GraphVerbosity as C;
+        match v {
+            GraphVerbosity::Terse => C::Terse,
+            GraphVerbosity::Standard => C::Standard,
+            GraphVerbosity::Verbose => C::Verbose,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::GraphRowCopy`]; `kind` is the graph
+/// surface's own [`GraphNodeKind`], travelling back through the reverse
+/// mapping (0aD-4).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GraphRowCopy {
+    pub label: String,
+    pub kind: GraphNodeKind,
+    pub in_links: u32,
+    pub out_links: u32,
+    pub references: u32,
+    pub embed: bool,
+}
+
+impl From<GraphRowCopy> for core::a11y::GraphRowCopy {
+    fn from(r: GraphRowCopy) -> Self {
+        core::a11y::GraphRowCopy {
+            label: r.label,
+            kind: r.kind.into(),
+            in_links: r.in_links,
+            out_links: r.out_links,
+            references: r.references,
+            embed: r.embed,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::GraphPresetOutcome`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphPresetOutcome {
+    Orphans { count: u64 },
+    Unresolved { count: u64 },
+    MostLinked { label: String, in_links: u32 },
+    NoNotesToRank,
+}
+
+impl From<GraphPresetOutcome> for core::a11y::GraphPresetOutcome {
+    fn from(o: GraphPresetOutcome) -> Self {
+        use GraphPresetOutcome as F;
+        use core::a11y::GraphPresetOutcome as C;
+        match o {
+            F::Orphans { count } => C::Orphans { count },
+            F::Unresolved { count } => C::Unresolved { count },
+            F::MostLinked { label, in_links } => C::MostLinked { label, in_links },
+            F::NoNotesToRank => C::NoNotesToRank,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::GraphForceControl`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphForceControl {
+    Center,
+    Repel,
+    Link,
+    LinkDistance,
+}
+
+impl From<GraphForceControl> for core::a11y::GraphForceControl {
+    fn from(c: GraphForceControl) -> Self {
+        use core::a11y::GraphForceControl as C;
+        match c {
+            GraphForceControl::Center => C::Center,
+            GraphForceControl::Repel => C::Repel,
+            GraphForceControl::Link => C::Link,
+            GraphForceControl::LinkDistance => C::LinkDistance,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::GraphSurfaceMode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphSurfaceMode {
+    Table,
+    Diagram,
+}
+
+impl From<core::a11y::GraphSurfaceMode> for GraphSurfaceMode {
+    fn from(m: core::a11y::GraphSurfaceMode) -> Self {
+        use core::a11y::GraphSurfaceMode as C;
+        match m {
+            C::Table => GraphSurfaceMode::Table,
+            C::Diagram => GraphSurfaceMode::Diagram,
+        }
+    }
+}
+
+impl From<GraphSurfaceMode> for core::a11y::GraphSurfaceMode {
+    fn from(m: GraphSurfaceMode) -> Self {
+        use core::a11y::GraphSurfaceMode as C;
+        match m {
+            GraphSurfaceMode::Table => C::Table,
+            GraphSurfaceMode::Diagram => C::Diagram,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::GraphWhereAmISelection`]. `NoSelection`
+/// rather than `None`: the generated Swift `.none` would collide with
+/// `Optional.none` (the canvas's `Unstated` precedent).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphWhereAmISelection {
+    Node { row: GraphRowCopy, component: u32 },
+    NoSelection,
+}
+
+impl From<GraphWhereAmISelection> for core::a11y::GraphWhereAmISelection {
+    fn from(s: GraphWhereAmISelection) -> Self {
+        use GraphWhereAmISelection as F;
+        use core::a11y::GraphWhereAmISelection as C;
+        match s {
+            F::Node { row, component } => C::Node {
+                row: row.into(),
+                component,
+            },
+            F::NoSelection => C::NoSelection,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::GraphWhereAmIFilter`] — the closed set of
+/// host-reachable filter states (contracts doc design B(i)).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphWhereAmIFilter {
+    Normal {
+        orphans_only: bool,
+        attachments_shown: bool,
+        ghosts_shown: bool,
+    },
+    UnresolvedOnly,
+}
+
+impl From<GraphWhereAmIFilter> for core::a11y::GraphWhereAmIFilter {
+    fn from(f: GraphWhereAmIFilter) -> Self {
+        use GraphWhereAmIFilter as F;
+        use core::a11y::GraphWhereAmIFilter as C;
+        match f {
+            F::Normal {
+                orphans_only,
+                attachments_shown,
+                ghosts_shown,
+            } => C::Normal {
+                orphans_only,
+                attachments_shown,
+                ghosts_shown,
+            },
+            F::UnresolvedOnly => C::UnresolvedOnly,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::GraphStatusNote`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphStatusNote {
+    Opened,
+    AlreadyOpen,
+    ConnectionsPanel,
+    NoteCreated { name: String },
+    NoConnections,
+    LoadingConnections,
+}
+
+impl From<GraphStatusNote> for core::a11y::GraphStatusNote {
+    fn from(n: GraphStatusNote) -> Self {
+        use GraphStatusNote as F;
+        use core::a11y::GraphStatusNote as C;
+        match n {
+            F::Opened => C::Opened,
+            F::AlreadyOpen => C::AlreadyOpen,
+            F::ConnectionsPanel => C::ConnectionsPanel,
+            F::NoteCreated { name } => C::NoteCreated { name },
+            F::NoConnections => C::NoConnections,
+            F::LoadingConnections => C::LoadingConnections,
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::GraphBlockedReason`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphBlockedReason {
+    LoadFailed { message: String },
+    ConnectionsLoadFailed { message: String },
+    NoteCreateFailed { message: String },
+}
+
+impl From<GraphBlockedReason> for core::a11y::GraphBlockedReason {
+    fn from(r: GraphBlockedReason) -> Self {
+        use GraphBlockedReason as F;
+        use core::a11y::GraphBlockedReason as C;
+        match r {
+            F::LoadFailed { message } => C::LoadFailed { message },
+            F::ConnectionsLoadFailed { message } => C::ConnectionsLoadFailed { message },
+            F::NoteCreateFailed { message } => C::NoteCreateFailed { message },
+        }
+    }
+}
+
+/// FFI mirror of [`core::a11y::GraphA11yEvent`] — the graph family,
+/// nested so one engine costs one top-level `A11yEvent` variant.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphA11yEvent {
+    GraphRow {
+        verbosity: GraphVerbosity,
+        row: GraphRowCopy,
+    },
+    GraphReRooted {
+        label: String,
+    },
+    GraphSnapshotSummary {
+        counts: GraphSnapshotCounts,
+    },
+    GraphNeighborhoodSummary {
+        counts: GraphNeighborhoodCounts,
+    },
+    GraphPreset {
+        outcome: GraphPresetOutcome,
+    },
+    GraphFilterCount {
+        shown: u32,
+        total: u32,
+    },
+    GraphForceValue {
+        control: GraphForceControl,
+        percent: u32,
+    },
+    GraphLayoutSettled,
+    GraphPinned {
+        pinned: bool,
+    },
+    GraphZoom {
+        fit: bool,
+        percent: u32,
+    },
+    GraphMode {
+        mode: GraphSurfaceMode,
+    },
+    GraphWhereAmI {
+        selection: GraphWhereAmISelection,
+        zoom_percent: u32,
+        filter: GraphWhereAmIFilter,
+        name_filter: Option<String>,
+    },
+    GraphTierEntered,
+    GraphTierSummary {
+        count: u32,
+    },
+    GraphNeighborsContent {
+        labels: Vec<String>,
+    },
+    GraphStatus {
+        note: GraphStatusNote,
+    },
+    GraphBlocked {
+        reason: GraphBlockedReason,
+    },
+}
+
+impl From<GraphA11yEvent> for core::a11y::GraphA11yEvent {
+    fn from(e: GraphA11yEvent) -> Self {
+        use GraphA11yEvent as F;
+        use core::a11y::GraphA11yEvent as C;
+        match e {
+            F::GraphRow { verbosity, row } => C::GraphRow {
+                verbosity: verbosity.into(),
+                row: row.into(),
+            },
+            F::GraphReRooted { label } => C::GraphReRooted { label },
+            F::GraphSnapshotSummary { counts } => C::GraphSnapshotSummary {
+                counts: counts.into(),
+            },
+            F::GraphNeighborhoodSummary { counts } => C::GraphNeighborhoodSummary {
+                counts: counts.into(),
+            },
+            F::GraphPreset { outcome } => C::GraphPreset {
+                outcome: outcome.into(),
+            },
+            F::GraphFilterCount { shown, total } => C::GraphFilterCount { shown, total },
+            F::GraphForceValue { control, percent } => C::GraphForceValue {
+                control: control.into(),
+                percent,
+            },
+            F::GraphLayoutSettled => C::GraphLayoutSettled,
+            F::GraphPinned { pinned } => C::GraphPinned { pinned },
+            F::GraphZoom { fit, percent } => C::GraphZoom { fit, percent },
+            F::GraphMode { mode } => C::GraphMode { mode: mode.into() },
+            F::GraphWhereAmI {
+                selection,
+                zoom_percent,
+                filter,
+                name_filter,
+            } => C::GraphWhereAmI {
+                selection: selection.into(),
+                zoom_percent,
+                filter: filter.into(),
+                name_filter,
+            },
+            F::GraphTierEntered => C::GraphTierEntered,
+            F::GraphTierSummary { count } => C::GraphTierSummary { count },
+            F::GraphNeighborsContent { labels } => C::GraphNeighborsContent { labels },
+            F::GraphStatus { note } => C::GraphStatus { note: note.into() },
+            F::GraphBlocked { reason } => C::GraphBlocked {
+                reason: reason.into(),
+            },
         }
     }
 }
@@ -6813,6 +9676,8 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::WelcomeShown { recent_vault_count } => C::WelcomeShown { recent_vault_count },
             F::CommandPaletteNeedsVault => C::CommandPaletteNeedsVault,
             F::SearchNeedsVault => C::SearchNeedsVault,
+            F::SearchResultsSummary { count } => C::SearchResultsSummary { count },
+            F::SearchFailed { message } => C::SearchFailed { message },
             F::SearchResultOpened {
                 filename,
                 line,
@@ -6932,6 +9797,10 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
                 label,
                 disabled_reason,
             },
+            F::PaletteFilterCount { count, query } => C::PaletteFilterCount { count, query },
+            F::PaletteCommandFailed { label, detail } => C::PaletteCommandFailed { label, detail },
+            F::PaletteCommandNotFound { id } => C::PaletteCommandNotFound { id },
+            F::PaletteCommandUnavailable { reason } => C::PaletteCommandUnavailable { reason },
             F::RecentSearchFocused { query } => C::RecentSearchFocused { query },
             F::QuickSwitcherCount { count, query } => C::QuickSwitcherCount { count, query },
             F::BaseViewMode { mode } => C::BaseViewMode { mode },
@@ -6950,6 +9819,115 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::BasesViewSelected { name } => C::BasesViewSelected { name },
             F::BasesSortSaveFailed { detail } => C::BasesSortSaveFailed { detail },
             F::BaseRefreshed => C::BaseRefreshed,
+            F::BaseWhereAmI {
+                base,
+                view,
+                quick_filter,
+            } => C::BaseWhereAmI {
+                base,
+                view,
+                quick_filter,
+            },
+            F::BaseResultsPopover {
+                audio_summary,
+                where_am_i,
+            } => C::BaseResultsPopover {
+                audio_summary,
+                where_am_i,
+            },
+            F::BaseQuickFilterResult { shown, total } => C::BaseQuickFilterResult { shown, total },
+            F::BaseRowReorderRefused { label } => C::BaseRowReorderRefused { label },
+            F::BaseRowReorderAtBoundary { label, at_first } => {
+                C::BaseRowReorderAtBoundary { label, at_first }
+            }
+            F::BaseRowReorderMoved {
+                label,
+                moved_up,
+                position,
+                count,
+            } => C::BaseRowReorderMoved {
+                label,
+                moved_up,
+                position,
+                count,
+            },
+            F::BaseQueryPreviewIdle => C::BaseQueryPreviewIdle,
+            F::BaseQueryPreviewLoading => C::BaseQueryPreviewLoading,
+            F::BaseQueryPreviewReady {
+                audio_summary,
+                first_result,
+            } => C::BaseQueryPreviewReady {
+                audio_summary,
+                first_result,
+            },
+            F::BaseQueryPreviewFailed { detail } => C::BaseQueryPreviewFailed { detail },
+            F::BaseSortedByColumn { column, ascending } => {
+                C::BaseSortedByColumn { column, ascending }
+            }
+            F::BaseSortSavedToView { column, ascending } => {
+                C::BaseSortSavedToView { column, ascending }
+            }
+            F::BasesSavedQueryReferenceMissing { reference } => {
+                C::BasesSavedQueryReferenceMissing { reference }
+            }
+            F::BasesSavedQueryMissing => C::BasesSavedQueryMissing,
+            F::BasesQueriesRefreshFailed { detail } => C::BasesQueriesRefreshFailed { detail },
+            F::BasesSavedQueryEditing { name } => C::BasesSavedQueryEditing { name },
+            F::BasesSavedQueryEditFailed { detail } => C::BasesSavedQueryEditFailed { detail },
+            F::BasesSavedQueryRenameNameNeeded => C::BasesSavedQueryRenameNameNeeded,
+            F::BasesSavedQueryRenamed { name } => C::BasesSavedQueryRenamed { name },
+            F::BasesSavedQueryRenameFailed { detail } => C::BasesSavedQueryRenameFailed { detail },
+            F::BasesSavedQueryDeleted => C::BasesSavedQueryDeleted,
+            F::BasesSavedQueryDeleteFailed { detail } => C::BasesSavedQueryDeleteFailed { detail },
+            F::BasesSavedQueryExportPathNeeded => C::BasesSavedQueryExportPathNeeded,
+            F::BasesSavedQueryExported { name } => C::BasesSavedQueryExported { name },
+            F::BasesSavedQueryExportFailed { detail } => C::BasesSavedQueryExportFailed { detail },
+            F::BasesPathOutsideVault => C::BasesPathOutsideVault,
+            F::BasesDashboardNameNeeded => C::BasesDashboardNameNeeded,
+            F::BasesDashboardSaved { name } => C::BasesDashboardSaved { name },
+            F::BasesDashboardSaveFailed { detail } => C::BasesDashboardSaveFailed { detail },
+            F::BasesDashboardUpdated { name } => C::BasesDashboardUpdated { name },
+            F::BasesDashboardUpdateFailed { detail } => C::BasesDashboardUpdateFailed { detail },
+            F::BasesDashboardSectionStale => C::BasesDashboardSectionStale,
+            F::BasesDashboardSectionRemoveFailed { detail } => {
+                C::BasesDashboardSectionRemoveFailed { detail }
+            }
+            F::BasesDashboardSectionReplaceFailed { detail } => {
+                C::BasesDashboardSectionReplaceFailed { detail }
+            }
+            F::BasesDashboardDeleted => C::BasesDashboardDeleted,
+            F::BasesDashboardDeleteFailed { detail } => C::BasesDashboardDeleteFailed { detail },
+            F::BasesDashboardEditFailed { detail } => C::BasesDashboardEditFailed { detail },
+            F::BasesDashboardMissing => C::BasesDashboardMissing,
+            F::BasesDockUpdatedForNote => C::BasesDockUpdatedForNote,
+            F::BasesLinkCopied { name } => C::BasesLinkCopied { name },
+            F::BasesBacklinksFor { name } => C::BasesBacklinksFor { name },
+            F::BasesViewCopyNoActiveBase => C::BasesViewCopyNoActiveBase,
+            F::BasesViewCopiedAsMarkdown => C::BasesViewCopiedAsMarkdown,
+            F::BasesViewCopyFailed { detail } => C::BasesViewCopyFailed { detail },
+            F::BasesRowSelectionNeeded => C::BasesRowSelectionNeeded,
+            F::BasesNoEditableProperty => C::BasesNoEditableProperty,
+            F::BasesCellReadOnly { file_metadata } => C::BasesCellReadOnly { file_metadata },
+            F::BasesCellSaved { column, value } => C::BasesCellSaved { column, value },
+            F::BasesCellCleared { column } => C::BasesCellCleared { column },
+            F::BasesCellRowNoLongerMatches => C::BasesCellRowNoLongerMatches,
+            F::BasesCellEditFailed { detail } => C::BasesCellEditFailed { detail },
+            F::BasesCellEditCanceled => C::BasesCellEditCanceled,
+            F::BasesViewExported => C::BasesViewExported,
+            F::BasesViewExportFailed { detail } => C::BasesViewExportFailed { detail },
+            F::BasesDataviewConverted => C::BasesDataviewConverted,
+            F::BasesDataviewConversionSaveFailed { detail } => {
+                C::BasesDataviewConversionSaveFailed { detail }
+            }
+            F::BasesQuickFilterChoiceCanceled { verb } => {
+                C::BasesQuickFilterChoiceCanceled { verb }
+            }
+            F::BasesCellMustBeFiniteNumber => C::BasesCellMustBeFiniteNumber,
+            F::BasesCellMustBeWholeNumber => C::BasesCellMustBeWholeNumber,
+            F::BasesCellMustBeFiniteDecimal => C::BasesCellMustBeFiniteDecimal,
+            F::BasesCellMustBeBoolean => C::BasesCellMustBeBoolean,
+            F::BasesCellMustBeDate => C::BasesCellMustBeDate,
+            F::BasesRefreshUpdated { audio_summary } => C::BasesRefreshUpdated { audio_summary },
             F::DataviewConversionFailed { detail } => C::DataviewConversionFailed { detail },
             F::CitationInsertUnavailable => C::CitationInsertUnavailable,
             F::CitationWalkThrough => C::CitationWalkThrough,
@@ -6961,6 +9939,32 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::ReadingNavLanded { target, text } => C::ReadingNavLanded {
                 target: target.into(),
                 text,
+            },
+            F::GridSorted { column, ascending } => C::GridSorted { column, ascending },
+            F::GridRowMoved {
+                description,
+                focused_cell,
+            } => C::GridRowMoved {
+                description,
+                focused_cell,
+            },
+            F::GridCellMoved { column, value } => C::GridCellMoved { column, value },
+            F::GridGroup {
+                label,
+                row_count,
+                summary,
+            } => C::GridGroup {
+                label,
+                row_count,
+                summary,
+            },
+            F::TemplatePickerOpened { count } => C::TemplatePickerOpened { count },
+            F::TemplateNoteCreated { name, template } => C::TemplateNoteCreated { name, template },
+            F::Canvas { event } => C::Canvas {
+                event: event.into(),
+            },
+            F::Graph { event } => C::Graph {
+                event: event.into(),
             },
             F::HostComposed { text, priority } => C::HostComposed {
                 text,
@@ -6988,6 +9992,41 @@ pub fn a11y_render(event: A11yEvent) -> RenderedAnnouncement {
         text: event.render(),
         priority: event.priority().into(),
     }
+}
+
+/// The pinned spoken/display NAME of a canvas colour
+/// (`slate_core::canvas::color_name` — presets in JSON Canvas order,
+/// hex as the nearest preset plus "custom"). Exported so no host
+/// spells the preset table: the a11y templates phrase it for speech,
+/// and this is the same answer for the colour PICKER's button labels
+/// and any other label-class surface (contracts doc 0a-11).
+#[uniffi::export]
+pub fn canvas_color_name(color: CanvasColor) -> String {
+    core::canvas::color_name(&color.into())
+}
+
+/// A grouped count plus its English noun — core's `count_noun`
+/// (`sidebar_filter.rs`), the single definition of both the thousands
+/// grouping (`1,000`, ASCII comma, locale-independent) and the
+/// singular-only-at-exactly-one agreement rule (zero stays plural).
+///
+/// Exported because a host sometimes composes a string that is read
+/// back BESIDE a core sentence counting the same number, and the two
+/// must agree. The shipped case is the canvas undo-stack action name:
+/// it rides into `CanvasHistoryApplied.name` as a payload and is spoken
+/// verbatim, so `Undid delete 1,000 cards.` has to follow
+/// `Deleted 1,000 cards.` (W6-1 CD-6). Before this export the mac host
+/// mirrored `group_thousands` in Swift; that mirror is deleted, which
+/// is the whole point — never a host re-implementation where a pure
+/// core function can be called (§W-G).
+///
+/// A caller that formats the number itself (locale decimals, ungrouped
+/// byte counts) wants the bare noun instead, which stays host-side
+/// because it is a two-branch ternary with no formatting to disagree
+/// about.
+#[uniffi::export]
+pub fn count_noun(count: u64, singular: String, plural: String) -> String {
+    core::sidebar_filter::count_noun(count, &singular, &plural)
 }
 
 /// Core Debug identity of the event — the exact string the corpus artifact
@@ -7822,6 +10861,8 @@ pub struct CanvasOutlineRow {
     /// "text" | "file" | "image" | "link" | "group" (t0 §1.1 type word).
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5).
+    pub speakable_name: String,
     pub group_path: Vec<String>,
     pub ordinal_n: u32,
     pub total_m: u32,
@@ -7836,6 +10877,7 @@ impl From<core::CanvasOutlineRow> for CanvasOutlineRow {
             depth: r.depth,
             kind: r.kind,
             title: r.title,
+            speakable_name: r.speakable_name,
             group_path: r.group_path,
             ordinal_n: r.ordinal_n,
             total_m: r.total_m,
@@ -7851,6 +10893,8 @@ pub struct CanvasTableRow {
     pub node_id: String,
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5).
+    pub speakable_name: String,
     pub group_path: Vec<String>,
     pub target: String,
     pub connection_count: u32,
@@ -7863,10 +10907,45 @@ impl From<core::CanvasTableRow> for CanvasTableRow {
             node_id: r.node_id,
             kind: r.kind,
             title: r.title,
+            speakable_name: r.speakable_name,
             group_path: r.group_path,
             target: r.target,
             connection_count: r.connection_count,
             color_name: r.color_name,
+        }
+    }
+}
+
+/// A canvas colour: one of the six JSON Canvas presets, or a verbatim
+/// colour string. Mirrors `core::canvas::CanvasColor` so a host can
+/// hand the colour it just wrote to the a11y vocabulary
+/// (`CanvasColorSet` / `CanvasBulkColorSet`) instead of naming it —
+/// the preset table lives in `canvas::color_name` and nowhere else
+/// (contracts doc 0a-11).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasColor {
+    Preset { preset: u8 },
+    Hex { hex: String },
+}
+
+impl From<core::canvas::CanvasColor> for CanvasColor {
+    fn from(color: core::canvas::CanvasColor) -> Self {
+        use core::canvas::CanvasColor as C;
+        match color {
+            C::Preset(preset) => CanvasColor::Preset { preset },
+            C::Hex(hex) => CanvasColor::Hex { hex },
+        }
+    }
+}
+
+/// The reverse direction, for the a11y vocabulary: the colour crosses
+/// the boundary INTO core so `color_name` phrases it there.
+impl From<CanvasColor> for core::canvas::CanvasColor {
+    fn from(color: CanvasColor) -> Self {
+        use core::canvas::CanvasColor as C;
+        match color {
+            CanvasColor::Preset { preset } => C::Preset(preset),
+            CanvasColor::Hex { hex } => C::Hex(hex),
         }
     }
 }
@@ -7889,6 +10968,21 @@ impl From<core::canvas::model::EdgeDirection> for CanvasEdgeDirection {
             D::Incoming => CanvasEdgeDirection::Incoming,
             D::Bidirectional => CanvasEdgeDirection::Bidirectional,
             D::Undirected => CanvasEdgeDirection::Undirected,
+        }
+    }
+}
+
+/// The reverse direction, for the a11y vocabulary: the canvas
+/// announcement events (W6-1 0a) take a direction FROM the host and
+/// core phrases it, so this type crosses the boundary both ways.
+impl From<CanvasEdgeDirection> for core::canvas::model::EdgeDirection {
+    fn from(d: CanvasEdgeDirection) -> Self {
+        use core::canvas::model::EdgeDirection as D;
+        match d {
+            CanvasEdgeDirection::Outgoing => D::Outgoing,
+            CanvasEdgeDirection::Incoming => D::Incoming,
+            CanvasEdgeDirection::Bidirectional => D::Bidirectional,
+            CanvasEdgeDirection::Undirected => D::Undirected,
         }
     }
 }
@@ -7945,6 +11039,8 @@ impl From<core::CanvasNeighbor> for CanvasNeighbor {
 pub struct CanvasWhereAmI {
     pub node_id: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5).
+    pub speakable_name: String,
     pub kind: String,
     pub group_path: Vec<String>,
     pub ordinal_n: u32,
@@ -7960,6 +11056,7 @@ impl From<core::CanvasWhereAmI> for CanvasWhereAmI {
         CanvasWhereAmI {
             node_id: w.node_id,
             title: w.title,
+            speakable_name: w.speakable_name,
             kind: w.kind,
             group_path: w.group_path,
             ordinal_n: w.ordinal_n,
@@ -8016,6 +11113,8 @@ pub struct CanvasOpenInfo {
     pub edge_count: u32,
     pub degraded: bool,
     pub warnings: Vec<CanvasLoadWarning>,
+    /// The opened bytes' hash — the handle's CAS basis (W6-1 §E TE-0).
+    pub content_hash: String,
 }
 
 impl From<core::CanvasOpenInfo> for CanvasOpenInfo {
@@ -8026,6 +11125,7 @@ impl From<core::CanvasOpenInfo> for CanvasOpenInfo {
             edge_count: i.edge_count,
             degraded: i.degraded,
             warnings: i.warnings.into_iter().map(Into::into).collect(),
+            content_hash: i.content_hash,
         }
     }
 }
@@ -8053,7 +11153,7 @@ impl From<CanvasPlaceDirection> for core::canvas::placement::PlaceDirection {
 
 /// Typed relative-position description; `anchor_title` is empty for
 /// `AtOrigin`. Phrasing stays UI-side (#518 grammar tables).
-#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum CanvasRelativeDesc {
     Below { anchor_title: String },
     RightOf { anchor_title: String },
@@ -8071,6 +11171,22 @@ impl From<core::canvas::placement::RelativeDesc> for CanvasRelativeDesc {
             R::Above(t) => CanvasRelativeDesc::Above { anchor_title: t },
             R::LeftOf(t) => CanvasRelativeDesc::LeftOf { anchor_title: t },
             R::AtOrigin => CanvasRelativeDesc::AtOrigin,
+        }
+    }
+}
+
+/// The reverse direction, for the a11y vocabulary: a host hands core's
+/// own placement description straight back to the canvas announcement
+/// events (W6-1 0a) rather than phrasing it itself (R-D).
+impl From<CanvasRelativeDesc> for core::canvas::placement::RelativeDesc {
+    fn from(r: CanvasRelativeDesc) -> Self {
+        use core::canvas::placement::RelativeDesc as R;
+        match r {
+            CanvasRelativeDesc::Below { anchor_title } => R::Below(anchor_title),
+            CanvasRelativeDesc::RightOf { anchor_title } => R::RightOf(anchor_title),
+            CanvasRelativeDesc::Above { anchor_title } => R::Above(anchor_title),
+            CanvasRelativeDesc::LeftOf { anchor_title } => R::LeftOf(anchor_title),
+            CanvasRelativeDesc::AtOrigin => R::AtOrigin,
         }
     }
 }
@@ -8560,12 +11676,34 @@ impl From<core::canvas::apply::CanvasAction> for CanvasAction {
     }
 }
 
+/// A text card's content paired with the basis it was read at, taken
+/// under one core lock (W6-1 §E TE-0) — the editor's seed token: two
+/// separate reads could pair old text with a new hash.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CanvasEditorSeed {
+    pub text: String,
+    pub content_hash: String,
+}
+
+impl From<core::CanvasEditorSeed> for CanvasEditorSeed {
+    fn from(s: core::CanvasEditorSeed) -> Self {
+        CanvasEditorSeed {
+            text: s.text,
+            content_hash: s.content_hash,
+        }
+    }
+}
+
 /// Result of `canvas_apply`: post-write hash + the inverse action for
 /// the session-scoped undo stack (#372).
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct CanvasApplyResult {
     pub new_content_hash: String,
     pub inverse: CanvasAction,
+    /// False when the bytes landed but the index commit failed (W6-1
+    /// §E TE-0): the write IS committed and the inverse valid; derived
+    /// reads may lag until the intent-marker repair runs.
+    pub indexed: bool,
 }
 
 impl From<core::CanvasApplyResult> for CanvasApplyResult {
@@ -8573,6 +11711,7 @@ impl From<core::CanvasApplyResult> for CanvasApplyResult {
         CanvasApplyResult {
             new_content_hash: r.new_content_hash,
             inverse: r.inverse.into(),
+            indexed: r.indexed,
         }
     }
 }
@@ -8583,6 +11722,9 @@ pub struct CanvasSceneNode {
     pub node_id: String,
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5) — the
+    /// renderer's AX peer name (CD-23).
+    pub speakable_name: String,
     pub x: f64,
     pub y: f64,
     pub width: f64,
@@ -8598,6 +11740,7 @@ impl From<core::CanvasSceneNode> for CanvasSceneNode {
             node_id: n.node_id,
             kind: n.kind,
             title: n.title,
+            speakable_name: n.speakable_name,
             x: n.x,
             y: n.y,
             width: n.width,
@@ -8644,6 +11787,173 @@ impl From<core::CanvasSceneEdge> for CanvasSceneEdge {
 pub struct CanvasScene {
     pub nodes: Vec<CanvasSceneNode>,
     pub edges: Vec<CanvasSceneEdge>,
+}
+
+// ---------------------------------------------------------------------------
+// Canvas structural queries (W6-1 PR 0b, #745): the §W-G row B–M rules,
+// mirrored 1:1. Same rule as above — no logic here.
+
+/// One hop of a traced connection path (0b-9). The start node is not a
+/// hop, so `hops.len() + 1` is mac's "cards visited".
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CanvasTraceHop {
+    pub edge_id: String,
+    pub node_id: String,
+    pub title: String,
+    pub label: Option<String>,
+}
+
+impl From<core::CanvasTraceHop> for CanvasTraceHop {
+    fn from(h: core::CanvasTraceHop) -> Self {
+        CanvasTraceHop {
+            edge_id: h.edge_id,
+            node_id: h.node_id,
+            title: h.title,
+            label: h.label,
+        }
+    }
+}
+
+/// The attachment sides an auto-routed connection uses (0b-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct CanvasSidePair {
+    pub from: CanvasSide,
+    pub to: CanvasSide,
+}
+
+/// Where a card lands inside a group, or why it cannot (0b-12).
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
+pub enum CanvasInsideGroupPlacement {
+    /// A free slot fully inside the group frame.
+    Placed { x: f64, y: f64 },
+    /// No candidate slot fits inside the group; the point is mac's
+    /// `(x + 20, y + 40)` inset, NOT checked for overlap.
+    TooSmall { x: f64, y: f64 },
+    /// Slots fit, but every one examined is occupied.
+    Full,
+}
+
+impl From<core::canvas::placement::InsideGroupPlacement> for CanvasInsideGroupPlacement {
+    fn from(p: core::canvas::placement::InsideGroupPlacement) -> Self {
+        use core::canvas::placement::InsideGroupPlacement as P;
+        match p {
+            P::Placed { x, y } => CanvasInsideGroupPlacement::Placed { x, y },
+            P::TooSmall { x, y } => CanvasInsideGroupPlacement::TooSmall { x, y },
+            P::Full => CanvasInsideGroupPlacement::Full,
+        }
+    }
+}
+
+/// The canvas grid/sizing constants (0b-4). Every field is the
+/// `slate_core::canvas::placement` constant of that name — a host that
+/// re-types one of these numbers has re-derived it (R-D).
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct CanvasConstants {
+    pub grid_step: f64,
+    pub grid_step_large: f64,
+    pub default_card_w: f64,
+    pub default_card_h: f64,
+    pub default_group_w: f64,
+    pub default_group_h: f64,
+    pub default_gap: f64,
+    pub min_card_size: f64,
+}
+
+impl From<core::canvas::placement::Constants> for CanvasConstants {
+    fn from(c: core::canvas::placement::Constants) -> Self {
+        CanvasConstants {
+            grid_step: c.grid_step,
+            grid_step_large: c.grid_step_large,
+            default_card_w: c.default_card_w,
+            default_card_h: c.default_card_h,
+            default_group_w: c.default_group_w,
+            default_group_h: c.default_group_h,
+            default_gap: c.default_gap,
+            min_card_size: c.min_card_size,
+        }
+    }
+}
+
+/// Core's media classification (W6-1 §E TE-0 — the CD-38 staged
+/// export): the class whose answer becomes kind labels and title
+/// prefixes, now crossing the FFI so no host transliterates the set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasMediaClass {
+    Image,
+    Audio,
+    Video,
+}
+
+impl From<core::canvas::model::MediaClass> for CanvasMediaClass {
+    fn from(m: core::canvas::model::MediaClass) -> Self {
+        use core::canvas::model::MediaClass as M;
+        match m {
+            M::Image => CanvasMediaClass::Image,
+            M::Audio => CanvasMediaClass::Audio,
+            M::Video => CanvasMediaClass::Video,
+        }
+    }
+}
+
+/// Media class from the basename's REAL extension — `None` for
+/// non-media, a file with no dot in its basename, and a dotfile like
+/// `.mov` (hidden, not a video). Handle-free: the gate asks about
+/// paths, not open canvases.
+#[uniffi::export]
+pub fn canvas_media_class(path: String) -> Option<CanvasMediaClass> {
+    core::canvas::model::media_class(&path).map(Into::into)
+}
+
+/// Apply an action to canvas TEXT with no session, handle or write —
+/// the detached algebra behind Save a Copy (W6-1 §E TE-0): parse
+/// (refusing an unusable canvas), apply, serialize. Handle-free.
+#[uniffi::export]
+pub fn canvas_apply_detached(text: String, action: CanvasAction) -> Result<String, VaultError> {
+    core::canvas::apply::apply_detached(&text, &action.into()).map_err(|e| {
+        VaultError::InvalidArgument {
+            message: format!("detached canvas apply rejected: {e}"),
+        }
+    })
+}
+
+/// The canonical empty `.canvas` document — what New Canvas writes on
+/// every host (W6-1 §E TE-0): core's serialization of the default
+/// canvas, exported so no host owns a serialization literal.
+#[uniffi::export]
+pub fn canvas_canonical_empty_text() -> String {
+    core::canvas::serialize::canonical_empty_canvas_text()
+}
+
+/// The canvas grid/sizing constants. Handle-free by ruling R-0b-2
+/// (CD-17): a host needs `min_card_size` to construct its mode
+/// controller, before any canvas is open.
+#[uniffi::export]
+pub fn canvas_constants() -> CanvasConstants {
+    core::canvas::placement::constants().into()
+}
+
+/// A fresh JSON-Canvas node/edge id: 16 lowercase hex from a v4 UUID,
+/// so index 12 is always `'4'` and the id carries 60 bits (0b-4).
+/// Handle-free, and deliberately unchecked against any canvas — mac
+/// mints the same way.
+#[uniffi::export]
+pub fn canvas_new_id() -> String {
+    core::canvas::queries::new_id()
+}
+
+/// The attachment sides for a connection between two RECTS (0b-3).
+/// Rects, not node ids: create-connected-card asks about a card that
+/// does not exist yet (CD-16). Horizontal wins only on a strict
+/// `|dx| > |dy|`, so a diagonal tie — and a self-loop — answers
+/// `(Top, Bottom)`.
+#[uniffi::export]
+pub fn canvas_auto_sides(from: CanvasRect, to: CanvasRect) -> CanvasSidePair {
+    let rect = |r: CanvasRect| core::canvas::model::Rect::new(r.x, r.y, r.width, r.height);
+    let (from, to) = core::canvas::queries::auto_sides(rect(from), rect(to));
+    CanvasSidePair {
+        from: from.into(),
+        to: to.into(),
+    }
 }
 
 #[uniffi::export]
@@ -8782,6 +12092,36 @@ impl VaultSession {
         Ok(self.inner.canvas_node_text(handle, &node_id)?)
     }
 
+    /// Proximity order for the card picker (§E TE-0): nodes by
+    /// distance from the anchor's centre, reading-order ties, groups
+    /// included; no anchor answers reading order.
+    pub fn canvas_proximity_order(
+        &self,
+        handle: u64,
+        anchor: Option<String>,
+        exclude: Vec<String>,
+    ) -> Result<Vec<String>, VaultError> {
+        Ok(self.inner.canvas_proximity_order(handle, anchor, exclude)?)
+    }
+
+    /// The handle's current document text + basis (§E TE-3): the
+    /// pre-conflict snapshot Save a Copy closes over.
+    pub fn canvas_current_text(&self, handle: u64) -> Result<CanvasEditorSeed, VaultError> {
+        Ok(self.inner.canvas_current_text(handle)?.into())
+    }
+
+    /// One locked read of text + basis — the editor's seed (§E TE-0).
+    pub fn canvas_editor_seed(
+        &self,
+        handle: u64,
+        node_id: String,
+    ) -> Result<Option<CanvasEditorSeed>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_editor_seed(handle, &node_id)?
+            .map(Into::into))
+    }
+
     /// Node ids overlapping `rect` (cards only) — #521 overlap warnings.
     pub fn canvas_check_overlap(
         &self,
@@ -8792,6 +12132,115 @@ impl VaultSession {
         Ok(self
             .inner
             .canvas_check_overlap(handle, rect.into(), exclude)?)
+    }
+}
+
+/// The W6-1 PR 0b structural queries (§W-G rows B–M).
+#[uniffi::export]
+impl VaultSession {
+    /// The node's containing group, `None` at canvas level (0b-8).
+    pub fn canvas_parent_of(
+        &self,
+        handle: u64,
+        node_id: String,
+    ) -> Result<Option<String>, VaultError> {
+        Ok(self.inner.canvas_parent_of(handle, &node_id)?)
+    }
+
+    /// The group's direct children in reading order (0b-8).
+    pub fn canvas_children_of(
+        &self,
+        handle: u64,
+        group_id: String,
+    ) -> Result<Vec<String>, VaultError> {
+        Ok(self.inner.canvas_children_of(handle, &group_id)?)
+    }
+
+    /// Project a set of node ids onto reading order (0b-10).
+    pub fn canvas_order_nodes(
+        &self,
+        handle: u64,
+        ids: Vec<String>,
+    ) -> Result<Vec<String>, VaultError> {
+        Ok(self.inner.canvas_order_nodes(handle, ids)?)
+    }
+
+    /// The cycle-safe outgoing walk from `node_id` (0b-9).
+    pub fn canvas_trace_path(
+        &self,
+        handle: u64,
+        node_id: String,
+    ) -> Result<Vec<CanvasTraceHop>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_trace_path(handle, &node_id)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Where `rect` sits relative to its nearest neighbours (0b-7).
+    pub fn canvas_describe_relative(
+        &self,
+        handle: u64,
+        rect: CanvasRect,
+        exclude: Vec<String>,
+    ) -> Result<Vec<CanvasRelativeDesc>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_describe_relative(handle, rect.into(), exclude)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// Bounding box of every node, group frames included (0b-11).
+    pub fn canvas_bounds(&self, handle: u64) -> Result<Option<CanvasRect>, VaultError> {
+        Ok(self.inner.canvas_bounds(handle)?.map(|r| CanvasRect {
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+        }))
+    }
+
+    /// The group frame enclosing `members` — union plus `default_gap`
+    /// on all four sides (0b-11).
+    pub fn canvas_group_rect_around(
+        &self,
+        handle: u64,
+        members: Vec<String>,
+    ) -> Result<Option<CanvasRect>, VaultError> {
+        Ok(self
+            .inner
+            .canvas_group_rect_around(handle, members)?
+            .map(|r| CanvasRect {
+                x: r.x,
+                y: r.y,
+                width: r.width,
+                height: r.height,
+            }))
+    }
+
+    /// A free slot INSIDE the group, or a typed refusal (0b-12).
+    pub fn canvas_place_inside_group(
+        &self,
+        handle: u64,
+        group_id: String,
+        width: f64,
+        height: f64,
+        exclude: Vec<String>,
+    ) -> Result<CanvasInsideGroupPlacement, VaultError> {
+        Ok(self
+            .inner
+            .canvas_place_inside_group(handle, &group_id, width, height, exclude)?
+            .into())
+    }
+
+    /// Node ids matching `query`, in reading order; an empty query
+    /// matches everything (0b-13).
+    pub fn canvas_filter(&self, handle: u64, query: String) -> Result<Vec<String>, VaultError> {
+        Ok(self.inner.canvas_filter(handle, &query)?)
     }
 }
 
@@ -8903,6 +12352,76 @@ mod tests {
     }
 
     #[test]
+    fn frontmatter_top_level_keys_sees_containers_properties_flatten_away() {
+        // The flattened property view reports person.name/person.role and
+        // never the container, which is exactly what made a flat `person`
+        // add look safe (W4-4 round 6).
+        let source = "person:\n  name: Alice\n  role: author\ntitle: Hi\n".to_string();
+        assert_eq!(
+            frontmatter_top_level_keys(source.clone()),
+            vec!["person".to_string(), "title".to_string()]
+        );
+        let flattened: Vec<String> = parse_frontmatter_properties(source)
+            .into_iter()
+            .map(|property| property.key)
+            .collect();
+        assert!(!flattened.contains(&"person".to_string()));
+    }
+
+    #[test]
+    fn round_trip_property_kind_answers_with_the_real_write_read_path() {
+        // The host asks this instead of mirroring the classifier
+        // (W4-4 adversarial round 5). Key-sensitive:
+        let tags_case = round_trip_property_kind(
+            "Tags".to_string(),
+            PropertyValue::List {
+                items: vec![PropertyValue::Text {
+                    value: "x".to_string(),
+                }],
+            },
+        );
+        assert_eq!(tags_case.as_deref(), Some("tag_list"));
+        // Shape-sensitive, including STRUCTURALLY date-shaped but
+        // calendar-invalid text:
+        assert_eq!(
+            round_trip_property_kind(
+                "fresh".to_string(),
+                PropertyValue::Text {
+                    value: "2026-99-99".to_string()
+                }
+            )
+            .as_deref(),
+            Some("date")
+        );
+        assert_eq!(
+            round_trip_property_kind(
+                "fresh".to_string(),
+                PropertyValue::Text {
+                    value: "plain".to_string()
+                }
+            )
+            .as_deref(),
+            Some("text")
+        );
+        // Integral floats keep their kind (the round-4 emitter fix):
+        assert_eq!(
+            round_trip_property_kind("fresh".to_string(), PropertyValue::Float { value: 1.0 })
+                .as_deref(),
+            Some("number")
+        );
+        // Unstorable values answer None rather than lying:
+        assert_eq!(
+            round_trip_property_kind(
+                "fresh".to_string(),
+                PropertyValue::Wikilink {
+                    target: String::new()
+                }
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn parse_frontmatter_properties_uses_authoritative_source_bytes() {
         let properties = parse_frontmatter_properties(
             "title: External\ncount: 2\ntags: [one, two]\n".to_string(),
@@ -8917,6 +12436,1157 @@ mod tests {
         assert_eq!(properties[2].key, "tags");
         assert_eq!(properties[2].kind, "tag_list");
         assert_eq!(properties[2].value_json, "[\"one\",\"two\"]");
+    }
+
+    /// The mac corpus mirror must stay in lockstep with `corpus()`.
+    ///
+    /// `A11yCorpusCensusTests.swift` hand-lists every corpus event in
+    /// order and compares against the committed artifact. That check is
+    /// real but it only runs in CI, so a vocabulary addition that forgets
+    /// the Swift list costs a full round-trip to discover — which is
+    /// exactly what it cost when this test did not exist. Parsing the
+    /// Swift list here turns it into a local failure.
+    ///
+    /// Order matters: the Swift census compares index by index, so a
+    /// correctly-populated list in the wrong order fails there too.
+    ///
+    /// SCOPE: case names and their order, NOT parameters — two entries
+    /// of the same variant with swapped arguments read identically
+    /// here. The Swift census still catches that (it compares full
+    /// event identity against the artifact); this is the cheap local
+    /// tripwire for the mistake that actually happens, which is
+    /// forgetting the list entirely.
+    ///
+    /// ASYMMETRY WITH THE WINDOWS TWIN, deliberately: this parser is
+    /// LINE-oriented (one entry per line, each starting with `.`),
+    /// while `the_windows_corpus_mirror_lists_every_event_in_order`
+    /// scans the whole slice and is robust to any wrapping. The
+    /// difference is not an oversight — it follows the formatters. C#
+    /// entries are re-wrapped by `dotnet format`, which runs in CI and
+    /// would break a line-oriented parser; the Swift census is written
+    /// one entry per line and `swift-format` leaves those lines alone.
+    /// Should that ever change, a wrapped Swift entry fails LOUDLY
+    /// (the continuation line does not start with `.`, so the entry
+    /// count drops and the length assertion fires) rather than being
+    /// skipped silently — the safe failure mode, and the reason the
+    /// simpler parser is acceptable here.
+    #[test]
+    fn the_mac_corpus_mirror_lists_every_event_in_order() {
+        /// The leading identifier of a Rust `Debug` rendering.
+        fn debug_head(debug: &str) -> String {
+            debug
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect()
+        }
+
+        /// uniffi lower-camelises Swift case names; every name in this
+        /// vocabulary is CamelCase, so lowering the first character is
+        /// the same transform.
+        fn lower_first(name: &str) -> String {
+            let mut chars = name.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+
+        /// The leading Swift case name of `.someCase(…)`, already
+        /// stripped of its dot.
+        fn swift_case(rest: &str) -> String {
+            rest.split(|c: char| !c.is_ascii_alphanumeric())
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        }
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let swift = std::fs::read_to_string(
+            manifest.join("../../apps/slate-mac/Tests/SlateMacTests/A11yCorpusCensusTests.swift"),
+        )
+        .expect("mac corpus census source");
+
+        // Bounded to the corpus literal: the file's `corpusURL` helper
+        // is a `.deletingLastPathComponent()` chain whose lines are
+        // indistinguishable from entry heads by shape alone.
+        let body = swift
+            .split_once("var corpus: [A11yEvent] {")
+            .expect("corpus declaration")
+            .1;
+        let body = body
+            .split_once(
+                "
+        ]",
+            )
+            .expect("corpus terminator")
+            .0;
+
+        // Every `.someCase` at the head of a list element, in order.
+        // A nested family (`.canvas(event: .canvasMovedTo(…))`) reports
+        // `canvas/canvasMovedTo`: without the inner case the wrapper
+        // would flatten 165 distinct entries into one indistinguishable
+        // name and the order check would stop meaning anything.
+        let listed: Vec<String> = body
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with('.'))
+            .map(|line| {
+                let head = swift_case(line.trim_start_matches('.'));
+                match line.split_once("event: .") {
+                    Some((_, rest)) => format!("{head}/{}", swift_case(rest)),
+                    None => head,
+                }
+            })
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        // `corpus()` in the same shape: the Debug head, lower-camelised
+        // the way uniffi names Swift cases.
+        let expected: Vec<String> = core::a11y::corpus()
+            .iter()
+            .map(|event| {
+                let debug = format!("{event:?}");
+                let head = lower_first(&debug_head(&debug));
+                match debug.split_once("event: ") {
+                    Some((_, rest)) => format!("{head}/{}", lower_first(&debug_head(rest))),
+                    None => head,
+                }
+            })
+            .collect();
+
+        assert_eq!(
+            listed.len(),
+            expected.len(),
+            "the mac corpus mirror lists {} events, the vocabulary has {}",
+            listed.len(),
+            expected.len()
+        );
+        for (index, (got, want)) in listed.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(
+                got, want,
+                "mac corpus mirror diverges at index {index}: listed {got}, vocabulary has {want}"
+            );
+        }
+    }
+
+    /// The Windows twin of the tripwire above (W6-1 0a, #745).
+    ///
+    /// The C# census (`A11yCorpusCensus`) fails by design when the
+    /// vocabulary grows without it — but only after
+    /// `generate-bindings.ps1` has rebuilt the cdylib AND `dotnet test`
+    /// has run, i.e. a full local round-trip later than the mac half,
+    /// which fails right here in `cargo test`. That asymmetry is the
+    /// whole reason this exists: forgetting the C# list is exactly as
+    /// easy as forgetting the Swift one, and it should cost the same.
+    ///
+    /// SCOPE: variant names and their order, NOT parameters — the C#
+    /// census still compares full event identity against the artifact.
+    #[test]
+    fn the_windows_corpus_mirror_lists_every_event_in_order() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let census = std::fs::read_to_string(manifest.join(
+            "../../apps/slate-windows/tests/SlateWindows.Tests/Censuses/A11yCorpusCensus.cs",
+        ))
+        .expect("windows corpus census source");
+
+        // Bounded to the mirror literal so a doc comment or an
+        // assertion message naming a variant cannot be counted.
+        let body = census
+            .split_once("private static readonly A11yEvent[] Corpus =")
+            .expect("corpus declaration")
+            .1;
+        let body = body.split_once("\n    ];").expect("corpus terminator").0;
+
+        fn head(text: &str) -> String {
+            text.chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect()
+        }
+
+        // `new A11yEvent.X(` heads, in order. An `A11yEvent` never
+        // nests inside another, so scanning the whole slice is safe
+        // under any line wrapping the formatter chooses. A nested
+        // family reports `Canvas/CanvasMovedTo`: without the inner
+        // variant the wrapper would flatten 165 distinct entries into
+        // one name and the order check would stop meaning anything.
+        let listed: Vec<String> = body
+            .match_indices("new A11yEvent.")
+            .map(|(at, marker)| {
+                let rest = &body[at + marker.len()..];
+                let outer = head(rest);
+                // A nested family's inner constructor is named after its
+                // wrapper (`new CanvasA11yEvent.` under `Canvas`, `new
+                // GraphA11yEvent.` under `Graph`) — W6-2 0a generalised the
+                // marker so a second family cannot satisfy a first's slot.
+                let inner_marker = format!("new {outer}A11yEvent.");
+                match rest.split_once(inner_marker.as_str()) {
+                    Some((before, inner)) if !before.contains("new A11yEvent.") => {
+                        format!("{outer}/{}", head(inner))
+                    }
+                    _ => outer,
+                }
+            })
+            .collect();
+
+        let expected: Vec<String> = core::a11y::corpus()
+            .iter()
+            .map(|event| {
+                let debug = format!("{event:?}");
+                let outer = head(&debug);
+                match debug.split_once("event: ") {
+                    Some((_, inner)) => format!("{outer}/{}", head(inner)),
+                    None => outer,
+                }
+            })
+            .collect();
+
+        assert_eq!(
+            listed.len(),
+            expected.len(),
+            "the Windows corpus mirror lists {} events, the vocabulary has {}",
+            listed.len(),
+            expected.len()
+        );
+        for (index, (got, want)) in listed.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(
+                got, want,
+                "Windows corpus mirror diverges at index {index}: listed {got}, \
+                 vocabulary has {want}"
+            );
+        }
+    }
+
+    /// The mac coalescer's class switch must agree with the ONE list
+    /// core pins (contracts doc 0a-8, and 0b-17 which adds this test).
+    ///
+    /// Coalescing TIMING is host-side by design — a pure render has no
+    /// clock — but the class MEMBERSHIP is not: both hosts collapse the
+    /// same bursts only if they route the same events into the same
+    /// classes. 0a-8 put that list in one Rust doc comment and asked
+    /// the hosts to copy it, and nothing checked that the copy stayed
+    /// faithful. A core event added to the navigation or filter class
+    /// that mac's switch does not route now fails `cargo test`, in the
+    /// same fast lane as the two corpus-mirror tripwires — rather than
+    /// after a full `generate-bindings` + host round trip, or never.
+    ///
+    /// SCOPE: membership per class, both directions. The 200 ms window,
+    /// the latest-wins rule and the High-flushes-and-drops rule stay
+    /// the hosts' own tests (`CanvasAnnouncerTests`).
+    /// uniffi lower-camelises Swift case names; every name in this
+    /// vocabulary is CamelCase, so lowering the first character is the
+    /// same transform. C# keeps the Rust spelling, so the C# side
+    /// lower-cases too and the two tripwires compare in one alphabet.
+    fn lower_first(name: &str) -> String {
+        let mut chars = name.chars();
+        match chars.next() {
+            Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
+            None => String::new(),
+        }
+    }
+
+    /// The ONE pinned coalescing-class list, read out of core's own doc
+    /// comment (0a-8) and checked against the enum it names.
+    ///
+    /// Shared by BOTH host tripwires, deliberately: two copies of this
+    /// parser would be the same curated-list defect one level up, which
+    /// is the class this programme keeps closing rather than patching.
+    /// Remove C# line and block comments, so a scrape over the result
+    /// reads CODE rather than prose about code.
+    ///
+    /// Bounded to what the caller needs and honest about it: the slice
+    /// this runs over is a `switch` expression's arms, which contain no
+    /// string or character literals, so the scanner does not track them.
+    /// A literal introduced there would need that added — the assertion
+    /// below the call site would start failing rather than passing
+    /// wrongly, because a stripped literal removes routes rather than
+    /// inventing them.
+    fn strip_csharp_comments(source: &str) -> String {
+        let bytes = source.as_bytes();
+        let mut out = String::with_capacity(source.len());
+        let mut at = 0usize;
+        while at < bytes.len() {
+            if bytes[at..].starts_with(b"//") {
+                match source[at..].find('\n') {
+                    Some(end) => at += end,
+                    None => break,
+                }
+            } else if bytes[at..].starts_with(b"/*") {
+                match source[at + 2..].find("*/") {
+                    Some(end) => at += 2 + end + 2,
+                    None => break,
+                }
+            } else {
+                let ch = source[at..].chars().next().expect("a char boundary");
+                out.push(ch);
+                at += ch.len_utf8();
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_csharp_comment_stripper_removes_decoys_and_keeps_code() {
+        let stripped = strip_csharp_comments(
+            "CanvasA11yEvent.Real => EventClass.Navigation,\n             // CanvasA11yEvent.LineDecoy => EventClass.Navigation,\n             /* CanvasA11yEvent.BlockDecoy => EventClass.Filter, */\n             CanvasA11yEvent.AlsoReal => EventClass.Filter,\n",
+        );
+        assert!(stripped.contains("CanvasA11yEvent.Real"));
+        assert!(stripped.contains("CanvasA11yEvent.AlsoReal"));
+        assert!(
+            !stripped.contains("Decoy"),
+            "a name that appears only in a comment must not survive into \
+             the scrape: {stripped}"
+        );
+    }
+
+    fn pinned_coalescing_classes(
+        core_source: &str,
+        family: &str,
+    ) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        // Bounded to the class-key section so a variant named anywhere
+        // else in the module doc cannot be counted.
+        let pinned_section = core_source
+            .split_once("// ## Coalescing class keys")
+            .expect("the coalescing class-key section")
+            .1;
+        let pinned_section = pinned_section
+            .split_once("// - Everything else posts immediately")
+            .expect("the section's terminator")
+            .0;
+
+        let mut pinned: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut found_a_class = false;
+        for chunk in pinned_section.split("// - **`") {
+            let Some((class, rest)) = chunk.split_once("`**") else {
+                continue;
+            };
+            found_a_class = true;
+            let entry = pinned.entry(class.to_string()).or_default();
+            // FAMILY-QUALIFIED (W6-2 0a): the one list carries both the
+            // canvas's and the graph's members under shared class names,
+            // and each host switch is compared against its own family.
+            let family_marker = format!("[`{family}::");
+            for (at, marker) in rest.match_indices(family_marker.as_str()) {
+                let name: String = rest[at + marker.len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                entry.insert(lower_first(&name));
+            }
+        }
+        // A class the other family alone populates is not this family's.
+        pinned.retain(|_, names| !names.is_empty());
+        assert!(
+            found_a_class && !pinned.is_empty(),
+            "the class-key doc comment parsed to nothing for {family}; its shape changed"
+        );
+
+        // Every name the doc comment carries must still BE a variant —
+        // a rename that misses the comment is the other way this rots.
+        let variants: BTreeSet<String> = {
+            let needle = format!("pub enum {family} {{");
+            let decl = core_source
+                .find(needle.as_str())
+                .unwrap_or_else(|| panic!("{family} declaration"));
+            let body = &core_source[decl..];
+            let body = &body[..body.find("\n}\n").expect("enum terminator")];
+            body.lines()
+                .map(str::trim)
+                .filter(|line| line.starts_with(|c: char| c.is_ascii_uppercase()))
+                .map(|line| {
+                    lower_first(
+                        &line
+                            .chars()
+                            .take_while(|c| c.is_ascii_alphanumeric())
+                            .collect::<String>(),
+                    )
+                })
+                .collect()
+        };
+        for (class, names) in &pinned {
+            for name in names {
+                assert!(
+                    variants.contains(name),
+                    "the {class} class lists {name}, which is not a {family} variant"
+                );
+            }
+        }
+        pinned
+    }
+
+    #[test]
+    fn the_mac_coalescing_switch_matches_the_pinned_class_list() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
+            .expect("core a11y source");
+        let swift = std::fs::read_to_string(
+            manifest.join("../../apps/slate-mac/Sources/SlateMac/Canvas/CanvasAnnouncer.swift"),
+        )
+        .expect("mac announcer source");
+
+        let pinned = pinned_coalescing_classes(&core_source, "CanvasA11yEvent");
+
+        // --- The copy: mac's switch ----------------------------------
+        let switch = swift
+            .split_once("func coalescingClass(of event: CanvasA11yEvent) -> EventClass?")
+            .expect("mac coalescing switch")
+            .1;
+        let switch = switch
+            .split_once("default:")
+            .expect("the switch's default arm")
+            .0;
+
+        let mut mac: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for arm in switch.split("case ").skip(1) {
+            let (cases, tail) = arm.split_once(':').expect("case arm ends in a colon");
+            let class: String = tail
+                .split_once("return .")
+                .expect("case arm returns a class")
+                .1
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            let entry = mac.entry(class).or_default();
+            for (at, _) in cases.match_indices('.') {
+                let name: String = cases[at + 1..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                if !name.is_empty() {
+                    entry.insert(name);
+                }
+            }
+        }
+
+        assert_eq!(
+            mac, pinned,
+            "mac's coalescing switch and the class list core pins (0a-8) disagree. \
+             Left is CanvasAnnouncer.swift, right is the a11y.rs doc comment; a core \
+             event in either class that the switch does not route is spoken \
+             uncoalesced on mac and coalesced on Windows, which is a §W-D difference \
+             no corpus entry can show."
+        );
+    }
+
+    /// The graph family's copy of the same tripwire (W6-2 0a, #746;
+    /// contracts doc 0a-9): mac's `GraphAnnouncer` switch routes exactly
+    /// the four graph classes the one list pins. The Windows twin arrives
+    /// with PR A's `GraphAnnouncer.cs`; until then the Windows assertion
+    /// covers the canvas file alone, by design.
+    #[test]
+    fn the_mac_graph_coalescing_switch_matches_the_pinned_class_list() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
+            .expect("core a11y source");
+        let swift = std::fs::read_to_string(
+            manifest.join("../../apps/slate-mac/Sources/SlateMac/Graph/GraphAnnouncer.swift"),
+        )
+        .expect("mac graph announcer source");
+
+        let pinned = pinned_coalescing_classes(&core_source, "GraphA11yEvent");
+        assert_eq!(pinned.len(), 4, "the graph family pins four classes (0a-9)");
+
+        let switch = swift
+            .split_once("func coalescingClass(of event: GraphA11yEvent) -> EventClass?")
+            .expect("mac graph coalescing switch")
+            .1;
+        let switch = switch
+            .split_once("default:")
+            .expect("the switch's default arm")
+            .0;
+
+        let mut mac: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for arm in switch.split("case ").skip(1) {
+            let (cases, tail) = arm.split_once(':').expect("case arm ends in a colon");
+            let class: String = tail
+                .split_once("return .")
+                .expect("case arm returns a class")
+                .1
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            let entry = mac.entry(class).or_default();
+            for (at, _) in cases.match_indices('.') {
+                let name: String = cases[at + 1..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                if !name.is_empty() {
+                    entry.insert(name);
+                }
+            }
+        }
+
+        assert_eq!(
+            mac, pinned,
+            "mac's graph coalescing switch and the class list core pins (0a-9) disagree. \
+             Left is GraphAnnouncer.swift, right is the a11y.rs doc comment."
+        );
+    }
+
+    /// The Windows twin of the tripwire above (W6-1 PR C, #745).
+    ///
+    /// 0b-17 pinned the MAC copy of the one class list and its own
+    /// failure message assumed the Windows copy was faithful — which
+    /// nothing checked. That is the asymmetry 0a-3 already closed for
+    /// the corpus mirrors ("two tripwires, symmetric"), reappearing one
+    /// subsystem over: forgetting the C# switch is exactly as easy as
+    /// forgetting the Swift one, and until now it cost a full
+    /// `generate-bindings` + `dotnet test` round trip to find, or
+    /// nothing at all — the C# side has no behavioural test that can see
+    /// a MISSING class, only that the classes it has behave.
+    ///
+    /// SCOPE: membership per class, both directions, exactly as the mac
+    /// half. The 200 ms window, latest-wins and the High-flushes rule
+    /// stay `CanvasAnnouncerTests`'.
+    #[test]
+    fn the_windows_coalescing_switch_matches_the_pinned_class_list() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
+            .expect("core a11y source");
+        let csharp = std::fs::read_to_string(
+            manifest.join("../../apps/slate-windows/src/SlateWindows/Canvas/CanvasAnnouncer.cs"),
+        )
+        .expect("windows announcer source");
+
+        let pinned = pinned_coalescing_classes(&core_source, "CanvasA11yEvent");
+
+        // --- The copy: the C# switch expression ----------------------
+        // Bounded to the switch body, and terminated at the discard arm
+        // for the same reason mac's is bounded at `default:` — an arm
+        // past it routes nothing.
+        let switch = csharp
+            .split_once("CoalescingClassOf(CanvasA11yEvent @event) => @event switch")
+            .expect("windows coalescing switch")
+            .1;
+        let switch = switch
+            .split_once("_ => null,")
+            .expect("the switch's discard arm")
+            .0;
+
+        // COMMENTS OUT FIRST. A scrape reads text, and text includes the
+        // text somebody wrote to explain the code — so an arm named only
+        // in a `// CanvasA11yEvent.Foo routes here` note would satisfy
+        // this tripwire while the switch routed nothing. That is the
+        // 0a round-6 decoy class exactly (an unused declaration carrying
+        // the words a scrape looks for), and it is one function to close.
+        let switch = strip_csharp_comments(switch);
+        let switch = switch.as_str();
+
+        // Each arm is `⟨patterns⟩ => EventClass.⟨Class⟩,`; the patterns
+        // are `CanvasA11yEvent.X` joined by `or`, wrapped freely by
+        // `dotnet format`, so the arm is split on its RESULT rather
+        // than on lines (the recorded reason the Windows corpus mirror's
+        // parser is slice-oriented too).
+        let mut windows: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut cursor = 0usize;
+        for (at, marker) in switch.match_indices("=> EventClass.") {
+            let class: String = switch[at + marker.len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            let entry = windows.entry(lower_first(&class)).or_default();
+            let patterns = &switch[cursor..at];
+            for (name_at, name_marker) in patterns.match_indices("CanvasA11yEvent.") {
+                let name: String = patterns[name_at + name_marker.len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                if !name.is_empty() {
+                    entry.insert(lower_first(&name));
+                }
+            }
+            cursor = at + marker.len();
+        }
+
+        assert_eq!(
+            windows, pinned,
+            "the Windows coalescing switch and the class list core pins (0a-8) \
+             disagree. Left is CanvasAnnouncer.cs, right is the a11y.rs doc comment; \
+             a core event in either class that the switch does not route is spoken \
+             coalesced on mac and uncoalesced on Windows, which is a §W-D difference \
+             no corpus entry can show."
+        );
+    }
+
+    /// The Windows GRAPH twin (W6-2 PR A, #746, contract A-10): the graph
+    /// relay's switch against the four classes core pins on the graph
+    /// family (0a-9), membership per class in both directions — the same
+    /// scrape as the canvas twin above, keyed on `Graph/GraphAnnouncer.cs`.
+    #[test]
+    fn the_windows_graph_coalescing_switch_matches_the_pinned_class_list() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
+            .expect("core a11y source");
+        let csharp = std::fs::read_to_string(
+            manifest.join("../../apps/slate-windows/src/SlateWindows/Graph/GraphAnnouncer.cs"),
+        )
+        .expect("windows graph announcer source");
+
+        let pinned = pinned_coalescing_classes(&core_source, "GraphA11yEvent");
+        assert_eq!(pinned.len(), 4, "the graph family pins four classes (0a-9)");
+
+        let switch = csharp
+            .split_once("CoalescingClassOf(GraphA11yEvent @event) => @event switch")
+            .expect("windows graph coalescing switch")
+            .1;
+        let switch = switch
+            .split_once("_ => null,")
+            .expect("the switch's discard arm")
+            .0;
+        let switch = strip_csharp_comments(switch);
+        let switch = switch.as_str();
+
+        let mut windows: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut cursor = 0usize;
+        for (at, marker) in switch.match_indices("=> EventClass.") {
+            let class: String = switch[at + marker.len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            let entry = windows.entry(lower_first(&class)).or_default();
+            let patterns = &switch[cursor..at];
+            for (name_at, name_marker) in patterns.match_indices("GraphA11yEvent.") {
+                let name: String = patterns[name_at + name_marker.len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                if !name.is_empty() {
+                    entry.insert(lower_first(&name));
+                }
+            }
+            cursor = at + marker.len();
+        }
+
+        assert_eq!(
+            windows, pinned,
+            "the Windows graph coalescing switch and the class list core pins (0a-9) \
+             disagree. Left is Graph/GraphAnnouncer.cs, right is the a11y.rs doc comment."
+        );
+    }
+
+    /// The FFI mirror must carry EVERY core variant.
+    ///
+    /// `From<A11yEvent> for core::a11y::A11yEvent` is exhaustive, so the
+    /// compiler already proves mirror SUBSET-OF core and always has. Nothing
+    /// proved the other direction, and that gap is silent in the worst
+    /// way: a variant added to core alone builds clean here, builds
+    /// clean for the C# host (whose code does not name the new case
+    /// yet), and only fails when a host finally writes
+    /// `.someNewCase` and the generated bindings do not have it. That
+    /// is a full CI round-trip to learn about a one-line omission,
+    /// and #969 has five more families to convert.
+    #[test]
+    fn the_ffi_mirror_covers_every_core_a11y_variant() {
+        fn enum_body_of(source: &str, enum_name: &str) -> String {
+            let needle = format!("pub enum {enum_name} {{");
+            let decl = source
+                .find(&needle)
+                .unwrap_or_else(|| panic!("{enum_name} declaration"));
+            let open = decl + source[decl..].find('{').expect("opening brace");
+            let mut depth = 0usize;
+            for (offset, ch) in source[open..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return source[open + 1..open + offset].to_string();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            panic!("unterminated {enum_name} declaration");
+        }
+
+        fn variant_names_of(source: &str, enum_name: &str) -> std::collections::BTreeSet<String> {
+            let body = enum_body_of(source, enum_name);
+            let mut names = std::collections::BTreeSet::new();
+            let mut depth = 0usize;
+            for line in body.lines() {
+                let trimmed = line.trim();
+                if depth == 0 && !trimmed.starts_with("//") && !trimmed.starts_with('#') {
+                    // The leading identifier of a variant line, so the
+                    // single-line payload form (`Card { title: String },`)
+                    // parses the same as the multi-line one. Matching the
+                    // whole trimmed line would skip single-line variants
+                    // in BOTH sources — a silent false pass.
+                    let name: String = trimmed
+                        .chars()
+                        .take_while(char::is_ascii_alphanumeric)
+                        .collect();
+                    let tail = trimmed[name.len()..].trim_start();
+                    let delimited = tail.is_empty()
+                        || tail.starts_with(',')
+                        || tail.starts_with('{')
+                        || tail.starts_with('(');
+                    if !name.is_empty()
+                        && name.starts_with(|c: char| c.is_ascii_uppercase())
+                        && delimited
+                    {
+                        names.insert(name);
+                    }
+                }
+                depth += trimmed.matches('{').count();
+                depth -= trimmed.matches('}').count().min(depth);
+            }
+            names
+        }
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mirror = std::fs::read_to_string(manifest.join("src/lib.rs")).expect("mirror source");
+        let core_source = std::fs::read_to_string(manifest.join("../slate-core/src/a11y.rs"))
+            .expect("core a11y source");
+
+        // Both the top-level vocabulary AND every nested family enum:
+        // a family that lives one level down (W6-1 0a's
+        // `Canvas { event: CanvasA11yEvent }`) is exactly as invisible
+        // to a host if the mirror misses one of its variants.
+        //
+        // The floor is PER ENUM, not shared: one number covering both
+        // would be the smaller family's, and a parser that silently
+        // stopped seeing (say) half of `A11yEvent`'s ~198 variants
+        // would still clear a 40-variant bar while the difference-set
+        // assertion below quietly compared two truncated sets.
+        for (enum_name, floor) in [
+            ("A11yEvent", 100usize),
+            ("CanvasA11yEvent", 40),
+            ("GraphA11yEvent", 15),
+        ] {
+            let mirror_variants = variant_names_of(&mirror, enum_name);
+            let core_variants = variant_names_of(&core_source, enum_name);
+            assert!(
+                core_variants.len() >= floor,
+                "parsed only {} core {enum_name} variants (floor {floor}) — the \
+                 parser broke, not the mirror",
+                core_variants.len()
+            );
+            assert!(
+                mirror_variants.len() >= floor,
+                "parsed only {} mirror {enum_name} variants (floor {floor}) — the \
+                 parser broke, not the mirror",
+                mirror_variants.len()
+            );
+
+            let missing: Vec<&String> = core_variants.difference(&mirror_variants).collect();
+            assert!(
+                missing.is_empty(),
+                "these core {enum_name} variants are missing from the FFI mirror, \
+                 so no host can name them: {missing:?}"
+            );
+        }
+
+        // W6-1 PR E13 (IE13-14, IE13-15): every closed nested family the
+        // core inventory lists — the list read from CANVAS_NESTED_ENUMS
+        // in core's own source and its count asserted, so a family
+        // added there is compared here without anyone remembering to —
+        // with the arm count pinned EXACTLY for the four families this
+        // slice names (a skipped arm in both parses changes a number)
+        // and mirror equality for all eighteen.
+        fn nested_families_of(core_source: &str) -> Vec<String> {
+            let decl = core_source
+                .find("const CANVAS_NESTED_ENUMS")
+                .expect("core's nested-enum inventory");
+            // Past the type signature — its own parentheses are not tuples.
+            let start = decl
+                + core_source[decl..]
+                    .find("= &[")
+                    .expect("the inventory's table")
+                + 4;
+            let end = start
+                + core_source[start..]
+                    .find("\n    ];")
+                    .expect("the inventory's terminator");
+            let code: String = core_source[start..end]
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let mut families = Vec::new();
+            let mut depth = 0usize;
+            let bytes: Vec<char> = code.chars().collect();
+            let mut i = 0;
+            while i < bytes.len() {
+                match bytes[i] {
+                    '(' => {
+                        depth += 1;
+                        if depth == 1 {
+                            let mut j = i + 1;
+                            while j < bytes.len() && bytes[j].is_whitespace() {
+                                j += 1;
+                            }
+                            assert_eq!(bytes[j], '"', "a family tuple opens with its name");
+                            let mut k = j + 1;
+                            while bytes[k] != '"' {
+                                k += 1;
+                            }
+                            families.push(bytes[j + 1..k].iter().collect());
+                            i = k;
+                        }
+                    }
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                i += 1;
+            }
+            families
+        }
+        /// One row of the graph's inventory (W6-2 0a, contracts doc 0a-3 —
+        /// the round-3 design pass): read BY KEY out of core's
+        /// `GRAPH_NESTED_ENUMS`, whose rows are `NestedEnum { core, mirror,
+        /// path, sites }` with named fields, so this consumer takes exactly
+        /// the three facts it needs and nothing positional.
+        struct GraphInventoryRow {
+            core: String,
+            mirror: String,
+            path: String,
+        }
+        fn graph_inventory_rows(core_source: &str) -> Vec<GraphInventoryRow> {
+            fn field(row: &str, key: &str) -> String {
+                let marker = format!("{key}: \"");
+                let at = row
+                    .find(&marker)
+                    .unwrap_or_else(|| panic!("an inventory row lacks `{key}`: {row}"));
+                let rest = &row[at + marker.len()..];
+                rest[..rest.find('"').expect("closing quote")].to_string()
+            }
+            let decl = core_source
+                .find("const GRAPH_NESTED_ENUMS")
+                .expect("core's graph nested-enum inventory");
+            let start = decl
+                + core_source[decl..]
+                    .find("= &[")
+                    .expect("the inventory's table")
+                + 4;
+            let end = start
+                + core_source[start..]
+                    .find("\n    ];")
+                    .expect("the inventory's terminator");
+            let code: String = core_source[start..end]
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            code.split("NestedEnum {")
+                .skip(1)
+                .map(|row| GraphInventoryRow {
+                    core: field(row, "core"),
+                    mirror: field(row, "mirror"),
+                    path: field(row, "path"),
+                })
+                .collect()
+        }
+
+        let canvas_families = nested_families_of(&core_source);
+        assert_eq!(
+            canvas_families.len(),
+            18,
+            "core's canvas nested-enum inventory lists {} families; this test knows eighteen — \
+             extend both or neither",
+            canvas_families.len()
+        );
+        let graph_rows = graph_inventory_rows(&core_source);
+        assert_eq!(
+            graph_rows.len(),
+            9,
+            "core's graph nested-enum inventory lists {} rows; this test knows nine",
+            graph_rows.len()
+        );
+        let exact: std::collections::BTreeMap<&str, usize> = [
+            ("CanvasStatusNote", 28usize),
+            ("CanvasBlockedReason", 18),
+            ("CanvasFailedAction", 12),
+            ("CanvasMutationRefusal", 7),
+            ("GraphVerbosity", 3),
+            ("GraphPresetOutcome", 4),
+            ("GraphForceControl", 4),
+            ("GraphSurfaceMode", 2),
+            ("GraphWhereAmISelection", 2),
+            ("GraphWhereAmIFilter", 2),
+            ("GraphStatusNote", 6),
+            ("GraphBlockedReason", 3),
+            ("NodeKind", 3),
+        ]
+        .into_iter()
+        .collect();
+        // (core, mirror, source): the canvas's families mirror under their
+        // own names in a11y.rs; the graph's rows say so themselves.
+        let families: Vec<(String, String, Option<String>)> = canvas_families
+            .into_iter()
+            .map(|name| (name.clone(), name, None))
+            .chain(
+                graph_rows
+                    .into_iter()
+                    .map(|row| (row.core, row.mirror, Some(row.path))),
+            )
+            .collect();
+        for (family, mirror_name, path) in &families {
+            let family_source = match path {
+                Some(path) => std::fs::read_to_string(manifest.join("../slate-core").join(path))
+                    .unwrap_or_else(|_| panic!("{family}'s source at {path}")),
+                None => core_source.clone(),
+            };
+            let core_variants = variant_names_of(&family_source, family);
+            let mirror_variants = variant_names_of(&mirror, mirror_name);
+            match exact.get(family.as_str()) {
+                Some(&count) => assert_eq!(
+                    core_variants.len(),
+                    count,
+                    "{family} parses to {} arms in core; the pin says {count} — an arm the \
+                     line parser skipped, or a pin to bump on purpose",
+                    core_variants.len()
+                ),
+                None => assert!(
+                    core_variants.len() >= 2,
+                    "parsed only {} core {family} arms — the parser broke, not the vocabulary",
+                    core_variants.len()
+                ),
+            }
+            let missing: Vec<&String> = core_variants.difference(&mirror_variants).collect();
+            assert!(
+                missing.is_empty(),
+                "these core {family} arms are missing from the FFI mirror, so no host can \
+                 name them: {missing:?}"
+            );
+            let extra: Vec<&String> = mirror_variants.difference(&core_variants).collect();
+            assert!(
+                extra.is_empty(),
+                "the FFI mirror of {family} carries arms core does not: {extra:?}"
+            );
+        }
+    }
+
+    /// The brace-matched body of `pub <kind> <name> {` in `source`.
+    fn graph_decl_body<'a>(source: &'a str, kind: &str, name: &str) -> &'a str {
+        let needle = format!("pub {kind} {name} {{");
+        let decl = source
+            .find(&needle)
+            .unwrap_or_else(|| panic!("{name} declaration"));
+        let open = decl + source[decl..].find('{').expect("opening brace");
+        let mut depth = 0usize;
+        for (offset, ch) in source[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &source[open + 1..open + offset];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("{name}: unbalanced braces");
+    }
+
+    /// W6-2 PR 0b (contracts doc 0b-15): every closed set the structural
+    /// queries carry is mirrored both ways, with each arm count pinned —
+    /// the a11y mirror test's parser over the two query modules.
+    #[test]
+    fn the_ffi_mirror_covers_every_graph_query_enum() {
+        fn variant_names_of(source: &str, enum_name: &str) -> std::collections::BTreeSet<String> {
+            let body = graph_decl_body(source, "enum", enum_name);
+            let mut names = std::collections::BTreeSet::new();
+            let mut depth = 0usize;
+            for line in body.lines() {
+                let trimmed = line.trim();
+                if depth == 0 && !trimmed.starts_with("//") && !trimmed.starts_with('#') {
+                    let name: String = trimmed
+                        .chars()
+                        .take_while(char::is_ascii_alphanumeric)
+                        .collect();
+                    let tail = trimmed[name.len()..].trim_start();
+                    let delimited = tail.is_empty()
+                        || tail.starts_with(',')
+                        || tail.starts_with('{')
+                        || tail.starts_with('(');
+                    if !name.is_empty()
+                        && name.starts_with(|c: char| c.is_ascii_uppercase())
+                        && delimited
+                    {
+                        names.insert(name);
+                    }
+                }
+                depth += trimmed.matches('{').count();
+                depth -= trimmed.matches('}').count().min(depth);
+            }
+            names
+        }
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mirror = std::fs::read_to_string(manifest.join("src/lib.rs")).expect("mirror source");
+        let queries = std::fs::read_to_string(manifest.join("../slate-core/src/graph_queries.rs"))
+            .expect("graph_queries");
+        let config = std::fs::read_to_string(manifest.join("../slate-core/src/graph_config.rs"))
+            .expect("graph_config");
+        for (source, family, count) in [
+            (&queries, "GraphRowAction", 5usize),
+            (&queries, "GraphTableColumn", 9),
+            (&config, "GraphColorToken", 8),
+            (&config, "GraphRingStyle", 4),
+            (&config, "GraphConfigError", 2),
+        ] {
+            let core_variants = variant_names_of(source, family);
+            let mirror_variants = variant_names_of(&mirror, family);
+            assert_eq!(
+                core_variants.len(),
+                count,
+                "{family} parses to {} core arms; the pin says {count}",
+                core_variants.len()
+            );
+            assert_eq!(
+                core_variants, mirror_variants,
+                "{family}: core and the FFI mirror disagree"
+            );
+        }
+    }
+
+    /// 0b-15: every name in core's `GRAPH_QUERY_SURFACE` is exported here
+    /// — a free `pub fn` under `#[uniffi::export]` or a `VaultSession`
+    /// method — so a query cannot exist in core without a binding.
+    #[test]
+    fn the_ffi_mirror_exports_every_graph_query() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mirror = std::fs::read_to_string(manifest.join("src/lib.rs")).expect("mirror source");
+        let surface = core::graph_queries::GRAPH_QUERY_SURFACE;
+        assert!(
+            surface.len() >= 24,
+            "the surface list shrank to {}",
+            surface.len()
+        );
+        for name in surface {
+            let declared = format!("pub fn {name}(");
+            let at = mirror
+                .find(&declared)
+                .unwrap_or_else(|| panic!("{name} is not exported from lib.rs"));
+            let preceding = &mirror[..at];
+            let exported = preceding.trim_end().ends_with("#[uniffi::export]")
+                || preceding
+                    .rfind("impl VaultSession {")
+                    .is_some_and(|i| !preceding[i..].contains("\n}\n"));
+            assert!(
+                exported,
+                "{name} is declared but neither exported nor a session method"
+            );
+        }
+    }
+
+    /// 0b-15: every `pub struct` in the two core modules, and `GraphNode`
+    /// in `graph.rs`, has a mirror of the same name here with the SAME
+    /// `(field, type)` pairs in the SAME order — the types compared as
+    /// text after the one alias map core→FFI — so a field, a width or an
+    /// `Option` that drifts fails here, not in a host. `GraphConfigError`'s
+    /// variant payloads are compared the same way.
+    #[test]
+    fn the_ffi_records_mirror_core_field_for_field() {
+        fn structs_of(source: &str) -> Vec<String> {
+            source
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("pub struct "))
+                .filter_map(|rest| {
+                    rest.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .next()
+                })
+                .map(str::to_string)
+                .collect()
+        }
+        /// Core type text under the alias map: path prefixes dropped,
+        /// `NodeKind` → `GraphNodeKind`; `usize` never crosses.
+        fn normalise(ty: &str) -> String {
+            let ty = ty.trim().trim_end_matches(',').trim();
+            let ty = ty
+                .replace("crate::graph::", "")
+                .replace("crate::graph_config::", "");
+            assert!(!ty.contains("usize"), "usize is not an FFI width: {ty}");
+            ty.split_inclusive(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .flat_map(|piece| {
+                    let (word, sep) = match piece.char_indices().last() {
+                        Some((i, c)) if !c.is_ascii_alphanumeric() && c != '_' => {
+                            (&piece[..i], &piece[i..])
+                        }
+                        _ => (piece, ""),
+                    };
+                    let word = match word {
+                        "NodeKind" => "GraphNodeKind",
+                        "EdgeKind" => "GraphEdgeKind",
+                        other => other,
+                    };
+                    [word.to_string(), sep.to_string()]
+                })
+                .collect()
+        }
+        fn fields_of(source: &str, name: &str) -> Vec<(String, String)> {
+            let body = graph_decl_body(source, "struct", name);
+            body.lines()
+                .filter_map(|line| line.trim().strip_prefix("pub "))
+                .filter_map(|rest| rest.split_once(':'))
+                .map(|(f, ty)| (f.trim().to_string(), normalise(ty)))
+                .collect()
+        }
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mirror = std::fs::read_to_string(manifest.join("src/lib.rs")).expect("mirror source");
+        let queries = std::fs::read_to_string(manifest.join("../slate-core/src/graph_queries.rs"))
+            .expect("graph_queries");
+        let config = std::fs::read_to_string(manifest.join("../slate-core/src/graph_config.rs"))
+            .expect("graph_config");
+        let graph =
+            std::fs::read_to_string(manifest.join("../slate-core/src/graph.rs")).expect("graph");
+        let mut seen = 0;
+        let mut names: Vec<(&String, String)> = Vec::new();
+        for source in [&queries, &config] {
+            for name in structs_of(source) {
+                names.push((source, name));
+            }
+        }
+        // Every `graph.rs` record the surface reuses (0b-15).
+        for reused in [
+            "GraphNode",
+            "GraphEdge",
+            "GraphFilter",
+            "GraphNeighborhoodCounts",
+        ] {
+            names.push((&graph, reused.to_string()));
+        }
+        for (source, name) in names {
+            assert!(
+                mirror.contains(&format!("pub struct {name} {{")),
+                "{name} has no FFI mirror"
+            );
+            assert_eq!(
+                fields_of(source, &name),
+                fields_of(&mirror, &name),
+                "{name}: the mirror's (field, type) pairs differ from core's"
+            );
+            seen += 1;
+        }
+        assert!(
+            seen >= 28,
+            "only {seen} records parsed; the parser lost the modules"
+        );
+        // The error enum's payloads, variant for variant.
+        fn payloads_of(source: &str) -> Vec<String> {
+            graph_decl_body(source, "enum", "GraphConfigError")
+                .lines()
+                .map(str::trim)
+                .filter(|l| l.starts_with(|c: char| c.is_ascii_uppercase()) && l.contains('{'))
+                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect()
+        }
+        assert_eq!(
+            payloads_of(&config),
+            payloads_of(&mirror),
+            "GraphConfigError payloads differ"
+        );
+        assert_eq!(payloads_of(&config).len(), 2);
     }
 
     #[test]
@@ -11266,6 +15936,650 @@ mod canvas_mirror_tests {
             frame.iteration > 0 && frame.iteration <= 10,
             "at most one ≤10 chunk runs after a mid-flight cancel (got {})",
             frame.iteration
+        );
+    }
+
+    /// Every mac call of a canvas READ query routes through the one
+    /// state mapping, or is named as an exclusion with a reason.
+    ///
+    /// **Why this is a parser and not a list.** VA-1/VA-2 membership and
+    /// the per-state responses were handwritten in four places, and
+    /// three consecutive review rounds found the same class of defect:
+    /// a member missing from a list, a state missing from a response
+    /// set, two lists disagreeing. Red-team protocol rule 4 says stop
+    /// fixing the sentences and implement the invariant. Membership is
+    /// DERIVED here: a Swift function that calls a canvas read query
+    /// either mentions `canvasReadTarget` / `canvasReadContext` /
+    /// `canvasReadRefusal` in its body, or it is on `EXCLUSIONS` with a
+    /// stated reason. Adding an ungated read verb fails this test and
+    /// names the function.
+    ///
+    /// Scope is the canvas READ set — the queries whose answer depends
+    /// on a live handle. Mutating entry points (`canvas_apply`,
+    /// `open_canvas`) are outside it: they are gated by
+    /// `admitCanvasMutation`, a different ladder with its own spoken
+    /// refusals.
+    ///
+    /// **What it catches, and what it cannot** — stated rather than
+    /// implied, the same doctrine 0a's source scan settled on.
+    ///
+    /// It matches the query as a MEMBER TOKEN on a session-ish
+    /// receiver, with no call paren required: `let read =
+    /// session.canvasBounds` then `try? read(handle)` is a use, and
+    /// requiring the paren let exactly that shape past (codex 0b round
+    /// 4). The receiver is the discriminator because these are
+    /// `VaultSession` methods — which is also what keeps
+    /// `appState?.canvasTracePath()`, the navigator's own verb of the
+    /// same name, out of the results.
+    ///
+    /// It CANNOT follow indirect flow: a session handed to a helper
+    /// that calls the query, a method reference stored in a property
+    /// and invoked elsewhere, or a closure capturing either. Answering
+    /// those needs symbol resolution across functions — a real
+    /// front end, which this text scan is not and should not grow into.
+    /// The bound on the damage is the same as every scan here: it can
+    /// miss a NEW evasion, it cannot go quietly green on the code it
+    /// does see, because it asserts it found call sites at all and that
+    /// every exclusion still calls one.
+    #[test]
+    fn every_mac_canvas_read_is_gated_or_named() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        /// The generated Swift names of the handle-based canvas read
+        /// queries — the ones whose answer depends on a live handle, so
+        /// the ones a state mapping can have an opinion about.
+        ///
+        /// `canvasAutoSides` is deliberately absent: it takes no handle
+        /// and cannot fail, so there is no state for a mapping to
+        /// answer about and nothing to gate.
+        const READ_QUERIES: &[&str] = &[
+            "canvasParentOf",
+            "canvasChildrenOf",
+            "canvasTracePath",
+            "canvasOrderNodes",
+            "canvasFilter",
+            "canvasBounds",
+            "canvasDescribeRelative",
+            "canvasNeighbors",
+            "canvasGroupRectAround",
+            "canvasWhereAmI",
+        ];
+
+        /// The one place membership is allowed to be a list — and every
+        /// entry states why the mapping does not apply. Function names,
+        /// not files, so moving a function does not silently excuse it.
+        /// An entry that stops calling a scanned query fails the
+        /// anti-rot assertion below, because a stale excuse is how the
+        /// next ungated verb hides.
+        ///
+        /// `canvasSelectAdjacent` is NOT here, and that is a decision
+        /// rather than an omission: it reaches `canvas_filter` only
+        /// through `filteredOutline`, so this scan never sees it, and
+        /// `FilterView.current` already separates a live answer from a
+        /// retained one — which is what keeps arrow movement working on
+        /// the displayed rows in the reopening window, as VA-1's tests
+        /// require. Recorded in the contracts (codex 0b round 3).
+        const EXCLUSIONS: &[(&str, &str)] = &[
+            // The document's own data layer RETURNS un-answerability
+            // (`FilterView.current`, `neighborsIfKnown`'s `nil`) rather
+            // than announcing it, so its callers can route through the
+            // mapping. Gating here too would announce twice.
+            (
+                "filterView",
+                "returns `current: false`; the caller announces",
+            ),
+            ("neighborsIfKnown", "returns nil; the caller announces"),
+            // Write verbs sit behind `admitCanvasMutation`, a different
+            // ladder with its own spoken refusals; routing them through
+            // the read mapping would double-announce.
+            (
+                "canvasRemoveFromGroup",
+                "write verb behind admitCanvasMutation",
+            ),
+            ("canvasGroupMarked", "write verb behind admitCanvasMutation"),
+            ("canvasDuplicate", "write verb behind admitCanvasMutation"),
+            (
+                "canvasInReadingOrder",
+                "projection for write verbs behind admission",
+            ),
+            (
+                "canvasRelativeDescription",
+                "move-mode narration behind admission",
+            ),
+        ];
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.join("../../apps/slate-mac/Sources/SlateMac");
+        let mut sources: Vec<std::path::PathBuf> = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("mac sources") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("swift")
+                    // The generated bindings DECLARE the queries; they
+                    // are not a host call site.
+                    && path.file_name().and_then(|n| n.to_str()) != Some("slate_uniffi.swift")
+                {
+                    sources.push(path);
+                }
+            }
+        }
+        assert!(
+            !sources.is_empty(),
+            "no mac Swift sources found under {}; this guard would pass vacuously",
+            root.display()
+        );
+
+        // Enclosing `func` per line, by brace depth: a function owns
+        // every line until its body closes.
+        let mut callers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut bodies: BTreeMap<String, String> = BTreeMap::new();
+        for path in &sources {
+            let text = std::fs::read_to_string(path).expect("swift source");
+            let file = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let lines: Vec<&str> = text.lines().collect();
+            let mut current: Option<(String, i32)> = None;
+            // A Swift signature may put its opening brace on a later
+            // line, so "the body closed" only means something once the
+            // body has been ENTERED — without this, every such function
+            // was dropped on its own declaration line and its calls
+            // went unattributed.
+            let mut entered = false;
+            let mut depth: i32 = 0;
+            for line in &lines {
+                let trimmed = line.trim_start();
+                let code = trimmed.split("//").next().unwrap_or("");
+                if current.is_none()
+                    && let Some(rest) = code.split_once("func ")
+                    && let Some(name) = rest
+                        .1
+                        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .find(|s| !s.is_empty())
+                {
+                    current = Some((name.to_string(), depth));
+                    entered = false;
+                }
+                if let Some((name, _)) = &current {
+                    let name = name.clone();
+                    for query in READ_QUERIES {
+                        // `.canvasFoo(` — a CALL, not the declaration.
+                        // A MEMBER TOKEN, with no call paren required:
+                        // `let read = session.canvasBounds` followed by
+                        // `try? read(handle)` is a use of the query, and
+                        // demanding the paren let exactly that shape
+                        // walk past the guard (codex 0b round 4).
+                        //
+                        // The receiver is the discriminator instead —
+                        // these are `VaultSession` methods, so a
+                        // session-ish receiver is what separates the FFI
+                        // query from a host verb that happens to share
+                        // its name (`appState?.canvasTracePath()` is the
+                        // navigator's own).
+                        for (offset, _) in code.match_indices(&format!(".{query}")) {
+                            let after = offset + 1 + query.len();
+                            // `.canvasBounds` must not match
+                            // `.canvasBoundsSomethingElse`.
+                            if code[after..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                            {
+                                continue;
+                            }
+                            let before = &code[..offset];
+                            let before = before.strip_suffix('?').unwrap_or(before);
+                            let receiver: String = before
+                                .chars()
+                                .rev()
+                                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                                .collect::<Vec<char>>()
+                                .into_iter()
+                                .rev()
+                                .collect();
+                            if !receiver.to_ascii_lowercase().contains("session") {
+                                continue;
+                            }
+                            callers
+                                .entry(name.clone())
+                                .or_default()
+                                .push(format!("{file}: {}", trimmed.trim_end()));
+                        }
+                    }
+                    bodies.entry(name).or_default().push_str(code);
+                }
+                depth += code.matches('{').count() as i32;
+                depth -= code.matches('}').count() as i32;
+                if let Some((_, opened)) = &current {
+                    if depth > *opened {
+                        entered = true;
+                    } else if entered {
+                        current = None;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            !callers.is_empty(),
+            "no canvas read-query call sites found in the mac tree; the query names or \
+             the scan are wrong, and this guard would pass vacuously"
+        );
+
+        let gated = |name: &str| -> bool {
+            bodies.get(name).is_some_and(|body| {
+                body.contains("canvasReadTarget")
+                    || body.contains("canvasReadContext")
+                    || body.contains("canvasReadRefusal")
+            })
+        };
+        let excluded: BTreeMap<&str, &str> = EXCLUSIONS.iter().copied().collect();
+
+        let mut ungated: Vec<String> = Vec::new();
+        for (name, sites) in &callers {
+            if gated(name) || excluded.contains_key(name.as_str()) {
+                continue;
+            }
+            ungated.push(format!("{name} — {}", sites.join("; ")));
+        }
+        assert!(
+            ungated.is_empty(),
+            "these mac functions call a canvas read query without routing through the \
+             state mapping (`canvasReadTarget`/`canvasReadContext`/`canvasReadRefusal`) \
+             and are not on the named exclusion list: {ungated:#?}"
+        );
+
+        // Anti-rot: an exclusion that no longer calls a read query is a
+        // stale excuse, and a stale excuse is how the next ungated verb
+        // hides.
+        let stale: Vec<&str> = EXCLUSIONS
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| !callers.contains_key(*name))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "these exclusions no longer call any canvas read query — delete them: {stale:?}"
+        );
+
+        // The selection question and the document question are a
+        // PRECEDENCE, not two independent checks. A verb that can say
+        // "Nothing selected." must ask that FIRST, through the one gate
+        // that consults the snapshot-visibility predicate; announcing it
+        // on some other path is how a verb ends up reciting the state's
+        // sentence at a user who is looking at rows.
+        const ANNOUNCER: &str = "canvasAnnounceSelectionUnresolvable";
+        const PRECEDENCE_GATE: &str = "canvasAnsweredMissingSelection";
+
+        // **A verb is selection-first iff it CALLS THE GATE.** That is
+        // the behaviour: the gate announces, so calling it is what makes
+        // "Nothing selected." reachable from a verb, whether or not the
+        // verb also names the announcer itself. Deriving instead from
+        // announcer mentions described only the verbs with their own
+        // throw arms, and left a verb that adopted the gate alone —
+        // most plausibly one already in `selectionFree` — changing no
+        // set anyone compared (codex 0b round 7).
+        //
+        // The gate is excluded from its own set: its declaration line
+        // names it, and it announces by construction, which is also how
+        // the round-6 floor was satisfiable by the gate plus one fewer
+        // verb.
+        let gate_call = format!("{PRECEDENCE_GATE}(");
+        let selection_first: BTreeSet<&str> = bodies
+            .iter()
+            .filter(|(name, body)| name.as_str() != PRECEDENCE_GATE && body.contains(&gate_call))
+            .map(|(name, _)| name.as_str())
+            .collect();
+
+        // The converse direction, kept: naming the announcer WITHOUT
+        // calling the gate is the original round-5 fault — a verb that
+        // can say "Nothing selected." on some path that never consults
+        // the snapshot-visibility predicate.
+        let unordered: Vec<&str> = bodies
+            .iter()
+            .filter(|(name, body)| {
+                name.as_str() != ANNOUNCER
+                    && name.as_str() != PRECEDENCE_GATE
+                    && body.contains(ANNOUNCER)
+                    && !body.contains(&gate_call)
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(
+            unordered.is_empty(),
+            "these mac verbs can say \"Nothing selected.\" without asking the selection \
+             question first via `{PRECEDENCE_GATE}`, so on a state whose snapshot is on \
+             screen they would answer with the state's sentence instead: {unordered:?}"
+        );
+
+        // The mac two-column test needs to know which verbs are
+        // selection-first, and it had that as a handwritten array —
+        // a third copy of a fact this guard already derives, free to
+        // drift in either direction: a verb could vanish from the
+        // matrix, or gain the gate in source, with nothing failing
+        // (codex 0b round 6). So the array is read and required to
+        // AGREE, both ways. That equality also replaces the old `>= 4`
+        // floor, which was a constant guessing at the same number.
+        let test_path =
+            manifest.join("../../apps/slate-mac/Tests/SlateMacTests/CanvasNavigatorTests.swift");
+        let test_source = std::fs::read_to_string(&test_path)
+            .unwrap_or_else(|err| panic!("{}: {err}", test_path.display()));
+
+        /// The `canvasFoo` receivers named inside one `[(String, () ->
+        /// Void)]` array literal — the verb each row drives.
+        fn verbs_in_array(source: &str, binding: &str, path: &std::path::Path) -> BTreeSet<String> {
+            let anchor = format!("let {binding}: [(String, () -> Void)] = [");
+            let start = source.find(&anchor).unwrap_or_else(|| {
+                panic!(
+                    "{}: `{anchor}` not found — the two-column test's verb groups were \
+                     renamed or reshaped, and this guard will not silently stop checking \
+                     what it can no longer find",
+                    path.display()
+                )
+            }) + anchor.len();
+            let mut depth = 1usize;
+            let mut end = None;
+            for (offset, ch) in source[start..].char_indices() {
+                match ch {
+                    '[' => depth += 1,
+                    ']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(start + offset);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let end = end.unwrap_or_else(|| {
+                panic!(
+                    "{}: `{binding}`'s array literal never closes",
+                    path.display()
+                )
+            });
+            let mut verbs = BTreeSet::new();
+            for line in source[start..end].lines() {
+                let code = line.split("//").next().unwrap_or("");
+                for (offset, _) in code.match_indices(".canvas") {
+                    verbs.insert(
+                        code[offset + 1..]
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect::<String>(),
+                    );
+                }
+            }
+            verbs
+        }
+
+        let test_bearing = verbs_in_array(&test_source, "selectionBearing", &test_path);
+        let test_free = verbs_in_array(&test_source, "selectionFree", &test_path);
+        assert!(
+            !test_bearing.is_empty() && !test_free.is_empty(),
+            "one of the two-column test's verb groups parsed empty ({test_bearing:?} / \
+             {test_free:?}); the comparison below would pass vacuously"
+        );
+
+        let derived: BTreeSet<String> = selection_first
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        let untested: Vec<&String> = derived.difference(&test_bearing).collect();
+        let unbacked: Vec<&String> = test_bearing.difference(&derived).collect();
+        assert!(
+            untested.is_empty() && unbacked.is_empty(),
+            "`selectionBearing` in {} disagrees with the source-derived selection-first \
+             set. A verb missing from the test is a matrix row nobody drives; a verb in \
+             the test that is no longer selection-first is an expectation that will pass \
+             for the wrong reason. Selection-first in source, absent from the test: \
+             {untested:?}. In the test, not selection-first in source: {unbacked:?}",
+            test_path.display()
+        );
+
+        let miscategorized: Vec<&String> = test_free.intersection(&derived).collect();
+        assert!(
+            miscategorized.is_empty(),
+            "`selectionFree` claims these never ask the selection question, but they call \
+             `{PRECEDENCE_GATE}` in source, so the test expects the state's sentence \
+             where the verb says \"Nothing selected.\": {miscategorized:?}"
+        );
+        let unknown: Vec<&String> = test_free
+            .iter()
+            .chain(test_bearing.iter())
+            .filter(|name| !bodies.contains_key(name.as_str()))
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "the two-column test drives verbs with no such function in the mac sources — \
+             renamed, or the scan is broken: {unknown:?}"
+        );
+        let ungated: Vec<&String> = test_free
+            .iter()
+            .filter(|name| !gated(name.as_str()))
+            .collect();
+        assert!(
+            ungated.is_empty(),
+            "`selectionFree` drives these as members of the state mapping, but they do \
+             not route through it, so the test's per-state expectations are not theirs \
+             to hold: {ungated:?}"
+        );
+
+        // Coverage, stated separately from the equality above: no gate
+        // caller may sit outside the two-column matrix entirely. Today
+        // the equality implies it — `selectionBearing` IS the gate
+        // callers — and it is asserted anyway, because the equality is
+        // the sort of thing a later round relaxes to a subset relation
+        // when some verb wants an exception, and this is the property
+        // that must survive that: a verb able to say "Nothing selected."
+        // is driven in both selection columns by name.
+        let undriven: Vec<&String> = derived
+            .iter()
+            .filter(|name| !test_bearing.contains(*name) && !test_free.contains(*name))
+            .collect();
+        assert!(
+            undriven.is_empty(),
+            "these mac verbs call `{PRECEDENCE_GATE}`, so they can say \"Nothing \
+             selected.\", but the two-column test drives them in neither group — nothing \
+             checks which question they answer per state: {undriven:?}"
+        );
+    }
+
+    /// The snapshot-visibility predicate says what the container's
+    /// switch actually does.
+    ///
+    /// `LoadState.rendersRetainedSnapshot` decides whether a verb's
+    /// selection question outranks the state's, and its truth is a
+    /// claim about the VIEW: does `CanvasContainerView` render retained
+    /// rows for this state? Written out by hand it was wrong —
+    /// `.retargetFailed` renders its snapshot read-only and the
+    /// predicate said otherwise (codex 0b round 5). So it is pinned
+    /// against the switch here instead of trusted.
+    ///
+    /// The reachability is transitive within the one file: an arm calls
+    /// a helper, the helper may call another, and reaching `canvasBody`
+    /// is what "renders rows" means. Same doctrine as the other scans —
+    /// it can be defeated by indirection this file does not contain,
+    /// and it cannot go quietly green, because it asserts it found
+    /// every case arm and that both sides are non-empty.
+    #[test]
+    fn the_snapshot_visibility_predicate_matches_the_container_switch() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mac = manifest.join("../../apps/slate-mac/Sources/SlateMac/Canvas");
+        let view = std::fs::read_to_string(mac.join("CanvasContainerView.swift"))
+            .expect("container source");
+        let document =
+            std::fs::read_to_string(mac.join("CanvasDocument.swift")).expect("document source");
+
+        // --- the view: state -> the identifiers its arm reaches -------
+        let body = view
+            .split_once("switch document.state {")
+            .expect("the container's state switch")
+            .1;
+        let body = body.split_once("\n        }").expect("switch end").0;
+
+        let mut arms: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut current: Option<String> = None;
+        for line in body.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("case .") {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                current = Some(name.clone());
+                arms.entry(name).or_default();
+                continue;
+            }
+            if let Some(name) = &current {
+                let mut identifier = String::new();
+                for character in trimmed.chars() {
+                    if character.is_alphanumeric() || character == '_' {
+                        identifier.push(character);
+                    } else {
+                        if !identifier.is_empty() {
+                            arms.get_mut(name).expect("arm").push(identifier.clone());
+                            identifier.clear();
+                        }
+                    }
+                }
+                if !identifier.is_empty() {
+                    arms.get_mut(name).expect("arm").push(identifier);
+                }
+            }
+        }
+        assert_eq!(
+            arms.len(),
+            5,
+            "expected one arm per LoadState case in the container switch, found {:?}",
+            arms.keys().collect::<Vec<_>>()
+        );
+
+        // --- transitive reachability to `canvasBody` ------------------
+        // Every `func`/`var` in the view file, with the identifiers its
+        // own body mentions.
+        let mut definitions: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut defining: Option<(String, i32)> = None;
+        let mut entered = false;
+        let mut depth: i32 = 0;
+        for line in view.lines() {
+            let code = line.trim().split("//").next().unwrap_or("");
+            if defining.is_none() {
+                for keyword in ["func ", "var "] {
+                    if let Some(rest) = code.split_once(keyword)
+                        && let Some(name) = rest
+                            .1
+                            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                            .find(|s| !s.is_empty())
+                    {
+                        defining = Some((name.to_string(), depth));
+                        entered = false;
+                        break;
+                    }
+                }
+            } else if let Some((name, _)) = &defining {
+                let name = name.clone();
+                let mut identifier = String::new();
+                for character in code.chars() {
+                    if character.is_alphanumeric() || character == '_' {
+                        identifier.push(character);
+                    } else {
+                        if !identifier.is_empty() {
+                            definitions
+                                .entry(name.clone())
+                                .or_default()
+                                .push(std::mem::take(&mut identifier));
+                        }
+                    }
+                }
+                if !identifier.is_empty() {
+                    definitions.entry(name).or_default().push(identifier);
+                }
+            }
+            depth += code.matches('{').count() as i32;
+            depth -= code.matches('}').count() as i32;
+            if let Some((_, opened)) = &defining {
+                if depth > *opened {
+                    entered = true;
+                } else if entered {
+                    defining = None;
+                }
+            }
+        }
+        assert!(
+            definitions.contains_key("canvasBody"),
+            "the container no longer defines `canvasBody`; this guard is measuring nothing"
+        );
+
+        fn reaches(
+            start: &[String],
+            target: &str,
+            definitions: &BTreeMap<String, Vec<String>>,
+            seen: &mut BTreeSet<String>,
+        ) -> bool {
+            for name in start {
+                if name == target {
+                    return true;
+                }
+                if !seen.insert(name.clone()) {
+                    continue;
+                }
+                if let Some(body) = definitions.get(name)
+                    && reaches(body, target, definitions, seen)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+
+        let mut rendered: BTreeSet<String> = BTreeSet::new();
+        for (state, mentions) in &arms {
+            let mut seen = BTreeSet::new();
+            if reaches(mentions, "canvasBody", &definitions, &mut seen) {
+                rendered.insert(state.clone());
+            }
+        }
+
+        // --- the predicate's own true set ----------------------------
+        let predicate = document
+            .split_once("var rendersRetainedSnapshot: Bool {")
+            .expect("the predicate")
+            .1;
+        let predicate = predicate
+            .split_once("return true")
+            .expect("the predicate's true arm")
+            .0;
+        let declared: BTreeSet<String> = predicate
+            .split(".case")
+            .flat_map(|chunk| chunk.split("case "))
+            .flat_map(|chunk| chunk.split(','))
+            .filter_map(|chunk| {
+                let chunk = chunk.trim();
+                chunk.strip_prefix('.').map(|name| {
+                    name.chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect::<String>()
+                })
+            })
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        assert!(
+            !rendered.is_empty() && !declared.is_empty(),
+            "one side of the comparison is empty, so this guard would pass vacuously: \
+             view {rendered:?}, predicate {declared:?}"
+        );
+        assert_eq!(
+            declared, rendered,
+            "`LoadState.rendersRetainedSnapshot` disagrees with what \
+             `CanvasContainerView` renders. The view is the authority: a state whose arm \
+             reaches `canvasBody` shows retained rows and its selection question outranks \
+             the state's sentence."
         );
     }
 }

@@ -5,34 +5,51 @@ import XCTest
 
 @testable import SlateMac
 
-/// ConnectionsPanel model derivation + AppState helpers (P1-1 #554).
-/// Pure logic — no session required.
+/// The Connections panel's host side (P1-1 #554; W6-2 PR 0b): the tree's
+/// derivation is core's now (`graph_connections_tree`, contracts doc
+/// 0b-4) and its facts live in `crates/slate-core/src/graph_queries.rs`.
+/// What remains here is the adapter — the nesting of core's flat rows
+/// by `parent_id`, the snippet overlay by path — and the busy-reason
+/// admission overlay (0bD-8). Pure logic — no session required.
 final class ConnectionsPanelTests: XCTestCase {
-    private func node(
-        _ id: UInt64, _ label: String, path: String?, kind: GraphNodeKind,
-        inLinks: UInt32 = 0, outLinks: UInt32 = 0, inEmbeds: UInt32 = 0
-    ) -> GraphNode {
-        GraphNode(
-            id: id, path: path, label: label, kind: kind,
-            inLinks: inLinks, outLinks: outLinks, inEmbeds: inEmbeds, outEmbeds: 0,
-            component: 0, isOrphan: false, pagerank: 0, modifiedMs: nil)
+    private func row(
+        _ id: String, level: UInt32, parent: String?, nodeId: UInt64, _ label: String,
+        path: String?, kind: GraphNodeKind = .note, embedOnly: Bool = false,
+        inLinks: UInt32 = 0, outLinks: UInt32 = 0, references: UInt32 = 0
+    ) -> GraphConnectionRow {
+        GraphConnectionRow(
+            id: id, level: level, parentId: parent, nodeId: nodeId,
+            stableKey: path.map { "p:\($0)" } ?? "g:\(label.lowercased())",
+            label: label, path: path, targetRaw: label, kind: kind, embedOnly: embedOnly,
+            inLinks: inLinks, outLinks: outLinks, references: references)
     }
 
+    private func tree(incoming: [GraphConnectionRow], outgoing: [GraphConnectionRow], depth: UInt32 = 1)
+        -> GraphConnectionsTree
+    {
+        GraphConnectionsTree(
+            generation: 1, centerId: 1, centerKey: "p:center.md", depth: depth,
+            summaryCounts: GraphNeighborhoodCounts(
+                centerLabel: "Center", inLinks: UInt32(incoming.count), outLinks: UInt32(outgoing.count),
+                noteCount: 0, depth: depth),
+            incoming: incoming, outgoing: outgoing)
+    }
+
+    /// The clamp reads core's constants (0b-8).
     func testDepthClampIntoOneToThree() {
         XCTAssertEqual(AppState.clampConnectionsDepth(0), 1)
         XCTAssertEqual(AppState.clampConnectionsDepth(1), 1)
         XCTAssertEqual(AppState.clampConnectionsDepth(3), 3)
         XCTAssertEqual(AppState.clampConnectionsDepth(99), 3)
+        XCTAssertEqual(Int(graphConstants().connectionsDepthMax), 3)
     }
 
-    func testGhostNotePathHonorsFolderAndExtension() {
+    /// The ghost path is core's (0b-11); the host wrapper forwards.
+    func testGhostNotePathIsCores() {
         XCTAssertEqual(AppState.ghostNotePath("Missing Note"), "Missing Note.md")
-        XCTAssertEqual(AppState.ghostNotePath("  Missing Note  "), "Missing Note.md")
-        XCTAssertEqual(AppState.ghostNotePath("notes/Foo"), "notes/Foo.md")
         XCTAssertEqual(AppState.ghostNotePath("./notes/Foo"), "notes/Foo.md")
-        XCTAssertEqual(AppState.ghostNotePath("/Foo"), "Foo.md")
-        // An already-markdown target keeps its extension.
         XCTAssertEqual(AppState.ghostNotePath("Foo.md"), "Foo.md")
+        XCTAssertEqual(AppState.ghostNotePath("dir/"), graphGhostNotePath(targetRaw: "dir/"))
     }
 
     @MainActor
@@ -59,133 +76,82 @@ final class ConnectionsPanelTests: XCTestCase {
             "idle ghost creation stays available")
     }
 
-    /// Depth-1 in/out split: incoming = edges into the center, outgoing
-    /// = edges from it. Ghost target → unresolved row; embed edge → embed
-    /// badge; snippets overlaid from the bundle by path.
-    func testModelSplitsIncomingOutgoingWithGhostsAndEmbeds() {
-        let center = node(1, "Center", path: "center.md", kind: .note, inLinks: 1, outLinks: 2)
-        let inbound = node(2, "Inbound", path: "in.md", kind: .note, inLinks: 0, outLinks: 1)
-        let outbound = node(3, "Outbound", path: "out.md", kind: .note, inLinks: 1, outLinks: 0)
-        let ghost = node(4, "Missing", path: nil, kind: .ghost, inLinks: 1)
-        let pic = node(5, "pic.png", path: "pic.png", kind: .attachment, inLinks: 0, inEmbeds: 1)
-
-        let edges = [
-            GraphEdge(sourceId: 2, targetId: 1, kind: .link, count: 1),  // Inbound → Center
-            GraphEdge(sourceId: 1, targetId: 3, kind: .link, count: 1),  // Center → Outbound
-            GraphEdge(sourceId: 1, targetId: 4, kind: .link, count: 1),  // Center → ghost
-            GraphEdge(sourceId: 1, targetId: 5, kind: .embed, count: 1),  // Center → pic (embed)
-        ]
-        let hood = GraphNeighborhood(
-            centerId: 1, depth: 1, nodes: [center, inbound, outbound, ghost, pic],
-            edges: edges, audioSummary: "irrelevant")
-
-        let model = ConnectionsModel(hood: hood, bundle: nil, depth: 1)
-
+    /// The adapter keeps core's lists and order, carries the kind, the
+    /// embed flag and the counts, and derives nothing.
+    func testAdapterCarriesCoresRowsInOrder() {
+        let t = tree(
+            incoming: [row("in/p%3Ain%2Emd", level: 1, parent: nil, nodeId: 2, "Inbound", path: "in.md", outLinks: 1)],
+            outgoing: [
+                row("out/g%3Amissing", level: 1, parent: nil, nodeId: 4, "Missing", path: nil, kind: .ghost, references: 1),
+                row("out/p%3Aout%2Emd", level: 1, parent: nil, nodeId: 3, "Outbound", path: "out.md", inLinks: 1),
+                row("out/p%3Apic%2Epng", level: 1, parent: nil, nodeId: 5, "pic.png", path: "pic.png", kind: .attachment, embedOnly: true, references: 1),
+            ])
+        let model = ConnectionsModel(tree: t, bundle: nil)
         XCTAssertEqual(model.incoming.map(\.label), ["Inbound"])
-        XCTAssertEqual(model.outgoing.map(\.label), ["Missing", "Outbound", "pic.png"])
-
+        XCTAssertEqual(model.outgoing.map(\.label), ["Missing", "Outbound", "pic.png"], "core's order, untouched")
         let ghostRow = model.outgoing.first { $0.label == "Missing" }!
         XCTAssertTrue(ghostRow.isGhost)
         XCTAssertNil(ghostRow.path)
         XCTAssertEqual(ghostRow.references, 1)
-
+        XCTAssertEqual(ghostRow.stableKey, "g:missing")
         let picRow = model.outgoing.first { $0.label == "pic.png" }!
-        XCTAssertTrue(picRow.isEmbed, "embed edge → embed badge")
+        XCTAssertTrue(picRow.isEmbed, "core's embed_only → the Embed badge")
         XCTAssertTrue(picRow.isAttachment)
-
         let inRow = model.incoming[0]
-        XCTAssertEqual(inRow.rowRef.linksIn, 0)
-        XCTAssertEqual(inRow.rowRef.linksOut, 1)
+        XCTAssertEqual(inRow.rowCopy.inLinks, 0)
+        XCTAssertEqual(inRow.rowCopy.outLinks, 1)
         XCTAssertFalse(inRow.isGhost)
+        XCTAssertEqual(inRow.id, "in/p%3Ain%2Emd", "the occurrence id is core's")
+        XCTAssertEqual(model.row(id: "out/g%3Amissing")?.label, "Missing")
+        XCTAssertEqual(t.summaryCounts.inLinks, 1, "the leaf's summary rides on the tree (design A)")
     }
 
-    func testDepthTwoNestsSecondHopNeighbors() {
-        // Center → A → B. At depth 2 the A row nests B.
-        let center = node(1, "Center", path: "center.md", kind: .note)
-        let a = node(2, "A", path: "a.md", kind: .note)
-        let b = node(3, "B", path: "b.md", kind: .note)
-        let edges = [
-            GraphEdge(sourceId: 1, targetId: 2, kind: .link, count: 1),
-            GraphEdge(sourceId: 2, targetId: 3, kind: .link, count: 1),
-        ]
-        let hood = GraphNeighborhood(
-            centerId: 1, depth: 2, nodes: [center, a, b], edges: edges,
-            audioSummary: "")
-        let model = ConnectionsModel(hood: hood, bundle: nil, depth: 2)
-        let aRow = model.outgoing.first { $0.label == "A" }!
-        XCTAssertEqual(aRow.nested.map(\.label), ["B"], "second-hop B nests under A")
-        // B is not expanded further at depth 2 (no third hop).
-        XCTAssertTrue(aRow.nested[0].nested.isEmpty)
+    /// Flat pre-order rows nest by `parent_id` in one pass: a level-2 row
+    /// lands under its parent, a diamond descendant under each parent.
+    func testAdapterNestsFlatRowsByParentId() {
+        let t = tree(
+            incoming: [],
+            outgoing: [
+                row("out/p%3Aalpha%2Emd", level: 1, parent: nil, nodeId: 3, "Alpha", path: "alpha.md"),
+                row("out/p%3Aalpha%2Emd/p%3Ashared%2Emd", level: 2, parent: "out/p%3Aalpha%2Emd", nodeId: 4, "Shared", path: "shared.md"),
+                row("out/p%3Abeta%2Emd", level: 1, parent: nil, nodeId: 2, "beta", path: "beta.md"),
+                row("out/p%3Abeta%2Emd/p%3Ashared%2Emd", level: 2, parent: "out/p%3Abeta%2Emd", nodeId: 4, "Shared", path: "shared.md"),
+                row("out/p%3Abeta%2Emd/p%3Ashared%2Emd/p%3Adeep%2Emd", level: 3, parent: "out/p%3Abeta%2Emd/p%3Ashared%2Emd", nodeId: 5, "Deep", path: "deep.md"),
+            ], depth: 3)
+        let model = ConnectionsModel(tree: t, bundle: nil)
+        XCTAssertEqual(model.outgoing.map(\.label), ["Alpha", "beta"])
+        XCTAssertEqual(model.outgoing[0].nested.map(\.label), ["Shared"])
+        XCTAssertEqual(model.outgoing[1].nested.map(\.label), ["Shared"])
+        XCTAssertEqual(model.outgoing[1].nested[0].nested.map(\.label), ["Deep"], "the third hop nests under the second")
+        XCTAssertTrue(model.outgoing[0].nested[0].nested.isEmpty)
+        XCTAssertNotEqual(model.outgoing[0].nested[0].id, model.outgoing[1].nested[0].id, "a diamond descendant is two occurrences")
+        XCTAssertEqual(model.outgoing[0].nested[0].nodeId, model.outgoing[1].nested[0].nodeId, "of one node")
     }
 
-    /// Depth 3 renders the third hop: Center → A → B → C, C nests under
-    /// B under A (review round 1 finding 8).
-    func testDepthThreeRendersThirdHop() {
-        let center = node(1, "Center", path: "center.md", kind: .note)
-        let a = node(2, "A", path: "a.md", kind: .note)
-        let b = node(3, "B", path: "b.md", kind: .note)
-        let c = node(4, "C", path: "c.md", kind: .note)
-        let edges = [
-            GraphEdge(sourceId: 1, targetId: 2, kind: .link, count: 1),
-            GraphEdge(sourceId: 2, targetId: 3, kind: .link, count: 1),
-            GraphEdge(sourceId: 3, targetId: 4, kind: .link, count: 1),
-        ]
-        let hood = GraphNeighborhood(
-            centerId: 1, depth: 3, nodes: [center, a, b, c], edges: edges, audioSummary: "")
-        let model = ConnectionsModel(hood: hood, bundle: nil, depth: 3)
-        let aRow = model.outgoing.first { $0.label == "A" }!
-        let bRow = aRow.nested.first { $0.label == "B" }!
-        XCTAssertEqual(bRow.nested.map(\.label), ["C"], "third-hop C nests under B")
-        // Cycle guard: C does not re-expand back to B/A.
-        XCTAssertTrue(bRow.nested[0].nested.isEmpty)
-    }
-
-    /// A neighbor reached by BOTH a link and an embed edge is ONE row
-    /// (not two with a duplicate id), and is not embed-only so it gets
-    /// no Embed badge (review round 1 finding 6).
-    func testLinkAndEmbedToSameNodeCollapseToOneRow() {
-        let center = node(1, "Center", path: "center.md", kind: .note)
-        let both = node(2, "Both", path: "both.md", kind: .note)
-        let edges = [
-            GraphEdge(sourceId: 1, targetId: 2, kind: .link, count: 1),
-            GraphEdge(sourceId: 1, targetId: 2, kind: .embed, count: 1),
-        ]
-        let hood = GraphNeighborhood(
-            centerId: 1, depth: 1, nodes: [center, both], edges: edges, audioSummary: "")
-        let model = ConnectionsModel(hood: hood, bundle: nil, depth: 1)
-        XCTAssertEqual(model.outgoing.count, 1, "one row per neighbor, not per edge")
-        XCTAssertFalse(model.outgoing[0].isEmbed, "has a real link → not embed-only")
-    }
-
-    /// A self-edge (a note linking to itself) is not a connection to
-    /// another note and appears in neither list (review round 1
-    /// finding 6).
-    func testSelfEdgeOmittedFromBothLists() {
-        let center = node(1, "Center", path: "center.md", kind: .note)
-        let edges = [GraphEdge(sourceId: 1, targetId: 1, kind: .link, count: 1)]
-        let hood = GraphNeighborhood(
-            centerId: 1, depth: 1, nodes: [center], edges: edges, audioSummary: "")
-        let model = ConnectionsModel(hood: hood, bundle: nil, depth: 1)
-        XCTAssertTrue(model.incoming.isEmpty && model.outgoing.isEmpty)
-    }
-
+    /// The depth-one snippet overlay reads the bundle by path (0bD-2);
+    /// deeper rows carry none.
     func testSnippetOverlayFromBundleAtDepthOne() {
-        let center = node(1, "Center", path: "center.md", kind: .note)
-        let outbound = node(3, "Outbound", path: "out.md", kind: .note)
-        let edges = [GraphEdge(sourceId: 1, targetId: 3, kind: .link, count: 1)]
-        let hood = GraphNeighborhood(
-            centerId: 1, depth: 1, nodes: [center, outbound], edges: edges,
-            audioSummary: "")
+        let t = tree(
+            incoming: [],
+            outgoing: [
+                row("out/p%3Aout%2Emd", level: 1, parent: nil, nodeId: 3, "Outbound", path: "out.md"),
+                row("out/p%3Aout%2Emd/p%3Afar%2Emd", level: 2, parent: "out/p%3Aout%2Emd", nodeId: 4, "Far", path: "far.md"),
+            ], depth: 2)
         let bundle = NoteLoadBundle(
             backlinks: BacklinkPage(items: [], nextCursor: nil, totalFiltered: 0),
             outgoingLinks: [
                 OutgoingLink(
                     targetPath: "out.md", targetRaw: "Outbound", targetAnchor: nil,
                     kind: "wikilink", isEmbed: false, isExternal: false, isUnresolved: false,
-                    snippet: "…the Outbound note…", ordinal: 0, spanStart: 0, spanEnd: 0, displayText: nil)
+                    snippet: "…the Outbound note…", ordinal: 0, spanStart: 0, spanEnd: 0, displayText: nil),
+                OutgoingLink(
+                    targetPath: "far.md", targetRaw: "Far", targetAnchor: nil,
+                    kind: "wikilink", isEmbed: false, isExternal: false, isUnresolved: false,
+                    snippet: "…never shown at level two…", ordinal: 1, spanStart: 0, spanEnd: 0, displayText: nil),
             ],
             properties: [])
-        let model = ConnectionsModel(hood: hood, bundle: bundle, depth: 1)
+        let model = ConnectionsModel(tree: t, bundle: bundle)
         XCTAssertEqual(model.outgoing.first?.snippet, "…the Outbound note…")
+        XCTAssertNil(model.outgoing.first?.nested.first?.snippet)
     }
 }

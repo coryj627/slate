@@ -1,0 +1,331 @@
+{
+  "schemaVersion": 1,
+  "comment": "W6-1 §E TE-11d (E18): the canvas scenario scripts ARE this data — the C# driver (apps/slate-windows/tools/ParityHarness, CanvasScenarioHarness.cs) and the Swift twin (apps/slate-mac/Tests/SlateMacTests/CanvasScenarioTests.swift) execute it verbatim, so identical CanvasAction sequences on both platforms are enforced by construction. Each scenario seeds ONE fixture (path relative to this file) into a fresh temp vault as board.canvas, opens it, applies each 'apply' step as one CanvasAction, then walks the returned inverses backward. Driver-enforced invariants: (1) for every scenario the post-inverse bytes equal core's own canonical serialization of the ORIGINAL content (canvas_apply_detached with an empty action is the canonicalizer — semantic equality by core's judgment, never a host reimplementation); (2) a scenario without 'foreign' additionally asserts the post-inverse bytes equal the original bytes VERBATIM (the corpus is canonical, so apply-plus-invert is byte-identity); (3) a 'foreign' scenario instead asserts the original bytes DIFFER from the round-trip (the foreign formatting must not survive the first write — E18's rule said properly). Op vocabulary inside 'ops': createNode(id,text,x,y,width,height,color?), createGroup(id,label?,x,y,width,height,color?), updateNodeGeometry(id,x,y,width,height), setNodeColor(id,color?), setNodeContent(id,text), deleteNode(id), addEdge(id,fromNode,fromSide?,toNode,toSide?,fromEnd,toEnd,label?,color?), updateEdge(id,fromSide?,toSide?,fromEnd,toEnd,label?,color?), deleteEdge(id). Sides: top|right|bottom|left. Ends: none|arrow. The 'excluded' map names fixtures no scenario scripts, each with its reason; both platforms' censuses assert every fixture is scripted or excluded (W6-1 §H).",
+  "scenarios": [
+    {
+      "name": "c1_sample_every_op",
+      "fixture": "../canvas/sample.canvas",
+      "steps": [
+        {
+          "name": "create card",
+          "ops": [
+            {
+              "kind": "createNode",
+              "id": "card-new",
+              "text": "A brand new card",
+              "x": 0.0,
+              "y": 620.0,
+              "width": 240.0,
+              "height": 140.0
+            }
+          ]
+        },
+        {
+          "name": "create group",
+          "ops": [
+            {
+              "kind": "createGroup",
+              "id": "grp-new",
+              "label": "Fresh",
+              "x": 1000.0,
+              "y": 0.0,
+              "width": 400.0,
+              "height": 300.0
+            }
+          ]
+        },
+        {
+          "name": "edit card",
+          "ops": [
+            {
+              "kind": "setNodeContent",
+              "id": "card-evidence",
+              "text": "Evidence so far, revised"
+            }
+          ]
+        },
+        {
+          "name": "set color",
+          "ops": [
+            {
+              "kind": "setNodeColor",
+              "id": "card-loose",
+              "color": "2"
+            }
+          ]
+        },
+        {
+          "name": "clear color",
+          "ops": [
+            {
+              "kind": "setNodeColor",
+              "id": "card-question",
+              "color": null
+            }
+          ]
+        },
+        {
+          "name": "move card",
+          "ops": [
+            {
+              "kind": "updateNodeGeometry",
+              "id": "card-loose",
+              "x": 40.0,
+              "y": 460.0,
+              "width": 200.0,
+              "height": 100.0
+            }
+          ]
+        },
+        {
+          "name": "connect",
+          "ops": [
+            {
+              "kind": "addEdge",
+              "id": "edge-new",
+              "fromNode": "card-new",
+              "fromSide": "right",
+              "toNode": "card-evidence",
+              "toSide": "left",
+              "fromEnd": "none",
+              "toEnd": "arrow",
+              "label": "feeds"
+            }
+          ]
+        },
+        {
+          "name": "edit connection",
+          "ops": [
+            {
+              "kind": "updateEdge",
+              "id": "edge-q-evidence",
+              "fromSide": "right",
+              "toSide": "left",
+              "fromEnd": "arrow",
+              "toEnd": "arrow",
+              "label": "supports strongly",
+              "color": "3"
+            }
+          ]
+        },
+        {
+          "name": "delete connection",
+          "ops": [
+            {
+              "kind": "deleteEdge",
+              "id": "edge-loose"
+            }
+          ]
+        },
+        {
+          "name": "delete card",
+          "ops": [
+            {
+              "kind": "deleteNode",
+              "id": "card-diagram"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "c2_nested_groups_geometry",
+      "fixture": "../canvas/groups_nested.canvas",
+      "steps": [
+        {
+          "name": "grow inner group",
+          "ops": [
+            {
+              "kind": "updateNodeGeometry",
+              "id": "inner-a",
+              "x": 40.0,
+              "y": 40.0,
+              "width": 440.0,
+              "height": 320.0
+            }
+          ]
+        },
+        {
+          "name": "card into free space",
+          "ops": [
+            {
+              "kind": "createNode",
+              "id": "fresh-thought",
+              "text": "landed beside the quarter",
+              "x": 1200.0,
+              "y": 120.0,
+              "width": 140.0,
+              "height": 80.0
+            }
+          ]
+        },
+        {
+          "name": "delete deepest group",
+          "ops": [
+            {
+              "kind": "deleteNode",
+              "id": "deep"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "c3_foreign_formatting",
+      "fixture": "foreign.canvas",
+      "foreign": true,
+      "steps": [
+        {
+          "name": "edit card",
+          "ops": [
+            {
+              "kind": "setNodeContent",
+              "id": "alpha",
+              "text": "rewritten body"
+            }
+          ]
+        },
+        {
+          "name": "set color",
+          "ops": [
+            {
+              "kind": "setNodeColor",
+              "id": "beta",
+              "color": "5"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "c4_empty_first_card",
+      "fixture": "../canvas/empty.canvas",
+      "steps": [
+        {
+          "name": "first card",
+          "ops": [
+            {
+              "kind": "createNode",
+              "id": "first",
+              "text": "The first card",
+              "x": 0.0,
+              "y": 0.0,
+              "width": 240.0,
+              "height": 140.0
+            }
+          ]
+        },
+        {
+          "name": "edit it",
+          "ops": [
+            {
+              "kind": "setNodeContent",
+              "id": "first",
+              "text": "The first card, revised"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "c5_malformed_retained",
+      "fixture": "../canvas/malformed.canvas",
+      "steps": [
+        {
+          "name": "edit a good card",
+          "ops": [
+            {
+              "kind": "setNodeContent",
+              "id": "good-1",
+              "text": "first good card, revised"
+            }
+          ]
+        },
+        {
+          "name": "delete the other good card",
+          "ops": [
+            {
+              "kind": "deleteNode",
+              "id": "good-2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "c6_cycle_geometry",
+      "fixture": "../canvas/cycle.canvas",
+      "steps": [
+        {
+          "name": "move a",
+          "ops": [
+            {
+              "kind": "updateNodeGeometry",
+              "id": "a",
+              "x": 40.0,
+              "y": 20.0,
+              "width": 100.0,
+              "height": 60.0
+            }
+          ]
+        },
+        {
+          "name": "name the untitled card",
+          "ops": [
+            {
+              "kind": "setNodeContent",
+              "id": "untitled",
+              "text": "Named now"
+            }
+          ]
+        },
+        {
+          "name": "label the self-loop",
+          "ops": [
+            {
+              "kind": "updateEdge",
+              "id": "e-self",
+              "fromEnd": "none",
+              "toEnd": "arrow",
+              "label": "again"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "c7_unknown_fields_preserved",
+      "fixture": "../canvas/unknown_fields.canvas",
+      "steps": [
+        {
+          "name": "move n1",
+          "ops": [
+            {
+              "kind": "updateNodeGeometry",
+              "id": "n1",
+              "x": 20.0,
+              "y": 0.0,
+              "width": 100.0,
+              "height": 50.0
+            }
+          ]
+        },
+        {
+          "name": "relabel e1",
+          "ops": [
+            {
+              "kind": "updateEdge",
+              "id": "e1",
+              "fromEnd": "none",
+              "toEnd": "arrow",
+              "label": "typed, revised"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "excluded": {
+    "../canvas/large_2000.canvas": "size — the 2,000-node fixture is the §K budget corpus, excluded from the read artifact for the same reason (CanvasArtifactExclusions)"
+  }
+}

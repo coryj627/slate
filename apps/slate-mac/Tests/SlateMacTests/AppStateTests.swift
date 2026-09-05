@@ -5152,9 +5152,9 @@ final class AppStateTests: XCTestCase {
         let firstTask = state.mathBlocksLoadTask
 
         // Flip a pref. With isolated defaults the starting state
-        // is the type default (.clearSpeak), so .mathSpeak is a
+        // is the type default (.clearSpeak), so .simpleSpeak is a
         // real change — the didSet must fire a NEW load task.
-        state.mathPrefs.speechStyle = .mathSpeak
+        state.mathPrefs.speechStyle = .simpleSpeak
         let secondTask = state.mathBlocksLoadTask
         XCTAssertNotNil(secondTask)
         XCTAssertNotEqual(

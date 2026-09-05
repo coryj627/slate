@@ -54,8 +54,11 @@ pub mod embeds;
 pub mod file_meta_db;
 pub mod frontmatter;
 pub mod graph;
+pub mod graph_config;
 pub mod graph_layout;
 pub mod graph_metrics;
+pub mod graph_queries;
+pub mod graph_summary;
 pub mod history_prefs;
 mod line_index;
 pub mod link_resolver;
@@ -113,13 +116,14 @@ pub use citations::{CitationMode, CitationReference, CitedItem, Locator, extract
 pub use commands::{Command, CommandAction, CommandError, CommandRegistry, CommandSection};
 pub use diff::diff_to_ops;
 pub use embeds::{
-    AttachmentBytes, EmbedPreviewResolution, EmbedResolution, EmbedUnresolvedReason,
-    MAX_EMBED_DEPTH, MAX_EMBED_PREVIEW_IMAGE_BYTES, MAX_EMBED_PREVIEW_NODES,
+    AttachmentBytes, EmbedPreviewResolution, EmbedReadingCard, EmbedResolution,
+    EmbedUnresolvedReason, MAX_EMBED_DEPTH, MAX_EMBED_PREVIEW_IMAGE_BYTES, MAX_EMBED_PREVIEW_NODES,
     MAX_EMBED_PREVIEW_TEXT_BYTES, NestedEmbed,
 };
 pub use frontmatter::{
     NoteParts, Property, PropertyParseWarning, PropertyValue, compose_note, extract_frontmatter,
-    frontmatter_range, split_note, validate_frontmatter_source,
+    frontmatter_range, frontmatter_top_level_keys, set_property_in_source, split_note,
+    validate_frontmatter_source,
 };
 pub use history_prefs::HistoryPrefs;
 pub use link_resolver::{
@@ -148,17 +152,19 @@ pub use text_buffer::TextBuffer;
 
 pub use session::{
     BaseFileSummary, BaseViewStatus, BaseViewSummary, BasesColumn, BasesGroup, BasesResultSet,
-    BasesRow, BasesSummaryCell, BasesValue, CancelToken, CanvasApplyResult, CanvasLoadWarning,
-    CanvasLoadWarningKind, CanvasNeighbor, CanvasOpenInfo, CanvasOutlineRow, CanvasPlacement,
-    CanvasRectArg, CanvasSceneEdge, CanvasSceneNode, CanvasSetPlacement, CanvasTableRow,
-    CanvasWhereAmI, ChangesSinceOpen, ColumnRole, CslStyleInfo, Dashboard, DashboardSection,
-    DashboardSectionStatus, DashboardSummary, DeletedFileEntry, DirListing, DirListingPage,
-    DirNodeSummary, EventErrorCode, ExportFormat, FileChangeEvent, FileChangeKind, FileFilter,
-    FileMetadata, FileSummary, IndexPhase, NoteLoadBundle, NotePartsBundle, OpAnnotationSummary,
-    Page, Paging, RemnantLog, RenameAffected, RenameFailed, RenameFailureKind, RenameReport,
-    RenameSkipReason, RenameSkipped, SaveReport, SavedQuery, SavedQuerySourceSyntax,
-    SavedQuerySummary, ScanProgress, ScanProgressListener, ScanReport, SessionConfig,
-    VaultEventListener, VaultRootIdentity, VaultSession, VersionSummary,
+    BasesRow, BasesSummaryCell, BasesValue, CancelToken, CanvasApplyResult, CanvasEditorSeed,
+    CanvasLoadWarning, CanvasLoadWarningKind, CanvasNeighbor, CanvasOpenInfo, CanvasOutlineRow,
+    CanvasPlacement, CanvasRectArg, CanvasSceneEdge, CanvasSceneNode, CanvasSetPlacement,
+    CanvasTableRow, CanvasTraceHop, CanvasWhereAmI, ChangesSinceOpen, ColumnRole,
+    CreateExclusiveOutcome, CslStyleInfo, Dashboard, DashboardSection, DashboardSectionStatus,
+    DashboardSummary, DeletedFileEntry, DirListing, DirListingPage, DirNodeSummary, EventErrorCode,
+    ExportFormat, FileChangeEvent, FileChangeKind, FileFilter, FileMetadata, FileSummary,
+    IndexPhase, NoteLinkPanels, NoteLoadBundle, NotePartsBundle, NoteTasksPage,
+    OpAnnotationSummary, OutlinePage, Page, Paging, RemnantLog, RenameAffected, RenameFailed,
+    RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport, SavedQuery,
+    SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener, ScanReport,
+    SessionConfig, TaskIndexRepairOutcome, VaultEventListener, VaultRootIdentity, VaultSession,
+    VersionSummary,
 };
 pub use session::{SkippedFile, TagCount, TagEditReport};
 pub use sidebar_filter::{
@@ -237,6 +243,19 @@ pub enum VaultError {
         current_content_hash: String,
         expected_content_hash: String,
         current_mtime_ms: i64,
+    },
+
+    /// The bytes LANDED on disk but a post-write step (stat, index
+    /// row, intent clear, index commit) failed before the index
+    /// committed (W6-1 §E TE-0, IE-6). The write is DURABLE — the
+    /// durable write-intent marker repairs the index later — so a
+    /// caller must treat this as a commit: retrying the write would
+    /// apply the action twice, and recording nothing would lose a
+    /// real change. `new_content_hash` is the landed bytes' hash.
+    #[error("saved but not indexed: {detail} (new hash {new_content_hash:?})")]
+    SavedButUnindexed {
+        new_content_hash: String,
+        detail: String,
     },
 
     /// A version operation refused to serve bytes whose hash doesn't

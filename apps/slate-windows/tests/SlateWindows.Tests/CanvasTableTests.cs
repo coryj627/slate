@@ -1,0 +1,1415 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using System.Globalization;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
+using System.Windows.Controls;
+using System.Windows.Input;
+using SlateWindows.Canvas;
+using SlateWindows.Grids;
+using uniffi.slate_uniffi;
+
+namespace SlateWindows.Tests;
+
+/// <summary>
+/// W6-1 PR B (#745) facts: the canvas TABLE projection over a REAL
+/// <see cref="VaultSession"/> and real <c>.canvas</c> bytes — contracts
+/// B1–B11. Every fact drives the production composition
+/// (<see cref="CanvasSurfaceView"/> → <see cref="CanvasTableView"/> →
+/// the W4-1 substrate) and reads what the consumer reads: the rendered
+/// row order, the cell labels a screen reader speaks, the summary
+/// region's name, the row-action menu, and the announcements that come
+/// out of the canvas funnel's post seam.
+/// </summary>
+public sealed class CanvasTableTests : IDisposable
+{
+    private readonly FixtureVault _fixture;
+    private readonly VaultSession _session;
+    private readonly List<RenderedAnnouncement> _announced = [];
+
+    public CanvasTableTests()
+    {
+        _fixture = FixtureVault.Create(3, "canvas-table");
+        WriteCanvasFixtures();
+        _session = VaultSession.OpenFilesystem(_fixture.Root);
+        using var cancel = new CancelToken();
+        _session.ScanInitial(cancel);
+    }
+
+    public void Dispose()
+    {
+        _session.Dispose();
+        _fixture.Dispose();
+    }
+
+    /// <summary>
+    /// One canvas that exercises every column: all five kinds, a group
+    /// and four cards inside it, titles that only sort correctly under a
+    /// case-INSENSITIVE compare (`Alpha` &lt; `beta` &lt; `Zeta`),
+    /// connection counts of 2 and 10 (which an ordinal compare of the
+    /// rendered digits gets backwards), and three colours — a preset, a
+    /// second preset, and a hex whose nearest preset is the first, so
+    /// the "customs sort beside their family" rule has something to
+    /// prove.
+    /// </summary>
+    private void WriteCanvasFixtures()
+    {
+        File.WriteAllBytes(
+            Path.Combine(_fixture.Root, "picture.png"),
+            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        File.WriteAllBytes(Path.Combine(_fixture.Root, "setup.exe"), [0x4D, 0x5A]);
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "table.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"grp","type":"group","x":-40,"y":-40,"width":720,"height":420,"label":"Research"},
+                {"id":"zeta","type":"text","text":"Zeta","x":0,"y":0,"width":200,"height":100,"color":"1"},
+                {"id":"alpha","type":"text","text":"Alpha","x":220,"y":0,"width":200,"height":100,"color":"#f00"},
+                {"id":"beta","type":"text","text":"beta","x":440,"y":0,"width":200,"height":100,"color":"4"},
+                {"id":"note","type":"file","file":"note0.md","x":0,"y":160,"width":200,"height":100},
+                {"id":"link","type":"link","url":"https://example.org/spec","x":800,"y":0,"width":200,"height":100},
+                {"id":"pic","type":"file","file":"picture.png","x":800,"y":160,"width":200,"height":100},
+                {"id":"exe","type":"file","file":"setup.exe","x":800,"y":320,"width":200,"height":100}
+              ],
+              "edges": [
+                {"id":"e1","fromNode":"zeta","fromSide":"right","toNode":"alpha","toSide":"left"},
+                {"id":"e2","fromNode":"zeta","fromSide":"right","toNode":"alpha","toSide":"left"},
+                {"id":"e3","fromNode":"zeta","fromSide":"right","toNode":"alpha","toSide":"left"},
+                {"id":"e4","fromNode":"zeta","fromSide":"right","toNode":"alpha","toSide":"left"},
+                {"id":"e5","fromNode":"zeta","fromSide":"right","toNode":"alpha","toSide":"left"},
+                {"id":"e6","fromNode":"zeta","fromSide":"right","toNode":"alpha","toSide":"left"},
+                {"id":"e7","fromNode":"zeta","fromSide":"right","toNode":"alpha","toSide":"left"},
+                {"id":"e8","fromNode":"zeta","fromSide":"right","toNode":"alpha","toSide":"left"},
+                {"id":"e9","fromNode":"zeta","fromSide":"right","toNode":"alpha","toSide":"left"},
+                {"id":"e10","fromNode":"zeta","fromSide":"right","toNode":"alpha","toSide":"left"},
+                {"id":"f1","fromNode":"note","fromSide":"right","toNode":"link","toSide":"left"},
+                {"id":"f2","fromNode":"note","fromSide":"right","toNode":"link","toSide":"left"}
+              ]
+            }
+            """);
+        // The pluralisation boundary: mac's sentence says "1 card,
+        // 0 groups", and a formatter that pluralised on the wrong side
+        // of one would only show it here.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "one.canvas"),
+            """
+            {"nodes":[{"id":"only","type":"text","text":"Only","x":0,"y":0,"width":10,"height":10}],"edges":[]}
+            """);
+    }
+
+    private CanvasDocumentViewModel NewDocument(string path) =>
+        new(
+            _session,
+            path,
+            new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)),
+            synchronousForTests: true);
+
+    private WorkspaceViewModel NewWorkspace() =>
+        new(
+            _session,
+            _fixture.Root,
+            () => [],
+            _ => { },
+            startInteractionBackgroundWork: false,
+            announceRendered: _announced.Add);
+
+    /// <summary>
+    /// The production composition: the surface view, switched to the
+    /// table, with its document loaded. Nothing here reaches around the
+    /// surface — the projection under test is the one a user gets.
+    /// </summary>
+    private (CanvasDocumentViewModel Document, CanvasSurfaceView Surface, AccessibleDataGrid Grid)
+        Table(string path = "table.canvas")
+    {
+        CanvasDocumentViewModel document = NewDocument(path);
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        document.ShowSurface(CanvasSurfaceKind.Table);
+        return (document, surface, surface.TableForTests.GridForTests);
+    }
+
+    // --- B1/B2: core's rows, the mac column inventory --------------------
+
+    /// <summary>
+    /// Contract B2/B4: the grid renders CORE's table rows, in core's
+    /// order, under the mac column inventory — and each cell carries the
+    /// substrate's "Header: value" label, which is the string a screen
+    /// reader actually speaks on that cell.
+    /// </summary>
+    [Fact]
+    public void TheTableIsCoresRowsInCoresOrderUnderTheMacColumnInventory() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
+
+        Assert.Equal(
+            new[] { "Type", "Title", "Group", "Target", "Connections", "Color" },
+            grid.Grid.Columns.Select(column => (string)column.Header).ToArray());
+
+        // Same rows, same order, same objects: the projection selects
+        // nothing, drops nothing and re-derives nothing (R-D).
+        Assert.Equal(
+            document.TableRows.Select(row => row.NodeId).ToArray(),
+            grid.Grid.Items.Cast<CanvasTableRow>().Select(row => row.NodeId).ToArray());
+        Assert.Equal(8, document.TableRows.Count);
+
+        // One row, read across: every value is core's — the target is
+        // core's `target` (a file path here, the whole URL for a link),
+        // never anything this host derived.
+        CanvasTableRow beta = document.TableRows.Single(row => row.NodeId == "beta");
+        Assert.Equal(
+            new[]
+            {
+                "Type: Text", "Title: beta", "Group: Research", "Target: ",
+                "Connections: 0", "Color: green",
+            },
+            CellsAcross(grid, beta));
+
+        // IsRowHeader reached the substrate: the row header is the UIA
+        // Table pattern's row identity (§8.7 "headers on entry").
+        Assert.Equal(DataGridHeadersVisibility.All, grid.Grid.HeadersVisibility);
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// Contract B4: the Title column is core's `speakable_name`, the
+    /// same field the outline row's name uses (CD-30) — so one card
+    /// answers to one name on both projections, and the row-header
+    /// identity the substrate restores the reader by is unique by
+    /// construction.
+    /// </summary>
+    [Fact]
+    public void TheTitleColumnIsCoresSpeakableNameJustAsTheOutlineIs() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
+        var titles = new List<string>();
+        foreach (CanvasTableRow row in grid.Grid.Items.Cast<CanvasTableRow>())
+        {
+            titles.Add(CellText(grid, 1, row));
+        }
+        Assert.Equal(
+            document.TableRows.Select(row => $"Title: {row.SpeakableName}").ToArray(),
+            titles.ToArray());
+        document.Shutdown();
+    });
+
+    // --- B3: the comparators ----------------------------------------------
+
+    /// <summary>
+    /// Contract B3: every column sorts, and each one sorts the way mac
+    /// sorts it. The expected sequences are CELL VALUES, so a tie is
+    /// spelled identically and the assertion pins the whole rendered
+    /// column rather than an order that depends on how ties fell.
+    /// </summary>
+    [Fact]
+    public void EveryColumnSortsTheWayMacSortsIt() => RunSta(() =>
+    {
+        // The Title/Group expectations are a COLLATION result, and the
+        // production comparator reads the ambient culture — so the fact
+        // pins the culture rather than inheriting the machine's. Without
+        // this it passes on en-US CI and could mis-order on a host whose
+        // collation differs (tr-TR's dotted/dotless I is the standard
+        // example), reporting a product defect that is not one. The
+        // comparator under test is unchanged; only the ambient value it
+        // reads is made deterministic (red team m-2).
+        CultureInfo previous = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
+        try
+        {
+            AssertEveryColumnSortsTheWayMacSortsIt();
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previous;
+        }
+    });
+
+    private void AssertEveryColumnSortsTheWayMacSortsIt()
+    {
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
+        (int Column, string[] Ascending)[] expectations =
+        [
+            (0, ["File", "File", "Group", "Image", "Link", "Text", "Text", "Text"]),
+            // Case-INSENSITIVE, like mac's localizedCaseInsensitiveCompare:
+            // an ordinal compare would put every capital first and read
+            // "Alpha, Image: picture, Note 0, Research, Zeta, beta,
+            // example.org, setup".
+            (1, [
+                "Alpha", "beta", "example.org", "Image: picture",
+                "note0", "Research", "setup", "Zeta",
+            ]),
+            (2, ["", "", "", "", "Research", "Research", "Research", "Research"]),
+            (3, [
+                "", "", "", "", "https://example.org/spec", "note0.md",
+                "picture.png", "setup.exe",
+            ]),
+            (4, ["0", "0", "0", "0", "2", "2", "10", "10"]),
+            (5, ["", "", "", "", "", "green", "red", "red (custom)"]),
+        ];
+
+        foreach ((int column, string[] ascending) in expectations)
+        {
+            string header = (string)grid.Grid.Columns[column].Header;
+            Assert.Equal(
+                ascending.Select(value => $"{header}: {value}").ToArray(),
+                SortedCells(grid, column, ascending: true));
+            // Descending is the same comparator, negated — the
+            // substrate's DirectionalComparer, inherited not rebuilt.
+            Assert.Equal(
+                ascending.Reverse().Select(value => $"{header}: {value}").ToArray(),
+                SortedCells(grid, column, ascending: false));
+        }
+        document.Shutdown();
+    }
+
+    /// <summary>
+    /// The Color comparator, called out because the spec's parenthetical
+    /// describes it wrongly (§B's B3 records the correction): core's
+    /// `color_name` never yields a hex — presets are words and a custom
+    /// is "⟨nearest preset⟩ (custom)" — so mac's plain `&lt;` over the
+    /// NAME is what puts a custom directly beside its family, which is
+    /// the property core's own doc comment claims for this column.
+    /// </summary>
+    [Fact]
+    public void TheColorColumnSortsCustomsBesideTheirFamily() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
+        string[] sorted = SortedCells(grid, 5, ascending: true);
+
+        // The names are CORE's, not this host's: the cells are exactly
+        // the ColorName field core served.
+        Assert.Equal(
+            document.TableRows.Select(row => row.ColorName ?? string.Empty)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .Select(name => $"Color: {name}")
+                .ToArray(),
+            sorted);
+        // …and the custom lands next to the preset it is nearest, not in
+        // a "custom" bucket of its own.
+        Assert.Equal("Color: red", sorted[^2]);
+        Assert.Equal("Color: red (custom)", sorted[^1]);
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// The Connections comparator is NUMERIC. Sorting the rendered
+    /// digits would put 10 before 2, which is the defect a column of
+    /// stringly-typed numbers invites and the reason mac's comparator
+    /// takes the count rather than the cell.
+    /// </summary>
+    [Fact]
+    public void TheConnectionsColumnSortsNumericallyNotAsText() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
+        string[] sorted = SortedCells(grid, 4, ascending: true);
+        Assert.Equal("Connections: 2", sorted[4]);
+        Assert.Equal("Connections: 10", sorted[^1]);
+        document.Shutdown();
+    });
+
+    // --- B5: selection, both directions ------------------------------------
+
+    /// <summary>
+    /// Contract B5: the row the reader is on IS the canvas selection,
+    /// and a selection made anywhere else re-seats the reader — with no
+    /// echo in either direction and nothing spoken for the direction the
+    /// user did not drive.
+    /// </summary>
+    [Fact]
+    public void SelectionFlowsBothWaysWithoutAnEcho() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
+
+        // View → model: moving the reader onto a row selects that card
+        // and narrates the canvas move (one line, not two).
+        _announced.Clear();
+        MoveReaderTo(grid, "beta");
+        Assert.Equal("beta", document.Selection.Selected);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Contains(_announced, line => line.Text == MovedToText(document, "beta"));
+
+        // Model → view: another surface (or, from PR C, the navigator)
+        // moves the shared selection, and the grid follows SILENTLY —
+        // the user did not make this move, and the announcement they
+        // need is the canvas one the document already posted.
+        _announced.Clear();
+        document.SelectNode("link");
+        Assert.Equal(
+            "link",
+            Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
+        document.AnnouncerForTests.FlushForTests();
+        // EXACTLY the canvas line: the grid's re-seat contributed
+        // nothing, so the move is spoken once rather than twice.
+        Assert.Equal(MovedToText(document, "link"), Assert.Single(_announced).Text);
+        // …and the re-seat did not come back as a fresh user selection.
+        Assert.Equal("link", document.Selection.Selected);
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// The model→view seat keeps the reader's COLUMN. Dropping them back
+    /// to column 0 because another pane moved the selection is the same
+    /// class of defect as moving their row.
+    /// </summary>
+    [Fact]
+    public void AReSeatKeepsTheReaderInTheColumnTheyWereReading() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
+        grid.Grid.CurrentCell = new DataGridCellInfo(
+            document.TableRows.Single(row => row.NodeId == "beta"), grid.Grid.Columns[5]);
+
+        document.SelectNode("pic");
+        Assert.Equal(
+            "pic", Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
+        Assert.Same(grid.Grid.Columns[5], grid.Grid.CurrentCell.Column);
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// A background REPUBLISH never speaks, even when it renumbers the
+    /// row-header text the substrate restores the reader by.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The substrate restores position by ROW-HEADER TEXT — every
+    /// publish builds fresh row objects, so identity is gone by
+    /// definition — and this projection's row header is core's
+    /// <c>speakable_name</c>, which a republish can RENUMBER. Two cards
+    /// titled "Shared" are "Shared" and "Shared 2"; rename the first and
+    /// the second one becomes "Shared". The restore then lands on a
+    /// DIFFERENT card that now spells what the reader was reading.
+    /// </para>
+    /// <para>
+    /// The substrate suppresses its own announcement there, but
+    /// <c>CurrentRowChanged</c> still fires — so without the guard the
+    /// view would call <c>SelectNode</c> and the DOCUMENT would speak a
+    /// canvas move nobody made, off a reload the user did not ask for.
+    /// Mutation-verified: dropping the guard around <c>Bind</c> fails
+    /// this fact on both halves (a line is spoken, and the shared
+    /// selection moves to the namesake).
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void ARepublishThatRenumbersASpeakableNameNeverSpeaks() => RunSta(() =>
+    {
+        string path = Path.Combine(_fixture.Root, "renamed.canvas");
+        File.WriteAllText(
+            path,
+            """
+            {"nodes":[
+              {"id":"first","type":"text","text":"Shared","x":0,"y":0,"width":100,"height":50},
+              {"id":"second","type":"text","text":"Shared","x":200,"y":0,"width":100,"height":50}
+            ],"edges":[]}
+            """);
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) =
+            Table("renamed.canvas");
+        // Core's one uniqueness algorithm gives the second card the
+        // ordinal; the reader sits on the FIRST, whose header is the
+        // bare title.
+        Assert.Equal(
+            new[] { "Shared", "Shared 2" },
+            document.TableRows.Select(row => row.SpeakableName).ToArray());
+        MoveReaderTo(grid, "first");
+        _announced.Clear();
+
+        // The first card is renamed on disk, so "Shared" is now the
+        // SECOND card's speakable name — the header-text restore has a
+        // match, and it is the wrong card.
+        File.WriteAllText(
+            path,
+            """
+            {"nodes":[
+              {"id":"first","type":"text","text":"Zulu","x":0,"y":0,"width":100,"height":50},
+              {"id":"second","type":"text","text":"Shared","x":200,"y":0,"width":100,"height":50}
+            ],"edges":[]}
+            """);
+        document.Load();
+        Assert.Equal(
+            new[] { "Zulu", "Shared" },
+            document.TableRows.Select(row => row.SpeakableName).ToArray());
+
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Empty(_announced);
+        // And the reader is still on the card they were on, by NODE id:
+        // the model is the authority the re-seat comes back to, not the
+        // header text.
+        Assert.Equal("first", document.Selection.Selected);
+        Assert.Equal(
+            "first", Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
+        document.Shutdown();
+    });
+
+    // --- B7: the announce seam --------------------------------------------
+
+    /// <summary>
+    /// Contract B7 (DoD §H): the substrate's own canonical events ride
+    /// the CANVAS announcer.
+    /// </summary>
+    /// <remarks>
+    /// Stated exactly, because the difference matters: this fact
+    /// EXECUTES <c>ToggleSortCommand</c> — the command the Ctrl+Alt+S
+    /// gesture is bound to, and the seam a real chord arrives at — on
+    /// the production surface, and reads the canvas funnel's post seam,
+    /// the sink the workspace wires in production. It does not press a
+    /// key; the journey
+    /// (<c>CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean</c>)
+    /// is the half that does, cross-process, through real input.
+    /// Nothing here supplies the mechanism it is checking.
+    /// </remarks>
+    [Fact]
+    public void TheGridsOwnAnnouncementsComeOutOfTheCanvasFunnel() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
+        MoveReaderTo(grid, "beta");
+        _announced.Clear();
+
+        AccessibleDataGrid.ToggleSortCommand.Execute(null, grid);
+
+        RenderedAnnouncement sorted = SlateUniffiMethods.A11yRender(
+            new A11yEvent.GridSorted("Type", true));
+        RenderedAnnouncement posted = Assert.Single(
+            _announced, line => line.Text == sorted.Text);
+        // Core's PRIORITY too: `Relay` carries a non-canvas event
+        // through unwrapped rather than re-classifying it as a canvas
+        // status (contract A5).
+        Assert.Equal(sorted.Priority, posted.Priority);
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// A row move speaks BOTH lines, exactly as mac does: the
+    /// substrate's row-move event immediately, and the canvas move on
+    /// the navigation class's 200 ms window. They say different things
+    /// — the focused cell, and the card's position in the canvas.
+    /// </summary>
+    [Fact]
+    public void ARowMoveSpeaksTheGridsLineAndTheCanvasLine() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
+        MoveReaderTo(grid, "beta");
+        _announced.Clear();
+
+        MoveReaderTo(grid, "zeta");
+        // Immediate: the grid's own event, rendered by core with an
+        // empty description (no engine-authored row context on a canvas
+        // row) — i.e. the focused cell alone.
+        Assert.Equal(
+            SlateUniffiMethods.A11yRender(
+                new A11yEvent.GridRowMoved(string.Empty, "Type: Text")).Text,
+            _announced[^1].Text);
+        // Coalesced: the canvas move.
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(MovedToText(document, "zeta"), _announced[^1].Text);
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// Contract B7's other half: a table with no document attached does
+    /// NOT fall back to the substrate's dispatcher-backed default seam,
+    /// and a table whose document was DETACHED stops posting to that
+    /// document's funnel.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The census only requires that at least one assignment names the
+    /// relay, so deleting either mute failed nothing (red team m-3).
+    /// The DETACH half is the one with teeth: the announcer is retired
+    /// with its document, and posting to a retired one is a
+    /// <c>Debug.Fail</c> by contract A5 — so a grid still holding a dead
+    /// document's relay is a real defect, not defence in depth.
+    /// </para>
+    /// <para>
+    /// Both halves discriminate BY DELEGATE IDENTITY (target + method),
+    /// which is what the first version of this fact lacked and what the
+    /// re-review caught: a stale relay is not the grid's own closure
+    /// either, so asserting "the seam is not the substrate's default"
+    /// passed against exactly the defect it was written to catch, and
+    /// the sort it drove after detach was a no-op anyway (the zero-row
+    /// rebind leaves no current column to sort). The seam is also
+    /// INVOKED directly here — the same call the substrate makes on
+    /// every announcement — so the silence is observed, not inferred.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AGridWithoutADocumentNeverPostsThroughTheSubstratesDefaultSeam() =>
+        RunSta(() =>
+        {
+            var bare = new CanvasTableView();
+            Assert.NotSame(bare.GridForTests, bare.GridForTests.Announce.Target);
+            // The substrate's own default IS the shape being refused:
+            // its target is the grid, because it closes over the grid's
+            // lazily-built dispatcher.
+            var substrateDefault = new AccessibleDataGrid();
+            Assert.Same(substrateDefault, substrateDefault.Announce.Target);
+
+            // Attached: the seam IS this document's relay, by identity.
+            (CanvasDocumentViewModel document, CanvasSurfaceView surface,
+                AccessibleDataGrid grid) = Table();
+            Assert.Equal<Action<A11yEvent>>(document.GridRelaySeam, grid.Announce);
+            MoveReaderTo(grid, "beta");
+            _announced.Clear();
+            AccessibleDataGrid.ToggleSortCommand.Execute(null, grid);
+            Assert.NotEmpty(_announced);
+
+            // Detached: the seam is NO LONGER that document's relay…
+            surface.Model = null;
+            Assert.NotEqual<Action<A11yEvent>>(document.GridRelaySeam, grid.Announce);
+            // …and it is really inert. Invoking the seam is what the
+            // substrate does on every sort, row move and cell move; a
+            // grid still wired to the retired document would post here.
+            _announced.Clear();
+            grid.Announce(new A11yEvent.GridSorted("Type", true));
+            Assert.Empty(_announced);
+            document.Shutdown();
+        });
+
+    // --- B6: activation and row actions ------------------------------------
+
+    /// <summary>
+    /// Contract B6: Enter on a row runs the document's ONE activation
+    /// seam, so the table opens a card exactly as the outline does —
+    /// including the media gate, which refuses a non-media file before
+    /// any shell hand-off can happen.
+    /// </summary>
+    [Fact]
+    public void ActivationRunsTheSameSeamTheOutlineDoesIncludingTheMediaGate() =>
+        RunSta(() =>
+        {
+            (CanvasDocumentViewModel document, CanvasSurfaceView surface,
+                AccessibleDataGrid grid) = Table();
+            string? navigated = null;
+            string? media = null;
+            string? launched = null;
+            document.OpenFileCardFromSurface = (target, _) =>
+            {
+                navigated = target;
+                return true;
+            };
+            document.OpenMediaCardFromSurface = target =>
+            {
+                media = target;
+                return true;
+            };
+            document.OpenExternalLinkFromSurface = target =>
+            {
+                launched = target;
+                return true;
+            };
+
+            // Text => the editor sheet is REQUESTED through the
+            // TE-8 seam (§E TE-11b); the workspace answers.
+            string? requested = null;
+            document.CardEditorRequested += nodeId => requested = nodeId;
+            PressEnterOn(grid, "zeta");
+            Assert.Equal("zeta", requested);
+
+            // Markdown file ⇒ the note tab; image ⇒ the default app.
+            PressEnterOn(grid, "note");
+            Assert.Equal("note0.md", navigated);
+            PressEnterOn(grid, "pic");
+            Assert.Equal("picture.png", media);
+
+            // Link ⇒ the shared allowlist and the injected opener.
+            PressEnterOn(grid, "link");
+            Assert.Equal("https://example.org/spec", launched);
+
+            // The media gate, from this projection: an executable is
+            // refused audibly and never reaches the shell.
+            _announced.Clear();
+            media = null;
+            PressEnterOn(grid, "exe");
+            Assert.Null(media);
+            document.AnnouncerForTests.FlushForTests();
+            Assert.Equal(
+                SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+                    new CanvasA11yEvent.CanvasBlocked(
+                    new CanvasBlockedReason.FileTypeNotOpenable("setup.exe")))).Text,
+                _announced[^1].Text);
+
+            // A group has nothing to open on a flat projection, and mac
+            // falls through the same way: no crash, no announcement, no
+            // move.
+            _announced.Clear();
+            requested = null;
+            PressEnterOn(grid, "grp");
+            Assert.Null(requested);
+            document.AnnouncerForTests.FlushForTests();
+            Assert.DoesNotContain(
+                _announced,
+                line => line.Text.Contains("failed", StringComparison.OrdinalIgnoreCase));
+            document.Shutdown();
+        });
+
+    /// <summary>§G2 TG2-7 (G2-12): the grid's row menu equals the
+    /// plan's GRID projection for the row's target — names, enabled
+    /// flags and reasons, the same count both ways, on every row the
+    /// grid shows — a group row's third verb is Ungroup, a card's is
+    /// Delete, from the same plan. Toggle Mark is LIVE: it seats ITS
+    /// row silently, then marks it, wherever the selection stood
+    /// (IG2-60). Open still runs the activation Enter runs (§E
+    /// TE-11b).</summary>
+    [Fact]
+    public void TheRowMenuEqualsThePlansGridProjectionAndToggleMarkIsLive() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
+        var kinds = new HashSet<string>();
+        foreach (CanvasTableRow row in grid.Grid.Items.Cast<CanvasTableRow>().ToList())
+        {
+            kinds.Add(row.Kind);
+            MoveReaderTo(grid, row.NodeId);
+            ContextMenu menu = grid.BuildRowActionsMenu()
+                ?? throw new Xunit.Sdk.XunitException($"the canvas table built no row menu on {row.NodeId}");
+            var planned = CanvasContextMenuPlan.RowsFor(
+                CanvasContextSurface.Grid,
+                new CanvasContextTarget.Node(row.NodeId, row.Kind, row.GroupPath.Length > 0));
+            Assert.Equal(
+                planned.Select(p => (p.Name, p.Enabled, p.DisabledReason)),
+                menu.Items.Cast<MenuItem>().Select(
+                    item => ((string)item.Header, item.IsEnabled, (string?)item.ToolTip)));
+        }
+        // The fixture exercises both arms of the third row.
+        Assert.Contains("group", kinds);
+        Assert.Contains("text", kinds);
+        MoveReaderTo(grid, "grp");
+        Assert.Equal(
+            CanvasPhrase.UngroupRowAction,
+            (string)Assert.IsType<MenuItem>(grid.BuildRowActionsMenu()!.Items[2]).Header);
+
+        // Toggle Mark is LIVE. The reader's currency already seats the
+        // row (the grid reads its selection back from currency), so
+        // the dispatch's own seat is a no-op here; its proof is the
+        // document-level fact, where the selection stands elsewhere.
+        MoveReaderTo(grid, "zeta");
+        Assert.Equal("zeta", document.Selection.Selected);
+        ContextMenu zeta = grid.BuildRowActionsMenu()!;
+        var mark = Assert.IsType<MenuItem>(zeta.Items[1]);
+        Assert.Equal(CanvasPhrase.ToggleMarkRowAction, mark.Header);
+        Assert.True(mark.IsEnabled, "Toggle Mark stayed staged after G2-12 made it live.");
+        mark.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        Assert.True(document.Selection.IsMarked("zeta"));
+        Assert.Equal("zeta", document.Selection.Selected);
+
+        // Open runs the same activation Enter runs - the editor
+        // request is the observable (§E TE-11b).
+        string? requested = null;
+        document.CardEditorRequested += nodeId => requested = nodeId;
+        Assert.IsType<MenuItem>(zeta.Items[0]).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        Assert.Equal("zeta", requested);
+        document.Shutdown();
+    });
+
+    // --- B9: the summary region --------------------------------------------
+
+    /// <summary>
+    /// Contract B9: the summary is mac's sentence, in the substrate's
+    /// separately-focusable region — a static label, never an
+    /// announcement (0a-13), which is why no vocabulary event renders it.
+    /// </summary>
+    [Fact]
+    public void TheSummaryIsMacsSentenceInTheFocusableRegion() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
+        Assert.Equal("Canvas table: 7 cards, 1 group.", grid.SummaryRegion.Text);
+        Assert.Equal(
+            "Summary: Canvas table: 7 cards, 1 group.",
+            AutomationProperties.GetName(grid.SummaryRegion));
+        Assert.True(grid.SummaryRegion.Focusable);
+        document.Shutdown();
+
+        // The pluralisation boundary, on both sides of one.
+        (CanvasDocumentViewModel single, _, AccessibleDataGrid oneGrid) =
+            Table("one.canvas");
+        Assert.Equal("Canvas table: 1 card, 0 groups.", oneGrid.SummaryRegion.Text);
+        single.Shutdown();
+    });
+
+    // --- B8: what the table deliberately does NOT wire ----------------------
+
+    /// <summary>
+    /// Contract B8: no export producer, because no core canvas export
+    /// exists — the `ReadingTableGrid` precedent, and the reason the
+    /// substrate's export commands answer CanExecute false rather than
+    /// composing text host-side.
+    /// </summary>
+    /// <remarks>
+    /// Ctrl+F's half of B8 has been SUPERSEDED by W6-1 PR C (contract
+    /// C10) and the sentence is corrected rather than deleted: B8 said
+    /// the grid's filter chord keeps ROUTING "until PR C subscribes the
+    /// canvas filter", and PR C does. The substrate's own gesture is now
+    /// the TABLE's delivery site for <c>slate.canvas.filterCards</c>
+    /// (spec §7's "table: grid FilterCommand"), which is why the two
+    /// command rows may share Ctrl+F — they end in the same action.
+    /// </remarks>
+    [Fact]
+    public void NoExportProducerAndTheFilterChordFocusesTheCanvasFilter() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) = Table();
+        Assert.False(AccessibleDataGrid.ExportCsvCommand.CanExecute(null, grid));
+        Assert.False(AccessibleDataGrid.ExportMarkdownCommand.CanExecute(null, grid));
+
+        Assert.True(
+            AccessibleDataGrid.FilterCommand.CanExecute(null, grid),
+            "the canvas subscribes the substrate's filter hook (contract C10), so "
+            + "the grid's Ctrl+F must stop continuing-routing past a grid that CAN "
+            + "filter.");
+        Assert.Null(document.FilterFocusRequest);
+        AccessibleDataGrid.FilterCommand.Execute(null, grid);
+        // The REQUEST, which is what every surface delivers from — a
+        // counter nobody reads would stay green for a request nothing
+        // could ever satisfy.
+        Assert.NotNull(document.FilterFocusRequest);
+        document.Shutdown();
+    });
+
+    // --- B10/B11: the projection and its command ----------------------------
+
+    /// <summary>
+    /// Contract B11: exactly one projection is in the UIA tree. The arm
+    /// that is not showing is COLLAPSED, which keeps it out of the tree
+    /// entirely rather than merely off screen, and a non-Ready document
+    /// shows neither.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two levels, and the split is honest about which one proves what.
+    /// HERE: the visibility gate itself, plus the positive half of the
+    /// topology — the showing projection really is reachable as a peer,
+    /// so "visible" is not just a property nobody reads.
+    /// </para>
+    /// <para>
+    /// The ABSENCE of the other arm is the journey's
+    /// (<c>CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean</c>
+    /// asserts the outline's element is gone from the live tree after
+    /// the switch). It is not asserted in-process because WPF's own peer
+    /// walk keeps an already-built peer for a collapsed element —
+    /// observed while writing this fact — so an in-process "absent"
+    /// assertion would be testing the walker, not the tree a UIA client
+    /// reads. The cross-process bridge is where the claim is true and
+    /// where it is checked.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void ExactlyOneProjectionIsEverInTheTree() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("table.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+
+        Assert.Equal(Visibility.Visible, surface.OutlineForTests.Visibility);
+        Assert.Equal(Visibility.Collapsed, surface.TableForTests.Visibility);
+        Assert.True(PeerTreeContains(surface, "CanvasOutlineTree"));
+
+        document.ShowSurface(CanvasSurfaceKind.Table);
+        host.UpdateLayout();
+        Assert.Equal(Visibility.Collapsed, surface.OutlineForTests.Visibility);
+        Assert.Equal(Visibility.Visible, surface.TableForTests.Visibility);
+        Assert.True(surface.TableChoiceForTests.IsChecked);
+        // The showing projection is REACHABLE, not merely marked
+        // visible: its grid resolves as a peer with the id AT looks it
+        // up by.
+        Assert.True(PeerTreeContains(surface, "CanvasTableGrid"));
+
+        document.ShowSurface(CanvasSurfaceKind.Outline);
+        host.UpdateLayout();
+        Assert.Equal(Visibility.Visible, surface.OutlineForTests.Visibility);
+        Assert.Equal(Visibility.Collapsed, surface.TableForTests.Visibility);
+        document.Shutdown();
+
+        // A parse error is a message, never an empty grid. The surface
+        // is asked for the table through the ONE switch (B10), not by
+        // poking the selection's field: a state a user can actually
+        // reach is the only one worth asserting about.
+        CanvasDocumentViewModel broken = NewDocument("no-such.canvas");
+        broken.Load();
+        surface.Model = broken;
+        broken.ShowSurface(CanvasSurfaceKind.Table);
+        host.UpdateLayout();
+        Assert.Equal(Visibility.Collapsed, surface.TableForTests.Visibility);
+        Assert.Equal(Visibility.Collapsed, surface.OutlineForTests.Visibility);
+        broken.Shutdown();
+    });
+
+    /// <summary>
+    /// Contract A18, the property PR B made true: the surface switcher
+    /// is ONE Tab stop, and arrows move between its three choices.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Said exactly, per the B7 pattern: this fact does not press keys.
+    /// It issues WPF <c>TraversalRequest</c>s — Next for Tab, Right/Left
+    /// for the arrows — which is the SAME focus engine a real keystroke
+    /// reaches, one layer below the key handler. That is what makes the
+    /// claim behavioural rather than a read-back of the property this
+    /// PR set; the property is asserted too, because a client that
+    /// inspects keyboard-navigation semantics reads it directly.
+    /// </para>
+    /// <para>
+    /// The third leg is the one the setting could have broken: with a
+    /// persisted "visual" token the CHECKED choice is disabled until PR
+    /// D, and `Once` must land on a reachable choice rather than
+    /// stranding focus on an unfocusable one.
+    /// </para>
+    /// <para>
+    /// Mutation-verified: removing the <c>TabNavigation=Once</c> line
+    /// fails the Tab leg (focus lands on the next radio instead of
+    /// leaving the group), and removing the directional line fails the
+    /// arrow leg.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TheSurfaceSwitcherIsOneTabStopAndArrowsMoveWithinIt() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface, _) = Table();
+        using var host = Host(surface);
+
+        Assert.Equal(
+            KeyboardNavigationMode.Once,
+            KeyboardNavigation.GetTabNavigation(surface.SwitcherForTests));
+        Assert.Equal(
+            KeyboardNavigationMode.Cycle,
+            KeyboardNavigation.GetDirectionalNavigation(surface.SwitcherForTests));
+
+        // ONE stop: Tab from the first choice leaves the group entirely
+        // rather than visiting the other two.
+        Assert.True(surface.OutlineChoiceForTests.Focus());
+        Assert.True(
+            surface.OutlineChoiceForTests.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.Next)));
+        Assert.DoesNotContain(
+            host.FocusedElement(),
+            new IInputElement[]
+            {
+                surface.OutlineChoiceForTests,
+                surface.TableChoiceForTests,
+                surface.VisualChoiceForTests,
+            });
+
+        // …and the arrows are how a keyboard user picks a surface.
+        Assert.True(surface.OutlineChoiceForTests.Focus());
+        Assert.True(
+            surface.OutlineChoiceForTests.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.Right)));
+        Assert.Same(surface.TableChoiceForTests, host.FocusedElement());
+        Assert.True(
+            surface.TableChoiceForTests.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.Left)));
+        Assert.Same(surface.OutlineChoiceForTests, host.FocusedElement());
+
+        // §D TD-6: the persisted "visual" token lands on a REAL arm
+        // now — checked, ENABLED, and reachable, which is the whole
+        // reachability claim with the third radio live.
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        Assert.True(surface.VisualChoiceForTests.IsChecked);
+        Assert.True(surface.VisualChoiceForTests.IsEnabled);
+        Assert.True(
+            surface.SwitcherForTests.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.First)));
+        Assert.Contains(
+            host.FocusedElement(),
+            new IInputElement[]
+            {
+                surface.OutlineChoiceForTests,
+                surface.TableChoiceForTests,
+                surface.VisualChoiceForTests,
+            });
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// Contract A14.3 at the SEAM: asking the substrate to put the
+    /// reader on a row answers whether the REALIZED ROW took focus, not
+    /// whether the row was in the bound set.
+    /// </summary>
+    /// <remarks>
+    /// The two jobs had one answer, and that is what let a grid-level
+    /// fallback report a landing (codex B round 1, B1). Currency and
+    /// selection are still seated either way — that half is what the
+    /// no-focus caller wants — so the fact asserts both: false for the
+    /// focus question, seated for the position one. Mutation-verified:
+    /// restoring the fallback-accepting form (discard
+    /// `FocusCellElement`'s result and return bound-set membership)
+    /// makes the first assertion pass when it must not.
+    /// </remarks>
+    [Fact]
+    public void SeatingTheReaderOnAnUnrealizedRowReportsFailureNotSuccess() =>
+        RunSta(() =>
+        {
+            // Never hosted: the generator has produced no containers, so
+            // no row can take focus.
+            CanvasDocumentViewModel document = NewDocument("table.canvas");
+            document.Load();
+            var table = new CanvasTableView { Model = document };
+            AccessibleDataGrid grid = table.GridForTests;
+            Assert.NotEmpty(grid.Grid.Items);
+
+            Assert.False(
+                grid.SelectRow(row => ((CanvasTableRow)row).NodeId == "pic", moveFocus: true),
+                "an unrealized row cannot have taken focus, and saying it did is "
+                + "what consumes a focus request nothing satisfied");
+            // …and the POSITION half still happened: currency and
+            // selection are what AT reports, and they are seated.
+            Assert.Equal(
+                "pic", Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
+            // The other job, unchanged: bound-set membership.
+            Assert.True(grid.SelectRow(row => ((CanvasTableRow)row).NodeId == "zeta"));
+            Assert.False(grid.SelectRow(row => ((CanvasTableRow)row).NodeId == "nope"));
+            document.Shutdown();
+        });
+
+    /// <summary>
+    /// Contract A14.3 end to end on this projection: a request for a
+    /// BOUND but UNREALIZED row is not consumed, and it is delivered
+    /// once the containers exist.
+    /// </summary>
+    /// <remarks>
+    /// The row is deep in the 2,000-node fixture, so it is virtualized
+    /// away by construction rather than by a contrivance. The retry
+    /// route is the surface's — the same set of triggers the outline
+    /// uses, now including the grid's own container-generation signal.
+    /// </remarks>
+    [Fact]
+    public void AnUnrealizedRowLeavesTheRequestPendingUntilItCanBeDelivered() =>
+        RunSta(() =>
+        {
+            File.Copy(
+                Path.Combine(
+                    SourceText.RepoRoot(), "crates", "slate-core", "tests", "fixtures",
+                    "canvas", "large_2000.canvas"),
+                Path.Combine(_fixture.Root, "deep.canvas"),
+                overwrite: true);
+            using WorkspaceViewModel workspace = NewWorkspace();
+            workspace.OpenPath("deep.canvas");
+            WorkspaceTabViewModel tab =
+                Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+            CanvasDocumentViewModel document =
+                Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+            document.ShowSurface(CanvasSurfaceKind.Table);
+
+            // A surface that is in no window: the row is BOUND (the grid
+            // has every row core served) and unrealizable.
+            var offscreen = new CanvasSurfaceView { DataContext = tab, Model = document };
+            string deep = document.TableRows[^1].NodeId;
+            Assert.Contains(
+                offscreen.TableForTests.GridForTests.Grid.Items.Cast<CanvasTableRow>(),
+                row => row.NodeId == deep);
+            Assert.False(offscreen.TableForTests.DeliverFocus(deep));
+
+            document.RequestFocusLanding(tab, deep);
+            Assert.NotNull(document.FocusRequest);
+
+            // Hosted: the containers can be made, so the same still-
+            // pending request lands on the row.
+            var hosted = new CanvasSurfaceView { DataContext = tab, Model = document };
+            using var host = Host(hosted);
+            host.UpdateLayout();
+            Assert.Null(document.FocusRequest);
+            Assert.Equal(
+                deep,
+                Assert.IsType<CanvasTableRow>(
+                    (host.FocusedElement() as FrameworkElement)?.DataContext).NodeId);
+        });
+
+    /// <summary>
+    /// After a sorted republish that renumbers a speakable name, the
+    /// READER, currency and the shared selection are all on the same
+    /// row.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is a CHARACTERIZATION, said plainly rather than dressed as a
+    /// guard: it passes with or without a focus re-seat in
+    /// <c>Rebuild</c>, because while the DataGrid holds focus WPF moves
+    /// focus with currency. That was measured, not assumed — the
+    /// re-seat's own precondition (the reader was in the grid) held, and
+    /// the reader/currency split codex B-2 described still did not
+    /// occur. What the fact is worth: it pins the END STATE a reader
+    /// experiences through the whole namesake path — sort, rename,
+    /// republish, text-keyed restore onto the WRONG card, repair — so a
+    /// future change that does split them fails here.
+    /// </para>
+    /// <para>
+    /// Focus is read as the focused element's own row (the
+    /// consumer-visible object), never as currency, which is the proxy
+    /// that would hide exactly the split this is about.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AfterANamesakeRepublishTheReaderCurrencyAndSelectionAllAgree() =>
+        RunSta(() =>
+        {
+            string path = Path.Combine(_fixture.Root, "namesake-focus.canvas");
+            File.WriteAllText(
+                path,
+                """
+                {"nodes":[
+                  {"id":"first","type":"text","text":"Shared","x":0,"y":0,"width":100,"height":50},
+                  {"id":"second","type":"text","text":"Shared","x":200,"y":0,"width":100,"height":50},
+                  {"id":"third","type":"text","text":"Alpha","x":400,"y":0,"width":100,"height":50}
+                ],"edges":[]}
+                """);
+            CanvasDocumentViewModel document = NewDocument("namesake-focus.canvas");
+            document.Load();
+            var surface = new CanvasSurfaceView { Model = document };
+            document.ShowSurface(CanvasSurfaceKind.Table);
+            using var host = Host(surface);
+            AccessibleDataGrid grid = surface.TableForTests.GridForTests;
+
+            // The reader is IN the grid, on the first "Shared", with a
+            // sort applied — the state a background republish arrives
+            // into.
+            _ = grid.ApplySort(1, ascending: true);
+            Assert.True(grid.FocusRow(row => ((CanvasTableRow)row).NodeId == "first"));
+            host.UpdateLayout();
+            Assert.Equal("first", FocusedNodeId(host));
+
+            // The rename makes "Shared" the SECOND card's name, so the
+            // substrate's header-text restore has a match and it is the
+            // wrong card.
+            File.WriteAllText(
+                path,
+                """
+                {"nodes":[
+                  {"id":"first","type":"text","text":"Zulu","x":0,"y":0,"width":100,"height":50},
+                  {"id":"second","type":"text","text":"Shared","x":200,"y":0,"width":100,"height":50},
+                  {"id":"third","type":"text","text":"Alpha","x":400,"y":0,"width":100,"height":50}
+                ],"edges":[]}
+                """);
+            _announced.Clear();
+            document.Load();
+            host.UpdateLayout();
+
+            Assert.Equal("first", document.Selection.Selected);
+            Assert.Equal(
+                "first", Assert.IsType<CanvasTableRow>(grid.Grid.CurrentCell.Item).NodeId);
+            Assert.Equal("first", FocusedNodeId(host));
+            // …and it is still silent (B5's other half).
+            document.AnnouncerForTests.FlushForTests();
+            Assert.Empty(_announced);
+            document.Shutdown();
+        });
+
+    /// <summary>
+    /// A background republish never yanks the reader off the
+    /// separately-focusable SUMMARY region.
+    /// </summary>
+    /// <remarks>
+    /// The §8.7 summary is its own focus stop, and a reader can be
+    /// sitting on it when a publish lands. This is a real guard, and it
+    /// is the one that made codex B-2's proposed fix wrong: re-seating
+    /// the row WITH focus on every rebind — gated on
+    /// <c>IsKeyboardFocusWithin</c>, which on this control INCLUDES the
+    /// summary — moves them onto a row they never asked for. Measured
+    /// while evaluating that fix: with the re-seat applied, focus went
+    /// from the summary to a cell. Mutation-verified in that direction —
+    /// adding the re-seat to <c>Rebuild</c> fails this fact.
+    /// </remarks>
+    [Fact]
+    public void ARepublishNeverYanksTheReaderOffTheSummaryRegion() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface,
+            AccessibleDataGrid grid) = Table();
+        using var host = Host(surface);
+        host.UpdateLayout();
+
+        Assert.True(grid.SummaryRegion.Focus());
+        Assert.Same(grid.SummaryRegion, host.FocusedElement());
+
+        // A publish the reader did not ask for.
+        document.Load();
+        host.UpdateLayout();
+
+        Assert.Same(grid.SummaryRegion, host.FocusedElement());
+        Assert.Null(FocusedNodeId(host));
+        document.Shutdown();
+    });
+
+    /// <summary>The node id of the row keyboard focus is actually on —
+    /// the consumer-visible object, not the currency that stands in for
+    /// it.</summary>
+    private static string? FocusedNodeId(HostedWindow host) =>
+        ((host.FocusedElement() as FrameworkElement)?.DataContext as CanvasTableRow)?.NodeId;
+
+    /// <summary>Whether a UIA client walking this surface's peers would
+    /// reach an element with that automation id — the production
+    /// topology, not the visual tree.</summary>
+    private static bool PeerTreeContains(UIElement root, string automationId)
+    {
+        AutomationPeer? peer = UIElementAutomationPeer.CreatePeerForElement(root);
+        return peer is not null && Walk(peer);
+
+        bool Walk(AutomationPeer node)
+        {
+            node.ResetChildrenCache();
+            if (string.Equals(
+                node.GetAutomationId(), automationId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+            foreach (AutomationPeer child in node.GetChildren() ?? [])
+            {
+                if (Walk(child))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Contract B10: `slate.canvas.showTable` is ENABLED now that the
+    /// projection exists, resolves through the registrar, and drives the
+    /// same one surface switch the header's radio does — so the state,
+    /// the persisted token and the spoken sentence cannot disagree.
+    /// </summary>
+    [Fact]
+    public void ShowTableIsEnabledAndDrivesTheOneSurfaceSwitch()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("table.canvas");
+        // The registrar resolves through `Workspace`, so the host has to
+        // be a live one — the PR A fact's own bridge, reused rather than
+        // copied.
+        var host = new CanvasDocumentTests.CanvasCommandHost(workspace);
+
+        Assert.Null(Commands.SlateCommandRegistrar.DisabledReason(
+            host, Commands.ChordTable.Ids.CanvasShowTable));
+        // §D TD-6 shipped the visual, so all three rows answer enabled
+        // — the third arm's flip, asserted where the disabled half
+        // used to be.
+        Assert.Null(Commands.SlateCommandRegistrar.DisabledReason(
+            host, Commands.ChordTable.Ids.CanvasShowVisual));
+
+        _announced.Clear();
+        Commands.SlateCommandRegistrar
+            .Resolve(host, Commands.ChordTable.Ids.CanvasShowTable)!
+            .Execute(null);
+
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        Assert.Equal(CanvasSurfaceKind.Table, document.Selection.ActiveSurface);
+        // The persisted token followed (contract A15).
+        Assert.Equal("table", tab.ActiveCanvasSurface);
+        document.AnnouncerForTests.FlushForTests();
+        Assert.Equal(
+            SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+                new CanvasA11yEvent.CanvasSurfaceShown(CanvasSurfaceKind.Table))).Text,
+            _announced[^1].Text);
+    }
+
+    /// <summary>
+    /// Contract A14's table arm: a focus request lands on a REALIZED
+    /// cell of the row, and a row the grid does not have is not reported
+    /// as delivered — the outline's tree-focus fallback is the defect
+    /// that rule exists for, and the same shape is reachable here
+    /// through the substrate's own grid-level fallback.
+    /// </summary>
+    [Fact]
+    public void AFocusRequestLandsOnATableRowAndAnUnknownRowDoesNot() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.OpenPath("table.canvas");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        CanvasDocumentViewModel document =
+            Assert.IsType<CanvasDocumentViewModel>(tab.Canvas);
+        document.ShowSurface(CanvasSurfaceKind.Table);
+        var surface = new CanvasSurfaceView { DataContext = tab, Model = document };
+        using var host = Host(surface);
+
+        document.RequestFocusLanding(tab, "pic");
+        host.UpdateLayout();
+
+        Assert.Null(document.FocusRequest);
+        Assert.Equal(
+            "pic",
+            Assert.IsType<CanvasTableRow>(
+                (host.FocusedElement() as FrameworkElement)?.DataContext).NodeId);
+
+        Assert.False(surface.TableForTests.DeliverFocus("no-such-node"));
+    });
+
+    // --- The substrate is INHERITED, not re-implemented ---------------------
+
+    /// <summary>
+    /// Contract B1: the projection IS the W4-1 substrate, so the §8.7
+    /// conformance matrix — headers on entry, cell navigation, keyboard
+    /// sort, type-ahead, the AT-safe virtualization mode, the
+    /// separately-focusable summary — applies to it by construction.
+    /// `GridConformanceTests` is that matrix and is CITED rather than
+    /// re-run: re-running its 10,000-row probe here would prove the
+    /// substrate again and this projection not at all.
+    /// </summary>
+    [Fact]
+    public void TheProjectionIsTheSubstrateSoTheConformanceMatrixApplies() => RunSta(() =>
+    {
+        (CanvasDocumentViewModel document, CanvasSurfaceView surface,
+            AccessibleDataGrid grid) = Table();
+        Assert.IsType<AccessibleDataGrid>(surface.TableForTests.GridForTests);
+        Assert.Equal(
+            VirtualizationMode.Standard,
+            VirtualizingPanel.GetVirtualizationMode(grid.Grid));
+        Assert.True(grid.Grid.EnableRowVirtualization);
+        // A distinct automation id per grid: the shell shows more than
+        // one, and a hardcoded id makes them indistinguishable (D-12).
+        Assert.Equal("CanvasTableGrid", grid.GridAutomationId);
+        Assert.Equal(
+            "CanvasTableGridSummary",
+            AutomationProperties.GetAutomationId(grid.SummaryRegion));
+        Assert.Equal(
+            CanvasPhrase.TableName, AutomationProperties.GetName(grid.Grid));
+
+        // Type-ahead is the substrate's, and it works on this
+        // projection's first column because the columns are ordinary
+        // substrate columns.
+        Assert.True(grid.TypeAhead("gr"));
+        document.Shutdown();
+    });
+
+    /// <summary>
+    /// The 2,000-node fixture binds EVERY row: the substrate's row
+    /// virtualization is what keeps that responsive (proven by
+    /// `GridConformanceTests`, cited not re-run), and this fact pins the
+    /// thing a projection can get wrong on its own — silently
+    /// truncating, paging, or dropping rows core served.
+    /// </summary>
+    [Fact]
+    public void TheLargeCanvasBindsEveryRowCoreServed() => RunSta(() =>
+    {
+        File.Copy(
+            Path.Combine(
+                SourceText.RepoRoot(), "crates", "slate-core", "tests", "fixtures",
+                "canvas", "large_2000.canvas"),
+            Path.Combine(_fixture.Root, "large.canvas"),
+            overwrite: true);
+        (CanvasDocumentViewModel document, _, AccessibleDataGrid grid) =
+            Table("large.canvas");
+        Assert.True(document.TableRows.Count >= 2_000);
+        Assert.Equal(document.TableRows.Count, grid.Grid.Items.Count);
+        document.Shutdown();
+    });
+
+    // --- helpers -------------------------------------------------------------
+
+    /// <summary>The rendered text of the canvas move the document
+    /// narrates for a row — core's render, never a local copy.</summary>
+    private static string MovedToText(CanvasDocumentViewModel document, string nodeId)
+    {
+        CanvasOutlineRow row = Assert.IsType<CanvasOutlineRow>(document.RowFor(nodeId));
+        return SlateUniffiMethods.A11yRender(new A11yEvent.Canvas(
+            new CanvasA11yEvent.CanvasMovedTo(
+                Verbosity: document.Verbosity,
+                KindLabel: row.Kind,
+                Title: row.Title,
+                OrdinalN: row.OrdinalN,
+                TotalM: row.TotalM,
+                Container: row.GroupPath.Length > 0 ? row.GroupPath[^1] : null,
+                ConnectionCount: row.ConnectionCount,
+                ColorName: row.ColorName,
+                Marked: false))).Text;
+    }
+
+    /// <summary>Move the reader onto a row the way an arrow key does:
+    /// currency, which is what the substrate announces from and what
+    /// the surface reads back.</summary>
+    private static void MoveReaderTo(AccessibleDataGrid grid, string nodeId) =>
+        grid.Grid.CurrentCell = new DataGridCellInfo(
+            grid.Grid.Items.Cast<CanvasTableRow>().Single(row => row.NodeId == nodeId),
+            grid.Grid.CurrentCell.Column ?? grid.Grid.Columns[0]);
+
+    private static void PressEnterOn(AccessibleDataGrid grid, string nodeId)
+    {
+        MoveReaderTo(grid, nodeId);
+        grid.Grid.RaiseEvent(new KeyEventArgs(
+            Keyboard.PrimaryDevice,
+            PresentationSource.FromVisual(grid.Grid)
+                ?? new System.Windows.Interop.HwndSource(0, 0, 0, 0, 0, "t", IntPtr.Zero),
+            0,
+            Key.Enter)
+        { RoutedEvent = UIElement.PreviewKeyDownEvent });
+    }
+
+    /// <summary>
+    /// The label a screen reader speaks on one cell: the substrate's
+    /// "Header: value" contract, read off the generated cell element
+    /// rather than off the column configuration that fed it.
+    /// </summary>
+    private static string CellText(AccessibleDataGrid grid, int columnIndex, object row)
+    {
+        var column = Assert.IsType<AccessibleGridTextColumn>(grid.Grid.Columns[columnIndex]);
+        var cell = new DataGridCell();
+        _ = column.TestGenerateElement(cell, row);
+        return AutomationProperties.GetName(cell);
+    }
+
+    private static string[] CellsAcross(AccessibleDataGrid grid, object row) =>
+        Enumerable.Range(0, grid.Grid.Columns.Count)
+            .Select(index => CellText(grid, index, row))
+            .ToArray();
+
+    /// <summary>Sort through the substrate's seam and read the rendered
+    /// column top to bottom.</summary>
+    private static string[] SortedCells(
+        AccessibleDataGrid grid, int columnIndex, bool ascending)
+    {
+        _ = grid.ApplySort(columnIndex, ascending);
+        return grid.Grid.Items.Cast<object>()
+            .Select(row => CellText(grid, columnIndex, row))
+            .ToArray();
+    }
+
+    private static HostedWindow Host(UIElement content)
+    {
+        var window = new Window
+        {
+            Content = content,
+            Width = 900,
+            Height = 700,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+            ShowActivated = false,
+        };
+        window.Show();
+        window.UpdateLayout();
+        return new HostedWindow(window);
+    }
+
+    private sealed class HostedWindow(Window window) : IDisposable
+    {
+        internal void UpdateLayout() => window.UpdateLayout();
+
+        internal IInputElement? FocusedElement() =>
+            System.Windows.Input.FocusManager.GetFocusedElement(window);
+
+        public void Dispose() => window.Close();
+    }
+
+    private static void RunSta(Action body)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                body();
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(120)), "STA test body timed out.");
+        if (failure is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+}

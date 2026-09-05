@@ -11,6 +11,13 @@ import XCTest
 /// #892) — through a real AppState + FFI session, no mocks.
 @MainActor
 final class GraphTabRoutingTests: XCTestCase {
+    /// The count the rows result carries (W6-2 PR 0b, design B): core's
+    /// predicate over the snapshot's labels, as `graph_table_rows` answers it.
+    private static func countUnderNeedle(_ snap: GraphSnapshot, _ needle: String) -> (shown: UInt32, total: UInt32) {
+        let shown = snap.nodes.filter { graphLabelMatches(label: $0.label, query: needle) }.count
+        return (UInt32(shown), UInt32(snap.nodes.count))
+    }
+
     private var tempDir: URL!
 
     override func setUpWithError() throws {
@@ -155,22 +162,27 @@ final class GraphTabRoutingTests: XCTestCase {
         XCTAssertNil(state.workspace.activeGroupTab(forPath: "graph"))
     }
 
-    /// The filter-count text is computed from the FRESH snapshot + the
-    /// current text needle (round 2 finding 7), so a post-fetch
-    /// announcement can't drift from the view's synchronous one.
-    func testGraphFilterCountText() async throws {
+    /// The filter count is computed from the FRESH snapshot + the current
+    /// text needle (round 2 finding 7), so a post-fetch announcement can't
+    /// drift from the view's synchronous one. The tuple feeds the one
+    /// gated entry; the copy is core's (W6-2 PR 0a).
+    func testGraphFilterCountFollowsTheNeedle() async throws {
         let state = try await makeAppState()
         state.openGraphTab()
         try await pollUntil { state.graphTableSnapshot != nil }
         let snap = try XCTUnwrap(state.graphTableSnapshot)
         let total = snap.nodes.count
         state.graphTableTextFilter = ""
-        XCTAssertEqual(state.graphFilterCountText(snap), "\(total) of \(total) shown")
+        let all = Self.countUnderNeedle(snap, state.graphTableTextFilter)
+        XCTAssertEqual(all.shown, UInt32(total))
+        XCTAssertEqual(all.total, UInt32(total))
         state.graphTableTextFilter = "a"
         let shown = snap.nodes.filter {
             $0.label.range(of: "a", options: [.caseInsensitive, .diacriticInsensitive]) != nil
         }.count
-        XCTAssertEqual(state.graphFilterCountText(snap), "\(shown) of \(total) shown")
+        let narrowed = Self.countUnderNeedle(snap, state.graphTableTextFilter)
+        XCTAssertEqual(narrowed.shown, UInt32(shown))
+        XCTAssertEqual(narrowed.total, UInt32(total))
     }
 
     /// The orphans preset (P1-3 #556) activates the graph tab with the
@@ -238,7 +250,11 @@ final class GraphTabRoutingTests: XCTestCase {
         state.openGraphPreset(.orphans)
         try await pollUntil { state.graphTableSnapshot != nil && !state.graphTableLoading }
         let snap = try XCTUnwrap(state.graphTableSnapshot)
-        let expected = state.graphPresetAnnouncement(.orphans, snap: snap)
+        let expected = a11yRender(
+            event: .graph(
+                event: state.graphPresetEvent(
+                    .orphans, rows: GraphTableRows(generation: snap.generation, total: UInt64(snap.nodes.count), rows: [])))
+        ).text
         XCTAssertEqual(
             posts.filter { $0 == expected }.count, 1,
             "preset headline announced exactly once from the fresh snapshot")
@@ -345,10 +361,10 @@ final class GraphTabRoutingTests: XCTestCase {
         try await pollUntil { state.graphTableSnapshot != nil }
         let snap = try XCTUnwrap(state.graphTableSnapshot)
         let real = try XCTUnwrap(snap.nodes.first { $0.path != nil })
-        state.graphSelectedNodeKey = GraphNodeKey.make(for: real)
+        state.graphSelectedNodeKey = real.stableKey
         state.revalidateGraphSelection(against: snap)
         XCTAssertEqual(
-            state.graphSelectedNodeKey, GraphNodeKey.make(for: real),
+            state.graphSelectedNodeKey, real.stableKey,
             "a node present in the snapshot keeps its selection")
         state.graphSelectedNodeKey = "p:/vanished-note.md"
         state.revalidateGraphSelection(against: snap)

@@ -1,0 +1,969 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using System.Collections.ObjectModel;
+using uniffi.slate_uniffi;
+
+namespace SlateWindows.Panels;
+
+/// <summary>The mac TaskReviewFilter, ported: chips over the FFI
+/// TaskFilter. Windows are UTC-midnight based — the documented V1
+/// limitation both platforms share, so the two platforms agree on
+/// which tasks are overdue.</summary>
+internal enum TaskReviewFilter
+{
+    All,
+    DueToday,
+    Overdue,
+    ThisWeek,
+}
+
+/// <summary>What the workspace did with a review toggle request
+/// (adversarial round 1): the states are NOT collapsible — only a
+/// STARTED toggle may arm a pending refresh, only a STALE refusal
+/// should reload the snapshot, and a dirty refusal changes nothing.</summary>
+internal enum ReviewToggleRoute
+{
+    /// <summary>No open tab holds the file — the review toggles the
+    /// session directly.</summary>
+    NoOpenTab,
+
+    /// <summary>An open tab holds unsaved changes; the refusal was
+    /// announced. Nothing changed.</summary>
+    RefusedDirty,
+
+    /// <summary>The tab refused because an earlier toggle is still
+    /// in flight; the refusal was announced. Nothing changed —
+    /// mapping this to Started would arm a refresh for an operation
+    /// that never ran (adversarial round 2).</summary>
+    RefusedBusy,
+
+    /// <summary>The row's snapshot no longer matches the open tab's
+    /// saved content; the conflict was announced. The snapshot needs
+    /// a reload.</summary>
+    RefusedStale,
+
+    /// <summary>The tab's guarded toggle started; its completion
+    /// arrives as a whole-document refresh.</summary>
+    Started,
+}
+
+/// <summary>What the workspace did with a review row ACTIVATION
+/// (adversarial round 6): the snapshot's byte offset and line are
+/// only meaningful against the content they were read from, so the
+/// workspace verifies the row's hash against the target tab's SAVED
+/// content before scrolling — the toggle paths already guard this
+/// same stale-identity condition, and an unguarded scroll lands on
+/// unrelated text while announcing success.</summary>
+internal enum ReviewOpenRoute
+{
+    /// <summary>The task's file was already the active note; the
+    /// caret moved in place.</summary>
+    ScrolledInPlace,
+
+    /// <summary>The file was opened first, then the caret moved.</summary>
+    Opened,
+
+    /// <summary>The target's saved content no longer matches the
+    /// row's snapshot; nothing scrolled. The snapshot needs a
+    /// reload.</summary>
+    RefusedStale,
+
+    /// <summary>The target tab holds unsaved edits (adversarial
+    /// round 8): the saved hash still matches, but the LIVE text the
+    /// caret would move through has shifted — a saved-content offset
+    /// can land on unrelated words. Nothing scrolled; the snapshot
+    /// stays valid.</summary>
+    RefusedDirty,
+
+    /// <summary>The file could not be opened; nothing scrolled and
+    /// nothing is announced (the refused-open posture).</summary>
+    OpenFailed,
+}
+
+/// <summary>
+/// W4-3 (#735): the vault-wide Tasks Review leaf — the mac
+/// TasksReviewPanel flow, ported. An explicit SNAPSHOT: it loads on
+/// first reveal, filter change, or the review command, and
+/// deliberately does NOT auto-refresh on unrelated saves (a mac
+/// auto-refresh was tried and removed: it reset paging and
+/// re-queried a hidden pane). Toggles re-query page one because
+/// filter-window membership may change.
+/// </summary>
+internal sealed class TasksReviewViewModel : PanelWorkScheduler
+{
+    /// <summary>Mac page size.</summary>
+    internal const uint PageSize = 200;
+
+    private const long DayMs = 24L * 60 * 60 * 1000;
+
+    private readonly VaultSession _session;
+    private readonly Action<A11yEvent> _announce;
+    private readonly Func<string, TaskItem, string, ReviewOpenRoute> _activateRow;
+    private readonly Func<string, TaskItem, string, ReviewToggleRoute> _toggleViaOpenTab;
+    private readonly Func<DateTimeOffset> _clock;
+
+    private TaskReviewFilter _activeFilter = TaskReviewFilter.All;
+    private string? _nextCursor;
+    private long _totalFiltered;
+    private bool _isLoading;
+    private bool _isLoadingMore;
+    private string? _loadError;
+    private int _loadRequestId;
+    private int _loadMoreToken;
+    private ulong _snapshotGeneration;
+    private TaskFilter? _snapshotFilter;
+    private TaskReviewFilter? _publishedFilter;
+    private readonly HashSet<string> _pendingToggleRefreshPaths =
+        new(StringComparer.Ordinal);
+
+    /// <summary>Fired on the UI thread for each path whose pending
+    /// repair succeeded inside a load worker (adversarial round 15):
+    /// the workspace refreshes the note panel so both task surfaces
+    /// converge, not just this one.</summary>
+    internal Action<string>? RepairLanded { get; set; }
+
+    private readonly TaskIndexRepairCoordinator _repairs;
+
+    public TasksReviewViewModel(
+        VaultSession session,
+        Action<A11yEvent> announce,
+        Func<string, TaskItem, string, ReviewOpenRoute> activateRow,
+        Func<string, TaskItem, string, ReviewToggleRoute> toggleViaOpenTab,
+        Func<DateTimeOffset>? clock = null,
+        TaskIndexRepairCoordinator? repairs = null,
+        bool synchronousForTests = false)
+        : base(synchronousForTests)
+    {
+        _session = session;
+        _announce = announce;
+        _activateRow = activateRow;
+        _toggleViaOpenTab = toggleViaOpenTab;
+        _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _repairs = repairs ?? new TaskIndexRepairCoordinator(session);
+    }
+
+    public ObservableCollection<ReviewTaskRowViewModel> Rows { get; } = [];
+
+    public TaskReviewFilter ActiveFilter
+    {
+        get => _activeFilter;
+        private set
+        {
+            if (SetField(ref _activeFilter, value))
+            {
+                RaiseStateChanges();
+            }
+        }
+    }
+
+    public bool IsLoading => _isLoading;
+
+    public bool IsLoadingMore => _isLoadingMore;
+
+    public bool HasMore => _nextCursor is not null;
+
+    internal int LoadRequestIdForTests => _loadRequestId;
+
+    /// <summary>Mac header, verbatim: "Tasks Review, showing N of M"
+    /// while a next page exists, else "Tasks Review, N shown".</summary>
+    public string Header => _nextCursor is not null
+        ? $"Tasks Review, showing {Rows.Count} of {_totalFiltered}"
+        : $"Tasks Review, {Rows.Count} shown";
+
+    /// <summary>Mac state sentences, verbatim (the error header uses
+    /// the typographic apostrophe the mac source ships).</summary>
+    public string? EmptyMessage =>
+        _loadError is { Length: > 0 } error
+            ? $"Couldn’t load tasks. {error}"
+        : _isLoading && Rows.Count == 0 ? "Loading tasks…"
+        : Rows.Count == 0 ? $"No tasks matching {DisplayName(ActiveFilter)}."
+        : null;
+
+    /// <summary>Mac load-more strings, verbatim; remaining clamped
+    /// to zero.</summary>
+    public string LoadMoreLabel =>
+        _isLoadingMore ? "Loading more tasks…" : "Load more tasks";
+
+    public string LoadMoreAutomationName => _isLoadingMore
+        ? "Loading more tasks"
+        : $"Load more tasks. {Math.Max(0, _totalFiltered - Rows.Count)} remaining.";
+
+    public string LoadMoreHelpText =>
+        "Fetches the next page of vault tasks matching the active filter.";
+
+    public static string DisplayName(TaskReviewFilter filter) => filter switch
+    {
+        TaskReviewFilter.DueToday => "Due today",
+        TaskReviewFilter.Overdue => "Overdue",
+        TaskReviewFilter.ThisWeek => "This week",
+        _ => "All",
+    };
+
+    /// <summary>The active chip speaks the filter TOTAL, not the
+    /// loaded-page count (mac chip labels, verbatim).</summary>
+    public string FilterAutomationName(TaskReviewFilter filter) =>
+        filter == ActiveFilter
+            ? $"{DisplayName(filter)}, {_totalFiltered} "
+                + (_totalFiltered == 1 ? "task" : "tasks")
+            : DisplayName(filter);
+
+    public static string FilterHelpText(TaskReviewFilter filter) =>
+        $"Filter the review to {DisplayName(filter).ToLowerInvariant()} tasks.";
+
+    /// <summary>The mac filter windows: UTC-midnight based. dueToday
+    /// = open + [today, +1d); overdue = open + [0, today); thisWeek
+    /// = open + [today, +7d); all = everything including done.</summary>
+    internal TaskFilter ToTaskFilter(TaskReviewFilter filter)
+    {
+        long todayStart = _clock().ToUnixTimeMilliseconds() / DayMs * DayMs;
+        return filter switch
+        {
+            TaskReviewFilter.DueToday => new TaskFilter(
+                false, todayStart, todayStart + DayMs, null),
+            TaskReviewFilter.Overdue => new TaskFilter(
+                false, 0, todayStart, null),
+            TaskReviewFilter.ThisWeek => new TaskFilter(
+                false, todayStart, todayStart + (7 * DayMs), null),
+            _ => new TaskFilter(null, null, null, null),
+        };
+    }
+
+    /// <summary>Rail reveal (mac ensureVaultTasksLoaded): idempotent
+    /// — loads only when nothing is loaded, nothing is in flight,
+    /// and no error is showing.</summary>
+    public void EnsureLoaded()
+    {
+        if (Rows.Count > 0 || _isLoading || _loadError is not null)
+        {
+            return;
+        }
+        LoadFirstPage();
+    }
+
+    /// <summary>The review command (mac openTasksReview): always a
+    /// FRESH first page; the caller announces TasksReviewShown.</summary>
+    public void ForceReload() => LoadFirstPage();
+
+    /// <summary>Filter chip commit: re-query and announce (mac
+    /// applyTaskReviewFilter). Re-selecting the active filter is a
+    /// no-op.</summary>
+    public void ApplyFilter(TaskReviewFilter filter)
+    {
+        if (filter == ActiveFilter)
+        {
+            return;
+        }
+        ActiveFilter = filter;
+        _announce(new A11yEvent.TasksFilterSet(DisplayName(filter)));
+        LoadFirstPage();
+    }
+
+    private void LoadFirstPage()
+    {
+        int requestId = ++_loadRequestId;
+        // Starting a fresh page invalidates any in-flight load-more
+        // (adversarial round 1): its stale completion must neither
+        // append nor leave the button stuck on "Loading more tasks…".
+        _ = ++_loadMoreToken;
+        _isLoadingMore = false;
+        // The CONCRETE filter (clock-derived UTC bounds) is fixed at
+        // request time and rides with the page (adversarial round 3):
+        // load-more must page the SAME population, so recomputing the
+        // window from a later clock — after a UTC midnight — would
+        // append rows from a different day's window to this page.
+        TaskReviewFilter requestFilter = ActiveFilter;
+        TaskFilter concreteFilter = ToTaskFilter(requestFilter);
+        // A DIFFERENT filter than the published rows clears them NOW,
+        // not at publication (adversarial round 5): during the
+        // in-flight window the old population would render under the
+        // new chip — mislabeled rows, the old total, and toggles
+        // acting outside the selected filter. Same-filter reloads
+        // keep their rows (a refresh over a still-valid population).
+        if (_publishedFilter is { } published && requestFilter != published)
+        {
+            Rows.Clear();
+            _nextCursor = null;
+            _totalFiltered = 0;
+            _snapshotFilter = null;
+            _publishedFilter = null;
+        }
+        _isLoading = true;
+        _loadError = null;
+        RaiseStateChanges();
+        StartWork(() =>
+        {
+            // Retry outstanding repairs first; while ANY remains
+            // failed the index is known stale and the query is
+            // BARRED (adversarial round 15) — publishing it would
+            // resurrect rolled-back rows as ghosts. The failure
+            // keeps the last honest snapshot (same-filter posture).
+            RepairSweep sweep = _repairs.Retry();
+            // The clean-state ticket is ATOMIC (round 18): a
+            // pending-check followed by a separate epoch capture let
+            // a failing repair register in the gap with its advanced
+            // epoch as the baseline — the post-read comparison then
+            // passed over a known-stale read.
+            if (!TryAwaitCleanTicket(out long quarantineEpoch))
+            {
+                Post(() =>
+                {
+                    AnnounceRepairsLanded(sweep);
+                    PublishFirstPage(
+                        requestId,
+                        page: null,
+                        sweep.LastError ?? "The vault index needs repair.",
+                        0,
+                        concreteFilter,
+                        requestFilter);
+                });
+                return;
+            }
+            TaskWithLocationPage? page = null;
+            string? failure = null;
+            ulong generation = 0;
+            try
+            {
+                // The generation and the page must describe the SAME
+                // index state, so the generation is re-read after the
+                // query (adversarial round 2: checking only before
+                // leaves a window where a save lands between check
+                // and query). A mismatch retries; if writes keep
+                // landing, the PRE-query generation is kept — it can
+                // never match the live index again, so the next
+                // load-more reloads instead of appending. The safe
+                // direction, never the corrupt one.
+                for (int attempt = 0; attempt < 3; attempt++)
+                {
+                    generation = _session.TasksIndexRevision();
+                    InterleaveForTests?.Invoke();
+                    page = _session.TasksInVault(
+                        concreteFilter, new Paging(null, PageSize));
+                    if (_session.TasksIndexRevision() == generation)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                failure = exception.Message;
+            }
+            // Re-validated AFTER the query, BEFORE publication
+            // (adversarial round 16): a post-write failure that
+            // registered between the sweep and the query moved no
+            // revision counter — its index transaction ROLLED BACK —
+            // so only the quarantine epoch can prove the rows were
+            // read from a clean index.
+            if (failure is null && _repairs.Epoch != quarantineEpoch)
+            {
+                page = null;
+                failure = "The vault index needs repair.";
+            }
+            Post(() =>
+            {
+                AnnounceRepairsLanded(sweep);
+                PublishFirstPage(
+                    requestId, page, failure, generation, concreteFilter,
+                    requestFilter);
+            });
+        });
+    }
+
+    /// <summary>Worker-side clean-ticket acquisition (round 19): a
+    /// ticket blocked ONLY by mutation leases is a live write a few
+    /// milliseconds from settling — retry briefly instead of
+    /// flashing the repair banner at every ordinary toggle. A ticket
+    /// blocked by pending repairs refuses immediately.</summary>
+    private bool TryAwaitCleanTicket(out long epoch)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            if (_repairs.TryBeginCleanQuery(out epoch, out bool leasesOnly))
+            {
+                return true;
+            }
+            // Leases are transient (one bounded file write), but a
+            // loaded CI runner can hold one past a short budget —
+            // and a barred FIRST page has no auto-retry, so patience
+            // here beats a stuck banner (10s total).
+            if (!leasesOnly || attempt >= 200)
+            {
+                return false;
+            }
+            Thread.Sleep(50);
+        }
+    }
+
+    /// <summary>UI-thread tail of a repair sweep: paths repaired
+    /// inside a load worker also refresh the note panel through the
+    /// workspace seam (round 15 — both surfaces converge, not just
+    /// this one).</summary>
+    private void AnnounceRepairsLanded(RepairSweep sweep)
+    {
+        foreach (string repaired in sweep.Repaired)
+        {
+            RepairLanded?.Invoke(repaired);
+        }
+    }
+
+    /// <summary>Test seam: runs between the generation snapshot and
+    /// the index query inside both load workers, where a concurrent
+    /// save is otherwise impossible to schedule deterministically.</summary>
+    internal Action? InterleaveForTests { get; set; }
+
+    /// <summary>Test seam (adversarial round 11): runs inside the
+    /// direct-toggle worker after the core write succeeded —
+    /// throwing here simulates the core's partial-failure window
+    /// (file written, index commit failed) with a real landed
+    /// write.</summary>
+    internal Action? DirectToggleFaultForTests { get; set; }
+
+    /// <summary>Internal so stale-ordering is testable
+    /// deterministically (the PublishOutline pattern).</summary>
+    internal void PublishFirstPage(
+        int requestId,
+        TaskWithLocationPage? page,
+        string? failure,
+        ulong generation = 0,
+        TaskFilter? concreteFilter = null,
+        TaskReviewFilter? requestFilter = null)
+    {
+        if (requestId != _loadRequestId)
+        {
+            return;
+        }
+        if (failure is not null || page is null)
+        {
+            // A failed SAME-filter refresh keeps existing rows (mac
+            // keeps rows on failed load-more; first-page parity). A
+            // failed load for a DIFFERENT filter than the published
+            // rows must NOT leave them actionable (adversarial round
+            // 4): the new chip would label old-filter rows, Load More
+            // would page the dead population, and toggles would act
+            // outside the selected filter — mac hides the list here.
+            _loadError = failure ?? "The vault could not be read.";
+            _isLoading = false;
+            if (requestFilter is { } requested
+                && requested != _publishedFilter)
+            {
+                Rows.Clear();
+                _nextCursor = null;
+                _totalFiltered = 0;
+                _snapshotFilter = null;
+                _publishedFilter = null;
+            }
+            RaiseStateChanges();
+            return;
+        }
+        _snapshotGeneration = generation;
+        // Stored only on SUCCESS: rows and cursor stay bound to the
+        // concrete window they were queried with (round 3), and the
+        // chip state to the population it actually shows (round 4).
+        _snapshotFilter = concreteFilter;
+        _publishedFilter = requestFilter ?? ActiveFilter;
+        Rows.Clear();
+        foreach (TaskWithLocation row in page.Items)
+        {
+            Rows.Add(new ReviewTaskRowViewModel(row));
+        }
+        _nextCursor = page.NextCursor;
+        _totalFiltered = checked((long)page.TotalFiltered);
+        _loadError = null;
+        _isLoading = false;
+        RaiseStateChanges();
+    }
+
+    /// <summary>Load more appends via the opaque cursor; a failed
+    /// load-more keeps existing rows (mac parity). The cursor is only
+    /// honored against the SNAPSHOT it came from: an index-generation
+    /// drift (any vault mutation since the first page) reloads
+    /// instead of appending — a live cursor over a mutated index can
+    /// duplicate moved rows and skip others (adversarial round 1).</summary>
+    public void LoadMore()
+    {
+        if (_nextCursor is not { } cursor || _isLoadingMore || _isLoading)
+        {
+            return;
+        }
+        int token = ++_loadMoreToken;
+        // The SNAPSHOT's concrete window, never a recomputed one
+        // (adversarial round 3): recomputing from the live clock lets
+        // a UTC midnight change the query population underneath the
+        // cursor while the interaction generation stays put — rows
+        // from the new day's window would append to the old page.
+        TaskFilter concreteFilter =
+            _snapshotFilter ?? ToTaskFilter(ActiveFilter);
+        ulong snapshotGeneration = _snapshotGeneration;
+        _isLoadingMore = true;
+        RaiseStateChanges();
+        StartWork(() =>
+        {
+            // Retry outstanding repairs first. Still-pending → the
+            // query is BARRED (round 15). A successful retry bumps
+            // the revision, so the drift check below converts the
+            // repair into a page-one reload — never an append over
+            // the previously stale index.
+            RepairSweep sweep = _repairs.Retry();
+            // Atomic clean-state ticket (round 18) — see the
+            // first-page worker.
+            if (!TryAwaitCleanTicket(out long quarantineEpoch))
+            {
+                Post(() =>
+                {
+                    AnnounceRepairsLanded(sweep);
+                    PublishLoadMore(
+                        token,
+                        page: null,
+                        sweep.LastError ?? "The vault index needs repair.",
+                        drifted: false);
+                });
+                return;
+            }
+            TaskWithLocationPage? page = null;
+            string? failure = null;
+            bool drifted = false;
+            try
+            {
+                if (_session.TasksIndexRevision() != snapshotGeneration)
+                {
+                    drifted = true;
+                }
+                else
+                {
+                    InterleaveForTests?.Invoke();
+                    page = _session.TasksInVault(
+                        concreteFilter, new Paging(cursor, PageSize));
+                    // Re-checked AFTER the query (adversarial round
+                    // 2): a save can land between the check above and
+                    // the query, bump the generation, and hand this
+                    // cursor rows from the mutated index — which
+                    // appended against the old page duplicates moved
+                    // rows and skips others.
+                    if (_session.TasksIndexRevision() != snapshotGeneration)
+                    {
+                        drifted = true;
+                        page = null;
+                    }
+                }
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                failure = exception.Message;
+            }
+            // Round 16: a quarantine registration during the query
+            // means the appended rows may be ghosts — treat it as
+            // drift. The page-one reload re-sweeps and bars itself
+            // while any repair remains pending.
+            if (failure is null && !drifted && _repairs.Epoch != quarantineEpoch)
+            {
+                drifted = true;
+                page = null;
+            }
+            Post(() =>
+            {
+                AnnounceRepairsLanded(sweep);
+                PublishLoadMore(token, page, failure, drifted);
+            });
+        });
+    }
+
+    /// <summary>Internal so token staleness and drift are testable
+    /// deterministically.</summary>
+    internal void PublishLoadMore(
+        int token, TaskWithLocationPage? page, string? failure, bool drifted)
+    {
+        if (token != _loadMoreToken)
+        {
+            // Superseded by a fresh first page, which already cleared
+            // the loading flag — nothing to do.
+            return;
+        }
+        _isLoadingMore = false;
+        if (drifted)
+        {
+            // The snapshot moved under the cursor: reload page one
+            // rather than appending against a different index.
+            LoadFirstPage();
+            return;
+        }
+        if (failure is not null || page is null)
+        {
+            _loadError = failure ?? "The vault could not be read.";
+            RaiseStateChanges();
+            return;
+        }
+        foreach (TaskWithLocation row in page.Items)
+        {
+            Rows.Add(new ReviewTaskRowViewModel(row));
+        }
+        _nextCursor = page.NextCursor;
+        _totalFiltered = checked((long)page.TotalFiltered);
+        // A successful append is a recovery: a banner left over from
+        // an earlier failed load-more would report an ongoing vault
+        // failure forever (adversarial round 5).
+        _loadError = null;
+        RaiseStateChanges();
+    }
+
+    /// <summary>Row toggle: a file with an open tab routes through
+    /// that tab's guarded ToggleTask; a file with NO open tab toggles
+    /// the session directly — WITH the row's snapshot hash as the
+    /// expected hash (adversarial round 1, a deliberate divergence
+    /// from the mac review's nil hash): task ordinals are only stable
+    /// for a given source text, so a hash mismatch means the clicked
+    /// row could name a DIFFERENT task now. Conflicts refuse loudly
+    /// and reload the snapshot.</summary>
+    public void ToggleTask(ReviewTaskRowViewModel row)
+    {
+        switch (_toggleViaOpenTab(row.Path, row.Task, row.ContentHash))
+        {
+            case ReviewToggleRoute.Started:
+                _ = _pendingToggleRefreshPaths.Add(row.Path);
+                return;
+            case ReviewToggleRoute.RefusedStale:
+                // The conflict was announced; the snapshot is stale.
+                LoadFirstPage();
+                return;
+            case ReviewToggleRoute.RefusedDirty:
+            case ReviewToggleRoute.RefusedBusy:
+                return;
+        }
+
+        string path = row.Path;
+        string fileName = row.FileName;
+        TaskItem task = row.Task;
+        string expectedHash = row.ContentHash;
+        string nextStatus = task.Completed ? " " : "x";
+        StartWork(() =>
+        {
+            SaveReport? report = null;
+            bool conflict = false;
+            string? failure = null;
+            string? postFailureDiskHash = null;
+            // Round 19: the LEASE brackets the session write — the
+            // stale-index interval starts at the file write, not at
+            // this worker's publish. A non-conflict failure converts
+            // the lease into the pending repair atomically.
+            _repairs.BeginMutation(path);
+            bool leaseSettled = false;
+            try
+            {
+                report = _session.ToggleTaskStatus(
+                    path, task.Ordinal, nextStatus, expectedHash);
+                DirectToggleFaultForTests?.Invoke();
+                _repairs.EndMutation(path, indexConsistent: true);
+                leaseSettled = true;
+            }
+            catch (VaultException.WriteConflict)
+            {
+                conflict = true;
+                _repairs.EndMutation(path, indexConsistent: true);
+                leaseSettled = true;
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                _repairs.EndMutation(path, indexConsistent: false);
+                leaseSettled = true;
+                failure = exception.Message;
+                // Round 11: the core writes the FILE before
+                // committing the index, so a non-conflict failure
+                // does NOT mean disk is unchanged — read it back.
+                try
+                {
+                    postFailureDiskHash =
+                        _session.ReadNoteParts(path).ContentHash;
+                }
+                catch (Exception readBack) when (
+                    readBack is not OutOfMemoryException)
+                {
+                    postFailureDiskHash = null;
+                }
+            }
+            finally
+            {
+                // Fail-closed for exception types the arms miss - a
+                // leaked lease bars every task query forever.
+                if (!leaseSettled)
+                {
+                    _repairs.EndMutation(path, indexConsistent: false);
+                }
+            }
+            Post(() =>
+            {
+                if (IsShutDown)
+                {
+                    return;
+                }
+                if (conflict)
+                {
+                    // The file changed since the snapshot: refusing is
+                    // the point — the stale ordinal could have toggled
+                    // a different task. Reload so the rows are true.
+                    _announce(new A11yEvent.TaskToggleConflict(fileName));
+                    LoadFirstPage();
+                    return;
+                }
+                if (failure is not null)
+                {
+                    // W0.5-3 residue: matches the tab toggle's failure string.
+                    _announce(new A11yEvent.HostComposed(
+                        $"Task could not be toggled: {failure}",
+                        A11yPriority.High));
+                    // The write may have landed before the failure
+                    // (round 12: the real window leaves the index
+                    // uncommitted). Hash moved → certain; hash
+                    // UNREADABLE → unknown, and unknown fails CLOSED
+                    // (round 16): treating it as "no write" would let
+                    // both surfaces query a possibly-stale index with
+                    // nothing barring them. Either way the repair
+                    // must succeed before any reload (rounds 14-15).
+                    bool diskMoved = postFailureDiskHash is not null
+                        && !string.Equals(
+                            postFailureDiskHash, expectedHash, StringComparison.Ordinal);
+                    bool outcomeUnknown = postFailureDiskHash is null;
+                    if (diskMoved || outcomeUnknown)
+                    {
+                        bool repaired = _repairs.TryRepairNow(path, out _);
+                        if (diskMoved)
+                        {
+                            DiskWriteLanded?.Invoke(path, postFailureDiskHash!);
+                        }
+                        if (repaired)
+                        {
+                            LoadFirstPage();
+                        }
+                    }
+                    return;
+                }
+                // The NoOpenTab route was decided BEFORE this write
+                // (adversarial round 3): a tab can have opened for the
+                // file in the meantime and loaded pre-write content —
+                // the workspace re-checks now that the disk moved.
+                DiskWriteLanded?.Invoke(path, report!.NewContentHash);
+                // W0.5-3 residue: the Windows toggle-success strings —
+                // the editor precedent (mac is silent on success).
+                _announce(new A11yEvent.HostComposed(
+                    task.Completed ? "Task reopened." : "Task completed.",
+                    A11yPriority.Medium));
+                LoadFirstPage();
+            });
+        });
+    }
+
+    /// <summary>Workspace seam (adversarial round 3): fired on the UI
+    /// thread after a DIRECT (tabless) toggle wrote to disk, with the
+    /// note's new content hash — the workspace reconciles any tab
+    /// that raced open between the route decision and the write.</summary>
+    internal Action<string, string>? DiskWriteLanded { get; set; }
+
+    /// <summary>A tab-routed toggle reached its terminal state
+    /// WITHOUT changing disk (adversarial round 3): disarm the
+    /// pending refresh so a later unrelated save of the same path
+    /// cannot reset paging (the round-1 refusal concern, extended to
+    /// failures that surface after Started).</summary>
+    public void ToggleAbandoned(string path) =>
+        _ = _pendingToggleRefreshPaths.Remove(path);
+
+    /// <summary>A whole-document refresh landed for <paramref
+    /// name="path"/> (the task-toggle publish): re-query page one
+    /// ONLY when this review started a tab-routed toggle for that
+    /// same path — the snapshot must not chase unrelated saves (mac
+    /// removed exactly that auto-refresh), and refusals never arm
+    /// the flag (adversarial round 1).</summary>
+    public void NoteRefreshed(string path)
+    {
+        if (!_pendingToggleRefreshPaths.Remove(path))
+        {
+            return;
+        }
+        LoadFirstPage();
+    }
+
+    /// <summary>Row activation (mac openTaskRowInEditor): scroll in
+    /// place when the task's file IS the active note, else open it
+    /// first. Announces the mac verbs, only on what actually
+    /// happened — and the workspace verifies the row's snapshot hash
+    /// before any scroll (adversarial round 6): a stale offset lands
+    /// on unrelated text, so staleness refuses, reloads, and says
+    /// why instead of announcing a landing that never happened.</summary>
+    public void OpenRow(ReviewTaskRowViewModel row)
+    {
+        switch (_activateRow(row.Path, row.Task, row.ContentHash))
+        {
+            case ReviewOpenRoute.ScrolledInPlace:
+                _announce(new A11yEvent.ScrolledToLine(
+                    row.FileName, row.Task.Line));
+                return;
+            case ReviewOpenRoute.Opened:
+                _announce(new A11yEvent.OpenedAtLine(
+                    row.FileName, row.Task.Line));
+                return;
+            case ReviewOpenRoute.RefusedStale:
+                // W0.5-3 residue: the review's stale-activation
+                // refusal (no mac counterpart — the mac review
+                // scrolls unverified; the recorded W4-3 divergence).
+                _announce(new A11yEvent.HostComposed(
+                    $"{row.FileName} changed since these tasks loaded. Refreshing.",
+                    A11yPriority.Medium));
+                LoadFirstPage();
+                return;
+            case ReviewOpenRoute.RefusedDirty:
+                // W0.5-3 residue: the TaskToggleUnsaved family's
+                // wording with the activation verb — dirty buffers
+                // shift live offsets under saved-content rows
+                // (adversarial round 8). The snapshot stays valid;
+                // no reload.
+                _announce(new A11yEvent.HostComposed(
+                    $"Cannot open this task. The editor has unsaved changes in {row.FileName}. Save the note first.",
+                    A11yPriority.High));
+                return;
+            case ReviewOpenRoute.OpenFailed:
+                // Refused opens announce nothing (existing posture).
+                return;
+        }
+    }
+
+    internal override void Shutdown()
+    {
+        base.Shutdown();
+        _ = ++_loadRequestId;
+    }
+
+    private void RaiseStateChanges()
+    {
+        OnPropertyChanged(nameof(Header));
+        OnPropertyChanged(nameof(EmptyMessage));
+        OnPropertyChanged(nameof(HasMore));
+        OnPropertyChanged(nameof(IsLoading));
+        OnPropertyChanged(nameof(IsLoadingMore));
+        OnPropertyChanged(nameof(LoadMoreLabel));
+        OnPropertyChanged(nameof(LoadMoreAutomationName));
+        OnPropertyChanged(nameof(ActiveFilter));
+        OnPropertyChanged(nameof(AllFilterName));
+        OnPropertyChanged(nameof(DueTodayFilterName));
+        OnPropertyChanged(nameof(OverdueFilterName));
+        OnPropertyChanged(nameof(ThisWeekFilterName));
+        OnPropertyChanged(nameof(AllFilterActive));
+        OnPropertyChanged(nameof(DueTodayFilterActive));
+        OnPropertyChanged(nameof(OverdueFilterActive));
+        OnPropertyChanged(nameof(ThisWeekFilterActive));
+    }
+
+    // Per-chip binding surfaces (WPF bindings cannot pass the enum
+    // through a method call).
+    public string AllFilterName => FilterAutomationName(TaskReviewFilter.All);
+
+    public string DueTodayFilterName =>
+        FilterAutomationName(TaskReviewFilter.DueToday);
+
+    public string OverdueFilterName =>
+        FilterAutomationName(TaskReviewFilter.Overdue);
+
+    public string ThisWeekFilterName =>
+        FilterAutomationName(TaskReviewFilter.ThisWeek);
+
+    // Per-chip selection surfaces (adversarial round 3): the chips
+    // render as radio buttons so the active filter is a real UIA
+    // selection state, not a name suffix. TwoWay: the radio click
+    // drives the setter (a OneWay binding would be replaced by the
+    // click's local value and never update again); false writes are
+    // the group unchecking a sibling and are ignored.
+    public bool AllFilterActive
+    {
+        get => ActiveFilter == TaskReviewFilter.All;
+        set => ApplyFilterWhenChecked(value, TaskReviewFilter.All);
+    }
+
+    public bool DueTodayFilterActive
+    {
+        get => ActiveFilter == TaskReviewFilter.DueToday;
+        set => ApplyFilterWhenChecked(value, TaskReviewFilter.DueToday);
+    }
+
+    public bool OverdueFilterActive
+    {
+        get => ActiveFilter == TaskReviewFilter.Overdue;
+        set => ApplyFilterWhenChecked(value, TaskReviewFilter.Overdue);
+    }
+
+    public bool ThisWeekFilterActive
+    {
+        get => ActiveFilter == TaskReviewFilter.ThisWeek;
+        set => ApplyFilterWhenChecked(value, TaskReviewFilter.ThisWeek);
+    }
+
+    private void ApplyFilterWhenChecked(bool isChecked, TaskReviewFilter filter)
+    {
+        if (isChecked)
+        {
+            ApplyFilter(filter);
+        }
+    }
+}
+
+/// <summary>One review row (mac TasksReviewPanel row): the record
+/// stays exact; rendered strings bound at the display ceiling. The
+/// label leads with the FILENAME (not a status word) — the review
+/// row shape.</summary>
+internal sealed class ReviewTaskRowViewModel
+{
+    public ReviewTaskRowViewModel(TaskWithLocation row)
+    {
+        Task = row.Task;
+        Path = row.Path;
+        FileName = row.FileName;
+        ContentHash = row.ContentHash;
+        DisplayText = EditorInteractionCoordinator.BoundDisplayText(
+            row.Task.Text);
+        MetadataCaption = string.Join(
+            " · ",
+            TaskStatusPhrase.MetadataParts(row.Task)
+                .Select(EditorInteractionCoordinator.BoundDisplayText));
+    }
+
+    public TaskItem Task { get; }
+
+    public string Path { get; }
+
+    public string FileName { get; }
+
+    /// <summary>The file's hash at snapshot time — the toggle's
+    /// identity check (round 1).</summary>
+    public string ContentHash { get; }
+
+    public string DisplayText { get; }
+
+    public bool Completed => Task.Completed;
+
+    public string MetadataCaption { get; }
+
+    public bool HasMetadata => MetadataCaption.Length > 0;
+
+    /// <summary>"&lt;fileName&gt;. &lt;text&gt;. Due &lt;date&gt;.
+    /// Priority &lt;level&gt;. Repeats &lt;rec&gt;.
+    /// &lt;statusPhrase&gt;" — the mac review row label.</summary>
+    public string AutomationName => string.Join(
+        ". ",
+        new[] { FileName, DisplayText }
+            .Concat(TaskStatusPhrase.MetadataParts(Task)
+                .Select(EditorInteractionCoordinator.BoundDisplayText))
+            .Append(TaskStatusPhrase.StatusPhrase(Task)));
+
+    public string AutomationHelpText =>
+        "Opens the source note at this task's line.";
+
+    public string CheckboxLabel =>
+        Completed ? "Mark incomplete" : "Mark complete";
+
+    public string CheckboxHelpText => "Toggles the task between open and done.";
+}

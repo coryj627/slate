@@ -23,7 +23,45 @@ internal static class ReadingSemantics
         Embed,
         CodeBlock,
         CodeCopy,
+        MathBlock,
+        DiagramBlock,
+        Quote,
     }
+
+    private static readonly DependencyProperty MathSpeechProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingMathSpeech", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
+    private static readonly DependencyProperty DiagramDescriptionProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingDiagramDescription", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
+    private static readonly DependencyProperty EmbedNameProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingEmbedName", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
+    private static readonly DependencyProperty EmbedKeyProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingEmbedKey", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
+    private static readonly DependencyProperty EmbedJumpPathProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingEmbedJumpPath", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
+    private static readonly DependencyProperty EmbedJumpAnchorProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingEmbedJumpAnchor", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
+    private static readonly DependencyProperty TableSourceProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingTableSource", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
 
     private static readonly DependencyProperty MarkerProperty =
         DependencyProperty.RegisterAttached(
@@ -50,11 +88,103 @@ internal static class ReadingSemantics
     public static void MarkTable(System.Windows.Documents.Table table) =>
         table.SetValue(MarkerProperty, Marker.Table);
 
+    /// <summary>Table with a grid destination (W4-1): the marker
+    /// carries the block's SOURCE so Enter-at-caret can open the same
+    /// table on the substrate — core re-derives the cells there, the
+    /// host never re-parses. String-only (the W3-1 Tag-serialization
+    /// lesson). Degenerate tables take the source-less overload and
+    /// stay linear-only.</summary>
+    public static void MarkTable(System.Windows.Documents.Table table, string source)
+    {
+        table.SetValue(MarkerProperty, Marker.Table);
+        table.SetValue(TableSourceProperty, source);
+    }
+
+    public static string? TableSourceOf(System.Windows.Documents.Table table) =>
+        table.GetValue(TableSourceProperty) as string;
+
     public static void MarkEmbed(BlockUIContainer container) =>
         container.SetValue(MarkerProperty, Marker.Embed);
 
+    /// <summary>Embed card (W3-5): the marker carries the mac-shaped
+    /// header name so the landmark walk announces content, not a
+    /// cache key.</summary>
+    public static void MarkEmbed(Section section, string name)
+    {
+        section.SetValue(MarkerProperty, Marker.Embed);
+        section.SetValue(EmbedNameProperty, name);
+    }
+
+    public static bool IsEmbedSection(Section section) =>
+        Equals(section.GetValue(MarkerProperty), Marker.Embed);
+
+    public static string EmbedNameOf(Section section) =>
+        section.GetValue(EmbedNameProperty) as string ?? string.Empty;
+
+    /// <summary>An embed card's header paragraph carries its cache
+    /// key so Enter-at-caret can activate the card (a caret position
+    /// is not element focus — the W3-1 lesson).</summary>
+    public static void MarkEmbedHeader(Paragraph paragraph, string key) =>
+        paragraph.SetValue(EmbedKeyProperty, key);
+
+    public static string? EmbedHeaderKeyOf(Paragraph paragraph) =>
+        paragraph.GetValue(EmbedKeyProperty) as string;
+
+    /// <summary>
+    /// The Jump destination when core ALREADY RESOLVED the target
+    /// (W3-5, round 1): activation navigates directly — the mac
+    /// `openEmbedTarget(path)` contract — because the host note's
+    /// record snapshot cannot contain NESTED targets, and re-matching
+    /// there dead-ends on content the card is displaying. String-only
+    /// values (the W3-1 Tag-serialization lesson); the anchor rides a
+    /// "kind:text" codec, kinds "heading"/"block" per core.
+    /// </summary>
+    public static void MarkEmbedJump(
+        DependencyObject element, string path, string? anchorKind, string? anchorText)
+    {
+        element.SetValue(EmbedJumpPathProperty, path);
+        if (anchorKind is not null && anchorText is not null)
+        {
+            element.SetValue(EmbedJumpAnchorProperty, anchorKind + ":" + anchorText);
+        }
+    }
+
+    public static bool TryGetEmbedJump(
+        DependencyObject element,
+        out string path,
+        out LinkAnchor? anchor)
+    {
+        path = string.Empty;
+        anchor = null;
+        if (element.GetValue(EmbedJumpPathProperty) is not string jumpPath)
+        {
+            return false;
+        }
+        path = jumpPath;
+        if (element.GetValue(EmbedJumpAnchorProperty) is string encoded)
+        {
+            int split = encoded.IndexOf(':', StringComparison.Ordinal);
+            if (split > 0)
+            {
+                anchor = new LinkAnchor(encoded[..split], encoded[(split + 1)..]);
+            }
+        }
+        return true;
+    }
+
     public static void MarkCodeBlock(Paragraph paragraph) =>
         paragraph.SetValue(MarkerProperty, Marker.CodeBlock);
+
+    /// <summary>Block quote (field, 2026-07-30): linear reading gave
+    /// no structure cue — the StyleId decorator answers
+    /// <c>StyleId_Quote</c> for marked paragraphs, the same mechanism
+    /// heading levels ride (mac parity: an AX value announces the
+    /// quote).</summary>
+    public static void MarkQuote(Paragraph paragraph) =>
+        paragraph.SetValue(MarkerProperty, Marker.Quote);
+
+    public static bool IsQuote(Paragraph paragraph) =>
+        Equals(paragraph.GetValue(MarkerProperty), Marker.Quote);
 
     /// <summary>0 when the paragraph is not a heading.</summary>
     public static byte HeadingLevelOf(Paragraph paragraph) =>
@@ -74,8 +204,38 @@ internal static class ReadingSemantics
     /// <summary>The code block's Copy button — distinguished by marker,
     /// not Tag shape, so the click router never guesses (embed-card
     /// buttons also carry string Tags).</summary>
-    public static void MarkCodeCopy(System.Windows.Controls.Button button) =>
-        button.SetValue(MarkerProperty, Marker.CodeCopy);
+    public static void MarkCodeCopy(DependencyObject element) =>
+        element.SetValue(MarkerProperty, Marker.CodeCopy);
+
+    /// <summary>Math block (W3-2): the marker carries the canonical
+    /// MathCAT speech so the landmark walk and the caret activation
+    /// path announce content, not composition.</summary>
+    public static void MarkMathBlock(Paragraph paragraph, string speech)
+    {
+        paragraph.SetValue(MarkerProperty, Marker.MathBlock);
+        paragraph.SetValue(MathSpeechProperty, speech);
+    }
+
+    public static bool IsMathBlock(Paragraph paragraph) =>
+        Equals(paragraph.GetValue(MarkerProperty), Marker.MathBlock);
+
+    public static string MathSpeechOf(Paragraph paragraph) =>
+        paragraph.GetValue(MathSpeechProperty) as string ?? string.Empty;
+
+    /// <summary>Diagram block (W3-3): the marker carries the canonical
+    /// structured description so the landmark walk and the caret
+    /// activation path announce content, not composition.</summary>
+    public static void MarkDiagramBlock(Paragraph paragraph, string description)
+    {
+        paragraph.SetValue(MarkerProperty, Marker.DiagramBlock);
+        paragraph.SetValue(DiagramDescriptionProperty, description);
+    }
+
+    public static bool IsDiagramBlock(Paragraph paragraph) =>
+        Equals(paragraph.GetValue(MarkerProperty), Marker.DiagramBlock);
+
+    public static string DiagramDescriptionOf(Paragraph paragraph) =>
+        paragraph.GetValue(DiagramDescriptionProperty) as string ?? string.Empty;
 
     public static bool IsCodeCopy(DependencyObject element) =>
         Equals(element.GetValue(MarkerProperty), Marker.CodeCopy);

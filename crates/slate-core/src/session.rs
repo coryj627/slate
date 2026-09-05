@@ -22,6 +22,7 @@
 //! `cache_dir` defaults to `<vault_root>/.slate`. Callers can override
 //! for tests or sandbox layouts.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -357,6 +358,62 @@ pub struct NoteLoadBundle {
     pub properties: Vec<crate::Property>,
 }
 
+/// The BOUNDED panel feed (W4-2 round 10): every collection is
+/// SQL-limited before a `Vec` is built or anything crosses FFI, and
+/// true totals ride alongside so the UI can announce and label what
+/// its display caps hide. No properties — the link panels don't
+/// read them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoteLinkPanels {
+    pub backlinks: Page<crate::Backlink>,
+    /// At most `outgoing_limit` rows, document order.
+    pub outgoing_links: Vec<crate::OutgoingLink>,
+    pub outgoing_total: u32,
+    /// At most `embed_limit` embed links, document order — bounded
+    /// SEPARATELY from the display rows so embeds beyond the display
+    /// cap stay discoverable.
+    pub embed_links: Vec<crate::OutgoingLink>,
+    pub embed_total: u32,
+}
+
+/// Bounded outline read (W4-2 round 10): headings are count-unbounded
+/// per note, so the panel asks for at most `limit` with the true
+/// total alongside.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutlinePage {
+    pub headings: Vec<crate::Heading>,
+    pub total: u32,
+}
+
+/// Bounded per-note task read (W4-3): at most `limit` tasks in
+/// document order plus the true totals the panel header speaks
+/// ("N open of M tasks"). `content_hash` is the indexed file's hash
+/// at read time (adversarial round 2): rows are snapshots, and a
+/// toggle raised from one must prove the note hasn't been rewritten
+/// underneath it — a stale ordinal against newer content could name
+/// a different task. Empty for unknown paths.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoteTasksPage {
+    pub tasks: Vec<crate::TaskItem>,
+    pub total: u32,
+    pub open_total: u32,
+    pub content_hash: String,
+}
+
+/// Outcome of [`VaultSession::repair_or_contain_path`] (W4-3
+/// adversarial round 31). `Repaired`: the index is disk truth.
+/// `Contained`: a persistent file condition; the path's suspect
+/// rows were dropped honest-empty with a self-healing durable
+/// marker planted — task queries are safe, the host may release
+/// its gate. `Declined`: another process committed mid-attempt;
+/// nothing destructive happened — retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskIndexRepairOutcome {
+    Repaired,
+    Contained,
+    Declined,
+}
+
 // --- Note parts bundle ---
 
 /// Everything the U3 tab-open path needs to render a note as body-only
@@ -397,6 +454,53 @@ pub struct SaveReport {
     pub new_content_hash: String,
     pub new_size_bytes: u64,
     pub new_mtime_ms: i64,
+}
+
+/// The typed outcome of a create-if-absent write (#1123).
+///
+/// `create_exclusive` has two failure classes that a single `Err` could
+/// not tell apart: REFUSED before any byte landed (occupied destination,
+/// invalid path, too large, a lock/transaction failure before the
+/// publish), and FAILED AFTER PUBLISH — the no-replace write succeeded,
+/// then the index/commit failed, and the contract is to leave the user's
+/// bytes on disk for the next scan to index. Hosts that saw one `Err`
+/// for both treated a committed file as "nothing was written": the UI
+/// re-presented with copy promising no file exists, a retry reported
+/// `DestinationExists`, and choosing another name created a duplicate.
+#[derive(Debug)]
+pub enum CreateExclusiveOutcome {
+    /// Written, indexed, committed — the ordinary success.
+    Committed(SaveReport),
+    /// The bytes are on disk at `path` (hash `content_hash`); the index
+    /// did not record them. The file is real — do not recreate it, do
+    /// not choose another name; the next scan indexes it. `error` is
+    /// the post-publish failure.
+    PublishedUnindexed {
+        path: String,
+        content_hash: String,
+        error: VaultError,
+    },
+}
+
+/// Internal split of a create-if-absent failure at the write boundary.
+pub(crate) enum CreateFailure {
+    /// Nothing landed.
+    Refused(VaultError),
+    /// The no-replace write landed; a later step failed.
+    Published {
+        content_hash: String,
+        error: VaultError,
+    },
+}
+
+impl CreateFailure {
+    /// The pre-#1123 shape: one error either way (the bytes-create and
+    /// deleted-file-recovery paths keep it).
+    fn into_error(self) -> VaultError {
+        match self {
+            CreateFailure::Refused(error) | CreateFailure::Published { error, .. } => error,
+        }
+    }
 }
 
 // --- Rename report ---
@@ -814,6 +918,108 @@ fn pin_root_identity(
     (None, None)
 }
 
+/// One in-flight diagram render (W3-3 rounds 2–3): waiters attach to
+/// the flight for THEIR key and receive that flight's completed
+/// result, so traffic on other keys can never detach them (the
+/// round-3 finding against a single shared claim slot). `Abandoned`
+/// marks an owner that unwound before completing; waiters retry.
+struct DiagramFlight {
+    state: Mutex<DiagramFlightState>,
+    done: std::sync::Condvar,
+}
+
+enum DiagramFlightState {
+    Pending,
+    Done(Vec<crate::diagram::DiagramBlock>),
+    Abandoned,
+}
+
+/// Completed diagram artifacts, KEYED by (path, source hash) — W3-3
+/// round 5: a single completed slot let an unrelated note's
+/// completion evict a result whose delayed caller was still between
+/// miss and admission, silently re-opening the duplicate-render
+/// path. Keyed entries mean cross-key completions never erase
+/// handoff state; eviction is capacity policy (LRU by entry count
+/// and total SVG payload), not a correctness hole.
+#[derive(Default)]
+struct DiagramCompletedCache {
+    /// LRU order: least-recent first.
+    entries: std::collections::VecDeque<((String, u64), Vec<crate::diagram::DiagramBlock>)>,
+}
+
+/// Entry-count bound: reading refreshes touch a handful of open
+/// notes; eight covers tab groups without letting a vault crawl pin
+/// every note's artifacts.
+const MAX_CACHED_DIAGRAM_NOTES: usize = 8;
+
+/// Payload bound: per-note retention is already capped at 8 MiB
+/// (`MAX_RETAINED_SVG_BYTES_PER_NOTE`); this caps the CACHE's total
+/// SVG bytes so worst-case adversarial notes cannot multiply that by
+/// the entry count.
+const MAX_CACHED_DIAGRAM_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+
+impl DiagramCompletedCache {
+    fn lookup(&mut self, key: &(String, u64)) -> Option<Vec<crate::diagram::DiagramBlock>> {
+        let index = self.entries.iter().position(|(k, _)| k == key)?;
+        // Move-to-back keeps the LRU honest for the hot note.
+        let entry = self.entries.remove(index).expect("index in range");
+        let blocks = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(blocks)
+    }
+
+    fn insert(&mut self, key: (String, u64), blocks: Vec<crate::diagram::DiagramBlock>) {
+        // Round 6: an entry whose RESIDENT size alone busts the budget
+        // is never admitted (callers of that pathological note simply
+        // re-render, already bounded by the per-call budgets) — it
+        // must not flush every other note's entry on its way through.
+        if Self::entry_resident_bytes(&key, &blocks) > MAX_CACHED_DIAGRAM_PAYLOAD_BYTES {
+            return;
+        }
+        self.entries.retain(|(k, _)| k != &key);
+        self.entries.push_back((key, blocks));
+        while self.entries.len() > MAX_CACHED_DIAGRAM_NOTES
+            || (self.entries.len() > 1
+                && self.total_resident_bytes() > MAX_CACHED_DIAGRAM_PAYLOAD_BYTES)
+        {
+            self.entries.pop_front();
+        }
+    }
+
+    /// The COMPLETE retained size (round 6: counting SVG alone let
+    /// eight zero-SVG notes with oversized preserved sources pin
+    /// hundreds of MiB): key, source, description, status strings,
+    /// SVG, and the reserved PNG fallback.
+    fn entry_resident_bytes(key: &(String, u64), blocks: &[crate::diagram::DiagramBlock]) -> usize {
+        key.0.len()
+            + blocks
+                .iter()
+                .map(|b| {
+                    b.source.len()
+                        + b.structured_description.len()
+                        + b.svg.as_ref().map_or(0, Vec::len)
+                        + b.png_fallback.as_ref().map_or(0, Vec::len)
+                        + match &b.render_status {
+                            crate::diagram::DiagramRenderStatus::Ok => 0,
+                            crate::diagram::DiagramRenderStatus::UnsupportedDialect { reason } => {
+                                reason.len()
+                            }
+                            crate::diagram::DiagramRenderStatus::RenderFailed { message } => {
+                                message.len()
+                            }
+                        }
+                })
+                .sum::<usize>()
+    }
+
+    fn total_resident_bytes(&self) -> usize {
+        self.entries
+            .iter()
+            .map(|(key, blocks)| Self::entry_resident_bytes(key, blocks))
+            .sum()
+    }
+}
+
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
@@ -830,6 +1036,35 @@ pub struct VaultSession {
     /// through it on every call so a preference change takes
     /// effect immediately.
     math_prefs: Mutex<crate::math::MathPrefs>,
+    /// Single-slot COMPLETED diagram artifact cache keyed on (path,
+    /// source hash) — W3-3 round 1: every reading refresh re-reads
+    /// the SAVED file, which live-buffer typing never changes, yet
+    /// each fetch re-rendered the whole note through the
+    /// process-global serialized renderer. A content-keyed hit turns
+    /// those refreshes into clones. One slot bounds memory (the
+    /// retention budget caps the payload) and covers the hot path:
+    /// repeated refreshes of the note being edited.
+    diagram_cache: Mutex<DiagramCompletedCache>,
+    /// In-flight renders keyed by (path, source hash) — single-flight
+    /// per key (rounds 2–3): concurrent same-key misses share one
+    /// render, and different-key traffic runs its own flight without
+    /// detaching anyone. Entries are removed on completion or unwind,
+    /// so the map is bounded by concurrent distinct fetches.
+    diagram_flights: Mutex<std::collections::HashMap<(String, u64), Arc<DiagramFlight>>>,
+    /// Test seam: cache-miss render passes, so the cache pin can
+    /// prove a repeated fetch renders nothing.
+    #[cfg(test)]
+    pub(crate) diagram_render_passes: AtomicU64,
+    /// Test seam: one-shot injected panic between flight claim and
+    /// render, so the unwind-cleanup pin can prove waiters recover.
+    #[cfg(test)]
+    pub(crate) diagram_render_panic_for_tests: std::sync::atomic::AtomicBool,
+    /// Test seam: one-shot admission gate — a caller that takes it
+    /// blocks BEFORE the atomic admission step until the test
+    /// signals, making delayed-arrival interleavings (rounds 4–6)
+    /// deterministic.
+    #[cfg(test)]
+    pub(crate) diagram_admission_gate_for_tests: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     /// Citations index — lazy view over `bibliography_entries`.
     /// `set_bibliography_sources` bumps the version so the renderer's
     /// cache invalidates implicitly (see `RenderCache`).
@@ -1105,7 +1340,7 @@ fn regen_events_after_compaction(
     }
     let entries = crate::oplog::read_oplog(cache_dir, log_name).map_err(VaultError::Io)?;
     let events = crate::oplog_events::derive_events_for_log(&entries);
-    let tx = conn.transaction()?;
+    let tx = db::begin_fenced(conn)?;
     tx.execute(
         "DELETE FROM oplog_events WHERE file_id = ?1",
         rusqlite::params![file_id],
@@ -1438,6 +1673,26 @@ impl VaultSession {
         self.bases_generation()
     }
 
+    /// Cross-process-aware revision for PAGED index snapshots
+    /// (adversarial round 14). [`Self::interaction_generation`] is
+    /// session-local: another PROCESS committing to the shared cache
+    /// database never advances it, so a paging cursor could read a
+    /// mutated index with both before/after checks still equal.
+    /// SQLite's `data_version` pragma increments exactly when a
+    /// DIFFERENT connection commits; summing both axes (each
+    /// non-decreasing) makes "unchanged between reads" honest across
+    /// sessions and processes. Takes the session lock briefly —
+    /// callers are background snapshot workers, never per-keystroke
+    /// editor paths (those keep the lock-free generation).
+    pub fn tasks_index_revision(&self) -> u64 {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let data_version: i64 = conn
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .unwrap_or(0);
+        self.bases_generation()
+            .wrapping_add(u64::try_from(data_version).unwrap_or(0))
+    }
+
     // --- GraphIndex plumbing (Milestone P #550) -------------------------
 
     /// Open a staging sink for one hooked mutation. Live only when
@@ -1664,12 +1919,14 @@ impl VaultSession {
             )
             .collect();
 
-        let audio_summary = snapshot_audio_summary(&nodes, &edges, filter);
+        let summary_counts = snapshot_summary_counts(&nodes, &edges, filter);
+        let audio_summary = crate::graph_summary::snapshot_summary(&summary_counts);
         Ok(crate::graph::GraphSnapshot {
             nodes,
             edges,
             generation: index.generation(),
             audio_summary,
+            summary_counts,
         })
     }
 
@@ -1682,11 +1939,24 @@ impl VaultSession {
         depth: u32,
         filter: crate::graph::GraphFilter,
     ) -> Result<crate::graph::GraphNeighborhood, VaultError> {
-        let depth = depth.clamp(1, 3);
         let conn = self.conn.lock().expect("session connection mutex");
         let mut guard = self.graph.lock().expect("graph index mutex");
         self.graph_ensure_built(&conn, &mut guard)?;
         let index = guard.as_ref().expect("graph index just ensured");
+        self.graph_neighborhood_locked(&conn, index, path, depth, filter)
+    }
+
+    /// The neighbourhood under a HELD lock (W6-2 PR 0b): the tree query
+    /// reads it and the generation in one critical section (0b-2b).
+    fn graph_neighborhood_locked(
+        &self,
+        conn: &Connection,
+        index: &crate::graph::GraphIndex,
+        path: &str,
+        depth: u32,
+        filter: crate::graph::GraphFilter,
+    ) -> Result<crate::graph::GraphNeighborhood, VaultError> {
+        let depth = depth.clamp(1, 3);
         let metrics = self.graph_metrics_cached(index);
 
         let center_key = crate::graph::NodeKey::Path(path.to_string());
@@ -1703,7 +1973,7 @@ impl VaultSession {
 
         // Key-sorted node order = filtered_nodes retained to members.
         let filtered = index.filtered_nodes(&filter, is_orphan);
-        let mtimes = file_mtimes(&conn)?;
+        let mtimes = file_mtimes(conn)?;
         let nodes: Vec<crate::graph::GraphNode> = filtered
             .iter()
             .filter(|(id, _)| member_ids.contains(id))
@@ -1732,20 +2002,97 @@ impl VaultSession {
             .iter()
             .filter(|n| matches!(n.kind, crate::graph::NodeKind::Note))
             .count() as u64;
-        let audio_summary = format!(
-            "{}: {} links in, {} links out. Showing {} notes within {} links.",
+        // The centre's degrees are its FULL-GRAPH metrics — Link edges
+        // only, unaffected by depth or filter (contracts doc 0a-7).
+        let summary_counts = crate::graph::GraphNeighborhoodCounts {
             center_label,
-            crate::graph::grouped_decimal(u64::from(center.in_links)),
-            crate::graph::grouped_decimal(u64::from(center.out_links)),
-            crate::graph::grouped_decimal(note_count),
+            in_links: center.in_links,
+            out_links: center.out_links,
+            note_count,
             depth,
-        );
+        };
+        let audio_summary = crate::graph_summary::neighborhood_summary(&summary_counts);
         Ok(crate::graph::GraphNeighborhood {
             center_id,
             depth,
             nodes,
             edges,
             audio_summary,
+            summary_counts,
+        })
+    }
+
+    /// The Connections tree for `path` (W6-2 PR 0b, contracts doc 0b-4):
+    /// the neighbourhood payload split, merged, ordered and nested as
+    /// flat pre-order rows — one function of `graph_neighborhood`'s
+    /// output, tagged with the generation read under the same lock.
+    pub fn graph_connections_tree(
+        &self,
+        path: &str,
+        depth: u32,
+        filter: crate::graph::GraphFilter,
+    ) -> Result<crate::graph_queries::GraphConnectionsTree, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut guard = self.graph.lock().expect("graph index mutex");
+        self.graph_ensure_built(&conn, &mut guard)?;
+        let index = guard.as_ref().expect("graph index just ensured");
+        let hood = self.graph_neighborhood_locked(&conn, index, path, depth, filter)?;
+        Ok(crate::graph_queries::connections_tree(
+            &hood,
+            index.generation(),
+        ))
+    }
+
+    /// The visible set under a query (0b-6): the ids that pass the needle
+    /// and the kind overlay, the label-priority subset, the total under
+    /// the backend filter, and the generation read (0b-2b).
+    pub fn graph_visibility(
+        &self,
+        query: &crate::graph_queries::GraphVisibilityQuery,
+    ) -> Result<crate::graph_queries::GraphVisibility, VaultError> {
+        let snapshot = self.graph_snapshot(query.filter)?;
+        Ok(crate::graph_queries::visibility(&snapshot, query))
+    }
+
+    /// The topology under a query and a config (0b-6b, design B): every
+    /// visible node with its key, label, kind, in-links, diameter, group,
+    /// label slot and visible neighbours — one record per rebuild.
+    pub fn graph_topology(
+        &self,
+        query: &crate::graph_queries::GraphVisibilityQuery,
+        config: &crate::graph_config::GraphConfig,
+    ) -> Result<crate::graph_queries::GraphTopology, VaultError> {
+        let snapshot = self.graph_snapshot(query.filter)?;
+        Ok(crate::graph_queries::topology(&snapshot, query, config))
+    }
+
+    /// The VISIBLE neighbours of `id` under a query (0b-6b): both
+    /// directions, unique, in the snapshot's edge order.
+    pub fn graph_neighbors(
+        &self,
+        query: &crate::graph_queries::GraphVisibilityQuery,
+        id: u64,
+    ) -> Result<crate::graph_queries::GraphNeighbors, VaultError> {
+        let snapshot = self.graph_snapshot(query.filter)?;
+        let visible = crate::graph_queries::visibility(&snapshot, query).ids;
+        Ok(crate::graph_queries::GraphNeighbors {
+            generation: snapshot.generation,
+            neighbors: crate::graph_queries::neighbors(&snapshot, &visible, id),
+        })
+    }
+
+    /// The table rows under a query, core-formatted and in `sort`'s
+    /// order (0b-7).
+    pub fn graph_table_rows(
+        &self,
+        query: &crate::graph_queries::GraphVisibilityQuery,
+        sort: crate::graph_queries::GraphTableSort,
+    ) -> Result<crate::graph_queries::GraphTableRows, VaultError> {
+        let snapshot = self.graph_snapshot(query.filter)?;
+        Ok(crate::graph_queries::GraphTableRows {
+            generation: snapshot.generation,
+            total: snapshot.nodes.len() as u64,
+            rows: crate::graph_queries::table_rows(&snapshot, query, sort),
         })
     }
 
@@ -1848,7 +2195,7 @@ impl VaultSession {
     /// Creates `config.cache_dir` if missing, opens/creates the SQLite
     /// database under it, and applies all pending schema migrations.
     // (graph payload helpers live below as free fns: `file_mtimes`,
-    // `graph_node_payload`, `snapshot_audio_summary`.)
+    // `graph_node_payload`, `snapshot_summary_counts`.)
     pub fn open(
         provider: Arc<dyn VaultProvider>,
         config: SessionConfig,
@@ -1873,6 +2220,7 @@ impl VaultSession {
         db::migrate(&mut conn)?;
 
         let math_prefs = Mutex::new(config.math_prefs);
+        let diagram_cache = Mutex::new(DiagramCompletedCache::default());
 
         // Build the initial BibIndex from whatever's already in the
         // bibliography_entries table — empty after a fresh
@@ -1956,6 +2304,14 @@ impl VaultSession {
             compaction_shutdown,
             compaction_join: Mutex::new(Some(compaction_join)),
             math_prefs,
+            diagram_cache,
+            diagram_flights: Mutex::new(std::collections::HashMap::new()),
+            #[cfg(test)]
+            diagram_render_passes: AtomicU64::new(0),
+            #[cfg(test)]
+            diagram_render_panic_for_tests: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            diagram_admission_gate_for_tests: Mutex::new(None),
             bib_index: Mutex::new(bib_index),
             csl_styles: Mutex::new(std::collections::HashMap::new()),
             render_cache: crate::citations::render::RenderCache::default(),
@@ -1993,10 +2349,77 @@ impl VaultSession {
             );
         }
 
-        match self.rollback_structural_batch_inflight_locked(&mut conn, &inflight) {
-            Ok(()) => Ok(()),
-            Err(error) => self.fail_structural_batch_recovery_locked(&mut conn, error),
+        // Rounds 35-37: crash-recovery renames and rewrite
+        // restorations are filesystem mutations like any other —
+        // mark both sides of every MOVED FILE (adversarial round
+        // 37: `inflight.entries` holds only top-level directory
+        // paths; the descendant file pairs live in
+        // `inflight.moved`) BEFORE any byte moves, and FAIL CLOSED
+        // if the markers cannot persist: the crashed process's
+        // forward markers may legitimately have aged and been swept
+        // while it was down. A marker-persistence failure returns
+        // DIRECTLY — never through the barrier handler below, which
+        // deletes the inflight journal (round 37): this open fails,
+        // the journal survives, and the next open retries with the
+        // filesystem untouched.
+        let planted = match self.plant_move_markers_locked(
+            &conn,
+            inflight
+                .moved
+                .iter()
+                .flat_map(|(old, new)| [old.as_str(), new.as_str()]),
+        ) {
+            Ok(planted) => planted,
+            Err(plant_error) => {
+                return Err(VaultError::InvalidArgument {
+                    message: format!(
+                        "structural batch recovery deferred: reconciliation markers could not \
+                         persist ({plant_error}); recovery will retry on the next open"
+                    ),
+                });
+            }
+        };
+
+        if let Err(error) = self.rollback_structural_batch_inflight_locked(&mut conn, &inflight) {
+            return self.fail_structural_batch_recovery_locked(&mut conn, error);
         }
+
+        // FINALIZATION (adversarial rounds 39-40), one atomic
+        // transaction: re-assert the FULL marker set aged (restoring
+        // any marker a sweep consumed against the mid-recovery
+        // topology) AND consume the journal together. A failure here
+        // must NOT reach the barrier handler — the reversals already
+        // ran and are idempotent to re-enter, so the deferred error
+        // below keeps the journal (the deletion rolled back with
+        // this transaction) and the next open re-runs recovery to
+        // this same point and retries.
+        let finalize = (|| -> Result<(), VaultError> {
+            let tx = db::begin_fenced(&conn)?;
+            // Test-only seam (round 40): a transient finalization
+            // failure — the journal must survive it.
+            if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_RECOVERY_FINALIZE")
+                && planted
+                    .iter()
+                    .any(|(path, _)| path.contains(trigger.to_string_lossy().as_ref()))
+            {
+                return Err(VaultError::InvalidArgument {
+                    message: "test fault: injected recovery finalization failure".into(),
+                });
+            }
+            Self::age_move_markers_in_tx(&tx, &planted)?;
+            tx.execute("DELETE FROM structural_batch_inflight WHERE id = 1", [])?;
+            tx.commit()?;
+            Ok(())
+        })();
+        if let Err(finalize_error) = finalize {
+            return Err(VaultError::InvalidArgument {
+                message: format!(
+                    "structural batch recovery deferred at finalization ({finalize_error}); \
+                     the journal is retained and the next open retries"
+                ),
+            });
+        }
+        Ok(())
     }
 
     fn fail_structural_batch_recovery_locked(
@@ -2005,7 +2428,7 @@ impl VaultSession {
         cause: VaultError,
     ) -> Result<(), VaultError> {
         let barrier = (|| -> Result<(), VaultError> {
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(conn)?;
             journal_append(
                 &tx,
                 crate::structural::StructuralOpKind::RecoveryBarrier,
@@ -2107,6 +2530,9 @@ impl VaultSession {
             self.restore_structural_batch_rewrites_locked(conn, inflight, true)?;
         }
 
+        // (Round 37: the recovery markers were planted by the
+        // caller, from `inflight.moved`, BEFORE the rewrite
+        // restoration above — the first byte-mutating step.)
         // Reverse only the renames that physically landed, always in strict
         // reverse plan order. A crash between rename and progress update is
         // therefore indistinguishable from (and as safe as) a recorded step.
@@ -2131,8 +2557,8 @@ impl VaultSession {
         }
 
         if indexed_truth == StructuralBatchTruth::Forward {
-            let tx = conn.transaction()?;
-            apply_batch_move_index_direction(&tx, &plans, false)?;
+            let tx = db::begin_fenced(conn)?;
+            apply_batch_move_index_direction(&tx, self.provider.as_ref(), &plans, false)?;
             tx.commit()?;
         } else {
             self.restore_structural_batch_rewrites_locked(conn, inflight, false)?;
@@ -2149,7 +2575,10 @@ impl VaultSession {
             }
         }
 
-        structural_batch_delete_inflight(conn)?;
+        // (Rounds 39-40: the marker re-assertion and the journal
+        // deletion are FINALIZED by the caller, atomically, and a
+        // finalization failure defers with the journal intact —
+        // never through the barrier handler.)
         Ok(())
     }
 
@@ -2584,7 +3013,7 @@ impl VaultSession {
         // processed log, a mutator can take that lock but blocks on this
         // transaction's DB writer before changing log bytes. Commit releases
         // the writer; the mutator then publishes a new obligation and proceeds.
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let tx = db::begin_fenced(conn)?;
         let bound: Vec<(i64, String)> = tx
             .prepare(
                 "SELECT id, oplog_name
@@ -2735,7 +3164,7 @@ impl VaultSession {
 
         // One-writer discipline from the start (#787): binding updates
         // below write `files.oplog_name`.
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let tx = db::begin_fenced(conn)?;
 
         struct LiveFile {
             id: i64,
@@ -2932,6 +3361,17 @@ impl VaultSession {
         get_file_metadata_impl(&conn, path)
     }
 
+    /// #1077 (contract I1/I6): the spelling the filesystem stores for an
+    /// EXISTING vault-relative entry, or `None` when nothing exists there.
+    /// Hosts use it to RE-SEAT a tab whose file vanished and came back
+    /// under another spelling (`Ghost.md` → `ghost.md` on NTFS/APFS): the
+    /// tab keeps ordinal comparisons everywhere and corrects its spelling
+    /// once, here, instead of re-litigating identity per comparison.
+    pub fn canonical_path(&self, path: &str) -> Result<Option<String>, VaultError> {
+        validate_save_path(path)?;
+        self.provider.canonical_path(path)
+    }
+
     /// Read a vault file's contents as UTF-8 text.
     ///
     /// - Refuses to read files larger than
@@ -3078,6 +3518,79 @@ impl VaultSession {
     /// `toggle_task_status` — pass it here and the op-log entry wraps
     /// it; plain text saves pass `&[]`. Kept off the public `save_text`
     /// signature: hosts never supply intent directly.
+    /// Token-scoped removal of THIS save's own durable write-intent
+    /// registration — the shared cleanup for every provable pre-write
+    /// error exit in `save_text_locked` (adversarial round 27).
+    /// Bounded retry (round 28): rusqlite's busy_timeout already
+    /// waits out transient writers inside each attempt, so a couple
+    /// of short-backoff retries close the remaining BUSY/LOCKED
+    /// races. A marker that STILL cannot be deleted is left behind
+    /// deliberately — the same posture as a crash in this interval —
+    /// because the sweep now absorbs an un-repairable marker by
+    /// quarantining its path instead of failing queries, so a
+    /// stranded row can no longer poison anything.
+    fn clear_own_intent_registration(&self, conn: &Connection, path: &str, intent_token: i64) {
+        // Test-only seam (adversarial round 28): a cleanup DELETE
+        // that persistently fails — another process camped on the
+        // writer lock, or database I/O errors — strands the marker
+        // exactly as a crash in the pre-write interval does.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_INTENT_CLEAR")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            return;
+        }
+        for attempt in 0..3 {
+            match conn.execute(
+                "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                rusqlite::params![path, intent_token],
+            ) {
+                // A completed DELETE statement proves the row is
+                // absent — no separate verification read needed.
+                Ok(_) => return,
+                Err(e) if attempt == 2 => {
+                    log::warn!(
+                        "pre-write intent cleanup failed; the sweep will absorb the stale marker: db error"
+                    );
+                    log::debug!("intent cleanup failure for {path:?}: {e}");
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(10 << attempt)),
+            }
+        }
+    }
+
+    /// #1077 (contracts I2/I3): the spelling a mutation SOURCE binds to.
+    /// An existing target resolves to the filesystem's stored spelling; a
+    /// brand-new file keeps the LEAF the caller chose but takes its
+    /// parent's stored spelling — parent components are existing targets,
+    /// and a fresh row under `notes/…` beside the scanned `Notes/…` is
+    /// exactly the drift this exists to stop. A canonicalization failure
+    /// is the caller's failure (I7): proceeding on the unresolved spelling
+    /// is how the second index row appears.
+    fn bind_source_path<'p>(&self, path: &'p str) -> Result<Cow<'p, str>, VaultError> {
+        match self.provider.canonical_path(path)? {
+            Some(canonical) if canonical != path => Ok(Cow::Owned(canonical)),
+            Some(_) => Ok(Cow::Borrowed(path)),
+            None => self.bind_destination_path(path),
+        }
+    }
+
+    /// #1077 (contract I4): the spelling a mutation DESTINATION, or a
+    /// create, binds to. The leaf is NEVER canonicalized — that is how a
+    /// user creates `Ä.md`, and canonicalizing a destination leaf would
+    /// collapse the case-only rename `A.md → a.md` onto its own source.
+    /// Only the parent binds, for the reason `bind_source_path` gives.
+    fn bind_destination_path<'p>(&self, path: &'p str) -> Result<Cow<'p, str>, VaultError> {
+        let Some((parent, leaf)) = path.rsplit_once('/') else {
+            return Ok(Cow::Borrowed(path));
+        };
+        match self.provider.canonical_path(parent)? {
+            Some(canonical_parent) if canonical_parent != parent => {
+                Ok(Cow::Owned(format!("{canonical_parent}/{leaf}")))
+            }
+            _ => Ok(Cow::Borrowed(path)),
+        }
+    }
+
     fn save_text_locked(
         &self,
         conn: &mut Connection,
@@ -3086,6 +3599,10 @@ impl VaultSession {
         expected_content_hash: Option<&str>,
         annotations: &[crate::oplog::OpAnnotation],
     ) -> Result<SaveReport, VaultError> {
+        // #1077 (I2/I3): bind the stored spelling BEFORE anything keys on
+        // `path` — the intent marker below, the index row, the epoch.
+        let bound_path = self.bind_source_path(path)?;
+        let path: &str = &bound_path;
         // Cross-process critical section (#641 adversarial review).
         //
         // The expected-hash compare-and-swap below re-reads and re-hashes
@@ -3103,7 +3620,173 @@ impl VaultSession {
         // `WriteConflict`, never a silent clobber. A post-timeout
         // SQLITE_BUSY surfaces as `Db` (the CLI maps it to its "cache is
         // busy" copy).
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // Durable cross-process write intent (adversarial round 21):
+        // committed BEFORE the write (autocommit, its own fsync) so a
+        // post-write rollback — or a crash — leaves it behind for
+        // EVERY process sharing the cache; deleted inside the index
+        // transaction below so success clears it atomically with the
+        // commit. Pre-write failures (a WriteConflict refusal, say)
+        // also leave it behind; the abandoned-intent repair path
+        // reindexes a consistent file — a cheap no-op — and clears
+        // it, which is accepted over restructuring this function
+        // around early-return cleanup. Side effect worth noting: the
+        // committed insert advances other connections'
+        // `data_version`, so their paging drift checks fire even
+        // before the main transaction lands.
+        let intent_token = fresh_intent_token();
+        // Durable-before-mutation (model-confirmation review): this
+        // registration must survive any power cut the file write
+        // below survives — WAL NORMAL could otherwise lose the
+        // marker while keeping the mutation.
+        Self::commit_durably(conn, || {
+            conn.execute(
+                "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+                 VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+                rusqlite::params![path, now_ms(), intent_token],
+            )?;
+            Ok(())
+        })?;
+
+        // INVARIANT (adversarial round 27): every error exit between
+        // the registration above and `provider.write_file` below is a
+        // PROVABLE no-write, so it must clear its own (path, token)
+        // row — a stranded pre-write intent is an unnecessary marker,
+        // and if the file is persistently unreadable its aged repair
+        // fails before token clearing on EVERY vault-wide task query.
+        // Only a crash in this interval may strand one (accepted:
+        // the sweep repairs a consistent file as a cheap no-op).
+        // New fallible steps in this interval must follow suit.
+
+        // Test-only seam (adversarial round 26): simulates a
+        // concurrent aged sweep landing exactly in the gap between
+        // this writer's registration and its transaction — the
+        // schedule the ownership fence below exists for. Best-effort:
+        // a failed delete leaves the row alive and the fence simply
+        // sees a live registration.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_SWEEP_AFTER_INTENT")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            let _ = conn.execute(
+                "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                rusqlite::params![path, intent_token],
+            );
+        }
+
+        // Test-only seam (adversarial round 32): another writer's
+        // FULL INDEX COMMIT landing in the registration→transaction
+        // gap — it indexed the OLD bytes, advancing the file's
+        // epoch past this writer's stamp. Committed through a
+        // genuine second connection, exactly as a real racing
+        // process would.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_COMMIT_AFTER_INTENT")
+            && path.contains(trigger.to_string_lossy().as_ref())
+            && let Some(db_path) = conn.path()
+            && let Ok(other) = Connection::open(db_path)
+        {
+            let _ = other.execute_batch(&format!(
+                "BEGIN IMMEDIATE;
+                 UPDATE index_epoch_clock SET clock = clock + 1;
+                 UPDATE files SET index_epoch = (SELECT clock FROM index_epoch_clock)
+                  WHERE path = '{}';
+                 COMMIT;",
+                path.replace('\'', "''")
+            ));
+        }
+
+        // `new_unchecked` (shared-borrow) rather than
+        // `transaction_with_behavior` (&mut): the error arm must
+        // clear the registration through `conn`, and the &mut
+        // wrapper's borrow spans the whole match under current
+        // borrowck. Exclusivity is already held — the session mutex
+        // serializes every writer on this connection.
+        let mut tx = match db::begin_fenced(conn) {
+            Ok(tx) => tx,
+            Err(e) => {
+                self.clear_own_intent_registration(conn, path, intent_token);
+                return Err(e.into());
+            }
+        };
+
+        // Ownership FENCE at the transaction boundary (adversarial
+        // rounds 26 + 32): a writer suspended past the liveness
+        // threshold in the registration→transaction gap can have
+        // its row swept as abandoned — resuming to write with no
+        // durable marker reopens the unmarked-failure window. And a
+        // FULL INDEX COMMIT landing in that same gap (another
+        // writer indexing the OLD bytes) advances the file's epoch
+        // past the stamp, so a post-write failure's marker would
+        // read as provably-superseded and be deleted — leaving the
+        // OTHER writer's now-stale rows serving unmarked. Verify
+        // BOTH under the writer lock — the row stands AND its stamp
+        // equals the file's current epoch; on either miss,
+        // re-register (a COMMITTED insert re-stamping the current
+        // epoch — an in-transaction one would roll back with the
+        // failure it exists to mark) and retake the lock. The lock
+        // is then held from this validation through the write, so
+        // the stamp provably equals the epoch AT the write.
+        // Reaching the retry bound requires multi-second
+        // suspensions inside consecutive microsecond windows; fail
+        // closed rather than write unmarked.
+        let mut intent_secured = false;
+        for _ in 0..3 {
+            let stamped_epoch: Option<i64> = match tx
+                .query_row(
+                    "SELECT registered_epoch FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                    rusqlite::params![path, intent_token],
+                    |row| row.get(0),
+                )
+                .optional()
+            {
+                Ok(stamped) => stamped,
+                Err(e) => {
+                    drop(tx);
+                    self.clear_own_intent_registration(conn, path, intent_token);
+                    return Err(e.into());
+                }
+            };
+            let current_epoch: i64 = match tx.query_row(
+                "SELECT COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0)",
+                rusqlite::params![path],
+                |row| row.get(0),
+            ) {
+                Ok(current) => current,
+                Err(e) => {
+                    drop(tx);
+                    self.clear_own_intent_registration(conn, path, intent_token);
+                    return Err(e.into());
+                }
+            };
+            if stamped_epoch == Some(current_epoch) {
+                intent_secured = true;
+                break;
+            }
+            drop(tx);
+            if let Err(e) = Self::commit_durably(conn, || {
+                conn.execute(
+                    "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+                     VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+                    rusqlite::params![path, now_ms(), intent_token],
+                )?;
+                Ok(())
+            }) {
+                self.clear_own_intent_registration(conn, path, intent_token);
+                return Err(e);
+            }
+            tx = match db::begin_fenced(conn) {
+                Ok(tx) => tx,
+                Err(e) => {
+                    self.clear_own_intent_registration(conn, path, intent_token);
+                    return Err(e.into());
+                }
+            };
+        }
+        if !intent_secured {
+            drop(tx);
+            self.clear_own_intent_registration(conn, path, intent_token);
+            return Err(VaultError::InvalidArgument {
+                message: "could not secure a durable write intent".into(),
+            });
+        }
 
         // `old_contents` is `Some(text)` only on the Some(expected_hash)
         // path with UTF-8-decodable disk content — the diff-on-save base
@@ -3111,35 +3794,75 @@ impl VaultSession {
         // those bytes costs no extra I/O. The None path (CLI/scripted)
         // and any non-UTF-8 file leave it `None`, which routes the op-log
         // append to a `WholeFileReplace` snapshot.
-        let (hash_before, old_contents): (String, Option<String>) =
-            if let Some(expected) = expected_content_hash {
-                let (old_bytes, current_hash, current_mtime_ms) = read_disk_contents_and_hash(
+        let (hash_before, old_contents): (String, Option<String>) = if let Some(expected) =
+            expected_content_hash
+        {
+            // Test-only fault seam (adversarial round 27): a
+            // provable pre-write failure — durable registration
+            // committed, file untouched. Routed through the REAL
+            // disk-read error arm below so the regression pins
+            // that arm's cleanup, not a seam-private copy.
+            let disk_read = if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_PRE_WRITE")
+                && path.contains(trigger.to_string_lossy().as_ref())
+            {
+                Err(VaultError::InvalidArgument {
+                    message: "test fault: injected failure before write, after intent registration"
+                        .into(),
+                })
+            } else {
+                read_disk_contents_and_hash(
                     self.provider.as_ref(),
                     path,
                     self.config.large_file_refuse_bytes,
-                )?;
-                if current_hash != expected {
-                    return Err(VaultError::WriteConflict {
-                        current_content_hash: current_hash,
-                        expected_content_hash: expected.to_string(),
-                        current_mtime_ms,
-                    });
-                }
-                (current_hash, String::from_utf8(old_bytes).ok())
-            } else {
-                // No conflict check: the cached index hash is good enough
-                // for the entry's `hash_before`, and we don't re-read disk
-                // just to diff — the None path logs a `WholeFileReplace`.
-                let cached = tx
-                    .query_row(
-                        "SELECT content_hash FROM files WHERE path = ?1",
-                        rusqlite::params![path],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()?
-                    .unwrap_or_default();
-                (cached, None)
+                )
             };
+            let (old_bytes, current_hash, current_mtime_ms) = match disk_read {
+                Ok(v) => v,
+                Err(e) => {
+                    drop(tx);
+                    self.clear_own_intent_registration(conn, path, intent_token);
+                    return Err(e);
+                }
+            };
+            if current_hash != expected {
+                // A conflict refusal is a PROVABLE no-write: this
+                // save's own intent registration clears here
+                // (token-scoped) rather than lingering to age
+                // into a pointless repair — and for a conflict
+                // against a DELETED file, lingering was worse
+                // than pointless (adversarial round 23): the
+                // aged repair hit NotFound forever and poisoned
+                // every vault-wide task query.
+                drop(tx);
+                self.clear_own_intent_registration(conn, path, intent_token);
+                return Err(VaultError::WriteConflict {
+                    current_content_hash: current_hash,
+                    expected_content_hash: expected.to_string(),
+                    current_mtime_ms,
+                });
+            }
+            (current_hash, String::from_utf8(old_bytes).ok())
+        } else {
+            // No conflict check: the cached index hash is good enough
+            // for the entry's `hash_before`, and we don't re-read disk
+            // just to diff — the None path logs a `WholeFileReplace`.
+            let cached = match tx
+                .query_row(
+                    "SELECT content_hash FROM files WHERE path = ?1",
+                    rusqlite::params![path],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+            {
+                Ok(cached) => cached.unwrap_or_default(),
+                Err(e) => {
+                    drop(tx);
+                    self.clear_own_intent_registration(conn, path, intent_token);
+                    return Err(e.into());
+                }
+            };
+            (cached, None)
+        };
 
         // Created-vs-Modified for the #802 event, read inside the
         // save's own transaction so a racing writer can't flip it.
@@ -3159,29 +3882,98 @@ impl VaultSession {
         // check-to-rename window above stays exclusive; a failed commit
         // still leaves a fully-written file, never a partial one —
         // `atomic_write` is temp-file + rename.)
-        self.provider.write_file(path, contents.as_bytes())?;
+        //
+        // Error typing (re-confirmation review): `InvalidPath` from
+        // the provider is its mutation-path validation refusing the
+        // spelling BEFORE touching disk — a Windows reserved name
+        // like `CON.md` passes vault-level validation but can never
+        // be written. That is a PROVABLE no-mutation, so it clears
+        // its registration like every pre-write exit; leaving the
+        // marker would poison every vault-wide query once aged,
+        // since its repair stats the same impossible path forever.
+        // All other write errors keep the marker: an atomic publish
+        // can fail AFTER mutating disk.
+        if let Err(write_error) = self.provider.write_file(path, contents.as_bytes()) {
+            if matches!(write_error, VaultError::InvalidPath { .. }) {
+                drop(tx);
+                self.clear_own_intent_registration(conn, path, intent_token);
+            }
+            return Err(write_error);
+        }
 
-        let new_stat = self.provider.stat(path)?;
+        // Test-only fault seam (adversarial round 12): THIS is the
+        // real partial-failure boundary — file written, index not
+        // yet committed. The env var carries a path substring so
+        // only the targeted test's saves trip it; production never
+        // sets it. Returning here rolls the transaction back,
+        // leaving disk newer than the index — the exact state the
+        // hosts' post-write reconciliation must repair.
+        // From here to the index commit the bytes are DURABLE while
+        // the cache is not (the write-intent marker repairs it), so
+        // every failure below is typed `SavedButUnindexed` carrying
+        // the landed hash — a caller must treat it as a COMMIT (W6-1
+        // §E TE-0, IE-6). Computed from `contents`, not from a stat:
+        // the hash exists even when `stat` is the step that failed.
         let new_hash = crate::vault::content_hash(contents.as_bytes());
+
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_AFTER_WRITE")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            return Err(VaultError::SavedButUnindexed {
+                new_content_hash: new_hash,
+                detail: "test fault: injected failure after write, before index commit".into(),
+            });
+        }
+
+        let new_stat = self
+            .provider
+            .stat(path)
+            .map_err(|e| VaultError::SavedButUnindexed {
+                new_content_hash: new_hash.clone(),
+                detail: e.to_string(),
+            })?;
 
         let now = now_ms();
         let mut graph_sink = self.graph_sink();
-        let file_id = self.index_saved_file(
-            &tx,
-            path,
-            contents,
-            &new_stat,
-            &new_hash,
-            now,
-            existed,
-            &mut graph_sink,
-        )?;
+        let file_id = self
+            .index_saved_file(
+                &tx,
+                path,
+                contents,
+                &new_stat,
+                &new_hash,
+                now,
+                existed,
+                &mut graph_sink,
+            )
+            .map_err(|e| VaultError::SavedButUnindexed {
+                new_content_hash: new_hash.clone(),
+                detail: e.to_string(),
+            })?;
         // Resolve (allocating on first save) the file's op-log name
         // inside the index transaction, so the binding column commits
         // atomically with the save it serves (O-1 #539). Best-effort:
         // `None` skips the append below exactly like an append failure.
         let oplog_name = self.ensure_oplog_name(&tx, file_id, path);
-        tx.commit()?;
+        // Clear the write intent ATOMICALLY with the index commit
+        // (round 21): a rollback of this transaction re-exposes the
+        // committed intent row, which is exactly the durable
+        // post-write marker other processes need. TOKEN-scoped
+        // (round 22): only this save's own registration clears —
+        // deleting by path alone could erase a replacement another
+        // writer registered meanwhile.
+        tx.execute(
+            "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+            rusqlite::params![path, intent_token],
+        )
+        .map_err(|e| VaultError::SavedButUnindexed {
+            new_content_hash: new_hash.clone(),
+            detail: e.to_string(),
+        })?;
+        tx.commit().map_err(|e| VaultError::SavedButUnindexed {
+            new_content_hash: new_hash.clone(),
+            detail: e.to_string(),
+        })?;
         self.graph_apply(graph_sink);
         self.bump_bases_generation();
 
@@ -3678,6 +4470,14 @@ impl VaultSession {
                 )?;
             }
         }
+        // Index epoch (adversarial rounds 31-32): this commit is a
+        // successful full-file index of `contents` — durable proof
+        // that any write intent registered BEFORE it is superseded.
+        // Stamped from the GLOBAL monotonic clock in the same
+        // transaction as the rows it vouches for, so a rollback
+        // moves neither and a delete/recreate can never reuse an
+        // earlier value (ABA).
+        stamp_index_epoch(tx, file_id)?;
         Ok(file_id)
     }
 
@@ -3942,7 +4742,7 @@ impl VaultSession {
         // log either way, so nothing is lost, only deferred.
         let events =
             crate::oplog_events::derive_events(&entry, ops_in_hand.as_deref(), old_contents);
-        let inserted = conn.unchecked_transaction().and_then(|tx| {
+        let inserted = db::begin_fenced(conn).and_then(|tx| {
             insert_oplog_events(
                 &tx,
                 file_id,
@@ -3955,7 +4755,8 @@ impl VaultSession {
                     rusqlite::params![rowid],
                 )?;
             }
-            tx.commit()
+            tx.commit()?;
+            Ok::<(), db::DbError>(())
         });
         if let Err(e) = inserted {
             // Rows rolled back; the marker stays behind and the next
@@ -4472,13 +5273,15 @@ impl VaultSession {
                 reason: "deleted-file history failed integrity verification".into(),
             });
         }
-        let report = self.create_exclusive_binding(
-            destination,
-            content.as_bytes(),
-            &content,
-            Some(&content),
-            Some(&remnant.stem),
-        )?;
+        let report = self
+            .create_exclusive_binding(
+                destination,
+                content.as_bytes(),
+                &content,
+                Some(&content),
+                Some(&remnant.stem),
+            )
+            .map_err(CreateFailure::into_error)?;
         // The remnant is a remnant no more (one lock hold: retain +
         // generation bump are atomic together).
         {
@@ -4496,10 +5299,49 @@ impl VaultSession {
     /// convention) → [`VaultError::DestinationExists`]; else the
     /// standard atomic-write + index + op-log machinery.
     pub fn create_exclusive(&self, path: &str, content: &str) -> Result<SaveReport, VaultError> {
-        let report =
-            self.create_exclusive_binding(path, content.as_bytes(), content, Some(content), None)?;
-        self.notify_file_change(FileChangeKind::Created, path, None);
-        Ok(report)
+        match self.create_exclusive_reporting(path, content)? {
+            CreateExclusiveOutcome::Committed(report) => Ok(report),
+            CreateExclusiveOutcome::PublishedUnindexed { error, .. } => Err(error),
+        }
+    }
+
+    /// [`create_exclusive`] with the typed post-publish outcome (#1123):
+    /// `Err` is a REFUSAL (nothing landed — `DestinationExists`,
+    /// `InvalidPath`, `FileTooLarge`, a pre-publish lock/transaction
+    /// failure); `Ok(PublishedUnindexed { .. })` means the no-replace
+    /// write landed and the index/commit then failed — the bytes are on
+    /// disk and the next scan indexes them, so a host must finish its
+    /// flow as a create (open it, select it, do NOT retry under another
+    /// name) and may present the recoverable state honestly. The
+    /// file-change notification fires for both landed arms.
+    ///
+    /// Test seam: `SLATE_TEST_FAULT_AFTER_WRITE` (a path substring) trips
+    /// the post-publish failure exactly at the boundary, the same seam
+    /// `save_text` exposes, so both hosts' harnesses can drive it.
+    pub fn create_exclusive_reporting(
+        &self,
+        path: &str,
+        content: &str,
+    ) -> Result<CreateExclusiveOutcome, VaultError> {
+        match self.create_exclusive_binding(path, content.as_bytes(), content, Some(content), None)
+        {
+            Ok(report) => {
+                self.notify_file_change(FileChangeKind::Created, path, None);
+                Ok(CreateExclusiveOutcome::Committed(report))
+            }
+            Err(CreateFailure::Refused(error)) => Err(error),
+            Err(CreateFailure::Published {
+                content_hash,
+                error,
+            }) => {
+                self.notify_file_change(FileChangeKind::Created, path, None);
+                Ok(CreateExclusiveOutcome::PublishedUnindexed {
+                    path: path.to_string(),
+                    content_hash,
+                    error,
+                })
+            }
+        }
     }
 
     /// Create-if-absent BYTES write (#910): the binary / non-UTF-8 sibling
@@ -4521,8 +5363,9 @@ impl VaultSession {
         bytes: &[u8],
     ) -> Result<SaveReport, VaultError> {
         let index_contents = String::from_utf8_lossy(bytes);
-        let report =
-            self.create_exclusive_binding(path, bytes, index_contents.as_ref(), None, None)?;
+        let report = self
+            .create_exclusive_binding(path, bytes, index_contents.as_ref(), None, None)
+            .map_err(CreateFailure::into_error)?;
         self.notify_file_change(FileChangeKind::Created, path, None);
         Ok(report)
     }
@@ -4568,55 +5411,93 @@ impl VaultSession {
         index_contents: &str,
         oplog_contents: Option<&str>,
         bind_log: Option<&str>,
-    ) -> Result<SaveReport, VaultError> {
-        validate_save_path(path)?;
+    ) -> Result<SaveReport, CreateFailure> {
+        validate_save_path(path).map_err(CreateFailure::Refused)?;
+        // #1077 (I2/I4): a create keeps the leaf the user chose and binds
+        // its parent's stored spelling.
+        let bound_path = self
+            .bind_destination_path(path)
+            .map_err(CreateFailure::Refused)?;
+        let path: &str = &bound_path;
         if bytes.len() as u64 > self.config.large_file_refuse_bytes {
-            return Err(VaultError::FileTooLarge {
+            return Err(CreateFailure::Refused(VaultError::FileTooLarge {
                 path: path.to_string(),
                 size: bytes.len() as u64,
-            });
+            }));
         }
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx =
+            db::begin_fenced(&conn).map_err(|e| CreateFailure::Refused(VaultError::from(e)))?;
 
         // Existence gates INSIDE the cross-process critical section:
         // the index (case-insensitive — the APFS-aware structural
         // convention) and the disk.
-        if let Some(existing) = index_entry_case_insensitive(&tx, path)? {
-            return Err(VaultError::DestinationExists { path: existing });
+        if let Some(existing) =
+            index_entry_case_insensitive(&tx, path).map_err(CreateFailure::Refused)?
+        {
+            return Err(CreateFailure::Refused(VaultError::DestinationExists {
+                path: existing,
+            }));
         }
         if self.provider.stat(path).is_ok() {
-            return Err(VaultError::DestinationExists {
+            return Err(CreateFailure::Refused(VaultError::DestinationExists {
                 path: path.to_string(),
-            });
+            }));
         }
 
         // No-replace publish: the point of no return for user bytes.
-        self.provider.write_file_if_absent(path, bytes)?;
+        self.provider
+            .write_file_if_absent(path, bytes)
+            .map_err(CreateFailure::Refused)?;
 
-        let new_stat = self.provider.stat(path)?;
+        // From here every failure is a POST-PUBLISH failure (#1123): the
+        // bytes are on disk, the transaction rolls back, and the next
+        // scan indexes the file — never delete user bytes on an index
+        // error. `published` carries the landed hash so a host can finish
+        // its flow against the committed file.
         let new_hash = crate::vault::content_hash(bytes);
+        let published = |error: VaultError| CreateFailure::Published {
+            content_hash: new_hash.clone(),
+            error,
+        };
+
+        // Test-only fault seam — THIS is the real partial-failure
+        // boundary (file written, index not yet committed): the same
+        // path-substring env var `save_text` exposes, so a host harness
+        // can drive the post-publish arm deterministically.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_AFTER_WRITE")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            return Err(published(VaultError::InvalidArgument {
+                message: "test fault: injected failure after write, before index commit".into(),
+            }));
+        }
+
+        let new_stat = self.provider.stat(path).map_err(&published)?;
         let now = now_ms();
         let mut graph_sink = self.graph_sink();
         // `existed = false` by construction: the case-insensitive index
         // gate above already rejected any pre-existing row.
-        let file_id = self.index_saved_file(
-            &tx,
-            path,
-            index_contents,
-            &new_stat,
-            &new_hash,
-            now,
-            false,
-            &mut graph_sink,
-        )?;
+        let file_id = self
+            .index_saved_file(
+                &tx,
+                path,
+                index_contents,
+                &new_stat,
+                &new_hash,
+                now,
+                false,
+                &mut graph_sink,
+            )
+            .map_err(&published)?;
         if let Some(stem) = bind_log {
             // Recovery re-binding, atomic with the row itself; the
             // partial UNIQUE index backstops double-binding.
             tx.execute(
                 "UPDATE files SET oplog_name = ?1 WHERE id = ?2 AND oplog_name IS NULL",
                 rusqlite::params![stem, file_id],
-            )?;
+            )
+            .map_err(|e| published(VaultError::from(e)))?;
             // O-6 (#544): the re-bound log carries the file's
             // pre-delete history, but its event rows died with the old
             // `files` row (the CASCADE). Repopulate inside the binding
@@ -4655,7 +5536,7 @@ impl VaultSession {
             Some(_) => self.ensure_oplog_name(&tx, file_id, path),
             None => None,
         };
-        tx.commit()?;
+        tx.commit().map_err(|e| published(VaultError::from(e)))?;
         self.graph_apply(graph_sink);
         self.bump_bases_generation();
 
@@ -4908,6 +5789,68 @@ impl VaultSession {
         Ok(crate::EmbedPreviewResolution {
             resolution,
             truncated: budget.truncated(),
+        })
+    }
+
+    /// Pool-bounded panel profile of the preview resolver (W4-2
+    /// round 11, the reading-card precedent below): the per-key
+    /// image allowance is clamped to the caller's remaining
+    /// NOTE-WIDE pool, so payloads past the pool degrade to
+    /// `Unresolved(ReadError)` core-side instead of marshalling —
+    /// without the clamp, 128 keys × the 8 MiB per-key allowance
+    /// was ~1 GiB of FFI traffic a crafted note triggered on
+    /// activation.
+    pub fn resolve_embed_preview_pooled(
+        &self,
+        host_path: &str,
+        target: &str,
+        alt: Option<String>,
+        image_pool_bytes: u64,
+    ) -> Result<crate::EmbedPreviewResolution, VaultError> {
+        let mut budget =
+            crate::embeds::EmbedResolveBudget::preview_with_image_pool(image_pool_bytes);
+        let resolution = self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)?;
+        Ok(crate::EmbedPreviewResolution {
+            resolution,
+            truncated: budget.truncated(),
+        })
+    }
+
+    /// Reading-card profile of the preview resolver (W3-5 round 4):
+    /// same cumulative budgets, but nested image payloads are
+    /// stripped BEFORE the result crosses the FFI (reading cards
+    /// render nested embeds header-only — their bytes were pure
+    /// marshalling churn a crafted note could multiply to ~1 GiB per
+    /// refresh), and the root image payload is included only when it
+    /// fits `image_budget_bytes` (the caller's remaining note-wide
+    /// pool). Transient allocation inside this call stays bounded by
+    /// the per-key preview budget; nothing over-budget is retained or
+    /// marshalled.
+    pub fn resolve_embed_reading_card(
+        &self,
+        host_path: &str,
+        target: &str,
+        alt: Option<String>,
+        image_budget_bytes: u64,
+    ) -> Result<crate::embeds::EmbedReadingCard, VaultError> {
+        let mut budget = crate::embeds::EmbedResolveBudget::preview();
+        let resolution = self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)?;
+        let mut resolution = crate::embeds::strip_nested_image_payloads(resolution);
+        let mut image_elided = false;
+        let mut image_len = 0u64;
+        if let crate::EmbedResolution::Image { bytes, .. } = &mut resolution {
+            image_len = bytes.len() as u64;
+            if image_len > image_budget_bytes {
+                bytes.clear();
+                bytes.shrink_to_fit();
+                image_elided = true;
+            }
+        }
+        Ok(crate::embeds::EmbedReadingCard {
+            resolution,
+            truncated: budget.truncated(),
+            image_elided,
+            image_len,
         })
     }
 
@@ -5375,6 +6318,76 @@ impl VaultSession {
         })
     }
 
+    /// The bounded panel twin of [`Self::note_load_bundle`] (W4-2
+    /// round 10): limits apply in SQL before any `Vec` exists.
+    pub fn note_link_panels(
+        &self,
+        path: &str,
+        backlinks_paging: Paging,
+        outgoing_limit: u32,
+        embed_limit: u32,
+    ) -> Result<NoteLinkPanels, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let backlinks = crate::links_db::backlinks_for(&conn, path, backlinks_paging)?;
+        let outgoing_links =
+            crate::links_db::outgoing_links_bounded(&conn, path, outgoing_limit, false)?;
+        let outgoing_total = crate::links_db::outgoing_links_count(&conn, path, false)?;
+        let embed_links = crate::links_db::outgoing_links_bounded(&conn, path, embed_limit, true)?;
+        let embed_total = crate::links_db::outgoing_links_count(&conn, path, true)?;
+        Ok(NoteLinkPanels {
+            backlinks,
+            outgoing_links,
+            outgoing_total,
+            embed_links,
+            embed_total,
+        })
+    }
+
+    /// Bounded outline read (W4-2 round 10). A path the scanner has
+    /// not indexed returns an empty page, not an error.
+    pub fn note_outline(&self, path: &str, limit: u32) -> Result<OutlinePage, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let file_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(file_id) = file_id else {
+            return Ok(OutlinePage {
+                headings: Vec::new(),
+                total: 0,
+            });
+        };
+        let mut stmt = conn.prepare_cached(
+            "SELECT ordinal, level, text, anchor_id, byte_offset
+             FROM headings WHERE file_id = ?1
+             ORDER BY ordinal ASC
+             LIMIT ?2",
+        )?;
+        let headings: Result<Vec<crate::Heading>, rusqlite::Error> = stmt
+            .query_map(rusqlite::params![file_id, limit], |row| {
+                Ok(crate::Heading {
+                    ordinal: row.get::<_, i64>(0)? as u32,
+                    level: row.get::<_, i64>(1)? as u8,
+                    text: row.get::<_, String>(2)?,
+                    anchor_id: row.get::<_, String>(3)?,
+                    byte_offset: row.get::<_, i64>(4)? as u32,
+                })
+            })?
+            .collect();
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM headings WHERE file_id = ?1",
+            rusqlite::params![file_id],
+            |row| row.get(0),
+        )?;
+        Ok(OutlinePage {
+            headings: headings?,
+            total: total.max(0) as u32,
+        })
+    }
+
     /// Paged audit of every unresolved internal link in the vault.
     /// Useful for "broken links" panels and pre-commit lint flows.
     pub fn list_unresolved_links(
@@ -5425,8 +6438,1004 @@ impl VaultSession {
     /// Every task parsed from `path`, in document order. Returns an
     /// empty vec when the file isn't indexed yet or has no tasks.
     pub fn tasks_for_file(&self, path: &str) -> Result<Vec<crate::TaskItem>, VaultError> {
-        let conn = self.conn.lock().expect("session connection mutex");
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let _move_guard = self.repair_abandoned_intents_locked(&mut conn, Some(path))?;
         crate::tasks_db::tasks_for_file(&conn, path)
+    }
+
+    /// The bounded panel twin of [`Self::tasks_for_file`] (W4-3, the
+    /// W4-2 round-10 posture): at most `limit` tasks in document
+    /// order, with the true total and open-count alongside so the
+    /// panel header stays honest past its display cap. Unknown paths
+    /// return an empty page.
+    pub fn note_tasks(&self, path: &str, limit: u32) -> Result<NoteTasksPage, VaultError> {
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let _move_guard = self.repair_abandoned_intents_locked(&mut conn, Some(path))?;
+        let (tasks, total, open_total, content_hash) =
+            crate::tasks_db::note_tasks_bounded(&conn, path, limit)?;
+        Ok(NoteTasksPage {
+            tasks,
+            total,
+            open_total,
+            content_hash,
+        })
+    }
+
+    /// Repair the index for one path after a post-write failure
+    /// (adversarial round 12). `save_text` writes the FILE before
+    /// the index commit, so a failure in between leaves disk newer
+    /// than the index. A host that detects the divergence — a
+    /// failed toggle whose read-back hash moved — calls this to
+    /// force the path's index back to disk truth BEFORE re-querying
+    /// any task surface: re-querying the stale index would
+    /// resurrect the pre-write state as ghost rows and make retries
+    /// conflict forever. Unconditional, unlike
+    /// [`Self::ensure_open_base_indexed`]: the existing row is
+    /// exactly what's wrong.
+    pub fn reindex_path(&self, path: &str) -> Result<(), VaultError> {
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        // No intent clearing from the host route (round 22): this
+        // caller cannot know whose registration currently occupies
+        // the path, and deleting by path alone could erase a NEWER
+        // writer's durable marker. Any lingering abandoned intent is
+        // token-safely cleared by a later query's sweep; the extra
+        // single-file reindex it costs is negligible.
+        self.reindex_path_locked(&mut conn, path, &[])
+    }
+
+    /// Host-facing repair-or-contain (adversarial round 31): the
+    /// Windows repair coordinator bars EVERY task query while a
+    /// pending path exists, so a path whose repair persistently
+    /// fails on a FILE condition (unreadable, non-UTF-8, oversize)
+    /// must resolve to something the host can safely release —
+    /// otherwise one bad file outages every task surface until
+    /// restart.
+    ///
+    /// `Repaired`: the index is disk truth again. `Contained`: the
+    /// file condition persists; the path's suspect task rows were
+    /// dropped (honest-empty), its stat tuple poisoned, and an
+    /// already-aged durable marker planted so every later query's
+    /// sweep — in ANY process — retries the repair and heals in full
+    /// the moment the file reads again. The host may release its
+    /// gate: queries are safe. `Declined`: another process committed
+    /// mid-attempt; nothing destructive happened — retry. Database
+    /// and other non-file failures propagate as errors: a broken
+    /// database must stay loud (round 29).
+    pub fn repair_or_contain_path(&self, path: &str) -> Result<TaskIndexRepairOutcome, VaultError> {
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        // A path owned by an ACTIVE move must not be repaired or
+        // contained mid-operation (final-confirmation review): if a
+        // HELD marker stands and the nonblocking structural claim
+        // fails, decline — the coordinator keeps the path pending
+        // and retries after the move ends. The guard, when claimed,
+        // is held for the whole repair-or-contain attempt.
+        let path_has_held_marker: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM text_write_intents WHERE path = ?1 AND created_ms = ?2)",
+            rusqlite::params![path, Self::HELD_MOVE_MARKER_MS],
+            |row| row.get(0),
+        )?;
+        let _move_guard = if path_has_held_marker {
+            match Self::try_acquire_structural_guard(&self.config.cache_dir) {
+                Some(guard) => Some(guard),
+                None => return Ok(TaskIndexRepairOutcome::Declined),
+            }
+        } else {
+            None
+        };
+        let epoch_before_attempt: Option<i64> = conn
+            .query_row(
+                "SELECT index_epoch FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match self.reindex_path_locked(&mut conn, path, &[]) {
+            Ok(()) => Ok(TaskIndexRepairOutcome::Repaired),
+            Err(repair_err) => match &repair_err {
+                VaultError::Io(_)
+                | VaultError::InvalidUtf8 { .. }
+                | VaultError::FileTooLarge { .. }
+                | VaultError::InvalidPath { .. } => {
+                    if self.contain_unrepairable_pending_path_locked(
+                        &mut conn,
+                        path,
+                        epoch_before_attempt,
+                    )? {
+                        Ok(TaskIndexRepairOutcome::Contained)
+                    } else {
+                        Ok(TaskIndexRepairOutcome::Declined)
+                    }
+                }
+                _ => Err(repair_err),
+            },
+        }
+    }
+
+    /// The host-route containment body. Unlike the sweep's
+    /// token-driven quarantine, the voucher here is the HOST's own
+    /// knowledge of its failed write; the epoch guard covers the
+    /// attempt window instead — any other-process commit between the
+    /// caller's epoch capture and this transaction declines
+    /// (`Ok(false)`, nothing destructive), because that commit may
+    /// have rebuilt the very rows containment would delete.
+    /// Same-process writers cannot interleave: the caller holds the
+    /// session mutex across capture, repair, and containment.
+    ///
+    /// Containment plants an ALREADY-AGED durable marker (fresh
+    /// token, current epoch), so the standard sweep machinery —
+    /// cross-process — keeps retrying the repair and rebuilds the
+    /// rows the moment the file reads again.
+    fn contain_unrepairable_pending_path_locked(
+        &self,
+        conn: &mut Connection,
+        path: &str,
+        epoch_before_attempt: Option<i64>,
+    ) -> Result<bool, VaultError> {
+        let tx = db::begin_fenced(conn)?;
+        let current_epoch: Option<i64> = tx
+            .query_row(
+                "SELECT index_epoch FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if current_epoch != epoch_before_attempt {
+            return Ok(false);
+        }
+        let already_quarantined: Option<bool> = tx
+            .query_row(
+                "SELECT f.mtime_ms = -1
+                       AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.file_id = f.id)
+                 FROM files f WHERE f.path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match already_quarantined {
+            // No index row (never indexed, or deleted) or already
+            // quarantined: nothing suspect is being served, but the
+            // gate release still needs a durable healing trigger
+            // (adversarial round 32) — Contained without a marker
+            // left the path honest-empty FOREVER when the file
+            // became readable without a filesystem event. Ensure a
+            // marker stands before releasing.
+            None | Some(true) => {
+                Self::ensure_aged_healing_marker(&tx, path)?;
+                tx.commit()?;
+                return Ok(true);
+            }
+            Some(false) => {}
+        }
+        tx.execute(
+            "UPDATE files SET mtime_ms = -1, size_bytes = -1, ctime_ms = -1 WHERE path = ?1",
+            rusqlite::params![path],
+        )?;
+        tx.execute(
+            "DELETE FROM tasks WHERE file_id = (SELECT id FROM files WHERE path = ?1)",
+            rusqlite::params![path],
+        )?;
+        // The planted marker is registered at the CURRENT epoch and
+        // already aged: the very next task query sweeps it, retries
+        // the repair, and clears it on success — self-healing in
+        // every process sharing the cache.
+        Self::ensure_aged_healing_marker(&tx, path)?;
+        tx.commit()?;
+        self.bump_bases_generation();
+        self.notify_file_change(FileChangeKind::Modified, path, None);
+        Ok(true)
+    }
+
+    /// Plant an ALREADY-AGED durable marker for `path` unless an
+    /// aged one already stands (adversarial round 32): every
+    /// Contained outcome must leave a trigger the sweep will
+    /// actually FIRE on — a fresh marker (the failed save's own, a
+    /// live writer's) doesn't age for 15s, and a pre-write failure
+    /// could even clear it, leaving the contained path honest-empty
+    /// with nothing to heal it. Aged-marker-conditional rather than
+    /// unconditional so repeated containments don't accumulate
+    /// token rows.
+    /// Durably mark BOTH sides of every structural rename BEFORE the
+    /// filesystem mutation (adversarial rounds 35-36): the rename is
+    /// not ordered against another process's writer-locked save, so
+    /// a save can interleave anywhere in the rename→index-commit gap
+    /// — including a SUCCESSFUL source save whose freshly indexed
+    /// row the move then relocates to the destination, its own
+    /// marker already cleared, leaving both paths silently wrong
+    /// with no trigger. These markers are committed before any byte
+    /// moves and NEVER cleared by the move itself: once aged, the
+    /// next task query's sweep re-reads both paths under the writer
+    /// lock and converges whatever any interleaving produced.
+    ///
+    /// Planted FRESH, not pre-aged (round 36): a pre-aged marker is
+    /// immediately sweep-eligible, so another process could repair
+    /// it against PRE-move disk truth and clear it before the
+    /// rename even ran — reopening the whole class. Fresh markers
+    /// are invisible to sweeps (only aged rows are selected) and
+    /// carry tokens nobody else clears; the move AGES its own
+    /// tokens atomically inside its index commit
+    /// ([`age_move_markers_in_tx`]), so convergence fires exactly
+    /// when the move lands. A move that fails, compensates, or
+    /// crashes leaves them to age naturally within the liveness
+    /// threshold — the re-read then converges the compensated or
+    /// crashed state instead. Returns the planted (path, token)
+    /// pairs for that in-commit aging.
+    /// Run `f` with `PRAGMA synchronous = FULL`, restoring NORMAL
+    /// afterward (model-confirmation review): the vault's WAL runs
+    /// NORMAL for throughput, but a commit that must be durable
+    /// BEFORE a filesystem mutation — a write-intent registration, a
+    /// move/delete marker plant, an inflight journal row — could
+    /// otherwise be lost to a power cut while the mutation survives,
+    /// leaving divergence with no trigger. These commits are rare
+    /// (one per save/move/delete), so the extra fsync is
+    /// proportionate.
+    fn commit_durably<T>(
+        conn: &Connection,
+        f: impl FnOnce() -> Result<T, VaultError>,
+    ) -> Result<T, VaultError> {
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        let result = f();
+        let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+        result
+    }
+
+    /// MEMBERSHIP FENCE for prefix-scale filesystem mutations
+    /// (final-confirmation review): enumerate the prefix and verify
+    /// every member is marked UNDER SQLite's writer lock — which
+    /// blocks every coordinated save, since saves write inside their
+    /// own writer transaction — and only run the filesystem mutation
+    /// while that verification holds. A save committing a new
+    /// source-prefix row after a snapshot can therefore never slip
+    /// between marking and the rename/trash: either it committed
+    /// before the fence's verification (and gets marked in the next
+    /// loop pass) or it is blocked until the mutation completes.
+    /// Newcomers found mid-loop are marked durably (both sides for
+    /// moves) and the verification retries; persistent churn fails
+    /// the operation BEFORE any byte moves. Returns every marker it
+    /// planted alongside the mutation's result.
+    #[allow(clippy::type_complexity)]
+    fn fence_prefix_and_mutate<R>(
+        &self,
+        conn: &mut Connection,
+        from_prefix: &str,
+        destination_prefix: Option<&str>,
+        fs_mutation: impl FnOnce() -> Result<R, VaultError>,
+    ) -> Result<(Vec<(String, i64)>, R), VaultError> {
+        let (lo, hi) = subtree_bounds(from_prefix).expect("non-root folder path");
+        let mut planted: Vec<(String, i64)> = Vec::new();
+        let mut marked: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for _attempt in 0..4 {
+            let tx = db::begin_fenced(conn)?;
+            let members: Vec<String> = {
+                let mut stmt =
+                    tx.prepare("SELECT path FROM files WHERE path >= ?1 AND path < ?2")?;
+                let rows = stmt.query_map(rusqlite::params![lo, hi], |row| row.get(0))?;
+                rows.collect::<Result<_, _>>()?
+            };
+            let unmarked: Vec<String> = members
+                .iter()
+                .filter(|member| !marked.contains(*member))
+                .cloned()
+                .collect();
+            if unmarked.is_empty() {
+                let result = fs_mutation()?;
+                drop(tx);
+                return Ok((planted, result));
+            }
+            drop(tx);
+            let mut to_mark: Vec<String> = Vec::new();
+            for member in unmarked {
+                if let Some(dest) = destination_prefix {
+                    to_mark.push(format!("{dest}{}", &member[from_prefix.len()..]));
+                }
+                to_mark.push(member);
+            }
+            planted
+                .extend(self.plant_move_markers_locked(conn, to_mark.iter().map(String::as_str))?);
+            marked.extend(to_mark);
+        }
+        Err(VaultError::InvalidArgument {
+            message: "prefix membership kept changing during a structural mutation; aborted                       before any bytes moved"
+                .into(),
+        })
+    }
+
+    fn plant_move_markers_locked<'p>(
+        &self,
+        conn: &Connection,
+        paths: impl IntoIterator<Item = &'p str>,
+    ) -> Result<Vec<(String, i64)>, VaultError> {
+        // ALL-OR-NOTHING (adversarial round 38): each insert
+        // autocommitting individually let a mid-loop persistence
+        // failure strand a PARTIAL marker set — durable rows an
+        // already-open process could age and sweep against a
+        // mid-crash topology, deleting descendant rows and
+        // consuming markers before the deferred recovery retried.
+        // One transaction: every marker persists, or none do.
+        // Durable-before-mutation (model-confirmation review): the
+        // commit below must survive a power cut that the upcoming
+        // filesystem mutation also survives.
+        Self::commit_durably(conn, || {
+            let tx = db::begin_fenced(conn)?;
+            let mut planted = Vec::new();
+            for path in paths {
+                // Test-only seam (adversarial round 37): a transient
+                // persistence failure while planting — recovery flows
+                // must fail closed WITHOUT consuming their journal, and
+                // (round 38) without leaving any partial markers.
+                if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_PLANT_MARKERS")
+                    && path.contains(trigger.to_string_lossy().as_ref())
+                {
+                    return Err(VaultError::InvalidArgument {
+                        message: "test fault: injected marker plant failure".into(),
+                    });
+                }
+                // HELD, not timestamped (adversarial rounds 39-40): any
+                // wall-clock stamp — even one taken adjacent to the
+                // commit — can expire while a suspended process sits
+                // between planting and its terminal state, letting a
+                // sweep consume markers against mid-move topology. The
+                // sentinel never ages; sweeps honor it while the vault
+                // structural lock (held across the whole move) is held,
+                // and treat it as an orphan resolved by a real read
+                // only once the lock is provably free.
+                let token = fresh_intent_token();
+                tx.execute(
+                "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+                 VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+                rusqlite::params![path, Self::HELD_MOVE_MARKER_MS, token],
+            )?;
+                planted.push((path.to_string(), token));
+            }
+            tx.commit()?;
+            Ok(planted)
+        })
+    }
+
+    /// ENSURE-and-age a move's own planted markers atomically with
+    /// its index commit (adversarial rounds 36 + 39): the tokens
+    /// become sweep-eligible in the same durable instant the moved
+    /// rows become visible, so the first task query after the move
+    /// re-reads every touched path. INSERT OR REPLACE, not UPDATE
+    /// (round 39): if the move outlived the liveness threshold, a
+    /// sweep may have already consumed some markers against the
+    /// mid-move topology — re-asserting the full set here restores
+    /// them, so every path this move touched is guaranteed a
+    /// durable re-read trigger the moment its index state lands,
+    /// regardless of what happened in between.
+    fn age_move_markers_in_tx(
+        tx: &rusqlite::Transaction,
+        planted: &[(String, i64)],
+    ) -> Result<(), VaultError> {
+        for (path, token) in planted {
+            tx.execute(
+                "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+                 VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+                rusqlite::params![
+                    path,
+                    now_ms() - Self::intent_abandon_threshold_ms(path) - 1,
+                    token
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn ensure_aged_healing_marker(
+        tx: &rusqlite::Transaction,
+        path: &str,
+    ) -> Result<(), VaultError> {
+        // A marker only counts as a standing healing trigger if it
+        // will actually SURVIVE to fire (model-confirmation review):
+        // an aged row whose epoch is behind the file's current epoch
+        // is superseded — the very next sweep deletes it without a
+        // read — so accepting it here would release the containment
+        // gate with nothing left to heal the path. Sufficient
+        // triggers are a non-superseded aged marker or a HELD move
+        // marker (whose terminal or orphan path guarantees a read).
+        let durable_trigger_stands: bool = tx.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM text_write_intents i
+                WHERE i.path = ?1
+                  AND (i.created_ms = ?3
+                       OR (i.created_ms <= ?2
+                           AND i.registered_epoch >=
+                               COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0)))
+             )",
+            rusqlite::params![
+                path,
+                now_ms() - Self::intent_abandon_threshold_ms(path),
+                Self::HELD_MOVE_MARKER_MS
+            ],
+            |row| row.get(0),
+        )?;
+        if durable_trigger_stands {
+            return Ok(());
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+             VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+            rusqlite::params![
+                path,
+                now_ms() - Self::intent_abandon_threshold_ms(path) - 1,
+                fresh_intent_token()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// `created_ms` sentinel for a HELD move marker (adversarial
+    /// round 40): planted rows carry this instead of a wall-clock
+    /// stamp, so no amount of suspension between planting and the
+    /// move's terminal state can make them sweep-eligible by age.
+    /// Sweeps honor held markers while the vault structural lock is
+    /// held — every move holds that lock across its whole lifetime
+    /// — and treat them as orphans (sweepable, resolved by a real
+    /// read) only when the lock is FREE, which means the mover
+    /// crashed or already reached a terminal state that failed to
+    /// re-stamp. Terminal states overwrite the sentinel with a real
+    /// aged stamp via [`Self::age_move_markers_in_tx`].
+    const HELD_MOVE_MARKER_MS: i64 = i64::MAX;
+
+    /// Probe whether the vault structural lock is currently free.
+    /// Test-observability only since round 41 — the sweep uses
+    /// [`Self::try_acquire_structural_guard`], which CLAIMS the lock
+    /// instead of sampling it. Registry-only and NON-INVASIVE: a
+    /// claiming probe could collide with the claimant it is trying
+    /// to observe.
+    #[cfg(test)]
+    fn structural_lock_is_free(cache_dir: &Path) -> bool {
+        let Ok(canonical_cache) = std::fs::canonicalize(cache_dir) else {
+            return false;
+        };
+        let lock_path = canonical_cache.join("structural.lock");
+        let registry = process_structural_locks();
+        let held = registry
+            .held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        !held.contains(&lock_path)
+    }
+
+    /// Nonblocking claim of the vault structural lock (adversarial
+    /// rounds 40-41): the round-40 boolean probe released the lock
+    /// the instant it proved it free, so a mover could acquire it
+    /// and start renaming between the probe and the sweep's orphan
+    /// repair — the sweep then read a MID-MOVE filesystem topology.
+    /// The sweep now claims the lock itself and HOLDS the guard
+    /// through candidate repair and the resulting task read: while
+    /// it stands, no mover can enter its planting-to-terminal
+    /// interval. Conservative on every error — a claim that cannot
+    /// complete returns `None` and the held markers stay untouched
+    /// for a later sweep. Never blocks, so the reversed lock order
+    /// (connection mutex already held here; movers take the
+    /// structural lock FIRST) cannot deadlock: an unavailable lock
+    /// just skips this sweep's orphans.
+    fn try_acquire_structural_guard(cache_dir: &Path) -> Option<VaultStructuralLock> {
+        let canonical_cache = std::fs::canonicalize(cache_dir).ok()?;
+        let lock_path = canonical_cache.join("structural.lock");
+        {
+            // In-process holders first — the same registry
+            // VaultStructuralLock::acquire consults. Claim our slot
+            // without waiting.
+            let registry = process_structural_locks();
+            let mut held = registry
+                .held
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if held.contains(&lock_path) {
+                return None;
+            }
+            held.insert(lock_path.clone());
+        }
+        let acquired = (|| {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&lock_path)?;
+            file.try_lock()
+                .map_err(|_| std::io::Error::other("structural lock is busy"))?;
+            Ok::<_, std::io::Error>(file)
+        })();
+        match acquired {
+            Ok(file) => Some(VaultStructuralLock {
+                file: Some(file),
+                lock_path,
+            }),
+            Err(_) => {
+                let registry = process_structural_locks();
+                let mut held = registry
+                    .held
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                held.remove(&lock_path);
+                registry.available.notify_all();
+                None
+            }
+        }
+    }
+
+    /// Millisecond age past which a surviving [`text_write_intents`]
+    /// row counts as ABANDONED (its writer rolled back or crashed)
+    /// rather than in-flight. Tests collapse it per-path via
+    /// `SLATE_TEST_INTENT_ABANDON_ZERO_FOR=<path-substring>` so
+    /// parallel suites' healthy in-flight saves stay untouched.
+    fn intent_abandon_threshold_ms(path: &str) -> i64 {
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_INTENT_ABANDON_ZERO_FOR")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            return 0;
+        }
+        15_000
+    }
+
+    /// Self-heal ABANDONED cross-process write intents before a task
+    /// query (adversarial round 21): another process's post-write
+    /// rollback moves no committed state this session could observe,
+    /// but the intent row it committed BEFORE its write survives —
+    /// repair every abandoned path (a single-file reindex, which
+    /// also clears the intent) so the query below reads disk truth
+    /// instead of the other process's ghost rows. Fresh intents are
+    /// in-flight writes and are left alone: reading past them is
+    /// ordinary transient staleness that converges on their commit.
+    fn repair_abandoned_intents_locked(
+        &self,
+        conn: &mut Connection,
+        scope: Option<&str>,
+    ) -> Result<Option<VaultStructuralLock>, VaultError> {
+        let now = now_ms();
+        let mut orphan_guard: Option<Option<VaultStructuralLock>> = None;
+        // Grouped per path (round 25: several in-flight writers can
+        // each own a row for the same path) so one reindex clears
+        // every abandoned registration it selected.
+        let candidates: Vec<(String, Vec<i64>)> = {
+            let mut stmt =
+                conn.prepare_cached("SELECT path, created_ms, token FROM text_write_intents")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?;
+            let mut raw: Vec<(String, i64, i64)> = Vec::new();
+            for row in rows {
+                let (path, created_ms, token) = row?;
+                if let Some(scope_path) = scope
+                    && path != scope_path
+                {
+                    continue;
+                }
+                raw.push((path, created_ms, token));
+            }
+            // Group per PATH before selection (final-confirmation
+            // review): when a path carries a HELD move marker whose
+            // structural-lock claim fails — an ACTIVE move owns it —
+            // its aged save tokens must defer too, or the repair
+            // would read a mid-move topology the guard exists to
+            // fence. One claim attempt per sweep, as before.
+            let mut grouped: Vec<(String, Vec<i64>)> = Vec::new();
+            let held_paths: std::collections::HashSet<&str> = raw
+                .iter()
+                .filter(|(_, created_ms, _)| *created_ms == Self::HELD_MOVE_MARKER_MS)
+                .map(|(path, _, _)| path.as_str())
+                .collect();
+            for (path, created_ms, token) in &raw {
+                let (path, created_ms, token) = (path.clone(), *created_ms, *token);
+                // HELD move markers (adversarial rounds 40-41) never
+                // age by wall clock: they are honored while the
+                // vault structural lock is held (an active move owns
+                // them) and become sweepable orphans only once this
+                // sweep CLAIMS the lock itself — the guard is held
+                // through the repairs and the task read that
+                // follows, so no mover can start renaming between
+                // the claim and the reads that resolve the orphans.
+                // One nonblocking claim per sweep, only when a held
+                // marker is present; unavailable means an active
+                // move owns the markers — skip them.
+                let path_needs_guard = held_paths.contains(path.as_str());
+                let guard_claimed = if path_needs_guard {
+                    orphan_guard
+                        .get_or_insert_with(|| {
+                            Self::try_acquire_structural_guard(&self.config.cache_dir)
+                        })
+                        .is_some()
+                } else {
+                    true
+                };
+                let selectable = if !guard_claimed {
+                    // An active move owns this path: defer EVERY
+                    // token — held and aged alike — until it ends.
+                    false
+                } else if created_ms == Self::HELD_MOVE_MARKER_MS {
+                    true
+                } else {
+                    // `now < created_ms` is a CLOCK ANOMALY (the
+                    // wall clock was corrected backward after the
+                    // stamp; model-confirmation review): treating it
+                    // as fresh would defer repair until wall time
+                    // catches up — hours of stale serving after a
+                    // large correction. Treating it as abandoned is
+                    // safe: a LIVE save's transaction-boundary fence
+                    // re-registers a swept row before writing.
+                    now - created_ms >= Self::intent_abandon_threshold_ms(&path) || now < created_ms
+                };
+                if selectable {
+                    if let Some(entry) = grouped.iter_mut().find(|(p, _)| *p == path) {
+                        entry.1.push(token);
+                    } else {
+                        grouped.push((path, vec![token]));
+                    }
+                }
+            }
+            grouped
+        };
+        // The SELECTED token rides into the repair (round 22): the
+        // clear is token-conditional, so a fresh replacement a new
+        // writer registers between this selection and the repair
+        // transaction survives untouched - deleting by path alone
+        // could erase the only durable marker covering that writer's
+        // own post-write rollback.
+        for (path, tokens) in candidates {
+            // Test-only seam (adversarial round 41): stalls a
+            // sweep's repair so a test can observe that the orphan
+            // guard is HELD across it — a mover attempting to start
+            // during the stall blocks on the structural lock.
+            if let Some(trigger) = std::env::var_os("SLATE_TEST_STALL_ORPHAN_REPAIR")
+                && path.contains(trigger.to_string_lossy().as_ref())
+            {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+            // An UN-REPAIRABLE path (adversarial round 28) must
+            // not fail every task query forever: a marker whose
+            // file stays unreadable — permissions, an AV lock —
+            // would otherwise re-fail this sweep on EVERY query,
+            // a permanent vault-wide outage over one bad file.
+            // Quarantine instead: the suspect rows stop serving,
+            // the marker STAYS (suspicion persists until a repair
+            // lands), and every later query retries the repair —
+            // the first success rebuilds the rows and clears the
+            // token. Only if the quarantine itself fails (the
+            // database is the broken thing, not the file) does the
+            // original error propagate.
+            //
+            // Gated to FILE-condition failures (adversarial round
+            // 29): Io, non-UTF-8, oversize — the classes
+            // honest-empty containment is FOR. A database failure
+            // (a broken trigger, a corrupt cache) must keep failing
+            // queries loud; absorbing it would silently drop the
+            // path's tasks over an error the file never caused.
+            //
+            // Supersession is decided by DURABLE state (adversarial
+            // rounds 30-31): a newer writer committing fresh rows in
+            // the repair→quarantine gap clears only its OWN token,
+            // so the aged selected token would otherwise vouch for
+            // quarantining rows that are now the consistent truth.
+            // Version SAMPLING could not close this — a commit
+            // landing before the baseline capture, or between retry
+            // attempts, hides from any sampled comparison. Instead
+            // every successful full-file index commit bumps
+            // `files.index_epoch` atomically with the rows it
+            // vouches for, and the quarantine re-derives
+            // supersession from that epoch UNDER its own writer
+            // lock: markers registered before the current epoch are
+            // provably obsolete, deleted without containment.
+            if let Err(repair_err) = self.reindex_path_locked(conn, &path, &tokens) {
+                match &repair_err {
+                    // InvalidPath joins the containable class
+                    // (re-confirmation review): a marker stranded on
+                    // a provider-invalid spelling — a Windows
+                    // reserved name — can never repair by reading,
+                    // and propagating would fail every vault-wide
+                    // query forever over one impossible path.
+                    // Containment serves honest-empty and keeps the
+                    // marker, which is idempotent and quiet.
+                    VaultError::Io(_)
+                    | VaultError::InvalidUtf8 { .. }
+                    | VaultError::FileTooLarge { .. }
+                    | VaultError::InvalidPath { .. } => {
+                        self.quarantine_unrepairable_path_locked(conn, &path, &tokens)
+                            .map_err(|_| repair_err)?;
+                    }
+                    _ => return Err(repair_err),
+                }
+            }
+        }
+        // The orphan guard (rounds 40-41) rides back to the caller,
+        // which holds it through its task read: the sweep's repairs
+        // AND the query they served stay fenced against a mover
+        // starting mid-flight.
+        Ok(orphan_guard.flatten())
+    }
+
+    /// The round-28 containment for a path whose repair cannot
+    /// succeed: drop its task rows inside one IMMEDIATE transaction
+    /// (suspect rows must not serve) and poison its stat tuple (the
+    /// next successful read reindexes in full), KEEPING the intent
+    /// marker. Idempotent and quiet: an already-quarantined path
+    /// returns without re-announcing, so repeated failing sweeps
+    /// don't storm hosts with Modified events.
+    ///
+    /// Containment runs only while a selected registration still
+    /// stands at the file's CURRENT index epoch (rounds 29-31): a
+    /// registration deleted by its own writer means the candidate
+    /// resolved itself, and a registration whose epoch is behind
+    /// `files.index_epoch` is provably superseded — some later
+    /// commit re-read the whole file — so it is deleted here without
+    /// containment and the fresh rows keep serving. Both facts are
+    /// durable and re-derived under this transaction's writer lock,
+    /// so no racing commit can hide in a selection-to-containment
+    /// gap.
+    fn quarantine_unrepairable_path_locked(
+        &self,
+        conn: &mut Connection,
+        path: &str,
+        selected_tokens: &[i64],
+    ) -> Result<(), VaultError> {
+        // Test-only seam (adversarial round 29): a live writer
+        // resolving — index committed, own token cleared — in the
+        // gap between the sweep's candidate selection and this
+        // quarantine acquiring the writer lock.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_RESOLVE_BEFORE_QUARANTINE")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            for token in selected_tokens {
+                let _ = conn.execute(
+                    "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                    rusqlite::params![path, token],
+                );
+            }
+        }
+        // Test-only seam (adversarial rounds 30-31): a NEWER writer
+        // on another connection committing fresh rows in the
+        // repair→quarantine gap — its full-file index commit bumps
+        // the path's `index_epoch` (as index_saved_file/index_file
+        // do), clears its OWN token, and leaves the aged selected
+        // token untouched.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_SECOND_WRITER_BEFORE_QUARANTINE")
+            && path.contains(trigger.to_string_lossy().as_ref())
+            && let Some(db_path) = conn.path()
+            && let Ok(other) = Connection::open(db_path)
+        {
+            let _ = other.execute(
+                "UPDATE files SET index_epoch = index_epoch + 1 WHERE path = ?1",
+                rusqlite::params![path],
+            );
+        }
+        let tx = db::begin_fenced(conn)?;
+        // Ownership + supersession fence (rounds 29-31), re-derived
+        // from durable state under this writer lock. A selected
+        // registration that is GONE was resolved by its own writer.
+        // One whose registered epoch is BEHIND the file's current
+        // epoch is provably superseded — a later successful commit
+        // re-read the whole file — and is deleted here, without
+        // containment, so the fresh rows keep serving. Containment
+        // proceeds only while a selected registration still stands
+        // AT the current epoch. Unselected fresh registrations
+        // don't count — they belong to live writers whose own
+        // lifecycle (or a later sweep, once aged) covers them
+        // (round-22 token discipline).
+        let current_epoch: Option<i64> = tx
+            .query_row(
+                "SELECT index_epoch FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let mut still_marked = false;
+        let mut cleared_obsolete = false;
+        for token in selected_tokens {
+            let marker: Option<(i64, i64)> = tx
+                .query_row(
+                    "SELECT registered_epoch, created_ms FROM text_write_intents
+                     WHERE path = ?1 AND token = ?2",
+                    rusqlite::params![path, token],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let Some((registered_epoch, created_ms)) = marker else {
+                continue; // resolved by its own writer
+            };
+            // Epoch supersession applies ONLY to markers whose stamp
+            // was taken under the writer lock at divergence-creation
+            // time — save markers, whose round-32 fence re-stamps at
+            // the transaction boundary and holds the lock through
+            // the write. A HELD move marker (design audit,
+            // post-round-41) stamps at PLANT time, and its
+            // divergence — the rename — lands later: a save
+            // committing on the path in between raises the epoch
+            // past the stamp, and a mid-move crash then leaves an
+            // orphan whose "supersession" predates the divergence it
+            // guards. Held markers are therefore never superseded,
+            // only resolved by real reads (repair) or contained.
+            match current_epoch {
+                Some(current)
+                    if current > registered_epoch && created_ms != Self::HELD_MOVE_MARKER_MS =>
+                {
+                    tx.execute(
+                        "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                        rusqlite::params![path, token],
+                    )?;
+                    cleared_obsolete = true;
+                }
+                // A missing files row can't prove supersession —
+                // fall through to the no-row containment arm below,
+                // which serves nothing anyway.
+                _ => still_marked = true,
+            }
+        }
+        if !still_marked {
+            // Nothing suspect stands; persist any obsolete-marker
+            // deletions (quiet — task rows were untouched).
+            if cleared_obsolete {
+                tx.commit()?;
+            }
+            return Ok(());
+        }
+        let already_quarantined: Option<bool> = tx
+            .query_row(
+                "SELECT f.mtime_ms = -1
+                       AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.file_id = f.id)
+                 FROM files f WHERE f.path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match already_quarantined {
+            // No index row at all: nothing suspect is being served.
+            None => {
+                if cleared_obsolete {
+                    tx.commit()?;
+                }
+                return Ok(());
+            }
+            Some(true) => {
+                if cleared_obsolete {
+                    tx.commit()?;
+                }
+                return Ok(());
+            }
+            Some(false) => {}
+        }
+        tx.execute(
+            "UPDATE files SET mtime_ms = -1, size_bytes = -1, ctime_ms = -1 WHERE path = ?1",
+            rusqlite::params![path],
+        )?;
+        tx.execute(
+            "DELETE FROM tasks WHERE file_id = (SELECT id FROM files WHERE path = ?1)",
+            rusqlite::params![path],
+        )?;
+        tx.commit()?;
+        self.bump_bases_generation();
+        // Hosts hear Modified and refresh: the honest surface for an
+        // unreadable file is task-free, not last-known-stale.
+        self.notify_file_change(FileChangeKind::Modified, path, None);
+        Ok(())
+    }
+
+    fn reindex_path_locked(
+        &self,
+        conn: &mut Connection,
+        path: &str,
+        clear_intent_tokens: &[i64],
+    ) -> Result<(), VaultError> {
+        // Test-only fault seam (adversarial round 14): a repair can
+        // itself fail, and the hosts must not treat "repair
+        // attempted" as "repair succeeded" — same env-var path
+        // trigger discipline as the save-path seam.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_REINDEX")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            // Io (adversarial round 29): the seam models an
+            // unreadable FILE — the recoverable class the sweep's
+            // quarantine may absorb — not a broken database.
+            return Err(VaultError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "test fault: injected reindex failure",
+            )));
+        }
+        // Test-only seam (adversarial round 29): a DATABASE failure
+        // during repair — a corrupt FTS trigger, say — must keep
+        // failing queries loud, never be absorbed into honest-empty
+        // quarantine.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_REINDEX_DB")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            return Err(VaultError::Db(crate::db::DbError::Sqlite(
+                rusqlite::Error::InvalidQuery,
+            )));
+        }
+        // IMMEDIATE (round 22): the repair reads and conditionally
+        // clears intent state - taking the writer lock up front
+        // serializes it against every save's own intent lifecycle.
+        let tx = db::begin_fenced(conn)?;
+        // Poison the cached stat tuple FIRST (adversarial round 13):
+        // `index_file`'s fast path trusts a matching (mtime, size,
+        // ctime) and skips the read entirely — but a checkbox toggle
+        // preserves size, Windows reports no portable ctime, and
+        // coarse-mtime filesystems can preserve mtime, so the tuple
+        // can match while the CONTENT columns hold the rolled-back
+        // state. A repair that can fast-path is no repair at all;
+        // −1 never matches a real stat, forcing the full re-read.
+        tx.execute(
+            "UPDATE files SET mtime_ms = -1, size_bytes = -1, ctime_ms = -1 WHERE path = ?1",
+            rusqlite::params![path],
+        )?;
+        let mut indexed_paths = tx
+            .prepare("SELECT path FROM files")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        indexed_paths.push(path.to_string());
+        let vault_index = crate::InMemoryVaultIndex::new(indexed_paths);
+        let mut report = ScanReport::default();
+        let (name, _, _) = classify_path(path);
+        let mut graph_sink = self.graph_sink();
+        let mut converged_to_deletion = false;
+        match index_file(
+            &tx,
+            self.provider.as_ref(),
+            path,
+            &name,
+            self.config.parser_version,
+            now_ms(),
+            &mut report,
+            &vault_index,
+            self.config.large_file_refuse_bytes,
+            None,
+            &mut graph_sink,
+        ) {
+            Ok(()) => {}
+            Err(VaultError::Io(ref io_err)) if io_err.kind() == std::io::ErrorKind::NotFound => {
+                converged_to_deletion = true;
+                // The path is GONE from disk: convergence means
+                // removing its index rows, not erroring forever
+                // (adversarial round 23) — a conflicted save against
+                // a deleted note left an intent whose repair would
+                // otherwise poison every vault-wide task query. The
+                // graph hears the removal like the delete path does.
+                graph_sink.stage_with(|| {
+                    Ok(crate::graph::GraphOp::FileRemoved {
+                        path: path.to_string(),
+                        inbound: crate::links_db::graph_inbound_rows(&tx, path)?,
+                    })
+                })?;
+                tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
+            }
+            Err(other) => return Err(other),
+        }
+        // A successful repair converges the index to disk truth for
+        // this path — including "the truth is that it's deleted" —
+        // so the durable suspicion marker clears with it (round 21),
+        // but ONLY the registration the sweep selected (round 22): a
+        // fresh replacement registered meanwhile is a live writer's
+        // marker and must survive this repair.
+        for token in clear_intent_tokens {
+            tx.execute(
+                "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                rusqlite::params![path, token],
+            )?;
+        }
+        tx.commit()?;
+        self.graph_apply(graph_sink);
+        self.bump_bases_generation();
+        // The save path's #802 tail: listeners hear the repaired
+        // truth (delivered with the session lock held, the
+        // documented contract — listeners marshal). The KIND matches
+        // the outcome (adversarial round 24): a convergence to
+        // deletion announced as Modified left hosts presenting the
+        // note as existing — open tab never marked missing, a ghost
+        // Quick Switcher entry — while only the task lists healed.
+        self.notify_file_change(
+            if converged_to_deletion {
+                FileChangeKind::Deleted
+            } else {
+                FileChangeKind::Modified
+            },
+            path,
+            None,
+        );
+        Ok(())
     }
 
     /// Replace one character — the `[X]` status — on a single task
@@ -6307,7 +8316,10 @@ impl VaultSession {
         filter: crate::TaskFilter,
         paging: Paging,
     ) -> Result<Page<crate::TaskWithLocation>, VaultError> {
-        let conn = self.conn.lock().expect("session connection mutex");
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        // Vault-wide query → vault-wide abandoned-intent sweep
+        // (round 21): any path's ghost rows could land in this page.
+        let _move_guard = self.repair_abandoned_intents_locked(&mut conn, None)?;
         crate::tasks_db::tasks_in_vault(&conn, filter, paging)
     }
 
@@ -6511,10 +8523,14 @@ impl VaultSession {
     /// no math.
     ///
     /// Reads the file fresh on each call (no cache yet — the LRU
-    /// cache is a follow-up; render time on a typical note is
-    /// dominated by MathCAT's per-block work which is bounded). The
-    /// session's `math_prefs` field is consulted on every call so a
-    /// settings change is observed immediately.
+    /// cache is a follow-up). Rendering is BOUNDED per call (W3-2
+    /// round 5): [`crate::math::render_math_blocks`] enforces the
+    /// per-note formula-count and per-formula source-byte budgets so
+    /// a dense adversarial note cannot monopolize the serialized
+    /// MathCAT worker; over-budget blocks degrade to the typed-speech
+    /// shape with source and position intact. The session's
+    /// `math_prefs` field is consulted on every call so a settings
+    /// change is observed immediately.
     pub fn get_math_blocks(&self, path: &str) -> Result<Vec<crate::math::MathBlock>, VaultError> {
         let source = self.read_text(path)?;
         let raws = crate::math::extract_math_blocks(&source);
@@ -6523,10 +8539,7 @@ impl VaultSession {
         // MathPrefs is Copy + small; the lock is held only long
         // enough to clone the value, no contention with renderers.
         let prefs = *self.math_prefs.lock().expect("math_prefs mutex poisoned");
-        Ok(raws
-            .iter()
-            .map(|raw| crate::math::render_math(raw, prefs))
-            .collect())
+        Ok(crate::math::render_math_blocks(&raws, prefs))
     }
 
     /// Swap the session's math preferences at runtime. Settings
@@ -6556,8 +8569,164 @@ impl VaultSession {
         path: &str,
     ) -> Result<Vec<crate::diagram::DiagramBlock>, VaultError> {
         let source = self.read_text(path)?;
-        let raws = crate::diagram::extract_diagram_blocks(&source);
-        Ok(raws.iter().map(crate::diagram::render_diagram).collect())
+        let source_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            source.hash(&mut hasher);
+            hasher.finish()
+        };
+        let key = (path.to_owned(), source_hash);
+        // Keyed single-flight fill (rounds 2-6): waiters receive
+        // their own flight's result, so traffic on other keys can
+        // never detach them, and cleanup is scoped to the flight it
+        // owns.
+        // Admission is ONE atomic step under the flights lock (lock
+        // order flights -> cache): a caller either sees the completed
+        // result, joins the key's flight, or registers as its owner —
+        // there is no program point where a caller has "observed a
+        // miss" without being registered, so completed-entry eviction
+        // is an honest fresh miss (bounded-cache policy), never a
+        // duplicate-render hole (round 6).
+        loop {
+            // One-shot test gate: suspends a caller here — BEFORE the
+            // atomic admission — so delayed-arrival interleavings are
+            // deterministically testable.
+            #[cfg(test)]
+            {
+                let gate = self
+                    .diagram_admission_gate_for_tests
+                    .lock()
+                    .expect("diagram admission gate poisoned")
+                    .take();
+                if let Some(gate) = gate {
+                    let _ = gate.recv();
+                }
+            }
+            let (flight, owner) = {
+                let mut flights = self
+                    .diagram_flights
+                    .lock()
+                    .expect("diagram_flights mutex poisoned");
+                if let Some(blocks) = self
+                    .diagram_cache
+                    .lock()
+                    .expect("diagram_cache mutex poisoned")
+                    .lookup(&key)
+                {
+                    return Ok(blocks);
+                }
+                match flights.get(&key) {
+                    Some(flight) => (Arc::clone(flight), false),
+                    None => {
+                        let flight = Arc::new(DiagramFlight {
+                            state: Mutex::new(DiagramFlightState::Pending),
+                            done: std::sync::Condvar::new(),
+                        });
+                        flights.insert(key.clone(), Arc::clone(&flight));
+                        (flight, true)
+                    }
+                }
+            };
+            if !owner {
+                let mut state = flight
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                loop {
+                    match &*state {
+                        DiagramFlightState::Pending => {
+                            state = flight
+                                .done
+                                .wait(state)
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        }
+                        DiagramFlightState::Done(blocks) => return Ok(blocks.clone()),
+                        // The owner unwound before completing: retry
+                        // from the top (rare; the next pass creates a
+                        // fresh flight).
+                        DiagramFlightState::Abandoned => break,
+                    }
+                }
+                continue;
+            }
+
+            // Owner path. Unwind guard: a panic between claim and
+            // completion must mark THIS flight abandoned and remove
+            // exactly this entry - never anyone else's.
+            struct FlightGuard<'a> {
+                session: &'a VaultSession,
+                key: &'a (String, u64),
+                flight: &'a Arc<DiagramFlight>,
+                armed: bool,
+            }
+            impl Drop for FlightGuard<'_> {
+                fn drop(&mut self) {
+                    if self.armed {
+                        *self
+                            .flight
+                            .state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                            DiagramFlightState::Abandoned;
+                        self.flight.done.notify_all();
+                        self.session
+                            .diagram_flights
+                            .lock()
+                            .expect("diagram_flights mutex poisoned")
+                            .remove(self.key);
+                    }
+                }
+            }
+            let mut guard = FlightGuard {
+                session: self,
+                key: &key,
+                flight: &flight,
+                armed: true,
+            };
+
+            #[cfg(test)]
+            if self
+                .diagram_render_panic_for_tests
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                panic!("diagram render panic injected for tests");
+            }
+            let raws = crate::diagram::extract_diagram_blocks(&source);
+            // Bounded per call (W3-3, the math render-budget
+            // precedent): per-note count, per-diagram source and
+            // output, and aggregate retention budgets; over-budget
+            // blocks degrade to a typed RenderFailed with source,
+            // position, and description intact. No lock is held
+            // across rendering.
+            #[cfg(test)]
+            self.diagram_render_passes
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let blocks = crate::diagram::render_diagram_blocks(&raws);
+
+            {
+                let mut flights = self
+                    .diagram_flights
+                    .lock()
+                    .expect("diagram_flights mutex poisoned");
+                // Publish BEFORE removal, atomically with it (round
+                // 4): admission rechecks the cache under this same
+                // lock, so "no flight" always implies "result
+                // published".
+                self.diagram_cache
+                    .lock()
+                    .expect("diagram_cache mutex poisoned")
+                    .insert(key.clone(), blocks.clone());
+                flights.remove(&key);
+            }
+            *flight
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                DiagramFlightState::Done(blocks.clone());
+            flight.done.notify_all();
+            guard.armed = false;
+            return Ok(blocks);
+        }
     }
 
     /// Ordered whole-document block segmentation for the reading view
@@ -6607,10 +8776,35 @@ impl VaultSession {
         let mut all_warnings: Vec<crate::citations::bibliography::BibLoadWarning> = Vec::new();
         let mut per_source: Vec<(String, Vec<crate::citations::bibliography::BibEntry>)> =
             Vec::with_capacity(sources.len());
+        // A load failure must NOT return early (#1082). Both the
+        // `bibliography_entries` table and the in-memory `BibIndex` are
+        // rewritten below, and skipping that left the PREVIOUS
+        // session's entries live: every key still rendered as resolved
+        // underneath the host's "failed to load" notice, and because
+        // the index is rebuilt from that table at open, a reopen
+        // resurrected the stale data outright.
+        //
+        // So the failure carries on to the same write with an EMPTY
+        // entry set and is returned at the end. `set_bibliography_sources`
+        // is all-or-nothing by contract — it returns one Err for any
+        // unreadable source — and the persisted entries now say the
+        // same thing rather than contradicting it. Nothing is lost that
+        // a successful re-seed does not rebuild: the table is derived
+        // state, not the user's library.
+        let mut load_error: Option<VaultError> = None;
         for src in &sources {
-            let result = crate::citations::bibliography::load_source(src, &vault_root)?;
-            all_warnings.extend(result.warnings);
-            per_source.push((src.path.clone(), result.entries));
+            match crate::citations::bibliography::load_source(src, &vault_root) {
+                Ok(result) => {
+                    all_warnings.extend(result.warnings);
+                    per_source.push((src.path.clone(), result.entries));
+                }
+                Err(error) => {
+                    load_error = Some(error);
+                    all_warnings.clear();
+                    per_source.clear();
+                    break;
+                }
+            }
         }
         let (merged, _collisions) = crate::citations::bibliography::merge_sources(&per_source);
 
@@ -6644,7 +8838,11 @@ impl VaultSession {
             merged,
             new_version,
         ));
-        Ok(all_warnings)
+        drop(idx);
+        match load_error {
+            Some(error) => Err(error),
+            None => Ok(all_warnings),
+        }
     }
 
     /// Render `reference` against the style identified by `style_id`.
@@ -6889,6 +9087,7 @@ fn graph_node_payload(
     let m = metrics.get(&data.key);
     crate::graph::GraphNode {
         id,
+        stable_key: crate::graph_queries::stable_key(&data.key),
         modified_ms: path.as_deref().and_then(|p| mtimes.get(p).copied()),
         path,
         label: data.label.clone(),
@@ -6903,44 +9102,34 @@ fn graph_node_payload(
     }
 }
 
-/// Normative snapshot summary (p0_spec §P0-3):
-/// `"{n} notes, {e} links. {o} orphans, {g} unresolved targets."` —
-/// counts describe the FILTERED payload; the second sentence is
-/// omitted when both counts are 0; `" Filtered."` appends when the
-/// filter deviates from the defaults.
-fn snapshot_audio_summary(
+/// The whole-graph summary's counts (p0_spec §P0-3; contracts doc 0a-7):
+/// every count describes the FILTERED payload, `links` sums Link and
+/// Embed edge counts alike, and `filtered` is the deviation from the
+/// default filter. Rendering is `graph_summary::snapshot_summary`'s —
+/// the one formatter the a11y vocabulary also renders through.
+fn snapshot_summary_counts(
     nodes: &[crate::graph::GraphNode],
     edges: &[crate::graph::GraphEdge],
     filter: crate::graph::GraphFilter,
-) -> String {
-    use crate::graph::{NodeKind, grouped_decimal};
+) -> crate::graph::GraphSnapshotCounts {
+    use crate::graph::NodeKind;
     let notes = nodes
         .iter()
         .filter(|n| matches!(n.kind, NodeKind::Note))
         .count() as u64;
-    let ghosts = nodes
+    let unresolved = nodes
         .iter()
         .filter(|n| matches!(n.kind, NodeKind::Ghost))
         .count() as u64;
     let orphans = nodes.iter().filter(|n| n.is_orphan).count() as u64;
-    let references: u64 = edges.iter().map(|e| u64::from(e.count)).sum();
-
-    let mut summary = format!(
-        "{} notes, {} links.",
-        grouped_decimal(notes),
-        grouped_decimal(references)
-    );
-    if orphans > 0 || ghosts > 0 {
-        summary.push_str(&format!(
-            " {} orphans, {} unresolved targets.",
-            grouped_decimal(orphans),
-            grouped_decimal(ghosts)
-        ));
+    let links: u64 = edges.iter().map(|e| u64::from(e.count)).sum();
+    crate::graph::GraphSnapshotCounts {
+        notes,
+        links,
+        orphans,
+        unresolved,
+        filtered: filter != crate::graph::GraphFilter::default(),
     }
-    if filter != crate::graph::GraphFilter::default() {
-        summary.push_str(" Filtered.");
-    }
-    summary
 }
 
 // --- Internal: scan ---
@@ -6990,7 +9179,7 @@ fn scan_vault(
     // snapshot also serializes simultaneous cold scans: a second process
     // cannot snapshot an empty cache and then lose the deferred lock
     // upgrade while indexing, returning a misleading partial scan.
-    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let tx = db::begin_fenced(conn)?;
 
     // Snapshot vault-relative paths for link resolution. Built once
     // up-front so per-file scanning doesn't re-query SQLite for every
@@ -7621,6 +9810,11 @@ fn index_file(
         purge_markdown_derivatives(tx, file_id, path, vault_index, graph_sink)?;
         purge_canvas_rows(tx, file_id)?;
         crate::bases_db::delete_base_file_for_file(tx, file_id)?;
+        // Index epoch (adversarial rounds 31-32): the oversized
+        // posture — metadata row, empty body, derivatives purged —
+        // IS this file's full index truth, so the commit supersedes
+        // any older write intent just like a normal index does.
+        stamp_index_epoch(tx, file_id)?;
         report.files_indexed += 1;
         return Ok(());
     }
@@ -7734,8 +9928,60 @@ fn index_file(
         }
     }
 
+    // Index epoch (adversarial rounds 31-32): a successful
+    // full-file index commit — durable proof that any write intent
+    // registered before it is superseded. The fast-path skip above
+    // deliberately does NOT stamp: a tuple match re-reads nothing.
+    stamp_index_epoch(tx, file_id)?;
     report.files_indexed += 1;
     report.bytes_processed += stat.size_bytes;
+    Ok(())
+}
+
+/// Advance the GLOBAL index-epoch clock and stamp the new value onto
+/// `file_id` (W4-3 adversarial round 32). Global and monotonic —
+/// never per-file — so a deleted-and-recreated path can never stamp
+/// a value at or below a prior incarnation's markers (ABA), and any
+/// marker whose `registered_epoch` is behind its file's stamp is
+/// provably superseded by a full re-read that committed after it.
+fn stamp_index_epoch(tx: &rusqlite::Transaction, file_id: i64) -> Result<(), VaultError> {
+    let clock: i64 = tx.query_row(
+        "UPDATE index_epoch_clock SET clock = clock + 1 RETURNING clock",
+        [],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        "UPDATE files SET index_epoch = ?1 WHERE id = ?2",
+        rusqlite::params![clock, file_id],
+    )?;
+    Ok(())
+}
+
+/// Zero a freshly MOVED row's epoch by its new path (W4-3
+/// adversarial rounds 33-34): every `files.path` transition is a
+/// new destination incarnation, and the row's carried epoch never
+/// described the destination. Zero — not a fresh clock stamp — is
+/// the only sound value: a fresh stamp VOUCHES for content the move
+/// never read, and the filesystem rename is not ordered against
+/// another process's in-flight save on the destination (the rename
+/// can land inside that save's writer-locked interval), so a
+/// stamped move could retire the save's post-write marker while the
+/// index still holds the SOURCE's rows and the disk holds the
+/// SAVE's bytes — silent stale serving with no repair trigger.
+/// Epoch 0 out-ranks nothing: any marker surviving on the
+/// destination stays live, and the next query's sweep resolves it
+/// with a REAL full read under the writer lock — repair converges
+/// to disk truth, or containment holds honest-empty until it can.
+/// Supersession is therefore only ever concluded from an actual
+/// read, never from move bookkeeping.
+fn clear_index_epoch_for_moved_path(
+    tx: &rusqlite::Transaction,
+    path: &str,
+) -> Result<(), VaultError> {
+    tx.execute(
+        "UPDATE files SET index_epoch = 0 WHERE path = ?1",
+        rusqlite::params![path],
+    )?;
     Ok(())
 }
 
@@ -8745,6 +10991,20 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// A cross-process-unique token for one write intent (adversarial
+/// round 22): `RandomState` seeds from OS entropy per instance, so
+/// two processes registering intents for the same path in the same
+/// millisecond still get distinct tokens with overwhelming
+/// probability — and every clear is token-conditional, so a
+/// collision's worst case is one redundant repair, never a lost
+/// marker for a DIFFERENT interval.
+fn fresh_intent_token() -> i64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_i64(now_ms());
+    hasher.finish() as i64
+}
+
 // --- Internal: save_text helpers ---
 
 /// Reject `save_text` paths that can't refer to a real vault file —
@@ -8756,6 +11016,30 @@ fn now_ms() -> i64 {
 /// check.
 fn validate_save_path(path: &str) -> Result<(), VaultError> {
     use std::path::{Component, Path};
+    // RAW-segment canonicalization gate (model-confirmation review):
+    // the index, markers, and epoch rows key by this EXACT string,
+    // while `Path::components()` below NORMALIZES — it silently
+    // drops interior `./` segments, and on Windows splits on `\` —
+    // so `a/./note.md` or `a\note.md` would pass component-level
+    // validation yet key a SECOND index identity for the same
+    // physical file. A save through the alias then clears only the
+    // alias's marker while the canonical row serves stale. One
+    // canonical key per file: forward slashes, non-empty segments,
+    // no self- or parent-references, checked on the raw text.
+    if path.contains('\\') {
+        return Err(VaultError::InvalidPath {
+            path: path.to_string(),
+            reason: "backslash separators are not allowed; vault paths use '/'".into(),
+        });
+    }
+    for segment in path.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err(VaultError::InvalidPath {
+                path: path.to_string(),
+                reason: "path segments must be non-empty and not self- or parent-references".into(),
+            });
+        }
+    }
     let p = Path::new(path);
     if p.is_absolute() {
         return Err(VaultError::InvalidPath {
@@ -8790,7 +11074,15 @@ fn validate_save_path(path: &str) -> Result<(), VaultError> {
                     });
                 }
             }
-            Component::CurDir => {}
+            // Defense in depth only — `Path::components()` NORMALIZES
+            // interior `./` away, so the load-bearing rejection is
+            // the RAW-segment check at the top of this function.
+            Component::CurDir => {
+                return Err(VaultError::InvalidPath {
+                    path: path.to_string(),
+                    reason: "self-referencing path components (.) are not allowed".into(),
+                });
+            }
             Component::ParentDir => {
                 return Err(VaultError::InvalidPath {
                     path: path.to_string(),
@@ -8845,7 +11137,12 @@ fn crosses_tags_boundary(old_key: &str, new_key: &str, value: &crate::PropertyVa
     if !is_list {
         return false;
     }
-    (old_key == "tags") ^ (new_key == "tags")
+    // Case-INSENSITIVE, matching `classify_list`'s own tags predicate
+    // (W4-4 adversarial round 8). An exact-lowercase guard let
+    // `authors` → `Tags` through, and the authoritative reread then
+    // silently flipped List to TagList — precisely the drift this
+    // refusal exists to prevent.
+    old_key.eq_ignore_ascii_case("tags") ^ new_key.eq_ignore_ascii_case("tags")
 }
 
 /// Map a `FrontmatterEditError` to the `VaultError` shape the FFI
@@ -9193,19 +11490,24 @@ fn structural_batch_insert_inflight(
     conn: &Connection,
     inflight: &StructuralBatchInflight,
 ) -> Result<(), VaultError> {
-    conn.execute(
-        "INSERT INTO structural_batch_inflight
-         (id, started_ms, payload, renames_completed, index_committed, path_markers_completed)
-         VALUES (1, ?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![
-            now_ms(),
-            structural_batch_inflight_json(inflight)?,
-            inflight.renames_completed as i64,
-            inflight.index_committed as i64,
-            inflight.path_markers_completed as i64,
-        ],
-    )?;
-    Ok(())
+    // Durable-before-mutation (model-confirmation review): the
+    // recovery journal must survive any power cut the batch's
+    // filesystem mutations survive.
+    VaultSession::commit_durably(conn, || {
+        conn.execute(
+            "INSERT INTO structural_batch_inflight
+             (id, started_ms, payload, renames_completed, index_committed, path_markers_completed)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                now_ms(),
+                structural_batch_inflight_json(inflight)?,
+                inflight.renames_completed as i64,
+                inflight.index_committed as i64,
+                inflight.path_markers_completed as i64,
+            ],
+        )?;
+        Ok(())
+    })
 }
 
 fn structural_batch_update_inflight(
@@ -9523,6 +11825,7 @@ fn validate_batch_directory_index_source(
 
 fn apply_batch_move_index_direction(
     tx: &rusqlite::Transaction,
+    provider: &dyn VaultProvider,
     plans: &[crate::structural_batch::PlannedBatchMove],
     forward: bool,
 ) -> Result<Vec<(String, String)>, VaultError> {
@@ -9534,7 +11837,18 @@ fn apply_batch_move_index_direction(
         };
         if plan.item.is_directory {
             validate_batch_directory_index_source(tx, plan, forward)?;
-            rename_prefix_in_index(tx, from, to)?;
+            let frozen: Vec<(String, String)> = plan
+                .moved_files
+                .iter()
+                .map(|(old, new)| {
+                    if forward {
+                        (old.clone(), new.clone())
+                    } else {
+                        (new.clone(), old.clone())
+                    }
+                })
+                .collect();
+            rename_prefix_in_index(tx, provider, from, to, &frozen)?;
         } else {
             let changed = tx.execute(
                 "UPDATE files SET path = ?1 WHERE path = ?2",
@@ -9546,6 +11860,7 @@ fn apply_batch_move_index_direction(
                     reason: "batch index source is missing".into(),
                 });
             }
+            clear_index_epoch_for_moved_path(tx, to)?;
         }
     }
     let moved = batch_move_file_mapping(plans, forward);
@@ -9658,6 +11973,17 @@ impl VaultSession {
 
         let mut inflight = StructuralBatchInflight::from_plans(&plans);
         structural_batch_insert_inflight(&conn, &inflight)?;
+        // Round 35: mark both sides of every file this batch touches
+        // BEFORE the first filesystem mutation — see
+        // plant_move_markers_locked.
+        let planted_markers = self.plant_move_markers_locked(
+            &conn,
+            plans.iter().flat_map(|plan| {
+                plan.moved_files
+                    .iter()
+                    .flat_map(|(old, new)| [old.as_str(), new.as_str()])
+            }),
+        )?;
         let mut applied: Vec<crate::structural_batch::PlannedBatchMove> = Vec::new();
         for plan in &plans {
             if let Err(error) = self.provider.rename(&plan.item.path, &plan.destination) {
@@ -9727,7 +12053,10 @@ impl VaultSession {
         let mut graph_sink = self.graph_sink();
         let index_result = (|| -> Result<(), VaultError> {
             faults.check(BatchFaultPoint::MoveIndex)?;
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
+            // Round 36: sweep-eligible atomically with this commit —
+            // see age_move_markers_in_tx.
+            Self::age_move_markers_in_tx(&tx, &planted_markers)?;
             for (old, new) in &moved {
                 graph_sink.stage(|| crate::graph::GraphOp::FileRenamed {
                     old_path: old.clone(),
@@ -9738,7 +12067,13 @@ impl VaultSession {
             for plan in &plans {
                 if plan.item.is_directory {
                     validate_batch_directory_index_source(&tx, plan, true)?;
-                    rename_prefix_in_index(&tx, &plan.item.path, &plan.destination)?;
+                    rename_prefix_in_index(
+                        &tx,
+                        self.provider.as_ref(),
+                        &plan.item.path,
+                        &plan.destination,
+                        &plan.moved_files,
+                    )?;
                 } else {
                     let changed = tx.execute(
                         "UPDATE files SET path = ?1 WHERE path = ?2",
@@ -9750,6 +12085,7 @@ impl VaultSession {
                             reason: "batch index source is missing".into(),
                         });
                     }
+                    clear_index_epoch_for_moved_path(&tx, &plan.destination)?;
                 }
             }
             {
@@ -9890,7 +12226,7 @@ impl VaultSession {
         }
         let journal_result = (|| -> Result<i64, VaultError> {
             faults.check(BatchFaultPoint::MoveJournal)?;
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
             let op_id = journal_append(
                 &tx,
                 crate::structural::StructuralOpKind::MoveBatch,
@@ -10164,6 +12500,21 @@ impl VaultSession {
     ) -> Result<crate::BatchMoveReport, VaultError> {
         use crate::structural_batch::{BatchFailureStage, BatchMoveState};
 
+        // Rounds 35-36: recovery renames are filesystem mutations
+        // like any other — mark both sides before reversing
+        // anything, and FAIL CLOSED if the markers cannot persist
+        // (round 36): renaming without durable reconciliation
+        // triggers would expose the rollback to exactly the racing
+        // saves the markers exist for. The inflight record survives
+        // the abort, so open-time recovery retries.
+        self.plant_move_markers_locked(
+            conn,
+            applied.iter().flat_map(|plan| {
+                plan.moved_files
+                    .iter()
+                    .flat_map(|(old, new)| [old.as_str(), new.as_str()])
+            }),
+        )?;
         let mut rollback_failures = Vec::new();
         for plan in applied.iter().rev() {
             if let Err(error) = self.provider.rename(&plan.destination, &plan.item.path) {
@@ -10233,9 +12584,10 @@ impl VaultSession {
         if !reconciliation_plans.is_empty() {
             let reconciled = (|| -> Result<(), VaultError> {
                 faults.check(BatchFaultPoint::MoveReconciliation)?;
-                let tx = conn.transaction()?;
+                let tx = db::begin_fenced(conn)?;
                 apply_batch_move_index_direction(
                     &tx,
+                    self.provider.as_ref(),
                     reconciliation_plans,
                     reconciliation_forward,
                 )?;
@@ -10364,7 +12716,7 @@ impl VaultSession {
         if recovery_incomplete {
             let barrier = (|| -> Result<(), VaultError> {
                 faults.check(BatchFaultPoint::RecoveryBarrier)?;
-                let tx = conn.transaction()?;
+                let tx = db::begin_fenced(conn)?;
                 journal_append(
                     &tx,
                     crate::structural::StructuralOpKind::RecoveryBarrier,
@@ -10509,6 +12861,17 @@ impl VaultSession {
 
         let mut inflight = StructuralBatchInflight::from_plans(&plans);
         structural_batch_insert_inflight(&conn, &inflight)?;
+        // Round 35: mark both sides of every file this inverse batch
+        // touches before the first filesystem mutation — see
+        // plant_move_markers_locked.
+        let planted_markers = self.plant_move_markers_locked(
+            &conn,
+            plans.iter().flat_map(|plan| {
+                plan.moved_files
+                    .iter()
+                    .flat_map(|(old, new)| [old.as_str(), new.as_str()])
+            }),
+        )?;
         let mut applied = Vec::new();
         for plan in &plans {
             if let Err(error) = self.provider.rename(&plan.item.path, &plan.destination) {
@@ -10571,7 +12934,10 @@ impl VaultSession {
         let mut graph_sink = self.graph_sink();
         let index_result = (|| -> Result<(), VaultError> {
             faults.check(BatchFaultPoint::MoveIndex)?;
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
+            // Round 36: sweep-eligible atomically with this commit —
+            // see age_move_markers_in_tx.
+            Self::age_move_markers_in_tx(&tx, &planted_markers)?;
             for (old, new) in &moved {
                 graph_sink.stage(|| crate::graph::GraphOp::FileRenamed {
                     old_path: old.clone(),
@@ -10582,7 +12948,13 @@ impl VaultSession {
             for plan in &plans {
                 if plan.item.is_directory {
                     validate_batch_directory_index_source(&tx, plan, true)?;
-                    rename_prefix_in_index(&tx, &plan.item.path, &plan.destination)?;
+                    rename_prefix_in_index(
+                        &tx,
+                        self.provider.as_ref(),
+                        &plan.item.path,
+                        &plan.destination,
+                        &plan.moved_files,
+                    )?;
                 } else {
                     let changed = tx.execute(
                         "UPDATE files SET path = ?1 WHERE path = ?2",
@@ -10594,6 +12966,7 @@ impl VaultSession {
                             reason: "batch inverse index source is missing".into(),
                         });
                     }
+                    clear_index_epoch_for_moved_path(&tx, &plan.destination)?;
                 }
             }
             {
@@ -10805,7 +13178,7 @@ impl VaultSession {
 
         let journal_result = (|| -> Result<i64, VaultError> {
             faults.check(BatchFaultPoint::MoveJournal)?;
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
             let id = journal_append(
                 &tx,
                 crate::structural::StructuralOpKind::MoveBatch,
@@ -11128,6 +13501,25 @@ impl VaultSession {
             return Ok(empty_batch_trash_report(envelope, BatchTrashState::NoOp));
         }
 
+        // Held delete markers for every file this batch may remove,
+        // planted per plan BEFORE the first filesystem mutation
+        // (model-confirmation review) — see delete_file. Cleared
+        // below for plans whose outcome is PROVEN (trashed rows
+        // deleted, or the item verified untouched); kept for unknown
+        // outcomes and failed reconciliation, where the orphan sweep
+        // converges whatever state was left.
+        let mut plan_markers: std::collections::HashMap<String, Vec<(String, i64)>> =
+            std::collections::HashMap::new();
+        for plan in &plans {
+            plan_markers.insert(
+                plan.item.path.clone(),
+                self.plant_move_markers_locked(
+                    &conn,
+                    plan.deleted_files.iter().map(String::as_str),
+                )?,
+            );
+        }
+
         let mut successful = Vec::new();
         let mut untrashed = Vec::new();
         let mut unknown = Vec::new();
@@ -11221,7 +13613,7 @@ impl VaultSession {
                 drop(graph);
                 let barrier = (|| -> Result<(), VaultError> {
                     faults.check(BatchFaultPoint::RecoveryBarrier)?;
-                    let tx = conn.transaction()?;
+                    let tx = db::begin_fenced(&conn)?;
                     journal_append(
                         &tx,
                         crate::structural::StructuralOpKind::RecoveryBarrier,
@@ -11259,6 +13651,7 @@ impl VaultSession {
             return Ok(report);
         }
 
+        let mut reconciliation_failed = false;
         if let Err(initial_error) = self.reconcile_batch_trash_index_locked(
             &mut conn,
             &successful,
@@ -11271,6 +13664,7 @@ impl VaultSession {
             faults,
         ) {
             requires_rescan = true;
+            reconciliation_failed = true;
             bookkeeping_failures.push(structural_batch_failure(
                 None,
                 BatchFailureStage::Reconciliation,
@@ -11278,6 +13672,34 @@ impl VaultSession {
                     "batch Trash index update failed ({initial_error}); reconciliation failed ({reconciliation_error})"
                 ),
             ));
+        }
+
+        // Release delete markers for PROVEN outcomes only: trashed
+        // items whose rows reconciled, and untrashed items verified
+        // physically untouched. Unknown outcomes and failed
+        // reconciliation keep theirs — the orphan sweep's real reads
+        // converge whatever state was left. Best-effort: an
+        // uncleared marker costs one extra read, never correctness.
+        if let Ok(tx) = db::begin_fenced(&conn) {
+            let clear = |item_path: &str| {
+                if let Some(tokens) = plan_markers.get(item_path) {
+                    for (marker_path, token) in tokens {
+                        let _ = tx.execute(
+                            "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                            rusqlite::params![marker_path, token],
+                        );
+                    }
+                }
+            };
+            if !reconciliation_failed {
+                for plan in &successful {
+                    clear(&plan.item.path);
+                }
+            }
+            for remainder in &untrashed {
+                clear(&remainder.item.path);
+            }
+            let _ = tx.commit();
         }
 
         // Disk and SQLite may diverge after an unknown provider outcome or
@@ -11289,7 +13711,7 @@ impl VaultSession {
 
         let journal_result = (|| -> Result<i64, VaultError> {
             faults.check(BatchFaultPoint::TrashJournal)?;
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
             let op_id = journal_append(
                 &tx,
                 crate::structural::StructuralOpKind::TrashBatch,
@@ -11322,7 +13744,7 @@ impl VaultSession {
                 ));
                 let barrier = (|| -> Result<(), VaultError> {
                     faults.check(BatchFaultPoint::RecoveryBarrier)?;
-                    let tx = conn.transaction()?;
+                    let tx = db::begin_fenced(&conn)?;
                     journal_append(
                         &tx,
                         crate::structural::StructuralOpKind::RecoveryBarrier,
@@ -11386,7 +13808,7 @@ impl VaultSession {
         faults.check(fault_point)?;
         let mut graph_sink = self.graph_sink();
         let result = (|| -> Result<(), VaultError> {
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(conn)?;
             for plan in plans {
                 for file in &plan.deleted_files {
                     graph_sink.stage_with(|| {
@@ -11550,6 +13972,10 @@ impl VaultSession {
         let _structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
         validate_leaf_component(leaf_name(path))?;
+        // #1077 (I2/I4): the new folder's leaf is verbatim; its parent
+        // binds to the stored spelling.
+        let bound_path = self.bind_destination_path(path)?;
+        let path: &str = &bound_path;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
         if let Some(existing) = index_entry_case_insensitive(&conn, path)? {
@@ -11587,6 +14013,10 @@ impl VaultSession {
         let _structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
         validate_leaf_component(leaf_name(path))?;
+        // #1077 (I2/I4): the new folder's leaf is verbatim; its parent
+        // binds to the stored spelling.
+        let bound_path = self.bind_destination_path(path)?;
+        let path: &str = &bound_path;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
         if let Some(existing) = index_entry_case_insensitive(&conn, path)? {
@@ -11667,10 +14097,21 @@ impl VaultSession {
                 // filesystem-equivalence beyond the exact name keeps the
                 // os-rename failure + rollback as the belt).
                 let collision_probe = format!("{path}/{new_name}.md");
-                if let Some(existing) = index_entry_case_insensitive(&conn, &collision_probe)? {
+                if let Some(existing) = index_entry_case_insensitive(&conn, &collision_probe)?
+                    && existing != old_note
+                {
+                    // The old note's own row under the new name's fold is
+                    // the case-only folder+note rename (#1077 I4), legal.
                     return Err(VaultError::DestinationExists { path: existing });
                 }
-                if collision_probe != old_note && self.provider.stat(&collision_probe).is_ok() {
+                // #1077 (I4): on an aliasing volume the probe path may BE
+                // the old note under its new spelling — that is the
+                // case-only folder+note rename, not an occupant.
+                if collision_probe != old_note
+                    && self.provider.stat(&collision_probe).is_ok()
+                    && self.provider.canonical_path(&collision_probe)?.as_deref()
+                        != Some(&*old_note)
+                {
                     return Err(VaultError::DestinationExists {
                         path: collision_probe,
                     });
@@ -11853,6 +14294,9 @@ impl VaultSession {
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
         let structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
+        // #1077 (I2/I3): the row that goes is the stored spelling's.
+        let bound_path = self.bind_source_path(path)?;
+        let path: &str = &bound_path;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
         // Capture the op-log binding before the row goes: the journal
@@ -11868,19 +14312,55 @@ impl VaultSession {
             )
             .optional()?
             .flatten();
-        self.provider.delete(path)?;
+        // Deletions are divergence-creating filesystem mutations like
+        // any move (model-confirmation review): a crash between the
+        // provider delete and the index transaction would leave
+        // files/tasks rows serving a deleted file's ghosts with no
+        // trigger until a scan. Same held-marker discipline — planted
+        // before the mutation under the structural lock, cleared
+        // token-scoped with the row deletion, orphan-sweepable on a
+        // crash (the sweep's read hits NotFound and converges).
+        let planted_markers = self.plant_move_markers_locked(&conn, [path])?;
+        // The filesystem delete AND the disk-truth probe both run
+        // INSIDE the index transaction (final-confirmation review):
+        // the writer lock blocks every coordinated save — saves
+        // write inside their own writer transaction — so nothing
+        // can recreate the path between the delete, the probe, and
+        // the row decision. The probe is kind-aware: only PROVEN
+        // absence deletes the row and clears the marker; a live
+        // path or an unknown probe outcome keeps both for the
+        // orphan sweep to re-verify by reading.
+        let mut recreated = false;
         let mut graph_sink = self.graph_sink();
         self.with_structural_tx(&mut conn, |tx| {
-            // Inbound snapshot BEFORE the delete: the FK cascade emits
-            // no per-row signal, and rows pointing here stay
-            // resolved-but-dangling (#550, p0_spec rule 1a).
-            graph_sink.stage_with(|| {
-                Ok(crate::graph::GraphOp::FileRemoved {
-                    path: path.to_string(),
-                    inbound: crate::links_db::graph_inbound_rows(tx, path)?,
-                })
-            })?;
-            tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
+            self.provider.delete(path)?;
+            recreated = match self.provider.stat(path) {
+                Ok(_) => true,
+                Err(VaultError::Io(ref io_err))
+                    if io_err.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    false
+                }
+                Err(_) => true, // unknown outcome: keep row + marker
+            };
+            if !recreated {
+                // Inbound snapshot BEFORE the delete: the FK cascade emits
+                // no per-row signal, and rows pointing here stay
+                // resolved-but-dangling (#550, p0_spec rule 1a).
+                graph_sink.stage_with(|| {
+                    Ok(crate::graph::GraphOp::FileRemoved {
+                        path: path.to_string(),
+                        inbound: crate::links_db::graph_inbound_rows(tx, path)?,
+                    })
+                })?;
+                tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
+                for (marker_path, token) in &planted_markers {
+                    tx.execute(
+                        "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                        rusqlite::params![marker_path, token],
+                    )?;
+                }
+            }
             journal_append(
                 tx,
                 crate::structural::StructuralOpKind::DeleteFile,
@@ -11900,7 +14380,14 @@ impl VaultSession {
         drop(structural_operation);
         drop(vault_structural_lock);
         self.bump_bases_generation();
-        self.notify_file_change(FileChangeKind::Deleted, path, None);
+        if recreated {
+            // The path is live again — announcing Deleted would be a
+            // lie; the recreating save's own events (and our held
+            // marker's eventual sweep) tell the true story.
+            self.notify_file_change(FileChangeKind::Modified, path, None);
+        } else {
+            self.notify_file_change(FileChangeKind::Deleted, path, None);
+        }
         Ok(())
     }
 
@@ -11910,44 +14397,80 @@ impl VaultSession {
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
         let structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
+        // #1077 (I2/I3): the subtree that goes is the stored spelling's.
+        let bound_path = self.bind_source_path(path)?;
+        let path: &str = &bound_path;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
-        // #802: the range delete below erases the paths — capture them
-        // first so each file's Deleted event can fire after commit.
-        // In-memory and O(folder size) by design (Codoki on #846): a
-        // folder delete already walks its subtree on disk, and events
-        // are per-file by contract; revisit with streamed emission
-        // only if a real vault shows this hot.
-        let deleted_files: Vec<String> = {
-            let (lo, hi) = subtree_bounds(path).expect("non-root folder path");
-            let mut stmt = conn.prepare("SELECT path FROM files WHERE path >= ?1 AND path < ?2")?;
-            let rows = stmt.query_map(rusqlite::params![lo, hi], |row| row.get(0))?;
-            rows.collect::<Result<_, _>>()?
+        // Membership-fenced trash (final-confirmation review): every
+        // descendant — including one a racing save commits after any
+        // earlier snapshot — is durably marked before the bytes
+        // move, or the save is blocked until they have. The fence's
+        // own enumeration is also the #802 event list: per-file
+        // Deleted events fire from the fenced membership after
+        // commit. See fence_prefix_and_mutate.
+
+        let (planted_markers, ()) =
+            self.fence_prefix_and_mutate(&mut conn, path, None, || self.provider.delete(path))?;
+        let fenced_members: Vec<String> = {
+            let mut unique: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for (marker_path, _) in &planted_markers {
+                unique.insert(marker_path.clone());
+            }
+            unique.into_iter().collect()
         };
-        self.provider.delete(path)?;
+        let deleted_files = fenced_members;
+        // Kind-aware disk truth per descendant, probed INSIDE the
+        // index transaction (writer lock held — coordinated saves
+        // cannot recreate mid-decision): proven absence deletes the
+        // row and clears the marker; live or unknown keeps both.
+        let mut recreated: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut graph_sink = self.graph_sink();
         self.with_structural_tx(&mut conn, |tx| {
+            for file in &deleted_files {
+                let keep = match self.provider.stat(file) {
+                    Ok(_) => true,
+                    Err(VaultError::Io(ref io_err))
+                        if io_err.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        false
+                    }
+                    Err(_) => true,
+                };
+                if keep {
+                    recreated.insert(file.clone());
+                }
+            }
             // Per-file removal replay, snapshotted BEFORE the range
             // delete (#550): the graph mirrors the cascade one victim
             // at a time; inbound rows from co-deleted files are
             // skipped at apply time when their source is already gone.
             for file in &deleted_files {
+                if recreated.contains(file.as_str()) {
+                    continue;
+                }
                 graph_sink.stage_with(|| {
                     Ok(crate::graph::GraphOp::FileRemoved {
                         path: file.clone(),
                         inbound: crate::links_db::graph_inbound_rows(tx, file)?,
                     })
                 })?;
+                tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![file])?;
             }
             let (lo, hi) = subtree_bounds(path).expect("non-root folder path");
-            tx.execute(
-                "DELETE FROM files WHERE path >= ?1 AND path < ?2",
-                rusqlite::params![lo, hi],
-            )?;
             tx.execute(
                 "DELETE FROM dirs WHERE path = ?1 OR (path >= ?2 AND path < ?3)",
                 rusqlite::params![path, lo, hi],
             )?;
+            for (marker_path, token) in &planted_markers {
+                if recreated.contains(marker_path.as_str()) {
+                    continue;
+                }
+                tx.execute(
+                    "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                    rusqlite::params![marker_path, token],
+                )?;
+            }
             journal_append(
                 tx,
                 crate::structural::StructuralOpKind::DeleteFolder,
@@ -11965,7 +14488,11 @@ impl VaultSession {
         drop(vault_structural_lock);
         self.bump_bases_generation();
         for file in &deleted_files {
-            self.notify_file_change(FileChangeKind::Deleted, file, None);
+            if recreated.contains(file.as_str()) {
+                self.notify_file_change(FileChangeKind::Modified, file, None);
+            } else {
+                self.notify_file_change(FileChangeKind::Deleted, file, None);
+            }
         }
         Ok(())
     }
@@ -12157,6 +14684,14 @@ impl VaultSession {
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         validate_save_path(from)?;
         validate_save_path(to)?;
+        // #1077: the SOURCE binds to its stored spelling (I2/I3); the
+        // DESTINATION keeps its leaf verbatim and binds only its parent
+        // (I4). Bound BEFORE the equality check, so renaming an alias to
+        // the stored spelling is the no-op it is.
+        let bound_from = self.bind_source_path(from)?;
+        let from: &str = &bound_from;
+        let bound_to = self.bind_destination_path(to)?;
+        let to: &str = &bound_to;
         if to == from {
             return Err(VaultError::InvalidArgument {
                 message: "destination equals source".into(),
@@ -12182,7 +14717,11 @@ impl VaultSession {
                 reason: "no such folder in the index".into(),
             });
         }
-        if let Some(existing) = index_entry_case_insensitive(&conn, to)? {
+        if let Some(existing) = index_entry_case_insensitive(&conn, to)?
+            && existing != from
+        {
+            // `existing == from` is the source's OWN row under the
+            // destination's fold: the case-only rename (#1077 I4), legal.
             return Err(VaultError::DestinationExists { path: existing });
         }
 
@@ -12201,10 +14740,33 @@ impl VaultSession {
             out
         };
 
-        self.provider.rename(from, to)?;
-        self.finish_structural_move(conn, kind, from, to, moved, plan_rewrites, |tx, _sink| {
-            rename_prefix_in_index(tx, from, to)
-        })
+        // Rounds 35 + final-confirmation review: mark BOTH sides of
+        // every file this move touches BEFORE the filesystem
+        // mutation, and FENCE the prefix membership under the writer
+        // lock so a save landing after the snapshot is either marked
+        // too or blocked until the rename completes.
+        let mut conn = conn;
+        let (planted_markers, ()) =
+            self.fence_prefix_and_mutate(&mut conn, from, Some(to), || {
+                self.provider.rename(from, to)
+            })?;
+        // The index rewrite uses the FROZEN pre-rename snapshot —
+        // never a fresh prefix enumeration (model-confirmation
+        // review); see rename_prefix_in_index.
+        let moved_for_index = moved.clone();
+        let provider_for_index = Arc::clone(&self.provider);
+        self.finish_structural_move(
+            conn,
+            kind,
+            from,
+            to,
+            moved,
+            plan_rewrites,
+            planted_markers,
+            move |tx, _sink| {
+                rename_prefix_in_index(tx, provider_for_index.as_ref(), from, to, &moved_for_index)
+            },
+        )
     }
 
     fn structural_move_file(
@@ -12216,6 +14778,14 @@ impl VaultSession {
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         validate_save_path(from)?;
         validate_save_path(to)?;
+        // #1077: the SOURCE binds to its stored spelling (I2/I3); the
+        // DESTINATION keeps its leaf verbatim and binds only its parent
+        // (I4). Bound BEFORE the equality check, so renaming an alias to
+        // the stored spelling is the no-op it is.
+        let bound_from = self.bind_source_path(from)?;
+        let from: &str = &bound_from;
+        let bound_to = self.bind_destination_path(to)?;
+        let to: &str = &bound_to;
         if to == from {
             return Err(VaultError::InvalidArgument {
                 message: "destination equals source".into(),
@@ -12236,7 +14806,11 @@ impl VaultSession {
                 reason: "no such file in the index".into(),
             });
         }
-        if let Some(existing) = index_entry_case_insensitive(&conn, to)? {
+        if let Some(existing) = index_entry_case_insensitive(&conn, to)?
+            && existing != from
+        {
+            // `existing == from` is the source's OWN row under the
+            // destination's fold: the case-only rename (#1077 I4), legal.
             return Err(VaultError::DestinationExists { path: existing });
         }
 
@@ -12245,6 +14819,9 @@ impl VaultSession {
         let provider = Arc::clone(&self.provider);
         let parser_version = self.config.parser_version;
         let large_file_refuse_bytes = self.config.large_file_refuse_bytes;
+        // Round 35: mark both sides before the filesystem mutation —
+        // see plant_move_markers_locked.
+        let planted_markers = self.plant_move_markers_locked(&conn, [from, to])?;
         self.provider.rename(from, to)?;
         let moved = vec![(from.to_string(), to.to_string())];
         self.finish_structural_move(
@@ -12254,6 +14831,7 @@ impl VaultSession {
             to,
             moved,
             plan_rewrites,
+            planted_markers,
             move |tx, sink| {
                 let (name, extension, is_markdown) = classify_path(to);
                 let is_base = extension.as_deref() == Some("base");
@@ -12269,6 +14847,7 @@ impl VaultSession {
                             reason: "file move index source disappeared".into(),
                         });
                     }
+                    clear_index_epoch_for_moved_path(tx, to)?;
                     let file_id: i64 = tx.query_row(
                         "SELECT id FROM files WHERE path = ?1",
                         rusqlite::params![to],
@@ -12298,6 +14877,7 @@ impl VaultSession {
                             reason: "file move index source disappeared".into(),
                         });
                     }
+                    clear_index_epoch_for_moved_path(tx, to)?;
                 }
                 Ok(())
             },
@@ -12328,6 +14908,7 @@ impl VaultSession {
         to: &str,
         moved: Vec<(String, String)>,
         plan_rewrites: bool,
+        planted_markers: Vec<(String, i64)>,
         update_index: impl FnOnce(
             &rusqlite::Transaction,
             &mut crate::graph::GraphOpSink,
@@ -12335,7 +14916,10 @@ impl VaultSession {
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         let mut graph_sink = self.graph_sink();
         let tx1 = (|| -> Result<(), VaultError> {
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
+            // Round 36: the move's own markers become sweep-eligible
+            // atomically with this commit — see age_move_markers_in_tx.
+            Self::age_move_markers_in_tx(&tx, &planted_markers)?;
             // Graph replay order (#550): rename ops FIRST, so a
             // reclassification's LinksetChanged (staged inside
             // `update_index`) lands on the already-renamed node. The
@@ -12375,6 +14959,17 @@ impl VaultSession {
         })();
         if let Err(e) = tx1 {
             let _ = self.provider.rename(to, from);
+            // Round 39: the failed transaction rolled back its
+            // ensure-and-age, but the compensating rename above is
+            // one more filesystem mutation — re-assert the marker
+            // set aged (best-effort: the freshly planted rows still
+            // stand in the common case; this restores any a sweep
+            // consumed during a long-running failed move and makes
+            // the compensated state re-read on the next query).
+            if let Ok(tx) = db::begin_fenced(&conn) {
+                let _ = Self::age_move_markers_in_tx(&tx, &planted_markers)
+                    .and_then(|()| tx.commit().map_err(Into::into));
+            }
             return Err(e);
         }
         self.graph_apply(graph_sink);
@@ -12405,7 +15000,7 @@ impl VaultSession {
         }
 
         let journal_result = (|| -> Result<i64, VaultError> {
-            let tx = conn.transaction()?;
+            let tx = db::begin_fenced(&conn)?;
             let journal_kind = if rewrite_health.physical_unknown {
                 crate::structural::StructuralOpKind::RecoveryBarrier
             } else {
@@ -13055,7 +15650,7 @@ impl VaultSession {
         conn: &mut Connection,
         body: impl FnOnce(&rusqlite::Transaction) -> Result<T, VaultError>,
     ) -> Result<T, VaultError> {
-        let tx = conn.transaction()?;
+        let tx = db::begin_fenced(conn)?;
         let out = body(&tx)?;
         tx.commit()?;
         Ok(out)
@@ -13300,21 +15895,31 @@ fn validate_leaf_component(name: &str) -> Result<(), VaultError> {
     Ok(())
 }
 
-/// Case-insensitive existence check across BOTH index tables (APFS default
-/// is case-insensitive; a differing-case collision would shadow on disk).
-/// Returns the existing entry's exact path for the error message.
+/// Filesystem-equivalence collision gate across BOTH index tables (#1077
+/// contract I5; `docs/plans/32` finding 7). A PORTABILITY guard that runs
+/// on every volume: APFS and NTFS default to case-insensitive, so a name
+/// differing only in case — or Unicode normalization — would shadow an
+/// existing one the moment the vault lands there. Folds with the
+/// registered `slate_tree_sort_key` (NFC + full-Unicode lowercase, the
+/// rule the tree already sorts by; migration 037 indexes it) rather than
+/// SQLite's `lower()`, which folds ASCII only — `Ä.md` beside `ä.md`
+/// slipped through while APFS and NTFS treat them as one file. Kanji,
+/// kana, and width are untouched by the fold (no case; NFC keeps
+/// full-width distinct). Returns the existing entry's stored path for the
+/// error message — callers renaming a path onto its OWN alias (the
+/// case-only rename, contract I4) compare that path against their source.
 fn index_entry_case_insensitive(
     conn: &Connection,
     path: &str,
 ) -> Result<Option<String>, VaultError> {
-    let lowered = path.to_lowercase();
+    let folded = crate::db::tree_sort_key(path);
     let hit: Option<String> = conn
         .query_row(
-            "SELECT path FROM files WHERE lower(path) = ?1
+            "SELECT path FROM files WHERE slate_tree_sort_key(path) = ?1
              UNION ALL
-             SELECT path FROM dirs WHERE lower(path) = ?1
+             SELECT path FROM dirs WHERE slate_tree_sort_key(path) = ?1
              LIMIT 1",
-            rusqlite::params![lowered],
+            rusqlite::params![folded],
             |row| row.get(0),
         )
         .optional()?;
@@ -13326,31 +15931,122 @@ fn index_entry_case_insensitive(
 /// U2-1 discipline (GLOB/LIKE are wildcard-unsafe against legal filenames).
 fn rename_prefix_in_index(
     tx: &rusqlite::Transaction,
+    provider: &dyn VaultProvider,
     from: &str,
     to: &str,
+    frozen_files: &[(String, String)],
 ) -> Result<(), VaultError> {
     let (lo, hi) = subtree_bounds(from).expect("non-root folder path");
 
-    let file_rows: Vec<(i64, String)> = {
-        let mut stmt = tx.prepare("SELECT id, path FROM files WHERE path >= ?1 AND path < ?2")?;
-        let rows = stmt.query_map(rusqlite::params![lo, hi], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })?;
-        rows.collect::<Result<_, _>>()?
-    };
-    for (id, old_path) in file_rows {
-        let new_path = format!("{to}{}", &old_path[from.len()..]);
-        let (name, extension, is_markdown) = classify_path(&new_path);
+    // FILE rows move by FROZEN identity, never by re-enumeration
+    // (model-confirmation review): the marker set was planted for
+    // the pre-rename snapshot, so a file that entered the source
+    // prefix AFTER the filesystem rename — a racing save recreating
+    // the directory — has its row at its true on-disk path and NO
+    // move marker. Dynamically relocating it here would index it at
+    // the destination while its bytes stay at the source, with
+    // nothing to heal the divergence. Post-snapshot entrants are
+    // simply left where they are: their row already matches disk.
+    for (old_path, new_path) in frozen_files {
+        let (name, extension, is_markdown) = classify_path(new_path);
         let changed = tx.execute(
             "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
-             WHERE id = ?5",
-            rusqlite::params![new_path, name, extension, is_markdown as i64, id],
+             WHERE path = ?5",
+            rusqlite::params![new_path, name, extension, is_markdown as i64, old_path],
         )?;
         if changed != 1 {
             return Err(VaultError::InvalidPath {
-                path: old_path,
+                path: old_path.clone(),
                 reason: "directory move file row disappeared during update".into(),
             });
+        }
+        // Every path transition is a new destination incarnation
+        // (adversarial rounds 33-34) — see
+        // clear_index_epoch_for_moved_path.
+        clear_index_epoch_for_moved_path(tx, new_path)?;
+    }
+
+    // STRAY rows still under the source prefix are entrants the
+    // frozen snapshot missed (re-confirmation review). Which side of
+    // the filesystem rename they landed on is decided by DISK TRUTH,
+    // under the writer lock — never by bookkeeping:
+    //  - source file exists  -> a post-rename entrant recreated the
+    //    source; its row already matches disk. Leave it.
+    //  - destination exists  -> a pre-rename entrant was physically
+    //    swept along; rewrite its row and mark BOTH sides (aged,
+    //    in-transaction) so the next query re-verifies by reading.
+    //  - neither exists      -> deleted meanwhile; leave the row
+    //    with an aged marker and let the sweep's NotFound
+    //    convergence remove it.
+    let strays: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT path FROM files WHERE path >= ?1 AND path < ?2")?;
+        let rows = stmt.query_map(rusqlite::params![lo, hi], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    // FOUR-STATE, kind-aware classification (final-confirmation
+    // review). `is_ok()` alone collapsed permission and transient
+    // stat failures into "absent", and the source-first shortcut
+    // missed the both-present case (swept entrant plus a recreated
+    // source). Probe outcomes are Live / ProvenAbsent / Unknown per
+    // side:
+    //  - source Live only        -> row already matches disk; leave.
+    //  - destination Live only   -> swept along; rewrite + mark both.
+    //  - BOTH Live               -> keep the SOURCE incarnation's row
+    //    (never erase it by preferring the destination) and mark both
+    //    paths: the unindexed destination file gains its marker, and
+    //    the sweep's reads build its row and re-verify the source.
+    //  - anything Unknown        -> mark both, mutate nothing.
+    //  - both ProvenAbsent       -> mark the source for NotFound
+    //    convergence.
+    let probe = |p: &str| -> u8 {
+        match provider.stat(p) {
+            Ok(_) => 0,
+            Err(VaultError::Io(ref io_err)) if io_err.kind() == std::io::ErrorKind::NotFound => 1,
+            Err(_) => 2,
+        }
+    };
+    let mark = |paths: &[&str]| -> Result<(), VaultError> {
+        for marker_path in paths {
+            let aged_stamp = now_ms() - VaultSession::intent_abandon_threshold_ms(marker_path) - 1;
+            tx.execute(
+                "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+                 VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+                rusqlite::params![marker_path, aged_stamp, fresh_intent_token()],
+            )?;
+        }
+        Ok(())
+    };
+    for stray in strays {
+        let swept_to = format!("{to}{}", &stray[from.len()..]);
+        match (probe(&stray), probe(&swept_to)) {
+            (0, 1) => {} // source live, destination absent: row matches disk
+            (1, 0) => {
+                // Swept along: the row follows its bytes, marked on
+                // both sides for re-verification.
+                let (name, extension, is_markdown) = classify_path(&swept_to);
+                tx.execute(
+                    "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
+                     WHERE path = ?5",
+                    rusqlite::params![swept_to, name, extension, is_markdown as i64, stray],
+                )?;
+                clear_index_epoch_for_moved_path(tx, &swept_to)?;
+                mark(&[stray.as_str(), swept_to.as_str()])?;
+            }
+            (0, 0) => {
+                // Both present: keep the source incarnation's row and
+                // let reads build the destination's.
+                mark(&[stray.as_str(), swept_to.as_str()])?;
+            }
+            (1, 1) => {
+                // Deleted meanwhile: NotFound convergence will remove
+                // the row.
+                mark(&[stray.as_str()])?;
+            }
+            _ => {
+                // Unknown probe outcome on either side: mutate
+                // nothing, mark both, and let reads decide later.
+                mark(&[stray.as_str(), swept_to.as_str()])?;
+            }
         }
     }
 
@@ -13369,6 +16065,13 @@ fn rename_prefix_in_index(
         });
     }
     for (id, old_path) in dir_rows {
+        // Disk truth for directory rows too (final-confirmation
+        // review): a source directory recreated by a racing save
+        // keeps its row — relocating it would split the file and
+        // directory trees.
+        if old_path != from && provider.stat(&old_path).is_ok() {
+            continue;
+        }
         let new_path = if old_path == from {
             to.to_string()
         } else {
@@ -13898,7 +16601,7 @@ impl VaultSession {
     /// on the scanner fast path; a missing files row or file_meta projection
     /// pays the targeted read and Bases-index update below.
     fn ensure_open_base_indexed(&self, path: &str) -> Result<(), VaultError> {
-        let mut conn = self.conn.lock().expect("session connection mutex");
+        let conn = self.conn.lock().expect("session connection mutex");
         let indexed_with_meta = conn
             .query_row(
                 "SELECT 1
@@ -13914,7 +16617,7 @@ impl VaultSession {
             return Ok(());
         }
 
-        let tx = conn.transaction()?;
+        let tx = db::begin_fenced(&conn)?;
         let mut indexed_paths = tx
             .prepare("SELECT path FROM files")?
             .query_map([], |row| row.get::<_, String>(0))?
@@ -14058,8 +16761,8 @@ impl VaultSession {
         validate_saved_name("saved query", name)?;
         let envelope = normalize_saved_query_envelope_for_save(query_json)?;
         let now = now_ms();
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx = db::begin_fenced(&conn)?;
         ensure_name_available(&tx, NameTable::SavedQueries, name, None)?;
         let id = sqlite_uuid(&tx)?;
         tx.execute(
@@ -14099,8 +16802,8 @@ impl VaultSession {
     pub fn rename_saved_query(&self, id: &str, name: &str) -> Result<(), VaultError> {
         validate_saved_name("saved query", name)?;
         let now = now_ms();
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx = db::begin_fenced(&conn)?;
         ensure_name_available(&tx, NameTable::SavedQueries, name, Some(id))?;
         let changed = tx.execute(
             "UPDATE saved_queries SET name = ?1, modified_at_ms = ?2 WHERE id = ?3",
@@ -14155,8 +16858,8 @@ impl VaultSession {
         validate_saved_name("dashboard", name)?;
         let sections_json = dashboard_sections_json(&sections)?;
         let now = now_ms();
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx = db::begin_fenced(&conn)?;
         ensure_name_available(&tx, NameTable::Dashboards, name, None)?;
         let id = sqlite_uuid(&tx)?;
         tx.execute(
@@ -14212,8 +16915,8 @@ impl VaultSession {
         validate_saved_name("dashboard", name)?;
         let sections_json = dashboard_sections_json(&sections)?;
         let now = now_ms();
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx = db::begin_fenced(&conn)?;
         ensure_name_available(&tx, NameTable::Dashboards, name, Some(id))?;
         let changed = tx.execute(
             "UPDATE dashboards SET name = ?1 WHERE id = ?2",
@@ -14232,8 +16935,8 @@ impl VaultSession {
     pub fn rename_dashboard(&self, id: &str, name: &str) -> Result<(), VaultError> {
         validate_saved_name("dashboard", name)?;
         let now = now_ms();
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx = db::begin_fenced(&conn)?;
         ensure_name_available(&tx, NameTable::Dashboards, name, Some(id))?;
         let changed = tx.execute(
             "UPDATE dashboards SET name = ?1, modified_at_ms = ?2 WHERE id = ?3",
@@ -15983,6 +18686,9 @@ pub struct CanvasOutlineRow {
     /// Announcement type word: "text" | "file" | "image" | "link" | "group".
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5). Joined in
+    /// from the open handle's model, not stored in the index (0b-6).
+    pub speakable_name: String,
     pub group_path: Vec<String>,
     /// 1-based position among siblings ("n of m in ⟨group‖canvas⟩").
     pub ordinal_n: u32,
@@ -15997,6 +18703,9 @@ pub struct CanvasTableRow {
     pub node_id: String,
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5), joined in
+    /// from the open handle's model (0b-6).
+    pub speakable_name: String,
     pub group_path: Vec<String>,
     /// File path (file/image cards), URL (link cards), "" otherwise.
     pub target: String,
@@ -16025,6 +18734,8 @@ pub struct CanvasNeighbor {
 pub struct CanvasWhereAmI {
     pub node_id: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5).
+    pub speakable_name: String,
     pub kind: String,
     pub group_path: Vec<String>,
     pub ordinal_n: u32,
@@ -16042,6 +18753,10 @@ pub struct CanvasSceneNode {
     pub node_id: String,
     pub kind: String,
     pub title: String,
+    /// The title made unique across the canvas (W6-1 0b-5) — the
+    /// renderer's AX peer name, which is the one surface mac speaks it
+    /// on (CD-23).
+    pub speakable_name: String,
     pub x: f64,
     pub y: f64,
     pub width: f64,
@@ -16099,6 +18814,20 @@ pub struct CanvasOpenInfo {
     /// document must be treated as read-only (t0 §5 error state).
     pub degraded: bool,
     pub warnings: Vec<CanvasLoadWarning>,
+    /// The content hash of the bytes this open parsed — the handle's
+    /// CAS basis, exposed so a host can bind history entries, editor
+    /// drafts and conflict records to the exact revision they were
+    /// minted against (W6-1 §E TE-0, IE-3). Every `canvas_apply`
+    /// returns the successor basis in `CanvasApplyResult`.
+    pub content_hash: String,
+}
+
+/// A text card's content paired with the basis it was read at, taken
+/// under one lock (W6-1 §E TE-0, IE-4) — the editor's seed token.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasEditorSeed {
+    pub text: String,
+    pub content_hash: String,
 }
 
 /// Geometry argument for placement / overlap queries.
@@ -16125,6 +18854,16 @@ pub struct CanvasSetPlacement {
     pub relative: crate::canvas::placement::RelativeDesc,
 }
 
+/// One hop of a traced connection path (W6-1 0b-9): the connection
+/// followed and the card it led to. The start node is NOT a hop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasTraceHop {
+    pub edge_id: String,
+    pub node_id: String,
+    pub title: String,
+    pub label: Option<String>,
+}
+
 /// Result of `canvas_apply`: the post-write content hash (the next
 /// apply conflict-checks against it) and the inverse action for the
 /// session-scoped undo stack (#372).
@@ -16132,6 +18871,13 @@ pub struct CanvasSetPlacement {
 pub struct CanvasApplyResult {
     pub new_content_hash: String,
     pub inverse: crate::canvas::apply::CanvasAction,
+    /// False when the bytes landed but the index commit failed (the
+    /// save's `SavedButUnindexed` arm, W6-1 §E TE-0/IE-6): the write
+    /// IS committed, the inverse IS valid, and derived reads (the
+    /// outline, the table) may lag until the intent-marker repair
+    /// runs. A host records the entry and surfaces a refresh, never
+    /// a retry of the action.
+    pub indexed: bool,
 }
 
 /// `FileTitleSource` over the live index: a file card referencing a
@@ -16279,6 +19025,15 @@ fn bad_node(node_id: &str) -> VaultError {
     }
 }
 
+/// The node exists but is not a container — distinct from [`bad_node`]
+/// on purpose, because "no such card" and "that card is not a group"
+/// send a caller to different fixes (W6-1 0b-12).
+fn not_a_group(node_id: &str) -> VaultError {
+    VaultError::InvalidArgument {
+        message: format!("canvas node {node_id:?} is not a group"),
+    }
+}
+
 impl VaultSession {
     /// Open a `.canvas` file: tolerant parse, model derivation, index
     /// refresh (one transaction), and a session-scoped handle for all
@@ -16286,8 +19041,8 @@ impl VaultSession {
     /// canvas is read-only.
     pub fn open_canvas(&self, path: &str) -> Result<CanvasOpenInfo, VaultError> {
         let text = self.read_text(path)?;
-        let mut conn = self.conn.lock().expect("session connection mutex");
-        let tx = conn.transaction()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx = db::begin_fenced(&conn)?;
 
         // Ensure a files row and its required empty non-Markdown metadata row
         // exist (open-before-first-scan and migration-replay gaps both heal).
@@ -16362,6 +19117,9 @@ impl VaultSession {
 
         let degraded = crate::canvas::is_load_degraded(&warnings);
         let info_warnings = warnings.iter().map(load_warning).collect();
+        // One hash computation feeds the state's CAS basis AND the
+        // info's exposed basis — they cannot drift (IE-3).
+        let opened_hash = content_hash(text.as_bytes());
         let info = CanvasOpenInfo {
             handle: self
                 .next_canvas_handle
@@ -16370,6 +19128,7 @@ impl VaultSession {
             edge_count: parsed.edges.len() as u32,
             degraded,
             warnings: info_warnings,
+            content_hash: opened_hash.clone(),
         };
         self.canvases.lock().expect("canvas registry mutex").insert(
             info.handle,
@@ -16378,7 +19137,7 @@ impl VaultSession {
                 file_id,
                 canvas: parsed,
                 model,
-                content_hash: content_hash(text.as_bytes()),
+                content_hash: opened_hash,
                 degraded,
             },
         );
@@ -16397,7 +19156,7 @@ impl VaultSession {
     /// Depth-first outline rows, one per node, in reading order — a
     /// single indexed query against the derived columns (§K).
     pub fn canvas_outline(&self, handle: u64) -> Result<Vec<CanvasOutlineRow>, VaultError> {
-        let file_id = self.canvas_file_id(handle)?;
+        let (file_id, speakable) = self.canvas_rows_context(handle)?;
         let conn = self.conn.lock().expect("session connection mutex");
         let mut stmt = conn.prepare_cached(
             "SELECT node_id, depth, kind, title, group_path, ordinal_n, total_m,
@@ -16405,16 +19164,19 @@ impl VaultSession {
              FROM canvas_nodes WHERE file_id = ?1 ORDER BY order_idx",
         )?;
         let rows = stmt.query_map(rusqlite::params![file_id], |row| {
+            let node_id: String = row.get(0)?;
+            let title: String = row.get(3)?;
             Ok(CanvasOutlineRow {
-                node_id: row.get(0)?,
                 depth: row.get::<_, i64>(1)? as u32,
                 kind: row.get(2)?,
-                title: row.get(3)?,
                 group_path: parse_group_path(&row.get::<_, String>(4)?),
                 ordinal_n: row.get::<_, i64>(5)? as u32,
                 total_m: row.get::<_, i64>(6)? as u32,
                 connection_count: row.get::<_, i64>(7)? as u32,
                 color_name: row.get(8)?,
+                speakable_name: speakable_for(&speakable, &node_id, &title),
+                title,
+                node_id,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -16423,21 +19185,24 @@ impl VaultSession {
     /// Flat table rows in reading order; the table view sorts client-side
     /// per column (#519 v2 comparators).
     pub fn canvas_table_rows(&self, handle: u64) -> Result<Vec<CanvasTableRow>, VaultError> {
-        let file_id = self.canvas_file_id(handle)?;
+        let (file_id, speakable) = self.canvas_rows_context(handle)?;
         let conn = self.conn.lock().expect("session connection mutex");
         let mut stmt = conn.prepare_cached(
             "SELECT node_id, kind, title, group_path, target, conn_count, color_name
              FROM canvas_nodes WHERE file_id = ?1 ORDER BY order_idx",
         )?;
         let rows = stmt.query_map(rusqlite::params![file_id], |row| {
+            let node_id: String = row.get(0)?;
+            let title: String = row.get(2)?;
             Ok(CanvasTableRow {
-                node_id: row.get(0)?,
                 kind: row.get(1)?,
-                title: row.get(2)?,
                 group_path: parse_group_path(&row.get::<_, String>(3)?),
                 target: row.get(4)?,
                 connection_count: row.get::<_, i64>(5)? as u32,
                 color_name: row.get(6)?,
+                speakable_name: speakable_for(&speakable, &node_id, &title),
+                title,
+                node_id,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -16494,6 +19259,7 @@ impl VaultSession {
         Ok(CanvasWhereAmI {
             node_id: node_id.to_string(),
             title: s.display_title.clone(),
+            speakable_name: s.speakable_name.clone(),
             kind: s.kind_label.to_string(),
             group_path: s.group_path.clone(),
             ordinal_n: s.position_in_container as u32,
@@ -16503,6 +19269,181 @@ impl VaultSession {
             out_count: s.out_count as u32,
             color_name: s.color_name.clone(),
         })
+    }
+
+    // --- W6-1 PR 0b: the structural queries (§W-G rows B–M) ----------
+    //
+    // Each is a handle lookup plus one call into `canvas::queries` or
+    // `canvas::placement`; the rules live there, once, and the contracts
+    // are `docs/plans/34_canvas_contracts.md` §"PR 0b".
+
+    /// The node's containing group, or `None` at canvas level (0b-8).
+    /// An unknown node id is `bad_node`, so a caller can tell "no
+    /// parent" from "no such node".
+    pub fn canvas_parent_of(
+        &self,
+        handle: u64,
+        node_id: &str,
+    ) -> Result<Option<String>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let id = crate::canvas::NodeId(node_id.to_string());
+        if !state.model.summaries.contains_key(&id) {
+            return Err(bad_node(node_id));
+        }
+        Ok(crate::canvas::queries::parent_of(&state.model, &id).map(|p| p.0))
+    }
+
+    /// The group's direct children in reading order (0b-8). Empty for a
+    /// childless group and for a node that is not a group; an unknown
+    /// node id is `bad_node`.
+    pub fn canvas_children_of(
+        &self,
+        handle: u64,
+        group_id: &str,
+    ) -> Result<Vec<String>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let id = crate::canvas::NodeId(group_id.to_string());
+        if !state.model.summaries.contains_key(&id) {
+            return Err(bad_node(group_id));
+        }
+        Ok(crate::canvas::queries::children_of(&state.model, &id)
+            .into_iter()
+            .map(|n| n.0)
+            .collect())
+    }
+
+    /// Project a set of node ids onto reading order (0b-10). Unknown
+    /// ids are dropped silently and duplicates collapse — a stale mark
+    /// must not be fatal to a bulk verb.
+    pub fn canvas_order_nodes(
+        &self,
+        handle: u64,
+        ids: Vec<String>,
+    ) -> Result<Vec<String>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let ids: Vec<crate::canvas::NodeId> = ids.into_iter().map(crate::canvas::NodeId).collect();
+        Ok(crate::canvas::queries::order_nodes(&state.model, &ids)
+            .into_iter()
+            .map(|n| n.0)
+            .collect())
+    }
+
+    /// The greedy, cycle-safe outgoing walk from `node_id` (0b-9). The
+    /// start node is not a hop, so a dead end returns an empty list.
+    pub fn canvas_trace_path(
+        &self,
+        handle: u64,
+        node_id: &str,
+    ) -> Result<Vec<CanvasTraceHop>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let id = crate::canvas::NodeId(node_id.to_string());
+        if !state.model.summaries.contains_key(&id) {
+            return Err(bad_node(node_id));
+        }
+        Ok(crate::canvas::queries::trace_path(&state.model, &id)
+            .into_iter()
+            .map(|hop| CanvasTraceHop {
+                edge_id: hop.edge.0,
+                node_id: hop.node.0,
+                title: hop.title,
+                label: hop.label,
+            })
+            .collect())
+    }
+
+    /// Where `rect` sits relative to its nearest non-group neighbours
+    /// (0b-7) — zero, one or two descriptions. An empty list is "no
+    /// candidates"; the announcement layer renders that.
+    pub fn canvas_describe_relative(
+        &self,
+        handle: u64,
+        rect: CanvasRectArg,
+        exclude: Vec<String>,
+    ) -> Result<Vec<crate::canvas::placement::RelativeDesc>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let exclude: Vec<crate::canvas::NodeId> =
+            exclude.into_iter().map(crate::canvas::NodeId).collect();
+        Ok(crate::canvas::queries::describe_relative(
+            &state.model,
+            crate::canvas::model::Rect::new(rect.x, rect.y, rect.width, rect.height),
+            &exclude,
+        ))
+    }
+
+    /// Bounding box of every node, group frames included (0b-11).
+    /// `None` on an empty canvas.
+    pub fn canvas_bounds(&self, handle: u64) -> Result<Option<CanvasRectArg>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        Ok(crate::canvas::queries::bounds(&state.model).map(rect_arg))
+    }
+
+    /// The group frame enclosing `members`: their union plus
+    /// `DEFAULT_GAP` on all four sides (0b-11). `None` when no member
+    /// resolves.
+    pub fn canvas_group_rect_around(
+        &self,
+        handle: u64,
+        members: Vec<String>,
+    ) -> Result<Option<CanvasRectArg>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let members: Vec<crate::canvas::NodeId> =
+            members.into_iter().map(crate::canvas::NodeId).collect();
+        Ok(crate::canvas::queries::group_rect_around(&state.model, &members).map(rect_arg))
+    }
+
+    /// A free slot for a card of `width × height` INSIDE the group
+    /// (0b-12) — or a typed "too small" / "full" outcome, never a point
+    /// outside the group.
+    ///
+    /// `group_id` must name a GROUP. A card's rect is not a container,
+    /// and answering geometry for one would hand the caller a position
+    /// "inside" something that cannot hold it — so a non-group id is
+    /// refused rather than answered (PR E is the first consumer).
+    pub fn canvas_place_inside_group(
+        &self,
+        handle: u64,
+        group_id: &str,
+        width: f64,
+        height: f64,
+        exclude: Vec<String>,
+    ) -> Result<crate::canvas::placement::InsideGroupPlacement, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let id = crate::canvas::NodeId(group_id.to_string());
+        let rect = state
+            .model
+            .spatial
+            .rect_of(&id)
+            .ok_or_else(|| bad_node(group_id))?;
+        if state.model.summaries.get(&id).map(|s| s.kind_label) != Some("group") {
+            return Err(not_a_group(group_id));
+        }
+        let exclude: Vec<crate::canvas::NodeId> =
+            exclude.into_iter().map(crate::canvas::NodeId).collect();
+        Ok(crate::canvas::placement::place_inside_group(
+            &state.model,
+            rect,
+            (width, height),
+            &exclude,
+        ))
+    }
+
+    /// Node ids matching `query`, in reading order (0b-13). An empty or
+    /// whitespace-only query matches EVERYTHING.
+    pub fn canvas_filter(&self, handle: u64, query: &str) -> Result<Vec<String>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        Ok(crate::canvas::queries::filter(&state.model, query)
+            .into_iter()
+            .map(|n| n.0)
+            .collect())
     }
 
     /// Non-overlapping, grid-aligned position for a new card (#517).
@@ -16631,18 +19572,45 @@ impl VaultSession {
         // since open/last apply → typed WriteConflict for t0 §5.
         let new_text = crate::canvas::serialize::serialize(&working);
         let mut conn = self.conn.lock().expect("session connection mutex");
-        let report = self.save_text_locked(
+        // A `SavedButUnindexed` return is a COMMIT whose index step
+        // failed (IE-6): the bytes and the inverse are real, so the
+        // apply reports success with `indexed: false` and the handle
+        // advances — refusing here would invite a retry that applies
+        // the action twice, and the write-intent marker repairs the
+        // index behind us.
+        let (committed_hash, indexed) = match self.save_text_locked(
             &mut conn,
             &state.path,
             &new_text,
             Some(&state.content_hash),
             &[],
-        )?;
+        ) {
+            Ok(report) => (report.new_content_hash, true),
+            Err(VaultError::SavedButUnindexed {
+                new_content_hash,
+                detail,
+            }) => {
+                log::warn!("canvas apply committed but unindexed: {detail}");
+                (new_content_hash, false)
+            }
+            Err(e) => return Err(e),
+        };
 
-        // Refresh the handle: new parse-equivalent state + model.
-        let tx = conn.transaction()?;
-        let model = crate::canvas::model::derive_with(&working, &DbTitleSource { conn: &tx });
-        drop(tx);
+        // Refresh the handle: new parse-equivalent state + model. On
+        // the unindexed arm the titles table may be behind or the
+        // fenced open may itself fail; the fallback derives without
+        // the DB (filename titles), which is exactly as stale as the
+        // index it could not read.
+        let model = match db::begin_fenced(&conn) {
+            Ok(tx) => {
+                let model =
+                    crate::canvas::model::derive_with(&working, &DbTitleSource { conn: &tx });
+                drop(tx);
+                model
+            }
+            Err(_) if !indexed => crate::canvas::model::derive(&working),
+            Err(e) => return Err(e.into()),
+        };
         // The save above allocated/resolved the binding; read it before
         // releasing the connection so the semantic entry lands in the
         // same log (O-1: names come from the column, never `files.id`).
@@ -16659,7 +19627,7 @@ impl VaultSession {
         state.canvas = working;
         state.model = model;
         let hash_before = state.content_hash.clone();
-        state.content_hash = report.new_content_hash.clone();
+        state.content_hash = committed_hash.clone();
 
         // Semantic journal entry (#372): named action + inverse beside
         // the byte-level text entry the save just wrote. Best-effort,
@@ -16683,7 +19651,7 @@ impl VaultSession {
             user_actor_id: self.config.user_actor_id.clone(),
             op_kind: crate::oplog::OpKind::CanvasApply,
             content_hash_before: hash_before,
-            content_hash_after: report.new_content_hash.clone(),
+            content_hash_after: committed_hash.clone(),
             payload_bytes: payload.to_string().into_bytes(),
         };
         let append_result = match log_name.as_deref() {
@@ -16718,8 +19686,9 @@ impl VaultSession {
         // above — the canvas serialization commits through the same
         // seam as every text write, so no extra emission here.
         Ok(CanvasApplyResult {
-            new_content_hash: report.new_content_hash,
+            new_content_hash: committed_hash,
             inverse,
+            indexed,
         })
     }
 
@@ -16742,6 +19711,7 @@ impl VaultSession {
                     node_id: node.id.0.clone(),
                     kind: summary.kind_label.to_string(),
                     title: summary.display_title.clone(),
+                    speakable_name: summary.speakable_name.clone(),
                     x: node.x,
                     y: node.y,
                     width: node.width,
@@ -16802,18 +19772,135 @@ impl VaultSession {
         })
     }
 
-    fn canvas_file_id(&self, handle: u64) -> Result<i64, VaultError> {
-        self.canvases
-            .lock()
-            .expect("canvas registry mutex")
-            .get(&handle)
-            .map(|s| s.file_id)
-            .ok_or_else(|| bad_handle(handle))
+    /// The picker's proximity order (W6-1 §E TE-0, IE-21) — core owns
+    /// the one distance algorithm; a host renders and text-filters.
+    pub fn canvas_proximity_order(
+        &self,
+        handle: u64,
+        anchor: Option<String>,
+        exclude: Vec<String>,
+    ) -> Result<Vec<String>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let anchor_id = anchor.map(crate::canvas::NodeId);
+        let exclude_ids: Vec<crate::canvas::NodeId> =
+            exclude.into_iter().map(crate::canvas::NodeId).collect();
+        Ok(
+            crate::canvas::queries::proximity_order(&state.model, anchor_id.as_ref(), &exclude_ids)
+                .into_iter()
+                .map(|n| n.0)
+                .collect(),
+        )
+    }
+
+    /// The handle's CURRENT document serialized (W6-1 §E TE-3,
+    /// IE-17): at conflict time the in-memory canvas is still the
+    /// pre-conflict revision — the apply refused, the state did not
+    /// move — and Save a Copy applies the retained action to THIS
+    /// text detachedly. Locked, and paired with the basis so the
+    /// caller can prove which revision it captured.
+    pub fn canvas_current_text(&self, handle: u64) -> Result<CanvasEditorSeed, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        Ok(CanvasEditorSeed {
+            text: crate::canvas::serialize::serialize(&state.canvas),
+            content_hash: state.content_hash.clone(),
+        })
+    }
+
+    /// One LOCKED read of a text card's content together with the
+    /// basis it was read at (W6-1 §E TE-0, IE-4). Reading text and
+    /// basis in two calls can seed old text under a new hash — or the
+    /// reverse — when an apply lands between them; this pairing is
+    /// taken under the registry lock and cannot tear. `None` for a
+    /// non-text card, `bad_node` for an id the canvas does not hold.
+    pub fn canvas_editor_seed(
+        &self,
+        handle: u64,
+        node_id: &str,
+    ) -> Result<Option<CanvasEditorSeed>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let node = state
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.id.0 == node_id)
+            .ok_or_else(|| bad_node(node_id))?;
+        Ok(match &node.kind {
+            crate::canvas::NodeKind::Text { text } => Some(CanvasEditorSeed {
+                text: text.clone(),
+                content_hash: state.content_hash.clone(),
+            }),
+            _ => None,
+        })
+    }
+
+    /// The handle's file id together with its `node_id → speakable_name`
+    /// map — the in-memory join contract 0b-6 chose over a derived
+    /// column.
+    ///
+    /// The map is BUILT PER CALL: two `String` clones per node, so one
+    /// linear pass and 2N allocations before the query runs. That is
+    /// the same order as the row materialization it feeds and keeps the
+    /// §K budget, but it is a copy, not a borrow — the alternative
+    /// (holding the registry lock across the SQLite read) would invert
+    /// this module's lock order. Both values come out of ONE registry
+    /// lock which is released before the connection is taken: the order
+    /// here is canvases → conn (see `canvas_apply`), so a query holding
+    /// the connection must never reach back for the registry.
+    fn canvas_rows_context(
+        &self,
+        handle: u64,
+    ) -> Result<(i64, std::collections::HashMap<String, String>), VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        let speakable = state
+            .model
+            .summaries
+            .iter()
+            .map(|(id, s)| (id.0.clone(), s.speakable_name.clone()))
+            .collect();
+        Ok((state.file_id, speakable))
     }
 }
 
 fn parse_group_path(json: &str) -> Vec<String> {
     serde_json::from_str(json).unwrap_or_default()
+}
+
+/// The joined speakable name for one indexed row (W6-1 0b-6).
+///
+/// The map comes from the handle's OPEN-TIME model and the row comes
+/// from `canvas_nodes`, which a rescan rewrites while the handle is
+/// still open. Holding a handle therefore guarantees a model, but NOT
+/// that the model and the rows agree about which nodes exist: an
+/// external edit plus a rescan leaves rows whose ids the snapshot never
+/// had. Falling back to the row's own title keeps the name non-empty,
+/// which is what Voice Control addressability needs — an empty
+/// speakable name is a card that cannot be spoken to at all. The
+/// fallback gives up UNIQUENESS for those rows, not addressability;
+/// the host recovers both by reopening the handle, which is what it
+/// already does on the change event.
+fn speakable_for(
+    names: &std::collections::HashMap<String, String>,
+    node_id: &str,
+    title: &str,
+) -> String {
+    match names.get(node_id) {
+        Some(name) => name.clone(),
+        None => title.to_owned(),
+    }
+}
+
+/// A model rect as the FFI's origin+size record (W6-1 0b-11).
+fn rect_arg(r: crate::canvas::model::Rect) -> CanvasRectArg {
+    CanvasRectArg {
+        x: r.x0,
+        y: r.y0,
+        width: r.width(),
+        height: r.height(),
+    }
 }
 
 fn load_warning(w: &crate::canvas::CanvasWarning) -> CanvasLoadWarning {
@@ -16904,8 +19991,10 @@ mod tests {
     #[path = "properties.rs"]
     mod properties;
 
+    mod canonical_identity;
     #[path = "save.rs"]
     mod save;
+    mod upgrade_fence;
 
     #[path = "oplog_identity.rs"]
     mod oplog_identity;

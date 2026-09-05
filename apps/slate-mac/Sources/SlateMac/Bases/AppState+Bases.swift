@@ -419,7 +419,7 @@ extension AppState {
             let resolved = BaseEmbedRequest.savedQuerySummary(
                 reference: reference, in: baseQueries.savedQueries)
             guard let resolved else {
-                postBaseActionAnnouncement("Saved query \(reference) is no longer available.")
+                postBaseActionEvent(.basesSavedQueryReferenceMissing(reference: reference))
                 return
             }
             openSavedQuery(resolved, target: .newTab)
@@ -712,7 +712,7 @@ extension AppState {
                 self.retargetOpenDashboards(dashboards)
                 self.refreshSavedQueryCommands(saved)
             case .failure(let message):
-                self.postBaseActionAnnouncement("Queries could not be refreshed: \(message)")
+                self.postBaseActionEvent(.basesQueriesRefreshFailed(detail: message))
             }
         }
         baseQueriesRefreshTask = task
@@ -753,7 +753,7 @@ extension AppState {
 
     func runSavedQuery(id: String) {
         guard let summary = savedQuerySummary(id: id) else {
-            postBaseActionAnnouncement("Saved query is no longer available.")
+            postBaseActionEvent(.basesSavedQueryMissing)
             return
         }
         openSavedQuery(summary)
@@ -770,9 +770,10 @@ extension AppState {
                     id: saved.id,
                     name: saved.name,
                     description: saved.description))
-            postBaseActionAnnouncement("Editing \(saved.name) in builder.")
+            postBaseActionEvent(.basesSavedQueryEditing(name: saved.name))
         } catch {
-            postBaseActionAnnouncement("Saved query could not be edited: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesSavedQueryEditFailed(detail: error.localizedDescription))
         }
     }
 
@@ -780,16 +781,17 @@ extension AppState {
         guard let session = currentSession else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            postBaseActionAnnouncement("Enter a saved query name before renaming.")
+            postBaseActionEvent(.basesSavedQueryRenameNameNeeded)
             return
         }
         do {
             try session.renameSavedQuery(id: id, name: trimmed)
             refreshBaseQueries()
             reloadDashboardDocumentsAfterSavedQueryChange()
-            postBaseActionAnnouncement("Renamed saved query to \(trimmed).")
+            postBaseActionEvent(.basesSavedQueryRenamed(name: trimmed))
         } catch {
-            postBaseActionAnnouncement("Saved query could not be renamed: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesSavedQueryRenameFailed(detail: error.localizedDescription))
         }
     }
 
@@ -809,9 +811,10 @@ extension AppState {
             }
             refreshBaseQueries()
             reloadDashboardDocumentsAfterSavedQueryChange()
-            postBaseActionAnnouncement("Deleted saved query.")
+            postBaseActionEvent(.basesSavedQueryDeleted)
         } catch {
-            postBaseActionAnnouncement("Saved query could not be deleted: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesSavedQueryDeleteFailed(detail: error.localizedDescription))
         }
     }
 
@@ -824,7 +827,7 @@ extension AppState {
         guard let session = currentSession else { return nil }
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            postBaseActionAnnouncement("Choose a .base path before exporting.")
+            postBaseActionEvent(.basesSavedQueryExportPathNeeded)
             return nil
         }
         guard admitStructuralMutationRequest() else { return nil }
@@ -868,10 +871,9 @@ extension AppState {
                     session: session,
                     changedPath: trimmed)?.value
                 guard self.ownsStructuralMutation(token, session: session) else { return }
-                self.postBaseActionAnnouncement("Exported saved query as \(trimmed).")
+                self.postBaseActionEvent(.basesSavedQueryExported(name: trimmed))
             case .failure(let message):
-                self.postBaseActionAnnouncement(
-                    "Saved query could not be exported: \(message)")
+                self.postBaseActionEvent(.basesSavedQueryExportFailed(detail: message))
             }
         }
         recordPendingStructuralTask(task)
@@ -881,7 +883,7 @@ extension AppState {
     func exportSavedQueryUsingSavePanel(id: String) {
         guard let originSession = currentSession else { return }
         guard let summary = savedQuerySummary(id: id) else {
-            postBaseActionAnnouncement("Saved query is no longer available.")
+            postBaseActionEvent(.basesSavedQueryMissing)
             return
         }
         guard admitStructuralMutationRequest() else { return }
@@ -899,7 +901,7 @@ extension AppState {
                     let path = Self.vaultRelativePath(
                         of: url, vaultURL: originVaultURL)
                 else {
-                    self.postBaseActionAnnouncement("Choose a path inside the vault.")
+                    self.postBaseActionEvent(.basesPathOutsideVault)
                     return
                 }
                 _ = self.exportSavedQuery(id: id, path: path)
@@ -912,16 +914,16 @@ extension AppState {
         guard let session = currentSession else { return nil }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            postBaseActionAnnouncement("Enter a dashboard name before saving.")
+            postBaseActionEvent(.basesDashboardNameNeeded)
             return nil
         }
         do {
             let id = try session.saveDashboard(name: trimmed, sections: sections)
             refreshBaseQueries()
-            postBaseActionAnnouncement("Saved dashboard \(trimmed).")
+            postBaseActionEvent(.basesDashboardSaved(name: trimmed))
             return id
         } catch {
-            postBaseActionAnnouncement("Dashboard could not be saved: \(error.localizedDescription)")
+            postBaseActionEvent(.basesDashboardSaveFailed(detail: error.localizedDescription))
             return nil
         }
     }
@@ -931,7 +933,7 @@ extension AppState {
         guard let session = currentSession else { return false }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            postBaseActionAnnouncement("Enter a dashboard name before saving.")
+            postBaseActionEvent(.basesDashboardNameNeeded)
             return false
         }
         do {
@@ -944,10 +946,11 @@ extension AppState {
                 }
             }
             refreshBaseQueries()
-            postBaseActionAnnouncement("Updated dashboard \(trimmed).")
+            postBaseActionEvent(.basesDashboardUpdated(name: trimmed))
             return true
         } catch {
-            postBaseActionAnnouncement("Dashboard could not be updated: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesDashboardUpdateFailed(detail: error.localizedDescription))
             return false
         }
     }
@@ -965,15 +968,15 @@ extension AppState {
                 dashboard.sections.indices.contains(index),
                 dashboard.sections[index].missing
             else {
-                postBaseActionAnnouncement("Dashboard section changed; reload and try again.")
+                postBaseActionEvent(.basesDashboardSectionStale)
                 return
             }
             var sections = freshSections
             sections.remove(at: index)
             updateDashboard(id: dashboardID, name: dashboard.name, sections: sections)
         } catch {
-            postBaseActionAnnouncement(
-                "Dashboard section could not be removed: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesDashboardSectionRemoveFailed(detail: error.localizedDescription))
         }
     }
 
@@ -992,7 +995,7 @@ extension AppState {
                 dashboard.sections.indices.contains(index),
                 dashboard.sections[index].missing
             else {
-                postBaseActionAnnouncement("Dashboard section changed; reload and try again.")
+                postBaseActionEvent(.basesDashboardSectionStale)
                 return
             }
             var sections = freshSections
@@ -1003,8 +1006,8 @@ extension AppState {
                 viewOverride: current.viewOverride)
             updateDashboard(id: dashboardID, name: dashboard.name, sections: sections)
         } catch {
-            postBaseActionAnnouncement(
-                "Dashboard section could not be replaced: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesDashboardSectionReplaceFailed(detail: error.localizedDescription))
         }
     }
 
@@ -1025,9 +1028,10 @@ extension AppState {
             try session.deleteDashboard(id: id)
             closeOpenDashboardTabs(id: id)
             refreshBaseQueries()
-            postBaseActionAnnouncement("Deleted dashboard.")
+            postBaseActionEvent(.basesDashboardDeleted)
         } catch {
-            postBaseActionAnnouncement("Dashboard could not be deleted: \(error.localizedDescription)")
+            postBaseActionEvent(
+                .basesDashboardDeleteFailed(detail: error.localizedDescription))
         }
     }
 
@@ -1036,7 +1040,7 @@ extension AppState {
         do {
             return try session.getDashboard(id: id)
         } catch {
-            postBaseActionAnnouncement("Dashboard could not be edited: \(error.localizedDescription)")
+            postBaseActionEvent(.basesDashboardEditFailed(detail: error.localizedDescription))
             return nil
         }
     }
@@ -1289,10 +1293,8 @@ extension AppState {
     @discardableResult
     func basesWhereAmI() -> String? {
         guard let doc = activeBaseDocument else { return nil }
-        let text = doc.whereAmIReadback
-        // W0.5-3 residue: BaseDocument.whereAmIReadback
-        postAccessibilityAnnouncement(.hostComposed(text: text, priority: .medium))
-        return text
+        postAccessibilityAnnouncement(doc.whereAmIEvent)
+        return doc.whereAmIReadback
     }
 
     func clearBaseQuickFilterIfLeavingActiveTab(for destination: TabID) {
@@ -1321,7 +1323,7 @@ extension AppState {
 
     func dockSavedQueryToSidebar(id: String, refreshDelayNanoseconds: UInt64 = 500_000_000) {
         guard let summary = savedQuerySummary(id: id) else {
-            postBaseActionAnnouncement("Saved query is no longer available.")
+            postBaseActionEvent(.basesSavedQueryMissing)
             return
         }
         basesDock.setTarget(.savedQuery(id: summary.id, name: summary.name))
@@ -1332,7 +1334,7 @@ extension AppState {
 
     func dockDashboardToSidebar(id: String, refreshDelayNanoseconds: UInt64 = 500_000_000) {
         guard let summary = dashboardSummary(id: id) else {
-            postBaseActionAnnouncement("Dashboard is no longer available.")
+            postBaseActionEvent(.basesDashboardMissing)
             return
         }
         basesDock.setTarget(.dashboard(id: summary.id, name: summary.name))
@@ -1499,7 +1501,7 @@ extension AppState {
         }
         basesDock.setTarget(target)
         if basesDock.publishMembership(membership) {
-            postBaseActionAnnouncement("Base dock updated for active note.")
+            postBaseActionEvent(.basesDockUpdatedForNote)
         }
     }
 
@@ -1882,9 +1884,15 @@ extension AppState {
             else { return [String]() }
 
             var announcements: [String] = []
-            func append(_ message: String) {
+            var events: [A11yEvent] = []
+            // Dedupe stays on the RENDERED text: two events can differ
+            // structurally and still say the same sentence, and the
+            // published list is what the suite asserts on.
+            func append(_ event: A11yEvent) {
+                let message = a11yRender(event: event).text
                 guard !announcements.contains(message) else { return }
                 announcements.append(message)
+                events.append(event)
             }
             func appendMembershipChange(
                 previous: BaseRowMembership,
@@ -1892,7 +1900,7 @@ extension AppState {
             ) {
                 let current = BaseRowMembership(rows: result?.rows ?? [])
                 guard previous != current, let summary = result?.audioSummary else { return }
-                append("Updated: \(summary)")
+                append(.basesRefreshUpdated(audioSummary: summary))
             }
 
             for plan in basePlans where settledIndices.contains(plan.workIndex) {
@@ -1956,7 +1964,7 @@ extension AppState {
                     columnID: selectedColumnID)
             }
             self.lastBaseRefreshAnnouncements = announcements
-            announcements.forEach(self.postBaseActionAnnouncement)
+            events.forEach { _ = self.postBaseActionEvent($0) }
             return announcements
         }
         visibleBasesRefreshTask = task
@@ -2219,11 +2227,7 @@ extension AppState {
         } else {
             model.previewState = .ready(result)
         }
-        // W0.5-3 residue: BaseQueryPreviewState.accessibilityAnnouncement
-        postAccessibilityAnnouncement(
-            .hostComposed(
-                text: model.previewState.accessibilityAnnouncement,
-                priority: .medium))
+        postAccessibilityAnnouncement(model.previewState.accessibilityEvent)
     }
 
     func basesBuilderPublishPreviewFailure(
@@ -2698,10 +2702,9 @@ extension AppState {
         guard let doc = activeBaseDocument,
             admitBaseDocumentInteraction(doc),
             let session = currentSession,
-            let text = doc.sortFocusedColumn(session: session)
+            let event = doc.sortFocusedColumn(session: session)
         else { return }
-        // W0.5-3 residue: BaseDocument.sortFocusedColumn
-        postAccessibilityAnnouncement(.hostComposed(text: text, priority: .medium))
+        postAccessibilityAnnouncement(event)
     }
 
     func basesSaveSortToView() {
@@ -2715,13 +2718,12 @@ extension AppState {
             return
         }
         do {
-            if let text = try doc.saveSortToView(session: session) {
+            if let event = try doc.saveSortToView(session: session) {
                 refreshVisibleBasesAfterInAppWrite(
                     session: session,
                     changedPath: doc.source.filePath ?? doc.selectionKey,
                     alreadyRefreshedDefinitionOwner: doc)
-                // W0.5-3 residue: BaseDocument.saveSortToView
-                postAccessibilityAnnouncement(.hostComposed(text: text, priority: .medium))
+                postAccessibilityAnnouncement(event)
             }
         } catch {
             postAccessibilityAnnouncement(
@@ -2731,10 +2733,13 @@ extension AppState {
 
     func basesResultsPopover() {
         guard let doc = activeBaseDocument, let result = doc.result else { return }
-        let suffix = doc.quickFilterActive ? " \(doc.whereAmIReadback)." : ""
-        // W0.5-3 residue: BasesResultSet.audioSummary + whereAmIReadback suffix
+        // `audioSummary` is core-composed already; the readback is
+        // appended only while a quick filter is active, and core owns
+        // that joining now (#969).
         postAccessibilityAnnouncement(
-            .hostComposed(text: "\(result.audioSummary)\(suffix)", priority: .medium))
+            .baseResultsPopover(
+                audioSummary: result.audioSummary,
+                whereAmI: doc.quickFilterActive ? doc.whereAmIReadback : nil))
     }
 
     @discardableResult
@@ -2742,8 +2747,7 @@ extension AppState {
         if let taskOrdinal = row.taskOrdinal,
             let task = taskItem(path: row.filePath, ordinal: taskOrdinal)
         {
-            openTaskRowInEditor(
-                TaskWithLocation(task: task, path: row.filePath, fileName: baseFilename(row.filePath)))
+            openTaskRow(path: row.filePath, fileLine: Int(task.line))
             return postBaseActionEvent(
                 .openedAtLine(filename: baseFilename(row.filePath), line: UInt32(task.line)))
         }
@@ -2756,7 +2760,8 @@ extension AppState {
         let link = baseWikilink(for: row.filePath)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(link, forType: .string)
-        postBaseActionAnnouncement("Copied link to \(displayNameWithoutExtension(row.filePath)).")
+        postBaseActionEvent(
+            .basesLinkCopied(name: displayNameWithoutExtension(row.filePath)))
         return link
     }
 
@@ -2765,9 +2770,8 @@ extension AppState {
         openFile(row.filePath, target: .currentTab)
         workspace.activeLeaf = .backlinks
         focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
-        let text = "Backlinks for \(displayNameWithoutExtension(row.filePath))."
-        postBaseActionAnnouncement(text)
-        return text
+        return postBaseActionEvent(
+            .basesBacklinksFor(name: displayNameWithoutExtension(row.filePath)))
     }
 
     /// The reserved "show local graph" row action (Bases gap O15 /
@@ -2816,7 +2820,7 @@ extension AppState {
         includeQuickFilter: Bool? = nil
     ) -> Task<String?, Never>? {
         guard let doc = activeBaseDocument else {
-            postBaseActionAnnouncement("Base view could not be copied: No active base.")
+            postBaseActionEvent(.basesViewCopyNoActiveBase)
             return nil
         }
         let shouldIncludeQuickFilter =
@@ -2830,11 +2834,10 @@ extension AppState {
                     includeQuickFilter: shouldIncludeQuickFilter)
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(markdown, forType: .string)
-                self.postBaseActionAnnouncement("Copied base view as Markdown.")
+                self.postBaseActionEvent(.basesViewCopiedAsMarkdown)
                 return markdown
             } catch {
-                self.postBaseActionAnnouncement(
-                    "Base view could not be copied: \(error.localizedDescription)")
+                self.postBaseActionEvent(.basesViewCopyFailed(detail: error.localizedDescription))
                 return nil
             }
         }
@@ -2860,7 +2863,7 @@ extension AppState {
 
     func basesOpenSelectedRow() {
         guard let row = activeBaseSelectedRowForCommand() else {
-            postBaseActionAnnouncement("Select a base row first.")
+            postBaseActionEvent(.basesRowSelectionNeeded)
             return
         }
         basesOpen(row: row)
@@ -2868,7 +2871,7 @@ extension AppState {
 
     func basesCopySelectedLink() {
         guard let row = activeBaseSelectedRowForCommand() else {
-            postBaseActionAnnouncement("Select a base row first.")
+            postBaseActionEvent(.basesRowSelectionNeeded)
             return
         }
         basesCopyLink(for: row)
@@ -2876,7 +2879,7 @@ extension AppState {
 
     func basesShowSelectedBacklinks() {
         guard let row = activeBaseSelectedRowForCommand() else {
-            postBaseActionAnnouncement("Select a base row first.")
+            postBaseActionEvent(.basesRowSelectionNeeded)
             return
         }
         basesShowBacklinks(for: row)
@@ -2884,11 +2887,11 @@ extension AppState {
 
     func basesEditSelectedProperty() {
         guard activeBaseSelectedRowForCommand() != nil else {
-            postBaseActionAnnouncement("Select a base row first.")
+            postBaseActionEvent(.basesRowSelectionNeeded)
             return
         }
         guard activeBaseSelectedColumn != nil else {
-            postBaseActionAnnouncement("No editable property is available for the selected row.")
+            postBaseActionEvent(.basesNoEditableProperty)
             return
         }
         baseEditPropertyRequestToken &+= 1
@@ -3192,9 +3195,7 @@ extension AppState {
         action: BasePropertyAction
     ) async -> String? {
         guard let key = BaseCellEditPolicy.propertyKey(for: column) else {
-            let hint = BaseCellEditPolicy.readOnlyHint(for: column)
-            postBaseActionAnnouncement(hint)
-            return hint
+            return postBaseActionEvent(BaseCellEditPolicy.readOnlyEvent(for: column))
         }
         guard admitBatchTrashWrite(to: [row.filePath]) else { return nil }
         guard let session = currentSession, let doc = activeBaseDocument else { return nil }
@@ -3235,23 +3236,23 @@ extension AppState {
                 BaseExactIdentity.matches($0.filePath, row.filePath)
                     && $0.taskOrdinal == row.taskOrdinal
             } ?? false)
-            let text: String
+            let event: A11yEvent
             if stillPresent {
                 switch action {
                 case .set(let value):
-                    text = "Saved. \(column.label): \(BaseCellEditPolicy.displayValue(value))"
+                    event = .basesCellSaved(
+                        column: column.label,
+                        value: BaseCellEditPolicy.displayValue(value))
                 case .delete:
-                    text = "Saved. \(column.label): empty"
+                    event = .basesCellCleared(column: column.label)
                 }
             } else {
-                text = "Saved. Row no longer matches this view"
+                event = .basesCellRowNoLongerMatches
             }
-            postBaseActionAnnouncement(text)
-            return text
+            return postBaseActionEvent(event)
         case .failure(let error):
-            let text = "Base edit failed: \(error.localizedDescription)"
-            postBaseActionAnnouncement(text)
-            return text
+            return postBaseActionEvent(
+                .basesCellEditFailed(detail: error.localizedDescription))
         }
     }
 
@@ -3265,8 +3266,8 @@ extension AppState {
         text: String,
         to url: URL,
         originSession: VaultSession,
-        successMessage: String,
-        failurePrefix: String,
+        successEvent: A11yEvent,
+        failureEvent: @escaping (String) -> A11yEvent,
         nativeThreadObserver: (@Sendable (Bool) -> Void)? = nil
     ) -> Task<Void, Never>? {
         guard currentSession === originSession else { return nil }
@@ -3324,9 +3325,9 @@ extension AppState {
                     guard self.ownsStructuralMutation(token, session: originSession)
                     else { return }
                 }
-                self.postBaseActionAnnouncement(successMessage)
+                self.postBaseActionEvent(successEvent)
             case .failure(let message):
-                self.postBaseActionAnnouncement("\(failurePrefix): \(message)")
+                self.postBaseActionEvent(failureEvent(message))
             }
         }
         recordPendingStructuralTask(task)
@@ -3356,13 +3357,12 @@ extension AppState {
                             text: text,
                             to: url,
                             originSession: originSession,
-                            successMessage: "Exported base view.",
-                            failurePrefix: "Base view could not be exported")
+                            successEvent: .basesViewExported,
+                            failureEvent: { .basesViewExportFailed(detail: $0) })
                     }
                 }
             } catch {
-                self.postBaseActionAnnouncement(
-                    "Base view could not be exported: \(error.localizedDescription)")
+                self.postBaseActionEvent(.basesViewExportFailed(detail: error.localizedDescription))
             }
         }
     }
@@ -3384,20 +3384,18 @@ extension AppState {
         case .alertSecondButtonReturn:
             return false
         default:
-            postBaseActionAnnouncement("\(verb) canceled.")
+            postBaseActionEvent(.basesQuickFilterChoiceCanceled(verb: verb))
             return nil
         }
     }
 
-    func postBaseActionAnnouncement(_ message: String) {
-        lastBaseActionAnnouncement = message
-        // W0.5-3 residue: Bases action message builders (postBaseActionAnnouncement callers)
-        postAccessibilityAnnouncement(.hostComposed(text: message, priority: .medium))
-    }
-
-    /// Typed sibling of `postBaseActionAnnouncement`: posts the canonical
-    /// event and feeds core's rendered text through the same
-    /// `lastBaseActionAnnouncement` seam the string form records.
+    /// The one Bases action funnel (#969). Posts the canonical event and
+    /// records core's rendered text on `lastBaseActionAnnouncement`,
+    /// which is the seam the views and the suite read.
+    ///
+    /// Its string-taking predecessor is GONE: it was the last
+    /// `.hostComposed` site in Bases, with 51 callers composing ~40
+    /// sentences the Windows twin would have had to re-type.
     @discardableResult
     func postBaseActionEvent(_ event: A11yEvent) -> String {
         let text = a11yRender(event: event).text

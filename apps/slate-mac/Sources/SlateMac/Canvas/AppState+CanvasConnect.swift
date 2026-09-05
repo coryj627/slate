@@ -19,19 +19,6 @@ import Foundation
 /// Existing-connection edit (label/direction) and delete live on the
 /// #362 connection rows and the palette.
 extension AppState {
-    /// Auto-side pair: nearest edges by center geometry (t4 pin —
-    /// mirrors the renderer's anchor choice so lines look right).
-    static func canvasAutoSides(
-        from: CanvasSceneNode, to: CanvasSceneNode
-    ) -> (from: CanvasSide, to: CanvasSide) {
-        let dx = (to.x + to.width / 2) - (from.x + from.width / 2)
-        let dy = (to.y + to.height / 2) - (from.y + from.height / 2)
-        if abs(dx) > abs(dy) {
-            return dx > 0 ? (.right, .left) : (.left, .right)
-        }
-        return dy > 0 ? (.bottom, .top) : (.top, .bottom)
-    }
-
     /// Create one connection origin→target with auto sides + default
     /// direction; announced per t0 §1.3.
     func canvasConnect(from originId: String, to targetId: String, label: String?) {
@@ -41,17 +28,26 @@ extension AppState {
             let origin = doc.scene.nodes.first(where: { $0.nodeId == originId }),
             let target = doc.scene.nodes.first(where: { $0.nodeId == targetId })
         else {
-            canvasAnnouncer.announce(.status("Pick a different card to connect to."))
+            canvasAnnouncer.announce(.canvasStatus(note: .pickDifferentTarget))
             return
         }
-        let sides = Self.canvasAutoSides(from: origin, to: target)
+        // §W-G row C: the nearest-edges-by-centre rule is core's
+        // (`canvas_auto_sides`, contract 0b-3), keyed by RECTS rather
+        // than node ids (CD-16) and handle-free, so the same call
+        // serves this site, create-connected-card's not-yet-real card,
+        // and the renderer's per-endpoint auto arm.
+        let sides = canvasAutoSides(
+            from: CanvasRect(
+                x: origin.x, y: origin.y, width: origin.width, height: origin.height),
+            to: CanvasRect(
+                x: target.x, y: target.y, width: target.width, height: target.height))
         let cleanLabel = (label?.isEmpty == true) ? nil : label
         let ok = canvasApply(
             CanvasAction(
                 name: "connect \"\(origin.title)\" to \"\(target.title)\"",
                 ops: [
                     .addEdge(
-                        id: Self.newCanvasEntityID(),
+                        id: canvasNewId(),
                         fromNode: originId, fromSide: sides.from,
                         toNode: targetId, toSide: sides.to,
                         fromEnd: .none, toEnd: .arrow,
@@ -59,9 +55,9 @@ extension AppState {
                 ]),
             to: doc)
         guard ok else { return }
-        var text = "Connected \"\(origin.title)\" to \"\(target.title)\""
-        if let cleanLabel { text += ", labelled \"\(cleanLabel)\"" }
-        canvasAnnouncer.announce(.confirmation(text + "."))
+        canvasAnnouncer.announce(
+            .canvasConnected(
+                fromTitle: origin.title, toTitle: target.title, label: cleanLabel))
     }
 
     /// ⌃⌘C: the picker flow. The pick routes to the optional label
@@ -70,7 +66,7 @@ extension AppState {
         guard let doc = activeCanvasDocument else { return }
         guard admitCanvasMutation(for: doc) else { return }
         guard doc.selection.selected != nil else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         canvasCardPicker = CanvasCardPickerRequest(purpose: .connectTo)
@@ -86,30 +82,28 @@ extension AppState {
             let origin = doc.selection.selected,
             let originRow = doc.outline.first(where: { $0.nodeId == origin })
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         let controller = canvasModeController(for: doc)
         let entered = controller.enter(
             .init(
-                name: "Connect mode",
-                object: "\"\(originRow.title)\"",
-                exits:
-                    "Navigate to the target with the usual movements, Return to connect, Escape to cancel.",
+                mode: .connect,
+                object: .card(title: originRow.title),
                 onCommit: { [weak self, weak doc] in
                     guard let self, let doc,
                         let target = doc.selection.selected, target != origin
                     else {
-                        return "Connect ended — no target chosen."
+                        return .canvasModeEndedWithoutEffect(mode: .connect)
                     }
                     // The connect announces itself (§1.3).
                     self.canvasConnect(from: origin, to: target, label: nil)
                     return nil
                 },
                 onCancel: { [weak self, weak doc] in
-                    guard let self, let doc else { return "Connect cancelled." }
+                    guard let self, let doc else { return .unstated }
                     self.canvasSelect(nodeId: origin, in: doc, announce: false)
-                    return "Connect cancelled — back at \"\(originRow.title)\"."
+                    return .backAt(title: originRow.title)
                 }))
         _ = entered
     }
@@ -136,9 +130,25 @@ extension AppState {
     /// Delete a connection of the selected card (row action + palette).
     func canvasDeleteConnection(edgeId: String) {
         guard let doc = activeCanvasDocument,
-            admitCanvasMutation(for: doc)
+            admitCanvasMutation(for: doc),
+            let selected = doc.selection.selected
         else { return }
-        let choice = canvasConnectionChoices().first { $0.edgeId == edgeId }
+        // CD-7: the sentence is built from the connection's STRUCTURE
+        // — direction, the other card's title, the label — so core
+        // lower-cases only the fixed direction word. mac lower-cased
+        // the whole picker row, which mangled the author's title
+        // (`Deleted connection to "ideas"` for a card called *Ideas*).
+        //
+        // Looked up BEFORE the delete, and required: connection rows
+        // only ever materialise under the selected card, so an edge
+        // that is not among its neighbours is not this card's to
+        // delete — and the typed event cannot express the
+        // `Deleted connection ` with a trailing space that the old
+        // `?? ""` produced.
+        guard
+            let neighbor = doc.neighbors(of: selected, session: currentSession)
+                .first(where: { $0.edgeId == edgeId })
+        else { return }
         let ok = canvasApply(
             CanvasAction(
                 name: "delete connection",
@@ -146,7 +156,13 @@ extension AppState {
             to: doc)
         guard ok else { return }
         canvasAnnouncer.announce(
-            .destructiveConfirmation("Deleted connection \(choice?.label.lowercased() ?? "")"))
+            .canvasDeleted(
+                target: .connection(
+                    direction: neighbor.direction,
+                    otherTitle: neighbor.otherTitle,
+                    label: neighbor.label),
+                verbosity: canvasAnnouncer.verbosity,
+                undoChord: Self.canvasUndoChord))
     }
 
     /// Edit a connection's label and direction (sides stay as
@@ -178,9 +194,7 @@ extension AppState {
                 ]),
             to: doc)
         guard ok else { return }
-        var text = "Connection updated"
-        if let cleanLabel { text += ", labelled \"\(cleanLabel)\"" }
-        canvasAnnouncer.announce(.confirmation(text + "."))
+        canvasAnnouncer.announce(.canvasConnectionUpdated(label: cleanLabel))
     }
 }
 

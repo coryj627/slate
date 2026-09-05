@@ -23,6 +23,16 @@ public partial class App : Application
         AppContext.SetSwitch(
             "Switch.System.Windows.Appearance.DisableFluentThemeWindowBackdrop",
             true);
+        // W3-2 (gap G23): register the MathML custom UIA property and
+        // install its peer bridge BEFORE any window or peer exists.
+        // Guarded internally — never throws; the smoke test fails
+        // loudly in CI if the bridge cannot install.
+        Reading.MathMlUiaProperty.Initialize();
+        // #1106: the Fluent TextBox clear button publishes a private-use
+        // icon glyph as its accessible name. Registered here, before any
+        // window exists, because it is a class handler for every TextBox
+        // the app will ever create.
+        TextBoxAccessibility.Install();
         if (!DpiAwarenessProbe.EnsurePerMonitorV2())
         {
             HostLog.Write(HostDiagnosticEvent.DpiAwarenessFailed);

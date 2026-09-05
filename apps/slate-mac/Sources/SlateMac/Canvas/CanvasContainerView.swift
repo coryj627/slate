@@ -33,6 +33,13 @@ struct CanvasContainerView: View {
     /// remain governed by the document reservation and AppState scheduler.
     @State private var retargetRetryInFlight = false
 
+    /// CD-3 / t0 §5: a degraded load is ANNOUNCED once per open, in
+    /// addition to the pull-readable banner below. mac shipped the
+    /// banner alone, which is a t0 cheat — a screen-reader user had to
+    /// go hunting for a region nothing told them about. `@State` gives
+    /// the "once per open" scope: a fresh open is a fresh view.
+    @State private var announcedDegradedLoad = false
+
     var body: some View {
         Group {
             switch document.state {
@@ -53,6 +60,7 @@ struct CanvasContainerView: View {
             // Focus the canvas content once the surface exists. The
             // async hop lets SwiftUI mount the destination first.
             DispatchQueue.main.async { contentFocused = true }
+            announceDegradedLoadIfNeeded()
         }
         // M3 (t0 §2): active mode is inspectable from the container's
         // AX value — never announcement-only (braille rule §3).
@@ -80,6 +88,7 @@ struct CanvasContainerView: View {
             appState.canvasAnnounceFilterCount(doc: document)
         }
         .onChange(of: document.state) { _, newState in
+            announceDegradedLoadIfNeeded()
             guard case .retargetFailed(let message) = newState else { return }
             announceCanvasRetargetFailure(message)
         }
@@ -175,19 +184,19 @@ struct CanvasContainerView: View {
                 appState.externalOpener(vault.appendingPathComponent(target))
             {
                 appState.canvasAnnouncer.announce(
-                    .status("Opened \(title) in its default app."))
+                    .canvasOpened(title: title, target: .defaultApp))
             } else {
                 appState.canvasAnnouncer.announce(
-                    .error(
-                        "\(target.isEmpty ? title : target) is missing from the vault. Use Locate File to repoint this card."
-                    ))
+                    .canvasFileNotFound(target: target.isEmpty ? title : target))
             }
         case "link":
             let target = document.target(of: nodeId)
             if let url = URL(string: target), appState.externalOpener(url) {
-                appState.canvasAnnouncer.announce(.status("Opened \(title) in your browser."))
+                appState.canvasAnnouncer.announce(
+                    .canvasOpened(title: title, target: .browser))
             } else {
-                appState.canvasAnnouncer.announce(.error("The link could not be opened."))
+                appState.canvasAnnouncer.announce(
+                    .canvasBlocked(reason: .linkOpenFailed))
             }
         default:
             break
@@ -335,11 +344,7 @@ struct CanvasContainerView: View {
                     )
                 if document.filterActive {
                     // t0 §3: the result summary is pull-readable.
-                    Text(
-                        "\(document.filteredOutline.count) of "
-                            + "\(CountCopy.counted(document.outline.count, "card", "cards")) "
-                            + CountCopy.verb(
-                                document.filteredOutline.count, "matches", "match"))
+                    Text(filterSummary)
                         .font(Tokens.Typography.caption)
                         .foregroundStyle(Tokens.ColorRole.textSecondary)
                     Button("Clear") { clearFilter() }
@@ -352,7 +357,11 @@ struct CanvasContainerView: View {
                 // focusable banner; #362's outline footer adds the
                 // per-item detail rows.
                 Text(
-                    "Canvas loaded. \(document.preservedItemCount) unsupported item\(document.preservedItemCount == 1 ? "" : "s") are preserved in the file but not shown."
+                    a11yRender(
+                        event: .canvas(
+                            event: .canvasLoadedDegraded(
+                                skipped: UInt32(clamping: document.preservedItemCount)))
+                    ).text
                 )
                 .font(Tokens.Typography.caption)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
@@ -361,6 +370,29 @@ struct CanvasContainerView: View {
         }
         .padding(.horizontal, Tokens.Spacing.md)
         .padding(.vertical, Tokens.Spacing.xs)
+    }
+
+    /// The pull-readable filter summary (t0 §3), counted from the view
+    /// the surfaces are DISPLAYING so the label, the rows and the
+    /// announced count are one answer.
+    ///
+    /// While a reopening window keeps core from answering the needle in
+    /// the field, the previous rows are still on screen — so the label
+    /// renders VA-1's sentence rather than claiming those rows matched
+    /// what the user just typed. Same string the announcement speaks:
+    /// one render, no second composition (the CD-3 banner precedent).
+    private var filterSummary: String {
+        let view = document.filterView(session: appState.currentSession)
+        guard view.current else {
+            // The same sentence the announcement gives, from the same
+            // state mapping — one render, no second composition, and no
+            // second opinion about which sentence the state owes.
+            let note = appState.canvasReadRefusal(for: document) ?? .reopening
+            return a11yRender(event: .canvas(event: .canvasStatus(note: note))).text
+        }
+        return "\(view.rows.count) of "
+            + "\(CountCopy.counted(document.outline.count, "card", "cards")) "
+            + CountCopy.verb(view.rows.count, "matches", "match")
     }
 
     private var filterBinding: Binding<String> {
@@ -441,14 +473,27 @@ struct CanvasContainerView: View {
         }
     }
 
+    /// CD-3: the polite "loaded with skipped items" announcement,
+    /// exactly once per open. The banner keeps its own copy of the
+    /// same rendered sentence, so the two cannot drift.
+    private func announceDegradedLoadIfNeeded() {
+        guard case .ready = document.state,
+            document.preservedItemCount > 0,
+            !announcedDegradedLoad
+        else { return }
+        announcedDegradedLoad = true
+        appState.canvasAnnouncer.announce(
+            .canvasLoadedDegraded(
+                skipped: UInt32(clamping: document.preservedItemCount)))
+    }
+
     private func announceCanvasRetargetFailure(_ message: String) {
         guard case .canvas(let activePath)? = workspace.activeTab?.item,
             BaseExactIdentity.matches(activePath, document.path),
             appState.canvasDocuments[activePath] === document
         else { return }
         appState.canvasAnnouncer.announce(
-            .error(
-                "Canvas could not be reopened. The previous snapshot is read-only. \(message)"))
+            .canvasBlocked(reason: .reopenFailed(message: message)))
     }
 
     private func clearFilter() {
@@ -456,9 +501,7 @@ struct CanvasContainerView: View {
             guard document.filterActive || !document.filterText.isEmpty else { return }
             document.filterText = ""
             appState.canvasAnnouncer.announce(
-                .filter(
-                    "Filter cleared — "
-                        + "\(CountCopy.counted(document.outline.count, "card", "cards"))."))
+                .canvasFilterCleared(total: UInt32(clamping: document.outline.count)))
         } else {
             appState.canvasClearFilter()
         }
@@ -489,8 +532,17 @@ struct CanvasContainerView: View {
         .padding(Tokens.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
+        // LABEL grade in the vocabulary (contracts doc 0a-13): core
+        // renders the SPELLED-OUT form, which is what a screen reader
+        // actually receives; the glyph form above stays a host label.
+        // The chords are host-supplied (program decision 12).
         .accessibilityLabel(
-            "Canvas is empty. Press Option Command N to create your first card. Every other canvas action is in the Command Palette, Command Shift P."
+            a11yRender(
+                event: .canvas(
+                    event: .canvasEmptyOnboarding(
+                        newCardChord: "Option Command N",
+                        paletteChord: "Command Shift P"))
+            ).text
         )
         .accessibilityFocused($contentFocused)
     }

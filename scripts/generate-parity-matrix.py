@@ -85,7 +85,13 @@ SECTION_ISSUE = {
 ID_ISSUE_OVERRIDES = {
     "slate.workspace.quickOpen": "#723 (W1-4)",
     "slate.view.toggleSearch": "#742 (W5-2)",
-    "slate.editor.findInNote": "#742 (W5-2)",
+    # Reassigned out of #742 at the W5-2 close-out: find-in-note shares
+    # no surface with vault search (mac ships it as the NSTextView find
+    # bar; core's SearchScope::File is reserved and unreachable), and
+    # the Windows equivalent was measured unusable as shipped — see
+    # docs/plans/29_search_overlay_contracts.md "Find-in-note is not in
+    # this issue".
+    "slate.editor.findInNote": "#1112 (find-in-note, split from #742)",
     "slate.editor.save": "#724 (W2-1)",
     "slate.editor.toggleViewMode": "#728 (W3-1)",
     "slate.editor.addProperty": "#736 (W4-4)",
@@ -146,6 +152,70 @@ LEAF_ISSUE = {
     "queries": "#738 (W4-6)",
     "basesDock": "#738 (W4-6)",
     "syncDiagnostics": "#740 (W4-8)",
+}
+
+# Leaves whose WINDOWS body + activation shipped: leaf -> delivery
+# evidence (date, surface, tests). A leaf absent here renders
+# "pending"; an entry here must name checkable evidence.
+LEAF_DELIVERED = {
+    "outline": (
+        "implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + "
+        "MainWindow leaf body; `RightPanePanelsTests` + FlaUI "
+        "`RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates`"),
+    "backlinks": (
+        "implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + "
+        "MainWindow leaf body; `RightPanePanelsTests` + FlaUI "
+        "`RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates`"),
+    "outgoingLinks": (
+        "implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + "
+        "MainWindow leaf body; `RightPanePanelsTests` + FlaUI "
+        "`RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates`"),
+    "embeds": (
+        "implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + "
+        "shared `EditorEmbedPreviewView` cards; `RightPanePanelsTests` "
+        "+ FlaUI `RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates`"),
+    "tasks": (
+        "implemented 2026-08-01 (#735): `RightPanePanelsViewModel` task "
+        "sections + MainWindow leaf body; `TasksPanelTests` + FlaUI "
+        "`TaskPanels_RowsToggleAndReviewCarriesTheMacShapes`"),
+    "tasksReview": (
+        "implemented 2026-08-01 (#735): `TasksReviewViewModel` + "
+        "MainWindow leaf body + Ctrl+R command; `TasksReviewTests` + "
+        "FlaUI `TaskPanels_RowsToggleAndReviewCarriesTheMacShapes`"),
+    "citations": (
+        "implemented 2026-08-04 (#737): `CitationsPanelViewModel` + "
+        "MainWindow leaf body + details/summary sheets; "
+        "`CitationsPanelTests` + FlaUI "
+        "`CitationSurfaces_GridsSheetsAndChords_AreClean`"),
+    "bibliography": (
+        "implemented 2026-08-04 (#737): `BibliographyViewModel` + "
+        "MainWindow leaf body, BOTH segments on `AccessibleDataGrid`; "
+        "`BibliographyPanelTests` + FlaUI "
+        "`CitationSurfaces_GridsSheetsAndChords_AreClean`"),
+    "queries": (
+        "implemented 2026-08-08 (#738): workspace BaseQueriesState + "
+        "MainWindow leaf body (saved queries / base files / dashboards, "
+        "pin + rename + delete + export + dock); `BasesQueriesTests` + "
+        "FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean`"),
+    "basesDock": (
+        "implemented 2026-08-08 (#738): workspace dock target following "
+        "the active note (this_path, 500 ms debounce) over read-only "
+        "`BaseSurfaceView`/`DashboardSurfaceView`; `BasesQueriesTests` + "
+        "FlaUI `BasesSurfaces_GridBuilderAndLeaves_AreClean` (docks a "
+        "base from the leaf and axe-scans the revealed BasesDockGrid)"),
+    "history": (
+        "implemented 2026-08-09 (#739): `HistoryViewModel` + "
+        "`HistorySurfaceView` MainWindow leaf body (two segments, "
+        "day-grouped versions, StructuredDiff walkthrough, restore + "
+        "Restore As + deleted recovery, since-open opt-in, markers "
+        "toggle); `HistoryPanelTests` + FlaUI "
+        "`HistorySurfaces_LeafDiffAndRestore_AreClean`"),
+    "syncDiagnostics": (
+        "implemented 2026-08-09 (#740): `SyncDiagnosticsViewModel` + "
+        "`SyncDiagnosticsSurfaceView` MainWindow leaf body (five-state "
+        "report, per-provider peered rows + evidence, LiveSync config "
+        "section, bounded marker watcher); `SyncDiagnosticsPanelTests` "
+        "+ FlaUI `SyncDiagnostics_LeafReportAndRefresh_AreClean`"),
 }
 
 # Milestones unshipped at the 2026-07-19 snapshot: their rows drop out
@@ -430,6 +500,266 @@ W3_DELIVERED_COMMANDS = {
     "slate.editor.toggleViewMode",
 }
 
+W4_IMPLEMENTED_STATUS = (
+    "implemented; local gates green 2026-08-03; interactive CI + human AT pending"
+)
+
+# The gate date is per-ISSUE, not per-wave: stamping every W4 row with
+# one date would claim gates ran on a day they did not for whichever
+# issue landed later.
+W4_STATUS_BY_COMMAND = {
+    "slate.navigation.jumpToBibliography":
+        "implemented; local gates green 2026-08-04; "
+        "interactive CI + human AT pending",
+    "slate.editor.citationSummary":
+        "implemented; local gates green 2026-08-04; "
+        "interactive CI + human AT pending",
+}
+
+W4_6_STATUS = (
+    "implemented; local gates green 2026-08-08; "
+    "interactive CI + human AT pending"
+)
+
+W4_6_COMMANDS = {
+    "slate.bases.builder.addCondition",
+    "slate.bases.builder.addGroup",
+    "slate.bases.builder.editCondition",
+    "slate.bases.builder.removeCondition",
+    "slate.bases.copyLink",
+    "slate.bases.copyMarkdown",
+    "slate.bases.editProperty",
+    "slate.bases.editViewFilters",
+    "slate.bases.exportCsv",
+    "slate.bases.exportMarkdown",
+    "slate.bases.newQuery",
+    "slate.bases.nextView",
+    "slate.bases.openRow",
+    "slate.bases.openViewSwitcher",
+    "slate.bases.previousView",
+    "slate.bases.quickFilter",
+    "slate.bases.refresh",
+    "slate.bases.resultsPopover",
+    "slate.bases.saveSortToView",
+    "slate.bases.savedQuery.run.<dynamic>",
+    "slate.bases.showBacklinks",
+    "slate.bases.sortByColumn",
+    "slate.bases.viewAsList",
+    "slate.bases.viewAsTable",
+    "slate.bases.whereAmI",
+}
+W4_STATUS_BY_COMMAND.update({command: W4_6_STATUS for command in W4_6_COMMANDS})
+
+W4_7_STATUS = (
+    "implemented; local gates green 2026-08-09; "
+    "interactive CI + human AT pending"
+)
+
+# W4-7 (#739): mac registers exactly ONE history command — the row
+# actions (compare/restore/restore-as/recover) are deliberately not
+# commands (they need row context).
+W4_7_COMMANDS = {
+    "slate.history.showPanel",
+}
+W4_STATUS_BY_COMMAND.update({command: W4_7_STATUS for command in W4_7_COMMANDS})
+
+W4_8_STATUS = (
+    "implemented; local gates green 2026-08-09; "
+    "interactive CI + human AT pending"
+)
+
+# W5-1 (#741): the palette is a SURFACE, not a command row — mac keeps
+# its own chord deliberately unregistered, so this issue delivers no
+# slate.* id of its own. Its status therefore rides the surface row
+# rather than any command.
+W5_1_STATUS = (
+    "implemented; local gates green 2026-08-13; "
+    "interactive CI + human AT pending"
+)
+
+# W4-8 (#740): mac registers exactly ONE sync command, and it is
+# CHORDLESS on both platforms ("refresh is a rare, deliberate action");
+# it refreshes only and never reveals the leaf (contract SD7).
+W4_8_COMMANDS = {
+    "slate.diagnostics.refreshSync",
+}
+W4_STATUS_BY_COMMAND.update({command: W4_8_STATUS for command in W4_8_COMMANDS})
+
+# W5-2 (#742): the vault-search overlay. mac registers exactly ONE
+# search command; the overlay's own keys are surface interactions
+# (chordSurface rows), and find-in-note moved to #1112 at the
+# close-out (see ID_ISSUE_OVERRIDES).
+W5_2_STATUS = (
+    "implemented; local gates green 2026-08-16; "
+    "interactive CI + human AT pending"
+)
+
+W5_2_DELIVERED_COMMANDS = {
+    "slate.view.toggleSearch",
+}
+
+# W5-3 (#743): create-from-template. mac registers exactly ONE template
+# command; the picker and prompt/name sheets are surface interactions.
+W5_3_STATUS = (
+    "implemented; local gates green 2026-08-20; "
+    "interactive CI + human AT pending"
+)
+
+W5_3_DELIVERED_COMMANDS = {
+    "slate.file.newFromTemplate",
+}
+
+# W5-4 (#744): file management — the verbs, the Move-To picker,
+# structural undo, and the two-platform mutation harness. Bulk
+# PROPERTY rename shipped in W4-4; the file verbs are this issue.
+W5_4_STATUS = (
+    "implemented; local gates green 2026-08-21; "
+    "interactive CI + human AT pending"
+)
+
+W5_4_DELIVERED_COMMANDS = {
+    "slate.file.newNote",
+    "slate.file.newFolder",
+    "slate.file.rename",
+    "slate.file.moveTo",
+    "slate.file.delete",
+    "slate.file.duplicate",
+    "slate.file.copyPath",
+    "slate.file.revealInFinder",
+}
+
+# W6-1 (#745): the canvas, as a STACKED SERIES — so this set grows one
+# PR at a time rather than once at the issue's close. The rule the
+# series adopted with PR B: a surface command joins the set in the PR
+# that makes it executable, not in the PR that registers it. PR A
+# registered all three `show*` rows and enabled `showOutline` when the
+# outline projection shipped; PR B enabled `showTable` with the table
+# projection. `showVisual` stays out until PR D ships the renderer,
+# where its resolver stops answering CanExecute false.
+W6_1_STATUS = (
+    "implemented; local gates green 2026-09-02; "
+    "interactive CI + human AT pending"
+)
+
+# W6-2 PR A (#746): the graph's delivered rows carry the date THEIR gates
+# went green, not W1's — a W6-2 row that fell through to the W1 status
+# claimed gates from before the branch existed (IPA-13).
+W6_2_STATUS = (
+    "implemented; local gates green 2026-09-03; "
+    "interactive CI + human AT pending"
+)
+
+W6_2_DELIVERED_COMMANDS = {
+    # W6-2 PR A (#746, contract A-12): the graph tab's one chordless row,
+    # executable through the palette and the registrar; B–E add the leaf's,
+    # the navigator's and the diagram's rows in the PR that makes each
+    # executable (B12's rule).
+    "slate.graph.openTab",
+}
+
+W6_1_DELIVERED_COMMANDS = {
+    # PR A / PR B / §D TD-6: the three projections that exist.
+    "slate.canvas.showOutline",
+    "slate.canvas.showTable",
+    "slate.canvas.showVisual",
+    # §D TD-6: the viewport verbs, executable with the renderer — B12's
+    # rule (a command joins this set in the PR that makes it
+    # EXECUTABLE) finally paying out for the rows PR C registered.
+    "slate.canvas.zoomIn",
+    "slate.canvas.zoomOut",
+    "slate.canvas.actualSize",
+    "slate.canvas.fitCanvas",
+    "slate.canvas.zoomToSelection",
+    "slate.canvas.toggleFollowSelection",
+    # PR C: the navigator command layer, the filter, Where-am-I and the
+    # mode transitions.
+    #
+    # `commitMode` and `cancelMode` are absent for the SAME reason, and
+    # the split is what made that true. They gate on `CanCommitOrCancel`,
+    # so they execute the moment a mode is running — but nothing in the
+    # shipped code ENTERS a mode: the entrants are PR F's (move, resize,
+    # connect), and C-lite ships the machine, not a way in. The M1-M7
+    # conformance suite drives a TEST mode, which is exactly the thing
+    # §B12's rule distinguishes from executable. Both rows return here
+    # with F, which is the PR that makes them reachable.
+    "slate.canvas.whereAmI",
+    "slate.canvas.nextCard",
+    "slate.canvas.previousCard",
+    "slate.canvas.enterGroup",
+    "slate.canvas.exitGroup",
+    "slate.canvas.followConnectionForward",
+    "slate.canvas.followConnectionBack",
+    "slate.canvas.tracePath",
+    "slate.canvas.filterCards",
+    "slate.canvas.clearFilter",
+    # §G2 TG2-8 (G2-14, IG2-3): every EXECUTABLE canvas id joins in the
+    # PR that made it executable. §E's five verbs shipped without a
+    # front door and §G2 gave them one; the §G2 residue, the card and
+    # canvas creators, §F's thirteen (the modes, the placements, the
+    # resizes — `commitMode` and `cancelMode` return here as promised
+    # above, F being the PR that made them reachable) and §G's six
+    # including `colorMarked`. Evidence groups canvasMutations,
+    # canvasModes and canvasMarks in chords.json carry the anchors.
+    "slate.canvas.delete",
+    "slate.canvas.editCard",
+    "slate.canvas.renameGroup",
+    "slate.canvas.setColor",
+    "slate.canvas.clearColor",
+    "slate.canvas.newGroup",
+    "slate.canvas.addLink",
+    "slate.canvas.moveIntoGroup",
+    "slate.canvas.editConnection",
+    "slate.canvas.deleteConnection",
+    "slate.canvas.addNote",
+    "slate.canvas.addMedia",
+    "slate.canvas.locateFile",
+    "slate.canvas.removeFromGroup",
+    "slate.canvas.createConnectedCard",
+    "slate.canvas.createConnectedCardDirectional",
+    "slate.canvas.duplicate",
+    "slate.canvas.convertToNote",
+    "slate.canvas.newCard",
+    "slate.file.newCanvas",
+    "slate.canvas.moveMode",
+    "slate.canvas.resizeMode",
+    "slate.canvas.connectMode",
+    "slate.canvas.commitMode",
+    "slate.canvas.cancelMode",
+    "slate.canvas.placeBelow",
+    "slate.canvas.placeRightOf",
+    "slate.canvas.placeAbove",
+    "slate.canvas.placeLeftOf",
+    "slate.canvas.alignWith",
+    "slate.canvas.connectTo",
+    "slate.canvas.resizeDefaultSize",
+    "slate.canvas.resizeFitContent",
+    "slate.canvas.toggleMark",
+    "slate.canvas.showMarks",
+    "slate.canvas.clearMarks",
+    "slate.canvas.deleteMarked",
+    "slate.canvas.groupMarked",
+    "slate.canvas.colorMarked",
+}
+
+# W4 delivery, same per-command shape as W3.
+# slate.editor.togglePropertiesSource stays PENDING: YAML source mode
+# was scoped out of W4-4 (no set_frontmatter_source call site) — the
+# deferral is recorded in docs/plans/22_property_panel_contracts.md.
+W4_DELIVERED_COMMANDS = {
+    "slate.tasks.review",
+    "slate.editor.addProperty",
+    "slate.editor.bulkRenameProperties",
+    # W4-5 (#737)
+    "slate.navigation.jumpToBibliography",
+    "slate.editor.citationSummary",
+}
+# W4-6 (#738)
+W4_DELIVERED_COMMANDS |= W4_6_COMMANDS
+# W4-7 (#739)
+W4_DELIVERED_COMMANDS |= W4_7_COMMANDS
+# W4-8 (#740)
+W4_DELIVERED_COMMANDS |= W4_8_COMMANDS
+
 # §W-F waivers: status text the generator must preserve across
 # regeneration — a waiver that lives only in the generated file is
 # silently erased by the next run.
@@ -441,6 +771,33 @@ COMMAND_STATUS_OVERRIDES = {
         "unit; tracked, not unshipped."
     ),
 }
+
+
+_DECLARATION_HEAD = re.compile(
+    r"^[ \t]*(?:\[[^\]]*\][ \t]*)*(?:public|internal|private|protected)\b[^;{=(]*?\b(?P<name>\w+)[ \t]*(?:\(|\{|=>|=|;|\r?$)",
+    re.MULTILINE,
+)
+_TYPE_HEAD = re.compile(r"\b(?:class|record|interface|enum|struct)[ \t]+(?P<name>\w+)\b")
+
+
+_CODE_ONLY = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:[^"\\\n]|\\.)*"', re.S)
+
+
+def declares(text: str, marker: str) -> bool:
+    """Whether `marker` is DECLARED in the C# text: a type head, or an
+    accessible member head (a method, constructor, property, event or
+    field) whose name is the marker. A name that appears only as a
+    call, an argument, a comment or a string literal does not declare —
+    comments and strings are stripped before the heads are read (review
+    round 1, IH-58)."""
+    text = _CODE_ONLY.sub("", text)
+    for m in _TYPE_HEAD.finditer(text):
+        if m.group("name") == marker:
+            return True
+    for m in _DECLARATION_HEAD.finditer(text):
+        if m.group("name") == marker:
+            return True
+    return False
 
 
 def load_delivery_evidence(
@@ -481,13 +838,26 @@ def load_delivery_evidence(
                 path = REPO / relative
                 if not path.is_file():
                     fail(f"delivery-evidence file does not exist: {relative}")
-                if not marker or marker not in path.read_text(encoding="utf-8"):
+                text = path.read_text(encoding="utf-8")
+                if not marker or marker not in text:
                     fail(f"delivery-evidence marker {marker!r} missing from {relative}")
+                # (13) W6-1 §H TH-9 (H7, IH-19, IH-45): a marker into C# names a
+                # DECLARATION — a type, a method, a constructor, a property, an
+                # event or a field — not a substring that could live in a
+                # comment or an unrelated call.
+                # A TEST anchor may instead name an automation id the journey
+                # drives — a quoted string the file reads, never a comment.
+                if relative.endswith(".cs") and not declares(text, marker) and not (
+                    kind == "tests" and f'"{marker}"' in text
+                ):
+                    fail(f"delivery-evidence marker {marker!r} is not a declaration in {relative}")
 
     delivered_commands = {
         cid for cid, _, _, _, issue in cmd_rows
         if issue.startswith(("#720", "#721", "#722", "#723", "#724", "#725"))
-    } | W3_DELIVERED_COMMANDS
+    } | W3_DELIVERED_COMMANDS | W4_DELIVERED_COMMANDS | W5_2_DELIVERED_COMMANDS \
+        | W5_3_DELIVERED_COMMANDS | W5_4_DELIVERED_COMMANDS | W6_1_DELIVERED_COMMANDS \
+        | W6_2_DELIVERED_COMMANDS
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
         missing = sorted(delivered_commands - mapped_commands)
@@ -498,7 +868,16 @@ def load_delivery_evidence(
         if group_name not in groups:
             fail(f"command {command_id} references unknown evidence group {group_name!r}")
 
-    expected_issues = {"#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728"}
+    expected_issues = {
+        "#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728", "#735", "#736",
+        "#737", "#738", "#739", "#740", "#741", "#742", "#743", "#744",
+        # W6-1 §H TH-9 (H7): the canvas issue, evidenced by the `canvas`
+        # aggregate group — anchors from every command group and the
+        # close-out gates (validation 14 makes the aggregate complete).
+        "#745",
+        # W6-2 PR A: the graph issue, evidenced by the `graph` group.
+        "#746",
+    }
     if set(issue_map) != expected_issues:
         fail(
             "delivery-evidence issue drift: expected "
@@ -507,6 +886,24 @@ def load_delivery_evidence(
     for issue, group_name in issue_map.items():
         if group_name not in groups:
             fail(f"issue {issue} references unknown evidence group {group_name!r}")
+        # (14) W6-1 §H TH-9 (H7, IH-18): an issue's group is SCOPE-COMPLETE —
+        # for every command group any of the issue's commands maps to, the
+        # issue's group carries one of that group's implementation anchors
+        # and one of its test anchors; one command group never stands for
+        # the issue.
+        issue_number = issue.split(" ", 1)[0]
+        command_groups = {
+            command_map[cid]
+            for cid, _, _, _, row_issue in cmd_rows
+            if row_issue.startswith(issue_number) and cid in command_map
+        }
+        for command_group in sorted(command_groups - {group_name}):
+            for kind in ("implementation", "tests"):
+                if not set(groups[group_name][kind]) & set(groups[command_group][kind]):
+                    fail(
+                        f"issue {issue} group {group_name!r} carries no {kind} anchor "
+                        f"of command group {command_group!r}"
+                    )
 
     return {"commands": command_map, "issues": issue_map}
 
@@ -522,6 +919,18 @@ def command_delivery_status(
         return "pending"
     if command_id in W3_DELIVERED_COMMANDS:
         return W3_IMPLEMENTED_STATUS
+    if command_id in W4_DELIVERED_COMMANDS:
+        return W4_STATUS_BY_COMMAND.get(command_id, W4_IMPLEMENTED_STATUS)
+    if command_id in W5_2_DELIVERED_COMMANDS:
+        return W5_2_STATUS
+    if command_id in W5_3_DELIVERED_COMMANDS:
+        return W5_3_STATUS
+    if command_id in W5_4_DELIVERED_COMMANDS:
+        return W5_4_STATUS
+    if command_id in W6_1_DELIVERED_COMMANDS:
+        return W6_1_STATUS
+    if command_id in W6_2_DELIVERED_COMMANDS:
+        return W6_2_STATUS
     return (
         W2_IMPLEMENTED_STATUS
         if issue.startswith(("#381", "#724", "#725"))
@@ -536,11 +945,19 @@ def issue_delivery_status(
     issue_number = issue.split(" ", 1)[0]
     if issue_number not in evidence["issues"]:
         return "pending"
-    return (
-        W2_IMPLEMENTED_STATUS
-        if issue_number in {"#381", "#724", "#725"}
-        else IMPLEMENTED_STATUS
-    )
+    if issue_number in {"#381", "#724", "#725"}:
+        return W2_IMPLEMENTED_STATUS
+    if issue_number == "#741":
+        return W5_1_STATUS
+    if issue_number == "#742":
+        return W5_2_STATUS
+    if issue_number == "#743":
+        return W5_3_STATUS
+    if issue_number == "#745":
+        return W6_1_STATUS
+    if issue_number == "#746":
+        return W6_2_STATUS
+    return IMPLEMENTED_STATUS
 
 
 def main() -> int:
@@ -637,7 +1054,8 @@ def main() -> int:
     a("| leaf | consuming W issue | status |")
     a("|---|---|---|")
     for leaf, issue in leaf_rows:
-        a(f"| `{leaf}` | {issue} | pending |")
+        status = LEAF_DELIVERED.get(leaf, "pending")
+        a(f"| `{leaf}` | {issue} | {status} |")
     a("")
     a("## Workspace persisted tab-content kinds (`enum EditorItem`)")
     a("")
@@ -664,19 +1082,25 @@ def main() -> int:
     a(f"| Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | {issue_delivery_status('#724 (W2-1)', delivery_evidence)} |")
     a(f"| Editor canonical spans | #381 span API consumers | #381 (W2-2) | {issue_delivery_status('#381 (W2-2)', delivery_evidence)} |")
     a(f"| In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | {issue_delivery_status('#725 (W2-3)', delivery_evidence)} |")
-    a("| Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | pending |")
-    a("| Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | pending |")
-    a("| Diagrams (canonical Rust SVG + description) | core `diagram.rs` consumers | #730 (W3-3) | pending |")
-    a("| Code blocks (canonical tokens + AT preamble) | `CodeBlockView.swift` | #731 (W3-4) | pending |")
-    a("| Embeds across contexts | editor/reading embeds | #732 (W3-5; XD rows dropped) | pending |")
+    a("| Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | implemented (PR #1052, merged 2026-07-27; NVDA field-verified 2026-07-26/27; print §W-F-waived) |")
+    a("| Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | implemented (PR #1057, merged 2026-07-28; human AT pending) |")
+    a("| Diagrams (canonical Rust SVG + description) | core `diagram.rs` consumers | #730 (W3-3) | implemented (PR #1058, merged 2026-07-29; human AT pending) |")
+    a("| Code blocks (canonical tokens + AT preamble) | `CodeBlockView.swift` | #731 (W3-4) | implemented (PR #1054, merged 2026-07-27; human AT pending) |")
+    a("| Embeds across contexts | editor/reading embeds | #732 (W3-5; XD rows dropped) | implemented (PR #1059, merged 2026-07-30; human AT pending; `.base` row closed by W4-6's layered embed card, D-15) |")
     a("| Accessible grid substrate | `AccessibleDataGrid.swift` | #733 (W4-1) | pending |")
     a("| Properties (in-note header, panel, typed rows, add-property) | `Properties*` views | #736 (W4-4) | pending |")
-    a("| Bases grid + builder (N shipped) | `Bases/` | #738 (W4-6) | pending |")
-    a("| Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | pending |")
-    a("| Search overlay | search UI over `full_text_search` | #742 (W5-2) | pending |")
-    a("| Templates picker + prompt flow | template views | #743 (W5-3) | pending |")
-    a("| File management + bulk rename | sidebar/file commands | #744 (W5-4) | pending |")
-    a("| Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | pending |")
+    a("| Bases grid + builder (N shipped) | `Bases/` | #738 (W4-6) | implemented; local gates green 2026-08-08; interactive CI + human AT pending |")
+    a(f"| Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | {issue_delivery_status('#741 (W5-1)', delivery_evidence)} |")
+    a(f"| Search overlay | search UI over `full_text_search` | #742 (W5-2) | {issue_delivery_status('#742 (W5-2)', delivery_evidence)} |")
+    a(f"| Templates picker + prompt flow | template views | #743 (W5-3) | {issue_delivery_status('#743 (W5-3)', delivery_evidence)} |")
+    a(
+        "| File management + bulk rename | sidebar/file commands | #744 (W5-4) | "
+        "implemented; local gates green 2026-08-21; interactive CI + human AT "
+        "pending (bulk PROPERTY rename shipped in W4-4; the W5-4 scope is the "
+        "file verbs, the Move-To picker, structural undo, and the mutation "
+        "harness) |"
+    )
+    a(f"| Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | {issue_delivery_status('#745 (W6-1)', delivery_evidence)} |")
     a("| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | pending |")
     a("")
     a("## Settings surface")

@@ -7,6 +7,8 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using System.Windows.Threading;
+using SlateWindows.Commands;
+using SlateWindows.Search;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -23,12 +25,21 @@ internal enum VaultCloseDecision
 /// the complete open-vault state; callbacks only enqueue work for the UI
 /// thread and never synchronously re-enter the session.
 /// </summary>
-internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposable
+/// <remarks>
+/// It is also the command bridge's <see cref="ISlateCommandHost"/> (contract
+/// P17): registered actions resolve live state through it at invoke time
+/// instead of capturing a workspace, so vault open and close never mutate
+/// the registry. The interface names members this type already exposed —
+/// implementing it added no surface.
+/// </remarks>
+internal sealed class VaultLifecycleViewModel
+    : INotifyPropertyChanged, IDisposable, ISlateCommandHost
 {
     private readonly Func<Task<string?>> _pickVault;
     private readonly Func<RecentVault, Task<bool>> _confirmRemoveMissingRecent;
     private readonly Action<Action> _enqueueUi;
     private readonly Action<A11yEvent> _announce;
+    private readonly Action<RenderedAnnouncement> _announceRendered;
     private readonly Action<string> _copyText;
     private readonly Func<VaultCloseDecision> _confirmUnsavedClose;
     private readonly Func<WorkspaceTabViewModel, WorkspaceItemState, WorkspaceDirtyNavigationDecision>
@@ -47,10 +58,51 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     private readonly Func<
         Func<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
         Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>> _runSessionLoad;
+    private readonly Func<Action, Task> _runSyncMarkerArm;
+    private readonly TimeSpan? _syncMarkerDebounce;
+
+    /// <summary>
+    /// W4-8 (SD6/SDR-5): the once-per-vault-PATH announce gate, keyed
+    /// by normalized vault root and deliberately never cleared.
+    ///
+    /// It lives here rather than on the workspace because it has to
+    /// OUTLIVE the workspace: <c>CloseSession</c> disposes and nulls
+    /// the workspace, and every open builds a fresh one, so a
+    /// workspace-scoped gate re-arms on reopen and interrupts the
+    /// reader again with a risk story that has not changed just
+    /// because the vault was closed and reopened mid-session. The mac
+    /// twin (<c>AppState.syncAnnouncedVaultPath</c>, AppState.swift
+    /// :11549) makes the same call for the same reason, in the same
+    /// words — but it is a single-slot LATCH, so switching away and
+    /// back re-announces there and stays silent here (divergence
+    /// SDD-6; a SET is the strictly quieter reading of "at most once
+    /// per vault"). A different vault path re-arms; the same path
+    /// stays silent, for the life of the process.
+    ///
+    /// Comparison follows the vault-root convention this file already
+    /// uses for Recents (<c>RecentVaultsStore.Add/Remove</c> compare
+    /// <c>Path.GetFullPath</c> results with
+    /// <c>StringComparer.OrdinalIgnoreCase</c>), plus the trailing
+    /// separator trim <see cref="SyncMarkerWatcher"/> applies, so
+    /// <c>C:\Vault</c> and <c>c:\vault\</c> are one vault. It is a
+    /// STRING key, not a filesystem identity: a vault reached through
+    /// a substituted drive or a junction reads as a different vault
+    /// and re-announces, which is the safe direction to be wrong in.
+    ///
+    /// Touched only from the announcement path, which runs on the UI
+    /// context, so it needs no lock.
+    /// </summary>
+    private readonly HashSet<string> _announcedSyncVaultPaths =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private readonly Dispatcher? _lifecycleDispatcher;
+    private CommandPaletteViewModel? _palette;
+    private PaletteCommandSource? _paletteSource;
+    private SearchOverlayViewModel? _search;
     private readonly AsyncRelayCommand _openVaultCommand;
     private readonly AsyncRelayCommand _openRecentCommand;
     private readonly RelayCommand _closeVaultCommand;
+    private readonly RelayCommand _toggleSearchCommand;
 
     private VaultSession? _session;
     private CancelToken? _scanCancel;
@@ -71,6 +123,9 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     private QuickSwitcherViewModel? _quickSwitcher;
     private Task _sessionLoadCompletion = Task.CompletedTask;
     private int _sidebarRefreshTicket;
+    // W4-8 (SD8): the bounded sync-marker watch, owned by the vault
+    // lifecycle for exactly the open-vault state.
+    private SyncMarkerWatcher? _syncMarkerWatcher;
 
     public VaultLifecycleViewModel(
         Func<Task<string?>> pickVault,
@@ -93,11 +148,19 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         Func<Action, CancellationToken, Task>? importWorker = null,
         Func<
             Func<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
-            Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>>? sessionLoadWorker = null)
+            Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>>? sessionLoadWorker = null,
+        Func<Action, Task>? syncArmWorker = null,
+        TimeSpan? syncMarkerDebounce = null,
+        Action<RenderedAnnouncement>? announceRendered = null)
     {
         _pickVault = pickVault;
         _enqueueUi = enqueueUi;
         _announce = announce ?? (_ => { });
+        // W6-1 PR A (contract A5): the canvas coalescer queues RENDERED
+        // lines, so it needs the dispatcher's rendered-pair overload.
+        // Absent (headless facts) it is a no-op, the same shape the
+        // event seam above already takes.
+        _announceRendered = announceRendered ?? (_ => { });
         _copyText = copyText ?? (_ => { });
         _confirmUnsavedClose = confirmUnsavedClose ?? (() => VaultCloseDecision.Cancel);
         _confirmDirtyNavigation = confirmDirtyNavigation
@@ -121,6 +184,11 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         _filterWorker = filterWorker;
         _importWorker = importWorker;
         _runSessionLoad = sessionLoadWorker ?? (work => Task.Run(work));
+        // W4-8 (SD4/SDR-2): the marker arm is filesystem I/O, so it
+        // rides its own hop off the dispatcher; injectable for the
+        // interleave facts, exactly like the session load above.
+        _runSyncMarkerArm = syncArmWorker ?? (work => Task.Run(work));
+        _syncMarkerDebounce = syncMarkerDebounce;
         _openVaultCommand = new AsyncRelayCommand(PickAndOpenVaultAsync, () => !IsBusy);
         _openRecentCommand = new AsyncRelayCommand(
             OpenRecentAsync,
@@ -128,6 +196,15 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         _closeVaultCommand = new RelayCommand(
             _ => CloseVault(),
             _ => IsVaultOpen && !IsBusy);
+        // W5-2 close-out (#742): UNGUARDED, matching mac's palette
+        // action (toggleSearchOverlay(), SlateCommands.swift:1483-1494).
+        // The palette invokes BEFORE dismissing (P9), so a modal gate
+        // here would see the palette itself open and refuse every
+        // palette invocation; the modal decision stays on the chord
+        // path (MainWindow.Window_PreviewKeyDown). The no-vault refusal
+        // lives inside Toggle() → Open(), which announces
+        // SearchNeedsVault — mac's exact posture.
+        _toggleSearchCommand = new RelayCommand(_ => Search.Toggle(), _ => true);
         ReloadRecentVaults();
     }
 
@@ -142,6 +219,12 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     public ICommand OpenVaultCommand => _openVaultCommand;
     public ICommand OpenRecentCommand => _openRecentCommand;
     public ICommand CloseVaultCommand => _closeVaultCommand;
+
+    /// <summary>W5-2 close-out (#742): the registered
+    /// <c>slate.view.toggleSearch</c> surface — the palette and the
+    /// Workspace ▸ Search Vault… menu item both run it. See the
+    /// constructor note for why it is unguarded.</summary>
+    public ICommand ToggleSearchCommand => _toggleSearchCommand;
 
     public bool IsVaultOpen
     {
@@ -227,6 +310,74 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         private set => SetField(ref _quickSwitcher, value);
     }
 
+    /// <summary>
+    /// The command palette (W5-1, #741). Public because WPF binding
+    /// reflection only sees public properties — an internal one fails
+    /// silently and renders nothing (the W4-4 lesson).
+    /// </summary>
+    /// <remarks>
+    /// Created on first access rather than in the constructor: creating
+    /// it registers the whole command catalog and needs a dispatcher,
+    /// and the shell is the only caller that wants either. The
+    /// null-coalescing assignment is what keeps PINV-3's "exactly one
+    /// registry" true — every later access returns the same instance.
+    /// It survives vault open and close by contract P17, so it is
+    /// deliberately not reset alongside <see cref="Workspace"/>.
+    /// </remarks>
+    public CommandPaletteViewModel Palette =>
+        _palette ??= new CommandPaletteViewModel(
+            _paletteSource ??= new PaletteCommandSource(
+                this,
+                _lifecycleDispatcher ?? Dispatcher.CurrentDispatcher),
+            _announce);
+
+    /// <summary>
+    /// The vault-search overlay (W5-2, #742). Public for the same W4-4
+    /// reason as <see cref="Palette"/>: WPF binding reflection only sees
+    /// public properties.
+    /// </summary>
+    /// <remarks>
+    /// One app-lifetime instance, the palette's shape: the
+    /// <see cref="VaultSearchSource"/> reads the session and vault root
+    /// through live delegates, so a vault switch invalidates in-flight
+    /// results through the view model's session-identity staleness arm
+    /// (contract S5) rather than by rebuilding the overlay. Constructed
+    /// on first access — the shell touches it at startup, on the UI
+    /// thread, which is where the view model captures its
+    /// <see cref="SynchronizationContext"/>.
+    /// </remarks>
+    public SearchOverlayViewModel Search
+    {
+        get
+        {
+            if (_search is null)
+            {
+                _search = new SearchOverlayViewModel(
+                    new VaultSearchSource(
+                        () => _session,
+                        () => _session is null || _vaultPath.Length == 0
+                            ? null
+                            : _vaultPath),
+                    _announce);
+                _search.OpenRequested += Search_OpenRequested;
+            }
+
+            return _search;
+        }
+    }
+
+    /// <summary>
+    /// W5-2 SD-4: the shell's modal-surface gate over opening the
+    /// search overlay from a view-model path. <c>MainWindow</c>
+    /// installs <c>TryClearTheWayForSearch</c> — the same
+    /// <c>ModalSurfaces.DecideSearchOpen</c> decision the Ctrl+Shift+F
+    /// chord applies, including the Quick Open dismissal — so a
+    /// reading-view tag activation can never open the overlay beneath
+    /// a sheet. Null (headless tests, window-free hosts) admits: with
+    /// no window there is no modal surface to open beneath.
+    /// </summary>
+    internal Func<bool>? SearchOpenAdmission { get; set; }
+
     public async Task OpenVaultAsync(string path)
     {
         if (IsBusy)
@@ -249,6 +400,18 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         {
             return;
         }
+
+        // P14: dismissed AFTER the cancellable gate, matching CloseVault.
+        // Dismissing before it meant a refused close — a dirty-tab prompt
+        // the user cancels, an import in flight — left the vault open with
+        // the palette already gone.
+        _palette?.Dismiss();
+        // The W5-1 vault-transition precedent, extended to search: a
+        // direct A→B open bypasses CloseVault, and mac routes exactly
+        // this path through closeSearchOverlay too (AppState.swift:9761,
+        // the #876 Codex round-2 bug). Closed BEFORE CloseSession so the
+        // in-flight cancellation targets vault A's search.
+        CloseSearchForVaultTransition();
 
         CloseSession();
         int generation = ++_generation;
@@ -273,7 +436,10 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
                 (code, eventPath, message) => _enqueueUi(
                     () => HandleVaultError(generation, code, eventPath, message)),
                 @event => _enqueueUi(() => HandleFileChange(generation, @event)),
-                (_, _) => { });
+                // W6-2 PR A (contract A-3): the index-phase arm, marshalled
+                // like the other two — an external edit surfaces at the next
+                // scan, never as a file change.
+                (phase, filesSeen) => _enqueueUi(() => HandleIndexPhase(generation, phase, filesSeen)));
             _eventListenerToken = _session.RegisterEventListener(_eventListener);
 
             IsVaultOpen = true;
@@ -302,6 +468,7 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
                 ProgressValue = ProgressMaximum;
                 IsProgressIndeterminate = false;
                 InitializeWorkspace(_session, root, loaded.SwitcherFiles);
+                StartSyncMarkerWatch(generation, root);
             }
         }
         catch (VaultException exception)
@@ -356,6 +523,15 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             return;
         }
 
+        // P14: the palette must never be open with no vault, or the
+        // next vault open auto-presents it. Dismissed BEFORE the session
+        // goes away, so the overlay cannot survive the gap.
+        _palette?.Dismiss();
+        // Search joins the same teardown (mac closeVault,
+        // AppState.swift:11016-11017): overlay closed, retained query
+        // cleared, while the session still exists.
+        CloseSearchForVaultTransition();
+
         ++_generation;
         CloseSession();
         IsVaultOpen = false;
@@ -398,6 +574,38 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     {
         ++_generation;
         CloseSession();
+
+        // Releases the one CommandRegistry (PINV-3). Null unless the
+        // shell actually reached for the palette.
+        _paletteSource?.Dispose();
+        _paletteSource = null;
+        _palette = null;
+
+        if (_search is not null)
+        {
+            _search.OpenRequested -= Search_OpenRequested;
+            _search.Dispose();
+            _search = null;
+        }
+    }
+
+    /// <summary>
+    /// The vault-transition teardown mac performs in both closeVault and
+    /// the direct-switch path (<c>AppState.swift:9761-9762</c>,
+    /// <c>:11016-11017</c>): nothing of vault A's search — query, scope,
+    /// rows, announcement memory — may re-arm inside vault B. Through
+    /// <see cref="SearchOverlayViewModel.ResetForVaultTransition"/>
+    /// rather than <c>Close()</c> (codex round 12): Close early-returns
+    /// on a CLOSED overlay, and a superseded overlay is closed with its
+    /// scope deliberately preserved — the old body carried vault A's
+    /// tag scope across the switch.
+    /// </summary>
+    private void CloseSearchForVaultTransition()
+    {
+        if (_search is SearchOverlayViewModel search)
+        {
+            search.ResetForVaultTransition();
+        }
     }
 
     private async Task PickAndOpenVaultAsync(object? _)
@@ -489,9 +697,31 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         string message)
     {
         HostLog.Write(HostDiagnosticEvent.VaultEventFailed);
-        if (generation == _generation)
+        if (generation != _generation)
         {
-            ReportTerminalStatus(message, A11yPriority.High);
+            return;
+        }
+        if (code == EventErrorCode.CompactionFailed)
+        {
+            // W4-7 (contract H13, divergence HD-4): core's composed
+            // message relayed as a MEDIUM announcement, once per path
+            // per session — a background maintenance failure is not a
+            // High-priority interruption.
+            Workspace?.AnnounceHistoryCompactionFailure(path, message);
+            return;
+        }
+        ReportTerminalStatus(message, A11yPriority.High);
+    }
+
+    /// <summary>W6-2 PR A (contract A-3): the scan-finished arm — an
+    /// external edit is visible only after a scan, so the graph's probe
+    /// runs here too, under the same lifecycle check.</summary>
+    private void HandleIndexPhase(int generation, IndexPhase phase, ulong filesSeen)
+    {
+        _ = filesSeen;
+        if (generation == _generation && phase == IndexPhase.ScanFinished)
+        {
+            Workspace?.NotifyGraphOfVaultChange();
         }
     }
 
@@ -512,8 +742,45 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             {
                 Workspace?.InvalidateModifiedPath(@event.Path);
             }
+            // #1077 (contract I6): a Created or Renamed publication may be
+            // a missing tab's file coming back under ANOTHER spelling
+            // (`Ghost.md` → `ghost.md` on NTFS); re-seat those tabs once,
+            // here, rather than re-litigating identity per comparison.
+            if (@event.Kind is FileChangeKind.Created or FileChangeKind.Renamed)
+            {
+                Workspace?.ReseatMissingTabs();
+            }
 
             Workspace?.InvalidateAllInteractionStates();
+            // Reading embed cards depend on OTHER files (W3-5): the
+            // change stream reaches every open reading model, which
+            // applies its own reverse-dependency filter. A rename
+            // notifies both sides of the move.
+            Workspace?.NotifyReadingOfVaultChange(@event.Kind, @event.Path);
+            if (@event.Kind == FileChangeKind.Renamed
+                && @event.PreviousPath is string renamedFrom)
+            {
+                Workspace?.NotifyReadingOfVaultChange(@event.Kind, renamedFrom);
+            }
+            // Bases surfaces re-execute on vault changes too (contract
+            // C9's vault-event arm — property panel, task toggles,
+            // editor saves, and external edits all land here).
+            Workspace?.NotifyBasesOfVaultChange(@event.Path);
+            // W6-2 PR A (contract A-3): the graph's generation probe, while
+            // a graph tab is visible.
+            Workspace?.NotifyGraphOfVaultChange();
+            // W4-7 (HR-2's vault-event arm): a Modified on the active
+            // path appended a version row the save funnel never saw
+            // (Bases grid edits, sync, external editors).
+            if (@event.Kind == FileChangeKind.Modified)
+            {
+                Workspace?.NotifyHistoryOfVaultChange(@event.Path);
+            }
+            if (@event.Kind == FileChangeKind.Renamed
+                && @event.PreviousPath is string basesRenamedFrom)
+            {
+                Workspace?.NotifyBasesOfVaultChange(basesRenamedFrom);
+            }
             QuickSwitcher?.ApplyFileChange(@event);
             int ticket = Interlocked.Increment(ref _sidebarRefreshTicket);
             _ = Task.Delay(150).ContinueWith(
@@ -579,6 +846,25 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
 
     private void CloseSession()
     {
+        // W4-8 (SD8/SDINV-8): the marker watch dies FIRST and
+        // synchronously. Stop is idempotent and a stopped watcher never
+        // invokes its callback, so nothing can enqueue a refresh into the
+        // workspace this method is about to dispose. This is the single
+        // deepest teardown seam — vault switch (OpenVaultAsync),
+        // CloseVault, and DisposeCore all funnel here.
+        //
+        // The ARM moved off the dispatcher (StartSyncMarkerWatch) but
+        // this teardown deliberately did NOT. Two reasons: SDINV-5's
+        // "teardown drains" means a background stop would have to be
+        // JOINED right here anyway — the same block, one hop later —
+        // and the cost is asymmetric, because what stalls on a
+        // virtualized or unreachable root is opening the change
+        // notification handle, not closing it. Stop also has to happen
+        // before the workspace below it is disposed, which is exactly
+        // the ordering a synchronous call gives for free.
+        _syncMarkerWatcher?.Dispose();
+        _syncMarkerWatcher = null;
+
         if (FileSidebar is FilesSidebarViewModel sidebar)
         {
             SidebarSessionShutdown shutdown = sidebar.BeginSessionShutdownAndCaptureWork();
@@ -654,13 +940,17 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         if (FileSidebar is not null)
         {
             FileSidebar.OpenTargetRequested -= FileSidebar_OpenTargetRequested;
+            FileSidebar.PropertyChanged -= FileSidebar_SheetPresented;
         }
 
         if (Workspace is not null)
         {
             Workspace.FileOpened -= Workspace_FileOpened;
             Workspace.EditorTagActivated -= Workspace_EditorTagActivated;
+            Workspace.ReadingTagActivated -= Workspace_ReadingTagActivated;
             Workspace.FocusBoundaryRequested -= Workspace_FocusBoundaryRequested;
+            Workspace.TemplateNoteWritten -= Workspace_TemplateNoteWritten;
+            Workspace.PropertyChanged -= Workspace_SheetPresented;
             Workspace.Dispose();
         }
 
@@ -700,7 +990,22 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             _announce,
             _confirmDirtyNavigation,
             _confirmDirtyClose,
-            preferencesStore: new AppPreferencesStore());
+            preferencesStore: new AppPreferencesStore(),
+            announceRendered: _announceRendered,
+            // Rule A / AD-8 (IPA-6, IPB-1): the graph's load token and the
+            // create's completion carry THIS lifecycle's generation and
+            // compare it at dispatch — the same counter the listener arms
+            // are guarded by — handed in at construction because the
+            // restore can seat a persisted graph tab and start its first
+            // load before the constructor returns.
+            lifecycleGeneration: () => _generation);
+        // W4-8 (SD6/SDR-5): hand the workspace an admission gate over
+        // the LIFECYCLE's per-path set instead of letting it keep its
+        // own flag, which would die with it. Installed before the
+        // first probe can run — SD4's arm-then-probe is started by
+        // StartSyncMarkerWatch, strictly after this returns.
+        string announceKey = SyncAnnounceKey(root);
+        workspace.SyncAnnounceAdmission = () => _announcedSyncVaultPaths.Add(announceKey);
         sidebar = new FilesSidebarViewModel(
             session,
             _announce,
@@ -718,15 +1023,163 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
 
         workspace.FileOpened += Workspace_FileOpened;
         workspace.EditorTagActivated += Workspace_EditorTagActivated;
+        workspace.ReadingTagActivated += Workspace_ReadingTagActivated;
         workspace.FocusBoundaryRequested += Workspace_FocusBoundaryRequested;
+        // W5-3 (T12, T7): the creation parent is the sidebar's rule —
+        // frozen by the workspace at picker open — and `{{vault}}` is
+        // the root's basename; a written template note refreshes the
+        // sidebar the way its own creates do.
+        FilesSidebarViewModel capturedSidebar = sidebar;
+        workspace.TemplateCreationParentProvider = capturedSidebar.CreationParentPath;
+        workspace.TemplateVaultNameProvider =
+            () => Path.GetFileName(Path.TrimEndingDirectorySeparator(root));
+        workspace.TemplateNoteWritten += Workspace_TemplateNoteWritten;
+        // W5-4 F9: structural reports retarget open tabs synchronously
+        // at the mutation site; the event-stream retarget stays wired
+        // and no-ops on already-retargeted tabs.
+        WorkspaceViewModel capturedWorkspace = workspace;
+        sidebar.RetargetRequested = (oldPath, newPath) =>
+            capturedWorkspace.RetargetPath(oldPath, newPath);
         sidebar.OpenTargetRequested += FileSidebar_OpenTargetRequested;
+        // §G2 TG2-6 (IG2-6): the sidebar is the canvas's note creator.
+        workspace.CanvasNoteCreator = sidebar;
+        // W6-2 PR A (contracts A-8, AD-11): and the graph's — and the
+        // target of "Reveal in File Tree".
+        workspace.GraphNoteCreator = sidebar;
+        workspace.GraphRevealInSidebar = capturedSidebar.SelectPathFromSurface;
         switcher.OpenRequested += QuickSwitcher_OpenRequested;
         switcher.Dismissed += QuickSwitcher_Dismissed;
 
         Workspace = workspace;
+
+        // Subscribed AFTER the Workspace assignment on purpose: the
+        // shell observes that assignment synchronously and subscribes
+        // its own sheet handlers first, so on a sheet presentation the
+        // sheet's focus grab is queued BEFORE any restore this
+        // handler's dismissals queue — the same converged order the
+        // pickers already produce.
+        workspace.PropertyChanged += Workspace_SheetPresented;
+
+        // PINV-7: the workspace requeries far more often than the vault
+        // lifecycle does — on every tab switch — and that is the frequency
+        // the invariant's own example needs.
+        workspace.RegisteredCommandStatesChanged = RaiseRegisteredCommandStates;
         FileSidebar = sidebar;
+        // The sidebar twin, same post-assignment ordering rationale.
+        sidebar.PropertyChanged += FileSidebar_SheetPresented;
         QuickSwitcher = switcher;
         WorkspaceReady?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>W4-8 test seam: the marker watch currently owned by
+    /// this lifecycle, so a fact can prove the arm/teardown race opens
+    /// no directory handles.</summary>
+    internal SyncMarkerWatcher? SyncMarkerWatchForTests => _syncMarkerWatcher;
+
+    /// <summary>The announce-gate key for a vault root. The root is
+    /// already <c>Path.GetFullPath</c>'d by <see cref="OpenVaultAsync"/>
+    /// before it reaches here, so only the trailing separator needs
+    /// normalizing; the OrdinalIgnoreCase comparison lives on the set
+    /// itself (see <see cref="_announcedSyncVaultPaths"/>).</summary>
+    private static string SyncAnnounceKey(string root) =>
+        Path.TrimEndingDirectorySeparator(root);
+
+    /// <summary>
+    /// W4-8 (SD8 + SD4): arm the bounded marker watch, THEN run the
+    /// vault-open detection probe. The order is the contract, not a
+    /// preference — a marker landing between a probe and a later arm
+    /// emits no event and would stay invisible until the next manual
+    /// refresh. <see cref="SyncMarkerWatcher.Start"/> returns with the
+    /// handles open, and the probe is chained INSIDE the same hop, so
+    /// there is no window between them.
+    ///
+    /// Why the arm is not inline: it is synchronous filesystem I/O —
+    /// three <c>Directory.Exists</c> probes plus up to three
+    /// <c>CreateFileW</c> calls against the vault root — and on SDR-2's
+    /// exact scenario (an unresponsive SMB share, a files-on-demand
+    /// OneDrive root) each of those can block for seconds. Run on the
+    /// dispatcher it freezes the window at vault open. One background
+    /// hop keeps the ordering contract and unblocks the UI.
+    ///
+    /// The generation is re-checked TWICE: once here, and once on the
+    /// arming thread immediately before the handles open. A teardown
+    /// can land while <see cref="InitializeWorkspace"/> is still
+    /// running, in which case <see cref="CloseSession"/> reads a
+    /// still-null <c>_syncMarkerWatcher</c> and tears everything down —
+    /// and without these checks this method would then arm three
+    /// <see cref="FileSystemWatcher"/>s with no owner left to stop
+    /// them. They would live for the process lifetime and hold the
+    /// vault directory undeletable (SDINV-5/SDINV-8).
+    /// </summary>
+    private void StartSyncMarkerWatch(int generation, string root)
+    {
+        _syncMarkerWatcher?.Dispose();
+        _syncMarkerWatcher = null;
+        if (generation != Volatile.Read(ref _generation))
+        {
+            return;
+        }
+
+        SyncMarkerWatcher watcher = new(
+            root,
+            () => OnSyncMarkerFire(generation),
+            _syncMarkerDebounce);
+        // Published BEFORE the hop is queued, so any teardown from here
+        // on finds it and stops it; Start is a no-op after Stop.
+        _syncMarkerWatcher = watcher;
+        _ = _runSyncMarkerArm(() =>
+        {
+            // Defence in depth for the hop that gets parked: a teardown
+            // that already read a null field cannot be relied on to
+            // stop this watcher, so prove liveness again before opening
+            // a single handle.
+            if (generation != Volatile.Read(ref _generation))
+            {
+                watcher.Dispose();
+                return;
+            }
+
+            watcher.Start();
+            // SD4 trigger (a): the vault-open probe, strictly after the
+            // arm and back on the UI context, where the workspace's
+            // refresh funnel and the SD6 gate live.
+            _enqueueUi(() =>
+            {
+                if (generation == Volatile.Read(ref _generation))
+                {
+                    Workspace?.RefreshSyncDiagnostics();
+                }
+            });
+        });
+    }
+
+    /// <summary>
+    /// A debounced marker fire. <see cref="SyncMarkerWatcher"/> invokes
+    /// this INSIDE its own lock — that is what makes "never fires after
+    /// Stop returns" structural — so this must enqueue and return.
+    ///
+    /// It therefore hands the UI hop to the threadpool instead of
+    /// calling <c>_enqueueUi</c> directly: the enqueue delegate is
+    /// injected, and a blocking one (a dispatcher <c>Invoke</c>, or a
+    /// test's inline <c>action =&gt; action()</c>) would otherwise run
+    /// the whole refresh funnel under the watcher's lock and deadlock
+    /// against <see cref="CloseSession"/>'s watcher stop. Structural,
+    /// not a documented promise the next caller has to remember.
+    ///
+    /// The generation is read with <see cref="Volatile"/> because this
+    /// comparison can run on a pool thread (an inline enqueue delegate
+    /// never reaches the dispatcher), and the liveness re-check on the
+    /// UI context is what SDINV-5 requires.
+    /// </summary>
+    private void OnSyncMarkerFire(int generation)
+    {
+        _ = Task.Run(() => _enqueueUi(() =>
+        {
+            if (generation == Volatile.Read(ref _generation))
+            {
+                Workspace?.RefreshSyncDiagnostics();
+            }
+        }));
     }
 
     private bool TryCloseWorkspace()
@@ -809,13 +1262,155 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         QuickSwitcher?.RecordOpen(path);
     }
 
+    /// <summary>W5-3 (T7): a template note was written outside the
+    /// sidebar's own mutation paths, which refresh inline — this one
+    /// refreshes the tree the same way so the new note is visible and
+    /// selectable immediately.</summary>
+    private void Workspace_TemplateNoteWritten(object? sender, string path)
+    {
+        // W5-4 F10: the template create is a CREATE — a structural
+        // history barrier exactly like newNote (mac's table; red team,
+        // contracts 1) — a stale inverse must never replay against a
+        // name the template note now owns.
+        FileSidebar?.StructuralHistoryBarrier();
+        FileSidebar?.Refresh();
+    }
+
     private void Workspace_EditorTagActivated(object? sender, string tag) =>
         FileSidebar?.ActivateTag(tag);
+
+    /// <summary>
+    /// W5-2 SD-4: a reading-view tag opens the tag-scoped search
+    /// overlay, never the sidebar filter. The shell's modal gate runs
+    /// first — an overlay must not open (invisibly) beneath a sheet —
+    /// and refusal leaves the overlay untouched: no cleared query, no
+    /// armed scope. Past the gate, <see
+    /// cref="SearchOverlayViewModel.OpenTagScoped"/> performs mac's
+    /// exact ordering (clear query, open, scope last).
+    /// </summary>
+    private void Workspace_ReadingTagActivated(object? sender, string tag)
+    {
+        SearchOverlayViewModel search = Search;
+        if (!search.IsOpen && SearchOpenAdmission?.Invoke() == false)
+        {
+            return;
+        }
+
+        search.OpenTagScoped(tag);
+    }
 
     private void Workspace_FocusBoundaryRequested(
         object? sender,
         WorkspaceFocusBoundary boundary) =>
         WorkspaceFocusBoundaryRequested?.Invoke(this, boundary);
+
+    /// <summary>
+    /// Invariant 6's presentation-time admission (codex round 11,
+    /// #742). A sheet may PRESENT from a deferred continuation — the
+    /// files-citing load, the bases edit-JSON fetch, a citation
+    /// summary parked on <c>RowsPublished</c> — and the modal decision
+    /// taken at command dispatch is stale by the time the sheet lands:
+    /// a picker opened during that window would sit hidden-but-live
+    /// beneath the sheet, the round-1/round-10 class SD-5 retires.
+    /// Enforced here, reactively, the moment a sheet property becomes
+    /// non-null, so every present and future presentation path is
+    /// covered without per-site admission calls. All three dismissals
+    /// are idempotent; the palette arm also fires during the
+    /// sanctioned P9 transient (a palette-invoked SYNCHRONOUS sheet),
+    /// where it runs the dismissal P9 itself would run moments later.
+    /// P9's subsequent success steps survive that early dismissal:
+    /// <c>RecordInvocation(row.Id)</c> reads only its parameter, never
+    /// palette state, and P9's own <c>Dismiss()</c> becomes a no-op.
+    /// </summary>
+    private void Workspace_SheetPresented(
+        object? sender, PropertyChangedEventArgs eventArgs)
+    {
+        if (sender is not WorkspaceViewModel workspace
+            || !ReferenceEquals(workspace, Workspace))
+        {
+            return;
+        }
+
+        // A flat name-by-name read, the CurrentModalSurfaceState
+        // idiom: each arm sits next to the property it reads, so a
+        // wrong-property error is visible here rather than hidden in
+        // shared plumbing. Census-pinned against the sheet members of
+        // ModalSurface in ModalSurfaceTests.
+        bool presented = eventArgs.PropertyName switch
+        {
+            nameof(WorkspaceViewModel.AddPropertySheet) =>
+                workspace.AddPropertySheet is not null,
+            nameof(WorkspaceViewModel.BulkRenameSheet) =>
+                workspace.BulkRenameSheet is not null,
+            nameof(WorkspaceViewModel.CitationDetails) =>
+                workspace.CitationDetails is not null,
+            nameof(WorkspaceViewModel.CitationSummary) =>
+                workspace.CitationSummary is not null,
+            nameof(WorkspaceViewModel.FilesCiting) =>
+                workspace.FilesCiting is not null,
+            nameof(WorkspaceViewModel.DashboardEditorSheet) =>
+                workspace.DashboardEditorSheet is not null,
+            nameof(WorkspaceViewModel.BaseQueryBuilderSheet) =>
+                workspace.BaseQueryBuilderSheet is not null,
+            nameof(WorkspaceViewModel.TemplatePickerSheet) =>
+                workspace.TemplatePickerSheet is not null,
+            nameof(WorkspaceViewModel.TemplateFlowSheet) =>
+                workspace.TemplateFlowSheet is not null,
+            nameof(WorkspaceViewModel.CanvasCardEditorSheet) =>
+                workspace.CanvasCardEditorSheet is not null,
+            nameof(WorkspaceViewModel.CanvasCardPickerSheet) =>
+                workspace.CanvasCardPickerSheet is not null,
+            nameof(WorkspaceViewModel.CanvasPromptSheet) =>
+                workspace.CanvasPromptSheet is not null,
+            _ => false,
+        };
+        if (!presented)
+        {
+            return;
+        }
+
+        // SUPERSEDE, not Close, for search (red team after round 11):
+        // the landing sheet is borrowing the screen the way the
+        // palette does, so the scope survives and Ctrl+Shift+F after
+        // the sheet restores the overlay the user actually had.
+        // Backing fields, not the lazy getters: closing a picker that
+        // was never constructed should not construct it — in a
+        // window-free host the Palette getter registers the whole
+        // command catalog as a side effect of this dispatch.
+        _search?.Supersede();
+        QuickSwitcher?.Dismiss();
+        _palette?.Dismiss();
+    }
+
+    /// <summary>W5-4 (F4): the workspace observer's SIDEBAR twin —
+    /// the Move-To sheet lives on <see cref="FilesSidebarViewModel"/>,
+    /// and its presentation must close the pickers reactively exactly
+    /// as a workspace sheet's does. Census-pinned in
+    /// <c>ModalSurfaceTests</c>.</summary>
+    private void FileSidebar_SheetPresented(
+        object? sender, PropertyChangedEventArgs eventArgs)
+    {
+        if (sender is not FilesSidebarViewModel sidebar
+            || !ReferenceEquals(sidebar, FileSidebar))
+        {
+            return;
+        }
+
+        bool presented = eventArgs.PropertyName switch
+        {
+            nameof(FilesSidebarViewModel.MoveToSheet) =>
+                sidebar.MoveToSheet is not null,
+            _ => false,
+        };
+        if (!presented)
+        {
+            return;
+        }
+
+        _search?.Supersede();
+        QuickSwitcher?.Dismiss();
+        _palette?.Dismiss();
+    }
 
     private static SwitcherFile[] LoadSwitcherFiles(VaultSession session)
     {
@@ -844,6 +1439,98 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     private void QuickSwitcher_Dismissed(object? sender, EventArgs e) =>
         QuickSwitcherDismissed?.Invoke(this, EventArgs.Empty);
 
+    /// <summary>
+    /// A search activation (contract S9): open the hit in the CURRENT
+    /// tab (contract S10 — no modifier variants; mac's ⌘Return is
+    /// rejected by its own key monitor and only ⌘-click works, so
+    /// Windows builds neither), derive the match line host-side, park
+    /// the caret at its start, and announce
+    /// <c>SearchResultOpened(filename, line, snippet)</c> with the
+    /// WHOLE-FILE line number.
+    /// </summary>
+    /// <remarks>
+    /// The overlay has already closed and recorded the recent
+    /// (record→close→open, the phase-1 ordering fact); this handler runs
+    /// synchronously after it on the UI thread — the Windows tab load is
+    /// synchronous, so there is no mac-style await on a pending note
+    /// load. An open the dirty-navigation prompt refuses leaves the user
+    /// on their current note, so nothing is scrolled or announced.
+    /// </remarks>
+    private void Search_OpenRequested(object? sender, SearchOpenRequest request)
+    {
+        if (Workspace is not WorkspaceViewModel workspace)
+        {
+            return;
+        }
+
+        // S10: opening a file that is already the selected file does not
+        // re-open it (mac wasAlreadyOpen, AppState.swift:9471-9477).
+        WorkspaceTabViewModel? active = workspace.ActiveGroup.ActiveTab;
+        bool alreadyActive = active is { IsMarkdown: true }
+            && string.Equals(active.Path, request.Path, StringComparison.Ordinal);
+        if (!alreadyActive)
+        {
+            workspace.OpenPath(request.Path, WorkspaceOpenTarget.CurrentTab);
+        }
+
+        WorkspaceTabViewModel? tab = workspace.ActiveGroup.ActiveTab;
+        if (tab is not { IsMarkdown: true }
+            || !string.Equals(tab.Path, request.Path, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        int fileLine = DeriveSearchResultLine(tab, request);
+        // The caret park follows the W4-3 dirty posture rather than mac's
+        // unverified scroll: a dirty or externally stale buffer no longer
+        // matches the indexed bytes the line was derived from, so the
+        // caret stays put (the silent non-move is the honest observable).
+        // The announcement still fires — the note did open, and the line
+        // describes the saved note the search indexed.
+        if (!tab.IsDirty && !tab.IsExternallyStale)
+        {
+            tab.EditorInteractions?.RequestCaret(
+                SearchLineLocator.LineStartOffset(tab.Text, fileLine));
+        }
+
+        _announce(new A11yEvent.SearchResultOpened(
+            Path.GetFileName(request.Path),
+            (uint)fileLine,
+            request.Snippet));
+    }
+
+    /// <summary>
+    /// The whole-file line for an activated hit. The scan runs over the
+    /// BODY (mac scans its body-space buffer) and the result is rebased
+    /// to file space with core's <c>BodyLineOffset</c> — the one
+    /// conversion authority (<c>read_note_parts</c>, the U3-5 law:
+    /// frontmatter geometry is never re-derived host-side). Windows
+    /// buffers are whole-file, so the same number both scrolls the
+    /// editor and is announced (mac needs <c>fileLine(fromBodyLine:)</c>
+    /// only for the announcement).
+    /// </summary>
+    private int DeriveSearchResultLine(
+        WorkspaceTabViewModel tab, SearchOpenRequest request)
+    {
+        if (_session is VaultSession session)
+        {
+            try
+            {
+                NotePartsBundle parts = session.ReadNoteParts(request.Path);
+                return SearchLineLocator.FirstTokenLine(parts.Body, request.Query)
+                    + (int)parts.BodyLineOffset;
+            }
+            catch (VaultException)
+            {
+                // The note opened but its parts read failed (deleted in
+                // the gap, a reparse refusal): degrade to a whole-file
+                // scan of the loaded buffer, which is already file-space.
+            }
+        }
+
+        return SearchLineLocator.FirstTokenLine(tab.Text, request.Query);
+    }
+
     private void ReportTerminalStatus(string message, A11yPriority priority)
     {
         StatusText = message;
@@ -856,6 +1543,26 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         _openVaultCommand.RaiseCanExecuteChanged();
         _openRecentCommand.RaiseCanExecuteChanged();
         _closeVaultCommand.RaiseCanExecuteChanged();
+
+        // PINV-7: requery the registered catalog by ENUMERATION, so a
+        // newly registered command cannot be silently omitted the way the
+        // four hand-maintained lists allow. Only meaningful once the
+        // bridge exists, hence the null check — an unopened palette has
+        // registered nothing yet.
+        RaiseRegisteredCommandStates();
+    }
+
+    /// <summary>
+    /// PINV-7: requery the registered catalog by ENUMERATION, so a newly
+    /// registered command cannot be silently omitted the way the
+    /// hand-maintained lists allow. No-op until the bridge exists.
+    /// </summary>
+    private void RaiseRegisteredCommandStates()
+    {
+        if (_paletteSource is not null)
+        {
+            SlateCommandRegistrar.RaiseCommandStates(this);
+        }
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)

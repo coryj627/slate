@@ -381,7 +381,67 @@ internal sealed partial class FilesSidebarViewModel
             ApplyTags(outcome.Tags);
         }
 
-        ScheduleFilter();
+        ScheduleFilter(automatic: true);
+        // W5-4 F1/F2: a create staged an inline-rename hand-off; the
+        // published tree is the first moment the new node exists to
+        // select. Other mutations stage a plain selection/focus
+        // reconciliation (red team, a11y 2).
+        ConsumePendingRenameArm();
+        ConsumePendingSelection();
+        // W6-2 PR A (contract A-8): a surface's "Reveal in File Tree" whose
+        // node the previous tree had not materialised.
+        ConsumePendingSurfaceSelection();
+        ReconcileSelectionAfterPublication();
+
+        // Project the AUTHORITATIVE checked set onto the published
+        // nodes (codex rounds 4-5): a fresh node whose path is
+        // checked re-checks silently; an entry is pruned only when
+        // its ABSENCE is provable (the parent's real children are
+        // materialized — or the root — and the path is not among
+        // them). A checked descendant inside a COLLAPSED folder is
+        // merely unmaterialized and survives. A truncated publication
+        // proves nothing and prunes nothing.
+        if (_batchChecked.Count > 0)
+        {
+            var materialized = new Dictionary<string, FileTreeNodeViewModel>(
+                StringComparer.Ordinal);
+            foreach (FileTreeNodeViewModel node in Flatten(RootNodes))
+            {
+                materialized[node.Path] = node;
+            }
+
+            // Absence pruning only from a COMPLETE publication (codex
+            // round 6): any truncation — the root level or a restored
+            // folder's overflow — makes the listing non-authoritative
+            // for what does NOT exist.
+            bool publicationComplete = !outcome.Level.Truncated
+                && outcome.RestoredOverflowPath is null;
+            foreach (string path in _batchChecked.Keys.ToList())
+            {
+                if (materialized.TryGetValue(path, out FileTreeNodeViewModel? node))
+                {
+                    _ = node.MarkBatchSelectedSilently();
+                    continue;
+                }
+
+                if (!publicationComplete)
+                {
+                    continue;
+                }
+
+                string parent = ParentPath(path);
+                bool absenceProvable = parent.Length == 0
+                    || (materialized.TryGetValue(
+                            parent, out FileTreeNodeViewModel? parentNode)
+                        && parentNode.HasLoadedChildren);
+                if (absenceProvable)
+                {
+                    _batchChecked.Remove(path);
+                }
+            }
+        }
+
+        BatchSelectionCount = _batchChecked.Count;
         if (outcome.Level.Truncated)
         {
             Status = DirectoryOverflowStatus(string.Empty);
@@ -395,6 +455,12 @@ internal sealed partial class FilesSidebarViewModel
         {
             Status = DirectoryOverflowStatus(overflowPath);
         }
+
+        // The mutation result wins the turn over this publication's
+        // own status arms (codex round 2) — a persistent condition
+        // (overflow, settings notice) returns on the next organic
+        // refresh.
+        ReassertStatusAfterPublication();
     }
 
     internal bool CancelTreeRefresh()
@@ -510,6 +576,9 @@ internal sealed partial class FilesSidebarViewModel
                 // Expand Loaded is deliberately snapshot-based: children that
                 // materialize here are not recursively expanded in this run.
                 node.ReplaceChildren(level.Nodes);
+                // Dispatcher publication boundary (codex round 7):
+                // recursive check projection.
+                ProjectBatchChecksOnto(level.Nodes);
                 if (level.Truncated)
                 {
                     Status = DirectoryOverflowStatus(node.Path);

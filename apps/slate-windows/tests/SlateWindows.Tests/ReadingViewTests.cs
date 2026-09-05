@@ -143,7 +143,15 @@ public sealed class ReadingViewTests
         RunSta(() =>
         {
             ReadingDocumentModel model = BuildFixture();
-            Hyperlink[] links = CollectHyperlinks(model.Document).ToArray();
+            // Card chrome (the embed Jump link, AutomationId
+            // "ReadingBlockEmbed") is excluded: the pin is about the
+            // INLINE run population — the embed itself is a card, not
+            // an inline link.
+            Hyperlink[] links = CollectHyperlinks(model.Document)
+                .Where(link => System.Windows.Automation.AutomationProperties
+                    .GetAutomationId(link) != "ReadingBlockEmbed")
+                .Where(link => !ReadingSemantics.IsCodeCopy(link))
+                .ToArray();
 
             // [[known]], [[absent]], #tag, [@smith2020] — the embed is a
             // card, not an inline link.
@@ -386,6 +394,13 @@ public sealed class ReadingViewTests
                 // U aliases L: the field log measured Ctrl+Alt+L grabbed
                 // globally on the reference machine before the app saw it.
                 System.Windows.Input.Key.U,
+                // W3-2: math blocks.
+                System.Windows.Input.Key.M,
+                // W3-3: diagram blocks; G aliases D (field 2026-07-30:
+                // Ctrl+Alt+D never reached the app on the tester's
+                // machine — the same theft class as L).
+                System.Windows.Input.Key.D,
+                System.Windows.Input.Key.G,
             };
             foreach (System.Windows.Input.Key key in kindKeys)
             {
@@ -468,6 +483,374 @@ public sealed class ReadingViewTests
                 System.Windows.Automation.Text.TextPatternRangeEndpoint.Start,
                 whole,
                 System.Windows.Automation.Text.TextPatternRangeEndpoint.Start);
+        });
+    }
+
+    /// <summary>Block quotes answer StyleId_Quote AND StyleName
+    /// "Quote" through the decorator. NVDA consumes only StyleName (its
+    /// "report style" setting, off by default — owner call, field pass
+    /// 3 2026-07-31: zero visual change accepted over a visible
+    /// prefix); StyleId stays for other ATs.</summary>
+    [Fact]
+    public void BlockQuotesAnswerThroughTheTextPatternStyleId()
+    {
+        RunSta(() =>
+        {
+            FlowDocument built = BuildSource(
+                "plain paragraph\n\n> a quoted line\n");
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(built);
+
+            var provider = peer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)
+                as System.Windows.Automation.Provider.ITextProvider;
+            var decorated = Assert.IsType<HeadingStyleTextProvider>(provider);
+
+            Paragraph quote = surface.Document.Blocks
+                .OfType<Paragraph>()
+                .Single(ReadingSemantics.IsQuote);
+            surface.CaretPosition = quote.ContentStart;
+            Assert.Equal(
+                HeadingStyleTextProvider.StyleIdQuote,
+                decorated.GetSelection()[0].GetAttributeValue(
+                    HeadingStyleTextProvider.StyleIdAttribute));
+
+            Paragraph plain = surface.Document.Blocks
+                .OfType<Paragraph>()
+                .First(p => !ReadingSemantics.IsQuote(p));
+            surface.CaretPosition = plain.ContentStart;
+            Assert.NotEqual(
+                HeadingStyleTextProvider.StyleIdQuote,
+                decorated.GetSelection()[0].GetAttributeValue(
+                    HeadingStyleTextProvider.StyleIdAttribute));
+
+            surface.CaretPosition = quote.ContentStart;
+            Assert.Equal(
+                HeadingStyleTextProvider.QuoteStyleName,
+                decorated.GetSelection()[0].GetAttributeValue(
+                    HeadingStyleTextProvider.StyleNameAttribute));
+            surface.CaretPosition = plain.ContentStart;
+            Assert.NotEqual(
+                HeadingStyleTextProvider.QuoteStyleName,
+                decorated.GetSelection()[0].GetAttributeValue(
+                    HeadingStyleTextProvider.StyleNameAttribute));
+        });
+    }
+
+    /// <summary>Synthetic style attributes are range-aware
+    /// (adversarial round 1): a selection spanning quote and plain
+    /// paragraphs answers MixedAttributeValue in either document
+    /// order — never the start paragraph's value alone — and a
+    /// uniform all-quote span answers the single value.</summary>
+    [Fact]
+    public void QuoteStyleAttributesReportMixedAcrossSpanningRanges()
+    {
+        RunSta(() =>
+        {
+            foreach (string source in new[]
+            {
+                "plain paragraph\n\n> a quoted line\n",
+                "> a quoted line\n\nplain paragraph\n",
+            })
+            {
+                FlowDocument built = BuildSource(source);
+                var surface = new ReadingSurface();
+                var peer = System.Windows.Automation.Peers
+                    .UIElementAutomationPeer.CreatePeerForElement(surface);
+                surface.ApplyBuiltDocument(built);
+                var provider = peer!.GetPattern(
+                    System.Windows.Automation.Peers.PatternInterface.Text)
+                    as System.Windows.Automation.Provider.ITextProvider;
+
+                surface.Selection.Select(
+                    surface.Document.ContentStart, surface.Document.ContentEnd);
+                var range = provider!.GetSelection()[0];
+                Assert.Same(
+                    System.Windows.Automation.TextPattern.MixedAttributeValue,
+                    range.GetAttributeValue(
+                        HeadingStyleTextProvider.StyleIdAttribute));
+                Assert.Same(
+                    System.Windows.Automation.TextPattern.MixedAttributeValue,
+                    range.GetAttributeValue(
+                        HeadingStyleTextProvider.StyleNameAttribute));
+            }
+
+            FlowDocument uniform = BuildSource(
+                "> first quote\n\n> second quote\n");
+            var uniformSurface = new ReadingSurface();
+            var uniformPeer = System.Windows.Automation.Peers
+                .UIElementAutomationPeer.CreatePeerForElement(uniformSurface);
+            uniformSurface.ApplyBuiltDocument(uniform);
+            var uniformProvider = uniformPeer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)
+                as System.Windows.Automation.Provider.ITextProvider;
+            uniformSurface.Selection.Select(
+                uniformSurface.Document.ContentStart,
+                uniformSurface.Document.ContentEnd);
+            var uniformRange = uniformProvider!.GetSelection()[0];
+            Assert.Equal(
+                HeadingStyleTextProvider.QuoteStyleName,
+                uniformRange.GetAttributeValue(
+                    HeadingStyleTextProvider.StyleNameAttribute));
+            Assert.Equal(
+                HeadingStyleTextProvider.StyleIdQuote,
+                uniformRange.GetAttributeValue(
+                    HeadingStyleTextProvider.StyleIdAttribute));
+        });
+    }
+
+    /// <summary>Mixed detection runs on style IDENTITY (adversarial
+    /// round 4): heading transitions must answer MixedAttributeValue on
+    /// the StyleName channel too, even though headings emit no
+    /// synthetic name — while a uniform heading range still delegates
+    /// (no "style Heading 1" double-speak under report-style).</summary>
+    [Fact]
+    public void HeadingRangesReportMixedStyleNameIdentity()
+    {
+        RunSta(() =>
+        {
+            foreach (string source in new[]
+            {
+                "# Heading one\n\nplain paragraph\n",
+                "# Heading one\n\n## Heading two\n",
+            })
+            {
+                FlowDocument built = BuildSource(source);
+                var surface = new ReadingSurface();
+                var peer = System.Windows.Automation.Peers
+                    .UIElementAutomationPeer.CreatePeerForElement(surface);
+                surface.ApplyBuiltDocument(built);
+                var provider = peer!.GetPattern(
+                    System.Windows.Automation.Peers.PatternInterface.Text)
+                    as System.Windows.Automation.Provider.ITextProvider;
+                surface.Selection.Select(
+                    surface.Document.ContentStart, surface.Document.ContentEnd);
+                var range = provider!.GetSelection()[0];
+                Assert.Same(
+                    System.Windows.Automation.TextPattern.MixedAttributeValue,
+                    range.GetAttributeValue(
+                        HeadingStyleTextProvider.StyleNameAttribute));
+                Assert.Same(
+                    System.Windows.Automation.TextPattern.MixedAttributeValue,
+                    range.GetAttributeValue(
+                        HeadingStyleTextProvider.StyleIdAttribute));
+            }
+
+            FlowDocument uniform = BuildSource("# Heading one\n");
+            var uniformSurface = new ReadingSurface();
+            var uniformPeer = System.Windows.Automation.Peers
+                .UIElementAutomationPeer.CreatePeerForElement(uniformSurface);
+            uniformSurface.ApplyBuiltDocument(uniform);
+            var uniformProvider = uniformPeer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)
+                as System.Windows.Automation.Provider.ITextProvider;
+            uniformSurface.Selection.Select(
+                uniformSurface.Document.ContentStart,
+                uniformSurface.Document.ContentEnd);
+            var uniformRange = uniformProvider!.GetSelection()[0];
+            Assert.Equal(
+                HeadingStyleTextProvider.StyleIdHeading1,
+                uniformRange.GetAttributeValue(
+                    HeadingStyleTextProvider.StyleIdAttribute));
+            object? uniformName = uniformRange.GetAttributeValue(
+                HeadingStyleTextProvider.StyleNameAttribute);
+            Assert.NotSame(
+                System.Windows.Automation.TextPattern.MixedAttributeValue,
+                uniformName);
+            Assert.NotEqual(
+                HeadingStyleTextProvider.QuoteStyleName, uniformName);
+        });
+    }
+
+    /// <summary>The paragraph walk has NO count ceiling (adversarial
+    /// round 2: a 10k cap silently truncated documents a 64 KiB embed
+    /// preview can legally exceed, hiding later quotes/headings from
+    /// both GetAttributeValue and FindAttribute). 10,050 plain
+    /// paragraphs precede the only quote; every synthetic answer must
+    /// still see it.</summary>
+    [Fact]
+    public void SyntheticAttributeWalkSurvivesHugeDocuments()
+    {
+        RunSta(() =>
+        {
+            var source = new System.Text.StringBuilder();
+            for (int i = 0; i < 10_050; i++)
+            {
+                source.Append('p').Append(i).Append("\n\n");
+            }
+            source.Append("> a quoted line\n");
+            FlowDocument built = BuildSource(source.ToString());
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers
+                .UIElementAutomationPeer.CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(built);
+            var provider = peer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)
+                as System.Windows.Automation.Provider.ITextProvider;
+            var whole = provider!.DocumentRange;
+
+            Assert.Same(
+                System.Windows.Automation.TextPattern.MixedAttributeValue,
+                whole.GetAttributeValue(
+                    HeadingStyleTextProvider.StyleNameAttribute));
+
+            var forward = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName,
+                false);
+            Assert.NotNull(forward);
+            Assert.Contains(
+                "a quoted line", forward!.GetText(-1), StringComparison.Ordinal);
+
+            var backward = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleIdAttribute,
+                HeadingStyleTextProvider.StyleIdQuote,
+                true);
+            Assert.NotNull(backward);
+            Assert.Contains(
+                "a quoted line", backward!.GetText(-1), StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>FindAttribute resolves synthetic styles (adversarial
+    /// round 1): WPF's own search cannot see the quote marker, so the
+    /// decorator answers — both directions, headings too, and no
+    /// false positives for values nothing carries.</summary>
+    [Fact]
+    public void FindAttributeLocatesSyntheticQuoteStyles()
+    {
+        RunSta(() =>
+        {
+            FlowDocument built = BuildSource(
+                "# Heading one\n\nplain paragraph\n\n> a quoted line\n");
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers
+                .UIElementAutomationPeer.CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(built);
+            var provider = peer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)
+                as System.Windows.Automation.Provider.ITextProvider;
+            var whole = provider!.DocumentRange;
+
+            var quote = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName,
+                false);
+            Assert.NotNull(quote);
+            Assert.Contains(
+                "a quoted line", quote!.GetText(-1), StringComparison.Ordinal);
+
+            var backwardQuote = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleIdAttribute,
+                HeadingStyleTextProvider.StyleIdQuote,
+                true);
+            Assert.NotNull(backwardQuote);
+            Assert.Contains(
+                "a quoted line",
+                backwardQuote!.GetText(-1),
+                StringComparison.Ordinal);
+
+            var heading = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleIdAttribute,
+                HeadingStyleTextProvider.StyleIdHeading1,
+                false);
+            Assert.NotNull(heading);
+            Assert.Contains(
+                "Heading one", heading!.GetText(-1), StringComparison.Ordinal);
+
+            Assert.Null(whole.FindAttribute(
+                HeadingStyleTextProvider.StyleNameAttribute,
+                "Caption",
+                false));
+
+            // Degenerate range = empty by UIA definition (adversarial
+            // round 3): a caret INSIDE the quote still answers
+            // GetAttributeValue, but FindAttribute must return null in
+            // both directions — not a zero-length self-match.
+            Paragraph quoteParagraph = surface.Document.Blocks
+                .OfType<Paragraph>()
+                .Single(ReadingSemantics.IsQuote);
+            surface.Selection.Select(
+                quoteParagraph.ContentStart, quoteParagraph.ContentStart);
+            var caret = provider!.GetSelection()[0];
+            Assert.Equal(
+                HeadingStyleTextProvider.QuoteStyleName,
+                caret.GetAttributeValue(
+                    HeadingStyleTextProvider.StyleNameAttribute));
+            Assert.Null(caret.FindAttribute(
+                HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName,
+                false));
+            Assert.Null(caret.FindAttribute(
+                HeadingStyleTextProvider.StyleIdAttribute,
+                HeadingStyleTextProvider.StyleIdQuote,
+                true));
+        });
+    }
+
+    /// <summary>The Copy affordance announces as a BUTTON: the
+    /// CodeCopyHyperlink peer overrides only the control type; Invoke
+    /// and the in-range name stay HyperlinkAutomationPeer's (field,
+    /// 2026-07-31: "link Copy code" misread an in-place action as
+    /// navigation).</summary>
+    [Fact]
+    public void CopyCodeAnnouncesAsAButton()
+    {
+        RunSta(() =>
+        {
+            FlowDocument built = BuildSource("```rust\nfn f() {}\n```\n");
+            var surface = new ReadingSurface();
+            surface.ApplyBuiltDocument(built);
+            Hyperlink copy = FindCopyLinks(surface.Document).Single();
+            Assert.IsType<CodeCopyHyperlink>(copy);
+            var peer = System.Windows.Automation.Peers
+                .ContentElementAutomationPeer.CreatePeerForElement(copy);
+            Assert.NotNull(peer);
+            Assert.Equal(
+                System.Windows.Automation.Peers.AutomationControlType.Button,
+                peer!.GetAutomationControlType());
+        });
+    }
+
+    /// <summary>The preamble is a CAPTION (owner call, field pass 3
+    /// 2026-07-31): smaller than the 15px body with a tight margin —
+    /// visible but subtle, the recorded divergence from mac's hidden
+    /// AX-only preamble.</summary>
+    [Fact]
+    public void CodePreambleIsCaptionStyled()
+    {
+        RunSta(() =>
+        {
+            FlowDocument built = BuildSource("```rust\nfn f() {}\n```\n");
+            var surface = new ReadingSurface();
+            surface.ApplyBuiltDocument(built);
+            Hyperlink copy = FindCopyLinks(surface.Document).Single();
+            var paragraph = Assert.IsType<Paragraph>(copy.Parent);
+            Assert.Equal(
+                ReadingDocumentBuilder.PreambleCaptionFontSize,
+                paragraph.FontSize);
+            Assert.Equal(2, paragraph.Margin.Top);
+        });
+    }
+
+    /// <summary>The code preamble is IN-RANGE text (field,
+    /// 2026-07-30: the paragraph Name feeds object navigation, but
+    /// linear caret reading arrowed straight into raw code with no
+    /// structure cue), with the Copy affordance a labelled hyperlink
+    /// on the same line.</summary>
+    [Fact]
+    public void CodePreambleReadsInTheTextRange()
+    {
+        RunSta(() =>
+        {
+            FlowDocument built = BuildSource("```rust\nfn f() {}\n```\n");
+            string text = new TextRange(
+                built.ContentStart, built.ContentEnd).Text;
+            Assert.Contains(
+                "Code block, rust, 1 line.", text, StringComparison.Ordinal);
+            Assert.Contains("Copy code", text, StringComparison.Ordinal);
         });
     }
 
@@ -578,11 +961,13 @@ public sealed class ReadingViewTests
     /// with a live vault session, records from the scanned index): a
     /// resolved wikilink navigates through the editor's own seam, an
     /// unresolved one announces core's "is unresolved. Cannot open.", a
-    /// tag routes to the tag seam, a citation speaks core's speech text,
-    /// and an embed activates via ReadingMatchLink with embed:true. The
-    /// run kinds come off the built document's own hyperlinks — exactly
-    /// what a click delivers — so nothing is re-derived in the test
-    /// either.
+    /// tag routes to the READING tag seam and never the editor's (W5-2
+    /// SD-4 — the split that sends reading tags to tag-scoped search
+    /// while editor tags keep the sidebar), a citation speaks core's
+    /// speech text, and an embed activates via ReadingMatchLink with
+    /// embed:true. The run kinds come off the built document's own
+    /// hyperlinks — exactly what a click delivers — so nothing is
+    /// re-derived in the test either.
     /// </summary>
     [Fact]
     public void ActivationRoutesEveryRunKindThroughCoreAndTheEditorSeams()
@@ -600,7 +985,8 @@ public sealed class ReadingViewTests
             session.ScanInitial(cancel);
 
             var navigations = new List<EditorNavigationRequest>();
-            var tags = new List<string>();
+            var readingTags = new List<string>();
+            var editorTags = new List<string>();
             var announced = new List<A11yEvent>();
             using var tab = new WorkspaceTabViewModel(
                 session,
@@ -608,7 +994,8 @@ public sealed class ReadingViewTests
                     Guid.NewGuid(),
                     new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
                 navigate: navigations.Add,
-                activateTag: tags.Add,
+                activateTag: editorTags.Add,
+                activateTagFromReading: readingTags.Add,
                 announce: announced.Add,
                 startInteractionBackgroundWork: false);
 
@@ -622,12 +1009,16 @@ public sealed class ReadingViewTests
             });
 
             ReadingInlineRunKind[] kinds = CollectHyperlinks(reading.Document!)
+                .Where(link => System.Windows.Automation.AutomationProperties
+                    .GetAutomationId(link) != "ReadingBlockEmbed")
                 .Select(link => link.Tag)
                 .OfType<ReadingInlineRunKind>()
                 .ToArray();
             // known, absent, #atag, and the citation — core classifies
             // [@smith2020] as a Citation run even with no configured CSL
-            // style (unmatched raw), so it stays activatable.
+            // style (unmatched raw), so it stays activatable. The embed
+            // card's Jump link (AutomationId "ReadingBlockEmbed") is
+            // card chrome, not an inline run.
             Assert.Equal(4, kinds.Length);
             Assert.IsType<ReadingInlineRunKind.Citation>(kinds[3]);
 
@@ -658,9 +1049,12 @@ public sealed class ReadingViewTests
                 "absent is unresolved. Cannot open.",
                 SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
 
-            // Tag → the tag seam.
+            // Tag → the READING tag seam, and ONLY that seam (SD-4):
+            // re-pointing reading activation back at the editor's
+            // sidebar-filter seam fails both of these lines.
             reading.Activate(kinds[2]);
-            Assert.Equal("atag", Assert.Single(tags));
+            Assert.Equal("atag", Assert.Single(readingTags));
+            Assert.Empty(editorTags);
 
             // External link → the system opener, announced.
             announced.Clear();
@@ -2381,13 +2775,13 @@ public sealed class ReadingViewTests
             tab.ToggleViewMode();
             var surface = new ReadingSurface { Model = tab.Reading };
 
-            System.Windows.Controls.Button copy = FindVisualButtons(surface.Document)
-                .Single(button => ReadingSemantics.IsCodeCopy(button));
+            System.Windows.Documents.Hyperlink copy =
+                FindCopyLinks(surface.Document).Single();
             Assert.Equal(
                 "Copies the code block source as plain text.",
                 System.Windows.Automation.AutomationProperties.GetHelpText(copy));
             copy.RaiseEvent(new System.Windows.RoutedEventArgs(
-                System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                System.Windows.Documents.Hyperlink.ClickEvent));
 
             // The LIVE fence interior (round-1 fix: never the saved
             // artifact) — the reading parser's authoritative form,
@@ -2537,8 +2931,8 @@ public sealed class ReadingViewTests
                 System.Windows.Automation.AutomationProperties.GetName(code));
             Assert.Single(code.Inlines);
             // Copy carries the live source.
-            System.Windows.Controls.Button copy = FindVisualButtons(surface.Document)
-                .Single(button => ReadingSemantics.IsCodeCopy(button));
+            System.Windows.Documents.Hyperlink copy =
+                FindCopyLinks(surface.Document).Single();
             Assert.Contains(
                 "fn live!()", (string)copy.Tag, StringComparison.Ordinal);
         });
@@ -2999,6 +3393,100 @@ public sealed class ReadingViewTests
             .OfType<BlockUIContainer>()
             .Select(container => container.Child)
             .OfType<System.Windows.Controls.Button>();
+
+    /// <summary>The code Copy affordance — a hyperlink since the
+    /// 2026-07-30 field fix (in-range text, labelled in the caret
+    /// stream).</summary>
+    private static IEnumerable<Hyperlink> FindCopyLinks(FlowDocument document) =>
+        AllBlocks(document.Blocks)
+            .OfType<Paragraph>()
+            .SelectMany(paragraph => paragraph.Inlines.OfType<Hyperlink>())
+            .Where(link => ReadingSemantics.IsCodeCopy(link));
+
+    /// <summary>
+    /// #1088: no automation peer may be claimed by two parents. WPF
+    /// stores ONE <c>_parent</c>/<c>_index</c> per peer, and its sibling
+    /// navigation is guarded on that index, so a peer reachable from two
+    /// parents has its sibling links overwritten by whichever subtree
+    /// was built last — it becomes a DEAD END in both directions and
+    /// every client walk truncates there.
+    ///
+    /// Measured live (2026-08-07, FlaUI cross-process): the task
+    /// checkbox was child 1 of the surface AND a child of its
+    /// ReadingListItemPeer, and a UIA client saw 2 of 9 children —
+    /// GetLastChild answered the 9th while NextSibling died at index 2.
+    /// A screen reader loses every element past that point silently.
+    ///
+    /// The invariant that prevents it: a structural peer over a
+    /// TextElement never re-exposes embedded controls, because
+    /// RichTextBoxAutomationPeer has ALREADY flattened them into the
+    /// surface's root collection.
+    /// </summary>
+    [Fact]
+    public void StructuralPeersNeverClaimAChildTheRootCollectionOwns()
+    {
+        RunSta(() =>
+        {
+            var surface = new ReadingSurface();
+            System.Windows.Automation.Peers.AutomationPeer surfacePeer =
+                System.Windows.Automation.Peers.UIElementAutomationPeer
+                    .CreatePeerForElement(surface)!;
+            surface.ApplyBuiltDocument(BuildSource(
+                "# Range note\n\n- [ ] open task\n\n```rust\nfn f() {}\n```\n"));
+            _ = surfacePeer.GetChildren();
+
+            var owners = new Dictionary<System.Windows.Automation.Peers.AutomationPeer, List<System.Windows.Automation.Peers.AutomationPeer>>(
+                ReferenceEqualityComparer.Instance);
+            var expanded = new HashSet<System.Windows.Automation.Peers.AutomationPeer>(
+                ReferenceEqualityComparer.Instance);
+            CollectPeerParents(surfacePeer, owners, expanded, depth: 0);
+
+            string[] duplicated = owners
+                .Where(entry => entry.Value.Count > 1)
+                .Select(entry =>
+                    $"{entry.Key.GetType().Name} claimed by "
+                    + string.Join(
+                        " AND ",
+                        entry.Value.Select(parent => parent.GetType().Name)))
+                .ToArray();
+
+            Assert.True(
+                duplicated.Length == 0,
+                "peers claimed by more than one parent:\n"
+                    + string.Join("\n", duplicated));
+        });
+    }
+
+    /// <summary>Record every parent that claims each peer, so a peer
+    /// reached from two subtrees is named rather than merely counted.
+    /// The depth guard and the expanded set keep a cyclic or
+    /// pathologically deep tree from hanging the suite.</summary>
+    private static void CollectPeerParents(
+        System.Windows.Automation.Peers.AutomationPeer parent,
+        Dictionary<System.Windows.Automation.Peers.AutomationPeer, List<System.Windows.Automation.Peers.AutomationPeer>> owners,
+        HashSet<System.Windows.Automation.Peers.AutomationPeer> expanded,
+        int depth)
+    {
+        if (depth > 12 || !expanded.Add(parent))
+        {
+            return;
+        }
+        foreach (System.Windows.Automation.Peers.AutomationPeer child in parent.GetChildren()
+            ?? new List<System.Windows.Automation.Peers.AutomationPeer>())
+        {
+            if (child is null)
+            {
+                continue;
+            }
+            if (!owners.TryGetValue(child, out List<System.Windows.Automation.Peers.AutomationPeer>? parents))
+            {
+                parents = new List<System.Windows.Automation.Peers.AutomationPeer>();
+                owners[child] = parents;
+            }
+            parents.Add(parent);
+            CollectPeerParents(child, owners, expanded, depth + 1);
+        }
+    }
 
     private static void PumpOneBackgroundPass()
     {

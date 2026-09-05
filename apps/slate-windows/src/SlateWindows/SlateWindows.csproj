@@ -8,11 +8,29 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>SlateWindows</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!-- W5-1 (#741): CS8509 is a non-exhaustive switch expression. The
+         modal-surface mapping is documented as compiler-enforced — adding
+         a ModalSurface without an IsOpen arm is meant to break the build,
+         not warn. Codex found that claim false: CS8509 is only a warning,
+         nothing here promotes it, and CI runs a plain `dotnet build`, so
+         the new surface would ship defaulting to "not open" and the
+         palette would render beneath it. Promoted rather than the claim
+         softened, because the claim is the behaviour we want. -->
+    <WarningsAsErrors>$(WarningsAsErrors);CS8509</WarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="AvalonEdit" Version="6.3.1.120" />
     <PackageReference Include="Svg.Skia" Version="5.1.1" />
+    <!-- W3-2 (#729): LaTeX rendering for reading-view math. Currency
+         check recorded in the PR: v2.1.0 (2023-07) is the latest
+         release; the repo is maintained (CI green through 2026-07,
+         3.0.0 in changelog) and its net6.0-windows assets load on
+         .NET 10, untested upstream. Coverage is a documented subset
+         (pmatrix/align only) — parse failures degrade to monospace
+         source, matrix-rowed, never silent. -->
+    <PackageReference Include="WpfMath" Version="2.1.0" />
     <ProjectReference Include="..\SlateUniffi\SlateUniffi.csproj" />
   </ItemGroup>
 

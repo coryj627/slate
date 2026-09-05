@@ -26,7 +26,7 @@ final class SettingsLocalizationTests: XCTestCase {
             MathSettingsTab.mathFooterText,
             "Changes apply immediately to math in the read pane. "
                 + "Speech style controls how math is read aloud (ClearSpeak: "
-                + "intuitive; MathSpeak: precise / verbatim). Verbosity sets "
+                + "intuitive; SimpleSpeak: brief). Verbosity sets "
                 + "how detailed the spoken math is. Braille code switches "
                 + "between Nemeth and UEB encodings.",
             "math footer must round-trip unchanged through String(localized:)"

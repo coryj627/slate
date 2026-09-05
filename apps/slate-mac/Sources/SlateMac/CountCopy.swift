@@ -20,9 +20,19 @@ import Foundation
 /// interpolates the value plainly — it does not group thousands and
 /// does not localize. This is a deliberate divergence from core's
 /// `count_noun`, which DOES group ("1,000 tags"), so the two are not
-/// byte-identical at ≥ 1000. A caller that needs a grouped or
-/// locale-formatted number formats it itself and takes `noun` for the
-/// agreement alone (see `SidebarFileRow`'s word count).
+/// byte-identical at ≥ 1000. A caller that needs a locale-formatted
+/// number formats it itself and takes `noun` for the agreement alone
+/// (see `SidebarFileRow`'s word count).
+///
+/// **Need core's GROUPED form?** Call the FFI export
+/// `countNoun` — core's `count_noun` itself, the one
+/// definition of both the `1,000` grouping and the agreement rule. A
+/// host string that is read back BESIDE a core sentence counting the
+/// same number has to use it, or the two disagree at ≥ 1000 (W6-1
+/// CD-6; the canvas undo-stack names are the shipped case). Do NOT add
+/// a grouped helper here: a second spelling of `group_thousands` is
+/// exactly the duplication §W-G exists to prevent, and one lived here
+/// briefly before the export existed (CD-26).
 enum CountCopy {
     /// `"1 card"`, `"3 cards"`, `"0 cards"`.
     static func counted(

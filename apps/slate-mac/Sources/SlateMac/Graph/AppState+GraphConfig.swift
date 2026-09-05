@@ -9,16 +9,6 @@ import Foundation
 /// per-vault serialized) as the inspector edits Filters / Groups /
 /// Display / Forces.
 extension AppState {
-    /// The ONE client-side name-filter predicate (case/diacritic-
-    /// insensitive label substring) that BOTH the Table and the Diagram
-    /// apply — the single source of truth (spec §P2-4 "filter
-    /// equivalence"). An empty needle matches everything.
-    nonisolated static func graphNameMatches(_ label: String, needle: String) -> Bool {
-        let n = needle.trimmingCharacters(in: .whitespaces)
-        guard !n.isEmpty else { return true }
-        return label.range(of: n, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-    }
-
     /// Load the config OBJECT once per vault (idempotent). The eager load
     /// at vault activation normally beats every caller here, so this is a
     /// safety net for any activation path that skipped it.
@@ -39,17 +29,45 @@ extension AppState {
     /// (finding 2). The file itself is never rewritten on a read.
     func loadGraphConfig() {
         guard let root = currentVaultURL else { return }
-        graphConfigVaultURL = root
         do {
-            let cfg = try GraphConfigStore(vaultRoot: root).read()
-            graphConfig = cfg
-            connectionsDepth = Self.clampConnectionsDepth(cfg.connectionsDepth)
-            graphConfigWritable = true
+            applyLoadedGraphConfig(try GraphConfigStore(vaultRoot: root).read(), vaultURL: root)
         } catch {
-            graphConfig = .default
-            connectionsDepth = 1
-            graphConfigWritable = false
+            applyGraphConfigLoadFailure(vaultURL: root)
         }
+    }
+
+    /// A loaded config takes effect (W6-2 PR 0b, 0b-14): the aggregate,
+    /// the depth, and the persisted verbosity on the announcer (0bD-7).
+    func applyLoadedGraphConfig(_ cfg: GraphConfig, vaultURL: URL) {
+        graphConfigVaultURL = vaultURL
+        graphConfig = cfg
+        connectionsDepth = Self.clampConnectionsDepth(Int(cfg.connectionsDepth))
+        graphAnnouncer.verbosity = cfg.verbosity
+        graphConfigWritable = true
+    }
+
+    /// A read/parse/version failure keeps DEFAULTS in memory — Standard
+    /// verbosity included — and marks the config read-only.
+    func applyGraphConfigLoadFailure(vaultURL: URL) {
+        graphConfigVaultURL = vaultURL
+        graphConfig = .default
+        connectionsDepth = 1
+        graphAnnouncer.verbosity = .standard
+        graphConfigWritable = false
+    }
+
+    /// The aggregate a save persists: the live filter, depth and the
+    /// announcer's verbosity folded into the config (0b-14).
+    func graphConfigSaveAggregate() -> GraphConfig {
+        var cfg = graphConfig
+        cfg.filters = GraphFilterConfig(
+            includeAttachments: graphTableFilter.includeAttachments,
+            includeGhosts: graphTableFilter.includeGhosts,
+            orphansOnly: graphTableFilter.orphansOnly,
+            nameQuery: graphTableTextFilter)
+        cfg.connectionsDepth = UInt32(Self.clampConnectionsDepth(connectionsDepth))
+        cfg.verbosity = graphAnnouncer.verbosity
+        return cfg
     }
 
     /// Apply the persisted backend + name filter to the live Table state
@@ -77,12 +95,7 @@ extension AppState {
     func scheduleGraphConfigSave() {
         guard let root = currentVaultURL, graphConfigVaultURL == root, graphConfigWritable
         else { return }
-        graphConfig.filters = GraphFilterConfig(
-            includeAttachments: graphTableFilter.includeAttachments,
-            includeGhosts: graphTableFilter.includeGhosts,
-            orphansOnly: graphTableFilter.orphansOnly,
-            nameQuery: graphTableTextFilter)
-        graphConfig.connectionsDepth = Self.clampConnectionsDepth(connectionsDepth)
+        graphConfig = graphConfigSaveAggregate()
         let snapshot = graphConfig
         // Coalesce ONLY this vault's still-pending save (per-vault keyed);
         // a pending save for a DIFFERENT vault keeps its own entry and runs
@@ -127,24 +140,26 @@ extension AppState {
             // announce "settled" on a LATER initial build (finding 8).
             graphForcesSettlePending = true
         }
-        if let phrase = Self.forcesChangePhrase(old: old, new: forces) {
-            graphAnnouncer.announceForceValue(phrase)
+        if let change = Self.changedForce(old: old, new: forces) {
+            graphAnnouncer.announce(
+                .graphForceValue(control: change.control, percent: change.percent))
         }
         scheduleGraphConfigSave()
     }
 
-    /// The spoken "control value" for the ONE force that changed (nil if
-    /// none did) — e.g. "Repel force 70 percent". Pure + `nonisolated` so
-    /// it's unit-testable off the main actor.
-    nonisolated static func forcesChangePhrase(
+    /// The ONE force that changed and its resting percent (nil if none
+    /// did) — the payload of `GraphA11yEvent.graphForceValue`, whose copy
+    /// is core's (W6-2 PR 0a). Pure + `nonisolated` so it's unit-testable
+    /// off the main actor.
+    nonisolated static func changedForce(
         old: GraphForcesConfig, new: GraphForcesConfig
-    ) -> String? {
-        func pct(_ v: Double) -> Int { Int((v * 100).rounded()) }
-        if new.center != old.center { return "Center force \(pct(new.center)) percent" }
-        if new.repel != old.repel { return "Repel force \(pct(new.repel)) percent" }
-        if new.link != old.link { return "Link force \(pct(new.link)) percent" }
+    ) -> (control: GraphForceControl, percent: UInt32)? {
+        func pct(_ v: Double) -> UInt32 { UInt32(max(0, (v * 100).rounded())) }
+        if new.center != old.center { return (.center, pct(new.center)) }
+        if new.repel != old.repel { return (.repel, pct(new.repel)) }
+        if new.link != old.link { return (.link, pct(new.link)) }
         if new.linkDistance != old.linkDistance {
-            return "Link distance \(pct(new.linkDistance)) percent"
+            return (.linkDistance, pct(new.linkDistance))
         }
         return nil
     }
@@ -164,18 +179,18 @@ extension AppState {
         scheduleGraphConfigSave()
     }
 
-    /// Append a group for `query`, auto-assigning the next ring style in
-    /// rotation (solid → dashed → double → dotted) and the next palette
-    /// colour, so successive groups differ on BOTH channels.
+    /// Append a group for `query`, taking the style core assigns by index
+    /// (the ring cycles, the palette cycles — 0b-12), so successive groups
+    /// differ on BOTH channels.
     func addGraphGroup(query: String) {
-        let idx = graphConfig.groups.count
-        let ring = GraphRingStyle.allCases[idx % GraphRingStyle.allCases.count]
-        let color = GraphColorToken.allCases[idx % GraphColorToken.allCases.count]
-        setGraphGroups(graphConfig.groups + [GraphGroup(query: query, colorToken: color, ringStyle: ring)])
+        let style = graphConfigNextGroupStyle(groupCount: UInt32(graphConfig.groups.count))
+        setGraphGroups(
+            graphConfig.groups
+                + [GraphGroup(query: query, colorToken: style.colorToken, ringStyle: style.ringStyle)])
     }
 
     /// Persist the last-used projection mode (restored on the next open).
-    func setGraphMode(_ mode: GraphTabMode) {
+    func setGraphMode(_ mode: GraphSurfaceMode) {
         graphConfig.mode = mode
         scheduleGraphConfigSave()
     }

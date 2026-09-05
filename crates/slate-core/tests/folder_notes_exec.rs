@@ -251,25 +251,123 @@ fn compound_second_step_failure_rolls_the_folder_rename_back() {
 }
 
 #[test]
-fn compound_case_only_rename_is_refused_like_the_plain_structural_path() {
-    // Parity: the shipped folder-rename preflight refuses a
-    // case-insensitive self-collision (case-preserving filesystems);
-    // the compound inherits exactly that semantics rather than
-    // inventing a second rename dialect.
+fn compound_case_only_rename_succeeds_like_the_plain_structural_path() {
+    // Parity: the compound inherits the plain folder rename's semantics
+    // rather than inventing a second rename dialect. Those semantics
+    // changed with #1077 (contract I4, owner call): a case-only rename
+    // used to be refused as a self-collision — the gate found the
+    // source's own row under the destination's fold — and is now legal
+    // on every volume. Both paths agree on the new rule.
     let tmp = tempfile::tempdir().unwrap();
-    write(tmp.path(), "notes/notes.md", "folder note\n");
+    write(
+        tmp.path(),
+        "notes/notes.md",
+        "folder note
+",
+    );
+    write(
+        tmp.path(),
+        "other/other.md",
+        "another folder note
+",
+    );
     let session = open(tmp.path());
     let compound = session
         .rename_folder_with_note("notes", "Notes")
-        .unwrap_err();
+        .expect("#1077 I4: the compound case-only rename is legal");
     assert!(
-        matches!(compound, VaultError::DestinationExists { .. }),
-        "got {compound:?}"
+        compound
+            .moved
+            .contains(&("notes/notes.md".to_string(), "Notes/Notes.md".to_string())),
+        "{:?}",
+        compound.moved
     );
-    let plain = session.rename_folder("notes", "Notes").unwrap_err();
+    assert!(tmp.path().join("Notes/Notes.md").exists());
+    let plain = session
+        .rename_folder("other", "Other")
+        .expect("#1077 I4: the plain case-only rename is legal");
     assert!(
-        matches!(plain, VaultError::DestinationExists { .. }),
-        "got {plain:?}"
+        plain
+            .moved
+            .contains(&("other/other.md".to_string(), "Other/other.md".to_string())),
+        "{:?}",
+        plain.moved
     );
-    assert!(tmp.path().join("notes/notes.md").exists());
+    assert!(tmp.path().join("Other/other.md").exists());
+    // And the index carries the new spellings. The compound kept its
+    // folder note (Notes/Notes.md); the plain rename left other.md
+    // under Other/, which is no longer that folder's note — the very
+    // reason the compound verb exists.
+    assert_eq!(
+        dir_flags(&session, ""),
+        vec![("Notes".into(), true), ("Other".into(), false)]
+    );
+}
+
+#[test]
+fn compound_undo_ids_are_the_journal_record_not_a_host_walk() {
+    // #1127: `undo_op_ids` lists the rows the compound wrote, newest
+    // first — the journal RECORD. It is not an executable sequence:
+    // `undo_structural` admits only the latest row and journals itself,
+    // so after the note hop is undone the folder row is no longer the
+    // latest and the second call is refused. Hosts reverse a compound by
+    // re-running the forward FFI with inverse arguments (mac #871,
+    // Windows W5-4 F10; the mutation harness's S4 scripts exactly that).
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), "P/P.md", "folder note\n");
+    write(tmp.path(), "R/R.md", "another folder note\n");
+    let session = open(tmp.path());
+    let report = session.rename_folder_with_note("P", "Q").unwrap();
+    let [note_hop, folder_move] = report.undo_op_ids[..] else {
+        panic!("two journal rows: {report:?}");
+    };
+
+    // Out of order FIRST, before any undo (codoki): the older id is
+    // refused with the same message and nothing moves — so a host that
+    // walked the recorded sequence backwards, or forwards, gets the same
+    // honest refusal rather than a half-undone pair.
+    let out_of_order = session.undo_structural(folder_move).unwrap_err();
+    assert!(
+        matches!(out_of_order, VaultError::InvalidArgument { ref message }
+            if message.contains("only the latest structural op is undoable")),
+        "got {out_of_order:?}"
+    );
+    assert!(
+        tmp.path().join("Q/Q.md").exists(),
+        "nothing moved on refusal"
+    );
+    assert!(!tmp.path().join("P").exists());
+
+    // The newest row IS undoable — and its undo journals itself.
+    session.undo_structural(note_hop).unwrap();
+    assert!(
+        tmp.path().join("Q/P.md").exists(),
+        "the note hop is reversed"
+    );
+    assert!(!tmp.path().join("Q/Q.md").exists());
+
+    // The older row is now two rows from the top: refused, by the
+    // latest-only gate, with the message the hosts key on.
+    let err = session.undo_structural(folder_move).unwrap_err();
+    assert!(
+        matches!(err, VaultError::InvalidArgument { ref message }
+            if message.contains("only the latest structural op is undoable")),
+        "got {err:?}"
+    );
+    // Nothing moved on refusal: the folder rename still stands.
+    assert!(tmp.path().join("Q").is_dir());
+    assert!(!tmp.path().join("P").exists());
+
+    // The host model, on a fresh compound: reverse by re-running the
+    // forward operation with inverse arguments — itself a compound
+    // (two rows; the journal stays append-only) — which restores the
+    // pre-operation state the recorded ids could not.
+    let forward = session.rename_folder_with_note("R", "S").unwrap();
+    assert_eq!(forward.undo_op_ids.len(), 2);
+    assert!(tmp.path().join("S/S.md").exists());
+    let inverse = session.rename_folder_with_note("S", "R").unwrap();
+    assert_eq!(inverse.undo_op_ids.len(), 2);
+    assert!(tmp.path().join("R/R.md").exists());
+    assert!(!tmp.path().join("S").exists());
+    assert!(dir_flags(&session, "").contains(&("R".to_string(), true)));
 }

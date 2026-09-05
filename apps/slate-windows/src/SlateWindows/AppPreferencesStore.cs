@@ -17,7 +17,29 @@ internal sealed record AppPreferencesState(
     [property: JsonPropertyName("readingLinksOpenInNewTab")]
     bool ReadingLinksOpenInNewTab = true,
     [property: JsonPropertyName("codePreambleVerbosity")]
-    string CodePreambleVerbosity = "preambleOnly");
+    string CodePreambleVerbosity = "preambleOnly",
+    [property: JsonPropertyName("mathSpeechStyle")]
+    string MathSpeechStyle = "clearSpeak",
+    [property: JsonPropertyName("mathVerbosity")]
+    string MathVerbosity = "medium",
+    [property: JsonPropertyName("mathBrailleCode")]
+    string MathBrailleCode = "nemeth",
+    [property: JsonPropertyName("historyShowChangesSinceOpen")]
+    bool HistoryShowChangesSinceOpen = false,
+    /// <summary>
+    /// W6-1 PR C (#745): the canvas announcement verbosity (t0 §1.2).
+    /// </summary>
+    /// <remarks>
+    /// The VALUES are mac's — <c>terse</c> / <c>standard</c> /
+    /// <c>verbose</c>, its own <c>CanvasVerbosity</c> case names — so a
+    /// future shared prefs schema needs no value migration. The STORE is
+    /// not shared and contract C13 says so: mac keeps its
+    /// <c>CanvasPrefs</c> under the <c>slate.prefs.canvas</c> UserDefaults
+    /// key, this file is the device-local Windows peer, and neither is
+    /// the vault's <c>.slate/prefs.json</c>.
+    /// </remarks>
+    [property: JsonPropertyName("canvasVerbosity")]
+    string CanvasVerbosity = "standard");
 
 /// <summary>Bounded device-local storage for app-level preferences.</summary>
 internal sealed class AppPreferencesStore
@@ -61,6 +83,30 @@ internal sealed class AppPreferencesStore
             if (state.CodePreambleVerbosity is null)
             {
                 state = state with { CodePreambleVerbosity = "preambleOnly" };
+            }
+            if (state.MathSpeechStyle is null
+                || state.MathSpeechStyle == "mathSpeak")
+            {
+                // Legacy "mathSpeak" migrates to ClearSpeak (#1056): the
+                // upstream engine never implemented MathSpeak, so
+                // ClearSpeak is what that user was already hearing —
+                // the migration changes nothing audible. SimpleSpeak
+                // replaced the variant and is never inferred from a
+                // stored MathSpeak, which would change the speech
+                // without the user asking.
+                state = state with { MathSpeechStyle = "clearSpeak" };
+            }
+            if (state.MathVerbosity is null)
+            {
+                state = state with { MathVerbosity = "medium" };
+            }
+            if (state.MathBrailleCode is null)
+            {
+                state = state with { MathBrailleCode = "nemeth" };
+            }
+            if (state.CanvasVerbosity is null)
+            {
+                state = state with { CanvasVerbosity = "standard" };
             }
             return state;
         }

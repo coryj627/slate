@@ -1037,6 +1037,41 @@ final class BasesTabRoutingTests: XCTestCase {
             "file.name,status\r\nAlpha.md,active\r\nBeta.md,done\r\n")
     }
 
+    /// Round 19: if the engine rollback after an execution failure
+    /// ALSO fails, the engine may hold the rejected sort while the
+    /// surface describes the previous one — the document DETACHES (the
+    /// batch-Trash posture) so no later execute can render rows that
+    /// contradict the published identity; reopening restores a
+    /// coherent pair.
+    func testSortRollbackFailureDetachesTheDocument() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+        let session = try XCTUnwrap(state.currentSession)
+        XCTAssertNotNil(doc.result)
+        let orphaned = try XCTUnwrap(doc.handle)
+
+        struct Fault: Error {}
+        doc.executeFaultForTests = { Fault() }
+        doc.rollbackFaultForTests = { Fault() }
+        XCTAssertFalse(
+            doc.setTransientSort(
+                DataGridSortState(columnIndex: 0, ascending: true),
+                session: session))
+        XCTAssertNil(doc.handle, "a failed rollback detaches the handle")
+        XCTAssertNil(doc.sortState, "the published identity keeps the previous order")
+        XCTAssertThrowsError(
+            try session.baseViews(handle: orphaned),
+            "the detached handle must be CLOSED, not leaked in the registry")
+
+        doc.executeFaultForTests = nil
+        doc.rollbackFaultForTests = nil
+        doc.executeActiveView(session: session)
+        XCTAssertNil(
+            doc.result,
+            "a detached document cannot publish rows that contradict the identity")
+    }
+
     func testTransientTypedSortDrivesTableListExportAndLifecycle() async throws {
         let state = try await makeTypedSortAppState()
         state.openFile("Queries/Typed.base", target: .currentTab)
@@ -1108,6 +1143,32 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertEqual(doc.result?.rows.map(\.filePath), [
             "Notes/Aardvark.md", "Notes/Alpha.md", "Notes/Beta.md", "Notes/Null.md",
         ])
+
+        // Round 17: execution failure AFTER admission is TRANSACTIONAL
+        // — the published sort identity and the engine's transient
+        // sort both keep the previous order, so the grid announces
+        // nothing and a later successful execute cannot resurrect the
+        // unconfirmed sort.
+        doc.setTransientSort(
+            DataGridSortState(columnIndex: 1, ascending: true), session: session)
+        XCTAssertEqual(
+            doc.sortState, DataGridSortState(columnIndex: 1, ascending: true))
+        struct ExecuteFault: Error {}
+        doc.executeFaultForTests = { ExecuteFault() }
+        XCTAssertFalse(
+            doc.setTransientSort(
+                DataGridSortState(columnIndex: 2, ascending: false),
+                session: session),
+            "an execution failure must report rejection")
+        XCTAssertEqual(
+            doc.sortState,
+            DataGridSortState(columnIndex: 1, ascending: true),
+            "the sort identity keeps the CONFIRMED order")
+        doc.executeFaultForTests = nil
+        doc.executeActiveView(session: session)
+        XCTAssertEqual(
+            doc.result?.rows.map(\.filePath), numericPaths,
+            "recovery re-executes the confirmed sort, never the rejected one")
 
         let staleHandle = try XCTUnwrap(doc.handle)
         doc.close(session: session)

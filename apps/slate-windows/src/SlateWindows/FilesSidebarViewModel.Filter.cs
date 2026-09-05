@@ -52,7 +52,7 @@ internal sealed partial class FilesSidebarViewModel
 
     public bool IsFilterActive => !string.IsNullOrWhiteSpace(FilterText);
 
-    private void ScheduleFilter()
+    private void ScheduleFilter(bool automatic = false)
     {
         Task previous = FilterCompletion;
         CancelFilterCore();
@@ -60,6 +60,16 @@ internal sealed partial class FilesSidebarViewModel
         string query = FilterText.Trim();
         if (query.Length == 0)
         {
+            // Codex round 6: a USER clearing the filter cancels the
+            // automatic refilter that would have consumed the pending
+            // mutation reassert — clear it here, or a later organic
+            // refresh resurrects the obsolete status. The automatic
+            // path preserves it for its own publication.
+            if (!automatic)
+            {
+                _statusToReassert = null;
+            }
+
             FilterResults.Clear();
             lock (_filterCancellationGate)
             {
@@ -84,7 +94,7 @@ internal sealed partial class FilesSidebarViewModel
                     outcome = RunFilterQuery(query, CancellationToken.None);
                 }
 
-                ApplyFilterOutcome(outcome);
+                ApplyFilterOutcome(outcome, automatic);
             }
             catch (Exception exception)
             {
@@ -114,11 +124,16 @@ internal sealed partial class FilesSidebarViewModel
             _filterCancellation = cancellation;
         }
 
-        Status = "Filtering files…";
+        if (!automatic)
+        {
+            Status = "Filtering files…";
+        }
+
         Task completion = FilterAfterDelayAsync(
             previous,
             query,
             generation,
+            automatic,
             cancellation,
             cancellationToken);
         lock (_filterCancellationGate)
@@ -182,6 +197,7 @@ internal sealed partial class FilesSidebarViewModel
         Task previous,
         string query,
         int generation,
+        bool automatic,
         CancellationTokenSource cancellation,
         CancellationToken cancellationToken)
     {
@@ -231,7 +247,7 @@ internal sealed partial class FilesSidebarViewModel
                             && generation == _filterGeneration
                             && string.Equals(FilterText.Trim(), query, StringComparison.Ordinal))
                         {
-                            ApplyFilterOutcome(outcome);
+                            ApplyFilterOutcome(outcome, automatic);
                         }
 
                         applied.TrySetResult();
@@ -350,7 +366,7 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    private void ApplyFilterOutcome(FilterOutcome outcome)
+    private void ApplyFilterOutcome(FilterOutcome outcome, bool automatic)
     {
         FilterResults.Clear();
         foreach (FileSummary summary in outcome.Files)
@@ -367,10 +383,23 @@ internal sealed partial class FilesSidebarViewModel
 
         if (outcome.Error is not null)
         {
+            _statusToReassert = null;
             ReportFailure(outcome.Error);
+        }
+        else if (automatic && _statusToReassert is string reassert)
+        {
+            // Codex round 5: an AUTOMATIC refilter (tree publication)
+            // must not erase the mutation's final status with the
+            // filter summary, nor speak a redundant count after the
+            // mutation result.
+            _statusToReassert = null;
+            Status = reassert;
         }
         else
         {
+            // A USER-driven filter supersedes any pending mutation
+            // reassert — the user asked for the summary.
+            _statusToReassert = null;
             Status = outcome.AudioSummary;
             _announce(new A11yEvent.FileListCount((uint)Math.Min(outcome.Total, uint.MaxValue)));
         }

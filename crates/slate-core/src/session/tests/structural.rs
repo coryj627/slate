@@ -249,8 +249,14 @@ fn create_folder_exclusive_applies_leaf_validation() {
 
     let error = session.create_folder_exclusive("bad\\name").unwrap_err();
 
+    // Since the model-confirmation review, the RAW-segment canonical
+    // key gate rejects backslashes before the leaf validator can —
+    // an earlier, stricter refusal of the same bad input.
     assert!(
-        matches!(error, VaultError::InvalidArgument { .. }),
+        matches!(
+            error,
+            VaultError::InvalidPath { .. } | VaultError::InvalidArgument { .. }
+        ),
         "{error:?}"
     );
     assert!(!dir.path().join("bad\\name").exists());
@@ -479,7 +485,11 @@ fn rejections_leave_state_byte_identical() {
         session.rename_file("five.md", "a/b").err(),
         session.rename_file("five.md", ".hidden").err(),
         session.rename_file("missing.md", "x.md").err(),
-        session.rename_file("five.md", "FIVE.md").err(), // case-only self-collision
+        // `rename_file("five.md", "FIVE.md")` was pinned here as a
+        // "case-only self-collision" rejection; #1077 contract I4 made the
+        // case-only rename legal (it is pinned as a SUCCESS in
+        // canonical_identity::a_case_only_rename_succeeds_and_moves_the_row),
+        // so it is no longer a rejection to keep pure.
         session.move_folder("a", "a/sub").err(),
         session.create_folder(".slate").err(),
         session.move_file("five.md", "a/sub/../..").err(),

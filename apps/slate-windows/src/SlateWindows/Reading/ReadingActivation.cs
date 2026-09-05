@@ -80,6 +80,24 @@ internal sealed class ReadingActivation
         }
     }
 
+    /// <summary>
+    /// W3-5 card "Jump to source": the destination is the
+    /// ALREADY-RESOLVED target path core handed back inside the
+    /// resolution tree — the mac contract (`openEmbedTarget(path)`),
+    /// and the only correct route for NESTED cards, whose targets the
+    /// host note's record snapshot cannot contain (round 1: matching
+    /// them there dead-ended on content we were displaying). Same
+    /// navigation seam and G22 preference as record activation.
+    /// </summary>
+    public void ActivateResolvedEmbedSource(string path, LinkAnchor? anchor)
+    {
+        _tab.NavigateFromReading(new EditorNavigationRequest(
+            path,
+            anchor,
+            null,
+            OpenInNewTab: _tab.EditorPreferences.OpenReadingLinksInNewTab));
+    }
+
     private void ActivateRecord(uint? match, string spokenTarget)
     {
         OutgoingLink[] records = _records();

@@ -36,6 +36,55 @@ internal sealed class ReadingListBuildContext
     /// </summary>
     internal int RemainingHighlightTokens { get; set; } =
         ReadingDocumentBuilder.ProjectionHighlightTokenBudget;
+
+    /// <summary>
+    /// The math analog (W3-2 round 7): the CORE budgets bound MathCAT
+    /// work, not WPFMath geometry — 250 sub-threshold formulas in one
+    /// chunk would still parse into giant Geometry on the dispatcher.
+    /// Each visually rendered formula draws its LaTeX byte length
+    /// from this shared pool, carried across chunks exactly like the
+    /// highlight pool; formulas after exhaustion keep their FULL
+    /// accessibility artifacts (speech, braille, MathML) and degrade
+    /// only the visual to source-in-range.
+    /// </summary>
+    internal int RemainingMathRenderBytes { get; set; } =
+        ReadingDocumentBuilder.ProjectionMathRenderByteBudgetOverrideForTests
+            ?? ReadingDocumentBuilder.ProjectionMathRenderByteBudget;
+
+    /// <summary>
+    /// The diagram analog (W3-3): each decoded SVG draws its byte
+    /// length from this shared pool, carried across chunks exactly
+    /// like the highlight and math pools; diagrams after exhaustion
+    /// keep description and source and degrade only the visual.
+    /// </summary>
+    internal int RemainingDiagramRenderBytes { get; set; } =
+        ReadingDocumentBuilder.ProjectionDiagramRenderByteBudgetOverrideForTests
+            ?? ReadingDocumentBuilder.ProjectionDiagramRenderByteBudget;
+
+    /// <summary>
+    /// The embed-image analog (W3-5 round 5): the encoded-byte pools
+    /// bound FFI transfer, not PIXELS — a small compressed image
+    /// repeated across the 2,000-block ceiling decoded once per
+    /// OCCURRENCE (~9 GiB of surfaces from one 16 MiB charge). One
+    /// frozen ImageSource per resolved key, shared by every
+    /// occurrence, drawing decoded pixels from this pool; images
+    /// after exhaustion keep header and destination and degrade only
+    /// the visual with the honest budget notice.
+    /// </summary>
+    /// <summary>Per-key TERMINAL outcomes (round 6): a refused or
+    /// undecodable key memoizes too, so no key is ever decoded more
+    /// than once per projection — an admitted-only cache let an
+    /// over-budget key re-decode at every occurrence.</summary>
+    internal Dictionary<
+        string,
+        (System.Windows.Media.ImageSource? Source, bool BudgetRefused)>
+        DecodedEmbedImages
+    { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>See <see cref="DecodedEmbedImages"/>.</summary>
+    internal long RemainingEmbedDecodedPixels { get; set; } =
+        ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests
+            ?? ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudget;
 }
 
 /// <summary>The built reading document plus its navigation index.</summary>
@@ -71,17 +120,59 @@ internal static class ReadingDocumentBuilder
 {
     public static ReadingDocumentModel Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model) =>
-        Build(model, new ReadingListBuildContext(), Array.Empty<CodeBlock>());
+        Build(
+            model,
+            new ReadingListBuildContext(),
+            Array.Empty<CodeBlock>(),
+            Array.Empty<MathBlock>());
 
     public static ReadingDocumentModel Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
         ReadingListBuildContext context) =>
-        Build(model, context, Array.Empty<CodeBlock>());
+        Build(model, context, Array.Empty<CodeBlock>(), Array.Empty<MathBlock>());
 
     public static ReadingDocumentModel Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
         ReadingListBuildContext context,
-        IReadOnlyList<CodeBlock> codeBlocks)
+        IReadOnlyList<CodeBlock> codeBlocks) =>
+        Build(model, context, codeBlocks, Array.Empty<MathBlock>());
+
+    public static ReadingDocumentModel Build(
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
+        ReadingListBuildContext context,
+        IReadOnlyList<CodeBlock> codeBlocks,
+        IReadOnlyList<MathBlock> mathBlocks) =>
+        Build(model, context, codeBlocks, mathBlocks, Array.Empty<DiagramBlock>());
+
+    public static ReadingDocumentModel Build(
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
+        ReadingListBuildContext context,
+        IReadOnlyList<CodeBlock> codeBlocks,
+        IReadOnlyList<MathBlock> mathBlocks,
+        IReadOnlyList<DiagramBlock> diagramBlocks) =>
+        Build(
+            model, context, codeBlocks, mathBlocks, diagramBlocks,
+            Array.Empty<ReadingEmbedArtifact>());
+
+    public static ReadingDocumentModel Build(
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
+        ReadingListBuildContext context,
+        IReadOnlyList<CodeBlock> codeBlocks,
+        IReadOnlyList<MathBlock> mathBlocks,
+        IReadOnlyList<DiagramBlock> diagramBlocks,
+        IReadOnlyList<ReadingEmbedArtifact> embeds) =>
+        Build(
+            model, context, codeBlocks, mathBlocks, diagramBlocks, embeds,
+            Array.Empty<OutgoingLink>());
+
+    public static ReadingDocumentModel Build(
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
+        ReadingListBuildContext context,
+        IReadOnlyList<CodeBlock> codeBlocks,
+        IReadOnlyList<MathBlock> mathBlocks,
+        IReadOnlyList<DiagramBlock> diagramBlocks,
+        IReadOnlyList<ReadingEmbedArtifact> embeds,
+        IReadOnlyList<OutgoingLink> records)
     {
         var document = new FlowDocument
         {
@@ -103,7 +194,13 @@ internal static class ReadingDocumentBuilder
             if (inlines.BlockEmbedKey is { Length: > 0 } embedKey)
             {
                 stack.Clear();
-                document.Blocks.Add(EmbedCard(embedKey));
+                document.Blocks.Add(EmbedCard(
+                    embedKey,
+                    embeds.FirstOrDefault(candidate =>
+                        string.Equals(candidate.Key, embedKey, StringComparison.Ordinal)),
+                    block,
+                    records,
+                    context));
                 continue;
             }
 
@@ -114,7 +211,8 @@ internal static class ReadingDocumentBuilder
             }
 
             stack.Clear();
-            document.Blocks.Add(NonListBlock(block, inlines, codeBlocks, context));
+            document.Blocks.Add(
+                NonListBlock(block, inlines, codeBlocks, mathBlocks, diagramBlocks, context));
         }
 
         return new ReadingDocumentModel(document, CollectLandmarks(document));
@@ -188,6 +286,8 @@ internal static class ReadingDocumentBuilder
         ReadingBlock block,
         ReadingBlockInlines inlines,
         IReadOnlyList<CodeBlock> codeBlocks,
+        IReadOnlyList<MathBlock> mathBlocks,
+        IReadOnlyList<DiagramBlock> diagramBlocks,
         ReadingListBuildContext context)
     {
         switch (block.Kind)
@@ -218,6 +318,10 @@ internal static class ReadingDocumentBuilder
                     quote.Padding = new Thickness(12, 2, 0, 2);
                     quote.BorderThickness = new Thickness(3, 0, 0, 0);
                     quote.SetResourceReference(Block.BorderBrushProperty, "Slate.AccentBrush");
+                    // StyleId_Quote through the heading decorator's
+                    // channel (field, 2026-07-30: linear reading gave
+                    // no structure cue).
+                    ReadingSemantics.MarkQuote(quote);
                     return quote;
                 }
 
@@ -231,14 +335,17 @@ internal static class ReadingDocumentBuilder
                 return new BlockUIContainer(new Separator { Margin = new Thickness(0, 8, 0, 8) });
 
             case ReadingBlockKind.MathBlock:
-            case ReadingBlockKind.Diagram:
+                return MathBlockElement(block, mathBlocks, context);
+
+            case ReadingBlockKind.Diagram diagram:
+                return DiagramBlockElement(diagram, block, diagramBlocks, context);
+
             case ReadingBlockKind.Html:
             default:
                 {
-                    // Math (W3-2) and diagrams (W3-3) get their canonical
-                    // renderers in their own PRs; HTML renders as source per
-                    // the mac contract. Until then the block's source stays
-                    // IN the text range, monospace — never silently absent.
+                    // HTML renders as source per the mac contract: the
+                    // block's source stays IN the text range, monospace
+                    // — never silently absent.
                     if (inlines.Segments.Length == 0)
                     {
                         return MonospaceParagraph(block.Source.TrimEnd('\n', '\r'));
@@ -329,22 +436,51 @@ internal static class ReadingDocumentBuilder
         ReadingSemantics.MarkCodeBlock(paragraph);
         AutomationProperties.SetName(paragraph, preamble);
 
-        var copy = new Button
+        // The preamble is IN-RANGE text (field, 2026-07-30): the
+        // paragraph Name feeds object navigation but linear caret
+        // reading gave no structure cue at all — a reader arrowed
+        // straight into raw code. Styled as a CAPTION (owner call,
+        // field pass 3 2026-07-31): mac hides its preamble entirely
+        // (AX-only label), Windows must keep it in-range, so
+        // visible-but-subtle is the recorded divergence. The same line
+        // carries the Copy affordance as a HYPERLINK announcing as a
+        // BUTTON (CodeCopyHyperlink: the G23-proof idiom the embed
+        // Jump link established, with the control type an in-place
+        // action deserves).
+        var preambleParagraph = new Paragraph
         {
-            Content = "Copy code",
-            Padding = new Thickness(8, 2, 8, 2),
-            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 2, 0, 0),
+            FontSize = PreambleCaptionFontSize,
+        };
+        var preambleRun = new Run(preamble)
+        {
+            FontStyle = FontStyles.Italic,
+        };
+        preambleRun.SetResourceReference(
+            TextElement.ForegroundProperty, "Slate.TertiaryTextBrush");
+        preambleParagraph.Inlines.Add(preambleRun);
+        preambleParagraph.Inlines.Add(new Run("  "));
+        var copy = new CodeCopyHyperlink(new Run("Copy code"))
+        {
+            TextDecorations = TextDecorations.Underline,
             Tag = source,
         };
+        copy.SetResourceReference(
+            TextElement.ForegroundProperty, "Slate.AccentBrush");
         ReadingSemantics.MarkCodeCopy(copy);
+        AutomationProperties.SetName(copy, "Copy code");
         AutomationProperties.SetHelpText(
             copy, "Copies the code block source as plain text.");
-        var section = new Section();
-        section.Blocks.Add(new BlockUIContainer(copy)
+        // Destination-less links announce "no apparent destination"
+        // (W3-1, measured) — the copy action rides its own scheme.
+        if (Uri.TryCreate(
+            "slate-copy:///code", UriKind.Absolute, out Uri? copyDestination))
         {
-            Padding = new Thickness(0),
-            Margin = new Thickness(0, 4, 0, 0),
-        });
+            copy.NavigateUri = copyDestination;
+        }
+        preambleParagraph.Inlines.Add(copy);
+        var section = new Section();
+        section.Blocks.Add(preambleParagraph);
         section.Blocks.Add(paragraph);
         return section;
     }
@@ -360,6 +496,195 @@ internal static class ReadingDocumentBuilder
     /// forms are identical), then clamps to the rendered length.
     /// </summary>
     /// <summary>
+    /// W3-2 math block (gap G23's guaranteed layer): the canonical
+    /// artifact matches by byte containment, BLOCK display style only
+    /// (the mac codeModel rule), and renders through WPFMath into a
+    /// focusable <see cref="ReadingMathElement"/> whose Name is the
+    /// MathCAT speech — spoken on focus/Tab/object navigation in stock
+    /// NVDA and JAWS, with the MathML convention property riding the
+    /// peer. Unmatched blocks and TexException coverage gaps (the
+    /// documented WPFMath subset) degrade to the source IN the text
+    /// range — never silently absent — with the block still a nav
+    /// stop; the landing announcement then carries the speech when the
+    /// artifact matched, or the raw source otherwise (content either
+    /// way, composition never).
+    /// </summary>
+    private static Block MathBlockElement(
+        ReadingBlock block,
+        IReadOnlyList<MathBlock> mathBlocks,
+        ReadingListBuildContext context)
+    {
+        MathBlock? matched = mathBlocks.FirstOrDefault(candidate =>
+            candidate.DisplayStyle == MathDisplayStyle.Block
+            && candidate.ByteOffset >= block.ByteStart
+            && candidate.ByteOffset < block.ByteEnd);
+
+        // LIVE-source coherence (the W3-4 lesson, round-1 finding
+        // here): the reading block is parsed from the live buffer, the
+        // artifact from the SAVED file, and a same-position unsaved
+        // edit ($$x$$ -> $$y$$) keeps byte containment. Speaking the
+        // old equation would be an outright lie to an AT user, so the
+        // artifact only applies when its source equals the live fence
+        // interior (delimiters stripped host-side — the mac
+        // strippedMathDelimiters precedent; a core interior field for
+        // the reading MathBlock variant is the recorded follow-up).
+        if (matched is not null
+            && !string.Equals(
+                matched.Source.Trim(),
+                StripMathDelimiters(block.Source),
+                StringComparison.Ordinal))
+        {
+            matched = null;
+        }
+
+        string speech = matched is { Speech.Length: > 0 } speechful
+            ? speechful.Speech.Trim()
+            : "Math expression.";
+        string fallbackSource = block.Source.TrimEnd('\n', '\r');
+
+        if (matched is null)
+        {
+            Paragraph unmatchedParagraph = MonospaceParagraph(fallbackSource);
+            ReadingSemantics.MarkMathBlock(unmatchedParagraph, fallbackSource);
+            return unmatchedParagraph;
+        }
+
+        // Core's degradation verdict gates the HOST renderer too
+        // (round 6): budget-rejected and unconvertible formulas carry
+        // empty MathML, and feeding their raw source to WPFMath would
+        // re-do on the dispatcher exactly the unbounded work the core
+        // budget refused — supported oversized TeX parses into a giant
+        // Geometry. The conservative cost: a formula pulldown-latex
+        // cannot convert loses its visual even if WPFMath could have
+        // drawn it; it keeps source-in-range + the artifact element.
+        //
+        // Round 7 completes the W3-4 shape: within core's budgets a
+        // formula is still WPFMath work proportional to its LaTeX, so
+        // the HOST charges a per-formula cap plus the projection-wide
+        // pool before entering the renderer. Charged on entry — a
+        // failed parse burned the dispatcher too.
+        System.Windows.UIElement? visual = null;
+        int renderCost = System.Text.Encoding.UTF8.GetByteCount(matched.Source);
+        if (matched.Mathml.Length > 0
+            && renderCost <= MaximumRenderedFormulaSourceBytes
+            && renderCost <= context.RemainingMathRenderBytes)
+        {
+            context.RemainingMathRenderBytes -= renderCost;
+            visual = TryRenderFormula(matched.Source);
+        }
+        if (visual is null)
+        {
+            // Coverage gap (documented WPFMath subset, matrix-rowed):
+            // source stays readable in range — and the CORE artifacts
+            // stay retrievable (round 4: a host-only rendering failure
+            // must not hide valid braille or MathML). A zero-size
+            // focusable element at the fence end carries Name,
+            // ItemStatus, and the MathML property exactly like the
+            // rendered path; WPF text ranges blank embedded objects, so
+            // it costs the in-range source nothing.
+            Paragraph gapParagraph = MonospaceParagraph(fallbackSource);
+            gapParagraph.Inlines.Add(new InlineUIContainer(
+                new ReadingMathElement(
+                    speech,
+                    matched.Mathml,
+                    matched.Source,
+                    DecodeBraille(matched.Braille))));
+            ReadingSemantics.MarkMathBlock(gapParagraph, speech);
+            return gapParagraph;
+        }
+
+        var element = new ReadingMathElement(
+            speech, matched.Mathml, matched.Source, DecodeBraille(matched.Braille))
+        {
+            Content = visual,
+            Margin = new Thickness(0, 4, 0, 4),
+        };
+        var paragraph = new Paragraph(new InlineUIContainer(element))
+        {
+            TextAlignment = TextAlignment.Center,
+        };
+        ReadingSemantics.MarkMathBlock(paragraph, speech);
+        return paragraph;
+    }
+
+    /// <summary>The braille artifact decodes as UTF-8 (Nemeth is
+    /// ASCII, UEB is Unicode cells — MathCAT emits per the session
+    /// pref); undecodable or absent bytes become empty, which the
+    /// element treats as "no braille".</summary>
+    private static string DecodeBraille(byte[] braille)
+    {
+        try
+        {
+            return System.Text.Encoding.UTF8.GetString(braille).Trim();
+        }
+        catch (ArgumentException)
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>The live fence interior for coherence comparison:
+    /// trims, then strips the $$/$ delimiter pair the reading block's
+    /// raw slice carries (mac ReadingPrintComposer precedent).</summary>
+    private static string StripMathDelimiters(string source)
+    {
+        string trimmed = source.Trim();
+        if (trimmed.StartsWith("$$", StringComparison.Ordinal)
+            && trimmed.EndsWith("$$", StringComparison.Ordinal)
+            && trimmed.Length >= 4)
+        {
+            return trimmed[2..^2].Trim();
+        }
+        if (trimmed.StartsWith('$') && trimmed.EndsWith('$') && trimmed.Length >= 2)
+        {
+            return trimmed[1..^1].Trim();
+        }
+        return trimmed;
+    }
+
+    /// <summary>
+    /// LaTeX to a themed vector Path via WPFMath; null on the parser's
+    /// documented coverage boundary (TexException family) or renderer
+    /// failure — callers degrade to source-in-range.
+    /// </summary>
+    /// <summary>Fires with the LaTeX whenever the WPFMath renderer is
+    /// entered — the round-6 pin that core-degraded artifacts never
+    /// reach it asserts this stays silent.</summary>
+    internal static Action<string>? FormulaRenderProbeForTests;
+
+    private static System.Windows.UIElement? TryRenderFormula(string latex)
+    {
+        FormulaRenderProbeForTests?.Invoke(latex);
+        try
+        {
+            XamlMath.TexFormula formula =
+                WpfMath.Parsers.WpfTeXFormulaParser.Instance.Parse(latex);
+            XamlMath.TexEnvironment environment =
+                WpfMath.Rendering.WpfTeXEnvironment.Create(
+                    XamlMath.TexStyle.Display, 20.0, "Arial");
+            System.Windows.Media.Geometry geometry =
+                WpfMath.Rendering.WpfTeXFormulaExtensions.RenderToGeometry(
+                    formula, environment);
+            var path = new System.Windows.Shapes.Path
+            {
+                Data = geometry,
+                Stretch = System.Windows.Media.Stretch.None,
+            };
+            path.SetResourceReference(
+                System.Windows.Shapes.Path.FillProperty, "Slate.TextBrush");
+            return path;
+        }
+        catch (XamlMath.Exceptions.TexException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// The run-budget preflight: the loop below creates a WPF Run per
     /// token plus one per gap, and core's 256 KiB BYTE cap does not
     /// bound token DENSITY — a valid dense JSON fence under the cap
@@ -371,11 +696,35 @@ internal static class ReadingDocumentBuilder
     /// </summary>
     internal const int MaximumHighlightTokens = 4_000;
 
+    /// <summary>Code preamble caption size — 0.8x the 15px body
+    /// (owner call, field pass 3 2026-07-31: a caption, not a
+    /// paragraph; mac hides its preamble entirely).</summary>
+    internal const double PreambleCaptionFontSize = 12;
+
     /// <summary>The projection-wide pool the per-fence cap draws from
     /// (see <see cref="ReadingListBuildContext.RemainingHighlightTokens"/>):
     /// three maximal fences, or dozens of ordinary ones — bounded Run
     /// fan-out no matter how many fences a note holds.</summary>
     internal const int ProjectionHighlightTokenBudget = 12_000;
+
+    /// <summary>Host visual cap per formula (W3-2 round 7): core's
+    /// 16 KiB budget bounds MathCAT, but WPFMath geometry complexity
+    /// scales with the LaTeX too, and no legitimate DISPLAYED formula
+    /// approaches 4 KiB of source. Over-cap formulas keep speech,
+    /// braille, and MathML — only the visual degrades.</summary>
+    internal const int MaximumRenderedFormulaSourceBytes = 4 * 1024;
+
+    /// <summary>The projection-wide pool the per-formula cap draws
+    /// from (see
+    /// <see cref="ReadingListBuildContext.RemainingMathRenderBytes"/>)
+    /// — the exact shape of <see cref="ProjectionHighlightTokenBudget"/>:
+    /// sixteen maximal formulas, or hundreds of ordinary ones.</summary>
+    internal const int ProjectionMathRenderByteBudget = 64 * 1024;
+
+    /// <summary>Budget override so the projection-pool exhaustion test
+    /// doesn't need hundreds of MathCAT-heavy fixtures. Null in
+    /// production.</summary>
+    internal static int? ProjectionMathRenderByteBudgetOverrideForTests;
 
     /// <summary>Core degrades oversized (>256 KiB) and
     /// unknown-language blocks to tokens that carry no color — those
@@ -480,6 +829,207 @@ internal static class ReadingDocumentBuilder
         _ => null,
     };
 
+    /// <summary>
+    /// W3-3 diagram block: the canonical SVG artifact rendered through
+    /// the W2-3 hardened Svg.Skia path, with the CORE structured
+    /// description as the entire AT surface (mac contract). The fence
+    /// matches its pipeline <see cref="DiagramBlock"/> by byte
+    /// containment; a live-buffer drift miss degrades to
+    /// source-in-range (mac's unmatched fallback — never a fabricated
+    /// failure status). Every failure branch keeps the source IN the
+    /// text range and appends a zero-size focusable element carrying
+    /// the description, so Tab and object navigation always speak the
+    /// canonical content (the W3-2 round-4 lesson applied at design
+    /// time).
+    /// </summary>
+    private static Block DiagramBlockElement(
+        ReadingBlockKind.Diagram diagram,
+        ReadingBlock block,
+        IReadOnlyList<DiagramBlock> diagramBlocks,
+        ReadingListBuildContext context)
+    {
+        DiagramBlock? matched = diagramBlocks.FirstOrDefault(candidate =>
+            candidate.ByteOffset >= block.ByteStart
+            && candidate.ByteOffset < block.ByteEnd);
+
+        // LIVE-source coherence (the W3-4/W3-2 lesson): the reading
+        // block is parsed from the live buffer, the artifact from the
+        // SAVED file, and a same-position unsaved edit keeps byte
+        // containment. Diagram fences are code-shaped, so the code
+        // precedent applies: LF-normalized interior equality.
+        if (matched is not null)
+        {
+            string normalized = matched.Source.Replace("\r\n", "\n");
+            if (!string.Equals(normalized, diagram.Interior, StringComparison.Ordinal)
+                && !string.Equals(normalized, diagram.Interior + "\n", StringComparison.Ordinal)
+                && !string.Equals(normalized + "\n", diagram.Interior, StringComparison.Ordinal))
+            {
+                matched = null;
+            }
+        }
+
+        string fallbackSource = diagram.Interior.TrimEnd('\n', '\r');
+        if (matched is null)
+        {
+            // Mac's unmatched fallback: raw source, no fabricated
+            // status. The landing announcement carries the source —
+            // the math unmatched precedent.
+            Paragraph unmatchedParagraph = MonospaceParagraph(fallbackSource);
+            ReadingSemantics.MarkDiagramBlock(unmatchedParagraph, fallbackSource);
+            return unmatchedParagraph;
+        }
+
+        // The description is the entire primary AT surface — verbatim
+        // core content, never composed; "Mermaid diagram." is the mac
+        // defensive fallback for an empty artifact.
+        string description = matched.StructuredDescription.Trim();
+        if (description.Length == 0)
+        {
+            description = "Mermaid diagram.";
+        }
+        // Landing text: trailing period stripped so the canonical
+        // vocabulary's own punctuation composes ("…3 steps, diagram.").
+        string landing = description.TrimEnd('.');
+
+        System.Windows.Media.ImageSource? visual = null;
+        string? failureHeader = null;
+        string failureReason = string.Empty;
+        switch (matched.RenderStatus)
+        {
+            case DiagramRenderStatus.UnsupportedDialect unsupported:
+                failureHeader = "Diagram dialect not supported";
+                failureReason = unsupported.Reason;
+                break;
+            case DiagramRenderStatus.RenderFailed failed:
+                failureHeader = "Diagram could not be rendered";
+                failureReason = failed.Message;
+                break;
+            default:
+                if (matched.Svg is not { Length: > 0 } svg)
+                {
+                    // Mac audit #254 L1: Ok status with nil OR EMPTY
+                    // bytes routes to the decode-failure fallback.
+                    failureHeader = "Diagram could not be rendered";
+                    failureReason = "diagram rendered but image could not be decoded";
+                    break;
+                }
+                // Host visual budgets (the W3-2 round-7 shape): core
+                // bounds the RENDERER's work, not the host decoder's —
+                // per-diagram SVG cap plus the projection-wide pool,
+                // charged on entry (a failed decode burned the
+                // dispatcher too). Over-budget keeps the description
+                // and source; only the visual degrades.
+                if (svg.Length > MaximumRenderedDiagramSvgBytes
+                    || svg.Length > context.RemainingDiagramRenderBytes)
+                {
+                    failureHeader = "Diagram could not be rendered";
+                    failureReason = "diagram image exceeds the display budget";
+                    break;
+                }
+                context.RemainingDiagramRenderBytes -= svg.Length;
+                DiagramRenderProbeForTests?.Invoke(svg.Length);
+                visual = EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml");
+                if (visual is null)
+                {
+                    failureHeader = "Diagram could not be rendered";
+                    failureReason = "diagram rendered but image could not be decoded";
+                }
+                break;
+        }
+
+        if (visual is not null)
+        {
+            var element = new ReadingDiagramElement(description, matched.Source)
+            {
+                Content = new ReadingDiagramImage
+                {
+                    Source = visual,
+                    Stretch = System.Windows.Media.Stretch.Uniform,
+                    StretchDirection = StretchDirection.DownOnly,
+                    // Mac caps at a Dynamic-Type-scaled 600pt (audit
+                    // #254 M1); WPF has no text-size metric to scale
+                    // by, so the base cap ships and the scaling is a
+                    // recorded matrix note.
+                    MaxHeight = 600,
+                },
+                Margin = new Thickness(0, 4, 0, 4),
+            };
+            var renderedParagraph = new Paragraph(new InlineUIContainer(element))
+            {
+                TextAlignment = TextAlignment.Center,
+            };
+            ReadingSemantics.MarkDiagramBlock(renderedParagraph, landing);
+            return renderedParagraph;
+        }
+
+        // Failure presentation, mac shape: header, reason, then the
+        // full source — all IN the text range — plus the zero-size
+        // focusable element so the description stays Tab-reachable.
+        var paragraph = new Paragraph { Padding = new Thickness(8) };
+        paragraph.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
+        paragraph.Inlines.Add(new Run(failureHeader)
+        {
+            FontWeight = FontWeights.SemiBold,
+        });
+        if (failureReason.Length > 0)
+        {
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new Run(failureReason));
+        }
+        if (fallbackSource.Length > 0)
+        {
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new Run(fallbackSource)
+            {
+                FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
+            });
+        }
+        paragraph.Inlines.Add(new InlineUIContainer(
+            new ReadingDiagramElement(description, matched.Source)));
+        ReadingSemantics.MarkDiagramBlock(paragraph, landing);
+        return paragraph;
+    }
+
+    /// <summary>Host visual cap per diagram (W3-3): core's budgets
+    /// bound the mermaid renderer, but Svg.Skia decode + raster work
+    /// scales with the SVG too. Real diagram SVGs are tens of
+    /// kilobytes; over-cap diagrams keep description and source —
+    /// only the visual degrades.</summary>
+    internal const int MaximumRenderedDiagramSvgBytes = 512 * 1024;
+
+    /// <summary>The projection-wide pool the per-diagram cap draws
+    /// from (see
+    /// <see cref="ReadingListBuildContext.RemainingDiagramRenderBytes"/>)
+    /// — the exact shape of <see cref="ProjectionMathRenderByteBudget"/>:
+    /// four maximal diagrams, or dozens of ordinary ones.</summary>
+    internal const int ProjectionDiagramRenderByteBudget = 2 * 1024 * 1024;
+
+    /// <summary>Budget override so the pool-exhaustion test doesn't
+    /// need megabytes of fixtures. Null in production.</summary>
+    internal static int? ProjectionDiagramRenderByteBudgetOverrideForTests;
+
+    /// <summary>Projection-wide DECODED-pixel pool for embed images
+    /// (W3-5 round 5): ~16 MP ≈ 64 MB of BGRA surfaces — a dozen
+    /// maximum-dimension images or hundreds of ordinary ones. The
+    /// per-image dimension cap (1120 px, DecodeImage) bounds the
+    /// transient overshoot of the one decode that discovers
+    /// exhaustion.</summary>
+    internal const long ProjectionEmbedDecodedPixelBudget = 16_000_000;
+
+    /// <summary>Budget override for the pixel-pool tests. Null in
+    /// production.</summary>
+    internal static long? ProjectionEmbedDecodedPixelBudgetOverrideForTests;
+
+    /// <summary>Fires with the embed key whenever the image decoder
+    /// is entered — the pin that duplicate occurrences share one
+    /// decode and over-budget images never allocate.</summary>
+    internal static Action<string>? EmbedImageDecodeProbeForTests;
+
+    /// <summary>Fires with the SVG byte length whenever the Svg.Skia
+    /// decode path is entered — the pin that degraded or over-budget
+    /// artifacts never reach it.</summary>
+    internal static Action<int>? DiagramRenderProbeForTests;
+
     private static Paragraph MonospaceParagraph(string text)
     {
         var run = new Run(text);
@@ -494,18 +1044,24 @@ internal static class ReadingDocumentBuilder
 
     private static Block TableBlock(ReadingBlock block)
     {
-        // Plain accessible table until W4-1's grid substrate (§10.7).
+        // The table stays IN-RANGE for linear reading (G23: embedded
+        // objects blank say-all); Enter at the caret opens the SAME
+        // source on the W4-1 grid substrate, which is where the §8.7
+        // powers (headers on entry, cell nav, sort, type-ahead) live.
         ReadingTableCells? cells = SlateUniffiMethods.ReadingTableCells(block.Source);
         var table = new WpfTable();
-        ReadingSemantics.MarkTable(table);
         var group = new TableRowGroup();
         table.RowGroups.Add(group);
 
         if (cells is null || (cells.Header.Length == 0 && cells.Rows.Length == 0))
         {
+            // Degenerate: no grid destination — Enter must fall
+            // through, not open an empty window.
+            ReadingSemantics.MarkTable(table);
             group.Rows.Add(Row(new[] { block.Source }, header: false));
             return table;
         }
+        ReadingSemantics.MarkTable(table, block.Source);
 
         int columns = Math.Max(
             cells.Header.Length,
@@ -541,25 +1097,487 @@ internal static class ReadingDocumentBuilder
     }
 
     /// <summary>
-    /// The embed card placeholder: a named, invokable button carrying
-    /// core's cache key. The full card state machine (#598/#511 parity)
-    /// is W3-5's; the W3-1 contract is that the card exists, is
-    /// reachable, and activates through <c>ReadingMatchLink</c>.
+    /// The embed card (W3-5, #598/#511 parity): a <see cref="Section"/>
+    /// whose content lives IN the document text range — the W3-1 spike
+    /// measured <c>BlockUIContainer</c> content as silently absent from
+    /// say-all, and an embed a reader cannot hear is a correctness
+    /// failure. The header carries the mac EmbedView name shape, the
+    /// "Jump to source" button keeps the W3-1 activation contract
+    /// (string Tag through the surface's click router), and the body
+    /// renders the CORE-resolved content: text with nested embeds
+    /// spliced as header-only child cards (mac renders nested cards
+    /// collapsed by default; Windows renders exactly that initial
+    /// state, with activation opening the source — recorded
+    /// divergence: no in-place nested expansion), images through the
+    /// hardened decode path, and unresolved shapes with mac's exact
+    /// strings. A null artifact (per-key degraded fetch) is a
+    /// header-only card that still activates — never a dead block.
     /// </summary>
-    private static Block EmbedCard(string key)
+    /// <summary>The `.base` embed card body (contract C10): summary,
+    /// counts, warnings, and the read-only hint — mac's embed hint
+    /// wording verbatim. An execute failure says so; it never renders
+    /// as an empty base.</summary>
+    private static void AppendBaseEmbedBody(
+        Section section, BaseEmbedProjection projection)
     {
-        var button = new Button
+        if (projection.ExecuteError is { Length: > 0 } error)
         {
-            Content = key,
-            HorizontalAlignment = HorizontalAlignment.Left,
+            section.Blocks.Add(EmbedBodyParagraph(
+                $"This base could not be executed: {error}"));
+            return;
+        }
+        if (projection.AudioSummary.Length > 0)
+        {
+            section.Blocks.Add(EmbedBodyParagraph(projection.AudioSummary));
+        }
+        section.Blocks.Add(EmbedBodyParagraph(
+            $"{projection.ShownCount} of {projection.TotalCount} results."));
+        foreach (string warning in projection.Warnings)
+        {
+            section.Blocks.Add(EmbedBodyParagraph(warning));
+        }
+        if (projection.ViewError is { Length: > 0 } viewError)
+        {
+            section.Blocks.Add(EmbedBodyParagraph(viewError));
+        }
+        section.Blocks.Add(EmbedBodyParagraph(
+            "read-only in embeds — open the base file in a tab to edit"));
+    }
+
+    private static Block EmbedCard(
+        string key,
+        ReadingEmbedArtifact? artifact,
+        ReadingBlock block,
+        IReadOnlyList<OutgoingLink> records,
+        ReadingListBuildContext context)
+    {
+        // PER-OCCURRENCE alt (field, 2026-07-30): the artifact's alt
+        // follows mac's last-record-wins rule, so an aliased and an
+        // alias-less occurrence of the SAME image key shared one alt
+        // and both titled with the filename. The card's own block
+        // knows its own record — its authored alias wins here, fixing
+        // the deferral mac documented rather than porting it.
+        string? occurrenceAlt = null;
+        foreach (OutgoingLink record in records)
+        {
+            if (record.IsEmbed
+                && record.SpanStart >= block.ByteStart
+                && record.SpanEnd <= block.ByteEnd)
+            {
+                occurrenceAlt = record.DisplayText;
+            }
+        }
+        var section = new Section
+        {
             Padding = new Thickness(10, 6, 10, 6),
-            Tag = key,
         };
-        AutomationProperties.SetName(button, $"Embedded note {key}");
-        AutomationProperties.SetAutomationId(button, "ReadingBlockEmbed");
-        var container = new BlockUIContainer(button);
-        ReadingSemantics.MarkEmbed(container);
-        return container;
+        section.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
+
+        EmbedResolution? resolution = artifact?.Resolution?.Resolution;
+        // A null resolution never claims a kind it cannot know (round
+        // 1 [medium]): the neutral label says only what is true.
+        string headerName = resolution is null
+            ? $"Embed: {key}"
+            : EmbedHeaderName(resolution, occurrenceAlt ?? artifact?.Alt);
+        if (artifact is { BaseProjection: { } namedBase })
+        {
+            // The base card names its real kind (contract C10) — the
+            // FullNote resolution would otherwise title it as a note.
+            headerName =
+                $"Embedded base: {System.IO.Path.GetFileNameWithoutExtension(namedBase.TargetPath)}";
+        }
+        string headerSuffix = resolution is null
+            ? string.Empty
+            : EmbedHeaderAccessibilitySuffix(resolution);
+        (string Path, string? AnchorKind, string? AnchorText)? jump =
+            ResolvedJump(resolution);
+
+        var header = new Paragraph
+        {
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0),
+        };
+        header.Inlines.Add(new Run(headerName));
+        header.Inlines.Add(new Run("  "));
+        header.Inlines.Add(JumpToSourceLink(key, headerSuffix, jump));
+        ReadingSemantics.MarkEmbedHeader(header, key);
+        if (jump is { } headerJump)
+        {
+            ReadingSemantics.MarkEmbedJump(
+                header, headerJump.Path, headerJump.AnchorKind, headerJump.AnchorText);
+        }
+        section.Blocks.Add(header);
+
+        switch (resolution)
+        {
+            case EmbedResolution.FullNote when artifact is { BaseProjection: { } basePreview }:
+                // W4-6 (#738, contract C10 / G28): a `.base` embed is a
+                // LAYERED summary card, never a live grid inside the
+                // FlowDocument (an embedded grid is blank in say-all).
+                // Core's audio summary and counts stay in the text
+                // range; the header's jump opens the real tab surface,
+                // where the full grid lives. Recorded divergence D-15.
+                AppendBaseEmbedBody(section, basePreview);
+                break;
+            case EmbedResolution.FullNote fullNote:
+                AppendEmbedText(section, fullNote.Text, fullNote.Nested);
+                break;
+            case EmbedResolution.Section sectionResolution:
+                AppendEmbedText(
+                    section, sectionResolution.Text, sectionResolution.Nested);
+                break;
+            case EmbedResolution.Block blockResolution:
+                AppendEmbedText(
+                    section, blockResolution.Text, Array.Empty<NestedEmbed>());
+                break;
+            case EmbedResolution.Image image when artifact is { ImageBudgetRefused: true }:
+                // The artifact resolved — the header keeps its true
+                // image identity and destination; only the PAYLOAD was
+                // refused by the note-wide budget, and the notice says
+                // exactly that (never the decode-failure lie).
+                section.Blocks.Add(EmbedBodyParagraph(
+                    "Image not displayed: over this note's embedded-image "
+                    + "budget. Open the source note to view it."));
+                break;
+            case EmbedResolution.Image image:
+                AppendEmbedImage(section, image, key, context);
+                break;
+            case EmbedResolution.Unresolved:
+                // The header name IS the mac unresolved string; the
+                // AX suffix rides the button's HelpText. No body.
+                break;
+            case null:
+                section.Blocks.Add(EmbedBodyParagraph(
+                    "Embed preview unavailable. Activate to open the source."));
+                break;
+        }
+        if (artifact?.Resolution is { Truncated: true })
+        {
+            section.Blocks.Add(EmbedBodyParagraph(
+                "Preview truncated. Open the source note for the full content."));
+        }
+
+        ReadingSemantics.MarkEmbed(section, headerName);
+        return section;
+    }
+
+    /// <summary>The mac EmbedView name shapes, verbatim.</summary>
+    private static string EmbedHeaderName(EmbedResolution resolution, string? alt) =>
+        resolution switch
+        {
+            EmbedResolution.FullNote fullNote =>
+                $"Embedded note: {fullNote.TargetPath}",
+            EmbedResolution.Section section =>
+                $"Embedded section: {section.Heading} from {section.TargetPath}",
+            EmbedResolution.Block block =>
+                $"Embedded block from {block.TargetPath}",
+            EmbedResolution.Image image =>
+                $"Embedded image: {ImageDescriptor(image, alt)}",
+            EmbedResolution.Unresolved unresolved =>
+                UnresolvedEmbedText(unresolved.Reason),
+            _ => "Embedded note",
+        };
+
+    /// <summary>Alt-or-filename (mac audits #196/#198/#419): trimmed
+    /// authored alt when present, else the target's filename.</summary>
+    private static string ImageDescriptor(EmbedResolution.Image image, string? alt)
+    {
+        string? trimmed = (alt ?? image.Alt)?.Trim();
+        if (!string.IsNullOrEmpty(trimmed))
+        {
+            return trimmed;
+        }
+        int slash = image.TargetPath.LastIndexOf('/');
+        return slash >= 0 ? image.TargetPath[(slash + 1)..] : image.TargetPath;
+    }
+
+    /// <summary>The mac visible unresolved strings, verbatim.</summary>
+    private static string UnresolvedEmbedText(EmbedUnresolvedReason reason) =>
+        reason switch
+        {
+            EmbedUnresolvedReason.TargetNotFound notFound =>
+                $"Unresolved embed: {notFound.Target}",
+            EmbedUnresolvedReason.HeadingNotFound heading =>
+                $"Unresolved embed: {heading.TargetPath}#{heading.Heading}",
+            EmbedUnresolvedReason.BlockNotFound block =>
+                $"Unresolved embed: {block.TargetPath}^{block.BlockId}",
+            EmbedUnresolvedReason.DepthLimitReached =>
+                "Unresolved embed: depth limit reached.",
+            EmbedUnresolvedReason.ReadError readError =>
+                $"Unresolved embed: read error — {readError.Message}",
+            _ => "Unresolved embed",
+        };
+
+    /// <summary>The mac AX-only explanatory suffixes, delivered as the
+    /// Jump button's HelpText (on request, never in the reading
+    /// flow).</summary>
+    private static string EmbedHeaderAccessibilitySuffix(EmbedResolution resolution) =>
+        resolution switch
+        {
+            EmbedResolution.Unresolved { Reason: EmbedUnresolvedReason.TargetNotFound } =>
+                "The target note or attachment doesn't exist in this vault.",
+            EmbedResolution.Unresolved { Reason: EmbedUnresolvedReason.HeadingNotFound } =>
+                "The heading was not found in the target note.",
+            EmbedResolution.Unresolved { Reason: EmbedUnresolvedReason.BlockNotFound } =>
+                "The block anchor was not found in the target note.",
+            EmbedResolution.Unresolved { Reason: EmbedUnresolvedReason.DepthLimitReached } =>
+                "Further nested embeds inside this one are not rendered.",
+            EmbedResolution.Unresolved { Reason: EmbedUnresolvedReason.ReadError } =>
+                "Reading the target failed.",
+            _ => string.Empty,
+        };
+
+    /// <summary>The destination core already resolved, when it did —
+    /// the mac <c>openEmbedTarget(path)</c> route, and the only
+    /// correct one for nested targets absent from the host's record
+    /// snapshot (round 1 [high]).</summary>
+    private static (string Path, string? AnchorKind, string? AnchorText)? ResolvedJump(
+        EmbedResolution? resolution) =>
+        resolution switch
+        {
+            EmbedResolution.FullNote fullNote => (fullNote.TargetPath, null, null),
+            EmbedResolution.Section section =>
+                (section.TargetPath, "heading", section.Heading),
+            EmbedResolution.Block block => (block.TargetPath, "block", block.BlockId),
+            EmbedResolution.Image image => (image.TargetPath, null, null),
+            // Missing-ANCHOR reasons still name an existing file
+            // (round 2 [high]): Jump opens it — top of file, no
+            // anchor — instead of dead-ending a nested card on the
+            // host's record snapshot. Record matching remains only
+            // where core resolved NO path at all.
+            EmbedResolution.Unresolved
+            {
+                Reason: EmbedUnresolvedReason.HeadingNotFound heading,
+            } => (heading.TargetPath, null, null),
+            EmbedResolution.Unresolved
+            {
+                Reason: EmbedUnresolvedReason.BlockNotFound block,
+            } => (block.TargetPath, null, null),
+            _ => null,
+        };
+
+    /// <summary>
+    /// The card's Jump affordance is a <see cref="Hyperlink"/>, not a
+    /// Button (field, 2026-07-30): a Button in an InlineUIContainer
+    /// is an EMBEDDED OBJECT — blank in the text range, its Name
+    /// suppressed during caret reading (the G23 mechanism) — so the
+    /// caret heard a bare "button". A FlowDocument hyperlink is real
+    /// in-range TEXT: the caret reads "Jump to source, link", Tab
+    /// focuses it with the full Name, and Enter/click route exactly
+    /// as reading links do.
+    /// </summary>
+    private static Hyperlink JumpToSourceLink(
+        string key,
+        string helpText,
+        (string Path, string? AnchorKind, string? AnchorText)? jump)
+    {
+        var link = new Hyperlink(new Run("Jump to source"))
+        {
+            TextDecorations = TextDecorations.Underline,
+            Tag = new ReadingInlineRunKind.Embed(key),
+        };
+        link.SetResourceReference(
+            TextElement.ForegroundProperty, "Slate.AccentBrush");
+        // A destination is REQUIRED: without NavigateUri NVDA
+        // announces "Link has no apparent destination" (W3-1,
+        // measured).
+        Uri? destination = ReadingRouting.RoutingUri(
+            new ReadingInlineRunKind.Embed(key));
+        if (destination is not null)
+        {
+            link.NavigateUri = destination;
+        }
+        AutomationProperties.SetName(link, $"Jump to source: {key}");
+        AutomationProperties.SetAutomationId(link, "ReadingBlockEmbed");
+        if (helpText.Length > 0)
+        {
+            AutomationProperties.SetHelpText(link, helpText);
+        }
+        if (jump is { } resolved)
+        {
+            ReadingSemantics.MarkEmbedJump(
+                link, resolved.Path, resolved.AnchorKind, resolved.AnchorText);
+        }
+        return link;
+    }
+
+    /// <summary>
+    /// Body text with nested embeds spliced at their core-supplied
+    /// byte offsets (the host never reconstructs embed grammar):
+    /// plain-text paragraphs split on blank lines, and each nested
+    /// embed as an indented header-only child card.
+    /// </summary>
+    private static void AppendEmbedText(
+        Section section, string text, IReadOnlyList<NestedEmbed> nested)
+    {
+        byte[] utf8 = System.Text.Encoding.UTF8.GetBytes(text);
+        int cursor = 0;
+        foreach (NestedEmbed child in nested.OrderBy(child => child.ByteOffsetInParent))
+        {
+            int start = (int)Math.Min(child.ByteOffsetInParent, (uint)utf8.Length);
+            int end = (int)Math.Min(child.ByteEndInParent, (uint)utf8.Length);
+            if (start > cursor)
+            {
+                AppendEmbedPlainText(
+                    section,
+                    System.Text.Encoding.UTF8.GetString(utf8, cursor, start - cursor));
+            }
+            section.Blocks.Add(NestedEmbedHeader(child));
+            cursor = Math.Max(cursor, end);
+        }
+        if (cursor < utf8.Length)
+        {
+            AppendEmbedPlainText(
+                section,
+                System.Text.Encoding.UTF8.GetString(utf8, cursor, utf8.Length - cursor));
+        }
+    }
+
+    private static void AppendEmbedPlainText(Section section, string text)
+    {
+        foreach (string group in text.Replace("\r\n", "\n").Split(
+            "\n\n", StringSplitOptions.RemoveEmptyEntries))
+        {
+            string trimmed = group.Trim('\n');
+            if (trimmed.Trim().Length == 0)
+            {
+                continue;
+            }
+            section.Blocks.Add(EmbedBodyParagraph(trimmed));
+        }
+    }
+
+    private static Paragraph EmbedBodyParagraph(string text)
+    {
+        var paragraph = new Paragraph { Margin = new Thickness(0, 2, 0, 2) };
+        string[] lines = text.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (i > 0)
+            {
+                paragraph.Inlines.Add(new LineBreak());
+            }
+            paragraph.Inlines.Add(new Run(lines[i]));
+        }
+        return paragraph;
+    }
+
+    /// <summary>A nested embed rendered in mac's initial (collapsed)
+    /// state: the header line with its own Jump button — activation
+    /// opens the nested source. Deeper resolutions (including the
+    /// core depth-limit marker) surface through the header name.</summary>
+    private static Paragraph NestedEmbedHeader(NestedEmbed child)
+    {
+        string name = EmbedHeaderName(child.Resolution, alt: null);
+        (string Path, string? AnchorKind, string? AnchorText)? jump =
+            ResolvedJump(child.Resolution);
+        var paragraph = new Paragraph
+        {
+            Margin = new Thickness(24, 2, 0, 2),
+            FontWeight = FontWeights.SemiBold,
+        };
+        paragraph.Inlines.Add(new Run(name));
+        paragraph.Inlines.Add(new Run("  "));
+        paragraph.Inlines.Add(JumpToSourceLink(
+            child.RawTarget,
+            EmbedHeaderAccessibilitySuffix(child.Resolution),
+            jump));
+        ReadingSemantics.MarkEmbedHeader(paragraph, child.RawTarget);
+        if (jump is { } resolvedJump)
+        {
+            ReadingSemantics.MarkEmbedJump(
+                paragraph, resolvedJump.Path, resolvedJump.AnchorKind,
+                resolvedJump.AnchorText);
+        }
+        return paragraph;
+    }
+
+    /// <summary>Image embed body: the hardened decode path (8 MiB /
+    /// 1120 px caps; the note-wide byte pool was charged at fetch),
+    /// peer-suppressed like the diagram image — the header name IS
+    /// the announcement (mac hides the image from AT). Decode failure
+    /// shows mac's exact string. DECODED surfaces are bounded (round
+    /// 5): one frozen ImageSource per key shared by every occurrence,
+    /// drawing pixels from the projection pool — encoded-byte
+    /// accounting alone let one small compressed image repeated
+    /// across the block ceiling allocate gigabytes of surfaces.</summary>
+    private static void AppendEmbedImage(
+        Section section,
+        EmbedResolution.Image image,
+        string key,
+        ReadingListBuildContext context)
+    {
+        if (!context.DecodedEmbedImages.TryGetValue(key, out var outcome))
+        {
+            if (context.RemainingEmbedDecodedPixels <= 0)
+            {
+                outcome = (null, true);
+            }
+            else
+            {
+                EmbedImageDecodeProbeForTests?.Invoke(key);
+                System.Windows.Media.ImageSource? decoded =
+                    EditorInteractionCoordinator.DecodeImage(image.Bytes, image.Mime);
+                if (decoded is null)
+                {
+                    outcome = (null, false);
+                }
+                else
+                {
+                    long pixels =
+                        decoded is System.Windows.Media.Imaging.BitmapSource bitmap
+                            ? (long)bitmap.PixelWidth * bitmap.PixelHeight
+                            // Non-bitmap sources cannot report
+                            // dimensions; charge the decode cap
+                            // conservatively.
+                            : 1120L * 1120L;
+                    if (pixels > context.RemainingEmbedDecodedPixels)
+                    {
+                        // Exhaustion discovered (round 6): DRAIN the
+                        // pool — every later image refuses pre-decode
+                        // — and memoize the refusal, so this is the
+                        // projection's LAST decode. The discovering
+                        // surface is discarded unreferenced, bounded
+                        // by the per-image dimension cap.
+                        context.RemainingEmbedDecodedPixels = 0;
+                        outcome = (null, true);
+                    }
+                    else
+                    {
+                        context.RemainingEmbedDecodedPixels -= pixels;
+                        outcome = (decoded, false);
+                    }
+                }
+            }
+            context.DecodedEmbedImages[key] = outcome;
+        }
+        if (outcome.Source is null)
+        {
+            section.Blocks.Add(EmbedBodyParagraph(
+                outcome.BudgetRefused
+                    ? "Image not displayed: over this note's embedded-image "
+                        + "budget. Open the source note to view it."
+                    : $"Could not decode image. MIME: {image.Mime}. "
+                        + "The file may be corrupt or an unsupported codec."));
+            return;
+        }
+        var visual = new ReadingDiagramImage
+        {
+            Source = outcome.Source,
+            Stretch = System.Windows.Media.Stretch.Uniform,
+            // Never upscale (owner call, field pass 3 2026-07-31):
+            // natural size, downscale-only to fit — Obsidian's
+            // behavior, a recorded divergence (G26) from mac's
+            // scaledToFit, which stretches small images up to the full
+            // column width (EmbedView.swift .resizable().scaledToFit()
+            // .frame(maxWidth: .infinity)). The 2026-07-30 Both call
+            // was made against a 2x2 test fixture whose NATURAL size
+            // was invisible; a real image at natural size is the
+            // wanted rendering.
+            StretchDirection = StretchDirection.DownOnly,
+            MaxHeight = 600,
+        };
+        section.Blocks.Add(new BlockUIContainer(visual));
     }
 
     private static Paragraph InlineParagraph(
@@ -748,6 +1766,20 @@ internal static class ReadingDocumentBuilder
                         Insertion(paragraph.ContentStart),
                         text: ElementText(paragraph)));
                 }
+                else if (ReadingSemantics.IsMathBlock(paragraph))
+                {
+                    landmarks.Add(new ReadingLandmark(
+                        ReadingLandmarkKind.Math,
+                        Insertion(paragraph.ContentStart),
+                        text: ReadingSemantics.MathSpeechOf(paragraph)));
+                }
+                else if (ReadingSemantics.IsDiagramBlock(paragraph))
+                {
+                    landmarks.Add(new ReadingLandmark(
+                        ReadingLandmarkKind.Diagram,
+                        Insertion(paragraph.ContentStart),
+                        text: ReadingSemantics.DiagramDescriptionOf(paragraph)));
+                }
                 WalkInlines(paragraph.Inlines, landmarks);
                 break;
 
@@ -781,6 +1813,17 @@ internal static class ReadingDocumentBuilder
                         : string.Empty));
                 break;
 
+            case Section section when ReadingSemantics.IsEmbedSection(section):
+                // ONE landmark per card, carrying the mac-shaped
+                // header name; the body is plain in-range text and is
+                // deliberately not walked (nested headers are not
+                // separate chord stops — one card, one stop).
+                landmarks.Add(new ReadingLandmark(
+                    ReadingLandmarkKind.Embed,
+                    Insertion(section.ContentStart),
+                    text: ReadingSemantics.EmbedNameOf(section)));
+                break;
+
             case Section section:
                 foreach (Block inner in section.Blocks)
                 {
@@ -796,7 +1839,11 @@ internal static class ReadingDocumentBuilder
         {
             switch (inline)
             {
-                case Hyperlink link:
+                // Chrome links — the code Copy affordance — are not
+                // K-chord stops: the LINK landmark population is the
+                // note's authored links (field, 2026-07-30: the Copy
+                // hyperlink conversion must not add copy stops).
+                case Hyperlink link when !ReadingSemantics.IsCodeCopy(link):
                     landmarks.Add(new ReadingLandmark(
                         ReadingLandmarkKind.Link,
                         Insertion(link.ContentStart),

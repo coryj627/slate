@@ -127,6 +127,12 @@ fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
         .unwrap();
     conn.execute("ALTER TABLE tasks DROP COLUMN checkbox_end_byte", [])
         .unwrap();
+    // (035's CREATE TABLE IF NOT EXISTS replays as a no-op; 036's
+    // ALTER and clock table cannot, so both unwind here like the
+    // others.)
+    conn.execute("ALTER TABLE files DROP COLUMN index_epoch", [])
+        .unwrap();
+    conn.execute("DROP TABLE index_epoch_clock", []).unwrap();
     let version: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
             row.get(0)

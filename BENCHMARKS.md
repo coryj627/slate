@@ -832,3 +832,172 @@ The optimization keeps immutable concurrent snapshots through the existing
 `Arc` ownership boundary while using `Arc::make_mut` plus in-place structure
 splices for the normal sequential edit path. The formal `--validate-budgets`
 runner exits non-zero on any point or flatness miss.
+
+## W6-1 PR A — canvas through the C# binding — 2026-08-24 (#745)
+
+The §K row the W6-1 spec asks PR A for: the canvas READ path through
+`uniffi`, over the committed 2,000-node fixture (`large_2000.canvas`).
+Runner class `CanvasOpenBenchmarks`
+(`apps/slate-windows/benchmarks/SlateWindows.Benchmarks/Program.cs`),
+BenchmarkDotNet 0.15.8, three warmups and fifteen measured iterations:
+
+```powershell
+dotnet run --project apps/slate-windows/benchmarks/SlateWindows.Benchmarks `
+  --configuration Release -- --canvas
+```
+
+Environment: **QEMU virtual CPU, 12 logical processors**, Windows 11 Pro
+x64 build 26200, .NET SDK 10.0.400 / .NET 10.0.11, `rustc 1.97.1`,
+Release `slate_uniffi.dll`. **This is a virtualized box, not the bare
+metal the W2-1/W2-2 rows above were measured on** (AMD Ryzen 7 9800X3D)
+— the two sets are not comparable to each other, and the absolute
+numbers here should be re-measured on the reference machine before any
+of them is treated as a budget.
+
+| Benchmark | Median | What it adds |
+|---|---:|---|
+| `Open` (baseline) | **36.27 ms** | `open_canvas`: parse + derive + the fenced `canvas_nodes` index write + registry insert. |
+| `OpenAndOutline` | 37.38 ms | + **~1.1 ms** marshalling 2,000 `CanvasOutlineRow`s (834 KB). |
+| `OpenAndTable` | 37.00 ms | + **~0.7 ms** marshalling 2,000 `CanvasTableRow`s (904 KB). |
+| `OpenAndScene` | 36.55 ms | + **~0.3 ms** marshalling the scene (1.43 MB). |
+| `OpenAndEveryProjection` | 40.82 ms | + **~4.6 ms** for all three behind one open (3.17 MB) — what PR A's document VM actually pays on a load. |
+
+**The mac 5.62 ms figure is not this baseline, and the spec's §K row
+reads as though it were.** `canvas_parse_derive_2000` (Milestone T Wave
+1, above) measures the pure parse + derive of the same fixture with no
+persistence; `open_canvas` additionally does an indexed SQLite write
+inside `begin_fenced` and inserts the handle into the session registry.
+So the 36 ms baseline is core's own work, not a C# tax, and the
+marshalling delta this suite exists to isolate is the **~4.6 ms** for
+all three projections. A like-for-like comparison against 5.62 ms needs
+a Rust bench of `open_canvas` itself, which does not exist; recorded
+here rather than papered over with a ratio that would mean nothing.
+
+Gate: PR A's `CanvasDocumentTests.LargeCanvasOutlineBuildsUnderBudget`
+asserts a complete document load (open + outline + table + scene +
+publish) under **500 ms** in both scheduling modes — the §K interactive
+budget the mac renderer suite also asserts. Measured headroom here is
+roughly an order of magnitude.
+
+## W6-1 §D — 2026-08-31 (Windows canvas renderer derivation, #745)
+
+`CanvasRendererBenchmarks` (SlateWindows.Benchmarks, `--canvas
+--validate-budgets`) over the committed 2,000-node fixture: the PURE
+derivation half the presentation engine runs off-thread — the windowed
+peer topology and the descriptor read — asserted against mac's §K
+budgets by the suite's own budget arm (a MISS fails the run). The
+numbers measure derivation only; the draw and UIA re-frame ride the
+app and the FlaUI journey. Windows x64 laptop, Release.
+
+| Bench | 2026-08 p50 | Budget | Meaning |
+|---|---|---|---|
+| `FirstWindowedDerivation` | **0.018 ms** | 500 ms | First windowed topology over 2,000 cards (viewport + 1-viewport margin). |
+| `PanWindowHop` | **0.023 ms** | 100 ms | A pan's re-derivation — window churn and edge re-test. |
+| `SelectionStepRead` | **<0.001 ms** | 50 ms | The descriptor lookup a selection step's ring redraw costs. |
+
+## Milestone W6-1 — canvas through the C# binding — 2026-09-02 (#745)
+
+The §K roll-up the W6-1 spec asks PR H for, over the two per-PR
+sections above (W6-1 PR A, W6-1 §D), re-measured at close-out on the
+same committed 2,000-node fixture (`large_2000.canvas`). Three runners,
+each named with what it measures; four spec budgets, each with the
+place that asserts it; and one benchmark that is NOT a spec budget,
+recorded as what it is.
+
+Environment: **QEMU Virtual CPU version 2.5+ (Standard PC Q35 + ICH9),
+20 GB**, Windows 11 Pro x64 build 26200, .NET SDK 10.0.400 / .NET
+10.0.11, `rustc 1.97.1`, Release `slate_uniffi.dll`, tests in Debug.
+The same virtualized box as the PR A row — not the bare metal the
+W2-1/W2-2 rows were measured on, and not the mac laptop of the
+Milestone T Wave 5 row; the sets are not comparable to each other.
+
+Runner `CanvasOpenBenchmarks` and `CanvasRendererBenchmarks`
+(`apps/slate-windows/benchmarks/SlateWindows.Benchmarks/`),
+BenchmarkDotNet 0.15.8, three warmups and fifteen measured iterations,
+the budget arm on:
+
+```powershell
+dotnet run --project apps/slate-windows/benchmarks/SlateWindows.Benchmarks `
+  --configuration Release -- --canvas --validate-budgets
+```
+
+**Marshalling (PR A's row, re-run):**
+
+| Benchmark | Median | What it adds |
+|---|---:|---|
+| `Open` (baseline) | **36.29 ms** | `open_canvas`: parse + derive + the fenced index write + registry insert. |
+| `OpenAndOutline` | 38.53 ms | + ~2.2 ms marshalling 2,000 `CanvasOutlineRow`s. |
+| `OpenAndTable` | 39.62 ms | + ~3.3 ms marshalling 2,000 `CanvasTableRow`s. |
+| `OpenAndScene` | 38.66 ms | + ~2.4 ms marshalling the scene. |
+| `OpenAndEveryProjection` | 42.25 ms | + ~6.0 ms for all three behind one open — what the document pays on a load. |
+
+**Derivation (§D's row, re-run; the runner's budget arm exits non-zero on a MISS):**
+
+| Bench | p50 | Budget | Verdict | Meaning |
+|---|---:|---:|---|---|
+| `FirstWindowedDerivation` | **0.020 ms** | 500 ms | PASS | First windowed peer topology over 2,000 cards (viewport + 1-viewport margin). |
+| `PanWindowHop` | **0.022 ms** | 100 ms | PASS | A pan's re-derivation — window churn and edge re-test. |
+| `SelectionStepRead` | **13 ns** | 50 ms | PASS | The descriptor lookup a selection step's ring redraw costs — a dictionary read, NOT the navigator step the spec's §K row names (see below). |
+
+**End to end (PR H's row):** measured by
+`CanvasEndToEndTests.LargeCanvasOpensNavigatesAndWindowsUnderBudget`
+(the real `VaultSession` + the document view-model, `synchronousForTests`,
+`Stopwatch`; the fact asserts every budget so a regression fails CI, and
+the recorded values show the headroom):
+
+| Measure | Recorded | Budget | Notes |
+|---|---:|---:|---|
+| Open (load + outline + table + scene + publish) | **45.1 ms** | 500 ms | 2,000 outline rows ready. |
+| First windowed derivation | **0.382 ms** | 500 ms | 39 of 2,000 placements materialised at 1600 × 1200 — windowing bounds the UIA tree (the fact asserts fewer than 600). |
+| Per-pan window hop | **0.149 ms** | 100 ms | Ten viewport hops of (−400, −250) each, averaged. |
+| Per-step navigator traversal | **0.018 ms** | 50 ms | Fifty `CanvasNavigator.NextCard` steps on the real navigator over the real document, averaged — the §K measurement the benchmark's descriptor lookup is not. |
+
+**The four spec budgets and where each is asserted.** Open under 500 ms:
+`CanvasDocumentTests.LargeCanvasOutlineBuildsUnderBudget` (both
+scheduling modes) and the E2E fact. First windowed derivation under
+500 ms and a pan's hop under 100 ms: the benchmark runner's exit code
+(`--validate-budgets`) AND the E2E fact. A navigator step under 50 ms:
+the E2E fact only — `SelectionStepRead` measures the descriptor lookup
+and is kept under the same 50 ms line for the ring redraw's sake, not as
+the navigator's budget.
+
+**Scope, honestly.** The Windows numbers measure the derivation the
+presentation engine runs and the navigator's own step; the draw and the
+UIA re-frame ride the app and the FlaUI journeys (§D TD-7, §H HD-D1).
+The mac row above (3.9 / 2.8 / 0.18 ms) timed a real `NSView` rebuild
+on a laptop; these are not the same operation on the same machine, and
+no ratio between them is claimed.
+
+## Milestone W6-2 PR A — graph through the C# binding — 2026-09-03 (#746)
+
+The graph's snapshot marshalling through the C# binding and the document's
+open through to its first publication (contract A-15, AD-7), over
+synthetic linked vaults at 1,000 and 10,000 notes (every note links to
+its successor and back to the first; one unresolved target per hundred
+notes). `GraphOpenBenchmarks`, `dotnet run --project
+apps/slate-windows/benchmarks/SlateWindows.Benchmarks --configuration
+Release -- --graph --validate-budgets`; the runner walks a pinned
+inventory of six (workload, notes) entries and fails on a missing or
+unlisted report. P set no host-side marshalling budget (locked decision
+10 budgets the layout and the backend); the two open-to-publication
+budgets are Windows host budgets on the canvas's first-derivation
+precedent, asserted by the runner's exit code. This box: .NET 10.0.11,
+x64, 15 iterations after 3 warm-ups, medians.
+
+| Workload | Notes | Median | Budget | Result |
+|---|---:|---:|---:|---|
+| `SnapshotDefaultFilter` (`graph_snapshot` under core's default filter) | 1,000 | **1.053 ms** | measurement-only | recorded |
+| `TableRowsDefaultSort` (`graph_table_rows` under the fetched default sort) | 1,000 | **5.831 ms** | measurement-only | recorded |
+| `OpenToPublication` (the document's pair through to the installed publication, under a pumped dispatcher) | 1,000 | **7.522 ms** | 100 ms | PASS |
+| `SnapshotDefaultFilter` | 10,000 | **13.618 ms** | measurement-only | recorded |
+| `TableRowsDefaultSort` | 10,000 | **80.121 ms** | measurement-only | recorded |
+| `OpenToPublication` | 10,000 | **98.069 ms** | 500 ms | PASS |
+
+**Scope, honestly.** The rows workload is five to six times the snapshot's
+at both scales: `graph_table_rows` formats nine cells per row core-side
+and marshals them as strings, which is the projection's cost by design
+(0b-7: core-formatted cells, a host that types nothing). The document's
+open adds the token, the envelope and the dispatcher hop on top of the
+pair — under 20 ms of overhead at 10k. Nothing here measures the grid's
+realization; the 10k virtualisation fact (`GraphTableTests`) pins that
+the live containers stay bounded.

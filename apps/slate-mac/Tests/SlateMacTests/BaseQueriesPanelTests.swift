@@ -317,7 +317,7 @@ final class BaseQueriesPanelTests: XCTestCase {
         XCTAssertTrue(source.contains("retainFocus: { _ in focusedSectionID = sectionID }"))
         XCTAssertTrue(
             source.contains(
-                "announce: { postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .medium)) }"
+                "announce: { postAccessibilityAnnouncement($0) }"
             ))
     }
 
@@ -353,7 +353,7 @@ final class BaseQueriesPanelTests: XCTestCase {
                 draft.moveSection(from: 1, to: destination)
             },
             retainFocus: { _ in focusedSectionID = second.id },
-            announce: { announcements.append($0) })
+            announce: { announcements.append(a11yRender(event: $0).text) })
 
         XCTAssertTrue(handled)
         XCTAssertEqual(draft.sections.map(\.id), [second.id, first.id])
@@ -376,7 +376,7 @@ final class BaseQueriesPanelTests: XCTestCase {
             label: "Dashboard section 1",
             move: { _ in boundaryMoves += 1 },
             retainFocus: { boundaryFocus = $0 },
-            announce: { boundaryAnnouncements.append($0) })
+            announce: { boundaryAnnouncements.append(a11yRender(event: $0).text) })
 
         XCTAssertTrue(boundaryHandled)
         XCTAssertEqual(boundaryMoves, 0)

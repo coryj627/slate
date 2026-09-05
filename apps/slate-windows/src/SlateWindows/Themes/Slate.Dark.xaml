@@ -6,12 +6,38 @@
     <Color x:Key="Slate.RaisedSurfaceColor">#FF292929</Color>
     <Color x:Key="Slate.TextColor">#FFF5F5F5</Color>
     <Color x:Key="Slate.SecondaryTextColor">#FFD4D4D4</Color>
+    <!-- Equals SecondaryText DELIBERATELY (adversarial round 1): at
+         the >75 APCA floor the dark palette has zero dimming headroom
+         (secondary itself measures 76.85 on the raised surface), so the
+         caption role dims by SIZE only here. W8-2 owns retuning. -->
+    <Color x:Key="Slate.TertiaryTextColor">#FFD4D4D4</Color>
     <Color x:Key="Slate.BorderColor">#FFAAAAAA</Color>
     <Color x:Key="Slate.AccentColor">#FFB9D9FF</Color>
     <Color x:Key="Slate.SelectionBackgroundColor">#FFB9D9FF</Color>
     <Color x:Key="Slate.SelectionTextColor">#FF101010</Color>
     <Color x:Key="Slate.ErrorColor">#FFFFD1D6</Color>
     <Color x:Key="Slate.WarningColor">#FFFFDB94</Color>
+
+    <!-- Canvas tokens (W6-1 §D D13): fills are the six preset tints
+         composited at 0.18 over Slate.SurfaceColor (CanvasPalette.Blend,
+         the one arithmetic); borders are the solid tints; the ring
+         carrier is the text color, mac’s measured guarantee. -->
+    <Color x:Key="Slate.Canvas.Fill1Color">#FF462526</Color>
+    <Color x:Key="Slate.Canvas.Fill2Color">#FF433424</Color>
+    <Color x:Key="Slate.Canvas.Fill3Color">#FF41412D</Color>
+    <Color x:Key="Slate.Canvas.Fill4Color">#FF253E2C</Color>
+    <Color x:Key="Slate.Canvas.Fill5Color">#FF284140</Color>
+    <Color x:Key="Slate.Canvas.Fill6Color">#FF373047</Color>
+    <Color x:Key="Slate.Canvas.Border1Color">#FFFB464C</Color>
+    <Color x:Key="Slate.Canvas.Border2Color">#FFE9973F</Color>
+    <Color x:Key="Slate.Canvas.Border3Color">#FFE0DE71</Color>
+    <Color x:Key="Slate.Canvas.Border4Color">#FF44CF6E</Color>
+    <Color x:Key="Slate.Canvas.Border5Color">#FF53DFDD</Color>
+    <Color x:Key="Slate.Canvas.Border6Color">#FFA882FF</Color>
+    <Color x:Key="Slate.Canvas.TextColor">#FFF5F5F5</Color>
+    <Color x:Key="Slate.Canvas.GroupFillColor">#FF292929</Color>
+    <Color x:Key="Slate.Canvas.EdgeColor">#FFAAAAAA</Color>
+    <Color x:Key="Slate.Canvas.SelectionRingColor">#FFF5F5F5</Color>
     <Color x:Key="Slate.CodeKeywordColor">#FFE6CCF2</Color>
     <Color x:Key="Slate.CodeStringColor">#FFFFCDD2</Color>
     <Color x:Key="Slate.CodeNumberColor">#FF9CDCFE</Color>
@@ -28,6 +54,8 @@
                      Color="{StaticResource Slate.TextColor}" />
     <SolidColorBrush x:Key="Slate.SecondaryTextBrush"
                      Color="{StaticResource Slate.SecondaryTextColor}" />
+    <SolidColorBrush x:Key="Slate.TertiaryTextBrush"
+                     Color="{StaticResource Slate.TertiaryTextColor}" />
     <SolidColorBrush x:Key="Slate.BorderBrush"
                      Color="{StaticResource Slate.BorderColor}" />
     <SolidColorBrush x:Key="Slate.AccentBrush"
@@ -64,4 +92,20 @@
                      Color="{StaticResource Slate.CodeTypeColor}" />
     <SolidColorBrush x:Key="Slate.CodeFunctionBrush"
                      Color="{StaticResource Slate.CodeFunctionColor}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill1Brush" Color="{StaticResource Slate.Canvas.Fill1Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill2Brush" Color="{StaticResource Slate.Canvas.Fill2Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill3Brush" Color="{StaticResource Slate.Canvas.Fill3Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill4Brush" Color="{StaticResource Slate.Canvas.Fill4Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill5Brush" Color="{StaticResource Slate.Canvas.Fill5Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Fill6Brush" Color="{StaticResource Slate.Canvas.Fill6Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border1Brush" Color="{StaticResource Slate.Canvas.Border1Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border2Brush" Color="{StaticResource Slate.Canvas.Border2Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border3Brush" Color="{StaticResource Slate.Canvas.Border3Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border4Brush" Color="{StaticResource Slate.Canvas.Border4Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border5Brush" Color="{StaticResource Slate.Canvas.Border5Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.Border6Brush" Color="{StaticResource Slate.Canvas.Border6Color}" />
+    <SolidColorBrush x:Key="Slate.Canvas.TextBrush" Color="{StaticResource Slate.Canvas.TextColor}" />
+    <SolidColorBrush x:Key="Slate.Canvas.GroupFillBrush" Color="{StaticResource Slate.Canvas.GroupFillColor}" />
+    <SolidColorBrush x:Key="Slate.Canvas.EdgeBrush" Color="{StaticResource Slate.Canvas.EdgeColor}" />
+    <SolidColorBrush x:Key="Slate.Canvas.SelectionRingBrush" Color="{StaticResource Slate.Canvas.SelectionRingColor}" />
 </ResourceDictionary>

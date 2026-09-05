@@ -97,12 +97,50 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertEqual(
             labels.count, Set(labels).count,
             "no two elements share a speakable name (Voice Control): \(labels.sorted())")
-        // Duplicate titles disambiguate with stable reading-order
-        // ordinals (t0 §1.1 rule applied to titled duplicates too).
+        // Duplicate titles disambiguate with a DOCUMENT-order ordinal
+        // (t0 §1.1 rule applied to titled duplicates too) — core's
+        // `CardSummary.speakable_name`, contract 0b-5.
         XCTAssertTrue(labels.contains("Ideas"))
         XCTAssertTrue(labels.contains("Ideas 2"))
         // Groups keep their Group phrasing.
         XCTAssertTrue(labels.contains("Group Zone"))
+    }
+
+    /// Edge anchors take BOTH halves of one `canvas_auto_sides` pair.
+    ///
+    /// Resolving each endpoint with its own call and reading `.from`
+    /// twice is the tempting shape and is wrong at every tie: the pair
+    /// is `(Top, Bottom)`, two `.from` reads give `(Top, Top)`, and the
+    /// edge collapses to a zero-length line in one corner. A self-loop
+    /// and two coincident centres are exactly those ties (contract
+    /// 0b-3: `|dx| > |dy|` is STRICT, so a tie resolves vertical and
+    /// `dy > 0` is false at zero).
+    func testEdgeSidesComeFromOnePairNotTwoFromReads() {
+        let card = CGRect(x: 0, y: 0, width: 200, height: 100)
+
+        let selfLoop = CanvasRendererNSView.resolvedSides(
+            fromSide: nil, toSide: nil, from: card, to: card)
+        XCTAssertEqual(selfLoop, CanvasSidePair(from: .top, to: .bottom))
+
+        // Different rects, same centre — the other tie.
+        let concentric = CGRect(x: 50, y: 25, width: 100, height: 50)
+        let coincident = CanvasRendererNSView.resolvedSides(
+            fromSide: nil, toSide: nil, from: card, to: concentric)
+        XCTAssertEqual(coincident, CanvasSidePair(from: .top, to: .bottom))
+
+        // A plain horizontal pair still faces each other.
+        let right = CGRect(x: 500, y: 0, width: 200, height: 100)
+        XCTAssertEqual(
+            CanvasRendererNSView.resolvedSides(
+                fromSide: nil, toSide: nil, from: card, to: right),
+            CanvasSidePair(from: .right, to: .left))
+
+        // A stored side wins per endpoint; the other still comes from
+        // the pair, not from a second call.
+        XCTAssertEqual(
+            CanvasRendererNSView.resolvedSides(
+                fromSide: .left, toSide: nil, from: card, to: right),
+            CanvasSidePair(from: .left, to: .left))
     }
 
     func testPanMaterializesTheNextWindow() async throws {
@@ -250,11 +288,22 @@ extension CanvasRendererTests {
             "follow-selection OFF: no observation-driven pan (F7)")
     }
 
-    func testRenameRefreshesLabelAndSurvivorsKeepOrdinals() async throws {
+    /// CD-20 (owner decision D-3, settled in 0b-1): speakable names are
+    /// core's, recomputed from document order on every derivation, so
+    /// an ordinal is a function of the CURRENT document and nothing
+    /// else. Renaming the first of two `Ideas` leaves exactly one
+    /// `Ideas`, and the survivor drops the ordinal it only ever had to
+    /// disambiguate against the card that just got renamed.
+    ///
+    /// This is the divergence from T R21's "ordinals hold for the
+    /// session". R21's stickiness lived in this view's own
+    /// `assignedSpeakable` map, so it was never document- or
+    /// session-held: two panes on one canvas already disagreed. Both
+    /// hosts now answer identically, which is what §W-A can pin and
+    /// per-view state never could.
+    func testRenameRefreshesLabelAndOrdinalsFollowDocumentOrder() async throws {
         let (state, doc, view) = try await makeView()
         XCTAssertTrue(view.speakableLabelsForTesting().contains("Ideas 2"))
-        // Rename the FIRST duplicate; the survivor must keep "Ideas 2"
-        // (session-sticky, no renumber) and the renamed card re-labels.
         _ = state.canvasApply(
             CanvasAction(
                 name: "rename",
@@ -263,9 +312,13 @@ extension CanvasRendererTests {
         await drainMainQueue()
         view.refreshFromDocument()
         let labels = view.speakableLabelsForTesting()
-        XCTAssertTrue(labels.contains("Fresh"), "\(labels)")
-        XCTAssertTrue(labels.contains("Ideas 2"), "survivor keeps its ordinal: \(labels)")
-        XCTAssertFalse(labels.contains("Ideas"), "old label gone after rename: \(labels)")
+        XCTAssertTrue(labels.contains("Fresh"), "renamed card re-labels: \(labels)")
+        XCTAssertTrue(
+            labels.contains("Ideas"),
+            "the last surviving \"Ideas\" needs no ordinal: \(labels)")
+        XCTAssertFalse(
+            labels.contains("Ideas 2"),
+            "the ordinal existed only against the renamed card: \(labels)")
         XCTAssertEqual(labels.count, Set(labels).count, "uniqueness holds: \(labels)")
     }
 

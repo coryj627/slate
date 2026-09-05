@@ -303,13 +303,15 @@ public sealed class W1SidebarAndRecentsTests
         Assert.Contains(sidebar.FilterResults, row => row.Path == "note0.md");
         sidebar.FilterText = string.Empty;
 
-        sidebar.MutationName = "Created";
+        // W5-4 F1: the auto-named untitled sequence — a second create
+        // advances past the occupied name instead of clobbering it.
         sidebar.CreateNoteCommand.Execute(null);
-        string created = Path.Combine(fixture.Root, "Created.md");
+        string created = Path.Combine(fixture.Root, "Untitled.md");
         Assert.True(File.Exists(created));
         File.WriteAllText(created, "must survive");
         sidebar.CreateNoteCommand.Execute(null);
         Assert.Equal("must survive", File.ReadAllText(created));
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "Untitled 2.md")));
 
         session.CreateFolderExclusive("Folder");
         sidebar.Refresh();
@@ -412,9 +414,11 @@ public sealed class W1SidebarCompletionTests : IDisposable
     }
 
     [Fact]
-    public void Sidebar_DeleteRequiresConfirmation_AndImportUsesExclusiveCollisionNames()
+    public void Sidebar_NonEmptyFolderDeleteStagesARefusableConfirmation_AndImportUsesExclusiveCollisionNames()
     {
         using FixtureVault fixture = FixtureVault.Create(1, "sidebar-import");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "full"));
+        File.WriteAllText(Path.Combine(fixture.Root, "full", "inner.md"), "kept\n");
         using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
         using var cancel = new CancelToken();
         session.ScanInitial(cancel);
@@ -424,13 +428,16 @@ public sealed class W1SidebarCompletionTests : IDisposable
             session,
             _ => { },
             vaultRoot: fixture.Root,
-            confirmDestructive: _ => false,
             pickImportSources: () => Task.FromResult<IReadOnlyList<string>>([source]),
             localAppDataRoot: Path.Combine(_scratch, "import-recents"));
 
-        sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == "note0.md");
+        // W5-4 F6: files and empty folders trash without confirmation
+        // (Finder parity); a NON-EMPTY folder stages the styled
+        // confirmation, and a refusal keeps it on disk.
+        sidebar.ConfirmRecycle = _ => false;
+        sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == "full");
         sidebar.DeleteCommand.Execute(null);
-        Assert.True(File.Exists(Path.Combine(fixture.Root, "note0.md")));
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "full", "inner.md")));
 
         sidebar.SelectedNode = null;
         sidebar.ImportCommand.Execute(null);
@@ -570,11 +577,29 @@ public sealed class W1QuickSwitcherAndChordTests
         ];
         Assert.All(required, id => Assert.Contains(commands, command => command.GetProperty("id").GetString() == id));
 
-        string[] active = commands
+        // The collision claim is SCOPE-KEYED. Two commands live in the
+        // same focus scope may not share a chord; two in different scopes
+        // may, and W6-1 PR C is where that first became true of COMMAND
+        // rows (Ctrl+F on a canvas table, Escape's ladder rung against
+        // cancel-import). This restates the invariant for the projected
+        // file; the cross-scope sharings themselves are dispositioned by
+        // id pair in `ChordTableTests.SharedCommandChords`, which is
+        // where a new one has to be argued.
+        var byScope = commands
             .Where(command => command.GetProperty("windows").ValueKind == JsonValueKind.String)
-            .Select(command => command.GetProperty("windows").GetString()!)
-            .ToArray();
-        Assert.Equal(active.Length, active.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+            .GroupBy(command => command.GetProperty("scope").GetString()!, StringComparer.Ordinal);
+        foreach (IGrouping<string, JsonElement> scope in byScope)
+        {
+            string[] active = scope
+                .Select(command => command.GetProperty("windows").GetString()!)
+                .ToArray();
+            Assert.True(
+                active.Length == active.Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                $"two commands in {scope.Key} scope share a chord: "
+                + string.Join(", ", active.GroupBy(chord => chord, StringComparer.OrdinalIgnoreCase)
+                    .Where(group => group.Count() > 1)
+                    .Select(group => group.Key)));
+        }
     }
 
     private static string RepoRoot()

@@ -52,6 +52,11 @@ internal sealed class EditorEmbedPreviewView : ContentControl
         set => SetValue(InteractionSessionProperty, value);
     }
 
+    /// <summary>Jump seam for hosts WITHOUT an editor interaction
+    /// coordinator (the W4-2 embeds leaf): used when
+    /// <see cref="InteractionSession"/> is null.</summary>
+    public Action<string>? JumpToSource { get; set; }
+
     private static void PreviewProperty_Changed(
         DependencyObject dependencyObject,
         DependencyPropertyChangedEventArgs eventArgs) =>
@@ -145,7 +150,17 @@ internal sealed class EditorEmbedPreviewView : ContentControl
                 Margin = new Thickness(0, 4, 0, 0),
             };
             AutomationProperties.SetName(open, $"Jump to source: {sourcePath}");
-            open.Click += (_, _) => InteractionSession?.OpenEmbedSource(sourcePath);
+            open.Click += (_, _) =>
+            {
+                if (InteractionSession is { } session)
+                {
+                    session.OpenEmbedSource(sourcePath);
+                }
+                else
+                {
+                    JumpToSource?.Invoke(sourcePath);
+                }
+            };
             panel.Children.Add(open);
         }
         return panel;

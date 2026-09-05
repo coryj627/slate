@@ -92,6 +92,13 @@ unicode-normalization = "0.1"
 unicode-segmentation = "1.13"
 regex = "1.12.4"
 memchr = "2.8.3"
+# getrandom is the OS entropy source behind `canvas::queries::new_id`
+# (W6-1 0b, §2 row M): JSON-Canvas node/edge ids are the first 16 hex of
+# a v4 UUID, so the minter needs real randomness and nothing else — no
+# UUID type, no formatting, no parsing. Already resolved transitively
+# (via `tempfile`, a direct dep), so pinning it direct adds no crate to
+# the lock. MIT OR Apache-2.0 — compatible inbound for AGPL-3.0-or-later.
+getrandom = "0.4"
 # petgraph backs Milestone P's GraphIndex (#550): StableDiGraph keeps
 # node indices stable across removals, which the incremental link-graph
 # mirror relies on. default-features = false sheds graphmap /

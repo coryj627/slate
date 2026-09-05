@@ -478,6 +478,15 @@ final class BaseDocument: ObservableObject {
         selectView(index: max(activeViewIndex - 1, 0), session: session)
     }
 
+    /// Execution-fault seam (round 17): forces the `baseExecute`
+    /// failure path so the sort-rollback contract is testable without
+    /// a corruptible fixture.
+    var executeFaultForTests: (() -> Error)?
+
+    /// Rollback-fault seam (round 19): fails the post-execution-failure
+    /// engine rollback so the detach posture is testable.
+    var rollbackFaultForTests: (() -> Error)?
+
     func executeActiveView(session: VaultSession, thisPath: String? = nil) {
         contentRefreshGeneration &+= 1
         // A batch-Trash unknown outcome deliberately detaches the handle while
@@ -491,6 +500,9 @@ final class BaseDocument: ObservableObject {
             return
         }
         do {
+            if let fault = executeFaultForTests?() {
+                throw fault
+            }
             let appliedFilter = quickFilterArgument
             let executed = try session.baseExecute(
                 handle: handle,
@@ -591,7 +603,7 @@ final class BaseDocument: ObservableObject {
     }
 
     @discardableResult
-    func sortFocusedColumn(session: VaultSession) -> String? {
+    func sortFocusedColumn(session: VaultSession) -> A11yEvent? {
         guard let result, result.columns.indices.contains(focusedColumnIndex) else {
             return nil
         }
@@ -605,8 +617,9 @@ final class BaseDocument: ObservableObject {
             DataGridSortState(columnIndex: focusedColumnIndex, ascending: ascending),
             session: session)
         else { return nil }
-        let direction = ascending ? "ascending" : "descending"
-        return "Sorted by \(result.columns[focusedColumnIndex].label), \(direction)"
+        return .baseSortedByColumn(
+            column: result.columns[focusedColumnIndex].label,
+            ascending: ascending)
     }
 
     @discardableResult
@@ -621,14 +634,58 @@ final class BaseDocument: ObservableObject {
         } else {
             columnID = nil
         }
+        // Captured for rollback (round 17): an execution failure AFTER
+        // admission must restore the ENGINE's transient sort too, or
+        // the next execute would resurrect an order no surface ever
+        // confirmed.
+        let previousSort = sortState
+        let previousColumnID = previousSort.flatMap { previous in
+            result.flatMap { snapshot in
+                snapshot.columns.indices.contains(previous.columnIndex)
+                    ? snapshot.columns[previous.columnIndex].id
+                    : nil
+            }
+        }
         do {
             try session.baseSetTransientSort(
                 handle: handle,
                 view: UInt32(activeViewIndex),
                 columnId: columnID,
                 ascending: newSort?.ascending ?? true)
-            sortState = newSort
             executeActiveView(session: session)
+            guard result != nil else {
+                // Sorting is TRANSACTIONAL (round 17): the rows never
+                // arrived, so publishing the new sortState would make
+                // the grid announce a sort that did not happen. The
+                // failed state stays visible — that is the honest
+                // display — but the sort identity and the engine both
+                // keep the previous order.
+                do {
+                    if let fault = rollbackFaultForTests?() {
+                        throw fault
+                    }
+                    try session.baseSetTransientSort(
+                        handle: handle,
+                        view: UInt32(activeViewIndex),
+                        columnId: previousColumnID,
+                        ascending: previousSort?.ascending ?? true)
+                } catch {
+                    // The engine may now hold the REJECTED sort while
+                    // the surface describes the previous one
+                    // (round 19). DETACH — the batch-Trash posture —
+                    // so no later execute can render rows that
+                    // contradict the published identity; reopening
+                    // restores a coherent pair. The native handle is
+                    // CLOSED first (round 22): dropping the reference
+                    // alone leaked the registry entry for the
+                    // session's lifetime.
+                    session.closeBase(handle: handle)
+                    self.handle = nil
+                    state = .failed(friendlyMessage(for: error))
+                }
+                return false
+            }
+            sortState = newSort
             return true
         } catch {
             result = nil
@@ -638,7 +695,7 @@ final class BaseDocument: ObservableObject {
     }
 
     @discardableResult
-    func saveSortToView(session: VaultSession) throws -> String? {
+    func saveSortToView(session: VaultSession) throws -> A11yEvent? {
         guard let handle,
             let result,
             let sortState,
@@ -657,8 +714,7 @@ final class BaseDocument: ObservableObject {
             ascending: true)
         views = try session.baseViews(handle: handle)
         executeActiveView(session: session)
-        let direction = sortState.ascending ? "ascending" : "descending"
-        return "Saved sort by \(column.label), \(direction)."
+        return .baseSortSavedToView(column: column.label, ascending: sortState.ascending)
     }
 
     func close(session: VaultSession) {
@@ -938,21 +994,39 @@ final class BaseDocument: ObservableObject {
         return quickFilterText
     }
 
-    var quickFilterResultAnnouncement: String {
-        guard let result else { return "0 of 0 results" }
+    /// The quick-filter count as vocabulary DATA (#969). Both document
+    /// types built this sentence identically and separately; now the
+    /// counts are the data and one template renders it.
+    var quickFilterResultEvent: A11yEvent {
+        guard let result else { return .baseQuickFilterResult(shown: 0, total: 0) }
         let total = quickFilterActive ? result.unfilteredShownCount : result.totalCount
-        return "\(result.shownCount) of \(CountCopy.counted(total, "result", "results"))"
+        return .baseQuickFilterResult(shown: result.shownCount, total: total)
     }
 
+    /// Rendered text. Kept because `applyQuickFilter` / `clearQuickFilter`
+    /// return it and the suite asserts on it — it renders from the event
+    /// now rather than being composed here.
+    var quickFilterResultAnnouncement: String {
+        a11yRender(event: quickFilterResultEvent).text
+    }
+
+    /// The readback as vocabulary DATA — core owns the joining and the
+    /// optional clauses now (#969).
+    var whereAmIEvent: A11yEvent {
+        .baseWhereAmI(
+            base: displayName,
+            view: activeViewName,
+            quickFilter: quickFilterActive
+                ? (editedQuickFilterArgument ?? appliedQuickFilterText ?? "")
+                : nil)
+    }
+
+    /// Rendered readback text. Kept because callers legitimately need
+    /// the STRING — `basesWhereAmI()` returns it, and the results
+    /// popover carries it as a field — but it is no longer composed
+    /// here.
     var whereAmIReadback: String {
-        var parts = ["Base: \(displayName)"]
-        if let activeViewName {
-            parts.append("view: \(activeViewName)")
-        }
-        if quickFilterActive {
-            parts.append("quick filter: \(editedQuickFilterArgument ?? appliedQuickFilterText ?? "")")
-        }
-        return parts.joined(separator: ", ")
+        a11yRender(event: whereAmIEvent).text
     }
 
     private func clearQuickFilterState() {

@@ -94,6 +94,36 @@ extension AppState {
     /// Tear down the diagram (graph-tab close, vault open/close, or the
     /// mode toggle returning to Table). Bumps the build sequence so any
     /// in-flight build/refresh publishes nothing.
+    /// The diagram's topology under the current visibility query and the
+    /// config (W6-2 PR 0b, 0b-6b, design B): one crossing per rebuild. The
+    /// held generation is the LAYOUT's (design A): a result from another
+    /// generation is dropped and nil returned — the layout's own refresh
+    /// path (`refreshGraphDiagramIfGraphChanged`) is the recovery, never a
+    /// snapshot fetch — and the rebuild that follows the adoption reissues.
+    func graphTopologyForDiagram(heldGeneration: UInt64, heldFilter: GraphFilter) -> GraphTopology? {
+        let query = graphVisibilityQuery
+        // The layout's identity includes its backend filter (design A): a
+        // query under another filter is never even issued against it.
+        guard query.filter == heldFilter else { return nil }
+        if let source = graphTopologySource {
+            return source(query, graphConfig, heldGeneration)
+        }
+        guard let session = currentSession,
+            let topology = try? session.graphTopology(query: query, config: graphConfig)
+        else { return nil }
+        return Self.acceptGraphTopology(
+            topology, heldGeneration: heldGeneration, heldFilter: heldFilter, queryFilter: query.filter)
+    }
+
+    /// The pure half of the diagram's token check, unit-testable: a
+    /// topology publishes only against the layout's identity — its backend
+    /// filter and its generation (design A).
+    nonisolated static func acceptGraphTopology(
+        _ topology: GraphTopology, heldGeneration: UInt64, heldFilter: GraphFilter, queryFilter: GraphFilter
+    ) -> GraphTopology? {
+        topology.generation == heldGeneration && queryFilter == heldFilter ? topology : nil
+    }
+
     func resetGraphDiagramState() {
         graphDiagramBuildSeq += 1
         graphDiagramRefreshTask?.cancel()
@@ -159,7 +189,7 @@ extension AppState {
             // reassign the old numeric id to a DIFFERENT node, so keeping
             // `model.selection`'s raw UInt64 (as `adopt` does) would move the
             // ring — and Return — to the wrong node, or drop a node that
-            // actually survived under a new id. The shared `GraphNodeKey` is
+            // actually survived under a new id. The shared `stableKey` is
             // the source of truth.
             model.selection = Self.graphDiagramNodeID(
                 forKey: self.graphSelectedNodeKey, ids: synced.0, byID: byID)
@@ -174,7 +204,7 @@ extension AppState {
     func graphDiagramDidConverge() {
         guard graphForcesSettlePending else { return }
         graphForcesSettlePending = false
-        graphAnnouncer.announceSettle("Graph layout settled.")
+        graphAnnouncer.announce(.graphLayoutSettled)
     }
 
     // MARK: Selection + readback
@@ -189,16 +219,16 @@ extension AppState {
         model.selection = id
         // Mirror into the SHARED cross-projection selection (P2-5 #561) so
         // the Table lands on the same row on a Diagram→Table switch. Keyed by
-        // the stable `GraphNodeKey`, never the volatile layout id.
+        // the stable `stableKey`, never the volatile layout id.
         if let node = model.node(id) {
-            graphSelectedNodeKey = GraphNodeKey.make(for: node)
+            graphSelectedNodeKey = node.stableKey
         }
-        if announce, let ref = model.rowRef(id) {
-            graphAnnouncer.announce(.rowFocused(ref))
+        if announce, let row = model.rowCopy(id) {
+            graphAnnouncer.announce(.graphRow(verbosity: graphAnnouncer.verbosity, row: row))
         }
     }
 
-    /// The layout id of the node whose stable `GraphNodeKey` equals `key`,
+    /// The layout id of the node whose `stableKey` equals `key`,
     /// among `ids`/`byID` — the ONE mapping that both the build-time seeding
     /// and the live lookup use, so they can't drift (P2-5 #561). Pure +
     /// `nonisolated` for unit testing.
@@ -206,7 +236,7 @@ extension AppState {
         forKey key: String?, ids: [UInt64], byID: [UInt64: GraphNode]
     ) -> UInt64? {
         guard let key else { return nil }
-        return ids.first { id in byID[id].map { GraphNodeKey.make(for: $0) == key } ?? false }
+        return ids.first { id in byID[id]?.stableKey == key }
     }
 
     /// The layout id of the node matching the shared `graphSelectedNodeKey`
@@ -228,42 +258,57 @@ extension AppState {
         if model.pinned.contains(id) {
             model.pinned.remove(id)
             model.session.unpinNode(id: id)
-            graphAnnouncer.announce(.status("Unpinned."))
+            graphAnnouncer.announce(.graphPinned(pinned: false))
         } else {
             model.pinned.insert(id)
             model.session.pinNode(id: id, x: x, y: y)
-            graphAnnouncer.announce(.status("Pinned."))
+            graphAnnouncer.announce(.graphPinned(pinned: true))
         }
     }
 
     /// The ⌃⌘I "Where am I?" readback for the diagram (spec §P2-3): the
     /// selected node's row copy, its component, the zoom level, and the
     /// active filters — backend AND the client-side name query / preset kind
-    /// filter (review) — assembled once and spoken assertively.
+    /// filter. One typed event; core renders it (W6-2 PR 0a, contracts
+    /// doc 0a-6): ALWAYS the full row copy, at every verbosity — a recorded
+    /// correction of the terse coupling this readback used to inherit
+    /// (0a-D1). Medium, as the shipped code posted it.
     func graphDiagramWhereAmI() {
-        guard let text = graphDiagramWhereAmIText() else { return }
-        graphAnnouncer.announce(.summary(text))
+        guard let event = graphDiagramWhereAmIEvent() else { return }
+        graphAnnouncer.announce(event)
     }
 
-    /// The assembled ⌃⌘I readback string — the selected node's row copy, its
-    /// component, the zoom, and the active filters (backend AND the
-    /// client-side name query / Unresolved-preset kind, which the backend
-    /// phrase omits — review finding). Pure + testable; nil when no diagram.
-    func graphDiagramWhereAmIText() -> String? {
+    /// The ⌃⌘I readback as data — the selection clause, the zoom, the
+    /// backend filter flags, the client-side needle (core trims it and
+    /// omits an empty one) and the Unresolved-preset kind. Pure +
+    /// testable; nil when no diagram.
+    func graphDiagramWhereAmIEvent() -> GraphA11yEvent? {
         guard let model = graphDiagramModel else { return nil }
-        var parts: [String] = []
-        if let sel = model.selection, let node = model.node(sel), let ref = model.rowRef(sel) {
-            parts.append(graphAnnouncer.rowPhrase(ref))
-            parts.append("component \(node.component)")
+        let selection: GraphWhereAmISelection
+        if let sel = model.selection, let node = model.node(sel), let row = model.rowCopy(sel) {
+            // The component is the topology entry's (0b-6b) when the diagram
+            // has accepted one; the model's metadata before the first epoch.
+            let component = graphDiagramTopology?.nodes.first { $0.id == sel }?.component ?? node.component
+            selection = .node(row: row, component: component)
         } else {
-            parts.append("No node selected")
+            selection = .noSelection
         }
-        parts.append("zoom \(model.viewport.zoomPercent) percent")
-        parts.append(graphDiagramFilterPhrase(model.filter))
-        let needle = graphTableTextFilter.trimmingCharacters(in: .whitespaces)
-        if !needle.isEmpty { parts.append("name filter \u{201C}\(needle)\u{201D}") }
-        if graphTableKindFilter == .ghost { parts.append("unresolved only") }
-        return parts.joined(separator: ", ") + "."
+        // The filter clause is the closed set of reachable states
+        // (contracts doc design B(i)): the unresolved preset is ONE arm
+        // whose backend flags are implied; otherwise the three toggles.
+        let backend = model.filter
+        let filter: GraphWhereAmIFilter =
+            graphTableKindFilter == .ghost
+            ? .unresolvedOnly
+            : .normal(
+                orphansOnly: backend.orphansOnly,
+                attachmentsShown: backend.includeAttachments,
+                ghostsShown: backend.includeGhosts)
+        return .graphWhereAmI(
+            selection: selection,
+            zoomPercent: UInt32(max(0, model.viewport.zoomPercent)),
+            filter: filter,
+            nameFilter: graphTableTextFilter)
     }
 
     // MARK: Zoom router (join the #848 focus-routed menu owner)
@@ -343,7 +388,8 @@ extension AppState {
     private func graphDiagramZoom(_ change: (CanvasViewport) -> Void) {
         guard let viewport = graphDiagramModel?.viewport else { return }
         change(viewport)
-        graphAnnouncer.announce(.status("Zoom \(viewport.zoomPercent) percent."))
+        graphAnnouncer.announce(
+            .graphZoom(fit: false, percent: UInt32(max(0, viewport.zoomPercent))))
     }
 
     /// ⌥⌘0 "Fit Graph" (a new chord — spec §P2-3 / T rule R3): frame every
@@ -352,15 +398,8 @@ extension AppState {
     func graphDiagramFit() {
         guard let model = graphDiagramModel else { return }
         model.fitToContent()
-        graphAnnouncer.announce(.status("Fit graph. Zoom \(model.viewport.zoomPercent) percent."))
+        graphAnnouncer.announce(
+            .graphZoom(fit: true, percent: UInt32(max(0, model.viewport.zoomPercent))))
     }
 
-    /// A spoken description of the active backend filter (Where-am-I).
-    func graphDiagramFilterPhrase(_ filter: GraphFilter) -> String {
-        var active: [String] = []
-        if filter.orphansOnly { active.append("orphans only") }
-        if filter.includeAttachments { active.append("attachments shown") }
-        active.append(filter.includeGhosts ? "unresolved shown" : "unresolved hidden")
-        return "filters: " + active.joined(separator: ", ")
-    }
 }

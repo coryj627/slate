@@ -61,6 +61,56 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
             ["preambleAllTokens"] = "Preamble + all tokens",
         };
 
+    /// <summary>W3-2 MathPrefs vocabulary — storage keys and the
+    /// enum-verbatim names the canonical announcements speak (mac
+    /// Settings parity). #1056: SimpleSpeak replaced MathSpeak, which
+    /// MathCAT never implemented; a stored "mathSpeak" migrates to
+    /// ClearSpeak in AppPreferencesStore.</summary>
+    internal static readonly IReadOnlyDictionary<string, string> MathSpeechStyleNames =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["clearSpeak"] = "ClearSpeak",
+            ["simpleSpeak"] = "SimpleSpeak",
+        };
+
+    internal static readonly IReadOnlyDictionary<string, string> MathVerbosityNames =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["terse"] = "Terse",
+            ["medium"] = "Medium",
+            ["verbose"] = "Verbose",
+        };
+
+    internal static readonly IReadOnlyDictionary<string, string> MathBrailleCodeNames =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["nemeth"] = "Nemeth",
+            ["ueb"] = "UEB",
+        };
+
+    private string _mathSpeechStyle = "clearSpeak";
+    private string _mathVerbosity = "medium";
+    private string _mathBrailleCode = "nemeth";
+
+    /// <summary>Raised after any math preference changes, carrying the
+    /// full FFI prefs — the workspace pushes them to the session and
+    /// re-projects reading views.</summary>
+    public event Action<MathPrefs>? MathPrefsChanged;
+
+    /// <summary>The current prefs in FFI shape (applied to the session
+    /// at workspace construction and on every change).</summary>
+    public MathPrefs CurrentMathPrefs => new(
+        _mathSpeechStyle == "simpleSpeak"
+            ? MathSpeechStyle.SimpleSpeak
+            : MathSpeechStyle.ClearSpeak,
+        _mathVerbosity switch
+        {
+            "terse" => MathVerbosity.Terse,
+            "verbose" => MathVerbosity.Verbose,
+            _ => MathVerbosity.Medium,
+        },
+        _mathBrailleCode == "ueb" ? BrailleCode.Ueb : BrailleCode.Nemeth);
+
     public EditorPreferencesViewModel(
         Action<A11yEvent>? announce = null,
         IEditorSpellingService? spellingService = null,
@@ -80,13 +130,70 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
             && CodeVerbosityNames.ContainsKey(verbosity)
                 ? verbosity
                 : "preambleOnly";
+        // A legacy "mathSpeak" never arrives here as active: the store
+        // migrates it to "clearSpeak" (#1056), and an unknown key falls
+        // to the default like every other field.
+        _mathSpeechStyle =
+            loaded?.MathSpeechStyle is string speechStyle
+            && MathSpeechStyleNames.ContainsKey(speechStyle)
+                ? speechStyle
+                : "clearSpeak";
+        _mathVerbosity =
+            loaded?.MathVerbosity is string mathVerbosity
+            && MathVerbosityNames.ContainsKey(mathVerbosity)
+                ? mathVerbosity
+                : "medium";
+        _mathBrailleCode =
+            loaded?.MathBrailleCode is string brailleCode
+            && MathBrailleCodeNames.ContainsKey(brailleCode)
+                ? brailleCode
+                : "nemeth";
+        SetMathSpeechStyleCommand = new RelayCommand(
+            parameter => SetMathPreference(
+                parameter,
+                MathSpeechStyleNames,
+                ref _mathSpeechStyle,
+                nameof(IsMathSpeechClearSpeak),
+                nameof(IsMathSpeechSimpleSpeak),
+                display => new A11yEvent.MathSpeechStyle(display),
+                value => Persist(state => state with { MathSpeechStyle = value })),
+            _ => true);
+        SetMathVerbosityCommand = new RelayCommand(
+            parameter => SetMathPreference(
+                parameter,
+                MathVerbosityNames,
+                ref _mathVerbosity,
+                nameof(IsMathVerbosityTerse),
+                nameof(IsMathVerbosityMedium),
+                display => new A11yEvent.MathVerbosity(display),
+                value => Persist(state => state with { MathVerbosity = value }),
+                nameof(IsMathVerbosityVerbose)),
+            _ => true);
+        SetMathBrailleCodeCommand = new RelayCommand(
+            parameter => SetMathPreference(
+                parameter,
+                MathBrailleCodeNames,
+                ref _mathBrailleCode,
+                nameof(IsMathBrailleNemeth),
+                nameof(IsMathBrailleUeb),
+                display => new A11yEvent.MathBrailleCode(display),
+                value => Persist(state => state with { MathBrailleCode = value })),
+            _ => true);
         SetCodePreambleVerbosityCommand = new RelayCommand(
             parameter =>
             {
                 if (parameter is not string key
-                    || !CodeVerbosityNames.TryGetValue(key, out string? display)
-                    || string.Equals(_codePreambleVerbosity, key, StringComparison.Ordinal))
+                    || !CodeVerbosityNames.TryGetValue(key, out string? display))
                 {
+                    return;
+                }
+                if (string.Equals(_codePreambleVerbosity, key, StringComparison.Ordinal))
+                {
+                    // m1: the re-selected item re-asserts its check.
+                    RaiseCheckGroup(
+                        nameof(IsCodeVerbosityPreambleOnly),
+                        nameof(IsCodeVerbosityFirstLine),
+                        nameof(IsCodeVerbosityAllTokens));
                     return;
                 }
                 CodePreambleVerbosity = key;
@@ -137,6 +244,20 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
                     A11yPriority.Medium));
             },
             _ => true);
+        _historyShowChangesSinceOpen = loaded?.HistoryShowChangesSinceOpen ?? false;
+        ToggleHistoryChangesSinceOpenCommand = new RelayCommand(
+            _ =>
+            {
+                HistoryShowChangesSinceOpen = !HistoryShowChangesSinceOpen;
+                // W0.5-3 residue: the menu-toggle announce family (the
+                // reading-link precedent).
+                _announce(new A11yEvent.HostComposed(
+                    HistoryShowChangesSinceOpen
+                        ? "Changes since last open shown in History."
+                        : "Changes since last open hidden.",
+                    A11yPriority.Medium));
+            },
+            _ => true);
         ZoomInCommand = new RelayCommand(
             _ => FontSize = Math.Min(MaximumFontSize, FontSize + 1),
             _ => FontSize < MaximumFontSize);
@@ -174,6 +295,43 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
     /// current-tab-with-⌘-click; gap G22). The editor's own navigation
     /// is untouched either way.
     /// </summary>
+    private bool _historyShowChangesSinceOpen;
+
+    /// <summary>W4-7 (#739, contract H8): the changes-since-last-open
+    /// opt-in — a HOST preference (mac Settings ▸ History), default
+    /// off; takes effect at the next note activation. The workspace
+    /// mirrors changes into the history document.</summary>
+    public System.Windows.Input.ICommand ToggleHistoryChangesSinceOpenCommand { get; }
+
+    public bool HistoryShowChangesSinceOpen
+    {
+        get => _historyShowChangesSinceOpen;
+        set
+        {
+            if (!SetField(ref _historyShowChangesSinceOpen, value))
+            {
+                return;
+            }
+            HistoryShowChangesSinceOpenChanged?.Invoke(value);
+            if (_preferencesStore is not { } store)
+            {
+                return;
+            }
+            try
+            {
+                store.Save(store.Load() with { HistoryShowChangesSinceOpen = value });
+            }
+            catch (IOException exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.AppPreferencesPersistFailed, exception);
+            }
+        }
+    }
+
+    /// <summary>The workspace subscribes to mirror the live value into
+    /// the history document (contract H8).</summary>
+    internal event Action<bool>? HistoryShowChangesSinceOpenChanged;
+
     public bool OpenReadingLinksInNewTab
     {
         get => _openReadingLinksInNewTab;
@@ -243,6 +401,87 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
         }
     }
 
+    /// <summary>The notifications of one radio group's check items, raised
+    /// together — on a change and on a re-selection alike (m1).</summary>
+    private void RaiseCheckGroup(params string?[] names)
+    {
+        foreach (string? name in names)
+        {
+            if (name is not null)
+            {
+                OnPropertyChanged(name);
+            }
+        }
+    }
+
+    private void SetMathPreference(
+        object? parameter,
+        IReadOnlyDictionary<string, string> names,
+        ref string field,
+        string boolA,
+        string boolB,
+        Func<string, A11yEvent> announcement,
+        Action<string> persist,
+        string? boolC = null)
+    {
+        if (parameter is not string key || !names.TryGetValue(key, out string? display))
+        {
+            return;
+        }
+        if (string.Equals(field, key, StringComparison.Ordinal))
+        {
+            // m1 (§C-unit's minors, fixed 2026-09-03): the group's items
+            // are CHECK items (WPF has no radio menu item) bound OneWay.
+            // A click on the already-selected item toggles its IsChecked
+            // to false locally before the command runs; with the value
+            // unchanged nothing re-pushed the binding and the selected
+            // item read unchecked. Re-raising the group's notifications
+            // re-asserts the selection — nothing is persisted or spoken,
+            // because nothing changed.
+            RaiseCheckGroup(boolA, boolB, boolC);
+            return;
+        }
+        field = key;
+        RaiseCheckGroup(boolA, boolB, boolC);
+        persist(key);
+        _announce(announcement(display));
+        MathPrefsChanged?.Invoke(CurrentMathPrefs);
+    }
+
+    private void Persist(Func<AppPreferencesState, AppPreferencesState> update)
+    {
+        if (_preferencesStore is not { } store)
+        {
+            return;
+        }
+        try
+        {
+            store.Save(update(store.Load()));
+        }
+        catch (IOException exception)
+        {
+            HostLog.Write(HostDiagnosticEvent.AppPreferencesPersistFailed, exception);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            HostLog.Write(HostDiagnosticEvent.AppPreferencesPersistFailed, exception);
+        }
+    }
+
+    public bool IsMathSpeechClearSpeak => _mathSpeechStyle == "clearSpeak";
+
+    public bool IsMathSpeechSimpleSpeak => _mathSpeechStyle == "simpleSpeak";
+
+    public bool IsMathVerbosityTerse => _mathVerbosity == "terse";
+
+    public bool IsMathVerbosityMedium => _mathVerbosity == "medium";
+
+    public bool IsMathVerbosityVerbose => _mathVerbosity == "verbose";
+
+    public bool IsMathBrailleNemeth => _mathBrailleCode == "nemeth";
+
+    public bool IsMathBrailleUeb => _mathBrailleCode == "ueb";
+
     public bool IsCodeVerbosityPreambleOnly =>
         _codePreambleVerbosity == "preambleOnly";
 
@@ -256,6 +495,9 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
     public ICommand ToggleSpellCheckCommand { get; }
     public ICommand ToggleReadingLinkTargetCommand { get; }
     public ICommand SetCodePreambleVerbosityCommand { get; }
+    public ICommand SetMathSpeechStyleCommand { get; }
+    public ICommand SetMathVerbosityCommand { get; }
+    public ICommand SetMathBrailleCodeCommand { get; }
     public ICommand ZoomInCommand { get; }
     public ICommand ZoomOutCommand { get; }
 
@@ -475,6 +717,30 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private long _mathRangeRefreshCountForTests;
     internal long MathRangeRefreshCountForTests =>
         Interlocked.Read(ref _mathRangeRefreshCountForTests);
+
+    /// <summary>#1152: true when no math refresh is pending, running, or
+    /// queued to re-run. A test that reasons about
+    /// <see cref="MathRangeRefreshCountForTests"/> must establish this
+    /// (together with <see cref="MathRangesCurrentForTests"/>) BEFORE it
+    /// samples or asserts — the worker is asynchronous, and a count read
+    /// while it is in flight asserts a race, not a property.</summary>
+    internal bool MathRefreshIdleForTests
+    {
+        get
+        {
+            lock (_mathRefreshGate)
+            {
+                return _mathRefreshDelay is null && !_mathWorkerRunning && !_mathRerunPending;
+            }
+        }
+    }
+
+    /// <summary>#1152: true once the published math ranges match the
+    /// editor session's current revision — the worker publishes through
+    /// the dispatcher, so "idle" alone can precede the publication landing.
+    /// Dispatcher-thread read, like every other math-range accessor.</summary>
+    internal bool MathRangesCurrentForTests =>
+        _tab.EditorSession is { } session && _mathRangesRevision == session.Revision;
     internal long ArtifactCacheLoadCountForTests =>
         Interlocked.Read(ref _artifactCacheLoadCountForTests);
     internal long CitationCacheLoadCountForTests =>
@@ -1099,7 +1365,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         EmbedResolution resolution,
         bool truncated)
     {
-        EditorEmbedPreviewNode root = BuildEmbedNode(resolution, depth: 0);
+        // The popover gets its own per-card decoded budget (round 5):
+        // a single card of many tiny nested images must not allocate
+        // unbounded bitmaps here either.
+        long spent = 0;
+        EditorEmbedPreviewNode root = BuildEmbedNode(
+            resolution,
+            depth: 0,
+            cost => TryReserveDecodedBytes(
+                ref spent, cost, MaxDecodedImageBytesPerCard));
         string body = string.Empty;
         if (truncated)
         {
@@ -1122,9 +1396,65 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             root);
     }
 
+    /// <summary>The decoded-pixel bound for one built card (W4-2
+    /// round 5): a valid preview may hold ~128 nested images whose
+    /// ENCODED bytes are tiny but decode to ~5 MB each at the 1120px
+    /// bound — enforcement must happen BEFORE pixels are allocated,
+    /// so the decoder reserves each image's bounded cost from its
+    /// header and elides the image when the budget is spent.</summary>
+    internal const long MaxDecodedImageBytesPerCard = 64L * 1024 * 1024;
+
+    /// <summary>Saturating cost of a decode: header dimensions are
+    /// attacker-controlled Int32s, so the product can overflow long
+    /// (round 7) — an overflowed or non-positive cost saturates to
+    /// long.MaxValue so every reservation refuses it.</summary>
+    internal static long SaturatingDecodeCost(
+        long width, long height, long bytesPerPixel)
+    {
+        if (width <= 0 || height <= 0 || bytesPerPixel <= 0)
+        {
+            return long.MaxValue;
+        }
+        try
+        {
+            return checked(width * height * bytesPerPixel);
+        }
+        catch (OverflowException)
+        {
+            return long.MaxValue;
+        }
+    }
+
+    /// <summary>The one reservation predicate both the panel batch
+    /// and the popover card use: subtraction-compared so the
+    /// accumulator can never be poisoned by overflow, and refusal
+    /// leaves it untouched (round 7).</summary>
+    internal static bool TryReserveDecodedBytes(
+        ref long spent, long cost, long limit)
+    {
+        if (cost <= 0 || cost > limit - spent)
+        {
+            return false;
+        }
+        spent += cost;
+        return true;
+    }
+
+    /// <summary>W4-2: the embeds LEAF renders the same card tree the
+    /// Ctrl+E popover builds — one composition for the embed name
+    /// shapes, nested splicing, image decode, and unresolved
+    /// descriptions. <paramref name="reserveDecodedBytes"/> is asked
+    /// before every image decode with the bounded decoded cost; a
+    /// false return elides that image with a loud warning body.</summary>
+    internal static EditorEmbedPreviewNode BuildEmbedPreviewNode(
+        EmbedResolution resolution,
+        Func<long, bool>? reserveDecodedBytes = null) =>
+        BuildEmbedNode(resolution, depth: 0, reserveDecodedBytes);
+
     private static EditorEmbedPreviewNode BuildEmbedNode(
         EmbedResolution resolution,
-        int depth)
+        int depth,
+        Func<long, bool>? reserveDecodedBytes = null)
     {
         if (depth >= 3)
         {
@@ -1144,15 +1474,21 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         {
             EmbedResolution.FullNote full => new EditorEmbedPreviewNode(
                 $"Embedded note: {full.TargetPath}",
-                BuildEmbedParts(full.Text, full.Nested, depth + 1),
+                BuildEmbedParts(
+                    full.Text, full.Nested, depth + 1, reserveDecodedBytes),
                 null,
                 full.TargetPath,
                 IsDisclosure: true,
                 InitiallyExpanded: depth == 0,
                 IsWarning: false),
+            // The heading is authored text and reaches the Expander
+            // header + UIA name — display-bounded (round 16); the
+            // resolution already happened, so nothing exact is lost.
             EmbedResolution.Section section => new EditorEmbedPreviewNode(
-                $"Embedded section: {section.Heading} from {section.TargetPath}",
-                BuildEmbedParts(section.Text, section.Nested, depth + 1),
+                $"Embedded section: {BoundDisplayText(section.Heading)} "
+                    + $"from {section.TargetPath}",
+                BuildEmbedParts(
+                    section.Text, section.Nested, depth + 1, reserveDecodedBytes),
                 null,
                 section.TargetPath,
                 IsDisclosure: true,
@@ -1166,7 +1502,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 IsDisclosure: true,
                 InitiallyExpanded: depth == 0,
                 IsWarning: false),
-            EmbedResolution.Image image => BuildImageNode(image, depth),
+            EmbedResolution.Image image =>
+                BuildImageNode(image, depth, reserveDecodedBytes),
             EmbedResolution.Unresolved unresolved => new EditorEmbedPreviewNode(
                 Describe(unresolved.Reason),
                 [],
@@ -1186,15 +1523,23 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         };
     }
 
+    internal const string ImageBudgetSpentMessage =
+        "Image not shown: the embed image budget for this note is spent. "
+        + "Open source to view it.";
+
     private static EditorEmbedPreviewNode BuildImageNode(
         EmbedResolution.Image image,
-        int depth)
+        int depth,
+        Func<long, bool>? reserveDecodedBytes)
     {
-        ImageSource? decoded = DecodeImage(image.Bytes, image.Mime);
-        string body = decoded is null
-            ? $"Could not decode image. MIME: {image.Mime}. "
-                + "The file may be corrupt or use an unsupported codec."
-            : image.Mime;
+        ImageSource? decoded = DecodeImage(
+            image.Bytes, image.Mime, reserveDecodedBytes, out bool budgetSpent);
+        string body = budgetSpent
+            ? ImageBudgetSpentMessage
+            : decoded is null
+                ? $"Could not decode image. MIME: {image.Mime}. "
+                    + "The file may be corrupt or use an unsupported codec."
+                : image.Mime;
         return new EditorEmbedPreviewNode(
             ImageTitle(image.TargetPath, image.Alt),
             [new EditorEmbedPreviewPart(body, null)],
@@ -1208,7 +1553,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private static IReadOnlyList<EditorEmbedPreviewPart> BuildEmbedParts(
         string parentText,
         IReadOnlyList<NestedEmbed> nested,
-        int childDepth)
+        int childDepth,
+        Func<long, bool>? reserveDecodedBytes = null)
     {
         if (nested.Count == 0)
         {
@@ -1233,7 +1579,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             }
             parts.Add(new EditorEmbedPreviewPart(
                 null,
-                BuildEmbedNode(item.Resolution, childDepth)));
+                BuildEmbedNode(item.Resolution, childDepth, reserveDecodedBytes)));
             cursor = Math.Clamp(
                 checked((int)item.ByteEndInParent),
                 offset,
@@ -1331,7 +1677,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return true;
         }
 
-        return _tab.ToggleTask(task, _announce);
+        return _tab.ToggleTask(task, _announce) != TabTaskToggle.Refused;
     }
 
     private TaskItem? CachedTaskAt(int utf16Offset, EditorInteractionOrigin origin)
@@ -2317,7 +2663,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         _announce(new A11yEvent.HostComposed(
             $"Reload {Path.GetFileName(_tab.Path)} before using this interaction.",
             A11yPriority.High));
-    private static string ComposeAnchoredTarget(OutgoingLink link)
+    /// <summary>The resolver target INCLUDING the anchor —
+    /// OutgoingLink.TargetRaw is anchor-stripped, so resolving by it
+    /// alone renders `![[note#Section]]` as the whole note (W4-2
+    /// round 6). Shared by the popover and the embeds panel.</summary>
+    internal static string ComposeAnchoredTarget(OutgoingLink link)
     {
         if (link.TargetAnchor is null)
         {
@@ -2339,18 +2689,37 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         return keys.Length == 0 ? reference.Raw : $"Citation: {keys}";
     }
 
+    /// <summary>Display ceiling for AUTHORED strings that reach UI
+    /// text and automation names (W4-2 round 14): activation data
+    /// stays exact on the records; only what is rendered is bounded,
+    /// so a megabyte link target cannot become a megabyte UIA name.</summary>
+    internal static string BoundDisplayText(string value)
+    {
+        const int maxChars = 4096;
+        if (value.Length <= maxChars)
+        {
+            return value;
+        }
+        int end = maxChars;
+        if (char.IsHighSurrogate(value[end - 1]))
+        {
+            end--;
+        }
+        return string.Concat(value.AsSpan(0, end), "…");
+    }
+
     private static string Describe(EmbedUnresolvedReason reason) => reason switch
     {
         EmbedUnresolvedReason.TargetNotFound target =>
-            $"Target not found: {target.Target}",
+            $"Target not found: {BoundDisplayText(target.Target)}",
         EmbedUnresolvedReason.HeadingNotFound heading =>
-            $"Heading not found: {heading.Heading} in {heading.TargetPath}",
+            $"Heading not found: {BoundDisplayText(heading.Heading)} in {heading.TargetPath}",
         EmbedUnresolvedReason.BlockNotFound block =>
-            $"Block not found: {block.BlockId} in {block.TargetPath}",
+            $"Block not found: {BoundDisplayText(block.BlockId)} in {block.TargetPath}",
         EmbedUnresolvedReason.DepthLimitReached =>
             "Nested embed depth limit reached.",
         EmbedUnresolvedReason.ReadError read =>
-            $"Could not read embed: {read.Message}",
+            $"Could not read embed: {BoundDisplayText(read.Message)}",
         _ => "The embed could not be resolved.",
     };
 
@@ -2377,8 +2746,22 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private const int MaxPreviewImageBytes = 8 * 1024 * 1024;
     private const int MaxPreviewImageDimension = 1120;
 
-    internal static ImageSource? DecodeImage(byte[] bytes, string? mime = null)
+    internal static ImageSource? DecodeImage(byte[] bytes, string? mime = null) =>
+        DecodeImage(bytes, mime, reserveDecodedBytes: null, out _);
+
+    /// <summary>Budgeted decode (round 5): the RESERVATION happens
+    /// from the image header's bounded target dimensions, before any
+    /// pixel allocation — post-decode accounting would let a card
+    /// full of tiny encoded images allocate hundreds of MB first.
+    /// A refused reservation reports <paramref name="budgetSpent"/>
+    /// so callers can say why the image is missing.</summary>
+    internal static ImageSource? DecodeImage(
+        byte[] bytes,
+        string? mime,
+        Func<long, bool>? reserveDecodedBytes,
+        out bool budgetSpent)
     {
+        budgetSpent = false;
         if (bytes.Length == 0 || bytes.Length > MaxPreviewImageBytes)
         {
             return null;
@@ -2387,10 +2770,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         bool isSvg = string.Equals(mime, "image/svg+xml", StringComparison.OrdinalIgnoreCase)
             || bytes.AsSpan(0, Math.Min(bytes.Length, 1024))
                 .IndexOf("<svg"u8) >= 0;
-        return isSvg ? DecodeSvgImage(bytes) : DecodeRasterImage(bytes);
+        return isSvg
+            ? DecodeSvgImage(bytes, reserveDecodedBytes, ref budgetSpent)
+            : DecodeRasterImage(bytes, reserveDecodedBytes, ref budgetSpent);
     }
 
-    private static ImageSource? DecodeSvgImage(byte[] bytes)
+    private static ImageSource? DecodeSvgImage(
+        byte[] bytes,
+        Func<long, bool>? reserveDecodedBytes,
+        ref bool budgetSpent)
     {
         try
         {
@@ -2429,6 +2817,14 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 MaxPreviewImageDimension / Math.Max(bounds.Width, bounds.Height));
             int width = Math.Max(1, (int)Math.Ceiling(bounds.Width * scale));
             int height = Math.Max(1, (int)Math.Ceiling(bounds.Height * scale));
+            // Reserve the rasterization cost BEFORE allocating; the
+            // inner raster decode reuses this reservation.
+            if (reserveDecodedBytes is not null
+                && !reserveDecodedBytes(SaturatingDecodeCost(width, height, 4)))
+            {
+                budgetSpent = true;
+                return null;
+            }
             using var bitmap = new SKBitmap(new SKImageInfo(
                 width,
                 height,
@@ -2444,7 +2840,9 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             }
             using SKImage image = SKImage.FromBitmap(bitmap);
             using SKData encoded = image.Encode(SKEncodedImageFormat.Png, 100);
-            return DecodeRasterImage(encoded.ToArray());
+            bool alreadyReserved = false;
+            return DecodeRasterImage(
+                encoded.ToArray(), reserveDecodedBytes: null, ref alreadyReserved);
         }
         catch (Exception exception) when (
             exception is not OutOfMemoryException
@@ -2547,15 +2945,19 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         return true;
     }
 
-    private static ImageSource? DecodeRasterImage(byte[] bytes)
+    private static ImageSource? DecodeRasterImage(
+        byte[] bytes,
+        Func<long, bool>? reserveDecodedBytes,
+        ref bool budgetSpent)
     {
         try
         {
             using var stream = new MemoryStream(bytes, writable: false);
-            BitmapFrame frame = BitmapDecoder.Create(
+            BitmapDecoder decoder = BitmapDecoder.Create(
                 stream,
                 BitmapCreateOptions.PreservePixelFormat,
-                BitmapCacheOption.OnDemand).Frames[0];
+                BitmapCacheOption.OnDemand);
+            BitmapFrame frame = decoder.Frames[0];
             if (frame.PixelWidth <= 0 || frame.PixelHeight <= 0)
             {
                 return null;
@@ -2565,6 +2967,46 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             int boundedDimension = Math.Min(
                 MaxPreviewImageDimension,
                 widthLimits ? frame.PixelWidth : frame.PixelHeight);
+            if (reserveDecodedBytes is not null)
+            {
+                // Reserve PEAK allocation from the HEADER, before any
+                // pixels exist. Only JPEG downsamples natively at
+                // DecodePixelWidth/Height (WIC's native-scaling
+                // transform — PNG has none, round 9); every other
+                // codec decodes the FULL source frame first and
+                // scales after, so a tiny compressed file with
+                // enormous declared dimensions must be charged at
+                // source size (round 6). Bytes-per-pixel comes from
+                // the source format — a fixed 4 undercounts 48/64-bpp
+                // images.
+                long bytesPerPixel = Math.Max(
+                    4, ((long)frame.Format.BitsPerPixel + 7) / 8);
+                long reservedWidth;
+                long reservedHeight;
+                if (decoder is JpegBitmapDecoder)
+                {
+                    long longSide =
+                        widthLimits ? frame.PixelWidth : frame.PixelHeight;
+                    long shortSide =
+                        widthLimits ? frame.PixelHeight : frame.PixelWidth;
+                    reservedWidth = boundedDimension;
+                    reservedHeight = Math.Max(
+                        1,
+                        (long)Math.Ceiling(
+                            shortSide * ((double)boundedDimension / longSide)));
+                }
+                else
+                {
+                    reservedWidth = frame.PixelWidth;
+                    reservedHeight = frame.PixelHeight;
+                }
+                if (!reserveDecodedBytes(SaturatingDecodeCost(
+                    reservedWidth, reservedHeight, bytesPerPixel)))
+                {
+                    budgetSpent = true;
+                    return null;
+                }
+            }
             stream.Position = 0;
             var image = new BitmapImage();
             image.BeginInit();
@@ -2592,9 +3034,12 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     }
     private static string ImageTitle(string targetPath, string? alt)
     {
+        // Nested alts are parsed at resolve time — they never pass
+        // the links_db display bound, so the title bounds them here
+        // (round 16).
         string trimmed = alt?.Trim() ?? string.Empty;
         string descriptor = trimmed.Length > 0
-            ? trimmed
+            ? BoundDisplayText(trimmed)
             : Path.GetFileName(targetPath);
         return $"Embedded image: {descriptor}";
     }

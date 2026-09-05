@@ -1,0 +1,20 @@
+{
+	"nodes":[
+		{"id":"a","type":"text","text":"Alpha","x":0,"y":0,"width":100,"height":60},
+		{"id":"b","type":"text","text":"Beta","x":200,"y":0,"width":100,"height":60},
+		{"id":"c","type":"text","text":"Gamma","x":400,"y":0,"width":100,"height":60},
+		{"id":"untitled","type":"text","text":"","x":600,"y":0,"width":100,"height":60},
+		{"id":"loop","type":"text","text":"Loop","x":0,"y":200,"width":100,"height":60},
+		{"id":"same-1","type":"text","text":"Same","x":200,"y":200,"width":100,"height":60},
+		{"id":"same-2","type":"text","text":"Same","x":400,"y":200,"width":100,"height":60},
+		{"id":"same-real-2","type":"text","text":"Same 2","x":600,"y":200,"width":100,"height":60}
+	],
+	"edges":[
+		{"id":"e-ab","fromNode":"a","toNode":"b"},
+		{"id":"e-bc","fromNode":"b","toNode":"c","label":"then"},
+		{"id":"e-ca","fromNode":"c","toNode":"a","label":"back to the start"},
+		{"id":"e-self","fromNode":"loop","toNode":"loop"},
+		{"id":"e-undirected","fromNode":"loop","toNode":"same-1","fromEnd":"none","toEnd":"none"},
+		{"id":"e-bidirectional","fromNode":"same-1","toNode":"same-2","fromEnd":"arrow","toEnd":"arrow"}
+	]
+}

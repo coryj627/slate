@@ -34,6 +34,74 @@ pub struct EmbedPreviewResolution {
     pub truncated: bool,
 }
 
+/// One reading-card resolution (W3-5 round 4): the preview budgets
+/// apply, NESTED image payloads never cross the FFI (reading cards
+/// render nested embeds header-only, so their bytes were pure
+/// marshalling churn — 128 keys × the 8 MiB per-key allowance was
+/// ~1 GiB per refresh), and the ROOT image payload is included only
+/// when it fits the caller's remaining note-wide pool.
+/// `image_len` always reports the root payload's TRUE size so the
+/// caller charges its pool honestly; `image_elided` distinguishes a
+/// budget refusal from a genuinely empty file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbedReadingCard {
+    pub resolution: EmbedResolution,
+    pub truncated: bool,
+    pub image_elided: bool,
+    pub image_len: u64,
+}
+
+/// Rebuild a resolution tree with every NESTED image payload emptied
+/// (mime/alt/target kept — headers still title correctly). The root
+/// is untouched; its budget check happens at the call site.
+pub(crate) fn strip_nested_image_payloads(resolution: EmbedResolution) -> EmbedResolution {
+    fn strip_children(nested: Vec<NestedEmbed>) -> Vec<NestedEmbed> {
+        nested
+            .into_iter()
+            .map(|mut child| {
+                child.resolution = match child.resolution {
+                    EmbedResolution::Image {
+                        target_path,
+                        mime,
+                        alt,
+                        ..
+                    } => EmbedResolution::Image {
+                        target_path,
+                        bytes: Vec::new(),
+                        mime,
+                        alt,
+                    },
+                    other => strip_nested_image_payloads(other),
+                };
+                child
+            })
+            .collect()
+    }
+    match resolution {
+        EmbedResolution::FullNote {
+            target_path,
+            text,
+            nested,
+        } => EmbedResolution::FullNote {
+            target_path,
+            text,
+            nested: strip_children(nested),
+        },
+        EmbedResolution::Section {
+            target_path,
+            heading,
+            text,
+            nested,
+        } => EmbedResolution::Section {
+            target_path,
+            heading,
+            text,
+            nested: strip_children(nested),
+        },
+        other => other,
+    }
+}
+
 pub(crate) enum EmbedResolveBudget {
     Unlimited,
     Preview {
@@ -50,6 +118,20 @@ impl EmbedResolveBudget {
             remaining_text_bytes: MAX_EMBED_PREVIEW_TEXT_BYTES,
             remaining_nodes: MAX_EMBED_PREVIEW_NODES,
             remaining_image_bytes: MAX_EMBED_PREVIEW_IMAGE_BYTES,
+            truncated: false,
+        }
+    }
+
+    /// The pool-clamped profile (W4-2 round 11): the image allowance
+    /// is the MINIMUM of the per-key preview budget and the caller's
+    /// remaining note-wide pool, so payloads past the pool are
+    /// refused before any FFI record carries them. Callers can only
+    /// LOWER the allowance, never raise it.
+    pub(crate) fn preview_with_image_pool(image_pool_bytes: u64) -> Self {
+        Self::Preview {
+            remaining_text_bytes: MAX_EMBED_PREVIEW_TEXT_BYTES,
+            remaining_nodes: MAX_EMBED_PREVIEW_NODES,
+            remaining_image_bytes: MAX_EMBED_PREVIEW_IMAGE_BYTES.min(image_pool_bytes),
             truncated: false,
         }
     }

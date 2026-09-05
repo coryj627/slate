@@ -18,6 +18,10 @@ struct CanvasCardEditorRequest: Identifiable, Equatable {
     let nodeId: String
     let title: String
     let initialText: String
+    /// The basis the text was read at — one locked core read pairs
+    /// them (W6-1 §E TE-0: `canvas_editor_seed`), so a commit can know
+    /// the exact revision this draft grew from.
+    let basis: String
     var id: String { nodeId }
 }
 
@@ -30,7 +34,7 @@ extension AppState {
             admitCanvasMutation(for: doc),
             let selected = doc.selection.selected
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         canvasEditCard(nodeId: selected)
@@ -43,17 +47,18 @@ extension AppState {
             let row = doc.outline.first(where: { $0.nodeId == nodeId })
         else { return }
         guard row.kind == "text" else {
-            canvasAnnouncer.announce(.status("Not a text card."))
+            canvasAnnouncer.announce(.canvasStatus(note: .notATextCard))
             return
         }
         guard let session = currentSession, let handle = doc.handle,
-            let fetched = try? session.canvasNodeText(handle: handle, nodeId: nodeId)
+            let seed = try? session.canvasEditorSeed(handle: handle, nodeId: nodeId)
         else {
-            canvasAnnouncer.announce(.error("The card's text could not be read."))
+            canvasAnnouncer.announce(.canvasBlocked(reason: .cardTextUnreadable))
             return
         }
         canvasCardEditor = CanvasCardEditorRequest(
-            nodeId: nodeId, title: row.title, initialText: fetched)
+            nodeId: nodeId, title: row.title,
+            initialText: seed.text, basis: seed.contentHash)
     }
 
     /// Commit path (Esc / Done / ⌘S): one `canvas_apply` when the text
@@ -73,15 +78,15 @@ extension AppState {
             return false
         }
         guard let doc = activeCanvasDocument else {
-            postMutationAnnouncement(Self.canvasCardEditorUnavailableReason)
+            announceCanvasRefusal(.canvas(.cardEditorUnavailable))
             return false
         }
-        if let reason = activeCanvasCardEditorDisabledReason {
-            postMutationAnnouncement(reason)
+        if let refusal = activeCanvasCardEditorRefusal {
+            announceCanvasRefusal(refusal)
             return false
         }
         guard newText != editor.initialText else {
-            canvasAnnouncer.announce(.status("No changes."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noChanges))
             dismissCanvasCardEditor()
             return true
         }
@@ -94,7 +99,7 @@ extension AppState {
         // editor open so the draft is not lost.
         guard ok else { return false }
         dismissCanvasCardEditor()
-        canvasAnnouncer.announce(.confirmation("Updated \"\(editor.title)\"."))
+        canvasAnnouncer.announce(.canvasCardUpdated(title: editor.title))
         return true
     }
 
@@ -139,7 +144,7 @@ extension AppState {
         else { return }
         let notes = canvasNotePaths
         guard !notes.isEmpty else {
-            canvasAnnouncer.announce(.status("This vault has no notes yet."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noNotesInVault))
             return
         }
         presentCanvasPrompt(.addNote(files: notes))
@@ -151,7 +156,7 @@ extension AppState {
         else { return }
         let media = canvasMediaPaths
         guard !media.isEmpty else {
-            canvasAnnouncer.announce(.status("This vault has no media files."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noMediaInVault))
             return
         }
         presentCanvasPrompt(.addMedia(files: media))
@@ -178,7 +183,7 @@ extension AppState {
     func canvasAddLinkCard(url: String) {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let parsed = URL(string: trimmed), parsed.scheme != nil else {
-            canvasAnnouncer.announce(.error("That doesn't look like a URL."))
+            canvasAnnouncer.announce(.canvasBlocked(reason: .notAUrl))
             return
         }
         canvasCreatePlaced(
@@ -198,12 +203,13 @@ extension AppState {
             let session = currentSession,
             let handle = doc.handle
         else { return }
-        let id = Self.newCanvasEntityID()
+        let id = canvasNewId()
+        let geometry = Self.canvasGeometry
         do {
             let placement = try session.canvasPlaceNew(
                 handle: handle,
                 anchor: doc.selection.selected,
-                width: 260, height: 140,
+                width: geometry.defaultCardW, height: geometry.defaultCardH,
                 directionHint: nil, exclude: [])
             let ok = canvasApply(
                 CanvasAction(
@@ -212,18 +218,19 @@ extension AppState {
                         .createNode(
                             id: id, content: content,
                             x: placement.x, y: placement.y,
-                            width: 260, height: 140, color: nil)
+                            width: geometry.defaultCardW, height: geometry.defaultCardH,
+                            color: nil)
                     ]),
                 to: doc)
             guard ok else { return }
             canvasSelect(nodeId: id, in: doc, announce: false)
             canvasAnnouncer.announce(
-                .confirmation(
-                    CanvasAnnouncer.createdText(
-                        card: CanvasCardRef(kind: kind, title: title),
-                        relative: placement.relative)))
+                .canvasCreated(
+                    kindLabel: kind, title: title, relative: placement.relative))
         } catch {
-            canvasAnnouncer.announce(.error("Create failed: \(error.localizedDescription)"))
+            canvasAnnouncer.announce(
+                .canvasActionFailed(
+                    action: .create, detail: error.localizedDescription))
         }
     }
 
@@ -237,18 +244,18 @@ extension AppState {
             let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         guard admitCanvasMutation(for: doc) else { return }
         guard row.kind == "file" || row.kind == "image" else {
-            canvasAnnouncer.announce(.status("Not a file card."))
+            canvasAnnouncer.announce(.canvasStatus(note: .notAFileCard))
             return
         }
         var candidates = canvasNotePaths
         candidates.append(contentsOf: canvasMediaPaths)
         guard !candidates.isEmpty else {
-            canvasAnnouncer.announce(.status("This vault has no files to point at."))
+            canvasAnnouncer.announce(.canvasStatus(note: .noFilesToPointAt))
             return
         }
         presentCanvasPrompt(
@@ -268,7 +275,7 @@ extension AppState {
             to: doc)
         guard ok else { return }
         canvasAnnouncer.announce(
-            .confirmation("\"\(row.title)\" now points at \(path)."))
+            .canvasCardRetargeted(title: row.title, path: path))
     }
 
     // MARK: Remove from Group (R22)
@@ -284,26 +291,40 @@ extension AppState {
             let row = doc.outline.first(where: { $0.nodeId == selected }),
             let node = doc.scene.nodes.first(where: { $0.nodeId == selected })
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         guard !row.groupPath.isEmpty else {
-            canvasAnnouncer.announce(.status("\"\(row.title)\" is not in a group."))
+            canvasAnnouncer.announce(
+                .canvasStatus(note: .notInAGroup(title: row.title)))
             return
         }
-        // Enclosing group by t1 containment: center inside, smallest
-        // area wins (title lookups would break on duplicate labels).
-        let cx = node.x + node.width / 2
-        let cy = node.y + node.height / 2
-        let parent = doc.scene.nodes
-            .filter {
-                $0.kind == "group" && $0.nodeId != selected
-                    && cx > $0.x && cx < $0.x + $0.width
-                    && cy > $0.y && cy < $0.y + $0.height
-            }
-            .min { $0.width * $0.height < $1.width * $1.height }
-        guard let parent else {
-            canvasAnnouncer.announce(.status("\"\(row.title)\" is not in a group."))
+        // §W-G row D: the enclosing group is core's `canvas_parent_of`
+        // (contract 0b-8) — the same `GroupTree` the outline's depth
+        // and group path already come from, so this verb and the rows
+        // it moves can no longer disagree about who contains what. The
+        // strict-centre / smallest-area filter that lived here is
+        // gone, and with it mac's equal-area tie-break: core keeps the
+        // LATER document order (CD-18), observable only for exactly
+        // coincident group rects.
+        // `do`/`catch`, not `try?`: SE-0230 flattens `try?` on an
+        // optional-returning call, so `try?` here would report a THROWN
+        // query as "not in a group" — a fact the query never returned.
+        // Same collapse as the one codex found at exit-group, in a verb
+        // where it was previously recorded as an unreachable exclusion;
+        // removing it is cheaper than keeping the exclusion true.
+        let parentId: String?
+        do {
+            parentId = try session.canvasParentOf(handle: handle, nodeId: selected)
+        } catch {
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
+            return
+        }
+        guard let parentId,
+            let parent = doc.scene.nodes.first(where: { $0.nodeId == parentId })
+        else {
+            canvasAnnouncer.announce(
+                .canvasStatus(note: .notInAGroup(title: row.title)))
             return
         }
         do {
@@ -321,10 +342,11 @@ extension AppState {
                     ]),
                 to: doc)
             guard ok else { return }
-            canvasAnnouncer.announce(
-                .confirmation("Removed from group \"\(parent.title)\"."))
+            canvasAnnouncer.announce(.canvasRemovedFromGroup(label: parent.title))
         } catch {
-            canvasAnnouncer.announce(.error("Remove failed: \(error.localizedDescription)"))
+            canvasAnnouncer.announce(
+                .canvasActionFailed(
+                    action: .removeFromGroup, detail: error.localizedDescription))
         }
     }
 }

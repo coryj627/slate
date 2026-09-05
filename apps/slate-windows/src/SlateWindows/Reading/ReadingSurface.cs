@@ -44,6 +44,13 @@ internal sealed class ReadingSurface : RichTextBox
         IsDocumentEnabled = true;
         AcceptsReturn = false;
         AcceptsTab = false;
+        // Tab walks the document's focusable children — links, Jump
+        // links, math/diagram elements, checkboxes — then continues
+        // out (field, 2026-07-30: without an explicit mode, Tab from
+        // the caret exited straight to the pane thumb and the
+        // embedded objects were unreachable by keyboard focus).
+        System.Windows.Input.KeyboardNavigation.SetTabNavigation(
+            this, System.Windows.Input.KeyboardNavigationMode.Continue);
         BorderThickness = new Thickness(0);
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
         HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
@@ -80,6 +87,33 @@ internal sealed class ReadingSurface : RichTextBox
             System.Windows.Documents.Hyperlink.ClickEvent,
             new System.Windows.RoutedEventHandler((_, args) =>
             {
+                // Copy-code links FIRST (field, 2026-07-30: the Copy
+                // affordance became a hyperlink for the same caret-
+                // stream reason as the embed Jump link); the marker
+                // tells them apart from every navigation link.
+                if (args.Source is System.Windows.Documents.Hyperlink
+                    {
+                        Tag: string copySource
+                    } copyLink
+                    && ReadingSemantics.IsCodeCopy(copyLink)
+                    && _model is { } copyLinkModel)
+                {
+                    copyLinkModel.CopyCode(copySource);
+                    args.Handled = true;
+                    return;
+                }
+                // Embed Jump links whose target core ALREADY RESOLVED
+                // navigate directly (the W3-5 contract) — the run-kind
+                // fallback below covers degraded cards only.
+                if (args.Source is System.Windows.Documents.Hyperlink jumpLink
+                    && ReadingSemantics.TryGetEmbedJump(
+                        jumpLink, out string jumpPath, out var jumpAnchor)
+                    && _model is { } jumpModel)
+                {
+                    jumpModel.ActivateResolvedEmbedSource(jumpPath, jumpAnchor);
+                    args.Handled = true;
+                    return;
+                }
                 if (args.Source is System.Windows.Documents.Hyperlink
                     {
                         Tag: uniffi.slate_uniffi.ReadingInlineRunKind kind
@@ -105,6 +139,19 @@ internal sealed class ReadingSurface : RichTextBox
                     && _model is { } copyModel)
                 {
                     copyModel.CopyCode(codeSource);
+                    args.Handled = true;
+                    return;
+                }
+                // Jump buttons whose target core ALREADY RESOLVED
+                // navigate directly (W3-5 round 1: nested targets are
+                // absent from the host's record snapshot, so a
+                // re-match would dead-end on content the card shows).
+                if (args.Source is System.Windows.Controls.Button jumpButton
+                    && ReadingSemantics.TryGetEmbedJump(
+                        jumpButton, out string jumpPath, out var jumpAnchor)
+                    && _model is { } jumpModel)
+                {
+                    jumpModel.ActivateResolvedEmbedSource(jumpPath, jumpAnchor);
                     args.Handled = true;
                     return;
                 }
@@ -184,6 +231,13 @@ internal sealed class ReadingSurface : RichTextBox
         var surface = (ReadingSurface)d;
         if (surface._model is { } previous)
         {
+            // Remember where the reader WAS (field, 2026-07-30: the
+            // unconditional caret park sent a returning reader back
+            // to the top of the note). Captured on the outgoing model
+            // so the same-projection fast path below can restore it.
+            previous.SavedCaretOffsetForRebind =
+                surface.Document.ContentStart.GetOffsetToPosition(
+                    surface.CaretPosition);
             previous.PropertyChanged -= surface.Model_PropertyChanged;
             previous.BlocksAppended -= surface.Model_BlocksAppended;
             // Kill the outgoing model's stream BEFORE anything else:
@@ -198,10 +252,6 @@ internal sealed class ReadingSurface : RichTextBox
             surface._navigator ??= new ReadingNavigator(surface, model.Announce);
             model.PropertyChanged += surface.Model_PropertyChanged;
             model.BlocksAppended += surface.Model_BlocksAppended;
-            // A model swap is a different projection (navigation, tab
-            // switch): the merge's caret preservation is for SAME-note
-            // re-projections only, so park the caret before applying.
-            surface.CaretPosition = surface.Document.ContentStart;
             if (ReferenceEquals(surface._lastMerged, model.Document)
                 && model.Document is not null
                 && model.ProjectionComplete)
@@ -211,8 +261,27 @@ internal sealed class ReadingSurface : RichTextBox
                 // back): free. Completeness matters — a stream this
                 // surface's own detach canceled leaves _lastMerged
                 // pointing at a torso that must re-project instead.
+                // Restore the reader's caret (field, 2026-07-30: the
+                // old unconditional park sent them to the top), and
+                // re-fetch if a dependency moved while hidden (same
+                // field pass: a target saved in another tab stayed
+                // stale forever — the current content remains visible
+                // while the digest decides whether anything changed).
+                surface.CaretPosition =
+                    surface.Document.ContentStart.GetPositionAtOffset(
+                        Math.Max(0, model.SavedCaretOffsetForRebind))
+                    ?? surface.Document.ContentEnd;
+                if (model.HasPendingDependencyRefresh)
+                {
+                    model.RefreshForDependencies();
+                }
                 return;
             }
+            // A model swap is a different projection (navigation, tab
+            // switch): the merge's caret preservation is for SAME-note
+            // re-projections only, so park the caret before applying
+            // (ClearForModelSwitch parks again with the placeholder).
+            surface.CaretPosition = surface.Document.ContentStart;
             // Any other rebind is a DIFFERENT note (or an untrusted
             // projection): the outgoing content leaves the tree NOW —
             // waiting for the incoming publish would let readers and
@@ -267,6 +336,7 @@ internal sealed class ReadingSurface : RichTextBox
         }
         _landmarks = ReadingDocumentBuilder.CollectLandmarks(Document);
         _navigator?.SetLandmarks(_landmarks);
+        InvalidateAutomationChildren();
     }
 
     private FlowDocument? _lastMerged;
@@ -332,6 +402,7 @@ internal sealed class ReadingSurface : RichTextBox
         }
         _landmarks = ReadingDocumentBuilder.CollectLandmarks(Document);
         _navigator?.SetLandmarks(_landmarks);
+        InvalidateAutomationChildren();
 
         if (caretOffset > 0)
         {
@@ -367,6 +438,82 @@ internal sealed class ReadingSurface : RichTextBox
         isVisible && !isKeyboardFocusWithin && blockCount > 0;
 
     /// <summary>
+    /// Bring the surface peer's child list current after a content
+    /// merge. WPF refreshes peer children on render-driven automation
+    /// ticks; on a sparsely-composited session those ticks stall and a
+    /// UIA client keeps reading a child list frozen at an earlier
+    /// document state (measured on CI, 2026-08-01: the range text
+    /// carried the complete note while the child list held two
+    /// elements for the full 90-second wait). No-op unless a UIA
+    /// client is attached — that is when a peer exists.
+    /// </summary>
+    private void InvalidateAutomationChildren()
+    {
+        // The UIA bridge publishes structure updates at the END OF A
+        // LAYOUT PASS — and a starved session defers layout
+        // indefinitely, so clients keep walking the pre-merge view
+        // while the peer's own children list is current (measured
+        // 2026-08-01: a clean two-element sibling walk against a
+        // nine-child cache). Run the pass NOW, synchronously.
+        UpdateLayout();
+        if (UIElementAutomationPeer.FromElement(this) is { } peer)
+        {
+            // Marking the cache dirty is NOT enough: the rebuild waits
+            // for a render-driven automation tick, which a throttled
+            // session may never run (measured on CI, 2026-08-01 — the
+            // dirty flag alone left the stale two-element list live
+            // for the full 90-second wait). GetChildren() rebuilds the
+            // list synchronously; StructureChanged tells attached
+            // clients to drop what they hold.
+            peer.ResetChildrenCache();
+            List<AutomationPeer>? rebuilt = peer.GetChildren();
+            peer.RaiseAutomationEvent(AutomationEvents.StructureChanged);
+            peer.InvalidatePeer();
+            CensusDiag($"invalidate: children={rebuilt?.Count ?? -1}");
+        }
+        else
+        {
+            CensusDiag("invalidate: no peer");
+        }
+    }
+
+    /// <summary>
+    /// Census-run diagnostics (SLATE_CENSUS_INSTANCE_ID gates it, so
+    /// production writes nothing): the stale-children repro exists
+    /// only on CI, and the shared app log is the one channel the
+    /// failing gate reads back into its assertion message.
+    /// </summary>
+    internal static void CensusDiag(string message)
+    {
+        if (Environment.GetEnvironmentVariable("SLATE_CENSUS_INSTANCE_ID")
+            is not { Length: > 0 })
+        {
+            return;
+        }
+        if (Environment.GetEnvironmentVariable("SLATE_LOG_DIR")
+            is not { Length: > 0 } directory)
+        {
+            return;
+        }
+        try
+        {
+            // A SEPARATE file: the app holds slate-windows.log open
+            // for the stderr redirect, and a second writer's append
+            // dies on a sharing violation — measured 2026-08-01 as a
+            // silently empty diagnostic channel.
+            System.IO.File.AppendAllText(
+                System.IO.Path.Combine(directory, "slate-census-diag.log"),
+                $"{DateTime.Now:HH:mm:ss.fff} census-diag {message}\r\n");
+        }
+        catch (System.IO.IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>
     /// Activate the link the CARET is inside. A caret position is not
     /// element focus — measured 2026-07-27: Enter with the caret inside
     /// a link did nothing, because the Hyperlink never had keyboard
@@ -375,7 +522,9 @@ internal sealed class ReadingSurface : RichTextBox
     /// parents, which misses at normalized boundary positions — exactly
     /// where a chord landing puts the caret.
     /// </summary>
-    internal bool TryActivateAtCaret()
+    internal bool TryActivateAtCaret() => TryActivateAtCaret(brailleRequested: false);
+
+    internal bool TryActivateAtCaret(bool brailleRequested)
     {
         if (_model is not { } model || CaretPosition is not { } caret)
         {
@@ -405,7 +554,108 @@ internal sealed class ReadingSurface : RichTextBox
         // No link at the caret: a task checkbox on the caret's LINE is
         // the other activatable thing. The caret can never rest inside
         // an InlineUIContainer, so containment is by paragraph.
-        return TryToggleTaskAtCaret();
+        if (TryToggleTaskAtCaret())
+        {
+            return true;
+        }
+        // Math block at the caret (W3-2): Enter speaks the canonical
+        // MathCAT speech through the landed vocabulary — "{speech},
+        // math." — content, never composition. This is the guaranteed
+        // layer's on-demand read; the W-E7 appModule upgrades Enter to
+        // NVDA's full math interaction later.
+        if (CaretPosition?.Paragraph is { } mathParagraph
+            && ReadingSemantics.IsMathBlock(mathParagraph)
+            && _model is { } mathModel)
+        {
+            // Ctrl+Enter reads the BRAILLE artifact — the accessible
+            // value the Nemeth/UEB pref selects (round 3: a persisted
+            // setting must change something a user can retrieve).
+            // Plain Enter reads the speech. Both announce core content.
+            if (brailleRequested)
+            {
+                ReadingMathElement? mathElement = mathParagraph.Inlines
+                    .OfType<InlineUIContainer>()
+                    .Select(container => container.Child)
+                    .OfType<ReadingMathElement>()
+                    .FirstOrDefault();
+                mathModel.Announce(new uniffi.slate_uniffi.A11yEvent.HostComposed(
+                    mathElement is { Braille.Length: > 0 }
+                        ? mathElement.Braille
+                        : "Braille not available.",
+                    uniffi.slate_uniffi.A11yPriority.Medium));
+                return true;
+            }
+            mathModel.Announce(new uniffi.slate_uniffi.A11yEvent.ReadingNavLanded(
+                new uniffi.slate_uniffi.ReadingNavTarget.Math(),
+                ReadingSemantics.MathSpeechOf(mathParagraph)));
+            return true;
+        }
+        // Diagram block at the caret (W3-3): Enter (and Ctrl+Enter —
+        // diagrams have no braille-analog artifact) re-reads the
+        // canonical structured description through the landed
+        // vocabulary — content, never composition.
+        if (CaretPosition?.Paragraph is { } diagramParagraph
+            && ReadingSemantics.IsDiagramBlock(diagramParagraph)
+            && _model is { } diagramModel)
+        {
+            diagramModel.Announce(new uniffi.slate_uniffi.A11yEvent.ReadingNavLanded(
+                new uniffi.slate_uniffi.ReadingNavTarget.Diagram(),
+                ReadingSemantics.DiagramDescriptionOf(diagramParagraph)));
+            return true;
+        }
+        // Embed card header at the caret (W3-5): Enter activates the
+        // card — a chord landing rests the caret ON the header, and a
+        // caret position is not element focus (the W3-1 lesson), so
+        // the Jump button's own key handling never fires for it. A
+        // core-resolved destination navigates directly; only cards
+        // without one fall back to the record match.
+        if (CaretPosition?.Paragraph is { } embedParagraph
+            && ReadingSemantics.EmbedHeaderKeyOf(embedParagraph) is { } embedKey
+            && _model is { } embedModel)
+        {
+            if (ReadingSemantics.TryGetEmbedJump(
+                embedParagraph, out string embedJumpPath, out var embedJumpAnchor))
+            {
+                embedModel.ActivateResolvedEmbedSource(embedJumpPath, embedJumpAnchor);
+                return true;
+            }
+            embedModel.Activate(new uniffi.slate_uniffi.ReadingInlineRunKind.Embed(embedKey));
+            return true;
+        }
+        // Table at the caret (W4-1): Enter opens the table on the grid
+        // substrate — the in-range table stays for linear reading
+        // (G23), the grid view adds the §8.7 powers. Runs LAST: a link
+        // inside a table cell is still a link first.
+        if (CaretPosition?.Paragraph is { } tableParagraph
+            && AncestorTableOf(tableParagraph) is { } table
+            && ReadingSemantics.TableSourceOf(table) is { } tableSource)
+        {
+            return (TableGridOpener ?? OpenTableGridWindow)(tableSource);
+        }
+        return false;
+    }
+
+    /// <summary>Test seam for the table→grid hop; production opens
+    /// the substrate window. Returns whether a grid actually opened —
+    /// a source core cannot re-derive cells from must not swallow
+    /// Enter.</summary>
+    internal Func<string, bool>? TableGridOpener { get; set; }
+
+    private bool OpenTableGridWindow(string source) =>
+        ReadingTableGrid.Show(source, Window.GetWindow(this)) is not null;
+
+    private static Table? AncestorTableOf(Paragraph paragraph)
+    {
+        DependencyObject? current = paragraph;
+        while (current is TextElement element)
+        {
+            if (current is Table table)
+            {
+                return table;
+            }
+            current = element.Parent;
+        }
+        return null;
     }
 
     /// <summary>
@@ -476,14 +726,19 @@ internal sealed class ReadingSurfacePeer : RichTextBoxAutomationPeer
     protected override List<AutomationPeer> GetChildrenCore()
     {
         List<AutomationPeer> children = base.GetChildrenCore() ?? new List<AutomationPeer>();
+        int baseCount = children.Count;
         if (((RichTextBox)Owner).Document is not FlowDocument document)
         {
+            ReadingSurface.CensusDiag($"peer-children base={baseCount} no-flowdoc");
             return children;
         }
         foreach (Block block in document.Blocks)
         {
             AppendStructural(block, children);
         }
+        ReadingSurface.CensusDiag(
+            $"peer-children base={baseCount} total={children.Count} "
+            + $"blocks={document.Blocks.Count}");
         return children;
     }
 
@@ -553,6 +808,10 @@ internal sealed class ReadingHeadingPeer : TextElementAutomationPeer
     protected override bool IsControlElementCore() => true;
 
     protected override bool IsContentElementCore() => true;
+
+    /// <summary>#1088: see <see cref="ReadingStructuralPeer"/>.</summary>
+    protected override List<AutomationPeer> GetChildrenCore() =>
+        ReadingStructuralPeer.NoChildren();
 }
 
 /// <summary>
@@ -580,6 +839,42 @@ internal sealed class ReadingCodeBlockPeer : TextElementAutomationPeer
     protected override bool IsControlElementCore() => true;
 
     protected override bool IsContentElementCore() => true;
+
+    /// <summary>#1088: see <see cref="ReadingStructuralPeer"/>. A fenced
+    /// block's Copy link is the element at risk here.</summary>
+    protected override List<AutomationPeer> GetChildrenCore() =>
+        ReadingStructuralPeer.NoChildren();
+}
+
+/// <summary>
+/// Why every structural peer over a TextElement refuses children
+/// (#1088).
+///
+/// <see cref="ReadingSurfacePeer"/> returns
+/// <c>RichTextBoxAutomationPeer</c>'s children — which ALREADY contains
+/// every embedded control and link in the document, flattened — and
+/// then appends the structural peers. <c>TextElementAutomationPeer</c>'s
+/// default <c>GetChildrenCore</c> hands back the peers for the
+/// UIElements inside its own element, which are the very same peer
+/// INSTANCES. WPF stores one <c>_parent</c>/<c>_index</c> per peer and
+/// guards sibling navigation on them, so a peer claimed by two parents
+/// has its links overwritten by whichever subtree was built last.
+///
+/// Measured live (2026-08-07, FlaUI cross-process, 9 provider children):
+/// the task CheckBox was child 1 of the surface and a child of its
+/// ReadingListItemPeer. A client saw TWO children — <c>GetLastChild</c>
+/// answered the 9th, <c>NextSibling</c> died at index 2, and
+/// <c>PreviousSibling</c> died at the same peer coming back. A screen
+/// reader loses everything past that point with no error.
+///
+/// Refusing children here costs nothing: the controls stay reachable in
+/// the root collection, and the structural peer's own Name already
+/// carries its text. It also matches the surface's documented design —
+/// "the structural peer walk adds headings and lists but never links".
+/// </summary>
+internal static class ReadingStructuralPeer
+{
+    internal static List<AutomationPeer> NoChildren() => new();
 }
 
 /// <summary>
@@ -651,4 +946,9 @@ internal sealed class ReadingListItemPeer : TextElementAutomationPeer
     /// browse-mode research's verified condition for `l`).
     /// </summary>
     protected override bool IsKeyboardFocusableCore() => false;
+
+    /// <summary>#1088: see <see cref="ReadingStructuralPeer"/>. A task
+    /// item's CheckBox is the element this bug was found on.</summary>
+    protected override List<AutomationPeer> GetChildrenCore() =>
+        ReadingStructuralPeer.NoChildren();
 }

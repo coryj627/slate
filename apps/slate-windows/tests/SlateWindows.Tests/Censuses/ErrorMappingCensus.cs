@@ -37,6 +37,7 @@ public class ErrorMappingCensus
         "InvalidArgument",
         "DestinationExists",
         "WriteConflict",
+        "SavedButUnindexed",
         "HistoryUnavailable",
         "MalformedFrontmatter",
         "BibSourceUnreadable",
@@ -76,6 +77,11 @@ public class ErrorMappingCensus
             Assert.Equal("census-expected", ex.expectedContentHash);
             Assert.Equal(42L, ex.currentMtimeMs);
         });
+        AssertArm<VaultException.SavedButUnindexed>("SavedButUnindexed", ex =>
+        {
+            Assert.Equal("census-new", ex.newContentHash);
+            Assert.Equal("census detail", ex.detail);
+        });
         AssertArm<VaultException.HistoryUnavailable>("HistoryUnavailable", ex =>
         {
             Assert.Equal("census/history.md", ex.path);
@@ -103,7 +109,7 @@ public class ErrorMappingCensus
         });
 
         // The pinned list and the synthesized coverage must not drift.
-        Assert.Equal(17, PinnedVaultErrorArms.Length);
+        Assert.Equal(18, PinnedVaultErrorArms.Length);
 
         // Unknown arm names are inert (the fn is a census tool, not a
         // product surface).

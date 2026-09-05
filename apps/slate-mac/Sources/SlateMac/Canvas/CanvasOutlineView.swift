@@ -3,6 +3,23 @@
 
 import SwiftUI
 
+/// A card reference for the outline's AX LABELS (t0 §1.1):
+/// backend-derived kind word + display title. §W-C label class, never
+/// spoken — the SPOKEN card reference is core's `card_ref`, reached
+/// through the canvas vocabulary (contracts doc 0a-10/0a-13). It lives
+/// here because this is the only surface that still needs the bare
+/// phrase as a label; PR 0b's query surface is where it collapses.
+struct CanvasCardRef: Equatable {
+    /// "text" | "file" | "image" | "link" | "group" (backend kind_label).
+    var kind: String
+    var title: String
+
+    /// `⟨Type⟩ card "title"`; groups phrase as `Group "label"`.
+    var phrase: String {
+        kind == "group" ? "Group \"\(title)\"" : "\(kind.capitalized) card \"\(title)\""
+    }
+}
+
 /// The accessible canvas outline (Milestone T, #362) — the primary
 /// structured surface: every card and group in deterministic reading
 /// order, with rotors, N-of-M positional context in AX values (t0
@@ -58,7 +75,9 @@ struct CanvasOutlineView: View {
         }
     }
 
-    private var rows: [CanvasOutlineRow] { document.filteredOutline }
+    private var rows: [CanvasOutlineRow] {
+        document.filteredOutline(session: appState.currentSession)
+    }
 
     private var lines: [Line] {
         var out: [Line] = []
@@ -331,19 +350,21 @@ struct CanvasOutlineView: View {
         }
     }
 
-    /// t0 §1.2 direction phrases honoring fromEnd/toEnd.
+    /// t0 §1.2 direction phrases honoring fromEnd/toEnd — rendered
+    /// from the SAME event the navigator announces when it traverses
+    /// this connection, so the row and the speech cannot drift
+    /// (contracts doc 0a-10; this file used to hold a second copy that
+    /// hardcoded `kind: "text"` and dropped the card reference).
     private func connectionPhrase(_ neighbor: CanvasNeighbor) -> String {
-        let other = CanvasCardRef(
-            kind: "text", title: neighbor.otherTitle)
-        let phrase: String
-        switch neighbor.direction {
-        case .outgoing: phrase = "Connects to"
-        case .incoming: phrase = "Connected from"
-        case .bidirectional, .undirected: phrase = "Linked with"
-        }
-        var text = "\(phrase) \"\(other.title)\""
-        if let label = neighbor.label { text += ", labelled \"\(label)\"" }
-        return text
+        let kind =
+            document.outline.first { $0.nodeId == neighbor.otherNode }?.kind ?? "text"
+        return a11yRender(
+            event: .canvas(
+                event: .canvasConnectionTraversed(
+                    direction: neighbor.direction,
+                    kindLabel: kind, title: neighbor.otherTitle,
+                    label: neighbor.label))
+        ).text
     }
 
     // MARK: Selection & activation
@@ -388,18 +409,22 @@ struct CanvasOutlineView: View {
             .groupPath ?? []
         if row.groupPath != previousPath {
             if let entered = row.groupPath.last, !previousPath.contains(entered) {
-                let count = document.outline.first { $0.title == entered && $0.kind == "group" }
-                    .map { Int($0.totalM) }
+                // CD-4: the ENTERED GROUP's own card count is exactly
+                // the arrived-at row's container size. The title-keyed
+                // group lookup that used to stand here miscounted on
+                // repeated labels (Codoki #613) AND spoke the group's
+                // sibling count rather than its children.
                 appState.canvasAnnouncer.announce(
-                    .groupEntered(label: entered, cardCount: count ?? 0))
+                    .canvasGroupEntered(label: entered, count: row.totalM))
             } else if let left = previousPath.last, !row.groupPath.contains(left) {
-                appState.canvasAnnouncer.announce(.groupLeft(label: left))
+                appState.canvasAnnouncer.announce(.canvasGroupLeft(label: left))
             }
         }
         appState.canvasAnnouncer.announce(
-            .movedTo(
-                card: CanvasCardRef(kind: row.kind, title: row.title),
-                ordinal: row.ordinalN, total: row.totalM,
+            .canvasMovedTo(
+                verbosity: appState.canvasAnnouncer.verbosity,
+                kindLabel: row.kind, title: row.title,
+                ordinalN: row.ordinalN, totalM: row.totalM,
                 container: row.groupPath.last,
                 connectionCount: row.connectionCount,
                 colorName: row.colorName,

@@ -295,7 +295,7 @@ struct BaseContainerView: View {
             },
             onCancelEdit: {
                 gridEditRequest = nil
-                appState.postBaseActionAnnouncement("Edit canceled.")
+                appState.postBaseActionEvent(.basesCellEditCanceled)
             },
             rowAccessibilityDescription: { $0.row.audioDescription },
             rowActions: gridRowActions(result: result),
@@ -414,10 +414,9 @@ struct BaseContainerView: View {
                 return
             }
             guard !Task.isCancelled, let session = appState.currentSession else { return }
-            let announcement = document.applyQuickFilter(document.quickFilterText, session: session)
+            _ = document.applyQuickFilter(document.quickFilterText, session: session)
             restoreSelection(previous: previousSelection)
-            // W0.5-3 residue: BaseDocument.applyQuickFilter
-            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .medium))
+            postAccessibilityAnnouncement(document.quickFilterResultEvent)
         }
     }
 
@@ -425,11 +424,10 @@ struct BaseContainerView: View {
         quickFilterTask?.cancel()
         quickFilterTask = nil
         let previousSelection = selectedRow
-        let announcement = document.clearQuickFilter(session: appState.currentSession)
+        let cleared = document.clearQuickFilter(session: appState.currentSession) != nil
         restoreSelection(previous: previousSelection)
-        if let announcement {
-            // W0.5-3 residue: BaseDocument.clearQuickFilter
-            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .medium))
+        if cleared {
+            postAccessibilityAnnouncement(document.quickFilterResultEvent)
         }
         resultFocusToken &+= 1
     }
@@ -516,7 +514,7 @@ struct BaseContainerView: View {
         else { return }
         let column = result.columns[columnIndex]
         guard BaseCellEditPolicy.propertyKey(for: column) != nil else {
-            appState.postBaseActionAnnouncement(BaseCellEditPolicy.readOnlyHint(for: column))
+            appState.postBaseActionEvent(BaseCellEditPolicy.readOnlyEvent(for: column))
             return
         }
         let rowID = BaseGridRow.id(for: row)
@@ -559,7 +557,7 @@ struct BaseContainerView: View {
             }
         case .failure(let error):
             gridEditRequest = .init(rowID: rowID, columnIndex: columnIndex, text: draft)
-            appState.postBaseActionAnnouncement(error.message)
+            appState.postBaseActionEvent(error.event)
         }
     }
 

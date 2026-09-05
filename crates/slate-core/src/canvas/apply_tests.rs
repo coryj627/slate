@@ -490,3 +490,158 @@ fn action_json_codec_round_trips_every_op() {
         assert_eq!(&decoded, action_value);
     }
 }
+
+/// #960: JSON Canvas array order is z-order — "the first node in the
+/// array should be displayed below all other nodes". A group created
+/// around existing cards (the `canvasGroupMarked` shape: members'
+/// bounding box + 40 pad) must precede them in the serialized array,
+/// or every spec-faithful renderer — Slate's own opaque-fill renderer
+/// included — paints the group frame over its members. Here the two
+/// cards already sit inside the Research group, so the new group must
+/// land ABOVE that outer group and BELOW its members.
+#[test]
+fn group_created_around_existing_cards_precedes_them() {
+    // card-notes (0,180,240×140) + card-spec (260,180,220×140): bbox
+    // (0,180)–(480,320), padded 40 → origin (-40,140), 560×220. The
+    // Research group's center (240,160) falls inside that rect too; it
+    // is LARGER, so it is the enclosing group, not a member.
+    let act = action(
+        "group 2 cards",
+        vec![CanvasOp::CreateGroup {
+            id: "grp-new".into(),
+            label: Some("Pair".into()),
+            x: -40.0,
+            y: 140.0,
+            width: 560.0,
+            height: 220.0,
+            color: None,
+        }],
+    );
+    let (mut canvas, _) = parse(SAMPLE);
+    apply(&mut canvas, &act).expect("applies");
+    let idx = |id: &str| {
+        canvas
+            .nodes
+            .iter()
+            .position(|n| n.id.0 == id)
+            .unwrap_or_else(|| panic!("{id} missing"))
+    };
+    assert!(
+        idx("grp-new") < idx("card-notes") && idx("grp-new") < idx("card-spec"),
+        "the group must sit below its members: order = {:?}",
+        canvas
+            .nodes
+            .iter()
+            .map(|n| n.id.0.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        idx("grp-research") < idx("grp-new"),
+        "the enclosing outer group stays below the new inner group"
+    );
+    assert!(
+        idx("card-evidence") < idx("grp-new"),
+        "cards the group does not contain keep their place"
+    );
+    // The serialized file carries that order — it is what other
+    // readers see.
+    let out = serialize(&canvas);
+    assert!(out.find("\"grp-new\"").unwrap() < out.find("\"card-notes\"").unwrap());
+    // Inverse bookkeeping: DeleteNode undoes it, and RestoreNode's
+    // recorded position redoes it byte-equal at the same index.
+    assert_invertible(SAMPLE, &act);
+}
+
+/// #960: a group created around an existing GROUP (and its cards) goes
+/// beneath that group — the sub-group is a member too.
+#[test]
+fn group_created_around_an_existing_group_goes_beneath_it() {
+    // Inspiration (600,-40,320×400) padded 40 → (560,-80), 400×480.
+    let act = action(
+        "group the inspiration group",
+        vec![CanvasOp::CreateGroup {
+            id: "grp-outer".into(),
+            label: None,
+            x: 560.0,
+            y: -80.0,
+            width: 400.0,
+            height: 480.0,
+            color: None,
+        }],
+    );
+    let (mut canvas, _) = parse(SAMPLE);
+    apply(&mut canvas, &act).expect("applies");
+    let idx = |id: &str| canvas.nodes.iter().position(|n| n.id.0 == id).unwrap();
+    assert!(idx("grp-outer") < idx("grp-inspiration"));
+    assert!(idx("grp-outer") < idx("card-jsoncanvas"));
+    assert!(
+        idx("grp-research") < idx("grp-outer"),
+        "unrelated earlier nodes stay put"
+    );
+    assert_invertible(SAMPLE, &act);
+}
+
+/// #960: a group that contains nothing appends — there is nothing to
+/// bury, and cards created inside it later append after it (above it).
+#[test]
+fn group_with_no_members_is_appended() {
+    let act = action(
+        "empty group",
+        vec![CanvasOp::CreateGroup {
+            id: "grp-empty".into(),
+            label: Some("Later".into()),
+            x: 5000.0,
+            y: 5000.0,
+            width: 300.0,
+            height: 200.0,
+            color: None,
+        }],
+    );
+    let (mut canvas, _) = parse(SAMPLE);
+    let before = canvas.nodes.len();
+    apply(&mut canvas, &act).expect("applies");
+    assert_eq!(canvas.nodes.last().unwrap().id.0, "grp-empty");
+    assert_eq!(canvas.nodes.len(), before + 1);
+    assert_invertible(SAMPLE, &act);
+}
+
+// ---------------------------------------------------------------------------
+// Detached apply (W6-1 §E TE-0, IE-17)
+
+#[test]
+fn apply_detached_transforms_text_without_a_session() {
+    let text = "{\n\t\"nodes\":[\n\t\t{\"id\":\"a\",\"type\":\"text\",\"text\":\"Alpha\",\"x\":0,\"y\":0,\"width\":10,\"height\":10}\n\t],\n\t\"edges\":[]\n}\n";
+    let action = CanvasAction {
+        name: "create card".into(),
+        ops: vec![CanvasOp::CreateNode {
+            id: "b".into(),
+            content: CanvasNodeContent::Text {
+                text: "Beta".into(),
+            },
+            x: 0.0,
+            y: 100.0,
+            width: 10.0,
+            height: 10.0,
+            color: None,
+        }],
+    };
+    let out = apply_detached(text, &action).unwrap();
+    assert!(out.contains("Beta"));
+    assert!(out.contains("Alpha"));
+    // Pure: the input text is untouched, and re-running answers the
+    // same bytes (no hidden state).
+    assert_eq!(apply_detached(text, &action).unwrap(), out);
+}
+
+#[test]
+fn apply_detached_refuses_a_degraded_parse() {
+    let err = apply_detached(
+        "not json at all",
+        &CanvasAction {
+            name: "noop".into(),
+            ops: vec![],
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, ApplyError::NotACanvas(_)));
+}

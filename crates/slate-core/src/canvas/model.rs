@@ -179,6 +179,18 @@ pub struct CardSummary {
     pub kind_label: &'static str,
     /// The one display/speakable title (t0 §1.1 derivation).
     pub display_title: String,
+    /// The display title made UNIQUE across the canvas (t0 §1.1's Voice
+    /// Control requirement; W6-1 §W-G row L, contract 0b-5): the
+    /// display title itself when that spelling is free, else
+    /// `⟨title⟩ ⟨k⟩` for the k-th node in document order wanting it,
+    /// skipping every ordinal whose spelling some node's real title
+    /// already occupies.
+    pub speakable_name: String,
+    /// What the card points at: the file path for file/image cards, the
+    /// URL for link cards, `""` otherwise. One derivation — the
+    /// `canvas_nodes.target` column and the filter predicate both read
+    /// this, so the table and the filter cannot disagree (0b-13).
+    pub target: String,
     /// Ancestor group titles, root → immediate parent.
     pub group_path: Vec<String>,
     /// Immediate containing group, if any.
@@ -242,6 +254,15 @@ impl SpatialIndex {
     /// True when the canvas has no nodes at all.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Every node as `(id, rect, is_group)`, in document order — the
+    /// same order [`SpatialIndex::overlapping`] scans. The structural
+    /// queries (`canvas::queries`) need geometry and groupness together
+    /// and must see the document index, so they read this rather than
+    /// re-walking the parsed canvas.
+    pub fn nodes(&self) -> impl Iterator<Item = (&NodeId, Rect, bool)> + '_ {
+        self.entries.iter().map(|e| (&e.id, e.rect, e.is_group))
     }
 
     /// Bounding box of all nodes (None for an empty canvas).
@@ -468,6 +489,38 @@ pub fn derive_with(canvas: &Canvas, titles: &dyn FileTitleSource) -> CanvasModel
         base_titles.insert(node.id.clone(), title);
     }
 
+    // Speakable names (t0 §1.1 uniqueness, W6-1 contract 0b-5). Document
+    // order, first-come keeps the bare title, and a generated ordinal
+    // skips any spelling some node's REAL title occupies — the same
+    // `taken` guard the untitled loop above uses, and for the same
+    // reason: without it an ordinal can spell some OTHER card's actual
+    // title, so a Voice Control user says what they read and lands on
+    // the wrong card. Mac's loop checks only the names it has already
+    // assigned, so `A`, `A`, `A 2` becomes `A`, `A 2`, `A 2 2` there —
+    // unique, but the second card answers to the third one's title.
+    let real_titles: std::collections::HashSet<&str> =
+        base_titles.values().map(String::as_str).collect();
+    let mut used: std::collections::HashSet<String> =
+        std::collections::HashSet::with_capacity(nodes.len());
+    let mut speakable_names: HashMap<NodeId, String> = HashMap::with_capacity(nodes.len());
+    for node in nodes {
+        let base = &base_titles[&node.id];
+        let mut candidate = base.clone();
+        if used.contains(&candidate) {
+            let mut ordinal = 1usize;
+            candidate = loop {
+                ordinal += 1;
+                let next = format!("{base} {ordinal}");
+                if !used.contains(&next) && !real_titles.contains(next.as_str()) {
+                    break next;
+                }
+            };
+        }
+        used.insert(candidate.clone());
+        speakable_names.insert(node.id.clone(), candidate);
+    }
+    drop(used);
+
     let group_title = |id: &NodeId| base_titles[id].clone();
     let mut summaries: HashMap<NodeId, CardSummary> = HashMap::with_capacity(nodes.len());
     for node in nodes {
@@ -516,6 +569,8 @@ pub fn derive_with(canvas: &Canvas, titles: &dyn FileTitleSource) -> CanvasModel
             CardSummary {
                 kind_label: kind_label(node),
                 display_title: base_titles[&node.id].clone(),
+                speakable_name: speakable_names[&node.id].clone(),
+                target: node_target(node),
                 group_path: path,
                 container,
                 position_in_container: position,
@@ -569,6 +624,18 @@ fn direction_from(is_from: bool, from_end: EndStyle, to_end: EndStyle) -> EdgeDi
     }
 }
 
+/// What a card points at — the file path for file/image cards, the URL
+/// for link cards, `""` for text cards and groups. One definition: the
+/// `canvas_nodes.target` column and the filter predicate both read
+/// [`CardSummary::target`], which is this (W6-1 contract 0b-13).
+fn node_target(node: &Node) -> String {
+    match &node.kind {
+        NodeKind::File { file, .. } => file.clone(),
+        NodeKind::Link { url } => url.clone(),
+        NodeKind::Text { .. } | NodeKind::Group { .. } => String::new(),
+    }
+}
+
 /// Announcement type word (t0 §1.1): image files phrase as Image cards;
 /// other media self-identify through the title prefix.
 fn kind_label(node: &Node) -> &'static str {
@@ -583,7 +650,8 @@ fn kind_label(node: &Node) -> &'static str {
     }
 }
 
-enum MediaClass {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaClass {
     Image,
     Audio,
     Video,
@@ -591,7 +659,10 @@ enum MediaClass {
 
 /// Media class from the basename's real extension: a file with no `.`
 /// in its basename (even one literally named `mov`) is not media.
-fn media_class(path: &str) -> Option<MediaClass> {
+/// PUBLIC since W6-1 §E TE-0 (the CD-38 drift note's staged export):
+/// the Windows media gate consumed a transliterated copy of this set,
+/// and the copy retires the moment this answer crosses the FFI.
+pub fn media_class(path: &str) -> Option<MediaClass> {
     let base = path.rsplit(['/', '\\']).next().unwrap_or(path);
     let (stem, ext) = base.rsplit_once('.')?;
     if stem.is_empty() {

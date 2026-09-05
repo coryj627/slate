@@ -148,7 +148,7 @@ pub fn full_text_search(
     if trimmed.is_empty() {
         return Ok(QueryResultSet {
             rows: Vec::new(),
-            summary: "Search returned no results.".to_string(),
+            summary: summary_for(0),
         });
     }
 
@@ -250,11 +250,14 @@ pub fn full_text_search(
 /// The VoiceOver summary string for a result count. Shared by the FTS
 /// and tag-scope paths so the announcement wording never diverges.
 fn summary_for(count: usize) -> String {
-    match count {
-        0 => "Search returned no results.".to_string(),
-        1 => "Search returned 1 result.".to_string(),
-        n => format!("Search returned {n} results."),
+    // Rendered THROUGH the a11y vocabulary (#969): this string is
+    // spoken, so its wording is a §W-D anchor and the Windows twin
+    // renders it from the same template. Composing it a second time
+    // here is exactly the drift the residue conversion removes.
+    crate::a11y::A11yEvent::SearchResultsSummary {
+        count: u32::try_from(count).unwrap_or(u32::MAX),
     }
+    .render()
 }
 
 /// Tag-scoped search over `file_tags`. The tag predicate is `tag_norm

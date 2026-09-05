@@ -138,13 +138,12 @@ struct CommandPaletteView: View {
                 .paletteCommandSelected(
                     label: command.label, disabledReason: disabledReason))
         }
-        .onChange(of: model.pendingAnnouncement) { _, announcement in
-            guard let announcement, !announcement.isEmpty else { return }
-            // W0.5-3 residue: palette model announcement strings (#717 core-rendered follow-up)
-            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .high))
+        .onChange(of: model.pendingAnnouncementText) { _, text in
+            guard let text, !text.isEmpty, let event = model.pendingAnnouncement else { return }
+            postAccessibilityAnnouncement(event)
             model.clearPendingAnnouncement()
         }
-        .onChange(of: model.filterAnnouncement) { _, announcement in
+        .onChange(of: model.filterAnnouncementText) { _, text in
             // Filter-change announcement (#316). `.medium` priority
             // (default) so per-keystroke announcements coalesce
             // gracefully — VoiceOver supersedes the in-flight one
@@ -152,9 +151,8 @@ struct CommandPaletteView: View {
             // mid-word and produce "1—5—12 commands matching"
             // garbage at typing speed. Matches the
             // `SearchOverlay.swift` precedent.
-            guard let announcement, !announcement.isEmpty else { return }
-            // W0.5-3 residue: palette model announcement strings (#717 core-rendered follow-up)
-            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .medium))
+            guard let text, !text.isEmpty, let event = model.filterAnnouncement else { return }
+            postAccessibilityAnnouncement(event)
             model.clearFilterAnnouncement()
         }
     }
@@ -656,8 +654,7 @@ struct CommandPaletteView: View {
             disabledReason: disabledReason,
             restoreSearchFocus: { searchFocused = true },
             announceUnavailable: {
-                // W0.5-3 residue: palette model announcement strings (#717 core-rendered follow-up)
-                postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .high))
+                postAccessibilityAnnouncement(.paletteCommandUnavailable(reason: $0))
             },
             invoke: {
                 model.invoke(command, via: appState.commandRegistry)

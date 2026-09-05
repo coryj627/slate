@@ -19,7 +19,10 @@ namespace SlateWindows.Reading;
 /// `TextRangeAdaptor` registers ~30 text attributes with no `StyleId`
 /// among them. Measured across three manual passes: down-arrow onto a
 /// heading reads only its text. This decorator forwards everything to
-/// the base provider and answers exactly one extra question.
+/// the base provider and answers two extra questions (StyleId,
+/// StyleName) with range-aware Mixed semantics and synthetic
+/// FindAttribute (adversarial round 1: the UIA range contract, not
+/// just the caret).
 ///
 /// The two known hazards, both handled:
 /// - Base methods taking another range (`CompareEndpoints`,
@@ -40,6 +43,22 @@ internal sealed class HeadingStyleTextProvider : ITextProvider
 
     /// <summary>StyleId_Heading1; levels 1–9 are contiguous.</summary>
     internal const int StyleIdHeading1 = 70001;
+
+    /// <summary>StyleId_Quote. NVDA-source-verified UNCONSUMED (field
+    /// pass 3, 2026-07-31, nvaccess/nvda@5ba9521: StyleId maps only
+    /// Heading1—9); kept for non-NVDA ATs that do read it. NVDA users
+    /// get quotes through <see cref="StyleNameAttribute"/>.</summary>
+    internal const int StyleIdQuote = 70014;
+
+    /// <summary>UIA_StyleNameAttributeId — NVDA's "report style"
+    /// channel (speaks "style Quote"; the setting is OFF by default and
+    /// the owner accepted that: no visible in-range prefix, zero visual
+    /// change, quotes silent until Report Style is enabled. Owner call,
+    /// field pass 3 2026-07-31).</summary>
+    internal const int StyleNameAttribute = 40033;
+
+    /// <summary>The style name answered for quote paragraphs.</summary>
+    internal const string QuoteStyleName = "Quote";
 
     private readonly ITextProvider _inner;
 
@@ -94,34 +113,153 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
 
     public object? GetAttributeValue(int attributeId)
     {
-        if (attributeId == HeadingStyleTextProvider.StyleIdAttribute
-            && HeadingLevelAtStart() is byte level and > 0)
+        if (attributeId is HeadingStyleTextProvider.StyleIdAttribute
+            or HeadingStyleTextProvider.StyleNameAttribute)
         {
-            return HeadingStyleTextProvider.StyleIdHeading1 + (level - 1);
+            return SyntheticAttributeValue(attributeId);
         }
         return _inner.GetAttributeValue(attributeId);
     }
 
     /// <summary>
-    /// The range's paragraph, via the adaptor's internal start pointer.
-    /// Any failure — field missing, unexpected type — degrades to "not a
-    /// heading" rather than throwing into UIA marshalling.
+    /// Range-aware synthetic evaluation (adversarial round 1): UIA
+    /// requires MixedAttributeValue when a range spans differing
+    /// values — paragraph-at-start alone made the answer depend on
+    /// which end of a selection came first. When NO paragraph in the
+    /// range carries a synthetic value the base provider keeps its
+    /// answer, preserving pre-decorator behavior for plain text.
     /// </summary>
-    private byte HeadingLevelAtStart()
+    private object? SyntheticAttributeValue(int attributeId)
+    {
+        // Mixed detection runs on style IDENTITY (the StyleId-level
+        // value: heading level, quote, or none), not on the emitted
+        // attribute (adversarial round 4): headings emit no synthetic
+        // StyleName, so an H1+body or H1+H2 range compared by emitted
+        // StyleName looked uniformly empty and delegated to WPF's
+        // NotSupported — UIA requires Mixed for BOTH style attributes
+        // whenever the style changes across the range.
+        object? firstIdentity = null;
+        bool haveFirst = false;
+        foreach ((ITextRangeProvider _, Paragraph paragraph) in ParagraphRanges())
+        {
+            object? identity = SyntheticValueOf(
+                paragraph, HeadingStyleTextProvider.StyleIdAttribute);
+            if (!haveFirst)
+            {
+                firstIdentity = identity;
+                haveFirst = true;
+                continue;
+            }
+            if (!Equals(firstIdentity, identity))
+            {
+                return System.Windows.Automation.TextPattern.MixedAttributeValue;
+            }
+        }
+        if (firstIdentity is null)
+        {
+            return _inner.GetAttributeValue(attributeId);
+        }
+        if (attributeId == HeadingStyleTextProvider.StyleIdAttribute)
+        {
+            return firstIdentity;
+        }
+        // Uniform identity, StyleName requested: only quotes carry a
+        // synthetic name (headings deliberately don't — NVDA would
+        // double-speak "style Heading 1" + "heading level 1" under
+        // report-style); uniform heading ranges delegate.
+        return Equals(firstIdentity, HeadingStyleTextProvider.StyleIdQuote)
+            ? HeadingStyleTextProvider.QuoteStyleName
+            : _inner.GetAttributeValue(attributeId);
+    }
+
+    /// <summary>The synthetic value a single paragraph contributes to
+    /// <paramref name="attributeId"/>, or null when it has none.</summary>
+    private static object? SyntheticValueOf(Paragraph paragraph, int attributeId)
+    {
+        if (attributeId == HeadingStyleTextProvider.StyleIdAttribute)
+        {
+            if (ReadingSemantics.HeadingLevelOf(paragraph) is byte level and > 0)
+            {
+                return HeadingStyleTextProvider.StyleIdHeading1 + (level - 1);
+            }
+            return ReadingSemantics.IsQuote(paragraph)
+                ? HeadingStyleTextProvider.StyleIdQuote
+                : null;
+        }
+        return ReadingSemantics.IsQuote(paragraph)
+            ? HeadingStyleTextProvider.QuoteStyleName
+            : null;
+    }
+
+    /// <summary>
+    /// Paragraph sub-ranges overlapping this range, in document order,
+    /// built from PUBLIC range operations on fresh clones of the raw
+    /// adaptor range (no new reflection surface). The cursor stays
+    /// degenerate at paragraph starts; each yield expands a probe to
+    /// the enclosing paragraph. Non-paragraph positions (container
+    /// blocks) contribute nothing and the walk continues past them.
+    ///
+    /// Termination is STRICT FORWARD PROGRESS, not a count cap
+    /// (adversarial round 2: a 10k ceiling silently truncated
+    /// documents a single 64 KiB embed preview can legally exceed,
+    /// hiding later headings and quotes). Each iteration either
+    /// advances the cursor strictly forward or the walk ends; the
+    /// document is finite, so the walk is too.
+    /// </summary>
+    private IEnumerable<(ITextRangeProvider Range, Paragraph Paragraph)> ParagraphRanges()
+    {
+        ITextRangeProvider cursor = _inner.Clone();
+        cursor.MoveEndpointByRange(
+            TextPatternRangeEndpoint.End, cursor, TextPatternRangeEndpoint.Start);
+        while (true)
+        {
+            ITextRangeProvider probe = cursor.Clone();
+            probe.ExpandToEnclosingUnit(TextUnit.Paragraph);
+            if (ParagraphAtStartOf(probe) is { } paragraph)
+            {
+                yield return (probe, paragraph);
+            }
+            ITextRangeProvider previous = cursor.Clone();
+            if (cursor.Move(TextUnit.Paragraph, 1) == 0)
+            {
+                yield break;
+            }
+            if (cursor.CompareEndpoints(
+                TextPatternRangeEndpoint.Start,
+                previous,
+                TextPatternRangeEndpoint.Start) <= 0)
+            {
+                yield break;
+            }
+            if (cursor.CompareEndpoints(
+                TextPatternRangeEndpoint.Start,
+                _inner,
+                TextPatternRangeEndpoint.End) >= 0)
+            {
+                yield break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A range's paragraph, via the adaptor's internal start pointer.
+    /// Any failure — field missing, unexpected type — degrades to "no
+    /// style" rather than throwing into UIA marshalling.
+    /// </summary>
+    private static Paragraph? ParagraphAtStartOf(ITextRangeProvider range)
     {
         try
         {
-            if (StartPointerField.ForType(_inner.GetType()) is not { } field
-                || field.GetValue(_inner) is not TextPointer start
-                || start.Paragraph is not { } paragraph)
+            if (StartPointerField.ForType(range.GetType()) is not { } field
+                || field.GetValue(range) is not TextPointer start)
             {
-                return 0;
+                return null;
             }
-            return ReadingSemantics.HeadingLevelOf(paragraph);
+            return start.Paragraph;
         }
         catch
         {
-            return 0;
+            return null;
         }
     }
 
@@ -141,8 +279,66 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
 
     public ITextRangeProvider? FindAttribute(int attribute, object value, bool backward)
     {
-        ITextRangeProvider? found = _inner.FindAttribute(attribute, value, backward);
-        return found is null ? null : new HeadingStyleTextRange(found);
+        if (attribute is HeadingStyleTextProvider.StyleIdAttribute
+            or HeadingStyleTextProvider.StyleNameAttribute)
+        {
+            // Synthetic values are invisible to WPF's own search
+            // (adversarial round 1): without this branch, "find
+            // StyleName Quote" answered nothing while GetAttributeValue
+            // advertised the value.
+            //
+            // A DEGENERATE range is empty by UIA definition and must
+            // answer null (adversarial round 3): the paragraph walk
+            // deliberately yields the caret's paragraph so
+            // GetAttributeValue works at a caret, but a search over
+            // empty content has nothing to find — clamping would
+            // otherwise return the caret itself as a zero-length
+            // "match" an AT can rediscover forever.
+            if (_inner.CompareEndpoints(
+                TextPatternRangeEndpoint.Start,
+                _inner,
+                TextPatternRangeEndpoint.End) == 0)
+            {
+                return null;
+            }
+            ITextRangeProvider? last = null;
+            foreach ((ITextRangeProvider paragraphRange, Paragraph paragraph)
+                in ParagraphRanges())
+            {
+                if (!Equals(SyntheticValueOf(paragraph, attribute), value))
+                {
+                    continue;
+                }
+                ITextRangeProvider found = ClampToThisRange(paragraphRange);
+                if (!backward)
+                {
+                    return new HeadingStyleTextRange(found);
+                }
+                last = found;
+            }
+            return last is null ? null : new HeadingStyleTextRange(last);
+        }
+        ITextRangeProvider? foundInner = _inner.FindAttribute(attribute, value, backward);
+        return foundInner is null ? null : new HeadingStyleTextRange(foundInner);
+    }
+
+    /// <summary>FindAttribute results must stay inside the searched
+    /// range; a paragraph can begin before it or end after it.</summary>
+    private ITextRangeProvider ClampToThisRange(ITextRangeProvider candidate)
+    {
+        if (candidate.CompareEndpoints(
+            TextPatternRangeEndpoint.Start, _inner, TextPatternRangeEndpoint.Start) < 0)
+        {
+            candidate.MoveEndpointByRange(
+                TextPatternRangeEndpoint.Start, _inner, TextPatternRangeEndpoint.Start);
+        }
+        if (candidate.CompareEndpoints(
+            TextPatternRangeEndpoint.End, _inner, TextPatternRangeEndpoint.End) > 0)
+        {
+            candidate.MoveEndpointByRange(
+                TextPatternRangeEndpoint.End, _inner, TextPatternRangeEndpoint.End);
+        }
+        return candidate;
     }
 
     public ITextRangeProvider? FindText(string text, bool backward, bool ignoreCase)

@@ -23,6 +23,24 @@
 # target/debug check artifacts, test → target/ci, bench →
 # target/release); the structural fix, per-lane cache volumes, is a
 # deferred dashboard experiment.
+#
+# Cache-trust posture (windows.yml adversarial rounds 2–3, applied
+# repo-wide): this repository is PUBLIC, and a fork PR controls both
+# the build code and this YAML — so the runner PROFILE is
+# REF-CONDITIONAL: runs on refs/heads/main (pushes and crons) use the
+# protected arm64-fast profile (dashboard branch allow-list "main" —
+# Namespace enforces protection PER-PROFILE, so trusted and PR
+# traffic ride separate profiles); every other ref uses the
+# unprotected arm64-fast-pr twin. The slate-arm64 cache TAG remains
+# for lineage identity within each profile, because in-workflow
+# routing cannot bind PR-controlled YAML — the profile allow-list is
+# the enforcement. The tag names are public
+# before protection exists, so a fork PR could seed a trusted volume
+# first — the mandatory bootstrap runbook (quiesce, allow-list,
+# reset, verify-cold) is recorded in windows.yml's header.
+# audit.yml and nightly.yml share these lineages (they share this
+# profile's volume family); windows.yml documents the full reasoning.
+# The first run per new tag starts cold once.
 
 name: Rust
 
@@ -59,7 +77,7 @@ jobs:
     name: fmt / clippy
     # Namespace Linux runner profile (dashboard-configured; re-pinned to
     # genuine ARM64 by the owner on 2026-07-18 — the name is truthful now).
-    runs-on: namespace-profile-arm64-fast
+    runs-on: namespace-profile-arm64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-arm64
     permissions:
       contents: read
     steps:
@@ -86,6 +104,53 @@ jobs:
         with:
           cache: rust
 
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (windows.yml runbook step 4): read
+        # BEFORE any build repopulates the volume, so a cold mount is
+        # distinguishable from a surviving stale generation. Measured
+        # at the VOLUME ROOT (adversarial round 4: the mount points are
+        # symlinks/junctions on mac/Windows and du reported link nodes,
+        # 0B even fully warm; NSC_CACHE_PATH holds the real content for
+        # every cache mode).
+        run: |
+          shopt -s nullglob dotglob
+          # Platform/vendor metadata is not cache content: skipped
+          # silently for both the cold decision and measurement
+          # (adversarial round 6: lost+found and containerscache on
+          # Linux, .Spotlight-V100/.Trashes/.fseventsd on macOS kept
+          # every attestation in the warning path, and permanent noise
+          # buries a real measurement failure).
+          is_metadata() {
+            case "$(basename "$1")" in
+              "lost+found"|containerscache|gitmirror|.Spotlight-V100|.Trashes|.fseventsd|.DS_Store) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          root="${NSC_CACHE_PATH:?cache volume root missing}"
+          if [ ! -d "$root" ] || [ ! -r "$root" ]; then
+            # Fail CLOSED (adversarial round 7): with nullglob, a
+            # missing or unreadable root yields zero entries and the
+            # cold sentinel - a mount failure must never masquerade as
+            # bootstrap proof.
+            echo "::error::cache volume root $root is not an accessible directory - attestation impossible"
+            exit 1
+          fi
+          entries=()
+          for entry in "$root"/*; do
+            is_metadata "$entry" || entries+=("$entry")
+          done
+          if [ ${#entries[@]} -eq 0 ]; then
+            echo "cache volume empty (cold mount)"
+          else
+            for entry in "${entries[@]}"; do
+              # Per-entry measurement: one unreadable entry must not
+              # taint the rest, and emptiness is decided by
+              # enumeration, never by du's exit status (rounds 5-6).
+              du -sh "$entry" 2>/dev/null \
+                || echo "::warning::cannot measure $entry - measurement incomplete, NOT cold"
+            done
+          fi
+
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
@@ -97,7 +162,7 @@ jobs:
 
   test:
     name: test (nextest, ci profile)
-    runs-on: namespace-profile-arm64-fast
+    runs-on: namespace-profile-arm64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-arm64
     permissions:
       contents: read
     env:
@@ -119,6 +184,53 @@ jobs:
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
         with:
           cache: rust
+
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (windows.yml runbook step 4): read
+        # BEFORE any build repopulates the volume, so a cold mount is
+        # distinguishable from a surviving stale generation. Measured
+        # at the VOLUME ROOT (adversarial round 4: the mount points are
+        # symlinks/junctions on mac/Windows and du reported link nodes,
+        # 0B even fully warm; NSC_CACHE_PATH holds the real content for
+        # every cache mode).
+        run: |
+          shopt -s nullglob dotglob
+          # Platform/vendor metadata is not cache content: skipped
+          # silently for both the cold decision and measurement
+          # (adversarial round 6: lost+found and containerscache on
+          # Linux, .Spotlight-V100/.Trashes/.fseventsd on macOS kept
+          # every attestation in the warning path, and permanent noise
+          # buries a real measurement failure).
+          is_metadata() {
+            case "$(basename "$1")" in
+              "lost+found"|containerscache|gitmirror|.Spotlight-V100|.Trashes|.fseventsd|.DS_Store) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          root="${NSC_CACHE_PATH:?cache volume root missing}"
+          if [ ! -d "$root" ] || [ ! -r "$root" ]; then
+            # Fail CLOSED (adversarial round 7): with nullglob, a
+            # missing or unreadable root yields zero entries and the
+            # cold sentinel - a mount failure must never masquerade as
+            # bootstrap proof.
+            echo "::error::cache volume root $root is not an accessible directory - attestation impossible"
+            exit 1
+          fi
+          entries=()
+          for entry in "$root"/*; do
+            is_metadata "$entry" || entries+=("$entry")
+          done
+          if [ ${#entries[@]} -eq 0 ]; then
+            echo "cache volume empty (cold mount)"
+          else
+            for entry in "${entries[@]}"; do
+              # Per-entry measurement: one unreadable entry must not
+              # taint the rest, and emptiness is decided by
+              # enumeration, never by du's exit status (rounds 5-6).
+              du -sh "$entry" 2>/dev/null \
+                || echo "::warning::cannot measure $entry - measurement incomplete, NOT cold"
+            done
+          fi
 
       - name: Install cargo-nextest
         # Prebuilt, checksum-verified binary in seconds. Installs into
@@ -188,7 +300,7 @@ jobs:
 
   bench-compile:
     name: bench-compile
-    runs-on: namespace-profile-arm64-fast
+    runs-on: namespace-profile-arm64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-arm64
     permissions:
       contents: read
     steps:
@@ -208,6 +320,53 @@ jobs:
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
         with:
           cache: rust
+
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (windows.yml runbook step 4): read
+        # BEFORE any build repopulates the volume, so a cold mount is
+        # distinguishable from a surviving stale generation. Measured
+        # at the VOLUME ROOT (adversarial round 4: the mount points are
+        # symlinks/junctions on mac/Windows and du reported link nodes,
+        # 0B even fully warm; NSC_CACHE_PATH holds the real content for
+        # every cache mode).
+        run: |
+          shopt -s nullglob dotglob
+          # Platform/vendor metadata is not cache content: skipped
+          # silently for both the cold decision and measurement
+          # (adversarial round 6: lost+found and containerscache on
+          # Linux, .Spotlight-V100/.Trashes/.fseventsd on macOS kept
+          # every attestation in the warning path, and permanent noise
+          # buries a real measurement failure).
+          is_metadata() {
+            case "$(basename "$1")" in
+              "lost+found"|containerscache|gitmirror|.Spotlight-V100|.Trashes|.fseventsd|.DS_Store) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          root="${NSC_CACHE_PATH:?cache volume root missing}"
+          if [ ! -d "$root" ] || [ ! -r "$root" ]; then
+            # Fail CLOSED (adversarial round 7): with nullglob, a
+            # missing or unreadable root yields zero entries and the
+            # cold sentinel - a mount failure must never masquerade as
+            # bootstrap proof.
+            echo "::error::cache volume root $root is not an accessible directory - attestation impossible"
+            exit 1
+          fi
+          entries=()
+          for entry in "$root"/*; do
+            is_metadata "$entry" || entries+=("$entry")
+          done
+          if [ ${#entries[@]} -eq 0 ]; then
+            echo "cache volume empty (cold mount)"
+          else
+            for entry in "${entries[@]}"; do
+              # Per-entry measurement: one unreadable entry must not
+              # taint the rest, and emptiness is decided by
+              # enumeration, never by du's exit status (rounds 5-6).
+              du -sh "$entry" 2>/dev/null \
+                || echo "::warning::cannot measure $entry - measurement incomplete, NOT cold"
+            done
+          fi
 
       - name: cargo bench --no-run (PR — LTO off)
         # Compile every bench without running it, so a broken bench

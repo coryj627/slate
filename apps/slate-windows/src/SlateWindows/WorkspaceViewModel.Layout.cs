@@ -42,10 +42,11 @@ internal sealed partial class WorkspaceViewModel
                 return;
             }
 
-            _activeGroup?.ActiveTab?.Deactivate();
+            _activeGroup?.ActiveTab?.Deactivate(clearBaseQuickFilter: false);
             _activeGroup = value;
             OnPropertyChanged();
             RaiseCommandStates();
+            SyncPanels();
         }
     }
 
@@ -84,6 +85,11 @@ internal sealed partial class WorkspaceViewModel
 
         RaiseCommandStates();
         Persist();
+        // EVERY tab activation re-derives the panels' note — the
+        // ActiveGroup setter's sync alone misses same-pane tab
+        // switches, whose group identity is unchanged (adversarial
+        // round 1: the panels stayed bound to the previous note).
+        SyncPanels();
     }
 
     private void OpenItem(WorkspaceItemState item, WorkspaceOpenTarget target)
@@ -146,6 +152,17 @@ internal sealed partial class WorkspaceViewModel
 
             WorkspaceTabViewModel? peer = FindSamePathTab(item, excluding: active);
             active.ReplaceItem(item);
+            // The replace arm is a tab MUTATION site, not a construction
+            // site — it needs the same attach funnel as AddTab/restore/
+            // duplicate or a .base opened into the current tab ships a
+            // dead pane (red team round 1 blocker). Attach before the
+            // release sweep so a shared document is never shut down
+            // between the two steps.
+            AttachTabDocumentsIfNeeded(active);
+            ReleaseUnreferencedBaseDocuments();
+            ReleaseUnreferencedDashboards();
+            ReleaseUnreferencedCanvasDocuments();
+            ReleaseGraphDocumentIfUnreferenced();
             if (peer is not null)
             {
                 active.MirrorDocumentStateFrom(peer);
@@ -187,9 +204,12 @@ internal sealed partial class WorkspaceViewModel
             MirrorSamePathDocumentState,
             OpenEditorNavigation,
             ActivateEditorTag,
+            ActivateReadingTag,
             _announce,
             EditorPreferences,
             startInteractionBackgroundWork: _startInteractionBackgroundWork);
+        tab.TaskRepairs = _taskIndexRepairs;
+        AttachTabDocumentsIfNeeded(tab);
         if (peer is not null)
         {
             tab.MirrorDocumentStateFrom(peer);
@@ -297,6 +317,10 @@ internal sealed partial class WorkspaceViewModel
 
         group.Tabs.Remove(tab);
         tab.Dispose();
+        ReleaseUnreferencedBaseDocuments();
+        ReleaseUnreferencedDashboards();
+        ReleaseUnreferencedCanvasDocuments();
+        ReleaseGraphDocumentIfUnreferenced();
         WorkspaceTabViewModel? successor = group.Tabs.Count == 0
             ? null
             : group.Tabs[Math.Min(index, group.Tabs.Count - 1)];
@@ -376,6 +400,12 @@ internal sealed partial class WorkspaceViewModel
         }
 
         group.Tabs.Clear();
+        ReleaseUnreferencedBaseDocuments();
+        ReleaseUnreferencedDashboards();
+        ReleaseUnreferencedCanvasDocuments();
+        // W6-2 PR A (contract A-1; IPA-2): the pane close is the third
+        // tab-set boundary — the last graph tab can leave with its pane.
+        ReleaseGraphDocumentIfUnreferenced();
         RemoveEmptyGroup(group);
         AnnounceActivePane();
         RequestActiveEditorFocus();
@@ -410,9 +440,13 @@ internal sealed partial class WorkspaceViewModel
             MirrorSamePathDocumentState,
             OpenEditorNavigation,
             ActivateEditorTag,
+            ActivateReadingTag,
             _announce,
             EditorPreferences,
             startInteractionBackgroundWork: _startInteractionBackgroundWork);
+        // The registry, not a fresh document: a duplicated tab shares
+        // its source's ONE document (contract C3).
+        AttachTabDocumentsIfNeeded(duplicate);
         duplicate.MirrorDocumentStateFrom(tab);
         ActiveGroup.Tabs.Insert(index + 1, duplicate);
         ActiveGroup.ActiveTab = duplicate;
@@ -429,8 +463,22 @@ internal sealed partial class WorkspaceViewModel
 
         (WorkspaceItemState item, Guid groupId) = _closedTabs[^1];
         _closedTabs.RemoveAt(_closedTabs.Count - 1);
+        if (item.Kind == WorkspaceItemKind.Graph)
+        {
+            // W6-2 PR A (rule L, Term 6): a reopened graph speaks Opened,
+            // then the shell's line below, then the summary when a load runs.
+            SetGraphCause(GraphActivationCause.Reopen);
+        }
         if (item.Kind == WorkspaceItemKind.Graph && TryFocusGlobalGraph())
         {
+            // Rule L, Term 6 (IPA-3): a reopen of a tab that still exists
+            // is an Open of that tab with the reopen line AFTER it. The two
+            // assignments above reach the funnel only when a reference
+            // changes; when the graph was already effective they change
+            // nothing, so the follow method is called here, before the
+            // shell's line — `Opened`, `ReopenedGraph`, and no load for an
+            // effective READY tab.
+            SyncPanels();
             _announce(new A11yEvent.ReopenedGraph());
             RaiseCommandStates();
             Persist();
@@ -643,8 +691,27 @@ internal sealed partial class WorkspaceViewModel
 
     public void AnnounceActivePaneFocus() => AnnounceActivePane();
 
-    private void RequestActiveEditorFocus() =>
+    /// <summary>Internal for the window's overlay-close focus
+    /// fallback (the Bases overlays restore here when their captured
+    /// element died in a republish).</summary>
+    /// <summary>
+    /// The ONE focus-request funnel: every user-initiated open calls it,
+    /// and no background path does. W6-1 PR A hangs the canvas's focus
+    /// landing here (contract A14) for exactly that property — a
+    /// retarget, a session restore of a pane the user is not in, and a
+    /// history reload all publish without asking, and must not steal
+    /// focus; a second tab on an already-open path is a registry hit
+    /// that never publishes, and must still land it.
+    /// </summary>
+    internal void RequestActiveEditorFocus()
+    {
+        // Addressed to the tab that asked: one document serves every
+        // pane on the path, and an unaddressed request lands focus in
+        // all of them.
+        WorkspaceTabViewModel? active = ActiveGroup.ActiveTab;
+        active?.Canvas?.RequestFocusLanding(active);
         EditorPaneFocusRequested?.Invoke(this, ActiveGroup);
+    }
 
     private void AnnounceActivePane()
     {
@@ -763,8 +830,22 @@ internal sealed partial class WorkspaceViewModel
         }
     }
 
+    /// <summary>
+    /// Raised after this view model requeries its own hand-maintained list,
+    /// so the shell can requery the REGISTERED catalog by enumeration
+    /// (PINV-7).
+    /// </summary>
+    /// <remarks>
+    /// The workspace refresh is the one that matters for the invariant's own
+    /// example: <c>ToggleReadingModeCommand</c> gates on the active tab
+    /// being Markdown, so it has to requery on a tab switch — which the
+    /// vault-lifecycle refresh never sees.
+    /// </remarks>
+    internal Action? RegisteredCommandStatesChanged { get; set; }
+
     private void RaiseCommandStates()
     {
+        RegisteredCommandStatesChanged?.Invoke();
         foreach (ICommand command in new[]
         {
             CloseActiveTabCommand,
@@ -790,5 +871,6 @@ internal sealed partial class WorkspaceViewModel
         {
             ((RelayCommand)command).RaiseCanExecuteChanged();
         }
+        RaiseBasesCommandStates();
     }
 }

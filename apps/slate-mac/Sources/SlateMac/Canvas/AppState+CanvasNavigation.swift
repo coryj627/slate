@@ -3,6 +3,16 @@
 
 import Foundation
 
+/// What a canvas READ verb needs to run, handed out only by
+/// `AppState.canvasReadContext(for:)` so no verb re-derives whether it
+/// may proceed. Holding one is the proof that the state mapping said
+/// yes.
+struct CanvasReadContext {
+    let doc: CanvasDocument
+    let session: VaultSession
+    let handle: UInt64
+}
+
 /// The canvas keyboard navigator (Milestone T, #364) — deliberately a
 /// **command layer, not a fourth view** (t2 shared-architecture
 /// decision): these commands are hosted by every canvas surface and
@@ -22,15 +32,158 @@ extension AppState {
         return doc
     }
 
+    /// The active tab's canvas whatever its load state — DISCOVERY,
+    /// separated from admission.
+    ///
+    /// A read verb needs its document before it may ask the mapping,
+    /// because the recorded precedence (m6) puts a verb's own selection
+    /// question ahead of the state's: pressing Enter-group with nothing
+    /// selected answers "Nothing selected." in the reopening window,
+    /// not "reopening". Acquiring the read context first announced
+    /// eagerly and inverted that.
+    var activeCanvasDocumentAnyState: CanvasDocument? {
+        guard let tab = workspace.activeTab, case .canvas(let path) = tab.item else {
+            return nil
+        }
+        return canvasDocument(for: path)
+    }
+
+    /// **The one state → response mapping for canvas READ verbs.**
+    ///
+    /// `nil` means the document can answer a core query. Anything else
+    /// is the sentence its state owes the user, and it is TOTAL over
+    /// `LoadState` — the `switch` has no `default`, so a new case fails
+    /// to compile here rather than falling into somebody's silent arm.
+    ///
+    /// | State | Answer |
+    /// |---|---|
+    /// | `.ready`, handle live | `nil` — proceed |
+    /// | `.ready`, handle detached | `.reopening` (VA-1) |
+    /// | `.loading` | `.loading` (VA-2) |
+    /// | `.degraded`, `.failed`, `.retargetFailed` | `.notReadable` |
+    ///
+    /// A verb may still owe its OWN question first — see
+    /// `canvasAnsweredMissingSelection`, which outranks this table on
+    /// any state whose retained rows the container actually renders
+    /// (`.ready` and `.retargetFailed`). This is what each state owes
+    /// once that question is settled.
+    ///
+    /// This exists because the alternative did not survive contact:
+    /// three review rounds in a row found a member missing from a
+    /// handwritten list, or a state missing from a handwritten
+    /// response set, or two lists disagreeing. Red-team protocol rule 4
+    /// says stop patching the sentences and implement the invariant, so
+    /// there is now one function to read, one place to change, and a
+    /// Rust guard (`slate-uniffi`) that fails when a canvas query is
+    /// called from a function that does not route through here and is
+    /// not on a named exclusion list.
+    ///
+    /// Two decisions this table carries. `.reopening` is a NEW sentence
+    /// rather than the write refusal, because
+    /// `CanvasMutationRefusal.reopening` ends "before making changes",
+    /// which is wrong in the ear of a user who pressed a navigation key
+    /// and changed nothing. And the detached handle is not reused for
+    /// reads: that would downgrade a structural write-safety invariant
+    /// — no handle, so `canvas_apply` is unreachable — to a
+    /// host-enforced one. Permanently refused (contracts doc, §0b
+    /// "Verified during implementation").
+    func canvasReadRefusal(for doc: CanvasDocument) -> CanvasStatusNote? {
+        switch doc.state {
+        case .ready:
+            // The one reachable `.ready`-with-no-handle state is
+            // `beginBatchRetarget`'s window: the snapshot stays visible
+            // while the path-bound handle is detached so nothing can
+            // save through the moved-away path.
+            return doc.handle == nil || currentSession == nil ? .reopening : nil
+        case .loading:
+            // A first open, or a prepared replacement installed over an
+            // already-open tab. "Reopening" would be false for the
+            // first, which is why VA-2 is its own sentence.
+            return .loading
+        case .degraded, .failed, .retargetFailed:
+            // Where-am-I's answer, now everyone's: a canvas that never
+            // opened cleanly, was moved to Trash, or failed to reopen
+            // cannot answer a structural question, and saying nothing
+            // was the t0 §5 gap.
+            return .notReadable
+        }
+    }
+
+    /// What a read verb needs, or `nil` after ANNOUNCING what the
+    /// state owes. The announcement happens here so no member decides
+    /// which sentence its state deserves.
+    func canvasReadContext(for doc: CanvasDocument) -> CanvasReadContext? {
+        if let note = canvasReadRefusal(for: doc) {
+            canvasAnnouncer.announce(.canvasStatus(note: note))
+            return nil
+        }
+        // Unreachable by the mapping above, which refuses both nils —
+        // this is the unwrap, not a second policy.
+        guard let session = currentSession, let handle = doc.handle else { return nil }
+        return CanvasReadContext(doc: doc, session: session, handle: handle)
+    }
+
+    /// The active tab's canvas, through the mapping.
+    func canvasReadTarget() -> CanvasReadContext? {
+        guard let tab = workspace.activeTab, case .canvas(let path) = tab.item else {
+            return nil
+        }
+        return canvasReadContext(for: canvasDocument(for: path))
+    }
+
+    /// The recorded precedence (m6), in one place beside the mapping
+    /// that owns the state story: a verb answers its OWN selection
+    /// question before the state's — but only on a canvas whose
+    /// snapshot the user is actually looking at.
+    ///
+    /// "Actually looking at" is `LoadState.rendersRetainedSnapshot`,
+    /// which is derived from `CanvasContainerView`'s own switch and
+    /// pinned against it by a guard. It is NOT `.ready`: writing the
+    /// condition out by hand made this gate miss `.retargetFailed`,
+    /// whose retained rows the container renders read-only and whose
+    /// navigation is palette-reachable, so a no-selection press there
+    /// answered with the state instead of the caret (codex 0b round 5 —
+    /// the curated-condition class, again).
+    ///
+    /// Where the predicate is false the snapshot is not on screen at
+    /// all, so a selection question has nothing to be about and the
+    /// mapping's sentence is the only honest answer.
+    ///
+    /// Returns true HAVING ANNOUNCED, so the caller returns.
+    func canvasAnsweredMissingSelection(_ doc: CanvasDocument) -> Bool {
+        guard doc.state.rendersRetainedSnapshot, doc.selection.selected == nil else {
+            return false
+        }
+        canvasAnnounceSelectionUnresolvable()
+        return true
+    }
+
+    /// The other never-silent arm: the query THREW while the handle was
+    /// live. Every structural query in this file refuses an id the model
+    /// does not hold with `bad_node`, so a throw here means the
+    /// selection no longer names a card this canvas can answer for —
+    /// rows outrunning the handle after an external write plus rescan
+    /// (contract 0b-6's skew).
+    ///
+    /// `Nothing selected.` is the accurate existing phrase for that:
+    /// nothing RESOLVABLE is selected. It is deliberately not the
+    /// verb-specific phrase, because none of those was learned — the
+    /// group might have children, the card might have a path, the row
+    /// might not be at canvas level. Announcing one of those would be
+    /// asserting an answer the query never gave.
+    private func canvasAnnounceSelectionUnresolvable() {
+        canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
+    }
+
     /// Move selection to the next/previous card in reading order.
     func canvasSelectAdjacent(offset: Int) {
         guard let doc = activeCanvasDocument else { return }
         // #373: movement walks the FILTERED set while a filter is on
         // (a view, never a mutation — Esc restores the full canvas).
-        let rows = doc.filteredOutline
+        let rows = doc.filteredOutline(session: currentSession)
         guard !rows.isEmpty else {
             if doc.filterActive {
-                canvasAnnouncer.announce(.status("No cards match the filter."))
+                canvasAnnouncer.announce(.canvasStatus(note: .noCardsMatchFilter))
             }
             return
         }
@@ -41,7 +194,7 @@ extension AppState {
             target = max(0, min(order.count - 1, currentIndex + offset))
             if target == currentIndex {
                 canvasAnnouncer.announce(
-                    .status(offset > 0 ? "End of canvas." : "Start of canvas."))
+                    .canvasStatus(note: offset > 0 ? .endOfCanvas : .startOfCanvas))
                 return
             }
         } else {
@@ -52,52 +205,147 @@ extension AppState {
 
     /// Enter the selected group (select its first child), or announce
     /// that the selection isn't a group.
+    ///
+    /// §W-G row E: the "next outline row one level deeper" walk was a
+    /// re-derivation of `GroupTree.children` off the flattened depth
+    /// column. It asks core directly now (`canvas_children_of`,
+    /// contract 0b-8), whose sibling order `(y, x, document index)` is
+    /// the order the outline's depth-first walk emits — so the first
+    /// child is the same card it always was.
+    ///
+    /// The selection is checked BEFORE the handle, so "nothing
+    /// selected" answers the same way in every state — the reopening
+    /// window must not turn a selection question into a reopening one.
     func canvasEnterGroup() {
-        guard let doc = activeCanvasDocument,
-            let selected = doc.selection.selected,
+        // Discovery, then admission: the selection question is this
+        // verb's own and outranks the state's on a canvas the user can
+        // see (m6's recorded precedence).
+        guard let found = activeCanvasDocumentAnyState else { return }
+        if canvasAnsweredMissingSelection(found) { return }
+        guard let target = canvasReadContext(for: found) else { return }
+        let doc = target.doc
+        guard let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
-        else { return }
-        guard row.kind == "group" else {
-            canvasAnnouncer.announce(.status("Not a group."))
-            return
-        }
-        // First child = the next outline row one level deeper.
-        guard let index = doc.outline.firstIndex(where: { $0.nodeId == selected }),
-            index + 1 < doc.outline.count,
-            doc.outline[index + 1].depth == row.depth + 1
         else {
-            canvasAnnouncer.announce(.status("Group \"\(row.title)\" is empty."))
+            return canvasAnnounceSelectionUnresolvable()
+        }
+        guard row.kind == "group" else {
+            canvasAnnouncer.announce(.canvasStatus(note: .notAGroup))
             return
         }
-        canvasSelect(nodeId: doc.outline[index + 1].nodeId, in: doc)
+        // A THROW is not an empty group — see
+        // `canvasAnnounceSelectionUnresolvable`. Only a successful query
+        // that came back empty may claim the group is empty.
+        guard
+            let children = try? target.session.canvasChildrenOf(
+                handle: target.handle, groupId: selected)
+        else {
+            return canvasAnnounceSelectionUnresolvable()
+        }
+        guard let firstChild = children.first else {
+            canvasAnnouncer.announce(.canvasStatus(note: .groupIsEmpty(label: row.title)))
+            return
+        }
+        canvasSelect(nodeId: firstChild, in: doc)
     }
 
     /// Exit to the containing group (select the group row), or announce
     /// canvas level.
+    ///
+    /// §W-G row E: the backwards scan for the nearest preceding row at
+    /// `depth − 1` is `GroupTree.parent` spelled in outline indices.
+    /// `canvas_parent_of` (contract 0b-8) answers it, and `nil` — no
+    /// parent — is exactly "at canvas level".
     func canvasExitGroup() {
-        guard let doc = activeCanvasDocument,
-            let selected = doc.selection.selected,
-            let row = doc.outline.first(where: { $0.nodeId == selected })
-        else { return }
-        guard row.depth > 0,
-            let index = doc.outline.firstIndex(where: { $0.nodeId == selected }),
-            let parent = doc.outline[..<index].last(where: { $0.depth == row.depth - 1 })
-        else {
-            canvasAnnouncer.announce(.status("At canvas level."))
+        guard let found = activeCanvasDocumentAnyState else { return }
+        if canvasAnsweredMissingSelection(found) { return }
+        guard let target = canvasReadContext(for: found) else { return }
+        let doc = target.doc
+        guard let selected = doc.selection.selected else {
+            return canvasAnnounceSelectionUnresolvable()
+        }
+        // A THROW is not "at canvas level" — a card the canvas cannot
+        // resolve has no level. Only a successful query returning no
+        // parent may say that.
+        //
+        // `do`/`catch`, NOT `try?`: this call returns `String?`, and
+        // `try?` on an optional-returning throwing call FLATTENS
+        // (SE-0230), so `try?` would collapse "the query threw" and
+        // "there is no parent" into one `nil` — erasing the very
+        // distinction the two arms below exist to make. The flattening
+        // also makes the two-step `guard let` shape fail to compile,
+        // which is how it was caught.
+        let parent: String?
+        do {
+            parent = try target.session.canvasParentOf(
+                handle: target.handle, nodeId: selected)
+        } catch {
+            return canvasAnnounceSelectionUnresolvable()
+        }
+        guard let parent else {
+            canvasAnnouncer.announce(.canvasStatus(note: .atCanvasLevel))
             return
         }
-        canvasSelect(nodeId: parent.nodeId, in: doc)
+        canvasSelect(nodeId: parent, in: doc)
     }
 
     /// Follow the selected card's Nth connection (1-based) in the given
     /// direction sense: forward = connections leaving or linking this
     /// card; back = connections arriving. Direction respects
     /// `fromEnd`/`toEnd` (t0 §1.2 / #360 model data).
+    ///
+    /// `No connection…` is a claim about the adjacency list, so it is
+    /// spoken only when there IS one. An unanswerable lookup — the
+    /// reopening window with a cold cache, or a refused id — takes
+    /// VA-1's table instead: the sentence for the state, never a
+    /// dead-end phrase nothing returned.
+    ///
+    /// The ORDER that makes both halves true, and the one VA-1 records:
+    /// 1. the verb's own precondition (a selection, via the precedence
+    ///    gate);
+    /// 2. the adjacency answer — a non-nil list answers normally,
+    ///    traversal or accurate dead end, whatever the state;
+    /// 3. the mapping's refusal, and only when step 2 came back nil.
     func canvasFollowConnection(forward: Bool, ordinal: Int = 1) {
-        guard let doc = activeCanvasDocument, let selected = doc.selection.selected else {
-            return
+        // Split, not combined: the document gate and the selection are
+        // different questions with different answers, and folding them
+        // into one `guard … else { return }` made a plain
+        // nothing-selected press SILENT on an ordinary ready canvas —
+        // palette-reachable, and out of step with the three sibling
+        // verbs that answer it.
+        guard let doc = activeCanvasDocumentAnyState else { return }
+        if canvasAnsweredMissingSelection(doc) { return }
+        // DATA BEFORE STATE, and this is not a second state reader — it
+        // reads no state at all. A warm adjacency list is a FACT about
+        // the rows the user is looking at, and VA-1's rule is that the
+        // accurate phrase wins wherever a fact exists: the refusal is
+        // for when the truth is unknowable, not for when it is already
+        // known. This is the same shape the filter family has had since
+        // VA-1 (`FilterView.current` first, mapping only when the
+        // needle went unanswered); follow-connection is the only other
+        // member with a cache-answerable path, and asking in the other
+        // order is what made a warm cache lose to `.reopening` (PR
+        // #1155 CI).
+        //
+        // The consult cannot escalate a refusal into a live read: the
+        // query arm of `neighborsIfKnown` needs a handle, and every
+        // non-ready state has already dropped it — `beginBatchRetarget`,
+        // `beginPreparedReplacement`, `applyPreparedLoad`,
+        // `markMovedToTrash` and the failed retarget arms all leave
+        // `handle == nil`. Outside `.ready` it can only answer from the
+        // cache, and the cache is emptied wherever the view stops
+        // rendering those rows, so "warm" means "still on screen".
+        let known = doc.selection.selected.flatMap {
+            doc.neighborsIfKnown(of: $0, session: currentSession)
         }
-        let neighbors = doc.neighbors(of: selected, session: currentSession)
+        guard let neighbors = known else {
+            // Nothing cached, nothing live. WHICH sentence that owes is
+            // the mapping's call. When the mapping admits the document
+            // the handle is live, so the lookup was refused for the id
+            // — the selection's problem, not the state's.
+            guard canvasReadContext(for: doc) != nil else { return }
+            return canvasAnnounceSelectionUnresolvable()
+        }
         let candidates = neighbors.filter { neighbor in
             switch neighbor.direction {
             case .outgoing: return forward
@@ -106,9 +354,11 @@ extension AppState {
             }
         }
         guard candidates.indices.contains(ordinal - 1) else {
-            let base = forward ? "No outgoing connection" : "No incoming connection"
             canvasAnnouncer.announce(
-                .status(candidates.isEmpty ? "\(base)." : "\(base) \(ordinal)."))
+                .canvasStatus(
+                    note: .noConnection(
+                        forward: forward,
+                        ordinal: candidates.isEmpty ? nil : UInt32(clamping: ordinal))))
             return
         }
         let neighbor = candidates[ordinal - 1]
@@ -117,42 +367,51 @@ extension AppState {
         let otherKind =
             doc.outline.first { $0.nodeId == neighbor.otherNode }?.kind ?? "text"
         canvasAnnouncer.announce(
-            .connectionTraversed(
+            .canvasConnectionTraversed(
                 direction: neighbor.direction,
-                other: CanvasCardRef(kind: otherKind, title: neighbor.otherTitle),
-                label: neighbor.label, towardOther: true))
+                kindLabel: otherKind, title: neighbor.otherTitle,
+                label: neighbor.label))
         canvasSelect(nodeId: neighbor.otherNode, in: doc, announce: false)
     }
 
     /// Trace the outgoing chain from the selected card (cycle-safe),
     /// announcing each hop, ending with the visited count (t3).
+    ///
+    /// §W-G row E: the greedy first-unseen walk is core's
+    /// (`canvas_trace_path`, contract 0b-9) — `Outgoing` and
+    /// `Bidirectional` are traversable, `Undirected` is not, neighbours
+    /// come in edge document order, and the seen set is keyed by node,
+    /// so a cycle or a self-loop ends the walk exactly where mac's loop
+    /// ended it. The hops EXCLUDE the start card, so an empty list is
+    /// the dead end mac spelled as `visited.count == 1`.
     func canvasTracePath() {
-        guard let doc = activeCanvasDocument, let start = doc.selection.selected else { return }
-        var visited: [String] = [start]
-        var seen: Set<String> = [start]
-        var current = start
-        while true {
-            let outgoing = doc.neighbors(of: current, session: currentSession)
-                .filter { $0.direction == .outgoing || $0.direction == .bidirectional }
-            guard let next = outgoing.first(where: { !seen.contains($0.otherNode) }) else {
-                break
-            }
-            visited.append(next.otherNode)
-            seen.insert(next.otherNode)
-            current = next.otherNode
+        guard let found = activeCanvasDocumentAnyState else { return }
+        if canvasAnsweredMissingSelection(found) { return }
+        guard let target = canvasReadContext(for: found) else { return }
+        let doc = target.doc
+        guard let start = doc.selection.selected else {
+            return canvasAnnounceSelectionUnresolvable()
         }
-        let titles = visited.compactMap { id in
-            doc.outline.first { $0.nodeId == id }?.title
+        // A THROW is not a dead end: `No outgoing path from "X".` is
+        // spoken only when the walk actually came back with no hops.
+        guard let hops = try? target.session.canvasTracePath(
+            handle: target.handle, nodeId: start)
+        else {
+            return canvasAnnounceSelectionUnresolvable()
         }
-        if visited.count == 1 {
-            canvasAnnouncer.announce(.status("No outgoing path from \"\(titles.first ?? "")\"."))
+        let startTitle = doc.outline.first { $0.nodeId == start }?.title
+        guard let last = hops.last else {
+            canvasAnnouncer.announce(
+                .canvasStatus(note: .noOutgoingPath(title: startTitle ?? "")))
             return
         }
-        canvasSelect(nodeId: current, in: doc, announce: false)
-        canvasAnnouncer.announce(
-            .status(
-                "Path: \(titles.joined(separator: ", then ")). "
-                    + "End of path — \(visited.count) cards visited."))
+        canvasSelect(nodeId: last.nodeId, in: doc, announce: false)
+        // The event carries the TITLES only; core speaks their count as
+        // the sentence's tail, so the list and the number it claims can
+        // never disagree (contracts doc CD-13 — mac spoke
+        // `visited.count` while listing `titles`).
+        let titles = (startTitle.map { [$0] } ?? []) + hops.map(\.title)
+        canvasAnnouncer.announce(.canvasTracePathEnd(titles: titles))
     }
 
     /// The one selection mutation used by every navigator movement:
@@ -168,25 +427,24 @@ extension AppState {
             .flatMap { prev in doc.outline.first { $0.nodeId == prev } }?.groupPath ?? []
         if row.groupPath != previousPath {
             if let entered = row.groupPath.last, !previousPath.contains(entered) {
-                // The entered group's row is the nearest PRECEDING
-                // outline row one level up — title lookups miscount
-                // when labels repeat (Codoki #613).
-                let count = doc.outline.firstIndex { $0.nodeId == nodeId }
-                    .flatMap { idx in
-                        doc.outline[..<idx].last {
-                            $0.kind == "group" && $0.depth == row.depth - 1
-                        }
-                    }
-                    .map { Int($0.totalM) }
-                canvasAnnouncer.announce(.groupEntered(label: entered, cardCount: count ?? 0))
+                // CD-4: the ENTERED GROUP's own card count, which is
+                // exactly `row.totalM` — the arrived-at row's container
+                // size, straight from core. mac walked back to the
+                // group's own outline row and spoke ITS `totalM`, i.e.
+                // how many siblings the GROUP has, a different number.
+                // There is no lookup left at all, so Codoki #613's
+                // repeated-label miscount cannot recur either.
+                canvasAnnouncer.announce(
+                    .canvasGroupEntered(label: entered, count: row.totalM))
             } else if let left = previousPath.last, !row.groupPath.contains(left) {
-                canvasAnnouncer.announce(.groupLeft(label: left))
+                canvasAnnouncer.announce(.canvasGroupLeft(label: left))
             }
         }
         canvasAnnouncer.announce(
-            .movedTo(
-                card: CanvasCardRef(kind: row.kind, title: row.title),
-                ordinal: row.ordinalN, total: row.totalM,
+            .canvasMovedTo(
+                verbosity: canvasAnnouncer.verbosity,
+                kindLabel: row.kind, title: row.title,
+                ordinalN: row.ordinalN, totalM: row.totalM,
                 container: row.groupPath.last,
                 connectionCount: row.connectionCount,
                 colorName: row.colorName,
@@ -196,7 +454,8 @@ extension AppState {
     // MARK: Viewport commands (#520)
 
     private func announceZoom(_ doc: CanvasDocument) {
-        canvasAnnouncer.announce(.status("Zoom \(doc.viewport.zoomPercent) percent."))
+        canvasAnnouncer.announce(
+            .canvasZoom(context: nil, percent: UInt32(clamping: doc.viewport.zoomPercent)))
     }
 
     func canvasZoomIn() {
@@ -218,15 +477,26 @@ extension AppState {
     }
 
     func canvasFitCanvas() {
-        guard let doc = activeCanvasDocument, !doc.scene.nodes.isEmpty else { return }
-        var rect = CGRect.null
-        for node in doc.scene.nodes {
-            rect = rect.union(
-                CGRect(x: node.x, y: node.y, width: node.width, height: node.height))
-        }
-        doc.viewport.fit(rect: rect)
+        // §W-G row H: the scene's extent is core's `canvas_bounds`
+        // (contract 0b-11) — `SpatialIndex::bounds` verbatim, every
+        // node including group frames, exactly what the union loop that
+        // stood here covered. `nil` is the empty canvas, which is the
+        // `!doc.scene.nodes.isEmpty` guard it replaces.
+        guard let target = canvasReadTarget() else { return }
+        let doc = target.doc
+        // One `?`, not two (SE-0230 flattens): an empty canvas and a
+        // thrown query arrive as the same `nil`, and both stay silent —
+        // the empty case was silent before PR 0b, and `canvas_bounds`
+        // has no `bad_node` path to distinguish (contracts doc, VA-1's
+        // recorded exclusions).
+        guard let bounds = try? target.session.canvasBounds(handle: target.handle)
+        else { return }
+        doc.viewport.fit(
+            rect: CGRect(
+                x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height))
         canvasAnnouncer.announce(
-            .status("Fit canvas. Zoom \(doc.viewport.zoomPercent) percent."))
+            .canvasZoom(
+                context: .fitCanvas, percent: UInt32(clamping: doc.viewport.zoomPercent)))
     }
 
     func canvasZoomToSelection() {
@@ -234,14 +504,16 @@ extension AppState {
         guard let selected = doc.selection.selected,
             let node = doc.scene.nodes.first(where: { $0.nodeId == selected })
         else {
-            canvasAnnouncer.announce(.status("Nothing selected."))
+            canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
         doc.viewport.fit(
             rect: CGRect(x: node.x, y: node.y, width: node.width, height: node.height),
             padding: 120)
         canvasAnnouncer.announce(
-            .status("Zoomed to selection. Zoom \(doc.viewport.zoomPercent) percent."))
+            .canvasZoom(
+                context: .zoomedToSelection,
+                percent: UInt32(clamping: doc.viewport.zoomPercent)))
     }
 
     /// Viewport-follows-selection toggle (default ON; the auto-pan
@@ -250,9 +522,7 @@ extension AppState {
         guard let doc = activeCanvasDocument else { return }
         doc.viewport.followSelection.toggle()
         canvasAnnouncer.announce(
-            .status(
-                doc.viewport.followSelection
-                    ? "Viewport follows selection." : "Viewport stays put."))
+            .canvasFollowSelectionToggled(following: doc.viewport.followSelection))
     }
 
     /// The per-document mode controller (t0 §2), created on first use.

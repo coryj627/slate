@@ -637,7 +637,7 @@ final class CommandPaletteViewTests: XCTestCase {
         model.query = ""
         model.handleQueryChange()
         XCTAssertNil(
-            model.filterAnnouncement,
+            model.filterAnnouncementText,
             "empty query doesn't announce — user just opened or cleared"
         )
     }
@@ -649,7 +649,7 @@ final class CommandPaletteViewTests: XCTestCase {
         model.query = "save"
         model.handleQueryChange()
         XCTAssertEqual(
-            model.filterAnnouncement,
+            model.filterAnnouncementText,
             "1 command matching \"save\""
         )
     }
@@ -662,10 +662,10 @@ final class CommandPaletteViewTests: XCTestCase {
         model.query = "e"
         model.handleQueryChange()
         // Expect a "<N> commands matching" with plural.
-        XCTAssertNotNil(model.filterAnnouncement)
+        XCTAssertNotNil(model.filterAnnouncementText)
         XCTAssertTrue(
-            model.filterAnnouncement!.contains("commands matching"),
-            "got: \(model.filterAnnouncement ?? "nil")"
+            model.filterAnnouncementText!.contains("commands matching"),
+            "got: \(model.filterAnnouncementText ?? "nil")"
         )
     }
 
@@ -676,7 +676,7 @@ final class CommandPaletteViewTests: XCTestCase {
         model.query = "zzznothingmatches"
         model.handleQueryChange()
         XCTAssertEqual(
-            model.filterAnnouncement,
+            model.filterAnnouncementText,
             "No commands match \"zzznothingmatches\""
         )
     }
@@ -687,9 +687,9 @@ final class CommandPaletteViewTests: XCTestCase {
         model.loadCommands(fixtureCommandsAcrossSections())
         model.query = "save"
         model.handleQueryChange()
-        XCTAssertNotNil(model.filterAnnouncement)
+        XCTAssertNotNil(model.filterAnnouncementText)
         model.clearFilterAnnouncement()
-        XCTAssertNil(model.filterAnnouncement)
+        XCTAssertNil(model.filterAnnouncementText)
     }
 
     // MARK: - Section title mapping
@@ -748,7 +748,7 @@ final class CommandPaletteViewTests: XCTestCase {
         let outcome = model.invokeSelected(via: registry)
         XCTAssertEqual(outcome, .success)
         XCTAssertEqual(action.invocationCount, 1)
-        XCTAssertNil(model.pendingAnnouncement, "success path posts no announcement")
+        XCTAssertNil(model.pendingAnnouncementText, "success path posts no announcement")
     }
 
     @MainActor
@@ -781,7 +781,7 @@ final class CommandPaletteViewTests: XCTestCase {
         }
 
         XCTAssertEqual(
-            model.pendingAnnouncement,
+            model.pendingAnnouncementText,
             "Failing failed: disk full",
             "announcement must include the unwrapped message"
         )
@@ -809,7 +809,7 @@ final class CommandPaletteViewTests: XCTestCase {
             .actionFailed(label: "New Note", message: reason),
             "busy structural work must not masquerade as a successful invocation")
         XCTAssertEqual(
-            model.pendingAnnouncement, reason,
+            model.pendingAnnouncementText, reason,
             "VoiceOver must hear the shared reason verbatim, without a second failure prefix")
         XCTAssertEqual(action.invocationCount, 1)
     }
@@ -821,7 +821,7 @@ final class CommandPaletteViewTests: XCTestCase {
         // Don't load any commands → no selection.
         let outcome = model.invokeSelected(via: registry)
         XCTAssertEqual(outcome, .noSelection)
-        XCTAssertNil(model.pendingAnnouncement)
+        XCTAssertNil(model.pendingAnnouncementText)
     }
 
     // MARK: - Fixtures

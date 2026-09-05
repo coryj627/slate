@@ -732,8 +732,8 @@ final class MarkdownPropertyRecoveryContractTests: XCTestCase {
                 text: "reserved",
                 to: destination,
                 originSession: session,
-                successMessage: "saved",
-                failurePrefix: "failed"))
+                successEvent: .basesViewExported,
+                failureEvent: { .basesViewExportFailed(detail: $0) }))
         XCTAssertEqual(
             baseState.noteAuthoringDisabledReason(for: "base-export.md"),
             Self.structuralBusyReason)
@@ -1303,8 +1303,8 @@ final class MarkdownPropertyRecoveryContractTests: XCTestCase {
                 text: "must not write",
                 to: fixture.vault.appendingPathComponent("panel-export.md"),
                 originSession: session,
-                successMessage: "saved",
-                failurePrefix: "failed"))
+                successEvent: .basesViewExported,
+                failureEvent: { .basesViewExportFailed(detail: $0) }))
         XCTAssertEqual(state.lastMutationAnnouncement, Self.structuralRecoveryDestinationReason)
         XCTAssertFalse(
             FileManager.default.fileExists(

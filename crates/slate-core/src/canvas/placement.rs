@@ -42,8 +42,55 @@ pub const GRID_STEP_LARGE: f64 = 100.0;
 pub const DEFAULT_CARD_WIDTH: f64 = 260.0;
 /// Default new-card size (#368).
 pub const DEFAULT_CARD_HEIGHT: f64 = 140.0;
-/// Gap between a placed card and its anchor.
+/// Gap between a placed card and its anchor. Also the pad a group frame
+/// keeps around the cards it was built from (W6-1 0b-11: mac's literal
+/// `pad = 40.0` in `AppState+CanvasActions.swift` is this constant).
 pub const DEFAULT_GAP: f64 = 40.0;
+/// Default new-group size (#368; W6-1 §2 row H — mac spelled it twice
+/// in `AppState+CanvasActions.swift`).
+pub const DEFAULT_GROUP_WIDTH: f64 = 400.0;
+/// Default new-group size (#368; W6-1 §2 row H).
+pub const DEFAULT_GROUP_HEIGHT: f64 = 300.0;
+/// Floor on either card dimension in resize mode (#521).
+///
+/// **Semantics are REFUSE, not clamp** (W6-1 contracts doc, "Mac details
+/// recorded while reading"): a step that would take *either* dimension
+/// below this leaves *both* unchanged and announces
+/// [`crate::a11y::CanvasA11yEvent::CanvasResizeClamped`]. Core owns the
+/// number; the refusal rule is the mode controller's.
+pub const MIN_CARD_SIZE: f64 = 40.0;
+
+/// The grid/sizing constants a host needs before it has opened anything
+/// (W6-1 contract 0b-4). Every field IS the `pub const` of the same name
+/// in this module — a host that re-types one of these numbers is the
+/// duplication §W-G exists to delete, and `constants_are_the_module_constants`
+/// asserts the identity field by field.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Constants {
+    pub grid_step: f64,
+    pub grid_step_large: f64,
+    pub default_card_w: f64,
+    pub default_card_h: f64,
+    pub default_group_w: f64,
+    pub default_group_h: f64,
+    pub default_gap: f64,
+    pub min_card_size: f64,
+}
+
+/// The constants, as data. Pure and handle-free (contract 0b-4 / CD-17):
+/// a caller must not need an open canvas to read a number.
+pub fn constants() -> Constants {
+    Constants {
+        grid_step: GRID_STEP,
+        grid_step_large: GRID_STEP_LARGE,
+        default_card_w: DEFAULT_CARD_WIDTH,
+        default_card_h: DEFAULT_CARD_HEIGHT,
+        default_group_w: DEFAULT_GROUP_WIDTH,
+        default_group_h: DEFAULT_GROUP_HEIGHT,
+        default_gap: DEFAULT_GAP,
+        min_card_size: MIN_CARD_SIZE,
+    }
+}
 
 /// Placement directions in canonical preference order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +327,90 @@ pub fn place_set(
         })
         .collect();
     SetPlacement { origins, relative }
+}
+
+/// Outcome of [`place_inside_group`] (W6-1 contract 0b-12). Three
+/// outcomes rather than one point, so a host can never receive a
+/// position outside the group it asked about — the failure mac ships,
+/// where a full group pushes the card out and containment silently
+/// un-parents it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InsideGroupPlacement {
+    /// A free, group-aligned slot fully inside the group frame.
+    Placed { x: f64, y: f64 },
+    /// No candidate slot fits inside the group at all. The point is the
+    /// inset itself (mac's `(x + 20, y + 40)`), NOT checked for overlap
+    /// — the caller decides whether to refuse.
+    TooSmall { x: f64, y: f64 },
+    /// Slots fit, but every one examined is occupied.
+    Full,
+}
+
+/// Place a card of `size` inside `group_rect`, clipped to it (#521/#523,
+/// W6-1 §2 row H).
+///
+/// Candidate slots are the lattice anchored at the group's inset
+/// top-left `(x0 + GRID_STEP, y0 + 2 · GRID_STEP)` — mac's
+/// `(x + 20, y + 40)` — stepping one slot-plus-gap at a time, and only
+/// slots lying wholly inside the group frame are candidates. They are
+/// visited COLUMN by column, each column top to bottom: that is
+/// [`PREFERENCE`]'s `Below` before `RightOf`, applied to a lattice
+/// instead of to a ring. `Above` and `LeftOf` are unreachable because
+/// the lattice starts at the group's inset top-left corner, which is
+/// the point of clipping to the group. Overlap is checked against
+/// *cards* only, exactly as [`place_new`] does — a group frame never
+/// blocks placement inside it.
+///
+/// At most [`RING_LIMIT`] candidates are examined, the same budget the
+/// ring search spends, so a pathological group cannot make this
+/// unbounded.
+pub fn place_inside_group(
+    model: &CanvasModel,
+    group_rect: Rect,
+    size: (f64, f64),
+    exclude: &[NodeId],
+) -> InsideGroupPlacement {
+    let (w, h) = size;
+    let inset = (group_rect.x0 + GRID_STEP, group_rect.y0 + 2.0 * GRID_STEP);
+    let step_x = ceil_to_grid(w + DEFAULT_GAP);
+    let step_y = ceil_to_grid(h + DEFAULT_GAP);
+
+    // A slot must fit inside the frame, and the lattice must actually
+    // advance. Non-finite geometry fails both tests and lands here
+    // rather than looping.
+    let fits = |x: f64, y: f64| {
+        x >= group_rect.x0 && y >= group_rect.y0 && x + w <= group_rect.x1 && y + h <= group_rect.y1
+    };
+    if !fits(inset.0, inset.1)
+        || !(step_x.is_finite() && step_x > 0.0)
+        || !(step_y.is_finite() && step_y > 0.0)
+    {
+        return InsideGroupPlacement::TooSmall {
+            x: inset.0,
+            y: inset.1,
+        };
+    }
+
+    let mut examined = 0usize;
+    let mut x = inset.0;
+    while fits(x, inset.1) {
+        let mut y = inset.1;
+        while fits(x, y) {
+            if examined >= RING_LIMIT {
+                return InsideGroupPlacement::Full;
+            }
+            examined += 1;
+            if !model
+                .spatial
+                .any_overlap(Rect::new(x, y, w, h), exclude, false)
+            {
+                return InsideGroupPlacement::Placed { x, y };
+            }
+            y += step_y;
+        }
+        x += step_x;
+    }
+    InsideGroupPlacement::Full
 }
 
 #[cfg(test)]

@@ -65,6 +65,14 @@ const CANONICAL_EDGE_ORDER: &[&str] = &[
     "id", "fromNode", "fromSide", "fromEnd", "toNode", "toSide", "toEnd", "color", "label",
 ];
 
+/// The canonical EMPTY canvas document — what New Canvas writes on
+/// every host (W6-1 §E TE-0, IE-22): `serialize(Canvas::default())`,
+/// exported so no host owns a serialization literal. Mac shipped the
+/// same bytes as a Swift literal; this is that literal's one home.
+pub fn canonical_empty_canvas_text() -> String {
+    serialize(&Canvas::default())
+}
+
 /// Serialize a canvas to its `.canvas` text (canonical layout, trailing
 /// newline).
 pub fn serialize(canvas: &Canvas) -> String {

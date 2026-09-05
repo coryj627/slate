@@ -871,10 +871,20 @@ final class BaseEmbedDocument: ObservableObject {
         editedQuickFilterArgument != nil || appliedQuickFilterText != nil
     }
 
-    var quickFilterResultAnnouncement: String {
-        guard let result else { return "0 of 0 results" }
+    /// The quick-filter count as vocabulary DATA (#969). Both document
+    /// types built this sentence identically and separately; now the
+    /// counts are the data and one template renders it.
+    var quickFilterResultEvent: A11yEvent {
+        guard let result else { return .baseQuickFilterResult(shown: 0, total: 0) }
         let total = quickFilterActive ? result.unfilteredShownCount : result.totalCount
-        return "\(result.shownCount) of \(CountCopy.counted(total, "result", "results"))"
+        return .baseQuickFilterResult(shown: result.shownCount, total: total)
+    }
+
+    /// Rendered text. Kept because `applyQuickFilter` / `clearQuickFilter`
+    /// return it and the suite asserts on it — it renders from the event
+    /// now rather than being composed here.
+    var quickFilterResultAnnouncement: String {
+        a11yRender(event: quickFilterResultEvent).text
     }
 
     func load(session: VaultSession) {
@@ -916,6 +926,12 @@ final class BaseEmbedDocument: ObservableObject {
         executeActiveView(session: session)
     }
 
+    /// The sort the next execute applies, staged UNPUBLISHED (rounds
+    /// 18–20 owner contract): observers must never see an accepted
+    /// sort ahead of its rows. Outer nil = no stage (use the published
+    /// selection); `.some(nil)` stages a clear.
+    private var stagedSortSelection: BaseGridSortSelection??
+
     func executeActiveView(session: VaultSession) {
         contentRefreshGeneration &+= 1
         // A quarantined file-backed embed keeps its last truthful result while
@@ -926,12 +942,13 @@ final class BaseEmbedDocument: ObservableObject {
             fail("No executable base views were found.")
             return
         }
+        let effectiveSort = stagedSortSelection ?? sortSelection
         do {
             try session.baseSetTransientSort(
                 handle: handle,
                 view: UInt32(activeViewIndex),
-                columnId: sortSelection?.columnID,
-                ascending: sortSelection?.ascending ?? true)
+                columnId: effectiveSort?.columnID,
+                ascending: effectiveSort?.ascending ?? true)
             let appliedFilter = quickFilterArgument
             let executed = try session.baseExecute(
                 handle: handle,
@@ -941,7 +958,11 @@ final class BaseEmbedDocument: ObservableObject {
                 cancel: CancelToken())
             result = executed
             appliedQuickFilterText = appliedFilter
-            if sortSelection?.sortState(in: executed) == nil {
+            if stagedSortSelection == nil, sortSelection?.sortState(in: executed) == nil {
+                // Non-sort executes keep the old cleanup: a published
+                // sort that no longer maps to the executed columns is
+                // dropped. Staged executes publish through
+                // setTransientSort instead.
                 sortSelection = nil
             }
             let view = views[activeViewIndex]
@@ -997,15 +1018,24 @@ final class BaseEmbedDocument: ObservableObject {
         }
 
         // Establish the reopened view first, then remap transient sort by its
-        // stable column id before executing the sorted result.
+        // stable column id before executing the sorted result. The restored
+        // identity travels STAGED (round 21: assigning the @Published
+        // selection before the sorted execute let observers see the restored
+        // sort against unsorted rows) — rows publish first, identity after.
         sortSelection = nil
         executeActiveView(session: session)
         if let previousSortSelection,
             let result,
             previousSortSelection.sortState(in: result) != nil
         {
-            sortSelection = previousSortSelection
+            stagedSortSelection = .some(previousSortSelection)
             executeActiveView(session: session)
+            stagedSortSelection = nil
+            if let executed = self.result,
+                previousSortSelection.sortState(in: executed) != nil
+            {
+                sortSelection = previousSortSelection
+            }
         }
     }
 
@@ -1042,10 +1072,24 @@ final class BaseEmbedDocument: ObservableObject {
     func setTransientSort(_ newSort: DataGridSortState?, session: VaultSession) {
         guard sharedHandle.handle != nil else { return }
         guard let result else { return }
-        sortSelection = newSort.flatMap {
+        let candidate = newSort.flatMap {
             BaseGridSortSelection(sortState: $0, result: result)
         }
+        // Execute with the candidate UNPUBLISHED, publish the identity
+        // only after its rows arrived (rounds 17–20: the atomic owner
+        // contract — @Published observers reload at every publication,
+        // and an accepted sort must never be visible with the previous
+        // order). Rows publish first inside executeActiveView, the
+        // identity second here; a failed execute publishes neither,
+        // and the next execute re-asserts the PUBLISHED sort to the
+        // engine, so a candidate left in the engine cannot survive.
+        stagedSortSelection = .some(candidate)
         executeActiveView(session: session)
+        stagedSortSelection = nil
+        guard let executed = self.result else { return }
+        sortSelection = candidate.flatMap {
+            $0.sortState(in: executed) != nil ? $0 : nil
+        }
     }
 
     @discardableResult

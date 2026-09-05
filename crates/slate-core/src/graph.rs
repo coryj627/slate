@@ -255,6 +255,10 @@ impl Default for GraphFilter {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphNode {
     pub id: u64,
+    /// The cross-projection, cross-generation identity (W6-2 PR 0b,
+    /// contracts doc 0b-3): `p:` + the path, or `g:` + the
+    /// percent-encoded ghost key — `graph_queries::stable_key`.
+    pub stable_key: String,
     /// `None` for ghosts.
     pub path: Option<String>,
     pub label: String,
@@ -278,14 +282,51 @@ pub struct GraphEdge {
     pub count: u32,
 }
 
+/// The counts the whole-graph summary speaks (W6-2 PR 0a, #746;
+/// contracts doc 0a-7), exported on [`GraphSnapshot::summary_counts`]
+/// so a host raises the typed summary event from the record it was
+/// handed and counts nothing itself. Semantics are the session's:
+/// every count describes the FILTERED payload — `notes` = nodes of kind
+/// Note; `links` = the sum of `count` over every edge among the
+/// filtered nodes, Link and Embed alike; `orphans` = nodes flagged
+/// `is_orphan`; `unresolved` = nodes of kind Ghost; `filtered` = the
+/// filter deviates from [`GraphFilter::default`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GraphSnapshotCounts {
+    pub notes: u64,
+    pub links: u64,
+    pub orphans: u64,
+    pub unresolved: u64,
+    pub filtered: bool,
+}
+
+/// The counts the neighbourhood summary speaks, exported on
+/// [`GraphNeighborhood::summary_counts`]. `in_links` / `out_links` are
+/// the centre's FULL-GRAPH `NodeMetrics` degrees — Link edges only,
+/// embeds excluded, unaffected by the requested depth or the active
+/// filter; `note_count` = Note-kind nodes in the neighbourhood payload,
+/// the centre included only when it is a note; `depth` = the clamped
+/// depth (1..=3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphNeighborhoodCounts {
+    pub center_label: String,
+    pub in_links: u32,
+    pub out_links: u32,
+    pub note_count: u64,
+    pub depth: u32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphSnapshot {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
     pub generation: u64,
     /// Pre-rendered VoiceOver summary — format normative in
-    /// p0_spec §P0-3.
+    /// p0_spec §P0-3; rendered by `graph_summary::snapshot_summary`
+    /// over `summary_counts`, so the two can never disagree.
     pub audio_summary: String,
+    /// The counts `audio_summary` was rendered from (W6-2 PR 0a).
+    pub summary_counts: GraphSnapshotCounts,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -294,7 +335,11 @@ pub struct GraphNeighborhood {
     pub depth: u32,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
+    /// Rendered by `graph_summary::neighborhood_summary` over
+    /// `summary_counts`.
     pub audio_summary: String,
+    /// The counts `audio_summary` was rendered from (W6-2 PR 0a).
+    pub summary_counts: GraphNeighborhoodCounts,
 }
 
 /// `1032` → `"1,032"` — the `%n` grouped-decimal convention of the

@@ -67,15 +67,21 @@ internal sealed partial class WorkspaceViewModel
                     graphRestored = true;
                 }
 
-                group.Tabs.Add(new WorkspaceTabViewModel(
+                var restoredTab = new WorkspaceTabViewModel(
                     _session,
                     tabState,
                     MirrorSamePathDocumentState,
                     OpenEditorNavigation,
                     ActivateEditorTag,
+                    ActivateReadingTag,
                     _announce,
                     EditorPreferences,
-                    startInteractionBackgroundWork: _startInteractionBackgroundWork));
+                    startInteractionBackgroundWork: _startInteractionBackgroundWork)
+                {
+                    TaskRepairs = _taskIndexRepairs,
+                };
+                AttachTabDocumentsIfNeeded(restoredTab);
+                group.Tabs.Add(restoredTab);
             }
 
             WorkspaceTabViewModel? active = group.Tabs.FirstOrDefault(tab => tab.Id == groupState.ActiveTab)
@@ -154,6 +160,16 @@ internal sealed partial class WorkspaceViewModel
                 _persistencePending = false;
                 PersistCore();
             }
+            if (_persistenceBatchDepth == 0)
+            {
+                // Mutations can replace the active tab's item in place
+                // (current-tab navigation) — re-derive the panels'
+                // note once per outermost mutation.
+                SyncPanels();
+                // W6-2 PR A (rule L, Term 5): the outermost boundary
+                // clears a graph cause the transition did not consume.
+                ClearGraphCauseAtMutationBoundary();
+            }
         }
     }
 
@@ -174,6 +190,10 @@ internal sealed partial class WorkspaceViewModel
     }
 
     internal void PersistLayoutWeights() => Persist();
+
+    /// <summary>Per-tab state that changes outside a workspace
+    /// mutation (W4-4: properties-header expansion).</summary>
+    internal void PersistTabState() => Persist();
 
     private void PersistCore()
     {

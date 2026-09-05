@@ -2932,7 +2932,9 @@ final class AppState: ObservableObject {
     @Published var connectionsRootPath: String?
     /// The neighborhood payload (structure + metrics + pre-rendered
     /// `audioSummary`) for the current root+depth.
-    @Published var connectionsNeighborhood: GraphNeighborhood?
+    /// The Connections tree core derives for the leaf (W6-2 PR 0b, 0b-4):
+    /// the rows AND the neighbourhood's counts, one record per load.
+    @Published var connectionsTree: GraphConnectionsTree?
     /// Depth-1 snippet source (spec §P1-1: rows show snippets from the
     /// existing `Backlink`/`OutgoingLink` data at depth 1).
     @Published var connectionsBundle: NoteLoadBundle?
@@ -2969,6 +2971,24 @@ final class AppState: ObservableObject {
     /// The whole-graph snapshot backing the Graph tab's Table mode,
     /// fetched once per generation and sorted/filtered client-side.
     @Published var graphTableSnapshot: GraphSnapshot?
+    /// The table rows core formats and orders for the accepted request
+    /// (W6-2 PR 0b, 0b-7); the grid shows them as given.
+    @Published var graphTableRows: [GraphTableRow] = []
+    /// The node count under the backend filter alone (the count's total).
+    @Published var graphTableTotal: UInt64 = 0
+    /// The table's ACCEPTED sort — published with the rows it ordered
+    /// (design A); the default hubs-first (Links in descending).
+    @Published var graphTableSort = graphTableDefaultSort()
+    /// The table's REQUESTED sort while a load is in flight, nil at rest.
+    @Published var graphTableRequestedSort: GraphTableSort?
+    /// The table's load sequence — every input change advances it, and a
+    /// result whose token carries an older value is dropped whole.
+    var graphTableSeq: UInt64 = 0
+    /// The table request the last token carried (the query and the sort).
+    var graphTableRequest: GraphTableRequest?
+    /// The backend filter the held snapshot was fetched under — half of
+    /// the snapshot's identity (design A): `GraphSnapshot` carries none.
+    var graphTableSnapshotFilter: GraphFilter?
     /// Backend filter (a snapshot re-fetch on change): Attachments /
     /// Unresolved (= ghosts) / Orphans-only toggles — exactly
     /// `GraphFilter` semantics (spec §P1-2). Defaults: attachments off,
@@ -2984,6 +3004,19 @@ final class AppState: ObservableObject {
     /// by presets; cleared by any manual filter-bar toggle so it never
     /// becomes hidden state the user can't see or undo.
     @Published var graphTableKindFilter: GraphNodeKind?
+    /// The ONE visibility record both projections hold (W6-2 PR 0b, 0b-2):
+    /// the backend filter, the name needle, the preset's kind overlay.
+    var graphVisibilityQuery: GraphVisibilityQuery {
+        GraphVisibilityQuery(
+            filter: graphTableFilter, nameQuery: graphTableTextFilter, kindOnly: graphTableKindFilter)
+    }
+    /// The diagram's topology source (W6-2 PR 0b, 0b-6b): nil means the
+    /// session query; tests inject a source over a synthetic model. The
+    /// third argument is the held (layout) generation the answer must match.
+    var graphTopologySource: ((GraphVisibilityQuery, GraphConfig, UInt64) -> GraphTopology?)?
+    /// The topology the diagram last accepted (0b-6b): Where-am-I reads its
+    /// entry for the selection, the same record the view renders.
+    var graphDiagramTopology: GraphTopology?
     /// A preset (orphans / unresolved / most-linked) awaiting its
     /// post-load announcement — set by `openGraphPreset`, consumed once
     /// the fresh snapshot publishes so the count/hub is spoken from real
@@ -3064,7 +3097,7 @@ final class AppState: ObservableObject {
     var graphForcesSettlePending = false
     /// The graph tab's SHARED selected-node key (Milestone P, P2-5 #561 —
     /// the `GraphViewState` selection channel). The ONE cross-projection-
-    /// stable identity (`GraphNodeKey`: `"p:<path>"` / `"g:<label>"`, never
+    /// stable identity (core's `stableKey`: `"p:<path>"` / `"g:<ghost key>"`, never
     /// a generation-volatile `UInt64`). The Table binds its row selection to
     /// this; the Diagram mirrors it to/from `GraphDiagramModel.selection`;
     /// Connections re-rooting writes it — so a selection in any projection
@@ -3233,7 +3266,7 @@ final class AppState: ObservableObject {
         // not spawn a second graph (round 2 finding 6). It's already the
         // active tab, so this is a no-op beyond the spoken confirmation.
         if case .graph = item {
-            graphAnnouncer.announce(.status("The graph is already open."))
+            graphAnnouncer.announce(.graphStatus(note: .alreadyOpen))
             return
         }
         // Snapshot the outgoing buffer, then open the duplicate. The
@@ -3909,7 +3942,7 @@ final class AppState: ObservableObject {
     var undoMenuItemTitle: String {
         if undoTargetsCanvas {
             return Self.canvasUndoRedoMenuTitle(
-                base: "Undo", actionName: activeCanvasDocument?.undoStack.last?.name)
+                verb: .undo, actionName: activeCanvasDocument?.undoStack.last?.name)
         }
         // #871: the structural (file-op) domain — same composer as canvas,
         // the action name describing the pending op read from the stack top
@@ -3917,7 +3950,7 @@ final class AppState: ObservableObject {
         // stack composes to the bare "Undo".
         if undoTargetsStructural {
             return Self.canvasUndoRedoMenuTitle(
-                base: "Undo",
+                verb: .undo,
                 actionName: structuralUndoStack.last.map(Self.structuralUndoActionName))
         }
         return Self.responderUndoMenuTitle(responderChainUndoManager)
@@ -3927,11 +3960,11 @@ final class AppState: ObservableObject {
     var redoMenuItemTitle: String {
         if undoTargetsCanvas {
             return Self.canvasUndoRedoMenuTitle(
-                base: "Redo", actionName: activeCanvasDocument?.redoStack.last?.name)
+                verb: .redo, actionName: activeCanvasDocument?.redoStack.last?.name)
         }
         if undoTargetsStructural {
             return Self.canvasUndoRedoMenuTitle(
-                base: "Redo",
+                verb: .redo,
                 actionName: structuralRedoStack.last.map(Self.structuralUndoActionName))
         }
         return Self.responderRedoMenuTitle(responderChainUndoManager)
@@ -3978,15 +4011,26 @@ final class AppState: ObservableObject {
         return manager.canRedo
     }
 
-    /// Pure title composer (#867), extracted for direct testing:
-    /// "Undo" + a canvas action name — "delete \"My Card\"" becomes
-    /// "Undo Delete \"My Card\"". Only the LEADING character is
-    /// uppercased: the t3 action names embed user-typed card titles
-    /// that must pass through verbatim, so full Title Case is off the
-    /// table. Nil/empty (empty stack) falls back to the bare verb.
-    static func canvasUndoRedoMenuTitle(base: String, actionName: String?) -> String {
-        guard let name = actionName, !name.isEmpty else { return base }
-        return "\(base) \(name.prefix(1).uppercased())\(name.dropFirst())"
+    /// Title composer (#867): "Undo" + a canvas action name —
+    /// "delete \"My Card\"" becomes "Undo Delete \"My Card\"". Only the
+    /// LEADING character is uppercased: the t3 action names embed
+    /// user-typed card titles that must pass through verbatim, so full
+    /// Title Case is off the table. Nil/empty (empty stack) falls back
+    /// to the bare verb.
+    ///
+    /// The composition is core's since W6-1 PR 0a
+    /// (`CanvasUndoMenuTitle` — LABEL grade, never spoken, contracts
+    /// doc 0a-13/§W-G row G), so both hosts build the menu title
+    /// identically from the same action name. The structural (file-op)
+    /// domain shares the composer, exactly as it shared the string
+    /// version.
+    static func canvasUndoRedoMenuTitle(
+        verb: CanvasHistoryVerb, actionName: String?
+    ) -> String {
+        a11yRender(
+            event: .canvas(
+                event: .canvasUndoMenuTitle(verb: verb, name: actionName ?? ""))
+        ).text
     }
 
     /// Pure title composer (#867) for the responder path: NSUndoManager
@@ -7587,7 +7631,7 @@ final class AppState: ObservableObject {
     /// Compose a brief diff announcement for `mathPrefs` changes.
     /// Only one of the three fields can change per Picker selection
     /// (UI surface uses three separate Pickers), so the announcement
-    /// reads like "Speech style: MathSpeak" — short, focused,
+    /// reads like "Speech style: SimpleSpeak" — short, focused,
     /// announces what the user just did. (Audit #261 H1.)
     private func announceMathPrefsDiff(from old: MathPrefs, to new: MathPrefs) {
         if old.speechStyle != new.speechStyle {
@@ -7818,6 +7862,13 @@ final class AppState: ObservableObject {
     /// `searchState`'s results.summary so the SwiftUI .onChange
     /// observer can fire a polite announcement.
     @Published private(set) var searchSummary: String = ""
+
+    /// The typed announcement for the current `searchSummary` (#969).
+    /// Set BEFORE `searchSummary`, because assigning that fires the
+    /// `@Published` publisher the overlay announces from — the view
+    /// still dedupes on the STRING (unchanged), it just posts the
+    /// vocabulary event instead of re-wrapping the text.
+    private(set) var searchAnnouncement: A11yEvent?
 
     /// The (trimmed) query that produced the currently-displayed
     /// `.results` rows — captured when the search resolves, NOT read from
@@ -8827,6 +8878,7 @@ final class AppState: ObservableObject {
         cancelInFlightSearch()
         searchScope = .vault
         searchState = .idle
+        searchAnnouncement = nil
         searchSummary = ""
         // No rows are displayed once the panel is idle, so the
         // producing-query snapshot must go too (#876 Codex round 2) —
@@ -8879,6 +8931,7 @@ final class AppState: ObservableObject {
         if trimmed.isEmpty && !scopeListsOnEmpty {
             cancelInFlightSearch()
             searchState = .idle
+            searchAnnouncement = nil
             searchSummary = ""
             lastResultsQuery = nil
             return
@@ -8940,7 +8993,12 @@ final class AppState: ObservableObject {
             }
             switch outcome {
             case .success(let rs):
+                self.searchAnnouncement = .searchResultsSummary(
+                    count: UInt32(clamping: rs.rows.count))
                 self.searchState = .results(rows: rs.rows, summary: rs.summary)
+                // `rs.summary` is rendered by core THROUGH the same
+                // vocabulary event, so the displayed and spoken strings
+                // are one template, not two copies (#969).
                 self.searchSummary = rs.summary
                 // #876 Codex round 1: remember WHICH query produced these
                 // rows, so activating one records/anchors that query — not
@@ -8953,8 +9011,12 @@ final class AppState: ObservableObject {
                     return
                 }
                 let message = self.humanReadable(error)
+                let event = A11yEvent.searchFailed(message: message)
+                self.searchAnnouncement = event
                 self.searchState = .error(message)
-                self.searchSummary = "Search error: \(message)"
+                // Rendered from the event rather than composed here:
+                // the wording is a §W-D anchor now (#969).
+                self.searchSummary = a11yRender(event: event).text
             }
         }
     }
@@ -9684,8 +9746,8 @@ final class AppState: ObservableObject {
         do {
             let session = try VaultSession.openFilesystem(rootPath: url.path)
             // Audit #259: push the persisted math prefs into the
-            // fresh session so a user who set ClearSpeak → MathSpeak
-            // in a prior run gets MathSpeak from the very first
+            // fresh session so a user who set ClearSpeak → SimpleSpeak
+            // in a prior run gets SimpleSpeak from the very first
             // `get_math_blocks` call. The Rust-side session opens
             // with defaults; without this the prefs would only take
             // effect after the first Picker interaction.
@@ -12217,6 +12279,42 @@ final class AppState: ObservableObject {
         guard let session = currentSession else { return }
         let effective = session.citationsPrefs()
         guard !effective.sources.isEmpty else {
+            // No sources configured — but `bibliography_entries`
+            // outlives the session and the session's in-memory index is
+            // rebuilt from it at open, so returning here left the
+            // PREVIOUS session's entries resolving as current (#1082).
+            // Push the empty list so core clears them: a vault that
+            // configures no bibliography must resolve nothing, not
+            // whatever it resolved last time.
+            //
+            // Deliberately NOT `pushBibliographySources`, which also
+            // re-fetches entries and re-renders the open note. This
+            // path runs on every vault open with no bibliography, and
+            // an unconditional refetch makes the Bibliography leaf load
+            // twice (RightPaneViewTests' load-fire spy). Refetch only
+            // when this AppState is actually holding entries — a vault
+            // SWITCH, where the outgoing vault's rows are still in
+            // memory and would otherwise survive the change.
+            let result: Result<[BibLoadWarning], VaultError> =
+                await Task.detached(priority: .userInitiated) {
+                    do {
+                        return .success(try session.setBibliographySources(sources: []))
+                    } catch let err as VaultError {
+                        return .failure(err)
+                    } catch {
+                        return .failure(.Io(message: error.localizedDescription))
+                    }
+                }
+                .value
+            guard !Task.isCancelled else { return }
+            switch result {
+            case .success:
+                if !bibliographyEntries.isEmpty {
+                    await loadBibliographyEntries()
+                }
+            case .failure(let err):
+                bibliographySettingsError = humanReadable(err)
+            }
             await refreshAvailableCslStyles()
             return
         }
@@ -12499,6 +12597,10 @@ final class AppState: ObservableObject {
             return "\(feature) is not implemented yet."
         case .WriteConflict:
             return "File changed externally."
+        case .SavedButUnindexed(_, let detail):
+            // W6-1 SE TE-0's typed post-write arm (#1123's shape): the
+            // bytes are on disk; only the index step failed.
+            return "Saved, but not indexed yet: \(detail) It will appear after the next scan."
         case .MalformedFrontmatter(let path, let reason):
             return "Frontmatter at \(path) is malformed: \(reason)."
         case .BibSourceUnreadable(let path, let reason):
@@ -13273,8 +13375,18 @@ final class AppState: ObservableObject {
     /// Same selection+scroll pattern as the search-overlay
     /// activation flow.
     func openTaskRowInEditor(_ row: TaskWithLocation) {
-        let target = row.path
-        let line = Int(row.task.line)
+        openTaskRow(path: row.path, fileLine: Int(row.task.line))
+    }
+
+    /// The path+line core of task-row activation, split from the
+    /// `TaskWithLocation` overload so callers that only hold a
+    /// `TaskItem` (Bases row open) don't have to synthesize an FFI
+    /// transport record — its generated initializer grows with the
+    /// record, and a hand-built one is a build break in waiting
+    /// (W4-3 adversarial round 2).
+    func openTaskRow(path: String, fileLine: Int) {
+        let target = path
+        let line = fileLine
         recordExplicitSidebarNavigationIntent()
 
         // If we're already on the file, just scroll.
@@ -16205,10 +16317,26 @@ final class AppState: ObservableObject {
     /// `.medium` priority (the politeness floor that survives — see the palette
     /// / search precedent) and records it for the verbatim-string tests.
     func postMutationAnnouncement(_ message: String) {
+        postAccessibilityAnnouncement(mutationAnnouncementEvent(message))
+    }
+
+    /// The same sentence as an EVENT, for a funnel that owns its own
+    /// posting and must not be bypassed — today the canvas announcer,
+    /// which coalesces and prioritises (DoD §H). Recording stays here
+    /// so §U2-6's verbatim-string tests and the focus token behave
+    /// identically whichever route the sentence takes.
+    func mutationAnnouncementEvent(_ message: String) -> A11yEvent {
         lastMutationAnnouncement = message
         // W0.5-3 residue: structural-mutation announcement builders (U2-6 wrappers via postMutationAnnouncement)
-        postAccessibilityAnnouncement(
-            .hostComposed(text: message, priority: .medium))
+        return .hostComposed(text: message, priority: .medium)
+    }
+
+    /// Record a mutation refusal that a dedicated vocabulary already
+    /// spoke through its own funnel, without posting it a second time.
+    /// The structural-mutation ledger and its focus token are the same
+    /// contract either way.
+    func recordMutationAnnouncement(_ message: String) {
+        lastMutationAnnouncement = message
     }
 
     // MARK: Create
@@ -23599,6 +23727,11 @@ final class AppState: ObservableObject {
             // surfacing it through the generic humanReadable path is
             // a last-resort fallback for non-editor callers.
             return "This file was modified by another writer since you opened it. Reload to see the latest version."
+        case .SavedButUnindexed(_, let detail):
+            // The landed-but-unindexed arm (W6-1 SE TE-0): a CREATE or
+            // save whose bytes are real while the index catches up on
+            // the next scan - never a reason to retry or recreate.
+            return "This change was saved but not indexed yet: \(detail) It will appear in listings after the next scan; do not recreate it."
         case .MalformedFrontmatter(let path, let reason):
             return
                 "Frontmatter at \(path) is malformed: \(reason). Fix the YAML in this note before editing properties."

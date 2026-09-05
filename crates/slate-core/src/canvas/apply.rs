@@ -27,6 +27,7 @@
 //!   retention), so clearing color/label/subpath here removes the raw
 //!   key explicitly.
 
+use super::model::Rect;
 use serde_json::Value;
 
 use super::serialize::{edge_map, node_map};
@@ -158,6 +159,27 @@ pub enum CanvasOp {
     },
 }
 
+/// Apply an action to canvas TEXT with no session, handle or write —
+/// the detached algebra (W6-1 §E TE-0, IE-17: Save a Copy applies the
+/// retained action to a snapshot the conflict record kept). Parse
+/// (refusing a degraded parse: a copy grown from an unusable document
+/// would silently drop what the parse dropped), apply, serialize.
+pub fn apply_detached(text: &str, action: &CanvasAction) -> Result<String, ApplyError> {
+    let (mut canvas, warnings) = crate::canvas::parse(text);
+    if crate::canvas::is_load_degraded(&warnings) {
+        let reason = warnings
+            .iter()
+            .find_map(|w| match w {
+                crate::canvas::CanvasWarning::ParseFailed { reason } => Some(reason.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "unusable canvas".to_string());
+        return Err(ApplyError::NotACanvas(reason));
+    }
+    apply(&mut canvas, action)?;
+    Ok(crate::canvas::serialize::serialize(&canvas))
+}
+
 /// Why an action was rejected (whole-action, no partial application).
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ApplyError {
@@ -175,6 +197,8 @@ pub enum ApplyError {
     MissingEndpoint(String),
     #[error("restore payload is not valid: {0}")]
     BadRestorePayload(String),
+    #[error("the text is not a usable canvas: {0}")]
+    NotACanvas(String),
 }
 
 /// Apply `action` to `canvas` in place. On success returns the inverse
@@ -211,6 +235,31 @@ fn edge_index(canvas: &Canvas, id: &str) -> Result<usize, ApplyError> {
         .iter()
         .position(|e| e.id.0 == id)
         .ok_or_else(|| ApplyError::UnknownEdge(id.to_string()))
+}
+
+/// #960: where a new group lands in the z-order (document order).
+///
+/// Immediately before the first node, in document order, that the group
+/// visually contains — the derived model's containment rule
+/// (`model::derive`): a node whose center is strictly inside the group's
+/// rect, where an existing GROUP counts only if it is strictly smaller
+/// (an enclosing outer group whose center happens to fall inside stays
+/// below, as it must). A group that contains nothing appends as before:
+/// there is nothing to bury, and cards created inside it later append
+/// after it, which is above it.
+fn group_insert_index(canvas: &Canvas, group: &Node) -> usize {
+    let rect = Rect::from_node(group);
+    canvas
+        .nodes
+        .iter()
+        .position(|node| {
+            let node_rect = Rect::from_node(node);
+            let (cx, cy) = node_rect.center();
+            rect.contains_point_strict(cx, cy)
+                && (!matches!(node.kind, NodeKind::Group { .. })
+                    || Rect::area_cmp(&node_rect, &rect) == std::cmp::Ordering::Less)
+        })
+        .unwrap_or(canvas.nodes.len())
 }
 
 fn id_taken(canvas: &Canvas, id: &str) -> bool {
@@ -303,7 +352,7 @@ fn apply_one(canvas: &mut Canvas, op: &CanvasOp) -> Result<Vec<CanvasOp>, ApplyE
             if id_taken(canvas, id) {
                 return Err(ApplyError::DuplicateId(id.clone()));
             }
-            canvas.nodes.push(Node {
+            let group = Node {
                 id: NodeId(id.clone()),
                 kind: NodeKind::Group {
                     label: label.clone(),
@@ -315,7 +364,15 @@ fn apply_one(canvas: &mut Canvas, op: &CanvasOp) -> Result<Vec<CanvasOp>, ApplyE
                 height: *height,
                 color: color_of(color),
                 raw: RawExtra::new(),
-            });
+            };
+            // #960: JSON Canvas array order IS z-order ("the first node
+            // in the array should be displayed below all other nodes").
+            // A group appended last declares itself the topmost node —
+            // stacked over its own members, which every spec-faithful
+            // renderer (Slate's opaque-fill one included) then paints
+            // buried under the group frame. Insert beneath them instead.
+            let at = group_insert_index(canvas, &group);
+            canvas.nodes.insert(at, group);
             Ok(vec![CanvasOp::DeleteNode { id: id.clone() }])
         }
         CanvasOp::UpdateNodeGeometry {

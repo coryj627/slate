@@ -17,8 +17,8 @@
 //! execution time) migrates in treatment classes. Literal, templated,
 //! and simple-builder announcements are typed variants below — their
 //! Swift string originals are deleted. A minority of sites relay text
-//! composed by dedicated engines (the canvas/graph announcers' verbosity
-//! machinery, Bases result summaries, filename advisories) or by
+//! composed by dedicated engines (Bases result summaries, filename
+//! advisories) or by
 //! availability logic whose copy serves double duty in dialogs/hints;
 //! those post [`A11yEvent::HostComposed`] carrying their text verbatim,
 //! each call site marked `// W0.5-3 residue:` with the owning engine.
@@ -27,13 +27,35 @@
 //! follow-on batches) and keeps direct string-primitive calls at zero,
 //! so no NEW announcement can bypass the vocabulary.
 //!
+//! The CANVAS announcer was such an engine and is no longer: W6-1 PR 0a
+//! gave it the typed family below and Task 0a-2 moved the mac host onto
+//! it, so `CanvasAnnouncer` posts rendered events and its residue site
+//! is gone (the mac census drops 30 → 29). The GRAPH announcer followed
+//! in W6-2 PR 0a (#746): its family is below, `GraphAnnouncer` relays
+//! rendered events, and its residue site is gone too (29 → 28). No
+//! engine-level vocabulary remains outstanding. One shared residue
+//! site survives that neither migration could delete: the
+//! structural-mutation builder the mac reaches through
+//! `postMutationAnnouncement`, which serves every authoring surface —
+//! the canvas and graph call sites left it, the marker stays.
+//!
 //! ## Copy rules
 //!
 //! Templates are the shipped mac strings, moved verbatim — this issue
 //! deliberately does not redesign wording or verbosity policy. Plain
-//! en-US in V1 (#264 owns localisation). Chord placeholders, when a
-//! template ever needs one, render per-platform (program decision 12);
-//! no current template carries a chord.
+//! en-US in V1 (#264 owns localisation). Chord placeholders render
+//! per-platform (program decision 12): the few templates that carry a
+//! chord take the host's DISPLAY chord string as a parameter
+//! (`undo_chord`, `new_card_chord`, `palette_chord` — mac `"⌘Z"`,
+//! Windows `"Ctrl+Z"`), because the chord table is host-owned. The
+//! §W-D census normalizes those parameters; they are the one recorded
+//! platform difference in the corpus. Key NAMES that are spelled
+//! identically on both platforms (`Return`, `Escape`) stay literal in
+//! the template — they are not chords.
+
+use crate::canvas::CanvasColor;
+use crate::canvas::model::EdgeDirection;
+use crate::canvas::placement::RelativeDesc;
 
 /// How urgently a host should speak an event. `High` interrupts
 /// current speech (assertive); `Medium` queues politely — mirroring the
@@ -63,6 +85,10 @@ pub enum ReadingNavTarget {
     Table,
     Embed,
     CodeBlock,
+    /// W3-2: math blocks (the `M` chord).
+    Math,
+    /// W3-3: diagram blocks (the `D` chord).
+    Diagram,
 }
 
 impl ReadingNavTarget {
@@ -76,8 +102,467 @@ impl ReadingNavTarget {
             Table => "table".to_owned(),
             Embed => "embed".to_owned(),
             CodeBlock => "code block".to_owned(),
+            Math => "math".to_owned(),
+            Diagram => "diagram".to_owned(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Canvas announcement vocabulary (W6-1 PR 0a, #745 — t0 §1 grammar,
+// #518). The whole grammar used to live in Swift: a 248-line
+// `CanvasAnnouncer` whose twelve cases were eight free-text
+// passthroughs, plus ~140 prose call sites composing the sentences at
+// the interaction site. It moves here verbatim so both hosts speak one
+// canvas. The enums below are the CLOSED parameter sets the templates
+// switch on; open-ended payload (titles, labels, group paths, file
+// paths, URL hosts, OS error detail, host chord strings, counts and
+// dimensions) stays `String`/number, and no variant carries a whole
+// sentence.
+//
+// ## Coalescing class keys (host-side timing, ONE list)
+//
+// Timing stays with the hosts — a pure render has no clock — but the
+// class keys are pinned here so mac and Windows collapse identical
+// bursts (t0 §1.5; mac `CanvasAnnouncer.EventClass`, 200 ms
+// latest-wins, each class independent):
+//
+// - **`navigation`** — [`CanvasA11yEvent::CanvasMovedTo`],
+//   [`CanvasA11yEvent::CanvasGroupEntered`], [`CanvasA11yEvent::CanvasGroupLeft`],
+//   [`CanvasA11yEvent::CanvasConnectionTraversed`],
+//   [`CanvasA11yEvent::CanvasMoveRelative`],
+//   [`CanvasA11yEvent::CanvasResizeGeometry`].
+// - **`filter`** — [`CanvasA11yEvent::CanvasFilterCount`],
+//   [`CanvasA11yEvent::CanvasFilterCleared`].
+//
+// The graph family (W6-2 0a, #746) shares the list, family-qualified
+// (mac `GraphAnnouncer.EventClass`; contracts doc 0a-9):
+//
+// - **`navigation`** — [`GraphA11yEvent::GraphRow`].
+// - **`filter`** — [`GraphA11yEvent::GraphFilterCount`].
+// - **`forceValue`** — [`GraphA11yEvent::GraphForceValue`].
+// - **`settle`** — [`GraphA11yEvent::GraphLayoutSettled`].
+// - Everything else posts immediately, uncoalesced.
+// - A canvas event whose [`CanvasA11yEvent::priority`] is
+//   [`A11yPriority::High`] FLUSHES both pending classes and DROPS
+//   them (never posts them): the error supersedes, and navigation
+//   context is re-derivable by moving again. A `High` graph event
+//   ([`GraphA11yEvent::GraphBlocked`], announced or relayed) does the
+//   same to the graph's four.
+
+/// Canvas announcement verbosity (t0 §1.2). Deliberately a PARAMETER
+/// on the two families that vary — the moved-to family and the
+/// destructive family — rather than module state: core stays pure and
+/// each host owns its own persisted, live-switchable preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasVerbosity {
+    Terse,
+    Standard,
+    Verbose,
+}
+
+/// An overlap transition crossed by a transient move/resize step (t4
+/// G20: silent stacking is invisible to a non-visual author).
+/// Deliberately NOT its own event: mac appends it as a clause to the
+/// geometry line so the coalescer emits one utterance, and two
+/// utterances would be a behaviour change (contracts doc 0a-D2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasOverlapTransition {
+    Onset,
+    Cleared,
+}
+
+/// A canvas mode (t0 §2). Core owns each mode's spoken NAME and its
+/// exit instructions; the host supplies only the object acted on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasMode {
+    Move,
+    Resize,
+    Connect,
+}
+
+impl CanvasMode {
+    /// The mode's spoken name — also the lead of the M3 inspectable
+    /// container value and of the Where-am-I mode clause.
+    fn name(&self) -> &'static str {
+        match self {
+            CanvasMode::Move => "Move mode",
+            CanvasMode::Resize => "Resize mode",
+            CanvasMode::Connect => "Connect mode",
+        }
+    }
+
+    /// The bare verb, for the lifecycle sentences that do not say
+    /// "mode" (`Move cancelled.`, `Resize ended — …`).
+    fn verb(&self) -> &'static str {
+        match self {
+            CanvasMode::Move => "Move",
+            CanvasMode::Resize => "Resize",
+            CanvasMode::Connect => "Connect",
+        }
+    }
+
+    /// The M1 exit instructions. `Return`/`Escape` are KEY NAMES, not
+    /// chords — spelled identically on both platforms — so they stay
+    /// literal here (unlike the undo hint, which takes the host's
+    /// display chord as a parameter).
+    fn exits(&self) -> &'static str {
+        match self {
+            CanvasMode::Move => {
+                "Arrows to move, Shift for big steps, Return to place, Escape to cancel."
+            }
+            CanvasMode::Resize => {
+                "Left and Right arrows change width, Up and Down change height, \
+                 Return to apply, Escape to cancel."
+            }
+            CanvasMode::Connect => {
+                "Navigate to the target with the usual movements, Return to connect, \
+                 Escape to cancel."
+            }
+        }
+    }
+}
+
+/// What a mode acts on (t0 §2 M1). Move mode takes the marked set as a
+/// rigid unit, so the object is either one titled card or a count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasModeObject {
+    Card { title: String },
+    Cards { count: u32 },
+}
+
+/// The two modes that hold transient geometry. Connect is absent by
+/// design: it has no rects, so `Placed …`/`Resized …` is only ever
+/// spoken for these two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasTransientVerb {
+    Move,
+    Resize,
+}
+
+/// What a cancelled mode put back (t0 §2 M2: Esc restores prior state
+/// and says so). `None` is the degenerate path where the document went
+/// away before the restore could run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasModeRestoration {
+    /// Cancelled without a restoration statement — the degenerate
+    /// path where the document went away before the restore could
+    /// run. (Named `Unstated` rather than `None` so the Swift
+    /// binding cannot collide with `Optional.none`.)
+    Unstated,
+    CardsReturned {
+        count: u32,
+    },
+    SizeRestored,
+    BackAt {
+        title: String,
+    },
+}
+
+/// The two single-card structural placements that share one template
+/// (`⟨Verb⟩ "title" ⟨relative⟩.`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasPlaceVerb {
+    Moved,
+    Duplicated,
+}
+
+/// Where a card's target was handed off to (t5 #525).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasOpenTarget {
+    DefaultApp,
+    Browser,
+}
+
+/// A resize preset (t4 #521). Core owns the spoken label; the host
+/// owns the geometry (Fit to Content is a recorded placeholder
+/// formula shared by both hosts — owner decision D-5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasResizePreset {
+    DefaultSize,
+    FitToContent,
+}
+
+/// The three canvas projections (t2 #369).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasSurfaceKind {
+    Outline,
+    Table,
+    Visual,
+}
+
+/// What produced a zoom announcement (#520): a bare zoom step carries
+/// no context, while Fit Canvas and Zoom to Selection each prefix
+/// their own sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasZoomContext {
+    FitCanvas,
+    ZoomedToSelection,
+}
+
+/// What a destructive confirmation removed (t0 §1.3). Four arms
+/// because four different tails ship, not because the verb varies —
+/// deleting a group is spoken as *ungrouping* because the cards
+/// survive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasDeleteTarget {
+    Card {
+        kind_label: String,
+        title: String,
+    },
+    Group {
+        label: String,
+    },
+    Cards {
+        count: u32,
+    },
+    /// The connection's own reference, spoken as the picker row reads
+    /// it lower-cased into the sentence (`to "Ideas", labelled
+    /// "supports"`). Structural rather than a pre-lowered string:
+    /// mac lower-cased the whole row, which mangled the author's card
+    /// title and label (contracts doc 0a-D5).
+    Connection {
+        direction: EdgeDirection,
+        other_title: String,
+        label: Option<String>,
+    },
+}
+
+/// The canvas verbs that wrap a backend failure in the shipped
+/// `⟨Verb⟩ failed: ⟨detail⟩` sentence. A closed set, not prose: the
+/// only open-ended part is the OS/FFI `detail`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasFailedAction {
+    NewCard,
+    NewGroup,
+    NewCanvas,
+    MoveIntoGroup,
+    Placement,
+    Align,
+    Create,
+    RemoveFromGroup,
+    Duplicate,
+    CreateConnectedCard,
+    CanvasAction,
+    WhereAmI,
+}
+
+impl CanvasFailedAction {
+    fn verb(&self) -> &'static str {
+        match self {
+            CanvasFailedAction::NewCard => "New card",
+            CanvasFailedAction::NewGroup => "New group",
+            CanvasFailedAction::NewCanvas => "New canvas",
+            CanvasFailedAction::MoveIntoGroup => "Move",
+            CanvasFailedAction::Placement => "Placement",
+            CanvasFailedAction::Align => "Align",
+            CanvasFailedAction::Create => "Create",
+            CanvasFailedAction::RemoveFromGroup => "Remove",
+            CanvasFailedAction::Duplicate => "Duplicate",
+            CanvasFailedAction::CreateConnectedCard => "Create connected card",
+            CanvasFailedAction::CanvasAction => "Canvas action",
+            CanvasFailedAction::WhereAmI => "Where am I",
+        }
+    }
+}
+
+/// Why a canvas refuses mutations (the admission ladder). Closed
+/// rather than prose because the SAME sentence serves the
+/// announcement, every disabled command's reason, and the sheet's
+/// read-only copy — three surfaces that drifted while it was a
+/// host-side constant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasMutationRefusal {
+    Opening,
+    Reopening,
+    RetargetFailed,
+    Unavailable,
+    ReadOnly,
+    CardEditorUnavailable,
+    /// A commit landed but its refresh could not present it (the
+    /// COMMITTED-BUT-UNPRESENTED admission arm, W6-1 §E TE-11c /
+    /// IE-10): writes stay refused until a REFRESH shows the change.
+    /// The sentence says Refresh, not Reload — the recovery re-runs
+    /// the refresh, never the committed action.
+    RefreshPending,
+}
+
+/// Undo or redo — for the Edit-menu title, which is LABEL class, not
+/// speech (§2 row G: the title is rendered here so both hosts compose
+/// it identically from core's action name).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasHistoryVerb {
+    Undo,
+    Redo,
+}
+
+impl CanvasHistoryVerb {
+    /// The menu-title base.
+    fn base(&self) -> &'static str {
+        match self {
+            CanvasHistoryVerb::Undo => "Undo",
+            CanvasHistoryVerb::Redo => "Redo",
+        }
+    }
+
+    /// The spoken past tense (t0 §1.3: undo/redo announce the op name).
+    fn past(&self) -> &'static str {
+        match self {
+            CanvasHistoryVerb::Undo => "Undid",
+            CanvasHistoryVerb::Redo => "Redid",
+        }
+    }
+}
+
+/// The polite "why that did nothing" sentences — preconditions,
+/// navigation dead ends, and the empty-history notes. One closed set
+/// because mac retyped the same fourteen sentences across ten files
+/// (`Nothing selected.` alone appears sixteen times) and they are all
+/// the same speech act at the same priority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasStatusNote {
+    NothingSelected,
+    NoMarks,
+    NotAGroup,
+    NotATextCard,
+    NotAFileCard,
+    NoGroups,
+    NoNotesInVault,
+    NoMediaInVault,
+    NoFilesToPointAt,
+    OnlyTextCardsConvert,
+    NoConnections,
+    PickOutsideMovingSet,
+    PickDifferentTarget,
+    NoChanges,
+    /// Where-am-I on a document that never opened cleanly.
+    NotReadable,
+    /// Where-am-I with no rows — deliberately NOT the onboarding copy,
+    /// which advertises the create chord.
+    Empty,
+    EndOfCanvas,
+    StartOfCanvas,
+    AtCanvasLevel,
+    NoCardsMatchFilter,
+    NothingToUndo,
+    NothingToRedo,
+    GroupIsEmpty {
+        label: String,
+    },
+    NoOutgoingPath {
+        title: String,
+    },
+    NotInAGroup {
+        title: String,
+    },
+    /// Follow-connection found nothing. `ordinal` is `None` when the
+    /// card has no connection in that direction at all, and `Some(n)`
+    /// when it has some but not an nth.
+    NoConnection {
+        forward: bool,
+        ordinal: Option<u32>,
+    },
+    /// A structural READ verb — enter group, exit group, trace path,
+    /// fit canvas — asked while the canvas is between a physical move
+    /// landing and its background reopen. Those verbs answer from
+    /// queries that need the native handle, and in that window the
+    /// handle is deliberately detached so nothing can save through the
+    /// moved-away path, so there is no answer to give.
+    ///
+    /// **New copy, not a migrated string** (W6-1 0b-2 fix round 2).
+    /// The alternative was silence, and t0's never-silent principle
+    /// says a keypress that does nothing must say so: the window is
+    /// transient but user-reachable, and the canvas commands carry no
+    /// enablement predicate (rule R1). Distinct from
+    /// [`CanvasMutationRefusal::Reopening`], which is the same window's
+    /// WRITE refusal and keeps its "before making changes" tail — this
+    /// one is reached by a user who changed nothing and is told when to
+    /// try again instead.
+    Reopening,
+    /// The same read verbs, on a canvas that is still LOADING — a first
+    /// open, or a prepared replacement installed over an already-open
+    /// tab (`beginPreparedReplacement`). The host's `LoadState` is
+    /// `loading`, `ready`, `degraded`, `failed`, `retargetFailed`, and
+    /// this covers the first; the window `Reopening` names is a REopen,
+    /// so its copy would be false the first time a canvas is opened.
+    ///
+    /// Same shape as its sibling for the same reason (W6-1 0b-2, codex
+    /// round 1): distinct from `CanvasMutationRefusal::Opening`, which
+    /// covers this state for WRITES and keeps its "before making
+    /// changes" tail.
+    Loading,
+}
+
+/// The assertive refusals and failures that are not the
+/// `⟨Verb⟩ failed: ⟨detail⟩` family (t0 §1.5: errors are assertive).
+/// One closed set so a new canvas error cannot inherit the polite
+/// default by omission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasBlockedReason {
+    /// An out-of-band mutation (apply, undo, redo, convert) refused
+    /// while a move or resize holds transient geometry.
+    ModeBusy,
+    UndoBlocked,
+    RedoBlocked,
+    /// W6-1 §E TE-2 (IE-13): the QUARANTINE — entries exist but the
+    /// top applies to an earlier revision than the attached document,
+    /// so it is disabled rather than offered. Truthful copy: nothing
+    /// re-enables it except that exact revision returning; "try
+    /// again" would be a lie here, unlike the Blocked pair above.
+    UndoQuarantined,
+    RedoQuarantined,
+    LinkOpenFailed,
+    AlignWouldOverlap,
+    NotAUrl,
+    CardTextUnreadable,
+    NotePathMustEndInMd,
+    NoFreeSpaceInGroup {
+        label: String,
+    },
+    /// Convert-to-note collision. `on_disk` distinguishes the cheap
+    /// snapshot bail from the backend's create-if-absent refusal — two
+    /// different sentences, because only the second proves it.
+    NotePathExists {
+        path: String,
+        on_disk: bool,
+    },
+    NoteReadFailed {
+        message: String,
+    },
+    NoteCreateFailed {
+        path: String,
+        message: String,
+    },
+    /// The partial-failure arm: the note landed, the card did not
+    /// follow. Naming the created file is the whole point.
+    NoteRetargetFailed {
+        path: String,
+        message: String,
+    },
+    HeadingNotFound {
+        heading: String,
+        filename: String,
+    },
+    ReopenFailed {
+        message: String,
+    },
+    /// W6-1 PR E13 (#1174, E13-1): the shell-execution gate's typed
+    /// reason — a file card whose target is neither a note nor media is
+    /// not opened from the canvas (CD-38). `target` is the vault-relative
+    /// path as the card carries it (E13D-4), the same string
+    /// `CanvasFileNotFound` speaks for the same kind of card.
+    FileTypeNotOpenable {
+        target: String,
+    },
+}
+
+/// The filter clause Where-am-I discloses (t0 §1.4). One spelling —
+/// t0's `⟨matched⟩ of ⟨total⟩ shown` — replaces the two mac shipped
+/// (contracts doc 0a-D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasFilterState {
+    Inactive,
+    Active { matched: u32, total: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,6 +634,18 @@ pub enum A11yEvent {
     SearchNeedsVault,
 
     // --- Links, search, embeds, headings, navigation ---
+    /// The search panel's result-count summary. This is the §W-D
+    /// anchor for `search_db::summary_for`, which renders THROUGH it —
+    /// the count is the data, the wording lives here once, and the
+    /// spoken and displayed strings cannot drift apart.
+    SearchResultsSummary {
+        count: u32,
+    },
+    /// A search that failed, carrying the host's human-readable
+    /// reason (the same shape as the other `{ reason }` failures).
+    SearchFailed {
+        message: String,
+    },
     SearchResultOpened {
         filename: String,
         line: u32,
@@ -385,6 +882,28 @@ pub enum A11yEvent {
         label: String,
         disabled_reason: Option<String>,
     },
+    /// Palette filter feedback: how many commands the query matched.
+    /// `count == 0` is the no-match phrasing.
+    PaletteFilterCount {
+        count: u32,
+        query: String,
+    },
+    /// A palette command that ran and failed. `detail == None` is the
+    /// defensive branch where the registry gave no message.
+    PaletteCommandFailed {
+        label: String,
+        detail: Option<String>,
+    },
+    PaletteCommandNotFound {
+        id: String,
+    },
+    /// An availability REJECTION, spoken verbatim: the reason is host
+    /// availability copy carried as data (the `PaletteCommandSelected`
+    /// precedent) and the row already exposes this exact sentence, so
+    /// prefixing it would make VoiceOver say it twice differently.
+    PaletteCommandUnavailable {
+        reason: String,
+    },
     RecentSearchFocused {
         query: String,
     },
@@ -436,6 +955,229 @@ pub enum A11yEvent {
         detail: String,
     },
     BaseRefreshed,
+    /// The Bases "where am I" readback, composed from PARTS so the
+    /// joining and the optional clauses live here rather than in the
+    /// host: "Base: X", plus ", view: Y" and ", quick filter: Z" when
+    /// those are present.
+    BaseWhereAmI {
+        base: String,
+        view: Option<String>,
+        quick_filter: Option<String>,
+    },
+    /// The results popover. `audio_summary` is core-composed already
+    /// (`bases::engine::audio_summary`) and carried as data; the
+    /// readback is appended only while a quick filter is active.
+    BaseResultsPopover {
+        audio_summary: String,
+        where_am_i: Option<String>,
+    },
+    /// Quick-filter result count, "{shown} of {total} result(s)".
+    /// Both Bases document types built this string identically and
+    /// separately; the counts are the data.
+    BaseQuickFilterResult {
+        shown: u64,
+        total: u64,
+    },
+    /// Keyboard row reorder (Option+Arrow) in the Bases query builder
+    /// and the dashboard editor. ONE host builder composed all three
+    /// sentences for three call sites — sort rows, column rows and
+    /// dashboard sections — so the row's label and its position are the
+    /// data and the wording lives here.
+    BaseRowReorderRefused {
+        label: String,
+    },
+    /// The row is already at the end it was asked to move toward.
+    BaseRowReorderAtBoundary {
+        label: String,
+        /// True at the top of the list ("first"), false at the bottom
+        /// ("last"). The host does not get a say in the noun.
+        at_first: bool,
+    },
+    /// A completed move. `position` is 1-BASED, exactly as spoken.
+    BaseRowReorderMoved {
+        label: String,
+        moved_up: bool,
+        position: u64,
+        count: u64,
+    },
+    /// The query builder's preview readback — one variant per state the
+    /// host branched on.
+    BaseQueryPreviewIdle,
+    BaseQueryPreviewLoading,
+    /// `first_result` is present only when the top row carries a
+    /// non-blank description; the host decides that (it is a data
+    /// question), the joining lives here.
+    ///
+    /// The join no longer doubles the period. `bases::engine::
+    /// audio_summary` always terminates with `.`, and the shipped mac
+    /// code appended `". First result: …"` to it, so users heard
+    /// "12 notes.. First result: Alpha" for as long as the readback has
+    /// existed. #969 moved the string verbatim and pinned the defect in
+    /// a golden; this is the deliberate follow-up that fixes it.
+    ///
+    /// The separator is chosen from the summary rather than assumed:
+    /// terminal punctuation gets a single space, anything else gets
+    /// ". ", so a caller that passes an unterminated summary still
+    /// produces one well-formed sentence.
+    BaseQueryPreviewReady {
+        audio_summary: String,
+        first_result: Option<String>,
+    },
+    /// Distinct from `BasesPreviewFailed` ("Base preview failed: …"):
+    /// this is the BUILDER's shorter sentence, kept verbatim rather
+    /// than folded into its neighbour.
+    BaseQueryPreviewFailed {
+        detail: String,
+    },
+    /// A transient column sort, and the same sort persisted into the
+    /// view. The two sentences differ deliberately — the transient one
+    /// carries NO terminal period, the saved one does. Preserved as
+    /// shipped; #969 moves strings, it does not redesign copy.
+    BaseSortedByColumn {
+        column: String,
+        ascending: bool,
+    },
+    BaseSortSavedToView {
+        column: String,
+        ascending: bool,
+    },
+    /// The saved-query action family. These all reached AT through the
+    /// host's `postBaseActionAnnouncement(String)` funnel; #969 gives
+    /// each its own case so the Windows twin renders the same sentence
+    /// rather than re-typing it.
+    ///
+    /// Note the near-neighbours that are deliberately NOT reused:
+    /// `BasesSavedQueryNameNeeded` is "…before saving.",
+    /// `BasesSavedQueryRenameNameNeeded` is "…before renaming.".
+    BasesSavedQueryReferenceMissing {
+        reference: String,
+    },
+    BasesSavedQueryMissing,
+    BasesQueriesRefreshFailed {
+        detail: String,
+    },
+    BasesSavedQueryEditing {
+        name: String,
+    },
+    BasesSavedQueryEditFailed {
+        detail: String,
+    },
+    BasesSavedQueryRenameNameNeeded,
+    BasesSavedQueryRenamed {
+        name: String,
+    },
+    BasesSavedQueryRenameFailed {
+        detail: String,
+    },
+    BasesSavedQueryDeleted,
+    BasesSavedQueryDeleteFailed {
+        detail: String,
+    },
+    BasesSavedQueryExportPathNeeded,
+    BasesSavedQueryExported {
+        name: String,
+    },
+    BasesSavedQueryExportFailed {
+        detail: String,
+    },
+    BasesPathOutsideVault,
+    /// The dashboard action family — the second group behind the same
+    /// `postBaseActionAnnouncement` funnel.
+    BasesDashboardNameNeeded,
+    BasesDashboardSaved {
+        name: String,
+    },
+    BasesDashboardSaveFailed {
+        detail: String,
+    },
+    BasesDashboardUpdated {
+        name: String,
+    },
+    BasesDashboardUpdateFailed {
+        detail: String,
+    },
+    /// The section moved under the editor's feet — a stale-index
+    /// refusal, not a failure with a reason to relay.
+    BasesDashboardSectionStale,
+    BasesDashboardSectionRemoveFailed {
+        detail: String,
+    },
+    BasesDashboardSectionReplaceFailed {
+        detail: String,
+    },
+    BasesDashboardDeleted,
+    BasesDashboardDeleteFailed {
+        detail: String,
+    },
+    BasesDashboardEditFailed {
+        detail: String,
+    },
+    BasesDashboardMissing,
+    /// The last group behind the `postBaseActionAnnouncement` funnel:
+    /// row actions, clipboard/export, and cell editing. With these the
+    /// funnel is deleted and the Bases family is fully converted.
+    BasesDockUpdatedForNote,
+    BasesLinkCopied {
+        name: String,
+    },
+    BasesBacklinksFor {
+        name: String,
+    },
+    BasesViewCopyNoActiveBase,
+    BasesViewCopiedAsMarkdown,
+    BasesViewCopyFailed {
+        detail: String,
+    },
+    BasesRowSelectionNeeded,
+    BasesNoEditableProperty,
+    /// Why a cell refuses editing. `file_metadata` picks the noun; the
+    /// host used to choose between two literals.
+    BasesCellReadOnly {
+        file_metadata: bool,
+    },
+    BasesCellSaved {
+        column: String,
+        value: String,
+    },
+    BasesCellCleared {
+        column: String,
+    },
+    /// Deliberately has NO terminal period — preserved as shipped.
+    BasesCellRowNoLongerMatches,
+    BasesCellEditFailed {
+        detail: String,
+    },
+    BasesCellEditCanceled,
+    BasesViewExported,
+    BasesViewExportFailed {
+        detail: String,
+    },
+    BasesDataviewConverted,
+    /// Distinct from `DataviewConversionFailed` ("Dataview conversion
+    /// failed: …"): this one is the SAVE step of the conversion.
+    BasesDataviewConversionSaveFailed {
+        detail: String,
+    },
+    /// The quick-filter scope prompt, dismissed. `verb` is the caller's
+    /// action word ("Copy", "Export") and stays data — the prompt is
+    /// reused by both.
+    BasesQuickFilterChoiceCanceled {
+        verb: String,
+    },
+    /// Cell-edit validation refusals. These reached AT through the same
+    /// funnel via `BaseCellEditValidationError.message`.
+    BasesCellMustBeFiniteNumber,
+    BasesCellMustBeWholeNumber,
+    BasesCellMustBeFiniteDecimal,
+    BasesCellMustBeBoolean,
+    BasesCellMustBeDate,
+    /// A visible base whose row membership changed under a background
+    /// refresh. `audio_summary` is core-composed already
+    /// (`bases::engine::audio_summary`); only the "Updated: " prefix
+    /// was host-side.
+    BasesRefreshUpdated {
+        audio_summary: String,
+    },
     DataviewConversionFailed {
         detail: String,
     },
@@ -469,9 +1211,429 @@ pub enum A11yEvent {
         text: String,
     },
 
+    // --- Accessible data grid (W4-1, the #969 grid announce family) ---
+    /// A grid column sort was applied (keyboard or header click).
+    GridSorted {
+        column: String,
+        ascending: bool,
+    },
+    /// Vertical navigation landed on a DIFFERENT row: the engine's row
+    /// `audio_description` deduplicated against the focused cell label
+    /// (spoken alone when it already contains the cell, case-folded;
+    /// mac's pre-conversion rule also folded diacritics -- the core
+    /// rule is case-only, a recorded refinement both twins now share).
+    GridRowMoved {
+        description: String,
+        focused_cell: String,
+    },
+    /// Horizontal / within-row navigation: the "Header: value" label.
+    GridCellMoved {
+        column: String,
+        value: String,
+    },
+    /// A group heading row.
+    GridGroup {
+        label: String,
+        row_count: u32,
+        summary: Option<String>,
+    },
+
+    // --- Templates (W5-3, #743) ---
+    /// The template picker presented with its enumeration result. The
+    /// three count arms are mac's `templatePickerOpenAnnouncement`
+    /// verbatim (the 0 arm is carried for completeness; mac's empty
+    /// present speaks its availability reason instead — contracts doc
+    /// T10).
+    TemplatePickerOpened {
+        count: u32,
+    },
+    /// Create-from-template succeeded. High priority (mac #421 F-H1:
+    /// the created announcement must win over the tab-switch
+    /// announcement that immediately follows the open).
+    TemplateNoteCreated {
+        name: String,
+        template: String,
+    },
+
+    /// The whole canvas announcement family (W6-1 0a, #745), nested
+    /// so one engine costs ONE top-level variant. uniffi caps an enum
+    /// at 256 variants and this vocabulary was at 197 before canvas;
+    /// a flat family would have spent a fifth of the remaining budget
+    /// on one surface and left none for the graph announcer (the other
+    /// named residue engine). Nesting per engine is the pattern every
+    /// later family copies.
+    Canvas {
+        event: CanvasA11yEvent,
+    },
+    /// The whole graph announcement family (W6-2 0a, #746), nested for
+    /// the same reason as the canvas's: one engine, ONE top-level
+    /// variant — the second family to copy the pattern.
+    Graph {
+        event: GraphA11yEvent,
+    },
+
     HostComposed {
         text: String,
         priority: A11yPriority,
+    },
+}
+
+/// Everything the canvas may say out loud (t0 §1 grammars), reached
+/// through [`A11yEvent::Canvas`]. Its own enum rather than 51 more
+/// top-level variants: see that variant's note for why, and the
+/// section comment above for the closed parameter sets and the
+/// coalescing class keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasA11yEvent {
+    // --- Canvas: selection and navigation (W6-1 0a, #745; t0 §1.2) ---
+    /// Selection landed on a card. The one event whose template is a
+    /// verbosity MATRIX (t0 §1.2): terse speaks the bare title for
+    /// rapid arrowing, standard adds the card reference and the
+    /// n-of-m fix, verbose adds connections, colour, and the mark.
+    /// `container` is the innermost group label; `None` speaks the
+    /// literal lowercase word `canvas`.
+    ///
+    /// `color_name` stays a `String` — unlike
+    /// [`CanvasA11yEvent::CanvasColorSet`]'s typed `CanvasColor` —
+    /// because it is core's OWN `canvas::color_name` output arriving
+    /// back through `CanvasOutlineRow.color_name`: the host relays it,
+    /// it never derives it. Typing it here would force a host to parse
+    /// a spoken name back into a colour, which is the re-derivation the
+    /// typed payload exists to prevent (contracts doc 0a-11).
+    CanvasMovedTo {
+        verbosity: CanvasVerbosity,
+        kind_label: String,
+        title: String,
+        ordinal_n: u32,
+        total_m: u32,
+        container: Option<String>,
+        connection_count: u32,
+        color_name: Option<String>,
+        marked: bool,
+    },
+    /// Crossed INTO a group. `count` is the group's own card count —
+    /// mac spoke the entered row's SIBLING count, a miscount this
+    /// migration fixes (contracts doc 0a-D4).
+    CanvasGroupEntered {
+        label: String,
+        count: u32,
+    },
+    CanvasGroupLeft {
+        label: String,
+    },
+    /// Followed a connection. The direction phrase comes from the
+    /// model's `EdgeDirection` (derived from `fromEnd`/`toEnd`), never
+    /// from geometry; `kind_label`/`title` describe the card ARRIVED
+    /// AT, so a group or file target is never introduced as a text
+    /// card (Codoki #613).
+    CanvasConnectionTraversed {
+        direction: EdgeDirection,
+        kind_label: String,
+        title: String,
+        label: Option<String>,
+    },
+    /// The whole traced chain in ONE utterance — mac deliberately does
+    /// not narrate hop by hop, and the visited count is the tail of
+    /// the same sentence, so a separate end event would double-speak.
+    ///
+    /// `titles` is the ONLY payload on purpose: the tail count is
+    /// `titles.len()`, so the list and the number it claims can never
+    /// disagree. Mac spoke `visited.count` while listing the titles it
+    /// could resolve to outline rows — two numbers from one walk
+    /// (contracts doc CD-13).
+    CanvasTracePathEnd {
+        titles: Vec<String>,
+    },
+
+    // --- Canvas: transient geometry (t4 #521; `navigation` class) ---
+    /// Move-mode narration: the nearest-neighbour fix, coalesced so a
+    /// held arrow announces the resting position. `descs` is core's
+    /// own relative description list (empty = nothing to fix against);
+    /// the first phrase is capitalised and the rest join lower-cased.
+    CanvasMoveRelative {
+        descs: Vec<RelativeDesc>,
+        overlap: Option<CanvasOverlapTransition>,
+    },
+    /// Resize-mode narration. `preset` is `None` for an arrow step and
+    /// names the preset when one was applied; both carry the overlap
+    /// clause because a preset can land on another card too.
+    CanvasResizeGeometry {
+        preset: Option<CanvasResizePreset>,
+        width: u32,
+        height: u32,
+        overlap: Option<CanvasOverlapTransition>,
+    },
+    /// A resize step refused at the minimum card size.
+    CanvasResizeClamped,
+
+    // --- Canvas: mode stack (t0 §2, M1-M7) ---
+    /// M1 entry: name, object, exits — the three things a mode must
+    /// disclose before it swallows the arrow keys.
+    CanvasModeEntered {
+        mode: CanvasMode,
+        object: CanvasModeObject,
+    },
+    /// M7: a second mode was refused while one is active.
+    CanvasModeRejected {
+        active_mode: CanvasMode,
+    },
+    /// M2 commit that changed geometry.
+    CanvasModeCommitted {
+        verb: CanvasTransientVerb,
+        object: CanvasModeObject,
+    },
+    /// M2 commit that wrote nothing — no ops for move/resize, no
+    /// target for connect. The user must hear that rather than a
+    /// false confirmation.
+    CanvasModeEndedWithoutEffect {
+        mode: CanvasMode,
+    },
+    /// M2 cancel: prior state restored, and the restoration named.
+    CanvasModeCancelled {
+        mode: CanvasMode,
+        restoration: CanvasModeRestoration,
+    },
+
+    // --- Canvas: authoring confirmations (t0 §1.3) ---
+    /// A card or group was created at a computed placement. One
+    /// template for both: mac's group arm hand-rolled a string that
+    /// was byte-identical to the builder's group rendering.
+    CanvasCreated {
+        kind_label: String,
+        title: String,
+        relative: RelativeDesc,
+    },
+    /// A `.canvas` FILE was created (the File-section verb), not a
+    /// card on one.
+    CanvasFileCreated {
+        name: String,
+    },
+    /// The mind-mapping loop's compound verb: create + connect in one
+    /// action, so it is one confirmation.
+    CanvasConnectedCardCreated {
+        relative: RelativeDesc,
+        origin_title: String,
+    },
+    CanvasConnected {
+        from_title: String,
+        to_title: String,
+        label: Option<String>,
+    },
+    CanvasConnectionUpdated {
+        label: Option<String>,
+    },
+    CanvasMovedIntoGroup {
+        label: String,
+    },
+    /// Names the group left behind — a payload-less variant could not
+    /// render the shipped sentence.
+    CanvasRemovedFromGroup {
+        label: String,
+    },
+    /// The host hands over the colour it just SET — core's own
+    /// [`CanvasColor`], not a name it phrased itself — and
+    /// [`canvas::color_name`] does the phrasing here. `None` speaks
+    /// the literal `no color` (the clear-colour arm). Typing the
+    /// payload is what deletes mac's preset dictionaries: a host
+    /// cannot spell `"red"` at this seam even by accident.
+    CanvasColorSet {
+        title: String,
+        color: Option<CanvasColor>,
+    },
+    CanvasRenamedGroup {
+        label: String,
+    },
+    CanvasCardUpdated {
+        title: String,
+    },
+    /// Locate… repointed a file card at a new vault path.
+    CanvasCardRetargeted {
+        title: String,
+        path: String,
+    },
+    /// The two single-card structural placements that share one
+    /// template (Place Below/Above/Left Of/Right Of…, and Duplicate).
+    CanvasCardPlaced {
+        verb: CanvasPlaceVerb,
+        title: String,
+        relative: RelativeDesc,
+    },
+    CanvasCardAligned {
+        title: String,
+        target_title: String,
+    },
+    CanvasConvertedToNote {
+        path: String,
+    },
+
+    // --- Canvas: destructive confirmations (t0 §1.3) ---
+    /// The one destructive family. The undo hint rides at standard+
+    /// only (terse users asked for minimum chrome), and `undo_chord`
+    /// is the host's DISPLAY chord — the first chord-bearing template
+    /// in this vocabulary.
+    CanvasDeleted {
+        target: CanvasDeleteTarget,
+        verbosity: CanvasVerbosity,
+        undo_chord: String,
+    },
+
+    // --- Canvas: bulk over the marked set (t0 §1.5: one summary) ---
+    /// Four typed bulk variants, not one `{verb, count}`: the shipped
+    /// tails are a relative description, a colour name, a group label,
+    /// and a fixed clause — they do not share a shape. None of them
+    /// carries the undo hint (only the destructive family does).
+    CanvasBulkMoved {
+        count: u32,
+        relative: RelativeDesc,
+    },
+    /// Typed like [`CanvasA11yEvent::CanvasColorSet`] — the bulk verb
+    /// hands over the same `CanvasColor` it wrote.
+    CanvasBulkColorSet {
+        count: u32,
+        color: Option<CanvasColor>,
+    },
+    CanvasGrouped {
+        count: u32,
+        label: String,
+    },
+    CanvasBulkDuplicated {
+        count: u32,
+    },
+
+    // --- Canvas: marks (t4 #524) ---
+    CanvasMarkToggled {
+        marked: bool,
+        title: String,
+        count: u32,
+    },
+    /// Clearing marks with nothing marked speaks the precondition
+    /// instead — mac's ternary, kept inside the template.
+    CanvasMarksCleared {
+        count: u32,
+    },
+
+    // --- Canvas: filter (t5 #373; `filter` class) ---
+    /// The debounced result count. Carries `matched` only: the
+    /// m-of-n form is the static summary LABEL, not speech.
+    CanvasFilterCount {
+        matched: u32,
+    },
+    CanvasFilterCleared {
+        total: u32,
+    },
+
+    // --- Canvas: viewport and surfaces (#520, #369) ---
+    CanvasZoom {
+        context: Option<CanvasZoomContext>,
+        percent: u32,
+    },
+    CanvasFollowSelectionToggled {
+        following: bool,
+    },
+    /// A viewport verb reached a document with NO addressable canvas
+    /// view — no initiating renderer and no last owner (W6-1 §D D7,
+    /// obligation ID-7): a restored, never-focused tab receiving Zoom
+    /// from the palette. The presentation-address refusal is its own
+    /// arm because the load-state mapping admits a Ready document and
+    /// has nothing honest to say about panes.
+    CanvasViewportNoPane,
+    CanvasSurfaceShown {
+        surface: CanvasSurfaceKind,
+    },
+
+    // --- Canvas: undo and redo (t3 #372) ---
+    /// `Undid: ⟨name⟩` / `Redid: ⟨name⟩` — the op name is core's own
+    /// `CanvasAction.name`, spoken verbatim.
+    CanvasHistoryApplied {
+        verb: CanvasHistoryVerb,
+        name: String,
+    },
+    /// LABEL class, not speech: the Edit menu's item title. Only the
+    /// leading character is upper-cased — core's action names embed
+    /// user-typed card titles that must pass through verbatim.
+    CanvasUndoMenuTitle {
+        verb: CanvasHistoryVerb,
+        name: String,
+    },
+    /// LABEL class: the menu title while the top entry is QUARANTINED
+    /// (W6-1 §E TE-2, IE-13) — entries exist, none is offered, and
+    /// the title says why instead of naming an entry a click cannot
+    /// take back.
+    CanvasHistoryQuarantinedTitle {
+        verb: CanvasHistoryVerb,
+    },
+
+    // --- Canvas: polite notes and assertive refusals ---
+    /// A command that could not run, or a movement with nowhere to go.
+    CanvasStatus {
+        note: CanvasStatusNote,
+    },
+    /// The assertive refusals and failures outside the
+    /// `⟨Verb⟩ failed:` family.
+    CanvasBlocked {
+        reason: CanvasBlockedReason,
+    },
+    /// The `⟨Verb⟩ failed: ⟨detail⟩` family. Twelve verbs ship; the
+    /// detail is the OS/FFI message.
+    CanvasActionFailed {
+        action: CanvasFailedAction,
+        detail: String,
+    },
+    /// t0 §5 save conflict: the file changed under us and nothing was
+    /// applied. Its own variant because the whole conflict SURFACE
+    /// (Reload / Overwrite / Save a Copy) keys off it.
+    CanvasSaveConflict,
+    /// A file card whose target is gone. `target` is the vault-relative
+    /// path, falling back to the card title when the node carries no
+    /// target at all.
+    CanvasFileNotFound {
+        target: String,
+    },
+    /// A file or link card handed off to the OS.
+    CanvasOpened {
+        title: String,
+        target: CanvasOpenTarget,
+    },
+
+    // --- Canvas: admission (the mutation ladder) ---
+    /// The six refusal reasons that used to bypass the canvas funnel
+    /// entirely as host-composed text.
+    CanvasMutationRefused {
+        reason: CanvasMutationRefusal,
+    },
+
+    // --- Canvas: load states and Where-am-I (t0 §1.4, §5) ---
+    /// t0 §5 tolerant-parse notice, polite. Mac ships this as a
+    /// static banner only; t0 requires the announcement, so the
+    /// event exists and mac gains the post.
+    CanvasLoadedDegraded {
+        skipped: u32,
+    },
+    /// The empty-canvas onboarding region — LABEL grade (region text,
+    /// never spoken). Renders the spelled-out AX form, which is the
+    /// one a screen reader gets; the glyph form stays a host label.
+    CanvasEmptyOnboarding {
+        new_card_chord: String,
+        palette_chord: String,
+    },
+    /// t0 §1.4: the pull-based readback, ALWAYS verbose-grade
+    /// regardless of the verbosity setting — which is why it takes no
+    /// `verbosity` parameter. `color_name` is a relayed `String` for
+    /// the same reason as [`CanvasA11yEvent::CanvasMovedTo`]'s: it
+    /// arrives from `CanvasWhereAmI.color_name`, already core's.
+    CanvasWhereAmI {
+        kind_label: String,
+        title: String,
+        group_path: Vec<String>,
+        ordinal_n: u32,
+        total_m: u32,
+        connection_count: u32,
+        in_count: u32,
+        out_count: u32,
+        color_name: Option<String>,
+        marked: bool,
+        mode: Option<CanvasMode>,
+        filter: CanvasFilterState,
     },
 }
 
@@ -482,6 +1644,9 @@ impl A11yEvent {
         use A11yEvent::*;
         match self {
             CommandPaletteNeedsVault
+            | PaletteCommandFailed { .. }
+            | PaletteCommandNotFound { .. }
+            | PaletteCommandUnavailable { .. }
             | InternalNavigated { .. }
             | TaskToggleUnsaved { .. }
             | PropertiesSourceRejected { .. }
@@ -499,7 +1664,11 @@ impl A11yEvent {
             | RenameFailed { .. }
             | RestoredVersionFrom { .. }
             | RestoredFile { .. }
-            | RestoredFileAs { .. } => A11yPriority::High,
+            | RestoredFileAs { .. }
+            | TemplateNoteCreated { .. } => A11yPriority::High,
+            // The canvas family owns its own tiering (t0 §1.5).
+            Canvas { event } => event.priority(),
+            Graph { event } => event.priority(),
             HostComposed { priority, .. } => *priority,
             _ => A11yPriority::Medium,
         }
@@ -571,6 +1740,12 @@ impl A11yEvent {
             }
             CommandPaletteNeedsVault => "Open a vault to use the command palette.".to_owned(),
             SearchNeedsVault => "Open a vault first. Search works inside a vault.".to_owned(),
+            SearchResultsSummary { count } => match *count {
+                0 => "Search returned no results.".to_owned(),
+                1 => "Search returned 1 result.".to_owned(),
+                n => format!("Search returned {n} results."),
+            },
+            SearchFailed { message } => format!("Search error: {message}"),
 
             SearchResultOpened {
                 filename,
@@ -769,6 +1944,22 @@ impl A11yEvent {
                 Some(reason) => format!("Selected: {label}. Unavailable: {reason}"),
                 None => format!("Selected: {label}"),
             },
+            PaletteFilterCount { count, query } => {
+                if *count == 0 {
+                    format!("No commands match \"{query}\"")
+                } else {
+                    format!(
+                        "{count} {} matching \"{query}\"",
+                        plural(*count, "command", "commands")
+                    )
+                }
+            }
+            PaletteCommandFailed { label, detail } => match detail {
+                Some(detail) => format!("{label} failed: {detail}"),
+                None => format!("{label} failed."),
+            },
+            PaletteCommandNotFound { id } => format!("Command not found: {id}"),
+            PaletteCommandUnavailable { reason } => reason.clone(),
             RecentSearchFocused { query } => format!("Recent search: {query}"),
             QuickSwitcherCount { count, query } => match query {
                 None => format!("{count} recent {}", plural(*count, "file", "files")),
@@ -804,6 +1995,175 @@ impl A11yEvent {
             BasesViewSelected { name } => format!("Base view: {name}."),
             BasesSortSaveFailed { detail } => format!("Base sort could not be saved: {detail}"),
             BaseRefreshed => "Base refreshed.".to_owned(),
+            BaseWhereAmI {
+                base,
+                view,
+                quick_filter,
+            } => {
+                let mut parts = vec![format!("Base: {base}")];
+                if let Some(view) = view {
+                    parts.push(format!("view: {view}"));
+                }
+                if let Some(quick_filter) = quick_filter {
+                    parts.push(format!("quick filter: {quick_filter}"));
+                }
+                parts.join(", ")
+            }
+            BaseResultsPopover {
+                audio_summary,
+                where_am_i,
+            } => match where_am_i {
+                Some(where_am_i) => format!("{audio_summary} {where_am_i}."),
+                None => audio_summary.clone(),
+            },
+            BaseQuickFilterResult { shown, total } => format!(
+                "{shown} of {total} {}",
+                crate::sidebar_filter::noun(*total, "result", "results")
+            ),
+            BaseRowReorderRefused { label } => format!("{label} cannot be moved."),
+            BaseRowReorderAtBoundary { label, at_first } => {
+                format!(
+                    "{label} is already {}.",
+                    if *at_first { "first" } else { "last" }
+                )
+            }
+            BaseRowReorderMoved {
+                label,
+                moved_up,
+                position,
+                count,
+            } => format!(
+                "{label} moved {} to position {position} of {count}.",
+                if *moved_up { "up" } else { "down" }
+            ),
+            BaseQueryPreviewIdle => "Preview not loaded.".to_owned(),
+            BaseQueryPreviewLoading => "Preview loading.".to_owned(),
+            BaseQueryPreviewReady {
+                audio_summary,
+                first_result,
+            } => match first_result {
+                Some(first) => {
+                    let head = audio_summary.trim_end();
+                    let separator = if head.ends_with(['.', '!', '?']) {
+                        " "
+                    } else {
+                        ". "
+                    };
+                    format!("{head}{separator}First result: {first}")
+                }
+                None => audio_summary.clone(),
+            },
+            BaseQueryPreviewFailed { detail } => format!("Preview failed: {detail}"),
+            BaseSortedByColumn { column, ascending } => format!(
+                "Sorted by {column}, {}",
+                if *ascending {
+                    "ascending"
+                } else {
+                    "descending"
+                }
+            ),
+            BaseSortSavedToView { column, ascending } => format!(
+                "Saved sort by {column}, {}.",
+                if *ascending {
+                    "ascending"
+                } else {
+                    "descending"
+                }
+            ),
+            BasesSavedQueryReferenceMissing { reference } => {
+                format!("Saved query {reference} is no longer available.")
+            }
+            BasesSavedQueryMissing => "Saved query is no longer available.".to_owned(),
+            BasesQueriesRefreshFailed { detail } => {
+                format!("Queries could not be refreshed: {detail}")
+            }
+            BasesSavedQueryEditing { name } => format!("Editing {name} in builder."),
+            BasesSavedQueryEditFailed { detail } => {
+                format!("Saved query could not be edited: {detail}")
+            }
+            BasesSavedQueryRenameNameNeeded => {
+                "Enter a saved query name before renaming.".to_owned()
+            }
+            BasesSavedQueryRenamed { name } => format!("Renamed saved query to {name}."),
+            BasesSavedQueryRenameFailed { detail } => {
+                format!("Saved query could not be renamed: {detail}")
+            }
+            BasesSavedQueryDeleted => "Deleted saved query.".to_owned(),
+            BasesSavedQueryDeleteFailed { detail } => {
+                format!("Saved query could not be deleted: {detail}")
+            }
+            BasesSavedQueryExportPathNeeded => "Choose a .base path before exporting.".to_owned(),
+            BasesSavedQueryExported { name } => format!("Exported saved query as {name}."),
+            BasesSavedQueryExportFailed { detail } => {
+                format!("Saved query could not be exported: {detail}")
+            }
+            BasesPathOutsideVault => "Choose a path inside the vault.".to_owned(),
+            BasesDashboardNameNeeded => "Enter a dashboard name before saving.".to_owned(),
+            BasesDashboardSaved { name } => format!("Saved dashboard {name}."),
+            BasesDashboardSaveFailed { detail } => {
+                format!("Dashboard could not be saved: {detail}")
+            }
+            BasesDashboardUpdated { name } => format!("Updated dashboard {name}."),
+            BasesDashboardUpdateFailed { detail } => {
+                format!("Dashboard could not be updated: {detail}")
+            }
+            BasesDashboardSectionStale => {
+                "Dashboard section changed; reload and try again.".to_owned()
+            }
+            BasesDashboardSectionRemoveFailed { detail } => {
+                format!("Dashboard section could not be removed: {detail}")
+            }
+            BasesDashboardSectionReplaceFailed { detail } => {
+                format!("Dashboard section could not be replaced: {detail}")
+            }
+            BasesDashboardDeleted => "Deleted dashboard.".to_owned(),
+            BasesDashboardDeleteFailed { detail } => {
+                format!("Dashboard could not be deleted: {detail}")
+            }
+            BasesDashboardEditFailed { detail } => {
+                format!("Dashboard could not be edited: {detail}")
+            }
+            BasesDashboardMissing => "Dashboard is no longer available.".to_owned(),
+            BasesDockUpdatedForNote => "Base dock updated for active note.".to_owned(),
+            BasesLinkCopied { name } => format!("Copied link to {name}."),
+            BasesBacklinksFor { name } => format!("Backlinks for {name}."),
+            BasesViewCopyNoActiveBase => {
+                "Base view could not be copied: No active base.".to_owned()
+            }
+            BasesViewCopiedAsMarkdown => "Copied base view as Markdown.".to_owned(),
+            BasesViewCopyFailed { detail } => {
+                format!("Base view could not be copied: {detail}")
+            }
+            BasesRowSelectionNeeded => "Select a base row first.".to_owned(),
+            BasesNoEditableProperty => {
+                "No editable property is available for the selected row.".to_owned()
+            }
+            BasesCellReadOnly { file_metadata } => if *file_metadata {
+                "read-only: file metadata"
+            } else {
+                "read-only: computed"
+            }
+            .to_owned(),
+            BasesCellSaved { column, value } => format!("Saved. {column}: {value}"),
+            BasesCellCleared { column } => format!("Saved. {column}: empty"),
+            BasesCellRowNoLongerMatches => "Saved. Row no longer matches this view".to_owned(),
+            BasesCellEditFailed { detail } => format!("Base edit failed: {detail}"),
+            BasesCellEditCanceled => "Edit canceled.".to_owned(),
+            BasesViewExported => "Exported base view.".to_owned(),
+            BasesViewExportFailed { detail } => {
+                format!("Base view could not be exported: {detail}")
+            }
+            BasesDataviewConverted => "Converted Dataview block to .base.".to_owned(),
+            BasesDataviewConversionSaveFailed { detail } => {
+                format!("Dataview conversion could not be saved: {detail}")
+            }
+            BasesQuickFilterChoiceCanceled { verb } => format!("{verb} canceled."),
+            BasesCellMustBeFiniteNumber => "Must be a finite number.".to_owned(),
+            BasesCellMustBeWholeNumber => "Must be a whole number.".to_owned(),
+            BasesCellMustBeFiniteDecimal => "Must be a finite decimal number.".to_owned(),
+            BasesCellMustBeBoolean => "Must be true or false.".to_owned(),
+            BasesCellMustBeDate => "Date must be YYYY-MM-DD.".to_owned(),
+            BasesRefreshUpdated { audio_summary } => format!("Updated: {audio_summary}"),
             DataviewConversionFailed { detail } => {
                 format!("Dataview conversion failed: {detail}")
             }
@@ -844,9 +2204,666 @@ impl A11yEvent {
                 }
             }
 
+            GridSorted { column, ascending } => format!(
+                "Sorted by {column}, {}",
+                if *ascending {
+                    "ascending"
+                } else {
+                    "descending"
+                }
+            ),
+            GridRowMoved {
+                description,
+                focused_cell,
+            } => {
+                let description = description.trim();
+                if description.is_empty() {
+                    focused_cell.clone()
+                } else if contains_field(description, focused_cell) {
+                    description.to_owned()
+                } else if description.ends_with('.') {
+                    format!("{description} {focused_cell}")
+                } else {
+                    format!("{description}. {focused_cell}")
+                }
+            }
+            GridCellMoved { column, value } => format!("{column}: {value}"),
+            GridGroup {
+                label,
+                row_count,
+                summary,
+            } => {
+                let rows = format!("{row_count} {}", plural(*row_count, "row", "rows"));
+                match summary {
+                    Some(summary) if !summary.is_empty() => {
+                        format!("Group: {label}, {rows}. Summary: {summary}")
+                    }
+                    _ => format!("Group: {label}, {rows}"),
+                }
+            }
+
+            TemplatePickerOpened { count } => match *count {
+                0 => "Template picker opened. No templates found. \
+                      Add a Markdown file to the configured template folder."
+                    .to_owned(),
+                1 => "Template picker opened. 1 template available.".to_owned(),
+                n => format!("Template picker opened. {n} templates available."),
+            },
+            TemplateNoteCreated { name, template } => {
+                format!("Created {name} from {template}.")
+            }
+
+            Canvas { event } => event.render(),
+            Graph { event } => event.render(),
+
             HostComposed { text, .. } => text.clone(),
         }
     }
+}
+
+impl CanvasA11yEvent {
+    /// The urgency this canvas event is spoken at. Exactly mac's
+    /// `.error` case is `High` (t0 §1.5: "navigation = polite;
+    /// errors/conflicts = assertive"); every other canvas event rode
+    /// `.status`/`.confirmation`/`.mode`/`.bulk` and is `Medium`. The
+    /// members are listed explicitly because the catch-all below makes
+    /// a forgotten one silently polite.
+    pub fn priority(&self) -> A11yPriority {
+        use CanvasA11yEvent::*;
+        match self {
+            CanvasModeRejected { .. }
+            | CanvasBlocked { .. }
+            | CanvasActionFailed { .. }
+            | CanvasSaveConflict
+            | CanvasFileNotFound { .. } => A11yPriority::High,
+            _ => A11yPriority::Medium,
+        }
+    }
+
+    /// The canonical spoken text — the shipped mac strings, verbatim.
+    pub fn render(&self) -> String {
+        use CanvasA11yEvent::*;
+        match self {
+            CanvasMovedTo {
+                verbosity,
+                kind_label,
+                title,
+                ordinal_n,
+                total_m,
+                container,
+                connection_count,
+                color_name,
+                marked,
+            } => match verbosity {
+                CanvasVerbosity::Terse => title.clone(),
+                _ => {
+                    let mut parts = vec![
+                        card_ref(kind_label, title),
+                        format!(
+                            "{ordinal_n} of {total_m} in {}",
+                            container.as_deref().unwrap_or("canvas")
+                        ),
+                    ];
+                    if matches!(verbosity, CanvasVerbosity::Verbose) {
+                        parts.push(format!(
+                            "{connection_count} {}",
+                            plural(*connection_count, "connection", "connections")
+                        ));
+                        if let Some(color_name) = color_name {
+                            parts.push(color_name.clone());
+                        }
+                        if *marked {
+                            parts.push("marked".to_owned());
+                        }
+                    }
+                    parts.join(", ")
+                }
+            },
+            CanvasGroupEntered { label, count } => format!(
+                "Entering group \"{label}\", {count} {}",
+                plural(*count, "card", "cards")
+            ),
+            CanvasGroupLeft { label } => format!("Leaving group \"{label}\""),
+            CanvasConnectionTraversed {
+                direction,
+                kind_label,
+                title,
+                label,
+            } => {
+                let phrase = match direction {
+                    EdgeDirection::Outgoing => "Connects to",
+                    EdgeDirection::Incoming => "Connected from",
+                    EdgeDirection::Bidirectional | EdgeDirection::Undirected => "Linked with",
+                };
+                let reference = card_ref(kind_label, title);
+                match label {
+                    Some(label) => format!("{phrase} {reference}, labelled \"{label}\""),
+                    None => format!("{phrase} {reference}"),
+                }
+            }
+            CanvasTracePathEnd { titles } => {
+                let tail = format!(
+                    "End of path — {} {} visited.",
+                    titles.len(),
+                    plural_len(titles.len(), "card", "cards")
+                );
+                if titles.is_empty() {
+                    // The `Path: …` clause is omitted when it has no
+                    // content, like every other optional clause here —
+                    // `Path: . End of path — 0 cards visited.` is not a
+                    // sentence. Unreachable from mac (the walk always
+                    // seeds with the selected card and returns
+                    // `NoOutgoingPath` below two), but the arm is total
+                    // over the payload (contract 0a-14).
+                    tail
+                } else {
+                    format!("Path: {}. {tail}", titles.join(", then "))
+                }
+            }
+
+            CanvasMoveRelative { descs, overlap } => {
+                let fix = if descs.is_empty() {
+                    "Alone on the canvas".to_owned()
+                } else {
+                    descs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, desc)| {
+                            let phrase = relative_phrase(desc);
+                            if index == 0 {
+                                capitalize_first(&phrase)
+                            } else {
+                                phrase
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                format!("{fix}{}", overlap_clause(overlap))
+            }
+            CanvasResizeGeometry {
+                preset,
+                width,
+                height,
+                overlap,
+            } => {
+                let size = match preset {
+                    None => format!("{width} by {height}"),
+                    Some(CanvasResizePreset::DefaultSize) => {
+                        format!("Resized to default size: {width} by {height}")
+                    }
+                    Some(CanvasResizePreset::FitToContent) => {
+                        format!("Resized to fit to content: {width} by {height}")
+                    }
+                };
+                format!("{size}{}", overlap_clause(overlap))
+            }
+            CanvasResizeClamped => "Minimum size.".to_owned(),
+
+            CanvasModeEntered { mode, object } => format!(
+                "{} — {}. {}",
+                mode.name(),
+                mode_object(object),
+                mode.exits()
+            ),
+            CanvasModeRejected { active_mode } => format!(
+                "{} is active. Return to commit or Escape to cancel first.",
+                active_mode.name()
+            ),
+            CanvasModeCommitted { verb, object } => match verb {
+                CanvasTransientVerb::Move => format!("Placed {}.", mode_object(object)),
+                CanvasTransientVerb::Resize => format!("Resized {}.", mode_object(object)),
+            },
+            CanvasModeEndedWithoutEffect { mode } => match mode {
+                // Connect's "no effect" is a different fact: nothing
+                // was chosen, rather than nothing changed.
+                CanvasMode::Connect => "Connect ended — no target chosen.".to_owned(),
+                _ => format!("{} ended — nothing changed.", mode.verb()),
+            },
+            CanvasModeCancelled { mode, restoration } => {
+                let head = format!("{} cancelled", mode.verb());
+                match restoration {
+                    CanvasModeRestoration::Unstated => format!("{head}."),
+                    CanvasModeRestoration::CardsReturned { count } => {
+                        format!("{head} — {} returned.", plural(*count, "card", "cards"))
+                    }
+                    CanvasModeRestoration::SizeRestored => format!("{head} — size restored."),
+                    CanvasModeRestoration::BackAt { title } => {
+                        format!("{head} — back at \"{title}\".")
+                    }
+                }
+            }
+
+            CanvasCreated {
+                kind_label,
+                title,
+                relative,
+            } => format!(
+                "Created {} {}",
+                lower_first(&card_ref(kind_label, title)),
+                relative_phrase(relative)
+            ),
+            CanvasFileCreated { name } => format!("Created canvas \"{name}\"."),
+            CanvasConnectedCardCreated {
+                relative,
+                origin_title,
+            } => format!(
+                "Created connected card {} — connected from \"{origin_title}\".",
+                relative_phrase(relative)
+            ),
+            CanvasConnected {
+                from_title,
+                to_title,
+                label,
+            } => match label {
+                Some(label) => {
+                    format!("Connected \"{from_title}\" to \"{to_title}\", labelled \"{label}\".")
+                }
+                None => format!("Connected \"{from_title}\" to \"{to_title}\"."),
+            },
+            CanvasConnectionUpdated { label } => match label {
+                Some(label) => format!("Connection updated, labelled \"{label}\"."),
+                None => "Connection updated.".to_owned(),
+            },
+            CanvasMovedIntoGroup { label } => format!("Moved into group \"{label}\"."),
+            CanvasRemovedFromGroup { label } => format!("Removed from group \"{label}\"."),
+            CanvasColorSet { title, color } => {
+                format!("Set \"{title}\" to {}.", spoken_color(color))
+            }
+            CanvasRenamedGroup { label } => format!("Renamed group to \"{label}\"."),
+            CanvasCardUpdated { title } => format!("Updated \"{title}\"."),
+            CanvasCardRetargeted { title, path } => {
+                format!("\"{title}\" now points at {path}.")
+            }
+            CanvasCardPlaced {
+                verb,
+                title,
+                relative,
+            } => format!(
+                "{} \"{title}\" {}.",
+                match verb {
+                    CanvasPlaceVerb::Moved => "Moved",
+                    CanvasPlaceVerb::Duplicated => "Duplicated",
+                },
+                relative_phrase(relative)
+            ),
+            CanvasCardAligned {
+                title,
+                target_title,
+            } => format!("Aligned \"{title}\" with \"{target_title}\"."),
+            CanvasConvertedToNote { path } => {
+                format!("Converted to note {path}. The card now points at it.")
+            }
+
+            CanvasDeleted {
+                target,
+                verbosity,
+                undo_chord,
+            } => {
+                let body = match target {
+                    CanvasDeleteTarget::Card { kind_label, title } => {
+                        format!("Deleted {}", card_ref(kind_label, title))
+                    }
+                    CanvasDeleteTarget::Group { label } => {
+                        format!("Ungrouped {} — cards kept", card_ref("group", label))
+                    }
+                    CanvasDeleteTarget::Cards { count } => {
+                        format!("Deleted {}", counted(*count, "card", "cards"))
+                    }
+                    CanvasDeleteTarget::Connection {
+                        direction,
+                        other_title,
+                        label,
+                    } => {
+                        let preposition = match direction {
+                            EdgeDirection::Outgoing => "to",
+                            EdgeDirection::Incoming => "from",
+                            EdgeDirection::Bidirectional | EdgeDirection::Undirected => "with",
+                        };
+                        match label {
+                            Some(label) => format!(
+                                "Deleted connection {preposition} \"{other_title}\", \
+                                 labelled \"{label}\""
+                            ),
+                            None => {
+                                format!("Deleted connection {preposition} \"{other_title}\"")
+                            }
+                        }
+                    }
+                };
+                match verbosity {
+                    // The undo hint rides at standard+ (t0 §1.3);
+                    // terse users asked for minimum chrome.
+                    CanvasVerbosity::Terse => body,
+                    _ => format!("{body} — {undo_chord} to undo"),
+                }
+            }
+
+            CanvasBulkMoved { count, relative } => format!(
+                "Moved {count} {} {}.",
+                plural(*count, "card", "cards"),
+                relative_phrase(relative)
+            ),
+            CanvasBulkColorSet { count, color } => format!(
+                "Set {} to {}.",
+                counted(*count, "card", "cards"),
+                spoken_color(color)
+            ),
+            CanvasGrouped { count, label } => format!(
+                "Grouped {} into \"{label}\".",
+                counted(*count, "card", "cards")
+            ),
+            CanvasBulkDuplicated { count } => format!(
+                "Duplicated {count} {} — one undo restores.",
+                plural(*count, "card", "cards")
+            ),
+
+            CanvasMarkToggled {
+                marked,
+                title,
+                count,
+            } => format!(
+                "{} \"{title}\". {count} marked.",
+                if *marked { "Marked" } else { "Unmarked" }
+            ),
+            CanvasMarksCleared { count } => {
+                if *count == 0 {
+                    "No marks.".to_owned()
+                } else {
+                    format!("Cleared {}.", counted(*count, "mark", "marks"))
+                }
+            }
+
+            CanvasFilterCount { matched } => {
+                format!("{matched} {} match.", plural(*matched, "card", "cards"))
+            }
+            CanvasFilterCleared { total } => {
+                format!("Filter cleared — {}.", counted(*total, "card", "cards"))
+            }
+
+            CanvasZoom { context, percent } => match context {
+                None => format!("Zoom {percent} percent."),
+                Some(CanvasZoomContext::FitCanvas) => {
+                    format!("Fit canvas. Zoom {percent} percent.")
+                }
+                Some(CanvasZoomContext::ZoomedToSelection) => {
+                    format!("Zoomed to selection. Zoom {percent} percent.")
+                }
+            },
+            CanvasFollowSelectionToggled { following } => if *following {
+                "Viewport follows selection."
+            } else {
+                "Viewport stays put."
+            }
+            .to_owned(),
+            CanvasViewportNoPane => "No canvas view to act on.".to_owned(),
+            CanvasSurfaceShown { surface } => format!(
+                "Canvas {} view.",
+                match surface {
+                    CanvasSurfaceKind::Outline => "outline",
+                    CanvasSurfaceKind::Table => "table",
+                    CanvasSurfaceKind::Visual => "visual",
+                }
+            ),
+
+            CanvasHistoryApplied { verb, name } => format!("{}: {name}", verb.past()),
+            CanvasUndoMenuTitle { verb, name } => {
+                if name.is_empty() {
+                    verb.base().to_owned()
+                } else {
+                    format!("{} {}", verb.base(), capitalize_first(name))
+                }
+            }
+            CanvasHistoryQuarantinedTitle { verb } => {
+                format!("{} unavailable — canvas changed on disk", verb.base())
+            }
+
+            CanvasStatus { note } => match note {
+                CanvasStatusNote::NothingSelected => "Nothing selected.".to_owned(),
+                CanvasStatusNote::NoMarks => "No marks.".to_owned(),
+                CanvasStatusNote::NotAGroup => "Not a group.".to_owned(),
+                CanvasStatusNote::NotATextCard => "Not a text card.".to_owned(),
+                CanvasStatusNote::NotAFileCard => "Not a file card.".to_owned(),
+                CanvasStatusNote::NoGroups => "This canvas has no groups.".to_owned(),
+                CanvasStatusNote::NoNotesInVault => "This vault has no notes yet.".to_owned(),
+                CanvasStatusNote::NoMediaInVault => "This vault has no media files.".to_owned(),
+                CanvasStatusNote::NoFilesToPointAt => {
+                    "This vault has no files to point at.".to_owned()
+                }
+                CanvasStatusNote::OnlyTextCardsConvert => {
+                    "Only text cards convert to notes.".to_owned()
+                }
+                CanvasStatusNote::NoConnections => {
+                    "The selected card has no connections.".to_owned()
+                }
+                CanvasStatusNote::PickOutsideMovingSet => {
+                    "Pick a card outside the moving set.".to_owned()
+                }
+                CanvasStatusNote::PickDifferentTarget => {
+                    "Pick a different card to connect to.".to_owned()
+                }
+                CanvasStatusNote::NoChanges => "No changes.".to_owned(),
+                CanvasStatusNote::NotReadable => "Canvas is not readable.".to_owned(),
+                CanvasStatusNote::Empty => "Canvas is empty.".to_owned(),
+                CanvasStatusNote::EndOfCanvas => "End of canvas.".to_owned(),
+                CanvasStatusNote::StartOfCanvas => "Start of canvas.".to_owned(),
+                CanvasStatusNote::AtCanvasLevel => "At canvas level.".to_owned(),
+                CanvasStatusNote::NoCardsMatchFilter => "No cards match the filter.".to_owned(),
+                CanvasStatusNote::NothingToUndo => "Nothing to undo.".to_owned(),
+                CanvasStatusNote::NothingToRedo => "Nothing to redo.".to_owned(),
+                CanvasStatusNote::GroupIsEmpty { label } => {
+                    format!("Group \"{label}\" is empty.")
+                }
+                CanvasStatusNote::NoOutgoingPath { title } => {
+                    format!("No outgoing path from \"{title}\".")
+                }
+                CanvasStatusNote::NotInAGroup { title } => {
+                    format!("\"{title}\" is not in a group.")
+                }
+                CanvasStatusNote::NoConnection { forward, ordinal } => {
+                    let base = if *forward {
+                        "No outgoing connection"
+                    } else {
+                        "No incoming connection"
+                    };
+                    match ordinal {
+                        Some(ordinal) => format!("{base} {ordinal}."),
+                        None => format!("{base}."),
+                    }
+                }
+                CanvasStatusNote::Reopening => {
+                    "This canvas is reopening. Try again in a moment.".to_owned()
+                }
+                CanvasStatusNote::Loading => {
+                    "This canvas is loading. Try again in a moment.".to_owned()
+                }
+            },
+            CanvasBlocked { reason } => match reason {
+                CanvasBlockedReason::ModeBusy => {
+                    "A move or resize is in progress. Return to place it or Escape to \
+                     cancel first."
+                        .to_owned()
+                }
+                CanvasBlockedReason::UndoBlocked => {
+                    "Undo blocked: the canvas changed on disk. Reload it and try again.".to_owned()
+                }
+                CanvasBlockedReason::RedoBlocked => {
+                    "Redo blocked: the canvas changed on disk. Reload it and try again.".to_owned()
+                }
+                CanvasBlockedReason::UndoQuarantined => {
+                    "Undo unavailable: the canvas changed on disk, and this entry \
+                     applies to an earlier revision."
+                        .to_owned()
+                }
+                CanvasBlockedReason::RedoQuarantined => {
+                    "Redo unavailable: the canvas changed on disk, and this entry \
+                     applies to an earlier revision."
+                        .to_owned()
+                }
+                CanvasBlockedReason::LinkOpenFailed => "The link could not be opened.".to_owned(),
+                CanvasBlockedReason::AlignWouldOverlap => {
+                    "Aligning would overlap another card — not moved.".to_owned()
+                }
+                CanvasBlockedReason::NotAUrl => "That doesn't look like a URL.".to_owned(),
+                CanvasBlockedReason::CardTextUnreadable => {
+                    "The card's text could not be read.".to_owned()
+                }
+                CanvasBlockedReason::NotePathMustEndInMd => {
+                    "The note path must end in .md.".to_owned()
+                }
+                CanvasBlockedReason::NoFreeSpaceInGroup { label } => {
+                    format!("No free space inside \"{label}\".")
+                }
+                CanvasBlockedReason::NotePathExists { path, on_disk } => {
+                    if *on_disk {
+                        format!("{path} already exists on disk. Pick another name.")
+                    } else {
+                        format!("{path} already exists. Pick another name.")
+                    }
+                }
+                CanvasBlockedReason::NoteReadFailed { message } => {
+                    format!("Could not read the card text: {message}")
+                }
+                CanvasBlockedReason::NoteCreateFailed { path, message } => {
+                    format!("Could not create {path}: {message}")
+                }
+                CanvasBlockedReason::NoteRetargetFailed { path, message } => {
+                    format!("Created {path}, but could not retarget the card: {message}")
+                }
+                CanvasBlockedReason::HeadingNotFound { heading, filename } => {
+                    format!("Heading {heading} was not found in {filename}.")
+                }
+                CanvasBlockedReason::ReopenFailed { message } => format!(
+                    "Canvas could not be reopened. The previous snapshot is read-only. \
+                     {message}"
+                ),
+                CanvasBlockedReason::FileTypeNotOpenable { target } => {
+                    format!(
+                        "{target} is not a note or media file, so it was not opened from the canvas."
+                    )
+                }
+            },
+            CanvasActionFailed { action, detail } => {
+                format!("{} failed: {detail}", action.verb())
+            }
+            CanvasSaveConflict => {
+                "The canvas changed on disk. Reload it to continue — your action was \
+                 not applied."
+                    .to_owned()
+            }
+            CanvasFileNotFound { target } => {
+                format!("{target} is missing from the vault. Use Locate File to repoint this card.")
+            }
+            CanvasOpened { title, target } => match target {
+                CanvasOpenTarget::DefaultApp => {
+                    format!("Opened {title} in its default app.")
+                }
+                CanvasOpenTarget::Browser => format!("Opened {title} in your browser."),
+            },
+
+            CanvasMutationRefused { reason } => match reason {
+                CanvasMutationRefusal::Opening => {
+                    "This canvas is still opening. Wait for it to finish before making \
+                     changes."
+                }
+                CanvasMutationRefusal::Reopening => {
+                    "This canvas is reopening. Wait for it to finish before making changes."
+                }
+                CanvasMutationRefusal::RetargetFailed => {
+                    "This canvas could not be reopened. Choose Retry before making changes."
+                }
+                CanvasMutationRefusal::Unavailable => {
+                    "This canvas is no longer available. Copy any draft before closing."
+                }
+                CanvasMutationRefusal::ReadOnly => {
+                    "This canvas is read-only because it could not be opened safely."
+                }
+                CanvasMutationRefusal::CardEditorUnavailable => {
+                    "This canvas is no longer available. Copy your draft before closing \
+                     the editor."
+                }
+                CanvasMutationRefusal::RefreshPending => {
+                    "Your last change is saved but not shown yet. Refresh to see it \
+                     before making more changes."
+                }
+            }
+            .to_owned(),
+
+            CanvasLoadedDegraded { skipped } => format!(
+                "Canvas loaded. {skipped} unsupported {} are preserved in the file but \
+                 not shown.",
+                plural(*skipped, "item", "items")
+            ),
+            CanvasEmptyOnboarding {
+                new_card_chord,
+                palette_chord,
+            } => format!(
+                "Canvas is empty. Press {new_card_chord} to create your first card. \
+                 Every other canvas action is in the Command Palette, {palette_chord}."
+            ),
+            CanvasWhereAmI {
+                kind_label,
+                title,
+                group_path,
+                ordinal_n,
+                total_m,
+                connection_count,
+                in_count,
+                out_count,
+                color_name,
+                marked,
+                mode,
+                filter,
+            } => {
+                let mut parts = vec![card_ref(kind_label, title)];
+                parts.push(if group_path.is_empty() {
+                    "at canvas level".to_owned()
+                } else {
+                    format!("in {}", group_path.join(" › "))
+                });
+                parts.push(format!("{ordinal_n} of {total_m}"));
+                parts.push(format!(
+                    "{connection_count} {} ({in_count} in, {out_count} out)",
+                    plural(*connection_count, "connection", "connections")
+                ));
+                if let Some(color_name) = color_name {
+                    parts.push(color_name.clone());
+                }
+                if *marked {
+                    parts.push("marked".to_owned());
+                }
+                if let Some(mode) = mode {
+                    parts.push(mode.name().to_owned());
+                }
+                if let CanvasFilterState::Active { matched, total } = filter {
+                    parts.push(format!("{matched} of {total} shown"));
+                }
+                parts.join(", ")
+            }
+        }
+    }
+}
+
+/// True when `haystack` already speaks `field` as a COMPLETE row
+/// field — case-folded, bounded on each side by the start/end of the
+/// description or a field separator (`.`/`,`/`;`, one optional space
+/// before). A plain substring hit is NOT dedup: "Status: Open" must
+/// not vanish into "Substatus: Opening" (mid-word) or "Status: Open
+/// Questions remain" (the row's actual value keeps going) — both
+/// adversarial round-1 findings.
+fn contains_field(haystack: &str, field: &str) -> bool {
+    let haystack = haystack.to_lowercase();
+    let field = field.to_lowercase();
+    if field.is_empty() {
+        return true;
+    }
+    haystack.match_indices(&field).any(|(begin, matched)| {
+        let end = begin + matched.len();
+        let before = haystack[..begin].trim_end();
+        let after = &haystack[end..];
+        (before.is_empty() || before.ends_with(['.', ',', ';']))
+            && (after.is_empty() || after.starts_with(['.', ',', ';']))
+    })
 }
 
 /// en-US count noun (this vocabulary is V1 English; #264 owns l10n).
@@ -854,6 +2871,520 @@ impl A11yEvent {
 /// the count is interpolated by the caller and stays ungrouped here.
 fn plural<'a>(count: u32, one: &'a str, many: &'a str) -> &'a str {
     crate::sidebar_filter::noun(count as u64, one, many)
+}
+
+/// The same rule over a COLLECTION LENGTH. Every count payload in this
+/// vocabulary is a `u32`, but the arms that speak the size of a `Vec`
+/// hold a `usize`; routing them here keeps the singular/plural rule at
+/// one definition instead of casting (or hand-branching) at the site.
+fn plural_len<'a>(len: usize, one: &'a str, many: &'a str) -> &'a str {
+    crate::sidebar_filter::noun(len as u64, one, many)
+}
+
+/// The spoken name of a colour a host just wrote, or the literal
+/// `no color` for the clear-colour arm. One line, but it is the whole
+/// point of the typed `Option<CanvasColor>` payload: the preset table
+/// lives in [`canvas::color_name`] and nowhere else, on either host.
+fn spoken_color(color: &Option<CanvasColor>) -> String {
+    match color {
+        Some(color) => crate::canvas::color_name(color),
+        None => "no color".to_owned(),
+    }
+}
+
+/// A grouped count plus its noun (`"3 cards"`, `"1,024 cards"`). The
+/// canvas templates that mac built with `CountCopy.counted` route here
+/// instead: `CountCopy` deliberately does NOT group thousands, so the
+/// two spellings diverge at ≥ 1000 and core's grouping wins (contracts
+/// doc 0a-D6).
+fn counted(count: u32, one: &str, many: &str) -> String {
+    crate::sidebar_filter::count_noun(count as u64, one, many)
+}
+
+/// The t0 §1.1 card reference: `Group "label"` for groups,
+/// `⟨Kind⟩ card "title"` otherwise. ONE definition — mac spelled it in
+/// `CanvasCardRef.phrase`, again (unquoted) in the renderer's peer
+/// names, and again (with a hardcoded kind) in the outline's
+/// connection rows, and the three drifted.
+fn card_ref(kind_label: &str, title: &str) -> String {
+    if kind_label == "group" {
+        format!("Group \"{title}\"")
+    } else {
+        format!("{} card \"{title}\"", capitalize_first(kind_label))
+    }
+}
+
+/// Upper-cases the LEADING character only — canvas payloads embed
+/// user-typed titles that must pass through verbatim.
+fn capitalize_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// The inverse, for a card reference used mid-sentence
+/// (`Created text card "X" …`).
+fn lower_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Core's own placement description, spoken. Lower-case because every
+/// shipped template places it mid-sentence; the move-mode narration
+/// capitalises its leading phrase itself.
+fn relative_phrase(relative: &RelativeDesc) -> String {
+    match relative {
+        RelativeDesc::Below(anchor) => format!("below \"{anchor}\""),
+        RelativeDesc::RightOf(anchor) => format!("right of \"{anchor}\""),
+        RelativeDesc::Above(anchor) => format!("above \"{anchor}\""),
+        RelativeDesc::LeftOf(anchor) => format!("left of \"{anchor}\""),
+        RelativeDesc::AtOrigin => "at the canvas origin".to_owned(),
+    }
+}
+
+/// The overlap clause a transient geometry line carries (t4 G20). It
+/// is a suffix, never a sentence of its own.
+fn overlap_clause(overlap: &Option<CanvasOverlapTransition>) -> &'static str {
+    match overlap {
+        None => "",
+        Some(CanvasOverlapTransition::Onset) => ". Overlapping another card",
+        Some(CanvasOverlapTransition::Cleared) => ". Clear of overlaps",
+    }
+}
+
+/// The object clause of a mode announcement (t0 §2 M1).
+fn mode_object(object: &CanvasModeObject) -> String {
+    match object {
+        CanvasModeObject::Card { title } => format!("\"{title}\""),
+        CanvasModeObject::Cards { count } => {
+            format!("{count} {}", plural(*count, "card", "cards"))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Graph announcement vocabulary (W6-2 PR 0a, #746 — Milestone P copy,
+// P1 §"VoiceOver copy", P2-3/P2-4). The grammar used to live in Swift:
+// a 239-line `GraphAnnouncer` whose five cases were three free-text
+// passthroughs, plus three text-taking posters outside the event type
+// and two summaries composed in `session.rs`. It moves here verbatim so
+// both hosts speak one graph (contracts doc `35_graph_contracts.md` PR
+// 0a). The enums below are the CLOSED parameter sets the templates
+// switch on; open-ended payload (labels, file names, OS error detail,
+// the name-filter needle, counts and percents) stays `String`/number,
+// and no variant carries a whole sentence (0a-1).
+//
+// The graph family's coalescing classes are listed with the canvas's
+// in the ONE class-key list above (0a-9): `navigation` =
+// [`GraphA11yEvent::GraphRow`], `filter` = [`GraphA11yEvent::GraphFilterCount`],
+// `forceValue` = [`GraphA11yEvent::GraphForceValue`], `settle` =
+// [`GraphA11yEvent::GraphLayoutSettled`]; a `High` graph event flushes
+// and drops every pending class.
+
+/// The neighbour content speaks this many labels before it counts the
+/// rest (P2-3 — "first 10 unique, then and k more"). Core's since W6-2
+/// PR 0a: the host hands over the full visible list and never applies
+/// the cap itself (contracts doc 0a-2b).
+pub const GRAPH_NEIGHBOR_LABEL_CAP: usize = 10;
+
+/// Graph announcement verbosity (P1 §"VoiceOver copy"; t0 §1.2). Its
+/// own enum, not an alias of [`CanvasVerbosity`]: P intends the graph's
+/// level in the vault file and the canvas's on the device (contracts
+/// doc 0aD-2). A PARAMETER on the one family whose template varies —
+/// [`GraphA11yEvent::GraphRow`] — never module state (0a-5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphVerbosity {
+    Terse,
+    Standard,
+    Verbose,
+}
+
+/// A graph node's row copy — P1's normative template data, carried by
+/// the row-focus event and by Where-am-I's selection. Fields come
+/// straight from a `GraphNode`; the host never re-derives labels or
+/// counts (R-D). `kind` reuses `graph::NodeKind` (0aD-4) — a ghost is
+/// phrased by `references`, notes and attachments by their degrees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphRowCopy {
+    pub label: String,
+    pub kind: crate::graph::NodeKind,
+    pub in_links: u32,
+    pub out_links: u32,
+    /// Ghosts only: the inbound reference count.
+    pub references: u32,
+    /// True when the focused relationship is an embed (`![[…]]`).
+    pub embed: bool,
+}
+
+/// What a preset announces (P1-3 normative copy): the shown count for
+/// orphans and unresolved, the top row for most-linked — or the empty
+/// case. Each arm carries only its own fields, so no combination the
+/// template cannot render exists (0a-2b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GraphPresetOutcome {
+    Orphans { count: u64 },
+    Unresolved { count: u64 },
+    MostLinked { label: String, in_links: u32 },
+    NoNotesToRank,
+}
+
+/// The four Obsidian-parity force sliders, named as mac speaks them
+/// (P2-4 finding 8; `forcesChangePhrase`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphForceControl {
+    Center,
+    Repel,
+    Link,
+    LinkDistance,
+}
+
+/// The Graph tab's two projections (U3 toggle pattern; P2-3). Named
+/// `GraphSurfaceMode` rather than mac's local `GraphTabMode`, which
+/// Task 0a-2 deletes in this enum's favour (0a-18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphSurfaceMode {
+    Table,
+    Diagram,
+}
+
+/// Where-am-I's selection clause: the selected node's row copy and
+/// component, or none. `NoSelection` rather than `None` so the
+/// generated Swift case does not collide with `Optional.none` (the
+/// canvas's `Unstated` precedent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GraphWhereAmISelection {
+    Node { row: GraphRowCopy, component: u32 },
+    NoSelection,
+}
+
+/// Where-am-I's filter clause — the closed set of HOST-REACHABLE filter
+/// states (contracts doc design B(i), 0aD-7). The three toggles of the
+/// Normal arm are independent controls (every combination reachable);
+/// the unresolved preset is ONE state whose backend flags are implied
+/// (attachments hidden, ghosts shown, orphans off) and which any manual
+/// toggle clears — so it is an arm, not a fourth flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GraphWhereAmIFilter {
+    Normal {
+        orphans_only: bool,
+        attachments_shown: bool,
+        ghosts_shown: bool,
+    },
+    UnresolvedOnly,
+}
+
+/// The graph's polite status sentences — one closed set at one
+/// priority. `NoConnections` and `LoadingConnections` are static
+/// labels on mac and posted on Windows when the leaf takes focus in
+/// that state (contracts doc 0a-D3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GraphStatusNote {
+    Opened,
+    AlreadyOpen,
+    ConnectionsPanel,
+    NoteCreated { name: String },
+    NoConnections,
+    LoadingConnections,
+}
+
+/// The graph's `High` tier — mac's `.error` case (0a-8). `message` is
+/// the host's human-readable error detail, relayed verbatim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GraphBlockedReason {
+    LoadFailed { message: String },
+    ConnectionsLoadFailed { message: String },
+    NoteCreateFailed { message: String },
+}
+
+/// Everything the graph may say out loud (Milestone P copy), reached
+/// through [`A11yEvent::Graph`]. Seventeen variants over eight closed
+/// sets plus the reused `graph::NodeKind`; templates are the shipped
+/// mac strings moved verbatim (contracts doc 0a-16 records where the P
+/// specs differ). `Medium` throughout except [`GraphA11yEvent::GraphBlocked`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GraphA11yEvent {
+    // --- Graph: navigation (P1 row copy; `navigation` class) ---
+    /// Focus landed on a row — table, Connections leaf, or diagram
+    /// node. The one event whose template is a verbosity MATRIX: terse
+    /// speaks the bare label; standard and verbose speak the full row
+    /// copy ([`graph_row_copy`]).
+    GraphRow {
+        verbosity: GraphVerbosity,
+        row: GraphRowCopy,
+    },
+    /// The Connections leaf re-rooted on a node: label only — the
+    /// authoritative neighbourhood summary follows from the load.
+    GraphReRooted {
+        label: String,
+    },
+
+    // --- Graph: the two summaries (P0-3 normative formats) ---
+    /// The whole-graph summary, typed over the counts the session
+    /// exports on `GraphSnapshot.summary_counts` and rendered by the
+    /// ONE formatter that also fills `audio_summary` (0a-7).
+    GraphSnapshotSummary {
+        counts: crate::graph::GraphSnapshotCounts,
+    },
+    /// The neighbourhood summary, likewise over
+    /// `GraphNeighborhood.summary_counts`.
+    GraphNeighborhoodSummary {
+        counts: crate::graph::GraphNeighborhoodCounts,
+    },
+
+    // --- Graph: presets, filters, forces, layout (P1-3, P2-4) ---
+    GraphPreset {
+        outcome: GraphPresetOutcome,
+    },
+    /// `filter` class; the host's fire-time relevance gate is a host
+    /// rule, not an event (0aD-3).
+    GraphFilterCount {
+        shown: u32,
+        total: u32,
+    },
+    /// `forceValue` class — a drag posts once at its resting value.
+    GraphForceValue {
+        control: GraphForceControl,
+        percent: u32,
+    },
+    /// `settle` class — its own class so the settled message can
+    /// neither cancel nor be cancelled by the value message.
+    GraphLayoutSettled,
+
+    // --- Graph: the diagram (P2-3) ---
+    GraphPinned {
+        pinned: bool,
+    },
+    GraphZoom {
+        fit: bool,
+        percent: u32,
+    },
+    GraphMode {
+        mode: GraphSurfaceMode,
+    },
+    /// The Where-am-I readback: the selection clause, the zoom, the
+    /// filter clause, then the client-side name needle and — under the
+    /// unresolved preset — its closing clause. ALWAYS the full row copy
+    /// — a recorded correction of mac's terse coupling (0a-6, 0a-D1).
+    /// `name_filter` is spoken TRIMMED (Unicode white space at both
+    /// ends) and only when non-empty after trimming. The selection's
+    /// kind obeys the host's visibility invariant (a Ghost only while
+    /// ghosts are shown, an Attachment only while attachments are).
+    GraphWhereAmI {
+        selection: GraphWhereAmISelection,
+        zoom_percent: u32,
+        filter: GraphWhereAmIFilter,
+        name_filter: Option<String>,
+    },
+    /// The large-graph tier was entered (P2-3 tier B).
+    GraphTierEntered,
+    /// LABEL class (0a-14): the tier-B summary element's name, read by
+    /// assistive technology as an element, not actively posted. The
+    /// count renders bare, as the shipped site interpolates it.
+    GraphTierSummary {
+        count: u32,
+    },
+    /// LABEL class: a diagram node's `Connects to` custom content over
+    /// the FULL ordered list of visible unique neighbours — core speaks
+    /// the first [`GRAPH_NEIGHBOR_LABEL_CAP`] and counts the rest (P2-3's
+    /// rule, moved from the host: a host could otherwise hand over three
+    /// labels and an overflow of one, a state it can never be in —
+    /// contracts doc design B(i)). Empty labels render the empty string
+    /// (the host attaches no content).
+    GraphNeighborsContent {
+        labels: Vec<String>,
+    },
+
+    // --- Graph: status and errors ---
+    GraphStatus {
+        note: GraphStatusNote,
+    },
+    /// `High` — mac's `.error` case.
+    GraphBlocked {
+        reason: GraphBlockedReason,
+    },
+}
+
+/// P1's row copy at Standard grade — the ONE helper both the row-focus
+/// event (after its terse check) and Where-am-I's selection clause
+/// render through, so a node sounds identical in every projection
+/// (0a-11). The shipped templates keep `links` and `references` plural
+/// regardless of count — verbatim substitution, never re-pluralised
+/// (P1 review round 1 finding 5; contracts doc 0a-15).
+pub fn graph_row_copy(row: &GraphRowCopy) -> String {
+    let mut text = match row.kind {
+        crate::graph::NodeKind::Ghost => {
+            format!("{}, unresolved, {} references", row.label, row.references)
+        }
+        crate::graph::NodeKind::Note | crate::graph::NodeKind::Attachment => format!(
+            "{}, {} links in, {} links out",
+            row.label, row.in_links, row.out_links
+        ),
+    };
+    if row.embed {
+        text.push_str(", embed");
+    }
+    text
+}
+
+impl GraphA11yEvent {
+    /// The urgency this graph event is spoken at. Exactly mac's
+    /// `.error` case is `High`; every other graph event — Where-am-I
+    /// included (mac posted its `.summary` at medium; the comment that
+    /// said "assertively" was wrong and is gone) — is `Medium` (0a-8).
+    pub fn priority(&self) -> A11yPriority {
+        match self {
+            GraphA11yEvent::GraphBlocked { .. } => A11yPriority::High,
+            _ => A11yPriority::Medium,
+        }
+    }
+
+    /// The canonical spoken text — the shipped mac strings, verbatim.
+    pub fn render(&self) -> String {
+        use GraphA11yEvent::*;
+        match self {
+            GraphRow { verbosity, row } => match verbosity {
+                GraphVerbosity::Terse => row.label.clone(),
+                GraphVerbosity::Standard | GraphVerbosity::Verbose => graph_row_copy(row),
+            },
+            GraphReRooted { label } => format!("Connections: {label}"),
+            GraphSnapshotSummary { counts } => crate::graph_summary::snapshot_summary(counts),
+            GraphNeighborhoodSummary { counts } => {
+                crate::graph_summary::neighborhood_summary(counts)
+            }
+            GraphPreset { outcome } => match outcome {
+                GraphPresetOutcome::Orphans { count } => format!("{count} orphaned notes."),
+                GraphPresetOutcome::Unresolved { count } => {
+                    format!("{count} unresolved targets.")
+                }
+                GraphPresetOutcome::MostLinked { label, in_links } => {
+                    format!("Most linked: {label}, {in_links} links in.")
+                }
+                GraphPresetOutcome::NoNotesToRank => "No notes to rank.".to_owned(),
+            },
+            GraphFilterCount { shown, total } => format!("{shown} of {total} shown"),
+            GraphForceValue { control, percent } => {
+                let name = match control {
+                    GraphForceControl::Center => "Center force",
+                    GraphForceControl::Repel => "Repel force",
+                    GraphForceControl::Link => "Link force",
+                    GraphForceControl::LinkDistance => "Link distance",
+                };
+                format!("{name} {percent} percent")
+            }
+            GraphLayoutSettled => "Graph layout settled.".to_owned(),
+            GraphPinned { pinned } => if *pinned { "Pinned." } else { "Unpinned." }.to_owned(),
+            GraphZoom { fit, percent } => {
+                if *fit {
+                    format!("Fit graph. Zoom {percent} percent.")
+                } else {
+                    format!("Zoom {percent} percent.")
+                }
+            }
+            GraphMode { mode } => match mode {
+                GraphSurfaceMode::Table => "Table mode.".to_owned(),
+                GraphSurfaceMode::Diagram => "Diagram mode.".to_owned(),
+            },
+            GraphWhereAmI {
+                selection,
+                zoom_percent,
+                filter,
+                name_filter,
+            } => {
+                let mut parts: Vec<String> = Vec::new();
+                match selection {
+                    GraphWhereAmISelection::Node { row, component } => {
+                        parts.push(graph_row_copy(row));
+                        parts.push(format!("component {component}"));
+                    }
+                    GraphWhereAmISelection::NoSelection => {
+                        parts.push("No node selected".to_owned());
+                    }
+                }
+                parts.push(format!("zoom {zoom_percent} percent"));
+                match filter {
+                    GraphWhereAmIFilter::Normal {
+                        orphans_only,
+                        attachments_shown,
+                        ghosts_shown,
+                    } => {
+                        let mut active: Vec<&str> = Vec::new();
+                        if *orphans_only {
+                            active.push("orphans only");
+                        }
+                        if *attachments_shown {
+                            active.push("attachments shown");
+                        }
+                        active.push(if *ghosts_shown {
+                            "unresolved shown"
+                        } else {
+                            "unresolved hidden"
+                        });
+                        parts.push(format!("filters: {}", active.join(", ")));
+                    }
+                    // The preset's backend flags are implied: attachments
+                    // hidden, ghosts shown, orphans off — mac's phrase.
+                    GraphWhereAmIFilter::UnresolvedOnly => {
+                        parts.push("filters: unresolved shown".to_owned());
+                    }
+                }
+                if let Some(needle) = name_filter {
+                    let needle = needle.trim();
+                    if !needle.is_empty() {
+                        parts.push(format!("name filter \u{201C}{needle}\u{201D}"));
+                    }
+                }
+                if matches!(filter, GraphWhereAmIFilter::UnresolvedOnly) {
+                    parts.push("unresolved only".to_owned());
+                }
+                format!("{}.", parts.join(", "))
+            }
+            GraphTierEntered => {
+                "Large graph: summary accessibility mode. Table mode has every node.".to_owned()
+            }
+            GraphTierSummary { count } => format!(
+                "{count} nodes — too many for per-node navigation. \
+                 Switch to Table mode for the full, navigable list."
+            ),
+            GraphNeighborsContent { labels } => {
+                if labels.is_empty() {
+                    return String::new();
+                }
+                let shown = labels.len().min(GRAPH_NEIGHBOR_LABEL_CAP);
+                let mut value = labels[..shown].join(", ");
+                if labels.len() > GRAPH_NEIGHBOR_LABEL_CAP {
+                    value.push_str(&format!(
+                        " and {} more",
+                        labels.len() - GRAPH_NEIGHBOR_LABEL_CAP
+                    ));
+                }
+                value
+            }
+            GraphStatus { note } => match note {
+                GraphStatusNote::Opened => "Graph.".to_owned(),
+                GraphStatusNote::AlreadyOpen => "The graph is already open.".to_owned(),
+                GraphStatusNote::ConnectionsPanel => "Connections panel.".to_owned(),
+                GraphStatusNote::NoteCreated { name } => format!("Created note {name}."),
+                GraphStatusNote::NoConnections => "This note has no connections.".to_owned(),
+                GraphStatusNote::LoadingConnections => "Loading connections.".to_owned(),
+            },
+            GraphBlocked { reason } => match reason {
+                GraphBlockedReason::LoadFailed { message } => {
+                    format!("Couldn't load the graph: {message}")
+                }
+                GraphBlockedReason::ConnectionsLoadFailed { message } => {
+                    format!("Couldn't load connections: {message}")
+                }
+                GraphBlockedReason::NoteCreateFailed { message } => {
+                    format!("Couldn't create note: {message}")
+                }
+            },
+        }
+    }
 }
 
 /// One representative event per variant (parameterized variants use
@@ -864,7 +3395,7 @@ fn plural<'a>(count: u32, one: &'a str, many: &'a str) -> &'a str {
 /// apart.
 pub fn corpus() -> Vec<A11yEvent> {
     use A11yEvent::*;
-    vec![
+    let mut events = vec![
         FilesRegionFocused,
         LeafPanelShown {
             title: "Outline".into(),
@@ -923,6 +3454,12 @@ pub fn corpus() -> Vec<A11yEvent> {
         },
         CommandPaletteNeedsVault,
         SearchNeedsVault,
+        SearchResultsSummary { count: 0 },
+        SearchResultsSummary { count: 1 },
+        SearchResultsSummary { count: 7 },
+        SearchFailed {
+            message: "the index is unavailable".into(),
+        },
         SearchResultOpened {
             filename: "notes.md".into(),
             line: 12,
@@ -1136,6 +3673,32 @@ pub fn corpus() -> Vec<A11yEvent> {
             label: "Save".into(),
             disabled_reason: Some("A structural operation is in progress.".into()),
         },
+        PaletteFilterCount {
+            count: 0,
+            query: "zzz".into(),
+        },
+        PaletteFilterCount {
+            count: 1,
+            query: "save".into(),
+        },
+        PaletteFilterCount {
+            count: 4,
+            query: "e".into(),
+        },
+        PaletteCommandFailed {
+            label: "Save".into(),
+            detail: Some("disk full".into()),
+        },
+        PaletteCommandFailed {
+            label: "Save".into(),
+            detail: None,
+        },
+        PaletteCommandNotFound {
+            id: "slate.nope".into(),
+        },
+        PaletteCommandUnavailable {
+            reason: "A structural operation is in progress.".into(),
+        },
         RecentSearchFocused {
             query: "fox".into(),
         },
@@ -1198,6 +3761,201 @@ pub fn corpus() -> Vec<A11yEvent> {
             detail: "io error".into(),
         },
         BaseRefreshed,
+        BaseWhereAmI {
+            base: "Reading".into(),
+            view: None,
+            quick_filter: None,
+        },
+        BaseWhereAmI {
+            base: "Reading".into(),
+            view: Some("Table".into()),
+            quick_filter: None,
+        },
+        BaseWhereAmI {
+            base: "Reading".into(),
+            view: Some("Table".into()),
+            quick_filter: Some("CAFE".into()),
+        },
+        BaseResultsPopover {
+            audio_summary: "12 results.".into(),
+            where_am_i: None,
+        },
+        BaseResultsPopover {
+            audio_summary: "12 results.".into(),
+            where_am_i: Some("Base: Reading, quick filter: CAFE".into()),
+        },
+        BaseQuickFilterResult { shown: 0, total: 0 },
+        BaseQuickFilterResult { shown: 1, total: 1 },
+        BaseQuickFilterResult { shown: 1, total: 2 },
+        BaseRowReorderRefused {
+            label: "Sort 1".into(),
+        },
+        BaseRowReorderAtBoundary {
+            label: "Sort 1".into(),
+            at_first: true,
+        },
+        BaseRowReorderAtBoundary {
+            label: "Sort 2".into(),
+            at_first: false,
+        },
+        BaseRowReorderMoved {
+            label: "Sort 1".into(),
+            moved_up: false,
+            position: 2,
+            count: 3,
+        },
+        BaseRowReorderMoved {
+            label: "Status column".into(),
+            moved_up: true,
+            position: 1,
+            count: 3,
+        },
+        BaseQueryPreviewIdle,
+        BaseQueryPreviewLoading,
+        BaseQueryPreviewReady {
+            audio_summary: "12 results.".into(),
+            first_result: None,
+        },
+        // The unterminated-summary branch: the separator must supply
+        // the period the summary lacks.
+        BaseQueryPreviewReady {
+            audio_summary: "12 results".into(),
+            first_result: Some("Alpha".into()),
+        },
+        BaseQueryPreviewReady {
+            audio_summary: "12 results.".into(),
+            first_result: Some("Alpha".into()),
+        },
+        BaseQueryPreviewFailed {
+            detail: "invalid expression".into(),
+        },
+        BaseSortedByColumn {
+            column: "Status".into(),
+            ascending: true,
+        },
+        BaseSortedByColumn {
+            column: "Status".into(),
+            ascending: false,
+        },
+        BaseSortSavedToView {
+            column: "Status".into(),
+            ascending: true,
+        },
+        BaseSortSavedToView {
+            column: "Status".into(),
+            ascending: false,
+        },
+        BasesSavedQueryReferenceMissing {
+            reference: "Open tasks".into(),
+        },
+        BasesSavedQueryMissing,
+        BasesQueriesRefreshFailed {
+            detail: "io error".into(),
+        },
+        BasesSavedQueryEditing {
+            name: "Open tasks".into(),
+        },
+        BasesSavedQueryEditFailed {
+            detail: "io error".into(),
+        },
+        BasesSavedQueryRenameNameNeeded,
+        BasesSavedQueryRenamed {
+            name: "Open tasks".into(),
+        },
+        BasesSavedQueryRenameFailed {
+            detail: "io error".into(),
+        },
+        BasesSavedQueryDeleted,
+        BasesSavedQueryDeleteFailed {
+            detail: "io error".into(),
+        },
+        BasesSavedQueryExportPathNeeded,
+        BasesSavedQueryExported {
+            name: "Open tasks.base".into(),
+        },
+        BasesSavedQueryExportFailed {
+            detail: "io error".into(),
+        },
+        BasesPathOutsideVault,
+        BasesDashboardNameNeeded,
+        BasesDashboardSaved {
+            name: "Reading".into(),
+        },
+        BasesDashboardSaveFailed {
+            detail: "io error".into(),
+        },
+        BasesDashboardUpdated {
+            name: "Reading".into(),
+        },
+        BasesDashboardUpdateFailed {
+            detail: "io error".into(),
+        },
+        BasesDashboardSectionStale,
+        BasesDashboardSectionRemoveFailed {
+            detail: "io error".into(),
+        },
+        BasesDashboardSectionReplaceFailed {
+            detail: "io error".into(),
+        },
+        BasesDashboardDeleted,
+        BasesDashboardDeleteFailed {
+            detail: "io error".into(),
+        },
+        BasesDashboardEditFailed {
+            detail: "io error".into(),
+        },
+        BasesDashboardMissing,
+        BasesDockUpdatedForNote,
+        BasesLinkCopied {
+            name: "Reading".into(),
+        },
+        BasesBacklinksFor {
+            name: "Reading".into(),
+        },
+        BasesViewCopyNoActiveBase,
+        BasesViewCopiedAsMarkdown,
+        BasesViewCopyFailed {
+            detail: "io error".into(),
+        },
+        BasesRowSelectionNeeded,
+        BasesNoEditableProperty,
+        BasesCellReadOnly {
+            file_metadata: true,
+        },
+        BasesCellReadOnly {
+            file_metadata: false,
+        },
+        BasesCellSaved {
+            column: "Status".into(),
+            value: "Done".into(),
+        },
+        BasesCellCleared {
+            column: "Status".into(),
+        },
+        BasesCellRowNoLongerMatches,
+        BasesCellEditFailed {
+            detail: "io error".into(),
+        },
+        BasesCellEditCanceled,
+        BasesViewExported,
+        BasesViewExportFailed {
+            detail: "io error".into(),
+        },
+        BasesDataviewConverted,
+        BasesDataviewConversionSaveFailed {
+            detail: "io error".into(),
+        },
+        BasesQuickFilterChoiceCanceled {
+            verb: "Export".into(),
+        },
+        BasesCellMustBeFiniteNumber,
+        BasesCellMustBeWholeNumber,
+        BasesCellMustBeFiniteDecimal,
+        BasesCellMustBeBoolean,
+        BasesCellMustBeDate,
+        BasesRefreshUpdated {
+            audio_summary: "1 note.".into(),
+        },
         DataviewConversionFailed {
             detail: "unsupported query".into(),
         },
@@ -1256,13 +4014,1291 @@ pub fn corpus() -> Vec<A11yEvent> {
             target: ReadingNavTarget::CodeBlock,
             text: "fn spoken_interior() -> usize { 42 }".into(),
         },
+        ReadingNavNoTarget {
+            target: ReadingNavTarget::Math,
+            forward: true,
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::Math,
+            // The landing text is the MathCAT speech the host captured
+            // from the landed block — content, not composition.
+            text: "x equals negative b plus or minus the square root of b squared minus 4 a c, over 2 a".into(),
+        },
+        ReadingNavNoTarget {
+            target: ReadingNavTarget::Diagram,
+            forward: true,
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::Diagram,
+            // The landing text is the canonical structured description
+            // the host captured from the landed block, trailing period
+            // stripped so the vocabulary's own punctuation composes —
+            // content, not composition.
+            text: "Flowchart with 3 steps".into(),
+        },
         ReadingNavLanded {
             target: ReadingNavTarget::Embed,
             text: "".into(),
         },
+        GridSorted {
+            column: "Status".into(),
+            ascending: true,
+        },
+        GridSorted {
+            column: "Due".into(),
+            ascending: false,
+        },
+        GridRowMoved {
+            // Dedup hit: the description already carries the focused
+            // cell label, so it is spoken alone.
+            description: "Ship the plan. Status: Open. Due: Friday".into(),
+            focused_cell: "Status: Open".into(),
+        },
+        GridRowMoved {
+            // Dedup miss, no trailing period: ". " joins.
+            description: "Ship the plan".into(),
+            focused_cell: "Status: Open".into(),
+        },
+        GridRowMoved {
+            // Dedup miss with a trailing period: a space joins.
+            description: "Done reviewing.".into(),
+            focused_cell: "Status: Open".into(),
+        },
+        GridRowMoved {
+            // Substring near-collision (adversarial round 1): the
+            // description does NOT speak the focused field — the hit
+            // is inside longer words — so both are spoken.
+            description: "Substatus: Opening".into(),
+            focused_cell: "Status: Open".into(),
+        },
+        GridRowMoved {
+            // Value continuation (adversarial round 1): the field
+            // appears but the row's actual value keeps going, so the
+            // focused cell is NOT already conveyed — both spoken.
+            description: "Status: Open Questions remain".into(),
+            focused_cell: "Status: Open".into(),
+        },
+        GridCellMoved {
+            column: "Status".into(),
+            value: "Open".into(),
+        },
+        GridGroup {
+            label: "Open".into(),
+            row_count: 1,
+            summary: None,
+        },
+        GridGroup {
+            label: "Done".into(),
+            row_count: 12,
+            summary: Some("Count: 12".into()),
+        },
+        TemplatePickerOpened { count: 0 },
+        TemplatePickerOpened { count: 1 },
+        TemplatePickerOpened { count: 7 },
+        TemplateNoteCreated {
+            name: "Meeting 2026-08-20.md".into(),
+            template: "Meeting".into(),
+        },
         HostComposed {
             text: "Composed by a host engine.".into(),
             priority: A11yPriority::High,
+        },
+    ];
+    // The canvas family (W6-1 0a, #745) is APPENDED as one block, so
+    // every pre-existing index — and therefore both host mirrors —
+    // is untouched by it.
+    events.extend(canvas_corpus().into_iter().map(|event| Canvas { event }));
+    // The graph family (W6-2 0a, #746) follows the same discipline —
+    // one appended block, no pre-existing index moves.
+    events.extend(graph_corpus().into_iter().map(|event| Graph { event }));
+    events
+}
+
+/// The canvas half of the corpus, in its own list because the family
+/// is its own enum ([`A11yEvent::Canvas`]). One representative event
+/// per variant, plus one per closed-set ARM whose template differs —
+/// `every_canvas_variant_and_arm_is_represented_in_the_corpus` proves
+/// the coverage.
+fn canvas_corpus() -> Vec<CanvasA11yEvent> {
+    use CanvasA11yEvent::*;
+    vec![
+        CanvasMovedTo {
+            verbosity: CanvasVerbosity::Terse,
+            kind_label: "text".into(),
+            title: "Research".into(),
+            ordinal_n: 2,
+            total_m: 5,
+            container: Some("Q3".into()),
+            connection_count: 3,
+            color_name: Some("red".into()),
+            marked: true,
+        },
+        CanvasMovedTo {
+            verbosity: CanvasVerbosity::Standard,
+            kind_label: "text".into(),
+            title: "Research".into(),
+            ordinal_n: 2,
+            total_m: 5,
+            container: Some("Q3".into()),
+            connection_count: 3,
+            color_name: Some("red".into()),
+            marked: true,
+        },
+        CanvasMovedTo {
+            verbosity: CanvasVerbosity::Verbose,
+            kind_label: "text".into(),
+            title: "Research".into(),
+            ordinal_n: 2,
+            total_m: 5,
+            container: Some("Q3".into()),
+            connection_count: 3,
+            color_name: Some("red".into()),
+            marked: true,
+        },
+        CanvasMovedTo {
+            verbosity: CanvasVerbosity::Standard,
+            kind_label: "group".into(),
+            title: "Q3".into(),
+            ordinal_n: 1,
+            total_m: 3,
+            container: None,
+            connection_count: 0,
+            color_name: None,
+            marked: false,
+        },
+        CanvasMovedTo {
+            verbosity: CanvasVerbosity::Verbose,
+            kind_label: "file".into(),
+            title: "Notes.md".into(),
+            ordinal_n: 1,
+            total_m: 1,
+            container: None,
+            connection_count: 1,
+            color_name: None,
+            marked: false,
+        },
+        CanvasGroupEntered {
+            label: "Q3".into(),
+            count: 4,
+        },
+        CanvasGroupEntered {
+            label: "Solo".into(),
+            count: 1,
+        },
+        CanvasGroupLeft { label: "Q3".into() },
+        CanvasViewportNoPane,
+        CanvasConnectionTraversed {
+            direction: EdgeDirection::Outgoing,
+            kind_label: "text".into(),
+            title: "Ideas".into(),
+            label: Some("supports".into()),
+        },
+        CanvasConnectionTraversed {
+            direction: EdgeDirection::Incoming,
+            kind_label: "text".into(),
+            title: "Research".into(),
+            label: None,
+        },
+        CanvasConnectionTraversed {
+            direction: EdgeDirection::Undirected,
+            kind_label: "group".into(),
+            title: "Q3".into(),
+            label: None,
+        },
+        CanvasConnectionTraversed {
+            direction: EdgeDirection::Bidirectional,
+            kind_label: "link".into(),
+            title: "example.com".into(),
+            label: None,
+        },
+        CanvasTracePathEnd {
+            titles: vec!["Research".into(), "Ideas".into(), "Draft".into()],
+        },
+        CanvasMoveRelative {
+            descs: Vec::new(),
+            overlap: None,
+        },
+        CanvasMoveRelative {
+            descs: vec![RelativeDesc::Below("Research".into())],
+            overlap: None,
+        },
+        CanvasMoveRelative {
+            descs: vec![
+                RelativeDesc::Below("Research".into()),
+                RelativeDesc::RightOf("Ideas".into()),
+            ],
+            overlap: Some(CanvasOverlapTransition::Onset),
+        },
+        CanvasMoveRelative {
+            descs: vec![RelativeDesc::Above("Ideas".into())],
+            overlap: Some(CanvasOverlapTransition::Cleared),
+        },
+        CanvasResizeGeometry {
+            preset: None,
+            width: 320,
+            height: 200,
+            overlap: None,
+        },
+        CanvasResizeGeometry {
+            preset: Some(CanvasResizePreset::DefaultSize),
+            width: 260,
+            height: 140,
+            overlap: None,
+        },
+        CanvasResizeGeometry {
+            preset: Some(CanvasResizePreset::FitToContent),
+            width: 260,
+            height: 88,
+            overlap: Some(CanvasOverlapTransition::Onset),
+        },
+        CanvasResizeClamped,
+        CanvasModeEntered {
+            mode: CanvasMode::Move,
+            object: CanvasModeObject::Card {
+                title: "Research".into(),
+            },
+        },
+        CanvasModeEntered {
+            mode: CanvasMode::Move,
+            object: CanvasModeObject::Cards { count: 3 },
+        },
+        CanvasModeEntered {
+            mode: CanvasMode::Resize,
+            object: CanvasModeObject::Card {
+                title: "Research".into(),
+            },
+        },
+        CanvasModeEntered {
+            mode: CanvasMode::Connect,
+            object: CanvasModeObject::Card {
+                title: "Research".into(),
+            },
+        },
+        CanvasModeRejected {
+            active_mode: CanvasMode::Move,
+        },
+        CanvasModeCommitted {
+            verb: CanvasTransientVerb::Move,
+            object: CanvasModeObject::Card {
+                title: "Research".into(),
+            },
+        },
+        CanvasModeCommitted {
+            verb: CanvasTransientVerb::Move,
+            object: CanvasModeObject::Cards { count: 3 },
+        },
+        CanvasModeCommitted {
+            verb: CanvasTransientVerb::Resize,
+            object: CanvasModeObject::Card {
+                title: "Research".into(),
+            },
+        },
+        CanvasModeEndedWithoutEffect {
+            mode: CanvasMode::Move,
+        },
+        CanvasModeEndedWithoutEffect {
+            mode: CanvasMode::Resize,
+        },
+        CanvasModeEndedWithoutEffect {
+            mode: CanvasMode::Connect,
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Move,
+            restoration: CanvasModeRestoration::Unstated,
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Move,
+            restoration: CanvasModeRestoration::CardsReturned { count: 1 },
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Move,
+            restoration: CanvasModeRestoration::CardsReturned { count: 3 },
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Resize,
+            restoration: CanvasModeRestoration::Unstated,
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Resize,
+            restoration: CanvasModeRestoration::SizeRestored,
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Connect,
+            restoration: CanvasModeRestoration::Unstated,
+        },
+        CanvasModeCancelled {
+            mode: CanvasMode::Connect,
+            restoration: CanvasModeRestoration::BackAt {
+                title: "Research".into(),
+            },
+        },
+        CanvasCreated {
+            kind_label: "text".into(),
+            title: "New idea".into(),
+            relative: RelativeDesc::Below("Research".into()),
+        },
+        CanvasCreated {
+            kind_label: "group".into(),
+            title: "Q3".into(),
+            relative: RelativeDesc::RightOf("Research".into()),
+        },
+        CanvasCreated {
+            kind_label: "file".into(),
+            title: "Notes.md".into(),
+            relative: RelativeDesc::Above("Research".into()),
+        },
+        CanvasCreated {
+            kind_label: "link".into(),
+            title: "example.com".into(),
+            relative: RelativeDesc::LeftOf("Research".into()),
+        },
+        CanvasCreated {
+            kind_label: "text".into(),
+            title: "Untitled".into(),
+            relative: RelativeDesc::AtOrigin,
+        },
+        CanvasFileCreated {
+            name: "Roadmap".into(),
+        },
+        CanvasConnectedCardCreated {
+            relative: RelativeDesc::Below("Research".into()),
+            origin_title: "Research".into(),
+        },
+        CanvasConnected {
+            from_title: "Research".into(),
+            to_title: "Ideas".into(),
+            label: Some("supports".into()),
+        },
+        CanvasConnected {
+            from_title: "Research".into(),
+            to_title: "Ideas".into(),
+            label: None,
+        },
+        CanvasConnectionUpdated {
+            label: Some("supports".into()),
+        },
+        CanvasConnectionUpdated { label: None },
+        CanvasMovedIntoGroup { label: "Q3".into() },
+        CanvasRemovedFromGroup { label: "Q3".into() },
+        CanvasColorSet {
+            title: "Research".into(),
+            color: Some(CanvasColor::Preset(1)),
+        },
+        CanvasColorSet {
+            title: "Research".into(),
+            color: None,
+        },
+        CanvasRenamedGroup { label: "Q3".into() },
+        CanvasCardUpdated {
+            title: "Research".into(),
+        },
+        CanvasCardRetargeted {
+            title: "Research".into(),
+            path: "notes/research.md".into(),
+        },
+        CanvasCardPlaced {
+            verb: CanvasPlaceVerb::Moved,
+            title: "Research".into(),
+            relative: RelativeDesc::Below("Ideas".into()),
+        },
+        CanvasCardPlaced {
+            verb: CanvasPlaceVerb::Duplicated,
+            title: "Research".into(),
+            relative: RelativeDesc::RightOf("Research".into()),
+        },
+        CanvasCardAligned {
+            title: "Research".into(),
+            target_title: "Ideas".into(),
+        },
+        CanvasConvertedToNote {
+            path: "notes/research.md".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Card {
+                kind_label: "text".into(),
+                title: "Research".into(),
+            },
+            verbosity: CanvasVerbosity::Standard,
+            undo_chord: "⌘Z".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Card {
+                kind_label: "text".into(),
+                title: "Research".into(),
+            },
+            verbosity: CanvasVerbosity::Terse,
+            undo_chord: "⌘Z".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Group { label: "Q3".into() },
+            verbosity: CanvasVerbosity::Standard,
+            undo_chord: "⌘Z".into(),
+        },
+        // The chord parameter is the one recorded platform difference
+        // in this corpus (§W-D): the Windows display chord renders
+        // through the same template.
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Cards { count: 3 },
+            verbosity: CanvasVerbosity::Standard,
+            undo_chord: "Ctrl+Z".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Cards { count: 1 },
+            verbosity: CanvasVerbosity::Verbose,
+            undo_chord: "⌘Z".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Connection {
+                direction: EdgeDirection::Outgoing,
+                other_title: "Ideas".into(),
+                label: Some("supports".into()),
+            },
+            verbosity: CanvasVerbosity::Standard,
+            undo_chord: "⌘Z".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Connection {
+                direction: EdgeDirection::Incoming,
+                other_title: "Research".into(),
+                label: None,
+            },
+            verbosity: CanvasVerbosity::Terse,
+            undo_chord: "⌘Z".into(),
+        },
+        CanvasDeleted {
+            target: CanvasDeleteTarget::Connection {
+                direction: EdgeDirection::Undirected,
+                other_title: "Q3".into(),
+                label: None,
+            },
+            verbosity: CanvasVerbosity::Standard,
+            undo_chord: "⌘Z".into(),
+        },
+        CanvasBulkMoved {
+            count: 3,
+            relative: RelativeDesc::Below("Research".into()),
+        },
+        CanvasBulkColorSet {
+            count: 3,
+            color: Some(CanvasColor::Preset(5)),
+        },
+        CanvasBulkColorSet {
+            count: 1,
+            color: None,
+        },
+        CanvasGrouped {
+            count: 3,
+            label: "Q3".into(),
+        },
+        CanvasBulkDuplicated { count: 2 },
+        CanvasMarkToggled {
+            marked: true,
+            title: "Research".into(),
+            count: 2,
+        },
+        CanvasMarkToggled {
+            marked: false,
+            title: "Research".into(),
+            count: 1,
+        },
+        CanvasMarksCleared { count: 0 },
+        CanvasMarksCleared { count: 3 },
+        CanvasFilterCount { matched: 3 },
+        CanvasFilterCount { matched: 1 },
+        CanvasFilterCleared { total: 40 },
+        CanvasFilterCleared { total: 1 },
+        CanvasZoom {
+            context: None,
+            percent: 100,
+        },
+        CanvasZoom {
+            context: Some(CanvasZoomContext::FitCanvas),
+            percent: 80,
+        },
+        CanvasZoom {
+            context: Some(CanvasZoomContext::ZoomedToSelection),
+            percent: 150,
+        },
+        CanvasFollowSelectionToggled { following: true },
+        CanvasFollowSelectionToggled { following: false },
+        CanvasSurfaceShown {
+            surface: CanvasSurfaceKind::Outline,
+        },
+        CanvasSurfaceShown {
+            surface: CanvasSurfaceKind::Table,
+        },
+        CanvasSurfaceShown {
+            surface: CanvasSurfaceKind::Visual,
+        },
+        CanvasHistoryApplied {
+            verb: CanvasHistoryVerb::Undo,
+            name: "move \"Research\"".into(),
+        },
+        CanvasHistoryApplied {
+            verb: CanvasHistoryVerb::Redo,
+            name: "move \"Research\"".into(),
+        },
+        CanvasUndoMenuTitle {
+            verb: CanvasHistoryVerb::Undo,
+            name: "delete \"My Card\"".into(),
+        },
+        CanvasUndoMenuTitle {
+            verb: CanvasHistoryVerb::Redo,
+            name: String::new(),
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NothingSelected,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoMarks,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NotAGroup,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NotATextCard,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NotAFileCard,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoGroups,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoNotesInVault,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoMediaInVault,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoFilesToPointAt,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::OnlyTextCardsConvert,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoConnections,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::PickOutsideMovingSet,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::PickDifferentTarget,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoChanges,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NotReadable,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::Empty,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::EndOfCanvas,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::StartOfCanvas,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::AtCanvasLevel,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoCardsMatchFilter,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NothingToUndo,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NothingToRedo,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::GroupIsEmpty { label: "Q3".into() },
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoOutgoingPath {
+                title: "Research".into(),
+            },
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NotInAGroup {
+                title: "Research".into(),
+            },
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoConnection {
+                forward: true,
+                ordinal: None,
+            },
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoConnection {
+                forward: true,
+                ordinal: Some(2),
+            },
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::NoConnection {
+                forward: false,
+                ordinal: None,
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::ModeBusy,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::UndoBlocked,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::RedoBlocked,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::UndoQuarantined,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::RedoQuarantined,
+        },
+        CanvasHistoryQuarantinedTitle {
+            verb: CanvasHistoryVerb::Undo,
+        },
+        CanvasHistoryQuarantinedTitle {
+            verb: CanvasHistoryVerb::Redo,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::LinkOpenFailed,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::AlignWouldOverlap,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NotAUrl,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::CardTextUnreadable,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NotePathMustEndInMd,
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NoFreeSpaceInGroup { label: "Q3".into() },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NotePathExists {
+                path: "notes/research.md".into(),
+                on_disk: false,
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NotePathExists {
+                path: "notes/research.md".into(),
+                on_disk: true,
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NoteReadFailed {
+                message: "The card text is unavailable.".into(),
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NoteCreateFailed {
+                path: "notes/research.md".into(),
+                message: "io error".into(),
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::NoteRetargetFailed {
+                path: "notes/research.md".into(),
+                message: "io error".into(),
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::HeadingNotFound {
+                heading: "Roadmap".into(),
+                filename: "notes.md".into(),
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::ReopenFailed {
+                message: "The file moved.".into(),
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::FileTypeNotOpenable {
+                target: "setup.exe".into(),
+            },
+        },
+        CanvasBlocked {
+            reason: CanvasBlockedReason::FileTypeNotOpenable {
+                target: "tools/setup.exe".into(),
+            },
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::NewCard,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::NewGroup,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::NewCanvas,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::MoveIntoGroup,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::Placement,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::Align,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::Create,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::RemoveFromGroup,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::Duplicate,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::CreateConnectedCard,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::CanvasAction,
+            detail: "the file is read-only".into(),
+        },
+        CanvasActionFailed {
+            action: CanvasFailedAction::WhereAmI,
+            detail: "the file is read-only".into(),
+        },
+        CanvasSaveConflict,
+        CanvasFileNotFound {
+            target: "media/diagram.png".into(),
+        },
+        CanvasOpened {
+            title: "Notes.md".into(),
+            target: CanvasOpenTarget::DefaultApp,
+        },
+        CanvasOpened {
+            title: "example.com".into(),
+            target: CanvasOpenTarget::Browser,
+        },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::Opening,
+        },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::Reopening,
+        },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::RetargetFailed,
+        },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::Unavailable,
+        },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::ReadOnly,
+        },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::CardEditorUnavailable,
+        },
+        CanvasMutationRefused {
+            reason: CanvasMutationRefusal::RefreshPending,
+        },
+        CanvasLoadedDegraded { skipped: 3 },
+        CanvasLoadedDegraded { skipped: 1 },
+        CanvasEmptyOnboarding {
+            new_card_chord: "Option Command N".into(),
+            palette_chord: "Command Shift P".into(),
+        },
+        CanvasWhereAmI {
+            kind_label: "text".into(),
+            title: "Research".into(),
+            group_path: vec!["Quarter".into(), "Q3".into()],
+            ordinal_n: 2,
+            total_m: 5,
+            connection_count: 3,
+            in_count: 1,
+            out_count: 2,
+            color_name: Some("red".into()),
+            marked: true,
+            mode: Some(CanvasMode::Move),
+            filter: CanvasFilterState::Active {
+                matched: 3,
+                total: 40,
+            },
+        },
+        CanvasWhereAmI {
+            kind_label: "text".into(),
+            title: "Loose".into(),
+            group_path: Vec::new(),
+            ordinal_n: 1,
+            total_m: 1,
+            connection_count: 1,
+            in_count: 1,
+            out_count: 0,
+            color_name: None,
+            marked: false,
+            mode: None,
+            filter: CanvasFilterState::Inactive,
+        },
+        // --- Cardinality boundary witnesses (contract 0a-14) ---
+        // Every arm above that interpolates a count or a collection
+        // length is sampled at its PLURAL value; these sample the
+        // singular and the empty collection, so an arm that hardcodes
+        // "cards" fails the golden instead of shipping "1 cards". They
+        // are appended rather than filed beside their siblings so no
+        // pre-existing corpus index moves (contract 0a-2), and grouped
+        // so the reason they exist is legible in one block.
+        CanvasTracePathEnd {
+            titles: vec!["Research".into()],
+        },
+        CanvasTracePathEnd { titles: Vec::new() },
+        CanvasBulkMoved {
+            count: 1,
+            relative: RelativeDesc::Below("Research".into()),
+        },
+        CanvasBulkDuplicated { count: 1 },
+        CanvasModeEntered {
+            mode: CanvasMode::Move,
+            object: CanvasModeObject::Cards { count: 1 },
+        },
+        CanvasModeCommitted {
+            verb: CanvasTransientVerb::Move,
+            object: CanvasModeObject::Cards { count: 1 },
+        },
+        // These two already rendered correctly (they route through
+        // `counted`); the witnesses exist so the claim "every
+        // count-speaking arm has a count-one witness" is TRUE rather
+        // than nearly true, and so a later edit cannot regress them
+        // unseen.
+        CanvasGrouped {
+            count: 1,
+            label: "Q3".into(),
+        },
+        CanvasMarksCleared { count: 1 },
+        // Zero witnesses, for the arms whose zero the HOST can reach
+        // (the reachability claim, with its reason per arm, is in
+        // `canvas_count_speaking_arms_have_boundary_witnesses_and_agreement`'s
+        // `ZERO_REACHABLE`). The bulk verbs are absent because their
+        // call sites announce a precondition instead of counting to
+        // zero.
+        CanvasMovedTo {
+            verbosity: CanvasVerbosity::Verbose,
+            kind_label: "text".into(),
+            title: "Loose".into(),
+            ordinal_n: 1,
+            total_m: 1,
+            container: None,
+            connection_count: 0,
+            color_name: None,
+            marked: false,
+        },
+        CanvasMarkToggled {
+            marked: false,
+            title: "Research".into(),
+            count: 0,
+        },
+        CanvasBulkDuplicated { count: 0 },
+        CanvasFilterCount { matched: 0 },
+        CanvasFilterCleared { total: 0 },
+        CanvasWhereAmI {
+            kind_label: "text".into(),
+            title: "Loose".into(),
+            group_path: Vec::new(),
+            ordinal_n: 1,
+            total_m: 1,
+            connection_count: 0,
+            in_count: 0,
+            out_count: 0,
+            color_name: None,
+            marked: false,
+            mode: None,
+            filter: CanvasFilterState::Inactive,
+        },
+        // --- Read-verb refusal during the reopening window ---
+        // Appended, not filed beside its `CanvasStatus` siblings, so no
+        // pre-existing corpus index moves (contract 0a-2) — the same
+        // discipline the boundary witnesses above follow.
+        CanvasStatus {
+            note: CanvasStatusNote::Reopening,
+        },
+        CanvasStatus {
+            note: CanvasStatusNote::Loading,
+        },
+    ]
+}
+
+/// The graph half of the corpus (W6-2 0a, #746): the ORDERED witness
+/// matrix of contracts doc 0a-17, seventy-three entries — one per variant,
+/// one per closed-set arm, one per reachable zero/one/many cell of every
+/// count slot the family speaks (0a-15), an above-999 witness for each
+/// grouped count (0a-16), and every Where-am-I witness host-reachable
+/// (0a-6). Appended after the canvas block so no pre-existing index
+/// moves; `the_graph_witnesses_are_exactly_the_matrix_in_order` is its
+/// executable, lossless form.
+fn graph_corpus() -> Vec<GraphA11yEvent> {
+    use crate::graph::NodeKind::{Attachment, Ghost, Note};
+    use GraphA11yEvent::*;
+    use GraphVerbosity::{Standard, Terse, Verbose};
+    fn row(
+        label: &str,
+        kind: crate::graph::NodeKind,
+        in_links: u32,
+        out_links: u32,
+        references: u32,
+        embed: bool,
+    ) -> GraphRowCopy {
+        GraphRowCopy {
+            label: label.into(),
+            kind,
+            in_links,
+            out_links,
+            references,
+            embed,
+        }
+    }
+    fn snapshot(
+        notes: u64,
+        links: u64,
+        orphans: u64,
+        unresolved: u64,
+        filtered: bool,
+    ) -> GraphA11yEvent {
+        GraphSnapshotSummary {
+            counts: crate::graph::GraphSnapshotCounts {
+                notes,
+                links,
+                orphans,
+                unresolved,
+                filtered,
+            },
+        }
+    }
+    fn neighborhood(
+        label: &str,
+        in_links: u32,
+        out_links: u32,
+        note_count: u64,
+        depth: u32,
+    ) -> GraphA11yEvent {
+        GraphNeighborhoodSummary {
+            counts: crate::graph::GraphNeighborhoodCounts {
+                center_label: label.into(),
+                in_links,
+                out_links,
+                note_count,
+                depth,
+            },
+        }
+    }
+    vec![
+        GraphRow {
+            verbosity: Standard,
+            row: row("Alpha", Note, 3, 1, 3, false),
+        },
+        GraphRow {
+            verbosity: Standard,
+            row: row("Missing Note", Ghost, 2, 0, 2, false),
+        },
+        GraphRow {
+            verbosity: Standard,
+            row: row("Pic", Note, 1, 0, 1, true),
+        },
+        GraphRow {
+            verbosity: Terse,
+            row: row("Alpha", Note, 3, 1, 3, false),
+        },
+        GraphRow {
+            verbosity: Verbose,
+            row: row("Hub", Note, 1024, 3, 1024, false),
+        },
+        GraphRow {
+            verbosity: Standard,
+            row: row("diagram.png", Attachment, 2, 0, 2, false),
+        },
+        GraphRow {
+            verbosity: Standard,
+            row: row("Draft", Ghost, 0, 0, 0, false),
+        },
+        GraphRow {
+            verbosity: Standard,
+            row: row("Todo", Ghost, 1, 0, 1, false),
+        },
+        GraphRow {
+            verbosity: Standard,
+            row: row("Alone", Note, 0, 0, 0, false),
+        },
+        GraphRow {
+            verbosity: Standard,
+            row: row("Missing", Ghost, 0, 0, 1, true),
+        },
+        GraphReRooted {
+            label: "Alpha".into(),
+        },
+        snapshot(247, 1032, 12, 3, false),
+        snapshot(1, 1, 0, 0, false),
+        snapshot(0, 0, 0, 0, false),
+        snapshot(40, 60, 1, 1, true),
+        snapshot(5, 9, 0, 2, false),
+        snapshot(3, 4, 2, 0, false),
+        snapshot(1200, 3400, 1000, 1001, false),
+        neighborhood("Alpha", 3, 1, 7, 1),
+        neighborhood("Hub", 1032, 4, 1206, 3),
+        neighborhood("diagram.png", 0, 0, 0, 2),
+        neighborhood("Solo", 1, 1, 1, 1),
+        neighborhood("Hub2", 4, 1032, 12, 2),
+        GraphPreset {
+            outcome: GraphPresetOutcome::Orphans { count: 12 },
+        },
+        GraphPreset {
+            outcome: GraphPresetOutcome::Orphans { count: 1 },
+        },
+        GraphPreset {
+            outcome: GraphPresetOutcome::Orphans { count: 0 },
+        },
+        GraphPreset {
+            outcome: GraphPresetOutcome::Unresolved { count: 1 },
+        },
+        GraphPreset {
+            outcome: GraphPresetOutcome::Unresolved { count: 12 },
+        },
+        GraphPreset {
+            outcome: GraphPresetOutcome::Unresolved { count: 0 },
+        },
+        GraphPreset {
+            outcome: GraphPresetOutcome::MostLinked {
+                label: "Hub".into(),
+                in_links: 1032,
+            },
+        },
+        GraphPreset {
+            outcome: GraphPresetOutcome::MostLinked {
+                label: "Only".into(),
+                in_links: 0,
+            },
+        },
+        GraphPreset {
+            outcome: GraphPresetOutcome::MostLinked {
+                label: "Solo".into(),
+                in_links: 1,
+            },
+        },
+        GraphPreset {
+            outcome: GraphPresetOutcome::NoNotesToRank,
+        },
+        GraphFilterCount {
+            shown: 3,
+            total: 247,
+        },
+        GraphFilterCount { shown: 1, total: 1 },
+        GraphFilterCount { shown: 0, total: 0 },
+        GraphForceValue {
+            control: GraphForceControl::Center,
+            percent: 50,
+        },
+        GraphForceValue {
+            control: GraphForceControl::Repel,
+            percent: 70,
+        },
+        GraphForceValue {
+            control: GraphForceControl::Link,
+            percent: 100,
+        },
+        GraphForceValue {
+            control: GraphForceControl::LinkDistance,
+            percent: 0,
+        },
+        GraphLayoutSettled,
+        GraphPinned { pinned: true },
+        GraphPinned { pinned: false },
+        GraphZoom {
+            fit: false,
+            percent: 125,
+        },
+        GraphZoom {
+            fit: true,
+            percent: 63,
+        },
+        GraphMode {
+            mode: GraphSurfaceMode::Table,
+        },
+        GraphMode {
+            mode: GraphSurfaceMode::Diagram,
+        },
+        GraphWhereAmI {
+            selection: GraphWhereAmISelection::Node {
+                row: row("Alone", Note, 0, 0, 0, false),
+                component: 2,
+            },
+            zoom_percent: 100,
+            filter: GraphWhereAmIFilter::Normal {
+                orphans_only: true,
+                attachments_shown: true,
+                ghosts_shown: true,
+            },
+            name_filter: Some("alo".into()),
+        },
+        GraphWhereAmI {
+            selection: GraphWhereAmISelection::Node {
+                row: row("Missing Note", Ghost, 2, 0, 2, false),
+                component: 0,
+            },
+            zoom_percent: 250,
+            filter: GraphWhereAmIFilter::UnresolvedOnly,
+            name_filter: None,
+        },
+        GraphWhereAmI {
+            selection: GraphWhereAmISelection::NoSelection,
+            zoom_percent: 100,
+            filter: GraphWhereAmIFilter::Normal {
+                orphans_only: false,
+                attachments_shown: false,
+                ghosts_shown: true,
+            },
+            name_filter: Some("\u{a0}\u{2003}".into()),
+        },
+        GraphWhereAmI {
+            selection: GraphWhereAmISelection::Node {
+                row: row("diagram.png", Attachment, 1, 0, 1, false),
+                component: 7,
+            },
+            zoom_percent: 50,
+            filter: GraphWhereAmIFilter::Normal {
+                orphans_only: false,
+                attachments_shown: true,
+                ghosts_shown: false,
+            },
+            name_filter: None,
+        },
+        GraphWhereAmI {
+            selection: GraphWhereAmISelection::Node {
+                row: row("Alpha", Note, 3, 1, 3, false),
+                component: 2,
+            },
+            zoom_percent: 100,
+            filter: GraphWhereAmIFilter::Normal {
+                orphans_only: false,
+                attachments_shown: false,
+                ghosts_shown: true,
+            },
+            name_filter: Some("\u{2003}alpha\u{a0}".into()),
+        },
+        GraphWhereAmI {
+            selection: GraphWhereAmISelection::Node {
+                row: row("Draft", Ghost, 0, 0, 0, false),
+                component: 1,
+            },
+            zoom_percent: 100,
+            filter: GraphWhereAmIFilter::UnresolvedOnly,
+            name_filter: None,
+        },
+        GraphWhereAmI {
+            selection: GraphWhereAmISelection::Node {
+                row: row("Todo", Ghost, 1, 0, 1, false),
+                component: 3,
+            },
+            zoom_percent: 80,
+            filter: GraphWhereAmIFilter::UnresolvedOnly,
+            name_filter: None,
+        },
+        GraphWhereAmI {
+            selection: GraphWhereAmISelection::Node {
+                row: row("Café", Note, 2, 4, 2, false),
+                component: 5,
+            },
+            zoom_percent: 200,
+            filter: GraphWhereAmIFilter::Normal {
+                orphans_only: false,
+                attachments_shown: false,
+                ghosts_shown: true,
+            },
+            name_filter: Some("cafe".into()),
+        },
+        GraphTierEntered,
+        GraphTierSummary { count: 2000 },
+        GraphTierSummary { count: 1501 },
+        GraphNeighborsContent {
+            labels: vec![
+                "N1".into(),
+                "N2".into(),
+                "N3".into(),
+                "N4".into(),
+                "N5".into(),
+                "N6".into(),
+                "N7".into(),
+                "N8".into(),
+                "N9".into(),
+                "N10".into(),
+            ],
+        },
+        GraphNeighborsContent {
+            labels: vec![
+                "N1".into(),
+                "N2".into(),
+                "N3".into(),
+                "N4".into(),
+                "N5".into(),
+                "N6".into(),
+                "N7".into(),
+                "N8".into(),
+                "N9".into(),
+                "N10".into(),
+                "N11".into(),
+            ],
+        },
+        GraphNeighborsContent {
+            labels: (1..=52).map(|n| format!("N{n}")).collect(),
+        },
+        GraphNeighborsContent {
+            labels: vec!["Only".into()],
+        },
+        GraphNeighborsContent { labels: Vec::new() },
+        GraphNeighborsContent {
+            labels: vec!["Foo".into(), "Foo".into()],
+        },
+        GraphStatus {
+            note: GraphStatusNote::Opened,
+        },
+        GraphStatus {
+            note: GraphStatusNote::AlreadyOpen,
+        },
+        GraphStatus {
+            note: GraphStatusNote::ConnectionsPanel,
+        },
+        GraphStatus {
+            note: GraphStatusNote::NoteCreated {
+                name: "Draft.md".into(),
+            },
+        },
+        GraphStatus {
+            note: GraphStatusNote::NoConnections,
+        },
+        GraphStatus {
+            note: GraphStatusNote::LoadingConnections,
+        },
+        GraphBlocked {
+            reason: GraphBlockedReason::LoadFailed {
+                message: "io error".into(),
+            },
+        },
+        GraphBlocked {
+            reason: GraphBlockedReason::ConnectionsLoadFailed {
+                message: "io error".into(),
+            },
+        },
+        GraphBlocked {
+            reason: GraphBlockedReason::NoteCreateFailed {
+                message: "exists".into(),
+            },
         },
     ]
 }
@@ -1317,6 +5353,10 @@ mod tests {
             ),
             (High, "Open a vault to use the command palette."),
             (Medium, "Open a vault first. Search works inside a vault."),
+            (Medium, "Search returned no results."),
+            (Medium, "Search returned 1 result."),
+            (Medium, "Search returned 7 results."),
+            (Medium, "Search error: the index is unavailable"),
             (Medium, "Opened notes.md, line 12: the quick brown fox"),
             (
                 Medium,
@@ -1455,6 +5495,13 @@ mod tests {
                 Medium,
                 "Selected: Save. Unavailable: A structural operation is in progress.",
             ),
+            (Medium, "No commands match \"zzz\""),
+            (Medium, "1 command matching \"save\""),
+            (Medium, "4 commands matching \"e\""),
+            (High, "Save failed: disk full"),
+            (High, "Save failed."),
+            (High, "Command not found: slate.nope"),
+            (High, "A structural operation is in progress."),
             (Medium, "Recent search: fox"),
             (Medium, "2 recent files"),
             (Medium, "1 recent file"),
@@ -1481,6 +5528,84 @@ mod tests {
             (Medium, "Base view: Cards."),
             (Medium, "Base sort could not be saved: io error"),
             (Medium, "Base refreshed."),
+            (Medium, "Base: Reading"),
+            (Medium, "Base: Reading, view: Table"),
+            (Medium, "Base: Reading, view: Table, quick filter: CAFE"),
+            (Medium, "12 results."),
+            (Medium, "12 results. Base: Reading, quick filter: CAFE."),
+            (Medium, "0 of 0 results"),
+            (Medium, "1 of 1 result"),
+            (Medium, "1 of 2 results"),
+            (Medium, "Sort 1 cannot be moved."),
+            (Medium, "Sort 1 is already first."),
+            (Medium, "Sort 2 is already last."),
+            (Medium, "Sort 1 moved down to position 2 of 3."),
+            (Medium, "Status column moved up to position 1 of 3."),
+            (Medium, "Preview not loaded."),
+            (Medium, "Preview loading."),
+            (Medium, "12 results."),
+            (Medium, "12 results. First result: Alpha"),
+            (Medium, "12 results. First result: Alpha"),
+            (Medium, "Preview failed: invalid expression"),
+            (Medium, "Sorted by Status, ascending"),
+            (Medium, "Sorted by Status, descending"),
+            (Medium, "Saved sort by Status, ascending."),
+            (Medium, "Saved sort by Status, descending."),
+            (Medium, "Saved query Open tasks is no longer available."),
+            (Medium, "Saved query is no longer available."),
+            (Medium, "Queries could not be refreshed: io error"),
+            (Medium, "Editing Open tasks in builder."),
+            (Medium, "Saved query could not be edited: io error"),
+            (Medium, "Enter a saved query name before renaming."),
+            (Medium, "Renamed saved query to Open tasks."),
+            (Medium, "Saved query could not be renamed: io error"),
+            (Medium, "Deleted saved query."),
+            (Medium, "Saved query could not be deleted: io error"),
+            (Medium, "Choose a .base path before exporting."),
+            (Medium, "Exported saved query as Open tasks.base."),
+            (Medium, "Saved query could not be exported: io error"),
+            (Medium, "Choose a path inside the vault."),
+            (Medium, "Enter a dashboard name before saving."),
+            (Medium, "Saved dashboard Reading."),
+            (Medium, "Dashboard could not be saved: io error"),
+            (Medium, "Updated dashboard Reading."),
+            (Medium, "Dashboard could not be updated: io error"),
+            (Medium, "Dashboard section changed; reload and try again."),
+            (Medium, "Dashboard section could not be removed: io error"),
+            (Medium, "Dashboard section could not be replaced: io error"),
+            (Medium, "Deleted dashboard."),
+            (Medium, "Dashboard could not be deleted: io error"),
+            (Medium, "Dashboard could not be edited: io error"),
+            (Medium, "Dashboard is no longer available."),
+            (Medium, "Base dock updated for active note."),
+            (Medium, "Copied link to Reading."),
+            (Medium, "Backlinks for Reading."),
+            (Medium, "Base view could not be copied: No active base."),
+            (Medium, "Copied base view as Markdown."),
+            (Medium, "Base view could not be copied: io error"),
+            (Medium, "Select a base row first."),
+            (
+                Medium,
+                "No editable property is available for the selected row.",
+            ),
+            (Medium, "read-only: file metadata"),
+            (Medium, "read-only: computed"),
+            (Medium, "Saved. Status: Done"),
+            (Medium, "Saved. Status: empty"),
+            (Medium, "Saved. Row no longer matches this view"),
+            (Medium, "Base edit failed: io error"),
+            (Medium, "Edit canceled."),
+            (Medium, "Exported base view."),
+            (Medium, "Base view could not be exported: io error"),
+            (Medium, "Converted Dataview block to .base."),
+            (Medium, "Dataview conversion could not be saved: io error"),
+            (Medium, "Export canceled."),
+            (Medium, "Must be a finite number."),
+            (Medium, "Must be a whole number."),
+            (Medium, "Must be a finite decimal number."),
+            (Medium, "Must be true or false."),
+            (Medium, "Date must be YYYY-MM-DD."),
+            (Medium, "Updated: 1 note."),
             (Medium, "Dataview conversion failed: unsupported query"),
             (Medium, "Insert citation lands in V1.x. See Milestone L."),
             (
@@ -1501,8 +5626,497 @@ mod tests {
             (Medium, "column a, table."),
             (Medium, "Embedded note Target Note."),
             (Medium, "fn spoken_interior() -> usize { 42 }, code block."),
+            (Medium, "No next math."),
+            (
+                Medium,
+                "x equals negative b plus or minus the square root of b squared \
+                 minus 4 a c, over 2 a, math.",
+            ),
+            (Medium, "No next diagram."),
+            (Medium, "Flowchart with 3 steps, diagram."),
             (Medium, "Embed."),
+            (Medium, "Sorted by Status, ascending"),
+            (Medium, "Sorted by Due, descending"),
+            (Medium, "Ship the plan. Status: Open. Due: Friday"),
+            (Medium, "Ship the plan. Status: Open"),
+            (Medium, "Done reviewing. Status: Open"),
+            (Medium, "Substatus: Opening. Status: Open"),
+            (Medium, "Status: Open Questions remain. Status: Open"),
+            (Medium, "Status: Open"),
+            (Medium, "Group: Open, 1 row"),
+            (Medium, "Group: Done, 12 rows. Summary: Count: 12"),
+            (
+                Medium,
+                "Template picker opened. No templates found. \
+                 Add a Markdown file to the configured template folder.",
+            ),
+            (Medium, "Template picker opened. 1 template available."),
+            (Medium, "Template picker opened. 7 templates available."),
+            (High, "Created Meeting 2026-08-20.md from Meeting."),
             (High, "Composed by a host engine."),
+            // --- Canvas (W6-1 0a, #745) ---
+            (Medium, "Research"),
+            (Medium, "Text card \"Research\", 2 of 5 in Q3"),
+            (
+                Medium,
+                "Text card \"Research\", 2 of 5 in Q3, 3 connections, red, marked",
+            ),
+            (Medium, "Group \"Q3\", 1 of 3 in canvas"),
+            (
+                Medium,
+                "File card \"Notes.md\", 1 of 1 in canvas, 1 connection",
+            ),
+            (Medium, "Entering group \"Q3\", 4 cards"),
+            (Medium, "Entering group \"Solo\", 1 card"),
+            (Medium, "Leaving group \"Q3\""),
+            (Medium, "No canvas view to act on."),
+            (
+                Medium,
+                "Connects to Text card \"Ideas\", labelled \"supports\"",
+            ),
+            (Medium, "Connected from Text card \"Research\""),
+            (Medium, "Linked with Group \"Q3\""),
+            (Medium, "Linked with Link card \"example.com\""),
+            (
+                Medium,
+                "Path: Research, then Ideas, then Draft. End of path — 3 cards visited.",
+            ),
+            (Medium, "Alone on the canvas"),
+            (Medium, "Below \"Research\""),
+            (
+                Medium,
+                "Below \"Research\", right of \"Ideas\". Overlapping another card",
+            ),
+            (Medium, "Above \"Ideas\". Clear of overlaps"),
+            (Medium, "320 by 200"),
+            (Medium, "Resized to default size: 260 by 140"),
+            (
+                Medium,
+                "Resized to fit to content: 260 by 88. Overlapping another card",
+            ),
+            (Medium, "Minimum size."),
+            (
+                Medium,
+                "Move mode — \"Research\". Arrows to move, Shift for big steps, Return to place, Escape to cancel.",
+            ),
+            (
+                Medium,
+                "Move mode — 3 cards. Arrows to move, Shift for big steps, Return to place, Escape to cancel.",
+            ),
+            (
+                Medium,
+                "Resize mode — \"Research\". Left and Right arrows change width, Up and Down change height, Return to apply, Escape to cancel.",
+            ),
+            (
+                Medium,
+                "Connect mode — \"Research\". Navigate to the target with the usual movements, Return to connect, Escape to cancel.",
+            ),
+            (
+                High,
+                "Move mode is active. Return to commit or Escape to cancel first.",
+            ),
+            (Medium, "Placed \"Research\"."),
+            (Medium, "Placed 3 cards."),
+            (Medium, "Resized \"Research\"."),
+            (Medium, "Move ended — nothing changed."),
+            (Medium, "Resize ended — nothing changed."),
+            (Medium, "Connect ended — no target chosen."),
+            (Medium, "Move cancelled."),
+            (Medium, "Move cancelled — card returned."),
+            (Medium, "Move cancelled — cards returned."),
+            (Medium, "Resize cancelled."),
+            (Medium, "Resize cancelled — size restored."),
+            (Medium, "Connect cancelled."),
+            (Medium, "Connect cancelled — back at \"Research\"."),
+            (Medium, "Created text card \"New idea\" below \"Research\""),
+            (Medium, "Created group \"Q3\" right of \"Research\""),
+            (Medium, "Created file card \"Notes.md\" above \"Research\""),
+            (
+                Medium,
+                "Created link card \"example.com\" left of \"Research\"",
+            ),
+            (
+                Medium,
+                "Created text card \"Untitled\" at the canvas origin",
+            ),
+            (Medium, "Created canvas \"Roadmap\"."),
+            (
+                Medium,
+                "Created connected card below \"Research\" — connected from \"Research\".",
+            ),
+            (
+                Medium,
+                "Connected \"Research\" to \"Ideas\", labelled \"supports\".",
+            ),
+            (Medium, "Connected \"Research\" to \"Ideas\"."),
+            (Medium, "Connection updated, labelled \"supports\"."),
+            (Medium, "Connection updated."),
+            (Medium, "Moved into group \"Q3\"."),
+            (Medium, "Removed from group \"Q3\"."),
+            (Medium, "Set \"Research\" to red."),
+            (Medium, "Set \"Research\" to no color."),
+            (Medium, "Renamed group to \"Q3\"."),
+            (Medium, "Updated \"Research\"."),
+            (Medium, "\"Research\" now points at notes/research.md."),
+            (Medium, "Moved \"Research\" below \"Ideas\"."),
+            (Medium, "Duplicated \"Research\" right of \"Research\"."),
+            (Medium, "Aligned \"Research\" with \"Ideas\"."),
+            (
+                Medium,
+                "Converted to note notes/research.md. The card now points at it.",
+            ),
+            (Medium, "Deleted Text card \"Research\" — ⌘Z to undo"),
+            (Medium, "Deleted Text card \"Research\""),
+            (Medium, "Ungrouped Group \"Q3\" — cards kept — ⌘Z to undo"),
+            (Medium, "Deleted 3 cards — Ctrl+Z to undo"),
+            (Medium, "Deleted 1 card — ⌘Z to undo"),
+            (
+                Medium,
+                "Deleted connection to \"Ideas\", labelled \"supports\" — ⌘Z to undo",
+            ),
+            (Medium, "Deleted connection from \"Research\""),
+            (Medium, "Deleted connection with \"Q3\" — ⌘Z to undo"),
+            (Medium, "Moved 3 cards below \"Research\"."),
+            (Medium, "Set 3 cards to cyan."),
+            (Medium, "Set 1 card to no color."),
+            (Medium, "Grouped 3 cards into \"Q3\"."),
+            (Medium, "Duplicated 2 cards — one undo restores."),
+            (Medium, "Marked \"Research\". 2 marked."),
+            (Medium, "Unmarked \"Research\". 1 marked."),
+            (Medium, "No marks."),
+            (Medium, "Cleared 3 marks."),
+            (Medium, "3 cards match."),
+            (Medium, "1 card match."),
+            (Medium, "Filter cleared — 40 cards."),
+            (Medium, "Filter cleared — 1 card."),
+            (Medium, "Zoom 100 percent."),
+            (Medium, "Fit canvas. Zoom 80 percent."),
+            (Medium, "Zoomed to selection. Zoom 150 percent."),
+            (Medium, "Viewport follows selection."),
+            (Medium, "Viewport stays put."),
+            (Medium, "Canvas outline view."),
+            (Medium, "Canvas table view."),
+            (Medium, "Canvas visual view."),
+            (Medium, "Undid: move \"Research\""),
+            (Medium, "Redid: move \"Research\""),
+            (Medium, "Undo Delete \"My Card\""),
+            (Medium, "Redo"),
+            (Medium, "Nothing selected."),
+            (Medium, "No marks."),
+            (Medium, "Not a group."),
+            (Medium, "Not a text card."),
+            (Medium, "Not a file card."),
+            (Medium, "This canvas has no groups."),
+            (Medium, "This vault has no notes yet."),
+            (Medium, "This vault has no media files."),
+            (Medium, "This vault has no files to point at."),
+            (Medium, "Only text cards convert to notes."),
+            (Medium, "The selected card has no connections."),
+            (Medium, "Pick a card outside the moving set."),
+            (Medium, "Pick a different card to connect to."),
+            (Medium, "No changes."),
+            (Medium, "Canvas is not readable."),
+            (Medium, "Canvas is empty."),
+            (Medium, "End of canvas."),
+            (Medium, "Start of canvas."),
+            (Medium, "At canvas level."),
+            (Medium, "No cards match the filter."),
+            (Medium, "Nothing to undo."),
+            (Medium, "Nothing to redo."),
+            (Medium, "Group \"Q3\" is empty."),
+            (Medium, "No outgoing path from \"Research\"."),
+            (Medium, "\"Research\" is not in a group."),
+            (Medium, "No outgoing connection."),
+            (Medium, "No outgoing connection 2."),
+            (Medium, "No incoming connection."),
+            (
+                High,
+                "A move or resize is in progress. Return to place it or Escape to cancel first.",
+            ),
+            (
+                High,
+                "Undo blocked: the canvas changed on disk. Reload it and try again.",
+            ),
+            (
+                High,
+                "Redo blocked: the canvas changed on disk. Reload it and try again.",
+            ),
+            (
+                High,
+                "Undo unavailable: the canvas changed on disk, and this entry applies to an earlier revision.",
+            ),
+            (
+                High,
+                "Redo unavailable: the canvas changed on disk, and this entry applies to an earlier revision.",
+            ),
+            (Medium, "Undo unavailable — canvas changed on disk"),
+            (Medium, "Redo unavailable — canvas changed on disk"),
+            (High, "The link could not be opened."),
+            (High, "Aligning would overlap another card — not moved."),
+            (High, "That doesn't look like a URL."),
+            (High, "The card's text could not be read."),
+            (High, "The note path must end in .md."),
+            (High, "No free space inside \"Q3\"."),
+            (High, "notes/research.md already exists. Pick another name."),
+            (
+                High,
+                "notes/research.md already exists on disk. Pick another name.",
+            ),
+            (
+                High,
+                "Could not read the card text: The card text is unavailable.",
+            ),
+            (High, "Could not create notes/research.md: io error"),
+            (
+                High,
+                "Created notes/research.md, but could not retarget the card: io error",
+            ),
+            (High, "Heading Roadmap was not found in notes.md."),
+            (
+                High,
+                "Canvas could not be reopened. The previous snapshot is read-only. The file moved.",
+            ),
+            (
+                High,
+                "setup.exe is not a note or media file, so it was not opened from the canvas.",
+            ),
+            (
+                High,
+                "tools/setup.exe is not a note or media file, so it was not opened from the canvas.",
+            ),
+            (High, "New card failed: the file is read-only"),
+            (High, "New group failed: the file is read-only"),
+            (High, "New canvas failed: the file is read-only"),
+            (High, "Move failed: the file is read-only"),
+            (High, "Placement failed: the file is read-only"),
+            (High, "Align failed: the file is read-only"),
+            (High, "Create failed: the file is read-only"),
+            (High, "Remove failed: the file is read-only"),
+            (High, "Duplicate failed: the file is read-only"),
+            (High, "Create connected card failed: the file is read-only"),
+            (High, "Canvas action failed: the file is read-only"),
+            (High, "Where am I failed: the file is read-only"),
+            (
+                High,
+                "The canvas changed on disk. Reload it to continue — your action was not applied.",
+            ),
+            (
+                High,
+                "media/diagram.png is missing from the vault. Use Locate File to repoint this card.",
+            ),
+            (Medium, "Opened Notes.md in its default app."),
+            (Medium, "Opened example.com in your browser."),
+            (
+                Medium,
+                "This canvas is still opening. Wait for it to finish before making changes.",
+            ),
+            (
+                Medium,
+                "This canvas is reopening. Wait for it to finish before making changes.",
+            ),
+            (
+                Medium,
+                "This canvas could not be reopened. Choose Retry before making changes.",
+            ),
+            (
+                Medium,
+                "This canvas is no longer available. Copy any draft before closing.",
+            ),
+            (
+                Medium,
+                "This canvas is read-only because it could not be opened safely.",
+            ),
+            (
+                Medium,
+                "This canvas is no longer available. Copy your draft before closing the editor.",
+            ),
+            (
+                Medium,
+                "Your last change is saved but not shown yet. Refresh to see it before making more changes.",
+            ),
+            (
+                Medium,
+                "Canvas loaded. 3 unsupported items are preserved in the file but not shown.",
+            ),
+            (
+                Medium,
+                "Canvas loaded. 1 unsupported item are preserved in the file but not shown.",
+            ),
+            (
+                Medium,
+                "Canvas is empty. Press Option Command N to create your first card. Every other canvas action is in the Command Palette, Command Shift P.",
+            ),
+            (
+                Medium,
+                "Text card \"Research\", in Quarter › Q3, 2 of 5, 3 connections (1 in, 2 out), red, marked, Move mode, 3 of 40 shown",
+            ),
+            (
+                Medium,
+                "Text card \"Loose\", at canvas level, 1 of 1, 1 connection (1 in, 0 out)",
+            ),
+            // --- Cardinality boundary witnesses (contract 0a-14) ---
+            (Medium, "Path: Research. End of path — 1 card visited."),
+            (Medium, "End of path — 0 cards visited."),
+            (Medium, "Moved 1 card below \"Research\"."),
+            (Medium, "Duplicated 1 card — one undo restores."),
+            (
+                Medium,
+                "Move mode — 1 card. Arrows to move, Shift for big steps, Return to place, Escape to cancel.",
+            ),
+            (Medium, "Placed 1 card."),
+            (Medium, "Grouped 1 card into \"Q3\"."),
+            (Medium, "Cleared 1 mark."),
+            // Zero witnesses (host-reachable zeros only).
+            (
+                Medium,
+                "Text card \"Loose\", 1 of 1 in canvas, 0 connections",
+            ),
+            (Medium, "Unmarked \"Research\". 0 marked."),
+            (Medium, "Duplicated 0 cards — one undo restores."),
+            (Medium, "0 cards match."),
+            (Medium, "Filter cleared — 0 cards."),
+            (
+                Medium,
+                "Text card \"Loose\", at canvas level, 1 of 1, 0 connections (0 in, 0 out)",
+            ),
+            // Read-verb refusal during the reopening window.
+            (Medium, "This canvas is reopening. Try again in a moment."),
+            // …and during a first load or a prepared replacement.
+            (Medium, "This canvas is loading. Try again in a moment."),
+            // --- The graph family (W6-2 0a, #746): contracts doc 0a-17's matrix ---
+            (Medium, "Alpha, 3 links in, 1 links out"),
+            (Medium, "Missing Note, unresolved, 2 references"),
+            (Medium, "Pic, 1 links in, 0 links out, embed"),
+            (Medium, "Alpha"),
+            (Medium, "Hub, 1024 links in, 3 links out"),
+            (Medium, "diagram.png, 2 links in, 0 links out"),
+            (Medium, "Draft, unresolved, 0 references"),
+            (Medium, "Todo, unresolved, 1 references"),
+            (Medium, "Alone, 0 links in, 0 links out"),
+            (Medium, "Missing, unresolved, 1 references, embed"),
+            (Medium, "Connections: Alpha"),
+            (
+                Medium,
+                "247 notes, 1,032 links. 12 orphans, 3 unresolved targets.",
+            ),
+            (Medium, "1 notes, 1 links."),
+            (Medium, "0 notes, 0 links."),
+            (
+                Medium,
+                "40 notes, 60 links. 1 orphans, 1 unresolved targets. Filtered.",
+            ),
+            (Medium, "5 notes, 9 links. 0 orphans, 2 unresolved targets."),
+            (Medium, "3 notes, 4 links. 2 orphans, 0 unresolved targets."),
+            (
+                Medium,
+                "1,200 notes, 3,400 links. 1,000 orphans, 1,001 unresolved targets.",
+            ),
+            (
+                Medium,
+                "Alpha: 3 links in, 1 links out. Showing 7 notes within 1 links.",
+            ),
+            (
+                Medium,
+                "Hub: 1,032 links in, 4 links out. Showing 1,206 notes within 3 links.",
+            ),
+            (
+                Medium,
+                "diagram.png: 0 links in, 0 links out. Showing 0 notes within 2 links.",
+            ),
+            (
+                Medium,
+                "Solo: 1 links in, 1 links out. Showing 1 notes within 1 links.",
+            ),
+            (
+                Medium,
+                "Hub2: 4 links in, 1,032 links out. Showing 12 notes within 2 links.",
+            ),
+            (Medium, "12 orphaned notes."),
+            (Medium, "1 orphaned notes."),
+            (Medium, "0 orphaned notes."),
+            (Medium, "1 unresolved targets."),
+            (Medium, "12 unresolved targets."),
+            (Medium, "0 unresolved targets."),
+            (Medium, "Most linked: Hub, 1032 links in."),
+            (Medium, "Most linked: Only, 0 links in."),
+            (Medium, "Most linked: Solo, 1 links in."),
+            (Medium, "No notes to rank."),
+            (Medium, "3 of 247 shown"),
+            (Medium, "1 of 1 shown"),
+            (Medium, "0 of 0 shown"),
+            (Medium, "Center force 50 percent"),
+            (Medium, "Repel force 70 percent"),
+            (Medium, "Link force 100 percent"),
+            (Medium, "Link distance 0 percent"),
+            (Medium, "Graph layout settled."),
+            (Medium, "Pinned."),
+            (Medium, "Unpinned."),
+            (Medium, "Zoom 125 percent."),
+            (Medium, "Fit graph. Zoom 63 percent."),
+            (Medium, "Table mode."),
+            (Medium, "Diagram mode."),
+            (
+                Medium,
+                "Alone, 0 links in, 0 links out, component 2, zoom 100 percent, filters: orphans only, attachments shown, unresolved shown, name filter “alo”.",
+            ),
+            (
+                Medium,
+                "Missing Note, unresolved, 2 references, component 0, zoom 250 percent, filters: unresolved shown, unresolved only.",
+            ),
+            (
+                Medium,
+                "No node selected, zoom 100 percent, filters: unresolved shown.",
+            ),
+            (
+                Medium,
+                "diagram.png, 1 links in, 0 links out, component 7, zoom 50 percent, filters: attachments shown, unresolved hidden.",
+            ),
+            (
+                Medium,
+                "Alpha, 3 links in, 1 links out, component 2, zoom 100 percent, filters: unresolved shown, name filter “alpha”.",
+            ),
+            (
+                Medium,
+                "Draft, unresolved, 0 references, component 1, zoom 100 percent, filters: unresolved shown, unresolved only.",
+            ),
+            (
+                Medium,
+                "Todo, unresolved, 1 references, component 3, zoom 80 percent, filters: unresolved shown, unresolved only.",
+            ),
+            (
+                Medium,
+                "Café, 2 links in, 4 links out, component 5, zoom 200 percent, filters: unresolved shown, name filter “cafe”.",
+            ),
+            (
+                Medium,
+                "Large graph: summary accessibility mode. Table mode has every node.",
+            ),
+            (
+                Medium,
+                "2000 nodes — too many for per-node navigation. Switch to Table mode for the full, navigable list.",
+            ),
+            (
+                Medium,
+                "1501 nodes — too many for per-node navigation. Switch to Table mode for the full, navigable list.",
+            ),
+            (Medium, "N1, N2, N3, N4, N5, N6, N7, N8, N9, N10"),
+            (Medium, "N1, N2, N3, N4, N5, N6, N7, N8, N9, N10 and 1 more"),
+            (
+                Medium,
+                "N1, N2, N3, N4, N5, N6, N7, N8, N9, N10 and 42 more",
+            ),
+            (Medium, "Only"),
+            (Medium, ""),
+            (Medium, "Foo, Foo"),
+            (Medium, "Graph."),
+            (Medium, "The graph is already open."),
+            (Medium, "Connections panel."),
+            (Medium, "Created note Draft.md."),
+            (Medium, "This note has no connections."),
+            (Medium, "Loading connections."),
+            (High, "Couldn't load the graph: io error"),
+            (High, "Couldn't load connections: io error"),
+            (High, "Couldn't create note: exists"),
         ];
 
         let corpus = corpus();
@@ -1525,7 +6139,11 @@ mod tests {
     /// vocabulary change — the regenerating run FAILS by design (so the
     /// variable can never mask drift, even exported in CI); review the diff
     /// as the §W-D delta, then re-run without the variable to prove the pin.
-    /// The Windows host consumes this same file for its parity census.
+    /// Both hosts consume this same file for their parity censuses —
+    /// mac's `A11yCorpusCensusTests` and Windows' `A11yCorpusCensus`
+    /// (#1114) — each constructing the mirrored events in corpus order
+    /// and rendering them through the FFI; with all three green, both
+    /// hosts speak identical announcements for identical events.
     #[test]
     fn committed_corpus_artifact_matches_the_vocabulary() {
         let rendered: Vec<serde_json::Value> = corpus()
@@ -1569,6 +6187,2539 @@ mod tests {
             expected,
             "corpus artifact drifted from the vocabulary — regenerate \
              deliberately and review the diff as a §W-D change",
+        );
+    }
+
+    /// The Debug head of an event — its variant name.
+    fn variant_of(event: &A11yEvent) -> String {
+        format!("{event:?}")
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect()
+    }
+
+    /// The INNER variant name of a canvas event, or `None` for
+    /// everything else. The family nests under one top-level variant
+    /// (`Canvas { event: … }`), so the head alone says "canvas" and
+    /// nothing more.
+    fn canvas_variant_of(event: &A11yEvent) -> Option<String> {
+        let debug = format!("{event:?}");
+        let at = debug.strip_prefix("Canvas { event: ")?;
+        Some(at.chars().take_while(char::is_ascii_alphanumeric).collect())
+    }
+
+    /// The variant names declared by an enum in this file. The corpus
+    /// is positional and hand-maintained, so "I added the variant and
+    /// forgot the corpus entry" is the mistake that actually happens —
+    /// and it is invisible until a host names the case. Same parser
+    /// shape as slate-uniffi's mirror tripwire.
+    fn declared_variants(enum_name: &str) -> std::collections::BTreeSet<String> {
+        declared_variants_in("src/a11y.rs", enum_name)
+    }
+
+    /// The same parse over any crate source: the graph family reuses
+    /// `graph::NodeKind` as a row's kind (W6-2 0a, 0aD-4), so its
+    /// inventory names the file each closed set is declared in.
+    fn declared_variants_in(
+        relative_path: &str,
+        enum_name: &str,
+    ) -> std::collections::BTreeSet<String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
+        let source =
+            std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("source at {relative_path}"));
+        let needle = format!("pub enum {enum_name} {{");
+        let decl = source
+            .find(&needle)
+            .unwrap_or_else(|| panic!("{enum_name} declaration"));
+        let open = decl + source[decl..].find('{').expect("opening brace");
+        let mut depth = 0usize;
+        let mut end = source.len();
+        for (offset, ch) in source[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + offset;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut names = std::collections::BTreeSet::new();
+        let mut depth = 0usize;
+        for line in source[open + 1..end].lines() {
+            let trimmed = line.trim();
+            if depth == 0 && !trimmed.starts_with("//") && !trimmed.starts_with('#') {
+                // The leading identifier of a variant line. Taking the
+                // HEAD rather than the whole trimmed line is what makes
+                // the single-line payload form (`Card { title: String },`
+                // — how the small parameter enums are written) parse the
+                // same as the multi-line one.
+                let name: String = trimmed
+                    .chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .collect();
+                let tail = trimmed[name.len()..].trim_start();
+                let delimited = tail.is_empty()
+                    || tail.starts_with(',')
+                    || tail.starts_with('{')
+                    || tail.starts_with('(');
+                if !name.is_empty()
+                    && name.starts_with(|c: char| c.is_ascii_uppercase())
+                    && delimited
+                {
+                    names.insert(name);
+                }
+            }
+            depth += trimmed.matches('{').count();
+            depth -= trimmed.matches('}').count().min(depth);
+        }
+        names
+    }
+
+    /// The nested-enum arm a corpus entry selected, read out of its
+    /// Debug string (`… CanvasStatus { note: NotAGroup }` → `NotAGroup`).
+    /// `Option`-carried parameters unwrap through `Some(`; a `None`
+    /// contributes nothing, because "absent" is not an arm.
+    ///
+    /// Scoped by (variant, field) rather than by field alone: three
+    /// different enums ride a field called `verb`, two ride `reason`,
+    /// and two ride `target`, so field-only scoping would let one
+    /// enum's coverage vouch for another's.
+    fn nested_arms(sites: &[(&str, &str)]) -> std::collections::BTreeSet<String> {
+        let mut arms = std::collections::BTreeSet::new();
+        for (variant, field) in sites {
+            let prefix = format!("{field}: ");
+            for event in corpus()
+                .iter()
+                .filter(|event| canvas_variant_of(event).as_deref() == Some(*variant))
+            {
+                let debug = format!("{event:?}");
+                let Some(at) = debug.find(&prefix) else {
+                    continue;
+                };
+                let rest = &debug[at + prefix.len()..];
+                let rest = rest.strip_prefix("Some(").unwrap_or(rest);
+                let arm: String = rest
+                    .chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .collect();
+                if !arm.is_empty() && arm != "None" {
+                    arms.insert(arm);
+                }
+            }
+        }
+        arms
+    }
+
+    /// Every closed nested enum the canvas family carries as a
+    /// parameter, with the (variant, field) sites it is reached
+    /// through. Eighteen of them — the whole set, not a sample: an arm
+    /// added to ANY of these without a corpus entry ships a string no
+    /// golden, no artifact entry and no host census covers.
+    const CANVAS_NESTED_ENUMS: &[(&str, &[(&str, &str)])] = &[
+        (
+            "CanvasVerbosity",
+            &[
+                ("CanvasMovedTo", "verbosity"),
+                ("CanvasDeleted", "verbosity"),
+            ],
+        ),
+        (
+            "CanvasOverlapTransition",
+            &[
+                ("CanvasMoveRelative", "overlap"),
+                ("CanvasResizeGeometry", "overlap"),
+            ],
+        ),
+        (
+            "CanvasMode",
+            &[
+                ("CanvasModeEntered", "mode"),
+                ("CanvasModeRejected", "active_mode"),
+                ("CanvasModeEndedWithoutEffect", "mode"),
+                ("CanvasModeCancelled", "mode"),
+                ("CanvasWhereAmI", "mode"),
+            ],
+        ),
+        (
+            "CanvasModeObject",
+            &[
+                ("CanvasModeEntered", "object"),
+                ("CanvasModeCommitted", "object"),
+            ],
+        ),
+        ("CanvasTransientVerb", &[("CanvasModeCommitted", "verb")]),
+        (
+            "CanvasModeRestoration",
+            &[("CanvasModeCancelled", "restoration")],
+        ),
+        ("CanvasPlaceVerb", &[("CanvasCardPlaced", "verb")]),
+        ("CanvasOpenTarget", &[("CanvasOpened", "target")]),
+        ("CanvasResizePreset", &[("CanvasResizeGeometry", "preset")]),
+        ("CanvasSurfaceKind", &[("CanvasSurfaceShown", "surface")]),
+        ("CanvasZoomContext", &[("CanvasZoom", "context")]),
+        ("CanvasDeleteTarget", &[("CanvasDeleted", "target")]),
+        ("CanvasFailedAction", &[("CanvasActionFailed", "action")]),
+        (
+            "CanvasMutationRefusal",
+            &[("CanvasMutationRefused", "reason")],
+        ),
+        (
+            "CanvasHistoryVerb",
+            &[
+                ("CanvasHistoryApplied", "verb"),
+                ("CanvasUndoMenuTitle", "verb"),
+                ("CanvasHistoryQuarantinedTitle", "verb"),
+            ],
+        ),
+        ("CanvasStatusNote", &[("CanvasStatus", "note")]),
+        ("CanvasBlockedReason", &[("CanvasBlocked", "reason")]),
+        ("CanvasFilterState", &[("CanvasWhereAmI", "filter")]),
+    ];
+
+    /// Five-place rule, first place: a canvas variant — or a closed-set
+    /// ARM of one — that never reaches [`corpus()`] is pinned by
+    /// nothing: not the golden above, not the committed artifact, and
+    /// not either host census.
+    #[test]
+    fn every_canvas_variant_and_arm_is_represented_in_the_corpus() {
+        let declared = declared_variants("CanvasA11yEvent");
+        assert!(
+            declared.len() > 40,
+            "parsed only {} canvas variants — the parser broke, not the vocabulary",
+            declared.len()
+        );
+        let represented: std::collections::BTreeSet<String> =
+            corpus().iter().filter_map(canvas_variant_of).collect();
+        let missing: Vec<&String> = declared.difference(&represented).collect();
+        assert!(
+            missing.is_empty(),
+            "these canvas variants never appear in corpus(), so no golden, no \
+             artifact entry, and neither host census covers them: {missing:?}"
+        );
+
+        for (enum_name, sites) in CANVAS_NESTED_ENUMS {
+            let declared = declared_variants(enum_name);
+            assert!(
+                !declared.is_empty(),
+                "parsed no arms of {enum_name} — the parser broke, not the vocabulary"
+            );
+            let covered = nested_arms(sites);
+            let missing: Vec<&String> = declared.difference(&covered).collect();
+            assert!(
+                missing.is_empty(),
+                "{enum_name} arms with no corpus entry, so their shipped string is \
+                 pinned nowhere: {missing:?}"
+            );
+        }
+    }
+
+    /// W6-1 PR E13 (E13-1, IE13-12): the arm's witnesses are EXACTLY the
+    /// two ordered payloads — a bare target and a nested one — so a
+    /// deleted witness fails here on its own, not only through the stale
+    /// golden row or artifact entry it leaves behind.
+    #[test]
+    fn file_type_not_openable_has_exactly_its_two_ordered_witnesses() {
+        let targets: Vec<String> = corpus()
+            .iter()
+            .filter_map(|event| match event {
+                A11yEvent::Canvas {
+                    event:
+                        CanvasA11yEvent::CanvasBlocked {
+                            reason: CanvasBlockedReason::FileTypeNotOpenable { target },
+                        },
+                } => Some(target.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            targets,
+            vec!["setup.exe".to_owned(), "tools/setup.exe".to_owned()],
+            "FileTypeNotOpenable's witnesses must be the bare and the nested target, in that order"
+        );
+    }
+
+    /// The nested-enum table above must not silently fall behind the
+    /// module: every closed `Canvas*` parameter enum declared here is
+    /// listed, so adding one without a coverage site fails HERE rather
+    /// than leaving its arms unpinned forever.
+    #[test]
+    fn every_canvas_parameter_enum_is_listed_for_coverage() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/a11y.rs");
+        let source = std::fs::read_to_string(&path).expect("a11y source");
+        let declared: std::collections::BTreeSet<String> = source
+            .lines()
+            .filter_map(|line| line.strip_prefix("pub enum "))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .filter(|name| name.starts_with("Canvas"))
+            // The family enum itself is not a parameter of the family.
+            .filter(|name| *name != "CanvasA11yEvent")
+            .map(str::to_owned)
+            .collect();
+        let listed: std::collections::BTreeSet<String> = CANVAS_NESTED_ENUMS
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .collect();
+        assert_eq!(
+            declared, listed,
+            "CANVAS_NESTED_ENUMS is out of step with the declared canvas \
+             parameter enums"
+        );
+        assert_eq!(listed.len(), 18, "the canvas family carries 18 closed sets");
+    }
+
+    // =====================================================================
+    // The graph family (W6-2 PR 0a, #746; contracts doc 35_graph_contracts.md)
+    // =====================================================================
+
+    /// The INNER variant name of a graph event, or `None` for everything
+    /// else — the twin of `canvas_variant_of`.
+    fn graph_variant_of(event: &A11yEvent) -> Option<String> {
+        let debug = format!("{event:?}");
+        let at = debug.strip_prefix("Graph { event: ")?;
+        Some(at.chars().take_while(char::is_ascii_alphanumeric).collect())
+    }
+
+    /// `nested_arms` for the graph family: the arm a corpus entry selected
+    /// at each (variant, field) site, read from its Debug string.
+    fn graph_nested_arms(sites: &[(&str, &str)]) -> std::collections::BTreeSet<String> {
+        let mut arms = std::collections::BTreeSet::new();
+        for (variant, field) in sites {
+            let prefix = format!("{field}: ");
+            for event in corpus()
+                .iter()
+                .filter(|event| graph_variant_of(event).as_deref() == Some(*variant))
+            {
+                let debug = format!("{event:?}");
+                let Some(at) = debug.find(&prefix) else {
+                    continue;
+                };
+                let rest = &debug[at + prefix.len()..];
+                let rest = rest.strip_prefix("Some(").unwrap_or(rest);
+                let arm: String = rest
+                    .chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .collect();
+                if !arm.is_empty() && arm != "None" {
+                    arms.insert(arm);
+                }
+            }
+        }
+        arms
+    }
+
+    /// One closed set the graph family carries as a parameter — the
+    /// self-describing inventory row of the round-3 design pass
+    /// (contracts doc 0a-3, Subsystem A). Four consumers read it BY KEY:
+    /// core's coverage test (`path`, `sites`), uniffi's mirror tripwire
+    /// (`core`, `mirror`, `path`), and, through the corpus it pins, the
+    /// two host census mirrors. Nothing is positional.
+    struct NestedEnum {
+        /// The Rust enum, as declared.
+        core: &'static str,
+        /// The FFI enum that mirrors it (`GraphNodeKind` for `NodeKind`;
+        /// the same name otherwise).
+        mirror: &'static str,
+        /// The crate-relative source file that declares `core`.
+        path: &'static str,
+        /// The (variant, field) sites the set is reached through.
+        sites: &'static [(&'static str, &'static str)],
+    }
+
+    /// Every closed set the graph family carries as a parameter — nine
+    /// rows: the eight `Graph*` sets of this module and the one external
+    /// set, `graph::NodeKind`, whose mirror is the graph surface's own
+    /// `GraphNodeKind` (0aD-4). slate-uniffi's tripwire reads this table
+    /// by the keys `core:`, `mirror:` and `path:`.
+    const GRAPH_NESTED_ENUMS: &[NestedEnum] = &[
+        NestedEnum {
+            core: "GraphVerbosity",
+            mirror: "GraphVerbosity",
+            path: "src/a11y.rs",
+            sites: &[("GraphRow", "verbosity")],
+        },
+        NestedEnum {
+            core: "GraphPresetOutcome",
+            mirror: "GraphPresetOutcome",
+            path: "src/a11y.rs",
+            sites: &[("GraphPreset", "outcome")],
+        },
+        NestedEnum {
+            core: "GraphForceControl",
+            mirror: "GraphForceControl",
+            path: "src/a11y.rs",
+            sites: &[("GraphForceValue", "control")],
+        },
+        NestedEnum {
+            core: "GraphSurfaceMode",
+            mirror: "GraphSurfaceMode",
+            path: "src/a11y.rs",
+            sites: &[("GraphMode", "mode")],
+        },
+        NestedEnum {
+            core: "GraphWhereAmISelection",
+            mirror: "GraphWhereAmISelection",
+            path: "src/a11y.rs",
+            sites: &[("GraphWhereAmI", "selection")],
+        },
+        NestedEnum {
+            core: "GraphWhereAmIFilter",
+            mirror: "GraphWhereAmIFilter",
+            path: "src/a11y.rs",
+            sites: &[("GraphWhereAmI", "filter")],
+        },
+        NestedEnum {
+            core: "GraphStatusNote",
+            mirror: "GraphStatusNote",
+            path: "src/a11y.rs",
+            sites: &[("GraphStatus", "note")],
+        },
+        NestedEnum {
+            core: "GraphBlockedReason",
+            mirror: "GraphBlockedReason",
+            path: "src/a11y.rs",
+            sites: &[("GraphBlocked", "reason")],
+        },
+        NestedEnum {
+            core: "NodeKind",
+            mirror: "GraphNodeKind",
+            path: "src/graph.rs",
+            sites: &[("GraphRow", "kind"), ("GraphWhereAmI", "kind")],
+        },
+    ];
+
+    /// Five-place rule, first place, for the graph (0a-4): a graph variant
+    /// — or an arm of any inventory row, the reused `NodeKind` at its
+    /// row-copy sites included — that never reaches `corpus()` is pinned
+    /// by nothing.
+    #[test]
+    fn every_graph_variant_and_arm_is_represented_in_the_corpus() {
+        let declared = declared_variants("GraphA11yEvent");
+        assert_eq!(
+            declared.len(),
+            17,
+            "the graph family declares seventeen variants (0a-1); parsed {:?}",
+            declared
+        );
+        let represented: std::collections::BTreeSet<String> =
+            corpus().iter().filter_map(graph_variant_of).collect();
+        let missing: Vec<&String> = declared.difference(&represented).collect();
+        assert!(
+            missing.is_empty(),
+            "these graph variants never appear in corpus(), so no golden, no \
+             artifact entry, and neither host census covers them: {missing:?}"
+        );
+        for row in GRAPH_NESTED_ENUMS {
+            let declared = declared_variants_in(row.path, row.core);
+            assert!(
+                !declared.is_empty(),
+                "parsed no arms of {} in {} — the parser broke, not the vocabulary",
+                row.core,
+                row.path
+            );
+            let covered = graph_nested_arms(row.sites);
+            let missing: Vec<&String> = declared.difference(&covered).collect();
+            assert!(
+                missing.is_empty(),
+                "{} arms with no corpus entry, so their shipped string is pinned nowhere: {missing:?}",
+                row.core
+            );
+        }
+    }
+
+    /// The inventory lists exactly the `Graph*` parameter enums this
+    /// module declares (mirror = core) plus the one external set, by name.
+    #[test]
+    fn every_graph_parameter_enum_is_listed_for_coverage() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/a11y.rs");
+        let source = std::fs::read_to_string(&path).expect("a11y source");
+        let declared: std::collections::BTreeSet<String> = source
+            .lines()
+            .filter_map(|line| line.strip_prefix("pub enum "))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .filter(|name| name.starts_with("Graph"))
+            .filter(|name| *name != "GraphA11yEvent")
+            .map(str::to_owned)
+            .collect();
+        let local: std::collections::BTreeSet<String> = GRAPH_NESTED_ENUMS
+            .iter()
+            .filter(|row| row.path == "src/a11y.rs")
+            .map(|row| {
+                assert_eq!(
+                    row.core, row.mirror,
+                    "a local set mirrors under its own name"
+                );
+                row.core.to_owned()
+            })
+            .collect();
+        assert_eq!(
+            declared, local,
+            "GRAPH_NESTED_ENUMS is out of step with the declared graph parameter enums"
+        );
+        let external: Vec<(&str, &str, &str)> = GRAPH_NESTED_ENUMS
+            .iter()
+            .filter(|row| row.path != "src/a11y.rs")
+            .map(|row| (row.core, row.mirror, row.path))
+            .collect();
+        assert_eq!(
+            external,
+            vec![("NodeKind", "GraphNodeKind", "src/graph.rs")],
+            "the one external set the graph family reuses is graph::NodeKind (0aD-4)"
+        );
+        assert_eq!(
+            GRAPH_NESTED_ENUMS.len(),
+            9,
+            "eight local sets plus one external"
+        );
+    }
+
+    /// The family is reached through exactly one top-level variant. The
+    /// two workspace-level graph events that predate it
+    /// (`GraphOpensSinglePane`, `ReopenedGraph`) are tab-management copy,
+    /// not announcer vocabulary, and stay where they are.
+    #[test]
+    fn the_graph_family_occupies_one_top_level_variant() {
+        let top_level: std::collections::BTreeSet<String> = declared_variants("A11yEvent")
+            .into_iter()
+            .filter(|name| name.starts_with("Graph"))
+            .collect();
+        assert_eq!(
+            top_level,
+            ["Graph".to_owned(), "GraphOpensSinglePane".to_owned()]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<String>>(),
+            "the graph announcer family must nest under A11yEvent::Graph"
+        );
+        assert_eq!(
+            corpus()
+                .iter()
+                .filter(|event| variant_of(event) == "Graph")
+                .count(),
+            graph_corpus().len(),
+            "every graph witness reaches the corpus through the one wrapper"
+        );
+    }
+
+    /// 0a-1b: the uniffi budget. A later family bumps this on purpose.
+    #[test]
+    fn a11y_event_top_level_count_is_pinned() {
+        assert_eq!(
+            declared_variants("A11yEvent").len(),
+            199,
+            "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
+        );
+    }
+
+    /// 0a-5: the verbosity matrix on the ONE family whose template varies,
+    /// full rendered strings; and no other variant carries the parameter.
+    #[test]
+    fn graph_verbosity_matrix_pins_every_level() {
+        use crate::graph::NodeKind::{Ghost, Note};
+        let row = |label: &str, kind, in_links, out_links, references, embed| GraphRowCopy {
+            label: label.into(),
+            kind,
+            in_links,
+            out_links,
+            references,
+            embed,
+        };
+        let render = |verbosity, row| GraphA11yEvent::GraphRow { verbosity, row }.render();
+        let cases: [(&str, GraphRowCopy, &str); 3] = [
+            (
+                "Alpha",
+                row("Alpha", Note, 3, 1, 0, false),
+                "Alpha, 3 links in, 1 links out",
+            ),
+            (
+                "Missing Note",
+                row("Missing Note", Ghost, 0, 0, 2, false),
+                "Missing Note, unresolved, 2 references",
+            ),
+            (
+                "Pic",
+                row("Pic", Note, 1, 0, 0, true),
+                "Pic, 1 links in, 0 links out, embed",
+            ),
+        ];
+        for (terse, row, full) in cases {
+            assert_eq!(render(GraphVerbosity::Terse, row.clone()), terse);
+            assert_eq!(render(GraphVerbosity::Standard, row.clone()), full);
+            assert_eq!(render(GraphVerbosity::Verbose, row), full);
+        }
+        // Structural: the parameter rides on GraphRow and nothing else.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/a11y.rs");
+        let source = std::fs::read_to_string(&path).expect("a11y source");
+        let decl = source
+            .find("pub enum GraphA11yEvent {")
+            .expect("family declaration");
+        let body = &source[decl..source[decl..].find("\n}\n").expect("terminator") + decl];
+        assert_eq!(
+            body.matches("verbosity: GraphVerbosity").count(),
+            1,
+            "GraphVerbosity is a parameter of exactly one graph variant (0a-5)"
+        );
+    }
+
+    /// 0a-6 / 0a-D1: Where-am-I always speaks the full row copy, and every
+    /// clause renders exactly — the matrix's five states, in order.
+    #[test]
+    fn graph_where_am_i_renders_every_state_exactly() {
+        let where_am_i: Vec<String> = graph_corpus()
+            .iter()
+            .filter(|event| matches!(event, GraphA11yEvent::GraphWhereAmI { .. }))
+            .map(GraphA11yEvent::render)
+            .collect();
+        assert_eq!(
+            where_am_i,
+            vec![
+                "Alone, 0 links in, 0 links out, component 2, zoom 100 percent, filters: orphans only, attachments shown, unresolved shown, name filter \u{201C}alo\u{201D}.".to_owned(),
+                "Missing Note, unresolved, 2 references, component 0, zoom 250 percent, filters: unresolved shown, unresolved only.".to_owned(),
+                "No node selected, zoom 100 percent, filters: unresolved shown.".to_owned(),
+                "diagram.png, 1 links in, 0 links out, component 7, zoom 50 percent, filters: attachments shown, unresolved hidden.".to_owned(),
+                "Alpha, 3 links in, 1 links out, component 2, zoom 100 percent, filters: unresolved shown, name filter \u{201C}alpha\u{201D}.".to_owned(),
+                "Draft, unresolved, 0 references, component 1, zoom 100 percent, filters: unresolved shown, unresolved only.".to_owned(),
+                "Todo, unresolved, 1 references, component 3, zoom 80 percent, filters: unresolved shown, unresolved only.".to_owned(),
+                "Café, 2 links in, 4 links out, component 5, zoom 200 percent, filters: unresolved shown, name filter \u{201C}cafe\u{201D}.".to_owned(),
+            ]
+        );
+    }
+
+    /// Mac's name-filter predicate, `graphNameMatches`: case- AND
+    /// diacritic-insensitive containment — folded here as NFD with the
+    /// combining marks dropped, then lower-cased.
+    fn name_filter_fold(text: &str) -> String {
+        // ONE definition (W6-2 PR 0b, contracts doc 0b-6): the production
+        // fold in `graph_queries`, which the visibility query itself uses.
+        crate::graph_queries::name_filter_fold(text)
+    }
+
+    /// A row copy comes from exactly two constructors (contracts doc
+    /// 0a-2b's invariants): the Connections row (`references = in_links +
+    /// in_embeds`) and the diagram row (`references = in_links`); an
+    /// Attachment or a Ghost has no file to link from.
+    fn row_copy_is_constructible(row: &GraphRowCopy, diagram_only: bool, event: &GraphA11yEvent) {
+        use crate::graph::NodeKind;
+        if diagram_only {
+            assert_eq!(row.references, row.in_links, "a diagram row: {event:?}");
+            assert!(!row.embed, "a diagram row never carries embed: {event:?}");
+        } else {
+            assert!(
+                row.references >= row.in_links,
+                "references count links and embeds: {event:?}"
+            );
+        }
+        if matches!(row.kind, NodeKind::Attachment | NodeKind::Ghost) {
+            assert_eq!(row.out_links, 0, "no file to link from: {event:?}");
+            // An embed-only relationship into a node that cannot be a
+            // source is an INCOMING embed, so the row's references exceed
+            // its link degree (ledger IG0a-58).
+            if row.embed {
+                assert!(
+                    row.references > row.in_links,
+                    "an embed-only ghost or attachment has an incoming embed: {event:?}"
+                );
+            }
+        }
+        // References above the link degree are embeds; a node with embeds
+        // but no links is still connected to something.
+        if !row.embed && row.references > row.in_links {
+            assert!(
+                row.in_links > 0 || row.out_links > 0,
+                "a row with references and no embed flag: {event:?}"
+            );
+        }
+    }
+
+    /// Design B(i), audited over the WHOLE schema (contracts doc 0a-2b's
+    /// "Payload invariants" table): every witness obeys the invariants
+    /// the shipped host guarantees, so no witness pins a state a user can
+    /// never be in. Exhaustive over the variants: a new variant must say
+    /// what it guarantees.
+    #[test]
+    fn graph_witnesses_obey_the_payload_invariants() {
+        use crate::graph::NodeKind;
+        use GraphA11yEvent::*;
+        const TIER_B_THRESHOLD: u32 = 1500;
+        // The shared viewport clamps its scale to 0.1..=4.0.
+        const ZOOM_PERCENT: std::ops::RangeInclusive<u32> = 10..=400;
+        for event in graph_corpus() {
+            match &event {
+                GraphRow { row, .. } => row_copy_is_constructible(row, false, &event),
+                GraphSnapshotSummary { counts } => {
+                    assert!(
+                        counts.orphans <= counts.notes,
+                        "an orphan is a note: {event:?}"
+                    );
+                    // Every edge originates from a Note, and every retained
+                    // ghost was created by a retained reference (ledger
+                    // IG0a-59).
+                    assert!(
+                        counts.links == 0 || counts.notes > 0,
+                        "links need a note to come from: {event:?}"
+                    );
+                    assert!(
+                        counts.unresolved <= counts.links,
+                        "a ghost is a referenced target: {event:?}"
+                    );
+                }
+                GraphNeighborhoodSummary { counts } => {
+                    assert!(
+                        (1..=3).contains(&counts.depth),
+                        "depth is clamped: {event:?}"
+                    );
+                    // A centre with a link degree has a depth-one Note
+                    // neighbour (or is one) in the payload (ledger IG0a-59).
+                    assert!(
+                        (counts.in_links == 0 && counts.out_links == 0) || counts.note_count > 0,
+                        "a linked centre has a note in its neighbourhood: {event:?}"
+                    );
+                }
+                GraphFilterCount { shown, total } => {
+                    assert!(
+                        shown <= total,
+                        "the needle narrows, never widens: {event:?}"
+                    );
+                }
+                GraphForceValue { percent, .. } => {
+                    assert!(*percent <= 100, "a slider's percent: {event:?}");
+                }
+                GraphZoom { percent, .. } => {
+                    assert!(
+                        ZOOM_PERCENT.contains(percent),
+                        "the viewport's clamp: {event:?}"
+                    );
+                }
+                GraphTierSummary { count } => {
+                    assert!(
+                        *count > TIER_B_THRESHOLD,
+                        "tier B begins above the threshold: {event:?}"
+                    );
+                }
+                GraphWhereAmI {
+                    selection,
+                    zoom_percent,
+                    filter,
+                    name_filter,
+                } => {
+                    assert!(
+                        ZOOM_PERCENT.contains(zoom_percent),
+                        "the viewport's clamp: {event:?}"
+                    );
+                    if let GraphWhereAmISelection::Node { row, .. } = selection {
+                        // The selection is a DIAGRAM row.
+                        row_copy_is_constructible(row, true, &event);
+                        if let GraphWhereAmIFilter::Normal {
+                            orphans_only: true, ..
+                        } = filter
+                        {
+                            assert!(
+                                row.kind == NodeKind::Note
+                                    && row.in_links == 0
+                                    && row.out_links == 0,
+                                "under orphans-only only orphan notes survive the filter: {event:?}"
+                            );
+                        }
+                        if let Some(needle) = name_filter {
+                            let needle = name_filter_fold(needle.trim());
+                            if !needle.is_empty() {
+                                assert!(
+                                    name_filter_fold(&row.label).contains(&needle),
+                                    "under a name filter only matching labels exist (mac's fold): {event:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+                // One label per unique neighbour ID; the text may repeat.
+                GraphNeighborsContent { .. }
+                | GraphReRooted { .. }
+                | GraphPreset { .. }
+                | GraphLayoutSettled
+                | GraphPinned { .. }
+                | GraphMode { .. }
+                | GraphTierEntered
+                | GraphStatus { .. }
+                | GraphBlocked { .. } => {}
+            }
+        }
+        // The fold is mac's predicate, witnessed: "Café" under `cafe`.
+        assert_eq!(name_filter_fold("Café"), "cafe");
+    }
+
+    /// Design B(i), 0a-6: every Where-am-I witness is a state the shipped
+    /// host can reach — a Ghost is selected only while ghosts are shown, an
+    /// Attachment only while attachments are shown, and under the
+    /// unresolved preset only Ghost rows exist to select.
+    #[test]
+    fn graph_where_am_i_witnesses_are_host_reachable() {
+        use crate::graph::NodeKind;
+        let mut seen = 0;
+        for event in graph_corpus() {
+            let GraphA11yEvent::GraphWhereAmI {
+                selection, filter, ..
+            } = &event
+            else {
+                continue;
+            };
+            seen += 1;
+            let GraphWhereAmISelection::Node { row, .. } = selection else {
+                continue;
+            };
+            let reachable = match (row.kind, filter) {
+                (NodeKind::Ghost, GraphWhereAmIFilter::UnresolvedOnly) => true,
+                (NodeKind::Ghost, GraphWhereAmIFilter::Normal { ghosts_shown, .. }) => {
+                    *ghosts_shown
+                }
+                (
+                    NodeKind::Attachment,
+                    GraphWhereAmIFilter::Normal {
+                        attachments_shown, ..
+                    },
+                ) => *attachments_shown,
+                (NodeKind::Note, GraphWhereAmIFilter::Normal { .. }) => true,
+                (NodeKind::Note | NodeKind::Attachment, GraphWhereAmIFilter::UnresolvedOnly) => {
+                    false
+                }
+            };
+            assert!(reachable, "unreachable Where-am-I witness: {event:?}");
+        }
+        assert_eq!(seen, 8, "the matrix carries eight Where-am-I witnesses");
+    }
+
+    /// 0a-8: exactly the blocked family is High; every other graph event,
+    /// Where-am-I included, is Medium — both directions.
+    #[test]
+    fn graph_priorities_pin_the_error_tier() {
+        for event in graph_corpus() {
+            let high = matches!(event, GraphA11yEvent::GraphBlocked { .. });
+            assert_eq!(
+                event.priority(),
+                if high { High } else { Medium },
+                "priority for {event:?}"
+            );
+        }
+    }
+
+    /// A count slot the graph speaks: its name, the value this witness
+    /// carries, and the fragment its template renders at exactly one when
+    /// the slot has a noun (`None` for bare numbers — percents, ordinals,
+    /// components).
+    struct GraphCountSlot {
+        name: &'static str,
+        value: u64,
+        at_one: Option<&'static str>,
+    }
+
+    /// Every count slot of every graph event, EXHAUSTIVE at every level:
+    /// the compiler refuses this function the moment a variant or a closed
+    /// arm joins the family without declaring what it counts (contracts
+    /// doc 0a-15). `..` elides only fields whose types cannot gain
+    /// variants.
+    fn graph_count_slots(event: &GraphA11yEvent) -> Vec<GraphCountSlot> {
+        use crate::graph::NodeKind;
+        use GraphA11yEvent::*;
+        fn row_slots(prefix: &'static str, row: &GraphRowCopy) -> Vec<GraphCountSlot> {
+            let slot = |name, value, at_one| GraphCountSlot {
+                name,
+                value,
+                at_one,
+            };
+            match row.kind {
+                NodeKind::Ghost => vec![slot(
+                    match prefix {
+                        "GraphRow" => "GraphRow.references",
+                        _ => "GraphWhereAmI.row.references",
+                    },
+                    u64::from(row.references),
+                    Some("1 references"),
+                )],
+                NodeKind::Note | NodeKind::Attachment => vec![
+                    slot(
+                        match prefix {
+                            "GraphRow" => "GraphRow.in_links",
+                            _ => "GraphWhereAmI.row.in_links",
+                        },
+                        u64::from(row.in_links),
+                        Some("1 links in"),
+                    ),
+                    slot(
+                        match prefix {
+                            "GraphRow" => "GraphRow.out_links",
+                            _ => "GraphWhereAmI.row.out_links",
+                        },
+                        u64::from(row.out_links),
+                        Some("1 links out"),
+                    ),
+                ],
+            }
+        }
+        let slot = |name, value, at_one| GraphCountSlot {
+            name,
+            value,
+            at_one,
+        };
+        match event {
+            GraphRow { verbosity, row } => match verbosity {
+                // Terse speaks the bare label: no count reaches the template.
+                GraphVerbosity::Terse => Vec::new(),
+                GraphVerbosity::Standard | GraphVerbosity::Verbose => row_slots("GraphRow", row),
+            },
+            GraphReRooted { .. } => Vec::new(),
+            GraphSnapshotSummary { counts } => {
+                let mut slots = vec![
+                    slot("GraphSnapshotSummary.notes", counts.notes, Some("1 notes")),
+                    slot("GraphSnapshotSummary.links", counts.links, Some("1 links.")),
+                ];
+                // The second sentence is omitted when both are zero, so a
+                // zero here is spoken only beside a non-zero partner.
+                if counts.orphans > 0 || counts.unresolved > 0 {
+                    slots.push(slot(
+                        "GraphSnapshotSummary.orphans",
+                        counts.orphans,
+                        Some("1 orphans"),
+                    ));
+                    slots.push(slot(
+                        "GraphSnapshotSummary.unresolved",
+                        counts.unresolved,
+                        Some("1 unresolved targets"),
+                    ));
+                }
+                slots
+            }
+            GraphNeighborhoodSummary { counts } => vec![
+                slot(
+                    "GraphNeighborhoodSummary.in_links",
+                    u64::from(counts.in_links),
+                    Some("1 links in"),
+                ),
+                slot(
+                    "GraphNeighborhoodSummary.out_links",
+                    u64::from(counts.out_links),
+                    Some("1 links out"),
+                ),
+                slot(
+                    "GraphNeighborhoodSummary.note_count",
+                    counts.note_count,
+                    Some("1 notes"),
+                ),
+                slot(
+                    "GraphNeighborhoodSummary.depth",
+                    u64::from(counts.depth),
+                    Some("within 1 links"),
+                ),
+            ],
+            GraphPreset { outcome } => match outcome {
+                GraphPresetOutcome::Orphans { count } => {
+                    vec![slot(
+                        "GraphPreset.Orphans.count",
+                        *count,
+                        Some("1 orphaned notes"),
+                    )]
+                }
+                GraphPresetOutcome::Unresolved { count } => vec![slot(
+                    "GraphPreset.Unresolved.count",
+                    *count,
+                    Some("1 unresolved targets"),
+                )],
+                GraphPresetOutcome::MostLinked { in_links, .. } => vec![slot(
+                    "GraphPreset.MostLinked.in_links",
+                    u64::from(*in_links),
+                    Some("1 links in"),
+                )],
+                GraphPresetOutcome::NoNotesToRank => Vec::new(),
+            },
+            GraphFilterCount { shown, total } => vec![
+                slot("GraphFilterCount.shown", u64::from(*shown), None),
+                slot("GraphFilterCount.total", u64::from(*total), None),
+            ],
+            GraphForceValue { control, percent } => {
+                match control {
+                    GraphForceControl::Center
+                    | GraphForceControl::Repel
+                    | GraphForceControl::Link
+                    | GraphForceControl::LinkDistance => {}
+                }
+                vec![slot("GraphForceValue.percent", u64::from(*percent), None)]
+            }
+            GraphLayoutSettled | GraphTierEntered => Vec::new(),
+            GraphPinned { .. } => Vec::new(),
+            GraphZoom { percent, .. } => vec![slot("GraphZoom.percent", u64::from(*percent), None)],
+            GraphMode { mode } => {
+                match mode {
+                    GraphSurfaceMode::Table | GraphSurfaceMode::Diagram => {}
+                }
+                Vec::new()
+            }
+            GraphWhereAmI {
+                selection,
+                zoom_percent,
+                filter,
+                ..
+            } => {
+                // The filter arms speak no count, but they are a closed set
+                // and so are matched rather than elided.
+                match filter {
+                    GraphWhereAmIFilter::Normal { .. } | GraphWhereAmIFilter::UnresolvedOnly => {}
+                }
+                let mut slots = match selection {
+                    GraphWhereAmISelection::Node { row, component } => {
+                        let mut slots = row_slots("GraphWhereAmI", row);
+                        slots.push(slot("GraphWhereAmI.component", u64::from(*component), None));
+                        slots
+                    }
+                    GraphWhereAmISelection::NoSelection => Vec::new(),
+                };
+                slots.push(slot(
+                    "GraphWhereAmI.zoom_percent",
+                    u64::from(*zoom_percent),
+                    None,
+                ));
+                slots
+            }
+            GraphTierSummary { count } => {
+                vec![slot(
+                    "GraphTierSummary.count",
+                    u64::from(*count),
+                    Some("1 nodes"),
+                )]
+            }
+            GraphNeighborsContent { labels } => {
+                let mut slots = vec![slot(
+                    "GraphNeighborsContent.labels",
+                    labels.len() as u64,
+                    None,
+                )];
+                // The overflow is DERIVED: core's cap, not a host count.
+                if labels.len() > GRAPH_NEIGHBOR_LABEL_CAP {
+                    slots.push(slot(
+                        "GraphNeighborsContent.more",
+                        (labels.len() - GRAPH_NEIGHBOR_LABEL_CAP) as u64,
+                        Some("and 1 more"),
+                    ));
+                }
+                slots
+            }
+            GraphStatus { note } => {
+                match note {
+                    GraphStatusNote::Opened
+                    | GraphStatusNote::AlreadyOpen
+                    | GraphStatusNote::ConnectionsPanel
+                    | GraphStatusNote::NoteCreated { .. }
+                    | GraphStatusNote::NoConnections
+                    | GraphStatusNote::LoadingConnections => {}
+                }
+                Vec::new()
+            }
+            GraphBlocked { reason } => {
+                match reason {
+                    GraphBlockedReason::LoadFailed { .. }
+                    | GraphBlockedReason::ConnectionsLoadFailed { .. }
+                    | GraphBlockedReason::NoteCreateFailed { .. } => {}
+                }
+                Vec::new()
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    enum Cardinality {
+        Zero,
+        One,
+        Many,
+    }
+
+    fn cardinality(value: u64) -> Cardinality {
+        match value {
+            0 => Cardinality::Zero,
+            1 => Cardinality::One,
+            _ => Cardinality::Many,
+        }
+    }
+
+    /// Contracts doc 0a-15's reachability table: every slot the classifier
+    /// can emit, with the cardinalities a host can actually reach. A slot
+    /// missing here, or a declared cell without a witness, fails below.
+    /// An empty list marks a bare number: witnessed, not boundary-matrixed.
+    const GRAPH_SLOT_REACH: &[(&str, &[Cardinality])] = {
+        use Cardinality::{Many, One, Zero};
+        &[
+            ("GraphRow.in_links", &[Zero, One, Many]),
+            ("GraphRow.out_links", &[Zero, One, Many]),
+            ("GraphRow.references", &[Zero, One, Many]),
+            ("GraphSnapshotSummary.notes", &[Zero, One, Many]),
+            ("GraphSnapshotSummary.links", &[Zero, One, Many]),
+            ("GraphSnapshotSummary.orphans", &[Zero, One, Many]),
+            ("GraphSnapshotSummary.unresolved", &[Zero, One, Many]),
+            ("GraphNeighborhoodSummary.in_links", &[Zero, One, Many]),
+            ("GraphNeighborhoodSummary.out_links", &[Zero, One, Many]),
+            ("GraphNeighborhoodSummary.note_count", &[Zero, One, Many]),
+            // Depth clamps to 1..=3: zero is unreachable.
+            ("GraphNeighborhoodSummary.depth", &[One, Many]),
+            ("GraphPreset.Orphans.count", &[Zero, One, Many]),
+            ("GraphPreset.Unresolved.count", &[Zero, One, Many]),
+            ("GraphPreset.MostLinked.in_links", &[Zero, One, Many]),
+            ("GraphFilterCount.shown", &[Zero, One, Many]),
+            ("GraphFilterCount.total", &[Zero, One, Many]),
+            ("GraphForceValue.percent", &[]),
+            ("GraphZoom.percent", &[]),
+            ("GraphWhereAmI.row.in_links", &[Zero, One, Many]),
+            ("GraphWhereAmI.row.out_links", &[Zero, One, Many]),
+            ("GraphWhereAmI.row.references", &[Zero, One, Many]),
+            ("GraphWhereAmI.component", &[]),
+            ("GraphWhereAmI.zoom_percent", &[]),
+            // The tier begins above core's threshold: only many is reachable.
+            ("GraphTierSummary.count", &[Many]),
+            ("GraphNeighborsContent.labels", &[Zero, One, Many]),
+            // The clause is omitted at zero.
+            ("GraphNeighborsContent.more", &[One, Many]),
+        ]
+    };
+
+    /// 0a-15: every reachable zero/one/many cell of every noun-bearing
+    /// slot has a witness in the matrix, and the matrix speaks no slot the
+    /// table does not know.
+    #[test]
+    fn graph_count_slots_render_at_every_reachable_cardinality() {
+        use std::collections::{BTreeMap, BTreeSet};
+        let mut seen: BTreeMap<&str, BTreeSet<Cardinality>> = BTreeMap::new();
+        for event in graph_corpus() {
+            for slot in graph_count_slots(&event) {
+                seen.entry(slot.name)
+                    .or_default()
+                    .insert(cardinality(slot.value));
+            }
+        }
+        let table: BTreeMap<&str, BTreeSet<Cardinality>> = GRAPH_SLOT_REACH
+            .iter()
+            .map(|(name, cells)| (*name, cells.iter().copied().collect()))
+            .collect();
+        let unknown: Vec<&&str> = seen
+            .keys()
+            .filter(|name| !table.contains_key(*name))
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "slots the reachability table does not know: {unknown:?}"
+        );
+        for (name, cells) in &table {
+            let witnessed = seen.get(name).cloned().unwrap_or_default();
+            assert!(
+                !witnessed.is_empty(),
+                "slot {name} is declared but no witness in the matrix speaks it"
+            );
+            let missing: Vec<&Cardinality> = cells.difference(&witnessed).collect();
+            assert!(
+                missing.is_empty(),
+                "slot {name} is reachable at {missing:?} but the matrix carries no such witness"
+            );
+        }
+    }
+
+    /// 0a-15: the preserved plural defects are EXACTLY these (variant,
+    /// slot) pairs — each renders its fixed-plural fragment at one, from
+    /// its own slot — and every other noun slot reachable at one is
+    /// grammatical there. The shipped strings keep their plurals
+    /// (P1 review round 1 finding 5); this test keeps the list honest.
+    #[test]
+    fn graph_plural_defects_are_exactly_these_slots() {
+        use std::collections::BTreeSet;
+        const DEFECTS: &[&str] = &[
+            "GraphRow.in_links",
+            "GraphRow.out_links",
+            "GraphRow.references",
+            "GraphSnapshotSummary.notes",
+            "GraphSnapshotSummary.links",
+            "GraphSnapshotSummary.orphans",
+            "GraphSnapshotSummary.unresolved",
+            "GraphNeighborhoodSummary.in_links",
+            "GraphNeighborhoodSummary.out_links",
+            "GraphNeighborhoodSummary.note_count",
+            "GraphNeighborhoodSummary.depth",
+            "GraphPreset.Orphans.count",
+            "GraphPreset.Unresolved.count",
+            "GraphPreset.MostLinked.in_links",
+            // The same fragments through Where-am-I's row copy: each
+            // pair its own, each witnessed at one (0a-15).
+            "GraphWhereAmI.row.in_links",
+            "GraphWhereAmI.row.out_links",
+            "GraphWhereAmI.row.references",
+        ];
+        const GRAMMATICAL_AT_ONE: &[&str] = &["GraphNeighborsContent.more"];
+        let mut noun_slots_at_one: BTreeSet<&str> = BTreeSet::new();
+        for event in graph_corpus() {
+            let rendered = event.render();
+            for slot in graph_count_slots(&event) {
+                let Some(fragment) = slot.at_one else {
+                    continue;
+                };
+                if slot.value != 1 {
+                    continue;
+                }
+                noun_slots_at_one.insert(slot.name);
+                assert!(
+                    rendered.contains(fragment),
+                    "slot {} at one renders {rendered:?}, which lacks its pinned fragment {fragment:?}",
+                    slot.name
+                );
+            }
+        }
+        let expected: BTreeSet<&str> = DEFECTS.iter().chain(GRAMMATICAL_AT_ONE).copied().collect();
+        assert_eq!(
+            noun_slots_at_one, expected,
+            "the noun slots witnessed at one must be exactly the defect list plus the grammatical clause"
+        );
+        // The tier count would read `1 nodes` — but one is unreachable, and
+        // the matrix must not pretend otherwise.
+        assert!(!noun_slots_at_one.contains("GraphTierSummary.count"));
+    }
+
+    /// 0a-17: the matrix's size, pinned.
+    #[test]
+    fn the_graph_family_witness_count_is_pinned() {
+        assert_eq!(
+            graph_corpus().len(),
+            73,
+            "the graph witness matrix has 73 ordered entries"
+        );
+    }
+
+    /// 0a-19: the matrix is EXECUTABLE and LOSSLESS — the graph entries of
+    /// the corpus, as their full Debug identities (the artifact's `event`
+    /// strings, every field), are exactly these, in this order. A deleted,
+    /// substituted, reordered or edited witness fails here on its own.
+    #[test]
+    fn the_graph_witnesses_are_exactly_the_matrix_in_order() {
+        let identities: Vec<String> = graph_corpus()
+            .iter()
+            .map(|event| format!("{event:?}"))
+            .collect();
+        let expected: Vec<&str> = vec![
+            "GraphRow { verbosity: Standard, row: GraphRowCopy { label: \"Alpha\", kind: Note, in_links: 3, out_links: 1, references: 3, embed: false } }",
+            "GraphRow { verbosity: Standard, row: GraphRowCopy { label: \"Missing Note\", kind: Ghost, in_links: 2, out_links: 0, references: 2, embed: false } }",
+            "GraphRow { verbosity: Standard, row: GraphRowCopy { label: \"Pic\", kind: Note, in_links: 1, out_links: 0, references: 1, embed: true } }",
+            "GraphRow { verbosity: Terse, row: GraphRowCopy { label: \"Alpha\", kind: Note, in_links: 3, out_links: 1, references: 3, embed: false } }",
+            "GraphRow { verbosity: Verbose, row: GraphRowCopy { label: \"Hub\", kind: Note, in_links: 1024, out_links: 3, references: 1024, embed: false } }",
+            "GraphRow { verbosity: Standard, row: GraphRowCopy { label: \"diagram.png\", kind: Attachment, in_links: 2, out_links: 0, references: 2, embed: false } }",
+            "GraphRow { verbosity: Standard, row: GraphRowCopy { label: \"Draft\", kind: Ghost, in_links: 0, out_links: 0, references: 0, embed: false } }",
+            "GraphRow { verbosity: Standard, row: GraphRowCopy { label: \"Todo\", kind: Ghost, in_links: 1, out_links: 0, references: 1, embed: false } }",
+            "GraphRow { verbosity: Standard, row: GraphRowCopy { label: \"Alone\", kind: Note, in_links: 0, out_links: 0, references: 0, embed: false } }",
+            "GraphRow { verbosity: Standard, row: GraphRowCopy { label: \"Missing\", kind: Ghost, in_links: 0, out_links: 0, references: 1, embed: true } }",
+            "GraphReRooted { label: \"Alpha\" }",
+            "GraphSnapshotSummary { counts: GraphSnapshotCounts { notes: 247, links: 1032, orphans: 12, unresolved: 3, filtered: false } }",
+            "GraphSnapshotSummary { counts: GraphSnapshotCounts { notes: 1, links: 1, orphans: 0, unresolved: 0, filtered: false } }",
+            "GraphSnapshotSummary { counts: GraphSnapshotCounts { notes: 0, links: 0, orphans: 0, unresolved: 0, filtered: false } }",
+            "GraphSnapshotSummary { counts: GraphSnapshotCounts { notes: 40, links: 60, orphans: 1, unresolved: 1, filtered: true } }",
+            "GraphSnapshotSummary { counts: GraphSnapshotCounts { notes: 5, links: 9, orphans: 0, unresolved: 2, filtered: false } }",
+            "GraphSnapshotSummary { counts: GraphSnapshotCounts { notes: 3, links: 4, orphans: 2, unresolved: 0, filtered: false } }",
+            "GraphSnapshotSummary { counts: GraphSnapshotCounts { notes: 1200, links: 3400, orphans: 1000, unresolved: 1001, filtered: false } }",
+            "GraphNeighborhoodSummary { counts: GraphNeighborhoodCounts { center_label: \"Alpha\", in_links: 3, out_links: 1, note_count: 7, depth: 1 } }",
+            "GraphNeighborhoodSummary { counts: GraphNeighborhoodCounts { center_label: \"Hub\", in_links: 1032, out_links: 4, note_count: 1206, depth: 3 } }",
+            "GraphNeighborhoodSummary { counts: GraphNeighborhoodCounts { center_label: \"diagram.png\", in_links: 0, out_links: 0, note_count: 0, depth: 2 } }",
+            "GraphNeighborhoodSummary { counts: GraphNeighborhoodCounts { center_label: \"Solo\", in_links: 1, out_links: 1, note_count: 1, depth: 1 } }",
+            "GraphNeighborhoodSummary { counts: GraphNeighborhoodCounts { center_label: \"Hub2\", in_links: 4, out_links: 1032, note_count: 12, depth: 2 } }",
+            "GraphPreset { outcome: Orphans { count: 12 } }",
+            "GraphPreset { outcome: Orphans { count: 1 } }",
+            "GraphPreset { outcome: Orphans { count: 0 } }",
+            "GraphPreset { outcome: Unresolved { count: 1 } }",
+            "GraphPreset { outcome: Unresolved { count: 12 } }",
+            "GraphPreset { outcome: Unresolved { count: 0 } }",
+            "GraphPreset { outcome: MostLinked { label: \"Hub\", in_links: 1032 } }",
+            "GraphPreset { outcome: MostLinked { label: \"Only\", in_links: 0 } }",
+            "GraphPreset { outcome: MostLinked { label: \"Solo\", in_links: 1 } }",
+            "GraphPreset { outcome: NoNotesToRank }",
+            "GraphFilterCount { shown: 3, total: 247 }",
+            "GraphFilterCount { shown: 1, total: 1 }",
+            "GraphFilterCount { shown: 0, total: 0 }",
+            "GraphForceValue { control: Center, percent: 50 }",
+            "GraphForceValue { control: Repel, percent: 70 }",
+            "GraphForceValue { control: Link, percent: 100 }",
+            "GraphForceValue { control: LinkDistance, percent: 0 }",
+            "GraphLayoutSettled",
+            "GraphPinned { pinned: true }",
+            "GraphPinned { pinned: false }",
+            "GraphZoom { fit: false, percent: 125 }",
+            "GraphZoom { fit: true, percent: 63 }",
+            "GraphMode { mode: Table }",
+            "GraphMode { mode: Diagram }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Alone\", kind: Note, in_links: 0, out_links: 0, references: 0, embed: false }, component: 2 }, zoom_percent: 100, filter: Normal { orphans_only: true, attachments_shown: true, ghosts_shown: true }, name_filter: Some(\"alo\") }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Missing Note\", kind: Ghost, in_links: 2, out_links: 0, references: 2, embed: false }, component: 0 }, zoom_percent: 250, filter: UnresolvedOnly, name_filter: None }",
+            "GraphWhereAmI { selection: NoSelection, zoom_percent: 100, filter: Normal { orphans_only: false, attachments_shown: false, ghosts_shown: true }, name_filter: Some(\"\\u{a0}\\u{2003}\") }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"diagram.png\", kind: Attachment, in_links: 1, out_links: 0, references: 1, embed: false }, component: 7 }, zoom_percent: 50, filter: Normal { orphans_only: false, attachments_shown: true, ghosts_shown: false }, name_filter: None }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Alpha\", kind: Note, in_links: 3, out_links: 1, references: 3, embed: false }, component: 2 }, zoom_percent: 100, filter: Normal { orphans_only: false, attachments_shown: false, ghosts_shown: true }, name_filter: Some(\"\\u{2003}alpha\\u{a0}\") }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Draft\", kind: Ghost, in_links: 0, out_links: 0, references: 0, embed: false }, component: 1 }, zoom_percent: 100, filter: UnresolvedOnly, name_filter: None }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Todo\", kind: Ghost, in_links: 1, out_links: 0, references: 1, embed: false }, component: 3 }, zoom_percent: 80, filter: UnresolvedOnly, name_filter: None }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Café\", kind: Note, in_links: 2, out_links: 4, references: 2, embed: false }, component: 5 }, zoom_percent: 200, filter: Normal { orphans_only: false, attachments_shown: false, ghosts_shown: true }, name_filter: Some(\"cafe\") }",
+            "GraphTierEntered",
+            "GraphTierSummary { count: 2000 }",
+            "GraphTierSummary { count: 1501 }",
+            "GraphNeighborsContent { labels: [\"N1\", \"N2\", \"N3\", \"N4\", \"N5\", \"N6\", \"N7\", \"N8\", \"N9\", \"N10\"] }",
+            "GraphNeighborsContent { labels: [\"N1\", \"N2\", \"N3\", \"N4\", \"N5\", \"N6\", \"N7\", \"N8\", \"N9\", \"N10\", \"N11\"] }",
+            "GraphNeighborsContent { labels: [\"N1\", \"N2\", \"N3\", \"N4\", \"N5\", \"N6\", \"N7\", \"N8\", \"N9\", \"N10\", \"N11\", \"N12\", \"N13\", \"N14\", \"N15\", \"N16\", \"N17\", \"N18\", \"N19\", \"N20\", \"N21\", \"N22\", \"N23\", \"N24\", \"N25\", \"N26\", \"N27\", \"N28\", \"N29\", \"N30\", \"N31\", \"N32\", \"N33\", \"N34\", \"N35\", \"N36\", \"N37\", \"N38\", \"N39\", \"N40\", \"N41\", \"N42\", \"N43\", \"N44\", \"N45\", \"N46\", \"N47\", \"N48\", \"N49\", \"N50\", \"N51\", \"N52\"] }",
+            "GraphNeighborsContent { labels: [\"Only\"] }",
+            "GraphNeighborsContent { labels: [] }",
+            "GraphNeighborsContent { labels: [\"Foo\", \"Foo\"] }",
+            "GraphStatus { note: Opened }",
+            "GraphStatus { note: AlreadyOpen }",
+            "GraphStatus { note: ConnectionsPanel }",
+            "GraphStatus { note: NoteCreated { name: \"Draft.md\" } }",
+            "GraphStatus { note: NoConnections }",
+            "GraphStatus { note: LoadingConnections }",
+            "GraphBlocked { reason: LoadFailed { message: \"io error\" } }",
+            "GraphBlocked { reason: ConnectionsLoadFailed { message: \"io error\" } }",
+            "GraphBlocked { reason: NoteCreateFailed { message: \"exists\" } }",
+        ];
+        assert_eq!(
+            identities.len(),
+            expected.len(),
+            "the matrix has {} rows",
+            expected.len()
+        );
+        for (index, (got, want)) in identities.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(
+                got, want,
+                "the graph witness matrix diverges at index {index}"
+            );
+        }
+    }
+
+    /// 0a-18: the module doc names no outstanding engine — only the
+    /// structural-mutation builder remains a named host-composed
+    /// exception — and the graph is recorded as migrated.
+    #[test]
+    fn the_module_doc_names_no_engine_but_the_mutation_builder() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/a11y.rs");
+        let source = std::fs::read_to_string(&path).expect("a11y source");
+        let doc: String = source
+            .lines()
+            .take_while(|line| {
+                line.starts_with("//!") || line.starts_with("//") || line.trim().is_empty()
+            })
+            .filter(|line| line.starts_with("//!"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            doc.contains("postMutationAnnouncement"),
+            "the one surviving residue site is named"
+        );
+        assert!(
+            doc.contains("GraphAnnouncer"),
+            "the graph migration is recorded"
+        );
+        for stale in [
+            "remaining named engine",
+            "GRAPH announcer's verbosity",
+            "W6-2 does for it what 0a did here",
+        ] {
+            assert!(
+                !doc.contains(stale),
+                "stale module-doc claim survives: {stale:?}"
+            );
+        }
+    }
+
+    /// What a canvas event says about CARDINALITY, if anything.
+    ///
+    /// Exhaustive at EVERY level. The outer variant is matched arm by
+    /// arm, and so is every one of the eighteen closed parameter sets
+    /// the family carries. The compiler therefore refuses this function
+    /// the moment a variant, or an arm of any nested set, is added;
+    /// nothing joins the family without its author declaring whether it
+    /// speaks a count. That is the property three rounds of
+    /// hand-maintained, hand-counted prose could not hold (contract
+    /// 0a-14; round record, rule 4).
+    ///
+    /// The precise rule for `..`: it elides only fields whose types
+    /// **cannot gain variants** — `String`, `u32`, `bool`,
+    /// `Vec<String>`, and `Option` of those, whose two arms are fixed
+    /// by the language. **Every parameter type that CAN gain variants
+    /// is explicitly matched, with no exception** — this module's
+    /// eighteen closed sets, and the three `core::canvas` sets the
+    /// vocabulary reuses (`RelativeDesc`, `EdgeDirection`,
+    /// `CanvasColor`), which cannot carry a count either but are
+    /// matched through the helpers below rather than trusted.
+    ///
+    /// "Speaks" means THIS value renders the count, not that the
+    /// variant sometimes can. `CanvasMovedTo` is the only arm whose
+    /// count is conditional on another field — the connection clause
+    /// rides at `Verbose` only — so a terse or standard moved-to speaks
+    /// no count and cannot serve as its witness. (Swept: every other
+    /// count reaches its template unconditionally. `CanvasMarksCleared`
+    /// swaps template at zero, but zero is a count it does speak.)
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum SpokenCardinality {
+        /// A `u32` count reaches the template.
+        Count(u32),
+        /// A collection LENGTH reaches the template, so the arm has an
+        /// empty case as well as a singular one.
+        Length(usize),
+    }
+
+    /// The three `core::canvas` sets this vocabulary reuses. They name
+    /// anchors, directions and colours, so none of them can carry a
+    /// count — but each CAN gain a variant, so they are MATCHED rather
+    /// than elided, and an arm added to any of them fails to compile
+    /// here. That is what lets the record say every variant-bearing
+    /// parameter type is matched, with no exception to remember.
+    fn relative_speaks_no_count(relative: &RelativeDesc) {
+        match relative {
+            RelativeDesc::Below(_)
+            | RelativeDesc::RightOf(_)
+            | RelativeDesc::Above(_)
+            | RelativeDesc::LeftOf(_)
+            | RelativeDesc::AtOrigin => {}
+        }
+    }
+
+    fn direction_speaks_no_count(direction: &EdgeDirection) {
+        match direction {
+            EdgeDirection::Outgoing
+            | EdgeDirection::Incoming
+            | EdgeDirection::Bidirectional
+            | EdgeDirection::Undirected => {}
+        }
+    }
+
+    fn color_speaks_no_count(color: &Option<CanvasColor>) {
+        match color {
+            Some(CanvasColor::Preset(_)) | Some(CanvasColor::Hex(_)) | None => {}
+        }
+    }
+
+    fn spoken_cardinality(event: &CanvasA11yEvent) -> Option<SpokenCardinality> {
+        use CanvasA11yEvent::*;
+        use SpokenCardinality::{Count, Length};
+        match event {
+            // --- speaks a count ---------------------------------------
+            CanvasMovedTo {
+                verbosity,
+                connection_count,
+                ..
+            } => match verbosity {
+                CanvasVerbosity::Verbose => Some(Count(*connection_count)),
+                // The connection clause is not rendered at all here, so
+                // this value speaks no count.
+                CanvasVerbosity::Terse | CanvasVerbosity::Standard => None,
+            },
+            CanvasWhereAmI {
+                connection_count,
+                mode,
+                filter,
+                ..
+            } => {
+                // `mode`/`filter` speak no count, but they are closed
+                // sets and so are matched rather than elided.
+                match mode {
+                    Some(CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect) | None => {}
+                }
+                match filter {
+                    CanvasFilterState::Inactive | CanvasFilterState::Active { .. } => {}
+                }
+                Some(Count(*connection_count))
+            }
+            CanvasGroupEntered { count, .. } => Some(Count(*count)),
+            CanvasTracePathEnd { titles } => Some(Length(titles.len())),
+            // The mode object is a shared clause, so BOTH arms speak
+            // its count and both need their own witness — the corpus is
+            // per event, not per clause.
+            CanvasModeEntered { mode, object } => {
+                match mode {
+                    CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect => {}
+                }
+                match object {
+                    CanvasModeObject::Cards { count } => Some(Count(*count)),
+                    CanvasModeObject::Card { .. } => None,
+                }
+            }
+            CanvasModeCommitted { verb, object } => {
+                match verb {
+                    CanvasTransientVerb::Move | CanvasTransientVerb::Resize => {}
+                }
+                match object {
+                    CanvasModeObject::Cards { count } => Some(Count(*count)),
+                    CanvasModeObject::Card { .. } => None,
+                }
+            }
+            CanvasModeCancelled { mode, restoration } => {
+                match mode {
+                    CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect => {}
+                }
+                match restoration {
+                    // The count is not interpolated here — only the noun
+                    // agrees with it ("card returned" / "cards
+                    // returned") — which is exactly the disagreement
+                    // this test hunts.
+                    CanvasModeRestoration::CardsReturned { count } => Some(Count(*count)),
+                    CanvasModeRestoration::Unstated
+                    | CanvasModeRestoration::SizeRestored
+                    | CanvasModeRestoration::BackAt { .. } => None,
+                }
+            }
+            CanvasDeleted {
+                target, verbosity, ..
+            } => {
+                match verbosity {
+                    CanvasVerbosity::Terse
+                    | CanvasVerbosity::Standard
+                    | CanvasVerbosity::Verbose => {}
+                }
+                match target {
+                    CanvasDeleteTarget::Cards { count } => Some(Count(*count)),
+                    CanvasDeleteTarget::Connection { direction, .. } => {
+                        direction_speaks_no_count(direction);
+                        None
+                    }
+                    CanvasDeleteTarget::Card { .. } | CanvasDeleteTarget::Group { .. } => None,
+                }
+            }
+            CanvasBulkMoved { count, relative } => {
+                relative_speaks_no_count(relative);
+                Some(Count(*count))
+            }
+            CanvasBulkColorSet { count, color } => {
+                color_speaks_no_count(color);
+                Some(Count(*count))
+            }
+            CanvasGrouped { count, .. }
+            | CanvasBulkDuplicated { count }
+            | CanvasMarkToggled { count, .. }
+            | CanvasMarksCleared { count } => Some(Count(*count)),
+            CanvasFilterCount { matched } => Some(Count(*matched)),
+            CanvasFilterCleared { total } => Some(Count(*total)),
+            CanvasLoadedDegraded { skipped } => Some(Count(*skipped)),
+
+            // --- speaks no count --------------------------------------
+            // Each closed parameter set is still matched arm by arm, so
+            // a count added to any of them lands here as a compile
+            // error rather than as an unpinned string.
+            CanvasMoveRelative { descs, overlap } => {
+                // Carries a `Vec` but never says how long it is — it
+                // joins the descriptions — so this is a Length-free
+                // arm. Its elements are still matched.
+                descs.iter().for_each(relative_speaks_no_count);
+                match overlap {
+                    Some(CanvasOverlapTransition::Onset)
+                    | Some(CanvasOverlapTransition::Cleared)
+                    | None => None,
+                }
+            }
+            CanvasResizeGeometry {
+                preset, overlap, ..
+            } => {
+                match preset {
+                    Some(CanvasResizePreset::DefaultSize)
+                    | Some(CanvasResizePreset::FitToContent)
+                    | None => {}
+                }
+                match overlap {
+                    Some(CanvasOverlapTransition::Onset)
+                    | Some(CanvasOverlapTransition::Cleared)
+                    | None => None,
+                }
+            }
+            CanvasModeRejected { active_mode } => match active_mode {
+                CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect => None,
+            },
+            CanvasModeEndedWithoutEffect { mode } => match mode {
+                CanvasMode::Move | CanvasMode::Resize | CanvasMode::Connect => None,
+            },
+            CanvasCardPlaced { verb, relative, .. } => {
+                match verb {
+                    CanvasPlaceVerb::Moved | CanvasPlaceVerb::Duplicated => {}
+                }
+                relative_speaks_no_count(relative);
+                None
+            }
+            CanvasCreated { relative, .. } | CanvasConnectedCardCreated { relative, .. } => {
+                relative_speaks_no_count(relative);
+                None
+            }
+            CanvasConnectionTraversed { direction, .. } => {
+                direction_speaks_no_count(direction);
+                None
+            }
+            CanvasColorSet { color, .. } => {
+                color_speaks_no_count(color);
+                None
+            }
+            CanvasOpened { target, .. } => match target {
+                CanvasOpenTarget::DefaultApp | CanvasOpenTarget::Browser => None,
+            },
+            CanvasSurfaceShown { surface } => match surface {
+                CanvasSurfaceKind::Outline
+                | CanvasSurfaceKind::Table
+                | CanvasSurfaceKind::Visual => None,
+            },
+            CanvasZoom { context, .. } => match context {
+                Some(CanvasZoomContext::FitCanvas)
+                | Some(CanvasZoomContext::ZoomedToSelection)
+                | None => None,
+            },
+            CanvasHistoryApplied { verb, .. } | CanvasUndoMenuTitle { verb, .. } => match verb {
+                CanvasHistoryVerb::Undo | CanvasHistoryVerb::Redo => None,
+            },
+            CanvasStatus { note } => match note {
+                CanvasStatusNote::NothingSelected
+                | CanvasStatusNote::NoMarks
+                | CanvasStatusNote::NotAGroup
+                | CanvasStatusNote::NotATextCard
+                | CanvasStatusNote::NotAFileCard
+                | CanvasStatusNote::NoGroups
+                | CanvasStatusNote::NoNotesInVault
+                | CanvasStatusNote::NoMediaInVault
+                | CanvasStatusNote::NoFilesToPointAt
+                | CanvasStatusNote::OnlyTextCardsConvert
+                | CanvasStatusNote::NoConnections
+                | CanvasStatusNote::PickOutsideMovingSet
+                | CanvasStatusNote::PickDifferentTarget
+                | CanvasStatusNote::NoChanges
+                | CanvasStatusNote::NotReadable
+                | CanvasStatusNote::Empty
+                | CanvasStatusNote::EndOfCanvas
+                | CanvasStatusNote::StartOfCanvas
+                | CanvasStatusNote::AtCanvasLevel
+                | CanvasStatusNote::NoCardsMatchFilter
+                | CanvasStatusNote::NothingToUndo
+                | CanvasStatusNote::NothingToRedo
+                | CanvasStatusNote::GroupIsEmpty { .. }
+                | CanvasStatusNote::NoOutgoingPath { .. }
+                | CanvasStatusNote::NotInAGroup { .. }
+                | CanvasStatusNote::NoConnection { .. }
+                | CanvasStatusNote::Reopening
+                | CanvasStatusNote::Loading => None,
+            },
+            CanvasBlocked { reason } => match reason {
+                CanvasBlockedReason::ModeBusy
+                | CanvasBlockedReason::UndoBlocked
+                | CanvasBlockedReason::RedoBlocked
+                | CanvasBlockedReason::UndoQuarantined
+                | CanvasBlockedReason::RedoQuarantined
+                | CanvasBlockedReason::LinkOpenFailed
+                | CanvasBlockedReason::AlignWouldOverlap
+                | CanvasBlockedReason::NotAUrl
+                | CanvasBlockedReason::CardTextUnreadable
+                | CanvasBlockedReason::NotePathMustEndInMd
+                | CanvasBlockedReason::NoFreeSpaceInGroup { .. }
+                | CanvasBlockedReason::NotePathExists { .. }
+                | CanvasBlockedReason::NoteReadFailed { .. }
+                | CanvasBlockedReason::NoteCreateFailed { .. }
+                | CanvasBlockedReason::NoteRetargetFailed { .. }
+                | CanvasBlockedReason::HeadingNotFound { .. }
+                | CanvasBlockedReason::ReopenFailed { .. }
+                | CanvasBlockedReason::FileTypeNotOpenable { .. } => None,
+            },
+            CanvasActionFailed { action, .. } => match action {
+                CanvasFailedAction::NewCard
+                | CanvasFailedAction::NewGroup
+                | CanvasFailedAction::NewCanvas
+                | CanvasFailedAction::MoveIntoGroup
+                | CanvasFailedAction::Placement
+                | CanvasFailedAction::Align
+                | CanvasFailedAction::Create
+                | CanvasFailedAction::RemoveFromGroup
+                | CanvasFailedAction::Duplicate
+                | CanvasFailedAction::CreateConnectedCard
+                | CanvasFailedAction::CanvasAction
+                | CanvasFailedAction::WhereAmI => None,
+            },
+            CanvasMutationRefused { reason } => match reason {
+                CanvasMutationRefusal::Opening
+                | CanvasMutationRefusal::Reopening
+                | CanvasMutationRefusal::RetargetFailed
+                | CanvasMutationRefusal::Unavailable
+                | CanvasMutationRefusal::ReadOnly
+                | CanvasMutationRefusal::CardEditorUnavailable
+                | CanvasMutationRefusal::RefreshPending => None,
+            },
+
+            // No closed parameter set at all — plain data only.
+            CanvasGroupLeft { .. }
+            | CanvasResizeClamped
+            | CanvasFileCreated { .. }
+            | CanvasConnected { .. }
+            | CanvasConnectionUpdated { .. }
+            | CanvasMovedIntoGroup { .. }
+            | CanvasRemovedFromGroup { .. }
+            | CanvasRenamedGroup { .. }
+            | CanvasCardUpdated { .. }
+            | CanvasCardRetargeted { .. }
+            | CanvasCardAligned { .. }
+            | CanvasConvertedToNote { .. }
+            | CanvasFollowSelectionToggled { .. }
+            | CanvasViewportNoPane
+            | CanvasSaveConflict
+            | CanvasFileNotFound { .. }
+            | CanvasHistoryQuarantinedTitle { .. }
+            | CanvasEmptyOnboarding { .. } => None,
+        }
+    }
+
+    /// Contract 0a-14, mechanically.
+    ///
+    /// Totality used to be pinned by a paragraph that counted arms and
+    /// witnesses by hand; three consecutive adversarial rounds found
+    /// three different miscounts in it (round record, rule 4), so the
+    /// invariant lives here and the paragraph points at this test.
+    ///
+    /// **(a)** the record — the count-speaking arms, derived from the
+    /// exhaustive classifier above and cross-checked against a written
+    /// list so the change is legible in a diff.
+    /// **(b)** each has a `corpus()` witness at exactly one; an arm
+    /// speaking a collection length also has an empty-collection one;
+    /// and an arm whose ZERO the host can reach has a zero witness
+    /// (that reachability is a claim about mac, so it is declared, not
+    /// derived — see `ZERO_REACHABLE`).
+    /// **(c)** those boundary renderings carry no plural form, except
+    /// the templates CR-3 pins, which are allow-listed as
+    /// (arm, string) PAIRS and proved to render from that arm and
+    /// nowhere else.
+    /// **(d)** a lexical source scan of the canvas render section: no
+    /// template may interpolate a count immediately before a hardcoded
+    /// plural noun, and no bare plural-noun literal may sit outside a
+    /// `plural` / `plural_len` / `counted` call.
+    ///
+    /// Between them these pin the BOUNDARY, not the whole domain:
+    /// agreement is checked at one (and at empty/zero where reachable),
+    /// and (d) routes count interpolations through the shared helpers.
+    ///
+    /// **(d) is a parser now, not a line scan** (contract 0b-16; the
+    /// implementation is below in this file). Two powers the 0a-1
+    /// version lacked, and this comment used to disclaim: the countable
+    /// noun list is DERIVED — it is the set of `one`/`many` arguments
+    /// this module's own `plural` / `plural_len` / `counted` call sites
+    /// pass, so a noun is guarded by being pluralized somewhere, not by
+    /// being typed into the test; and helper provenance is bound to the
+    /// LITERAL, not to the line, so a line carrying a real `plural(`
+    /// call no longer clears a hardcoded plural sitting beside it.
+    /// `\`-continuations are joined the way rustc joins them, with a
+    /// committed witness template proving the lexer builds the string
+    /// rustc does, and raw strings are refused loudly rather than
+    /// mis-lexed.
+    ///
+    /// It is still a check over THIS crate's source, not a proof:
+    /// `ZERO_REACHABLE` stays declared because host reachability is a
+    /// property of the mac call sites, and a runtime-assembled string or
+    /// a noun pluralized nowhere in the module remain outside its reach.
+    /// Those residuals are named in contract 0a-14, narrowed in place
+    /// rather than dropped.
+    #[test]
+    fn canvas_count_speaking_arms_have_boundary_witnesses_and_agreement() {
+        // (a) --------------------------------------------------------
+        let listed: std::collections::BTreeSet<&str> = [
+            "CanvasBulkColorSet",
+            "CanvasBulkDuplicated",
+            "CanvasBulkMoved",
+            "CanvasDeleted",
+            "CanvasFilterCleared",
+            "CanvasFilterCount",
+            "CanvasGroupEntered",
+            "CanvasGrouped",
+            "CanvasLoadedDegraded",
+            "CanvasMarkToggled",
+            "CanvasMarksCleared",
+            "CanvasModeCancelled",
+            "CanvasModeCommitted",
+            "CanvasModeEntered",
+            "CanvasMovedTo",
+            "CanvasTracePathEnd",
+            "CanvasWhereAmI",
+        ]
+        .into_iter()
+        .collect();
+
+        let mut speaking: std::collections::BTreeMap<String, Vec<(SpokenCardinality, String)>> =
+            std::collections::BTreeMap::new();
+        for entry in corpus() {
+            let A11yEvent::Canvas { ref event } = entry else {
+                continue;
+            };
+            if let Some(cardinality) = spoken_cardinality(event) {
+                let name = canvas_variant_of(&entry).expect("canvas variant name");
+                speaking
+                    .entry(name)
+                    .or_default()
+                    .push((cardinality, entry.render()));
+            }
+        }
+        let derived: std::collections::BTreeSet<&str> =
+            speaking.keys().map(String::as_str).collect();
+        assert_eq!(
+            derived, listed,
+            "the written list of count-speaking canvas arms is out of step with what \
+             `spoken_cardinality` classifies over corpus() — add the arm here, then \
+             give it the witnesses below"
+        );
+
+        // (b) --------------------------------------------------------
+        // Arms whose count the MAC HOST can actually reach at zero.
+        // Reachability is a property of the host's call sites, not of
+        // this crate, so it cannot be derived here — it is declared,
+        // with the reason, and re-checked when a host changes.
+        const ZERO_REACHABLE: &[(&str, &str)] = &[
+            ("CanvasMovedTo", "a card with no connections, at Verbose"),
+            ("CanvasWhereAmI", "a card with no connections"),
+            (
+                "CanvasMarkToggled",
+                "unmarking the last mark leaves zero marked",
+            ),
+            ("CanvasFilterCount", "a filter that matches nothing"),
+            (
+                "CanvasFilterCleared",
+                "clearing the filter on an empty canvas",
+            ),
+            (
+                "CanvasMarksCleared",
+                "clearing with nothing marked (its own template)",
+            ),
+            (
+                "CanvasBulkDuplicated",
+                "a STALE selection: create selects the new card, undo \
+                 removes it without reconciling `selection.selected`, \
+                 and Duplicate's seed passes its non-empty guard while \
+                 the collection it announces resolves to nothing",
+            ),
+            // NOT reachable, and so deliberately absent. The audit that
+            // matters is not "is the verb guarded" but "is the guarded
+            // collection the ANNOUNCED one" — `CanvasBulkDuplicated`
+            // above is exactly the case where it is not. Re-checked
+            // per verb: `CanvasDeleted`, `CanvasBulkColorSet` and
+            // `CanvasGrouped` announce `canvasMarkedInOrder`, which is
+            // already outline-filtered when the guard sees it;
+            // `CanvasBulkMoved` and the mode arms announce the same
+            // `canvasMovingSet` seed they guard (a stale id there
+            // reaches ONE, not zero — CD-15). `CanvasGroupEntered`
+            // counts a container holding the row just entered;
+            // `CanvasTracePathEnd` seeds with the selected card;
+            // `CanvasLoadedDegraded` only posts above zero.
+        ];
+        for (arm, _) in ZERO_REACHABLE {
+            assert!(
+                listed.contains(arm),
+                "{arm} is declared zero-reachable but is not a count-speaking arm"
+            );
+        }
+
+        for (arm, samples) in &speaking {
+            assert!(
+                samples.iter().any(|(c, _)| matches!(
+                    c,
+                    SpokenCardinality::Count(1) | SpokenCardinality::Length(1)
+                )),
+                "{arm} speaks a count but corpus() has no witness at ONE, so nothing \
+                 pins its singular rendering (contract 0a-14). NOTE: a witness only \
+                 counts if the event actually RENDERS the count — a non-Verbose \
+                 `CanvasMovedTo` does not"
+            );
+            if samples
+                .iter()
+                .any(|(c, _)| matches!(c, SpokenCardinality::Length(_)))
+            {
+                assert!(
+                    samples
+                        .iter()
+                        .any(|(c, _)| matches!(c, SpokenCardinality::Length(0))),
+                    "{arm} speaks a collection LENGTH, so it also needs an \
+                     empty-collection witness (contract 0a-14)"
+                );
+            }
+            if let Some((_, why)) = ZERO_REACHABLE.iter().find(|(a, _)| a == arm) {
+                assert!(
+                    samples
+                        .iter()
+                        .any(|(c, _)| matches!(c, SpokenCardinality::Count(0))),
+                    "{arm} can reach zero on the host ({why}) but corpus() has no \
+                     witness at zero (contract 0a-14)"
+                );
+            }
+        }
+
+        // (c) --------------------------------------------------------
+        // The shipped English defects CR-3 pins as verbatim, as
+        // (arm, rendering) PAIRS. The pairing is enforced below: each
+        // string must render from THAT arm and from nowhere else in the
+        // corpus, so a second defective template cannot hide behind an
+        // existing excuse, and a defect that moves arms fails here.
+        const CR3_VERBATIM_DEFECTS: &[(&str, &str)] = &[
+            // The plural rule is applied to the noun but the verb is
+            // fixed.
+            ("CanvasFilterCount", "1 card match."),
+            // "item" is singular, "are" is not.
+            (
+                "CanvasLoadedDegraded",
+                "Canvas loaded. 1 unsupported item are preserved in the file but not shown.",
+            ),
+        ];
+        // A plural noun, or a verb agreeing with one, has no business
+        // in a rendering whose count is one. The verbs are listed
+        // because NEITHER CR-3 defect carries a plural noun — both are
+        // correctly singular there — so a noun-only check would excuse
+        // them silently.
+        const PLURAL_AT_ONE: &[&str] =
+            &["cards", "marks", "items", "connections", " are ", " match."];
+
+        for (arm, text) in CR3_VERBATIM_DEFECTS {
+            let sources: Vec<String> = corpus()
+                .iter()
+                .filter(|event| event.render() == *text)
+                .filter_map(canvas_variant_of)
+                .collect();
+            assert_eq!(
+                sources,
+                vec![(*arm).to_owned()],
+                "CR3_VERBATIM_DEFECTS pairs {text:?} with {arm}, but the corpus renders \
+                 that exact string from {sources:?} — a carve-out excuses ONE template \
+                 on ONE arm, so update the pair (or drop it, if CR-3 was fixed)"
+            );
+        }
+
+        for (arm, samples) in &speaking {
+            for (cardinality, text) in samples {
+                if !matches!(
+                    cardinality,
+                    SpokenCardinality::Count(1) | SpokenCardinality::Length(1)
+                ) {
+                    continue;
+                }
+                if CR3_VERBATIM_DEFECTS
+                    .iter()
+                    .any(|(defect_arm, defect)| defect_arm == arm && defect == text)
+                {
+                    continue;
+                }
+                for token in PLURAL_AT_ONE {
+                    assert!(
+                        !text.contains(token),
+                        "{arm} renders {text:?} at a count of one, which carries the \
+                         plural form {token:?} — route the noun through \
+                         plural()/plural_len()/counted() (contract 0a-14), or, if this \
+                         is a deliberately preserved shipped defect, add the \
+                         (arm, string) pair to CR3_VERBATIM_DEFECTS with a citation"
+                    );
+                }
+            }
+        }
+
+        // (d) --------------------------------------------------------
+        // The canvas templates and the helpers they call: from the
+        // family's own impl block down to `corpus()`.
+        //
+        // W6-1 contract 0b-16 replaced the line-scoped scan 0a-1
+        // shipped. This walks the module's string literals WITH the
+        // call and argument position each one belongs to, so both of
+        // that scan's declared artefacts are gone: the countable-noun
+        // list is whatever the helper call sites actually pass, and a
+        // noun literal is excused only when THAT literal is a helper's
+        // noun argument — a line carrying a real `plural(` call no
+        // longer vouches for a hardcoded plural sitting beside it.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/a11y.rs");
+        let source = std::fs::read_to_string(&path).expect("a11y source");
+        let begin = source
+            .find("impl CanvasA11yEvent {")
+            .expect("canvas render impl");
+        let end = source[begin..]
+            .find("pub fn corpus()")
+            .expect("corpus() terminates the render section")
+            + begin;
+
+        // Every helper takes `(count, one, many)`, so the noun forms
+        // are arguments 1 and 2 of a call by one of these names.
+        const PLURAL_HELPERS: &[&str] = &["plural", "plural_len", "counted"];
+        const SINGULAR_ARG: usize = 1;
+        const PLURAL_ARG: usize = 2;
+
+        // The nouns this vocabulary counts, DERIVED from the calls that
+        // count them rather than declared here: a noun enters these
+        // sets by being pluralized somewhere in the module.
+        let module_literals = string_literals(&source);
+        let noun_forms = |position: usize| -> std::collections::BTreeSet<&str> {
+            module_literals
+                .iter()
+                .filter(|lit| PLURAL_HELPERS.contains(&lit.call.as_str()) && lit.arg == position)
+                .map(|lit| lit.text.as_str())
+                .collect()
+        };
+        let singulars = noun_forms(SINGULAR_ARG);
+        let plurals = noun_forms(PLURAL_ARG);
+        assert!(
+            !singulars.is_empty() && !plurals.is_empty(),
+            "no pluralization call sites were found, so this guard would pass \
+             vacuously — the lexer, the helper names or the argument positions are wrong"
+        );
+        let counted_nouns: std::collections::BTreeSet<&str> =
+            singulars.union(&plurals).copied().collect();
+
+        let literals = string_literals(&source[begin..end]);
+        assert!(
+            !literals.is_empty(),
+            "the canvas render section parsed to zero string literals, so this guard \
+             would pass vacuously"
+        );
+        // The lexer's own witness: this template is written across two
+        // source lines with a `\`-continuation, and rustc joins it with
+        // no indentation. If the lexer ever stops agreeing, the
+        // placeholder-then-noun check below is reading strings rustc
+        // never builds, and the whole guard is measuring the wrong text.
+        assert!(
+            literals
+                .iter()
+                .any(|lit| lit.text.contains("in the file but not shown.")),
+            "the lexer did not join a `\\`-continued template the way rustc does"
+        );
+        // The escape witness, for the same reason: a literal the lexer
+        // decodes differently from rustc is a literal this guard cannot
+        // see. `card\x73` and `card\u{73}` are both `cards` to rustc,
+        // and were `cardx73` / `cardu{73}` here until codex 0b round 1
+        // — an evasion any author could reach for by accident. The
+        // probes are lexed directly rather than planted in the render
+        // section, so proving the decoder does not require shipping an
+        // escaped noun in shipped copy.
+        //
+        // Written with escaped quotes rather than as raw strings
+        // BECAUSE the noun derivation above lexes this whole file, and
+        // the lexer refuses raw strings by design.
+        // The third probe is a continuation across a BLANK line, with
+        // the noun split by both escape families — rustc joins it to
+        // `{count} cards`, and a decoder that skips only indentation
+        // leaves a newline in the middle where the plural should be.
+        for probe in [
+            "\"{count} card\\x73\"",
+            "\"{count} card\\u{73}\"",
+            "\"{count} car\\u{64}\\\n\n\\x73\"",
+        ] {
+            assert_eq!(
+                string_literals(probe)
+                    .first()
+                    .map(|literal| literal.text.as_str()),
+                Some("{count} cards"),
+                "the lexer must decode {probe} the way rustc does, or an escaped \
+                 hardcoded plural is invisible to every check below"
+            );
+        }
+        let line_of = |literal: &SourceLiteral| source[..begin].lines().count() + literal.line - 1;
+
+        let mut offenders: Vec<String> = Vec::new();
+        for literal in &literals {
+            let routed = PLURAL_HELPERS.contains(&literal.call.as_str())
+                && (literal.arg == SINGULAR_ARG || literal.arg == PLURAL_ARG);
+            // A literal that IS a counted noun, in either form, is
+            // either that call's argument or a hardcoded form smuggled
+            // past the template. Provenance is the literal's own call
+            // and argument position, never its line.
+            if counted_nouns.contains(literal.text.as_str()) && !routed {
+                offenders.push(format!(
+                    "a11y.rs:{}: the literal {:?} is a counted noun but is argument {} of \
+                     `{}`, not a noun argument of plural()/plural_len()/counted()",
+                    line_of(literal),
+                    literal.text,
+                    literal.arg,
+                    literal.call
+                ));
+                continue;
+            }
+            if routed {
+                continue;
+            }
+            // The defect shape, inside ONE logical format string
+            // (`\`-continuations already joined by the lexer): a
+            // placeholder, then whitespace, then a hardcoded PLURAL.
+            // Only the plural form — a placeholder before a SINGULAR is
+            // the shape `⟨Kind⟩ card "title"` legitimately uses, and
+            // nothing lexical separates the two (0a-14's residuals).
+            for noun in &plurals {
+                let mut from = 0usize;
+                while let Some(at) = literal.text[from..].find(noun) {
+                    let at = from + at;
+                    from = at + noun.len();
+                    let before = &literal.text[..at];
+                    let after = &literal.text[from..];
+                    // Whole word only — never `placards`, `Cards`.
+                    if before.ends_with(|c: char| c.is_alphanumeric())
+                        || after.starts_with(|c: char| c.is_alphanumeric())
+                    {
+                        continue;
+                    }
+                    if before.trim_end().ends_with('}') {
+                        offenders.push(format!(
+                            "a11y.rs:{}: {:?} interpolates a value immediately before the \
+                             hardcoded plural {noun:?}",
+                            line_of(literal),
+                            literal.text
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "a canvas template speaks a noun whose count cannot agree with it — route it \
+             through plural()/plural_len()/counted() (contracts 0a-14, 0b-16): {offenders:#?}"
+        );
+    }
+
+    /// One string literal from Rust source, with the call it is an
+    /// argument of — the provenance contract 0b-16 binds to the
+    /// literal instead of to its line.
+    struct SourceLiteral {
+        /// 1-based line within the slice that was lexed.
+        line: usize,
+        /// The literal's CONTENT: escapes resolved, and Rust's
+        /// `\`-before-newline continuation applied, so a template split
+        /// across source lines reads as the one logical string it is.
+        text: String,
+        /// The identifier opening the innermost enclosing bracket
+        /// (`format!`, `plural`, …); empty when nothing names it.
+        call: String,
+        /// 0-based argument position within that call, so the SINGULAR
+        /// and PLURAL forms a helper is passed can be told apart.
+        arg: usize,
+    }
+
+    /// Lex `source` into its string literals. Deliberately small: it
+    /// knows strings, escapes, line comments, char literals and bracket
+    /// nesting, which is exactly what binding a plural noun to its call
+    /// needs — and nothing else, so it cannot quietly grow into a
+    /// second Rust front end.
+    ///
+    /// A raw string literal (the `r`-prefixed form) is REFUSED rather
+    /// than mis-lexed: it would read as an ordinary literal and its
+    /// escapes would be resolved wrongly. The refusal happens inside
+    /// the lexer, where prose in a comment cannot trip it.
+    ///
+    /// Two shapes it does NOT handle, named rather than implied away:
+    ///
+    /// - **block comments** (`/* … */`) are not skipped, so a quote
+    ///   inside one would open a phantom literal and desynchronise
+    ///   everything after it. This module has none;
+    /// - **closure pipes** (`|x|`) are not bracket-like, so a comma
+    ///   inside a closure's parameter list increments the enclosing
+    ///   call's argument counter. That only mis-numbers arguments, and
+    ///   only for a call that takes a multi-parameter closure — no
+    ///   pluralization helper does.
+    ///
+    /// Neither can make the guard pass VACUOUSLY: both would corrupt
+    /// the derived noun set or the literal list, and the caller asserts
+    /// both are non-empty before using them. The failure mode is a loud
+    /// wrong answer, not a silent green — which is the property that
+    /// makes a hand-rolled lexer acceptable here at all.
+    fn string_literals(source: &str) -> Vec<SourceLiteral> {
+        let bytes = source.as_bytes();
+        let mut out: Vec<SourceLiteral> = Vec::new();
+        // One frame per open bracket: the identifier that opened it and
+        // the argument position within it. Braces and square brackets
+        // get a frame too, so a comma inside a closure or an array
+        // cannot be mistaken for the next argument of a call.
+        let mut stack: Vec<(String, usize)> = Vec::new();
+        let mut ident = String::new();
+        let mut line = 1usize;
+        let mut index = 0usize;
+        while index < bytes.len() {
+            match bytes[index] {
+                b'\n' => {
+                    line += 1;
+                    ident.clear();
+                    index += 1;
+                }
+                b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                    while index < bytes.len() && bytes[index] != b'\n' {
+                        index += 1;
+                    }
+                    ident.clear();
+                }
+                b'(' | b'[' | b'{' => {
+                    stack.push((std::mem::take(&mut ident), 0));
+                    index += 1;
+                }
+                b')' | b']' | b'}' => {
+                    stack.pop();
+                    ident.clear();
+                    index += 1;
+                }
+                b',' => {
+                    if let Some(frame) = stack.last_mut() {
+                        frame.1 += 1;
+                    }
+                    ident.clear();
+                    index += 1;
+                }
+                b'\'' => {
+                    // A char literal (`'x'`, `'\n'`) or a lifetime.
+                    // Only the former can hide a quote from the scanner.
+                    if bytes.get(index + 1) == Some(&b'\\') {
+                        index += 2;
+                        while index < bytes.len() && bytes[index] != b'\'' {
+                            index += 1;
+                        }
+                        index += 1;
+                    } else if bytes.get(index + 2) == Some(&b'\'') {
+                        index += 3;
+                    } else {
+                        index += 1;
+                    }
+                    ident.clear();
+                }
+                b'"' => {
+                    assert_ne!(
+                        ident, "r",
+                        "the literal lexer does not handle raw strings; teach it before \
+                         using one in this module"
+                    );
+                    let start = line;
+                    let mut text: Vec<u8> = Vec::new();
+                    index += 1;
+                    while index < bytes.len() && bytes[index] != b'"' {
+                        if bytes[index] == b'\\' {
+                            index += 1;
+                            match bytes.get(index) {
+                                Some(b'n') => text.push(b'\n'),
+                                Some(b't') => text.push(b'\t'),
+                                Some(b'r') => text.push(b'\r'),
+                                Some(b'0') => text.push(0),
+                                // String-continuation escape: `\` before
+                                // a newline swallows that newline AND
+                                // every whitespace character after it —
+                                // which is how a template split across
+                                // source lines reads as one logical
+                                // string.
+                                //
+                                // The set is rustc's, not "spaces and
+                                // tabs": BLANK LINES and carriage
+                                // returns are whitespace too, so a
+                                // continuation followed by an empty line
+                                // joins straight through it. Skipping
+                                // only indentation left a stray newline
+                                // in the decoded text, which is enough
+                                // to hide a hardcoded plural from the
+                                // scan below (codex 0b round 2).
+                                Some(b'\n' | b'\r') => {
+                                    while matches!(
+                                        bytes.get(index),
+                                        Some(b' ' | b'\t' | b'\n' | b'\r')
+                                    ) {
+                                        if bytes[index] == b'\n' {
+                                            line += 1;
+                                        }
+                                        index += 1;
+                                    }
+                                    continue;
+                                }
+                                // `\xNN` and `\u{…}` are DECODED, not
+                                // copied through. Pushing the escape's
+                                // letters made `"{count} card\x73"` lex
+                                // as `card` + `x73`, so a hardcoded
+                                // plural spelled with escapes was
+                                // invisible to every downstream check —
+                                // a guard-evasion hole, and the one
+                                // shape a hand-rolled lexer is most
+                                // likely to get wrong.
+                                Some(b'x') => {
+                                    let hex = std::str::from_utf8(
+                                        &bytes[index + 1..(index + 3).min(bytes.len())],
+                                    )
+                                    .expect("source is UTF-8");
+                                    text.push(
+                                        u8::from_str_radix(hex, 16)
+                                            .expect("`\\x` takes two hex digits"),
+                                    );
+                                    index += 3;
+                                    continue;
+                                }
+                                Some(b'u') => {
+                                    assert_eq!(
+                                        bytes.get(index + 1),
+                                        Some(&b'{'),
+                                        "`\\u` takes a braced scalar"
+                                    );
+                                    let close = index
+                                        + bytes[index..]
+                                            .iter()
+                                            .position(|byte| *byte == b'}')
+                                            .expect("unterminated `\\u{`");
+                                    let hex = std::str::from_utf8(&bytes[index + 2..close])
+                                        .expect("source is UTF-8");
+                                    let scalar = u32::from_str_radix(hex, 16)
+                                        .expect("`\\u{}` takes hex digits");
+                                    let character = char::from_u32(scalar)
+                                        .expect("`\\u{}` takes a scalar value");
+                                    let mut buffer = [0u8; 4];
+                                    text.extend_from_slice(
+                                        character.encode_utf8(&mut buffer).as_bytes(),
+                                    );
+                                    index = close + 1;
+                                    continue;
+                                }
+                                Some(other) => text.push(*other),
+                                None => break,
+                            }
+                            index += 1;
+                            continue;
+                        }
+                        if bytes[index] == b'\n' {
+                            line += 1;
+                        }
+                        text.push(bytes[index]);
+                        index += 1;
+                    }
+                    index += 1;
+                    let (call, arg) = stack.last().cloned().unwrap_or_default();
+                    out.push(SourceLiteral {
+                        line: start,
+                        text: String::from_utf8(text).expect("source is UTF-8"),
+                        call,
+                        arg,
+                    });
+                    ident.clear();
+                }
+                c if c.is_ascii_alphanumeric() || c == b'_' => {
+                    ident.push(c as char);
+                    index += 1;
+                }
+                b'!' => {
+                    // `format!` / `matches!`: the bang belongs to the
+                    // name the following `(` opens.
+                    if !ident.is_empty() {
+                        ident.push('!');
+                    }
+                    index += 1;
+                }
+                // `r#"…"#`: the hash keeps the `r` alive so the quote
+                // arm above still sees the raw-string prefix.
+                b'#' if ident == "r" => index += 1,
+                _ => {
+                    ident.clear();
+                    index += 1;
+                }
+            }
+        }
+        out
+    }
+
+    /// The family is reached through exactly one top-level variant, and
+    /// no canvas variant leaked back out to the top level (the whole
+    /// point of the nesting — uniffi's 256-variant ceiling).
+    #[test]
+    fn the_canvas_family_occupies_one_top_level_variant() {
+        let top_level: std::collections::BTreeSet<String> = declared_variants("A11yEvent")
+            .into_iter()
+            .filter(|name| name.starts_with("Canvas"))
+            .collect();
+        assert_eq!(
+            top_level,
+            ["Canvas".to_owned()]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<String>>(),
+            "the canvas family must nest under A11yEvent::Canvas"
+        );
+        assert!(
+            corpus()
+                .iter()
+                .filter(|event| variant_of(event) == "Canvas")
+                .count()
+                > 100,
+            "the canvas corpus went missing"
+        );
+    }
+
+    /// t0 §1.2 and §1.3: the verbosity matrix, level by level, on the
+    /// two families whose TEMPLATE varies — moved-to (the navigation
+    /// matrix) and the destructive family (the undo hint at
+    /// standard+). Full rendered strings, never substrings.
+    #[test]
+    fn canvas_verbosity_matrix_pins_every_level() {
+        let moved_to = |verbosity| CanvasA11yEvent::CanvasMovedTo {
+            verbosity,
+            kind_label: "text".into(),
+            title: "Research".into(),
+            ordinal_n: 2,
+            total_m: 5,
+            container: Some("Q3".into()),
+            connection_count: 3,
+            color_name: Some("red".into()),
+            marked: true,
+        };
+        let deleted = |verbosity, target| CanvasA11yEvent::CanvasDeleted {
+            target,
+            verbosity,
+            undo_chord: "⌘Z".into(),
+        };
+        let card = || CanvasDeleteTarget::Card {
+            kind_label: "text".into(),
+            title: "Research".into(),
+        };
+        let group = || CanvasDeleteTarget::Group { label: "Q3".into() };
+        let cards = || CanvasDeleteTarget::Cards { count: 3 };
+        let connection = || CanvasDeleteTarget::Connection {
+            direction: EdgeDirection::Outgoing,
+            other_title: "Ideas".into(),
+            label: Some("supports".into()),
+        };
+
+        let expected: Vec<(CanvasA11yEvent, &str)> = vec![
+            (moved_to(CanvasVerbosity::Terse), "Research"),
+            (
+                moved_to(CanvasVerbosity::Standard),
+                "Text card \"Research\", 2 of 5 in Q3",
+            ),
+            (
+                moved_to(CanvasVerbosity::Verbose),
+                "Text card \"Research\", 2 of 5 in Q3, 3 connections, red, marked",
+            ),
+            (
+                deleted(CanvasVerbosity::Terse, card()),
+                "Deleted Text card \"Research\"",
+            ),
+            (
+                deleted(CanvasVerbosity::Standard, card()),
+                "Deleted Text card \"Research\" — ⌘Z to undo",
+            ),
+            (
+                deleted(CanvasVerbosity::Verbose, card()),
+                "Deleted Text card \"Research\" — ⌘Z to undo",
+            ),
+            (
+                deleted(CanvasVerbosity::Terse, group()),
+                "Ungrouped Group \"Q3\" — cards kept",
+            ),
+            (
+                deleted(CanvasVerbosity::Standard, group()),
+                "Ungrouped Group \"Q3\" — cards kept — ⌘Z to undo",
+            ),
+            (
+                deleted(CanvasVerbosity::Verbose, group()),
+                "Ungrouped Group \"Q3\" — cards kept — ⌘Z to undo",
+            ),
+            (deleted(CanvasVerbosity::Terse, cards()), "Deleted 3 cards"),
+            (
+                deleted(CanvasVerbosity::Standard, cards()),
+                "Deleted 3 cards — ⌘Z to undo",
+            ),
+            (
+                deleted(CanvasVerbosity::Verbose, cards()),
+                "Deleted 3 cards — ⌘Z to undo",
+            ),
+            (
+                deleted(CanvasVerbosity::Terse, connection()),
+                "Deleted connection to \"Ideas\", labelled \"supports\"",
+            ),
+            (
+                deleted(CanvasVerbosity::Standard, connection()),
+                "Deleted connection to \"Ideas\", labelled \"supports\" — ⌘Z to undo",
+            ),
+            (
+                deleted(CanvasVerbosity::Verbose, connection()),
+                "Deleted connection to \"Ideas\", labelled \"supports\" — ⌘Z to undo",
+            ),
+        ];
+        for (event, text) in &expected {
+            assert_eq!(event.render(), *text, "verbosity render for {event:?}");
+            // The wrapper is a pure relay: the same string comes back
+            // through the top-level event a host actually posts.
+            assert_eq!(
+                A11yEvent::Canvas {
+                    event: event.clone()
+                }
+                .render(),
+                *text
+            );
+        }
+
+        // Everything else is verbosity-INVARIANT, and structurally so:
+        // no other variant carries the parameter at all, which is why
+        // a host cannot accidentally make one vary.
+        let carriers: std::collections::BTreeSet<String> = corpus()
+            .iter()
+            .filter(|event| format!("{event:?}").contains("verbosity: "))
+            .filter_map(canvas_variant_of)
+            .collect();
+        assert_eq!(
+            carriers,
+            ["CanvasDeleted".to_owned(), "CanvasMovedTo".to_owned()]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<String>>(),
+            "only the moved-to and destructive families take a verbosity"
+        );
+    }
+
+    /// t0 §1.4: the ⌃⌘I readback is ALWAYS verbose-grade — it takes no
+    /// verbosity parameter, so a terse user still gets the full fix.
+    #[test]
+    fn canvas_where_am_i_is_always_verbose_grade() {
+        assert_eq!(
+            CanvasA11yEvent::CanvasWhereAmI {
+                kind_label: "text".into(),
+                title: "Research".into(),
+                group_path: vec!["Quarter".into(), "Q3".into()],
+                ordinal_n: 2,
+                total_m: 5,
+                connection_count: 3,
+                in_count: 1,
+                out_count: 2,
+                color_name: Some("red".into()),
+                marked: true,
+                mode: Some(CanvasMode::Move),
+                filter: CanvasFilterState::Active {
+                    matched: 3,
+                    total: 40,
+                },
+            }
+            .render(),
+            "Text card \"Research\", in Quarter › Q3, 2 of 5, 3 connections (1 in, 2 out), \
+             red, marked, Move mode, 3 of 40 shown"
+        );
+        assert!(
+            !corpus()
+                .iter()
+                .any(
+                    |event| canvas_variant_of(event).as_deref() == Some("CanvasWhereAmI")
+                        && format!("{event:?}").contains("verbosity")
+                ),
+            "Where-am-I must not take a verbosity"
+        );
+    }
+
+    /// t0 §1.5: "navigation = polite; errors/conflicts = assertive."
+    /// `CanvasA11yEvent::priority` ends in a catch-all `_ => Medium`,
+    /// so a canvas error that is not listed is silently polite. This
+    /// pins the High membership BY NAME, both ways: the five families
+    /// that carry mac's `.error` case and nothing else. The assertions
+    /// run through the TOP-LEVEL event, so the wrapper's delegation is
+    /// covered too.
+    #[test]
+    fn canvas_priorities_pin_the_error_tier() {
+        const HIGH: &[&str] = &[
+            "CanvasActionFailed",
+            "CanvasBlocked",
+            "CanvasFileNotFound",
+            "CanvasModeRejected",
+            "CanvasSaveConflict",
+        ];
+        let mut high_seen = std::collections::BTreeSet::new();
+        for event in corpus() {
+            let Some(variant) = canvas_variant_of(&event) else {
+                continue;
+            };
+            let listed = HIGH.contains(&variant.as_str());
+            match event.priority() {
+                A11yPriority::High => {
+                    assert!(
+                        listed,
+                        "{variant} renders High but is not in the error tier"
+                    );
+                    high_seen.insert(variant);
+                }
+                A11yPriority::Medium => assert!(
+                    !listed,
+                    "{variant} is in the error tier but renders Medium — the \
+                     explicit priority() arm is missing it"
+                ),
+            }
+        }
+        let expected: std::collections::BTreeSet<String> =
+            HIGH.iter().map(|name| (*name).to_owned()).collect();
+        assert_eq!(
+            high_seen, expected,
+            "every error-tier canvas variant must be exercised by the corpus"
         );
     }
 

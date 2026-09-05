@@ -20,6 +20,28 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- W4-5 (#737): the citation gate needs a real CSL style, and this
+         job runs on DOWNLOADED BINARIES with no checkout (windows.yml
+         "no checkout, no compilers"), so nothing outside the output
+         directory exists at run time. Linking the committed demo-vault
+         style copies it into bin, where it travels with the artifact. -->
+    <Content Include="..\..\..\..\demo-vault\csl\ieee.csl"
+             Link="fixtures\ieee.csl"
+             CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- W6-1 PR A (#745): the canvas outline journey seeds its temp vault
+         with committed demo-vault canvases, byte-exact. Same reason as the
+         CSL style above — no checkout at run time — so they must travel in
+         the output directory too. The §K benchmark fixture
+         (large_2000.canvas, ~385 KB) is excluded: no journey reads it, and
+         it is pure artifact weight. -->
+    <Content Include="..\..\..\..\demo-vault\canvas\*.canvas"
+             Exclude="..\..\..\..\demo-vault\canvas\large_2000.canvas"
+             Link="fixtures\canvas\%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\SlateWindows\SlateWindows.csproj"
                       ReferenceOutputAssembly="false" />
   </ItemGroup>

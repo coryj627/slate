@@ -3,28 +3,16 @@
 
 import SwiftUI
 
-/// The Graph tab's modes (U3 toggle pattern: one coherent AX tree per
-/// mode). Table is the accessible-first grid; Diagram is the visual
-/// force-directed projection (P2-3 #559).
-enum GraphTabMode: String, CaseIterable {
-    case table
-    case diagram
-
-    var title: String {
-        switch self {
-        case .table: return "Table"
-        case .diagram: return "Diagram"
-        }
-    }
-}
-
 /// The Graph tab body (Milestone P, P1-2 #555): hosts the mode seam and,
 /// in Table mode, the whole-graph grid + filter bar. One coherent AX
 /// tree per mode (U3 toggle pattern).
 struct GraphContainerView: View {
     @EnvironmentObject private var appState: AppState
     let tabID: TabID
-    @State private var mode: GraphTabMode = .table
+    // The two modes are core's `GraphSurfaceMode` (W6-2 PR 0a; the local
+    // enum it replaced is gone — `GraphAnnouncer.swift` carries the
+    // picker titles and the persistence tags).
+    @State private var mode: GraphSurfaceMode = .table
     @State private var showInspector = false
     /// Bumped on every USER mode switch so the newly-shown projection moves
     /// VoiceOver focus onto the shared-selected node — the row (Table) or
@@ -97,10 +85,10 @@ struct GraphContainerView: View {
             switch newMode {
             case .diagram:
                 appState.ensureGraphDiagram()
-                appState.graphAnnouncer.announce(.status("Diagram mode."))
+                appState.graphAnnouncer.announce(.graphMode(mode: .diagram))
             case .table:
                 appState.resetGraphDiagramState()
-                appState.graphAnnouncer.announce(.status("Table mode."))
+                appState.graphAnnouncer.announce(.graphMode(mode: .table))
             }
         }
         // A backend-filter change rebuilds the diagram's layout too, so
@@ -143,7 +131,7 @@ struct GraphContainerView: View {
     private var filterBar: some View {
         HStack(spacing: Tokens.Spacing.sm) {
             Picker("View", selection: $mode) {
-                ForEach(GraphTabMode.allCases, id: \.self) { m in
+                ForEach(GraphSurfaceMode.allCases, id: \.self) { m in
                     Text(m.title).tag(m)
                 }
             }
@@ -208,9 +196,10 @@ struct GraphContainerView: View {
     }
 }
 
-/// The whole-graph grid (Table mode). Rows come from the cached
-/// snapshot, are text-filtered client-side, and sorted by the grid via
-/// per-column comparators (default: Links in, descending — hubs first).
+/// The whole-graph grid (Table mode). Rows come from core, formatted,
+/// filtered and ordered there for the accepted request (W6-2 PR 0b,
+/// 0b-7 — the grid sorts and filters nothing itself), over core's
+/// column model (default sort: Links in, descending — hubs first).
 struct GraphTableView: View {
     @EnvironmentObject private var appState: AppState
     /// The owning Graph tab, so row actions target ITS group — not
@@ -221,8 +210,21 @@ struct GraphTableView: View {
     /// grid takes first-responder on the selected row — the Diagram→Table
     /// focus landing (P2-5 #561 review finding 3). 0 on plain mount.
     var focusRequest: Int = 0
-    @State private var sortState: DataGridSortState? = DataGridSortState(
-        columnIndex: GraphTableColumn.linksIn.rawValue, ascending: false)
+    /// The grid's sort state: reads the ACCEPTED sort, and a header
+    /// interaction issues a REQUEST token (design A); the accepted sort
+    /// changes only when its rows publish.
+    private var sortState: Binding<DataGridSortState?> {
+        Binding(
+            get: {
+                DataGridSortState(
+                    columnIndex: GraphTableColumns.index(of: appState.graphTableSort.column),
+                    ascending: appState.graphTableSort.ascending)
+            },
+            set: { state in
+                guard let state, let column = GraphTableColumns.column(at: state.columnIndex) else { return }
+                appState.setGraphTableSort(GraphTableSort(column: column, ascending: state.ascending))
+            })
+    }
     /// The token actually handed to the grid — captured ONCE at appear (this
     /// view is recreated per switch) and ONLY when the selected row is
     /// currently visible, so a selection that cleared between the switch-time
@@ -275,7 +277,10 @@ struct GraphTableView: View {
                 gridFocusRequest = focusRequest
             }
         }
-        .onChange(of: appState.graphTableTextFilter) { _, _ in announceCount() }
+        // A needle or kind change is a token change (design A): core
+        // re-answers the rows, and the count is announced when they publish.
+        .onChange(of: appState.graphTableTextFilter) { _, _ in appState.requestGraphTableRows() }
+        .onChange(of: appState.graphTableKindFilter) { _, _ in appState.requestGraphTableRows() }
         // A generation bump can reassign backend node ids, so any stale
         // selection must be re-validated against the fresh row set (our
         // id is the stable path/ghost key) and dropped if gone (finding 3).
@@ -309,56 +314,29 @@ struct GraphTableView: View {
             .accessibilityLabel("Graph error: \(error)")
     }
 
-    private var allRows: [GraphTableRow] {
-        guard let snap = appState.graphTableSnapshot else { return [] }
-        return snap.nodes.map { GraphTableRow(node: $0, folder: $0.path.map { appState.folder(of: $0) } ?? "") }
-    }
-
-    private var filteredRows: [GraphTableRow] {
-        var rows = allRows
-        // Preset kind filter (P1-3 #556): the "unresolved" preset narrows
-        // to ghosts, which the backend GraphFilter can't express.
-        if let kind = appState.graphTableKindFilter {
-            rows = rows.filter { $0.kind == kind }
-        }
-        // The SAME name predicate the Diagram applies (P2-4 single source
-        // of truth — asserted by the filter-equivalence test).
-        let needle = appState.graphTableTextFilter
-        return rows.filter { AppState.graphNameMatches($0.label, needle: needle) }
-    }
-
-    private func announceCount() {
-        // Gate at SCHEDULE time (skip entirely if the graph isn't the
-        // active surface) AND pass a FIRE-TIME gate so a coalesced count
-        // is dropped if focus leaves the graph within the debounce window
-        // — e.g. clicking into another split pane, which leaves this view
-        // mounted so `onDisappear` never fires (round 2 finding 7, round
-        // 3 finding 2).
-        guard appState.graphTabActive else { return }
-        let shown = filteredRows.count
-        let total = allRows.count
-        appState.graphAnnouncer.announceFilterCount(
-            "\(shown) of \(total) shown",
-            gate: { [weak appState] in appState?.graphTabActive == true })
-    }
+    /// Core's rows for the accepted request: the needle and the preset's
+    /// kind overlay are in the query (0b-2), so nothing is filtered here.
+    private var filteredRows: [GraphTableRow] { appState.graphTableRows }
 
     private func grid(_ rows: [GraphTableRow]) -> some View {
         AccessibleDataGrid(
-            columns: GraphTableColumn.columns(
+            columns: GraphTableColumns.columns(
                 ghostCreationDisabledReason: appState.structuralMutationDisabledReason),
             rows: rows,
             summary: appState.graphTableSnapshot?.audioSummary ?? "",
             accessibilityLabel: "Graph, data grid",
             selection: selection,
-            sortState: $sortState,
-            sortsRowsLocally: true,
+            sortState: sortState,
+            // Core orders the rows (0b-7); the grid never re-sorts them.
+            sortsRowsLocally: false,
             onActivate: { row in activate(row) },
             onActivateModified: { row in activateInNewTab(row) },
             showsRowContextMenu: true,
             rowActions: rowActions,
             focusRequest: gridFocusRequest,
-            announce: { [weak appState] text in
-                appState?.graphAnnouncer.announce(.status(text))
+            // The grid's own events relay with THEIR priority (0a-D2).
+            announce: { [weak appState] event in
+                appState?.graphAnnouncer.relay(event)
             })
     }
 
@@ -451,144 +429,34 @@ struct GraphTableView: View {
 
 // MARK: - Row model
 
-/// One graph-table row: a node's nine columns (spec §P1-2).
-struct GraphTableRow: Identifiable {
-    /// STABLE identity: the vault path for real nodes, `"g:<encoded key>"`
-    /// for ghosts — NOT the backend node id, which is only stable within
-    /// one generation and is reassigned on a rebuild (a stale numeric
-    /// selection could otherwise activate a different note — round 1
-    /// finding 3, the P1-1 lesson).
-    let id: String
-    /// The backend node id — VOLATILE across rebuilds, so NEVER used for
-    /// selection identity. Kept solely as the absolute last-resort sort
-    /// tie-break, which makes ordering a strict total order WITHIN a
-    /// snapshot without depending on `id` uniqueness (round 3 finding 3).
-    let nodeID: UInt64
-    let label: String
-    let path: String?
-    let kind: GraphNodeKind
-    let linksIn: UInt32
-    let linksOut: UInt32
-    let embedsIn: UInt32
-    let embedsOut: UInt32
-    let component: UInt32
-    let modifiedMs: Int64?
-    let folder: String
+// `GraphTableRow` is the generated record core formats and orders (W6-2
+// PR 0b, 0b-7): the nine cells, the stable key, the node id. The Swift
+// derivation — `init(node:folder:)`, the date formatter, `byLabel` and
+// the comparator — is deleted; what remains is the sugar the grid
+// and the actions read.
+
+extension GraphTableRow: Identifiable {
+    /// STABLE identity: core's `stable_key` — the vault path under `p:`
+    /// for real nodes, the percent-encoded ghost key under `g:` — never the
+    /// backend node id, which is reassigned on a rebuild.
+    public var id: String { stableKey }
 
     var isGhost: Bool { kind == .ghost }
-
-    var kindLabel: String {
-        switch kind {
-        case .note: return "Note"
-        case .attachment: return "Attachment"
-        case .ghost: return "Unresolved"
-        }
-    }
-
-    var modifiedText: String {
-        guard let ms = modifiedMs else { return "" }
-        return GraphTableRow.dateFormatter.string(
-            from: Date(timeIntervalSince1970: Double(ms) / 1000))
-    }
-
-    init(node: GraphNode, folder: String) {
-        // Stable, collision-proof identity via the SHARED cross-projection
-        // key (P2-5 #561, `GraphNodeKey`): real nodes key on their unique
-        // path under "p:", ghosts (no path) on their percent-encoded folded
-        // label under "g:" — two disjoint namespaces so a real vault file
-        // can never share an id with a ghost, byte-distinct so two Unicode
-        // normalization variants stay distinct rows. This is now the SAME
-        // key the Diagram selection and the shared `graphSelectedNodeKey`
-        // use, so a selection round-trips across projections.
-        self.id = GraphNodeKey.make(for: node)
-        self.nodeID = node.id
-        self.label = node.label
-        self.path = node.path
-        self.kind = node.kind
-        self.linksIn = node.inLinks
-        self.linksOut = node.outLinks
-        self.embedsIn = node.inEmbeds
-        self.embedsOut = node.outEmbeds
-        self.component = node.component
-        self.modifiedMs = node.modifiedMs
-        self.folder = folder
-    }
-
-    private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        return f
-    }()
 }
 
-/// The nine sortable columns (spec §P1-2), in display order. `rawValue`
-/// is the column index the grid's `DataGridSortState` uses.
-enum GraphTableColumn: Int, CaseIterable {
-    case note = 0
-    case linksIn
-    case linksOut
-    case embedsIn
-    case embedsOut
-    case component
-    case modified
-    case folder
-    case kind
+/// Core's column model (0b-7, design B): the ordered specs, fetched ONCE;
+/// the grid is built from the vector, the sort state's index IS the
+/// vector index, and a row's cell for index `i` is `cells[i]`. No column
+/// is listed here.
+enum GraphTableColumns {
+    static let specs: [GraphTableColumnSpec] = graphTableColumns()
 
-    /// Label order with two tie-breaks: the stable string `id`, then the
-    /// backend `nodeID`. Row ids are unique across the disjoint
-    /// `p:`/`g:` namespaces, but the final `nodeID` break guarantees a
-    /// STRICT TOTAL ORDER on distinct rows UNCONDITIONALLY — the sort's
-    /// determinism does not depend on `id` uniqueness, so no two distinct
-    /// rows can ever compare equal in both directions (round 1 finding 8,
-    /// round 2 finding 9, round 3 finding 3). `nodeID` is unique within
-    /// the snapshot being sorted, which is all a per-render sort needs.
-    static func byLabel(_ a: GraphTableRow, _ b: GraphTableRow) -> Bool {
-        switch a.label.localizedStandardCompare(b.label) {
-        case .orderedAscending: return true
-        case .orderedDescending: return false
-        case .orderedSame:
-            if a.id != b.id { return a.id < b.id }
-            return a.nodeID < b.nodeID
-        }
+    static func index(of column: GraphTableColumn) -> Int {
+        specs.firstIndex { $0.column == column } ?? 0
     }
 
-    /// The directional comparator for a column — exposed (not just
-    /// baked into the private `Column.directionalSort`) so it's unit
-    /// testable.
-    func directionalComparator(_ a: GraphTableRow, _ b: GraphTableRow, ascending: Bool) -> Bool {
-        // Numeric primary key, label tie-break (label ALWAYS ascending
-        // so ties are stable regardless of the primary direction).
-        func numeric(_ lhs: UInt32, _ rhs: UInt32) -> Bool {
-            if lhs != rhs { return ascending ? lhs < rhs : lhs > rhs }
-            return Self.byLabel(a, b)
-        }
-        switch self {
-        case .note:
-            return ascending ? Self.byLabel(a, b) : Self.byLabel(b, a)
-        case .linksIn: return numeric(a.linksIn, b.linksIn)
-        case .linksOut: return numeric(a.linksOut, b.linksOut)
-        case .embedsIn: return numeric(a.embedsIn, b.embedsIn)
-        case .embedsOut: return numeric(a.embedsOut, b.embedsOut)
-        case .component: return numeric(a.component, b.component)
-        case .modified:
-            let l = a.modifiedMs ?? .min
-            let r = b.modifiedMs ?? .min
-            if l != r { return ascending ? l < r : l > r }
-            return Self.byLabel(a, b)
-        case .folder:
-            if a.folder != b.folder {
-                let cmp = a.folder.localizedStandardCompare(b.folder) == .orderedAscending
-                return ascending ? cmp : !cmp
-            }
-            return Self.byLabel(a, b)
-        case .kind:
-            if a.kindLabel != b.kindLabel {
-                let cmp = a.kindLabel < b.kindLabel
-                return ascending ? cmp : !cmp
-            }
-            return Self.byLabel(a, b)
-        }
+    static func column(at index: Int) -> GraphTableColumn? {
+        specs.indices.contains(index) ? specs[index].column : nil
     }
 
     static var columns: [AccessibleDataGrid<GraphTableRow>.Column] {
@@ -598,42 +466,13 @@ enum GraphTableColumn: Int, CaseIterable {
     static func columns(ghostCreationDisabledReason: String?)
         -> [AccessibleDataGrid<GraphTableRow>.Column]
     {
-        allCases.map { col in
+        specs.enumerated().map { index, spec in
             AccessibleDataGrid<GraphTableRow>.Column(
-                col.header,
-                cell: col.cell,
-                directionalSort: { col.directionalComparator($0, $1, ascending: $2) },
+                spec.header,
+                cell: { row in row.cells.indices.contains(index) ? row.cells[index] : "" },
                 accessibilityHint: { row in
                     row.isGhost ? ghostCreationDisabledReason : nil
                 })
-        }
-    }
-
-    var header: String {
-        switch self {
-        case .note: return "Note"
-        case .linksIn: return "Links in"
-        case .linksOut: return "Links out"
-        case .embedsIn: return "Embeds in"
-        case .embedsOut: return "Embeds out"
-        case .component: return "Component"
-        case .modified: return "Modified"
-        case .folder: return "Folder"
-        case .kind: return "Kind"
-        }
-    }
-
-    var cell: (GraphTableRow) -> String {
-        switch self {
-        case .note: return { $0.label }
-        case .linksIn: return { String($0.linksIn) }
-        case .linksOut: return { String($0.linksOut) }
-        case .embedsIn: return { String($0.embedsIn) }
-        case .embedsOut: return { String($0.embedsOut) }
-        case .component: return { String($0.component) }
-        case .modified: return { $0.modifiedText }
-        case .folder: return { $0.folder }
-        case .kind: return { $0.kindLabel }
         }
     }
 }

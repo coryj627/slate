@@ -1,0 +1,631 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using System.Diagnostics;
+using System.Runtime.ExceptionServices;
+using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Definitions;
+using FlaUI.Core.Input;
+using FlaUI.Core.WindowsAPI;
+using FlaUI.UIA3;
+
+namespace SlateWindows.AccessibilityTests;
+
+/// <summary>
+/// W4-1 FlaUI conformance suite — the reusable §W-C gate every
+/// substrate-consuming surface inherits (w4_spec §W4-1 item 3). Runs
+/// the 05 §8.7 matrix against the GridConformanceHost fixture and
+/// probes the UIA-virtualization trap at 10,000 rows (the WPF
+/// Recycling-mode crash class the substrate pins out, dotnet/wpf
+/// #8528/#5428/#11519).
+/// </summary>
+public sealed class GridConformanceTests
+{
+    /// <summary>The §8.7 matrix over the 200-row fixture: identity,
+    /// Grid/Table patterns, headers, cell labels, keyboard sort,
+    /// type-ahead, row actions with disabled reasons, and the
+    /// separately-focusable summary region.</summary>
+    [Fact]
+    public void MatrixConformanceHolds()
+    {
+        RunHost(200, (automation, window, process) =>
+        {
+            AutomationElement grid = WaitForElement(
+                window, "AccessibleDataGrid", TimeSpan.FromSeconds(10));
+            Assert.True(grid.Patterns.Grid.IsSupported, "Grid pattern missing");
+            Assert.True(grid.Patterns.Table.IsSupported, "Table pattern missing");
+
+            // Headers announced on entry (§8.7): assert the header
+            // ELEMENTS in the tree and the PER-CELL TableItem
+            // associations — the routes AT actually reads on entry.
+            // The grid-LEVEL ColumnHeaders list is deliberately not
+            // load-bearing: the Server gate runner answers it empty
+            // while header item×20 sit realized in the same tree
+            // (captured census, 2026-08-01) — a WPF peer quirk, not a
+            // header failure.
+            AutomationElement[] headerItems = Array.Empty<AutomationElement>();
+            bool headersAppeared = SpinWait.SpinUntil(
+                () =>
+                {
+                    headerItems = grid.FindAllDescendants(
+                        cf => cf.ByControlType(ControlType.HeaderItem));
+                    string[] names = headerItems
+                        .Select(item => item.Properties.Name.ValueOrDefault ?? "")
+                        .ToArray();
+                    return names.Contains("Name")
+                        && names.Contains("Status")
+                        && names.Contains("Notes")
+                        && names.Contains("Note 00000");
+                },
+                TimeSpan.FromSeconds(15));
+            if (!headersAppeared)
+            {
+                CaptureForDiagnostics(window, "grid-headers-missing");
+                string kinds = string.Join(
+                    ", ",
+                    grid.FindAllDescendants()
+                        .GroupBy(d => d.Properties.LocalizedControlType.ValueOrDefault ?? "?")
+                        .Select(group => $"{group.Key}×{group.Count()}")
+                        .OrderBy(s => s, StringComparer.Ordinal));
+                Assert.Fail(
+                    "column + row header items did not materialize. grid holds: " + kinds);
+            }
+
+            // Cell labels carry the "Header: value" contract.
+            var firstCell = grid.Patterns.Grid.Pattern.GetItem(0, 0);
+            Assert.Equal("Name: Note 00000", firstCell.Name);
+            var statusCell = grid.Patterns.Grid.Pattern.GetItem(1, 1);
+            Assert.Equal("Status: Done", statusCell.Name);
+
+            // The per-cell association: entering THIS cell, AT resolves
+            // its column header and its row identity.
+            Assert.True(
+                statusCell.Patterns.TableItem.IsSupported,
+                "TableItem pattern missing on a cell");
+            var tableItem = statusCell.Patterns.TableItem.Pattern;
+            Assert.Contains(
+                tableItem.ColumnHeaderItems.Value ?? Array.Empty<AutomationElement>(),
+                header => header.Name == "Status");
+            Assert.Contains(
+                tableItem.RowHeaderItems.Value ?? Array.Empty<AutomationElement>(),
+                header => header.Name == "Note 00001");
+
+            // Keyboard sort: focus a cell, Ctrl+Alt+S twice = the
+            // second toggle flips to DESCENDING, reordering row 0.
+            // UIA SetFocus, not a mouse click — the pointer path is
+            // position-fragile on a hosted runner — and the window is
+            // FORCED foreground first: synthesized input goes to the
+            // foreground queue, and keyboard focus alone does not make
+            // a window foreground on the gate runner.
+            EnsureForeground(window);
+            FocusCell(firstCell);
+            AutomationElement actionLog = WaitForElement(
+                window, "GridActionLog", TimeSpan.FromSeconds(5));
+            PressChord(VirtualKeyShort.KEY_S);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
+            PressChord(VirtualKeyShort.KEY_S);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => grid.Patterns.Grid.Pattern.GetItem(0, 0).Name
+                        == "Name: Note 00199",
+                    TimeSpan.FromSeconds(5)),
+                // The host mirrors grid events into the log: "a11y:
+                // GridSorted" proves the chord fired and the reorder
+                // stalled; anything else means input never arrived.
+                "descending sort did not reorder row 0; host log: "
+                    + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
+            // The reader's CELL survives both sorts (round 4): after
+            // two re-populations, UIA keyboard focus must still be the
+            // originally focused cell element, not the grid.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => automation.FocusedElement()?.Name == "Name: Note 00000",
+                    TimeSpan.FromSeconds(10)),
+                "post-sort focus is on "
+                    + $"'{automation.FocusedElement()?.Name ?? "<none>"}', "
+                    + "not the reader's cell");
+
+            // Type-ahead: prefix matching on the FIRST column.
+            Keyboard.Type("note 00042");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (grid.Patterns.Selection.Pattern.Selection.Value
+                            ?? Array.Empty<AutomationElement>())
+                        .Any(item => item.Name.Contains("Note 00042", StringComparison.Ordinal)),
+                    TimeSpan.FromSeconds(5)),
+                "type-ahead did not select the prefixed row");
+            // ...and the reader MOVED (round 9): after the virtualized
+            // jump, UIA keyboard focus is the matched cell, not the
+            // cell the reader typed from.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => automation.FocusedElement()?.Name == "Name: Note 00042",
+                    TimeSpan.FromSeconds(10)),
+                "type-ahead focus is on "
+                    + $"'{automation.FocusedElement()?.Name ?? "<none>"}', "
+                    + "not the matched cell");
+
+            // Row actions, the full keyboard journey: the Menu key
+            // opens the actions menu (host lifecycle log — popup items
+            // are not reliably enumerable through desktop UIA on a
+            // starved session), Down lands on the first action, Enter
+            // executes it. Menu COMPOSITION — the disabled action
+            // retained with its reason as HelpText — is pinned by the
+            // in-process unit test
+            // (RowActionsMenuRetainsDisabledActionsWithTheirReason).
+            // The FIRST Menu-key press must OPEN the menu — a menu
+            // first assigned inside ContextMenuOpening is too late for
+            // the initiating request (round 4: the runner reproduced
+            // the first-open production failure every time; the
+            // substrate now keeps a persistent menu and mutates its
+            // items), then Down + Enter execute the first action.
+            Keyboard.Type(VirtualKeyShort.APPS);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => actionLog.Properties.Name.ValueOrDefault == "menu-open",
+                    TimeSpan.FromSeconds(10)),
+                "the first Menu-key press did not OPEN the row-actions menu; "
+                    + "host log: "
+                    + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
+            Keyboard.Type(VirtualKeyShort.DOWN);
+            Keyboard.Type(VirtualKeyShort.RETURN);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (actionLog.Properties.Name.ValueOrDefault ?? "")
+                        .StartsWith("opened:", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                "the Open row action did not execute; host log: "
+                    + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
+
+            // The summary region: separately addressable and named.
+            AutomationElement summary = WaitForElement(
+                window, "AccessibleDataGridSummary", TimeSpan.FromSeconds(5));
+            Assert.Equal(
+                "Summary: 200 rows, 3 columns.",
+                summary.Properties.Name.ValueOrDefault);
+
+            ShellAccessibilityTests.AssertAxeClean(process, "grid-conformance");
+        });
+    }
+
+    /// <summary>The virtualization trap probe: 10,000 rows, realize the
+    /// LAST item through the Grid pattern (the ItemContainerPattern
+    /// path UIA clients take), jump Ctrl+End, and require the process
+    /// to survive — the Recycling-mode NRE class dies here.</summary>
+    [Fact]
+    public void VirtualizationTrapProbeSurvivesTenThousandRows()
+    {
+        RunHost(10_000, (automation, window, process) =>
+        {
+            AutomationElement grid = WaitForElement(
+                window, "AccessibleDataGrid", TimeSpan.FromSeconds(20));
+
+            var last = grid.Patterns.Grid.Pattern.GetItem(9_999, 0);
+            Assert.Equal("Name: Note 09999", last.Name);
+
+            var middle = grid.Patterns.Grid.Pattern.GetItem(5_000, 2);
+            Assert.Equal("Notes: fixture row 5000", middle.Name);
+
+            // The ItemContainerPattern path — the named crash class is
+            // THIS provider route, distinct from GridPattern.GetItem:
+            // enumerate containers in order without realizing the whole
+            // list, and realize a stretch through VirtualizedItem.
+            Assert.True(
+                grid.Patterns.ItemContainer.IsSupported,
+                "ItemContainerPattern missing");
+            var containers = grid.Patterns.ItemContainer.Pattern;
+            AutomationElement? cursor = null;
+            int walked = 0;
+            int realized = 0;
+            AutomationElement? lastRealized = null;
+            for (int i = 0; i < 40; i++)
+            {
+                cursor = containers.FindItemByProperty(cursor, null, null);
+                if (cursor is null)
+                {
+                    break;
+                }
+                walked++;
+                if (cursor.Patterns.VirtualizedItem.IsSupported)
+                {
+                    cursor.Patterns.VirtualizedItem.Pattern.Realize();
+                    realized++;
+                    lastRealized = cursor;
+                }
+            }
+            Assert.True(walked >= 30, $"ItemContainer walk stalled at {walked} items");
+            // Realization is MANDATORY evidence, not opportunistic
+            // (adversarial round 2): a provider that stops offering
+            // VirtualizedItem must fail here, and a realized row must
+            // answer with real content.
+            Assert.True(
+                realized >= 1,
+                $"no virtualized container offered VirtualizedItem across {walked} items");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => lastRealized!.FindAllChildren().Any(
+                        cell => (cell.Properties.Name.ValueOrDefault ?? "")
+                            .StartsWith("Name: Note", StringComparison.Ordinal)),
+                    TimeSpan.FromSeconds(10)),
+                "the realized row never produced its cells");
+
+            EnsureForeground(window);
+            FocusCell(grid.Patterns.Grid.Pattern.GetItem(0, 0));
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.END);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (grid.Patterns.Selection.Pattern.Selection.Value
+                            ?? Array.Empty<AutomationElement>())
+                        // Ctrl+End lands on the LAST COLUMN of the last
+                        // row — "Notes: fixture row 9999" — so match
+                        // the unpadded row number.
+                        .Any(item => item.Name.Contains("9999", StringComparison.Ordinal)),
+                    // Generous: deferred scrolling over 10k Standard-mode
+                    // rows realizes containers on a cold runner's pace.
+                    TimeSpan.FromSeconds(60)),
+                "Ctrl+End did not reach the last row");
+
+            Assert.False(process.HasExited, "the host died under UIA load");
+        });
+    }
+
+    /// <summary>W4-1 reading-table window (G28): F2 in the host opens
+    /// a markdown table on the substrate. Entry must land on the FIRST
+    /// CELL (headers + cell announced — round 1 found MoveFocus(First)
+    /// landing on the summary), and Escape must close back to the
+    /// host.</summary>
+    [Fact]
+    public void ReadingTableWindowFocusesFirstCellAndEscapeReturns()
+    {
+        RunHost(5, (automation, window, process) =>
+        {
+            _ = WaitForElement(window, "AccessibleDataGrid", TimeSpan.FromSeconds(10));
+            AutomationElement actionLog = WaitForElement(
+                window, "GridActionLog", TimeSpan.FromSeconds(5));
+            EnsureForeground(window);
+            Keyboard.Type(VirtualKeyShort.F2);
+            // The contract is asserted through FOCUS and the host's
+            // own lifecycle log, never desktop-window enumeration: the
+            // gate runner has answered desktop and process-scoped
+            // window queries EMPTY while the host verifiably held the
+            // window open ("table-shown:True", no "table-closed") — a
+            // starved session materializes the window's UIA presence
+            // lazily, but keyboard focus and the app's own events are
+            // authoritative immediately.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (actionLog.Properties.Name.ValueOrDefault ?? "")
+                        .StartsWith("table-", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(15)),
+                "F2 never reached the host; host log: "
+                    + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
+            Assert.Equal(
+                "table-shown:True", actionLog.Properties.Name.ValueOrDefault);
+
+            // Initial keyboard focus is the first CELL, by label — the
+            // §8.7 entry contract (headers + cell announced).
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => automation.FocusedElement()?.Name == "Name: alpha",
+                    TimeSpan.FromSeconds(15)),
+                $"first cell not focused; focus is on "
+                    + $"'{automation.FocusedElement()?.Name ?? "<none>"}'; host log: "
+                    + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
+
+            Keyboard.Type(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => actionLog.Properties.Name.ValueOrDefault == "table-closed",
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not close the table window; host log: "
+                    + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
+            // Focus RESTORATION, not just closure (adversarial round
+            // 2): the owner window must hold keyboard focus again —
+            // focus stranded on the desktop or another process would
+            // otherwise pass.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => automation.FocusedElement()?.Properties.ProcessId.ValueOrDefault
+                        == process.Id,
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not return keyboard focus to the host");
+            Assert.False(process.HasExited, "the host died with the table window");
+        });
+    }
+
+    /// <summary>Round 22: the host must DIE on a dispatcher fault —
+    /// swallowing would keep it alive through the exact crash class
+    /// the virtualization probe gates, turning that gate green on the
+    /// failure it exists to catch. This fact gates the die-on-fault
+    /// contract itself.</summary>
+    [Fact]
+    public void InjectedDispatcherFaultKillsTheHost()
+    {
+        if (!Environment.UserInteractive)
+        {
+            // No desktop, no window Loaded, no injection point — the
+            // contract is gated where the suite actually runs.
+            return;
+        }
+        var startInfo = new ProcessStartInfo(HostExe())
+        {
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("--inject-dispatcher-fault");
+        using Process process = Process.Start(startInfo)
+            ?? throw new Xunit.Sdk.XunitException("GridConformanceHost did not start.");
+        try
+        {
+            Assert.True(
+                process.WaitForExit(30_000),
+                "the host survived an injected dispatcher fault");
+            Assert.Equal(70, process.ExitCode);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    /// <summary>#1089: the host-window bound must SCALE with the row
+    /// count a probe asked for, and must never hand any probe less than
+    /// the flat 30 s the gate already ran on — a "proportional" bound
+    /// that shrank the small cases would trade a known flake for an
+    /// unknown one. Pure arithmetic, no desktop (the
+    /// MainWindowDiscovery_RetriesTransientComTimeouts precedent).</summary>
+    [Fact]
+    public void HostWindowBound_ScalesWithRowCountAndNeverShrinks()
+    {
+        TimeSpan flatBoundBeforeThisChange = TimeSpan.FromSeconds(30);
+
+        // Never below the proven floor - including the degenerate and
+        // nonsensical row counts, which must not underflow it.
+        Assert.Equal(flatBoundBeforeThisChange, HostWindowTimeout(0));
+        Assert.Equal(flatBoundBeforeThisChange, HostWindowTimeout(-1));
+        foreach (int rowCount in new[] { 0, 5, 200, 10_000 })
+        {
+            Assert.True(
+                HostWindowTimeout(rowCount) >= flatBoundBeforeThisChange,
+                $"{rowCount} rows got less than the flat bound it used to have");
+        }
+
+        // Strictly increasing across the three sizes the suite drives.
+        Assert.True(
+            HostWindowTimeout(5) < HostWindowTimeout(200),
+            "200 rows must outrank 5");
+        Assert.True(
+            HostWindowTimeout(200) < HostWindowTimeout(10_000),
+            "10,000 rows must outrank 200");
+
+        // The case that actually flaked (#1086) gets materially more
+        // than the bound it blew - not a rounding-error improvement.
+        Assert.True(
+            HostWindowTimeout(10_000) >= TimeSpan.FromSeconds(60),
+            $"the 10,000-row bound is only {HostWindowTimeout(10_000).TotalSeconds:0.#} s");
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    /// <summary>
+    /// Make the window the FOREGROUND window, verified — synthesized
+    /// keyboard input goes to the foreground queue, and Windows denies
+    /// SetForegroundWindow to background processes unless they own
+    /// recent input. The Alt tap grants exactly that (the documented
+    /// unlock), then the claim is verified against
+    /// GetForegroundWindow, not assumed.
+    /// </summary>
+    private static void EnsureForeground(Window window)
+    {
+        IntPtr handle = new(window.Properties.NativeWindowHandle.Value.ToInt64());
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            if (GetForegroundWindow() == handle)
+            {
+                return;
+            }
+            // A CONTROL tap, deliberately not Alt: any synthesized key
+            // grants the calling process the recent-input credential
+            // SetForegroundWindow requires, but a bare Alt tap drops
+            // the target window into system-menu mode — the NEXT key
+            // (a chord letter, F2) gets eaten by menu navigation.
+            Keyboard.Press(VirtualKeyShort.CONTROL);
+            Keyboard.Release(VirtualKeyShort.CONTROL);
+            window.Focus();
+            Wait.UntilInputIsProcessed();
+            if (SpinWait.SpinUntil(
+                    () => GetForegroundWindow() == handle,
+                    TimeSpan.FromSeconds(2)))
+            {
+                return;
+            }
+        }
+        Assert.Fail("the host window could not take the foreground");
+    }
+
+    /// <summary>UIA SetFocus on a cell — deterministic on hosted
+    /// runners, where pointer-position clicks are fragile.</summary>
+    private static void FocusCell(AutomationElement cell)
+    {
+        cell.Focus();
+        Wait.UntilInputIsProcessed();
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => cell.Properties.HasKeyboardFocus.ValueOrDefault,
+                TimeSpan.FromSeconds(5)),
+            $"cell '{cell.Name}' did not take keyboard focus");
+    }
+
+    private static void CaptureForDiagnostics(Window window, string name)
+    {
+        try
+        {
+            string root = Environment.GetEnvironmentVariable("RUNNER_TEMP")
+                ?? Path.GetTempPath();
+            string path = Path.Combine(
+                root, "slate-accessibility-results", $"{name}.png");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            FlaUI.Core.Capturing.Capture.Element(window).ToFile(path);
+        }
+        catch (Exception)
+        {
+            // Diagnostics only — a capture failure must not mask the
+            // assertion that requested it.
+        }
+    }
+
+    private static AutomationElement WaitForDesktopElement(
+        UIA3Automation automation, string automationId, TimeSpan timeout)
+    {
+        AutomationElement? found = null;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    found = automation.GetDesktop().FindFirstChild(
+                        cf => cf.ByAutomationId(automationId));
+                    return found is not null;
+                },
+                timeout),
+            $"no desktop element with AutomationId {automationId} appeared");
+        return found!;
+    }
+
+    /// <summary>Cold WinExe start on a hosted runner — row-count
+    /// independent, and deliberately the WHOLE flat bound that the 5-
+    /// and 200-row probes already relied on, so no probe ends up with a
+    /// SMALLER budget than the one already proven in the gate.</summary>
+    private static readonly TimeSpan HostWindowStartBudget = TimeSpan.FromSeconds(30);
+
+    /// <summary>Per-row allowance for building and realizing the grid
+    /// before the window is discoverable: 3 ms/row puts the 10,000-row
+    /// probe at 60 s, double the bound that flaked.</summary>
+    private static readonly TimeSpan HostWindowPerRowBudget =
+        TimeSpan.FromMilliseconds(3);
+
+    /// <summary>
+    /// The host-window bound, scaled to the row count the probe asked
+    /// for (#1089). A flat number was the wrong shape: too tight for
+    /// the 10,000-row probe — which flaked the gate on #1086 with "the
+    /// host window never appeared" and passed on a no-change re-run —
+    /// while giving the 5-row probe the same budget for work three
+    /// orders of magnitude smaller.
+    ///
+    /// This is a CEILING, not a cost. SpinUntil returns the moment the
+    /// window appears (the whole 10,000-row probe takes ~1.6 s locally,
+    /// measured 2026-08-07), so the budget is only ever spent on a
+    /// failure — a real hang costs the extra seconds once, a too-tight
+    /// bound costs a re-run of the entire gate. Generous wins.
+    /// </summary>
+    internal static TimeSpan HostWindowTimeout(int rowCount) =>
+        HostWindowStartBudget + (HostWindowPerRowBudget * Math.Max(0, rowCount));
+
+    private static void RunHost(
+        int rowCount,
+        Action<UIA3Automation, Window, Process> body)
+    {
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(HostExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(
+                rowCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("GridConformanceHost did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                // Session-0 fallback (the shell-gate shape): the UIA
+                // half needs a desktop; the host must still survive
+                // startup.
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "GridConformanceHost exited during startup smoke.");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window? window = null;
+            TimeSpan windowBound = HostWindowTimeout(rowCount);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        window = automation.GetDesktop()
+                            .FindFirstChild(cf => cf.ByProcessId(process.Id))?.AsWindow();
+                        return window is not null;
+                    },
+                    windowBound),
+                // The bound rides the message: a future timeout must say
+                // WHICH budget it blew, not just that it blew one.
+                "the host window never appeared within "
+                    + $"{windowBound.TotalSeconds:0.#} s ({rowCount} rows)");
+            // The body drives real keyboard input; whatever test ran
+            // before this one owned the foreground.
+            EnsureForeground(window!);
+            body(automation, window!, process);
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    private static string HostExe()
+    {
+        string exe = Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..",
+            "tools", "GridConformanceHost", "bin",
+#if DEBUG
+            "Debug",
+#else
+            "Release",
+#endif
+            "net10.0-windows", "GridConformanceHost.exe");
+        exe = Path.GetFullPath(exe);
+        Assert.True(File.Exists(exe), $"GridConformanceHost.exe not built at {exe}.");
+        return exe;
+    }
+
+    private static AutomationElement WaitForElement(
+        Window window, string automationId, TimeSpan timeout)
+    {
+        AutomationElement? found = null;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    found = window.FindFirstDescendant(cf => cf.ByAutomationId(automationId));
+                    return found is not null;
+                },
+                timeout),
+            $"no element with AutomationId {automationId} appeared");
+        return found!;
+    }
+
+    private static void PressChord(VirtualKeyShort key)
+    {
+        // Explicit press/release ordering with settle time between
+        // steps — TypeSimultaneously's burst can land the letter
+        // before the modifiers register on a loaded runner.
+        Keyboard.Press(VirtualKeyShort.CONTROL);
+        Keyboard.Press(VirtualKeyShort.ALT);
+        Wait.UntilInputIsProcessed();
+        Keyboard.Type(key);
+        Wait.UntilInputIsProcessed();
+        Keyboard.Release(VirtualKeyShort.ALT);
+        Keyboard.Release(VirtualKeyShort.CONTROL);
+        Wait.UntilInputIsProcessed();
+    }
+}
