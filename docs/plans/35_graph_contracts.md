@@ -4667,4 +4667,245 @@ second, no product defect since the fourth.
 - Mac: the suites green with the default-sort literal replaced by the
   call and the artifact twin writing `summary`.
 
+## PR B — the Connections leaf
+
+**Goal (spec §PR B).** The right pane's `connections` leaf — in the
+catalogue since W1 and empty ever since (`WorkspaceViewModel.cs:1716`,
+`new("connections", "Connections")`) — becomes the local graph: core's
+connections tree at depth 1–3 for the active note, re-root on a
+neighbour with a back stack, the neighbourhood summary spoken on load,
+depth change and re-root, and ghost rows that create the note. The
+table's `Show connections` action, declared and unwired by PR A
+(`GraphDocumentViewModel.cs:273`, gated `:577`, invoked `:605`, set only
+by a fact at `GraphDocumentTests.cs:655`), is wired here. This section is
+at revision 1.
+
+**What stands today.** The leaf catalogue is a static list
+(`WorkspaceViewModel.cs:1711–1729`) and `ActiveLeaf`'s setter is the one
+funnel that shows a leaf (`:1811–1849`): it announces
+`A11yEvent.LeafPanelShown(value.Title)` (`:1818`), runs the per-leaf
+idempotent reveal hooks (`:1822`, `:1828`, `:1834`, `:1842`) and persists
+(`:1846`). Every leaf body is a `DockPanel` in `MainWindow.xaml` gated by
+a `DataTrigger` on `ActiveLeaf.Id`; the two newest host a code-behind
+`UserControl` with a `Model` dependency property — history at
+`MainWindow.xaml:1895–1918`, sync at `:1921–1942` — and the recorded trap
+is that the `Model` binding resolves by reflection, so the workspace
+property it names must be PUBLIC, not internal
+(`WorkspaceViewModel.History.cs:20–24`). The active note reaches a leaf
+through one funnel, `SyncPanels()` (`WorkspaceViewModel.cs:1759–1775`),
+whose `NoteChanged` calls are same-path no-ops
+(`RightPanePanelsViewModel.cs:359–366`). The reveal-and-focus template is
+`ShowHistoryPanel` (`WorkspaceViewModel.History.cs:62–85`): un-hide the
+pane, set `ActiveLeaf`, announce only on an actual switch, then
+`FocusBoundaryRequested` with `WorkspaceFocusBoundary.RightPane`
+(`:84`; the event at `WorkspaceViewModel.Layout.cs:26`, the enum at
+`WorkspaceViewModel.cs:25–29`). Off-dispatcher work rides PR A's
+primitive (`Panels/PanelWorkScheduler.cs`, `StartWorkAlwaysAsync`).
+
+**B-1 — One leaf document per workspace, seated on the catalogue's
+`connections` entry, retired with the workspace.** A
+ConnectionsLeafViewModel is constructed once per workspace and exposed as
+a PUBLIC property so the leaf body's `Model` binding resolves
+(`WorkspaceViewModel.History.cs:20–24`'s trap). It owns the view state
+(the root, the depth, the back stack), the load token, the one immutable
+publication and the announcer relay; it runs every body through
+`StartWorkAlwaysAsync` and has no inline mode (PR A's AD-4). The
+workspace's teardown shuts it down and adds its drain to the bounded
+pre-session drain beside the graph document's (`ShutdownGraphDocument`'s
+shape, `Graph/WorkspaceViewModel.Graph.cs`).
+
+**B-2 — The load: one token, one publication, validated at dispatch.**
+The token is (this document, the `VaultSession` the body was started
+against, the lifecycle generation, the request record {root path, depth,
+filter}, `seq`) — PR A's rule A verbatim, including the lifecycle
+generation IPA-6 added. The body calls
+`graph_connections_tree(path, depth, filter)`, which is a METHOD on the
+session object and takes its three arguments POSITIONALLY: there is no
+query record and `GraphVisibilityQuery` is not involved
+(`lib.rs:1365–1370`; core `graph_queries.rs:1011`). The receiver runs at
+dispatch time on the owner context and validates every field before
+either arm; a stale, mismatched or out-of-order result installs nothing;
+a failure installs an ERROR record without a tree.
+
+**B-3 — The root follows the active note until the reader pins it.**
+The mac's rule: a null root means FOLLOW, and any re-root pins
+(`AppState.swift:2965–2967`; the reload condition at
+`ConnectionsPanel.swift:31–37` fires only when the root is null AND the
+leaf is active for the view). Windows takes both halves: `NoteChanged`
+re-roots the leaf only while unpinned, and only while the leaf is the
+active one; a pinned leaf keeps its root as the reader moves through
+notes. Nothing else in the shell sets the root.
+
+**B-4 — Re-root and Back, with the mac's stack.** Re-root pushes the
+current (root, effective) pair onto a back stack
+(`ConnectionsPanel.swift:207`, the stack declared at
+`AppState.swift:2959`), sets the new root, makes the leaf active, loads,
+focuses the tree and announces `GraphReRooted` (`:214–223`). Back pops
+the stack and announces `GraphReRooted` again (`:233–247`). Row
+ACTIVATION does not re-root — only the `Show connections` row action does
+(`ConnectionsPanel.swift:279–280` against `:288–294`). The mac has no
+Back button, only ⌘[ on the panel (`:52–55`); Windows gives Back a
+chordless command row beside the leaf's own key handling (BD-4).
+
+**B-5 — Depth is core's clamp, never a Windows literal.** The bounds are
+core's named constants — CONNECTIONS_DEPTH_MIN = 1
+(`graph_queries.rs:73`) and CONNECTIONS_DEPTH_MAX = 3 (`:74`), applied
+by `clamp_depth` (`:113–115`) — read through `graph_constants`
+(`lib.rs:3583–3586`, core `:93–103`) once per document and never
+transcribed. The control is labelled "Local graph depth" and hinted
+"How many links away from this note to include."
+(`ConnectionsPanel.swift:97`, `:108` — an accessibility hint, not a
+tooltip), with the mac's three tags "Links", "2 links away" and
+"3 links away" (`:102–104`). A depth change reloads and speaks the
+summary.
+
+**B-6 — The tree's shape is core's, untouched.** The in/out split, the
+omission of self-edges and the collapsing of Link+Embed are core's rules,
+moved to Rust by PR 0b (`graph_queries.rs:1269`, `:1337`, `:1370`,
+`:1402`, `:1423`, `:1437`); the host reorders nothing. The records are
+`GraphConnectionsTree` (`lib.rs:4043–4052`) carrying
+`GraphNeighborhoodCounts` (`:3464–3471`) and the two ordered row vectors
+of `GraphConnectionRow` (`:4004–4019`). The host's only structural work
+is nesting the flat rows for display; it nests by the rows' own
+level-and-order relation, the mac's `ConnectionsModel.nest`
+(`ConnectionsPanel.swift:406–435`), and the diamond — one node reached
+twice, two occurrences — stays two rows (BD-6).
+
+**B-7 — Every row's name and status are core's copy.** A row's
+accessible name is `GraphRow`'s rendering through the relay
+(`a11y.rs:3250–3253` over `graph_row_copy` `:3218–3232`): a ghost reads
+"{label}, unresolved, {references} references", a note or attachment
+"{label}, {in} links in, {out} links out", with ", embed" appended when
+the edge is an embed. `GraphRow` is RENDERED, never announced — the mac
+posts it nowhere (`ConnectionsPanel.swift:244–247`). The badges are
+ItemStatus, the mac's words: "Unresolved", "Embed", "Attachment"
+(`:311`, `:313`, `:315`), and they are hidden from the visual reader's
+accessibility tree exactly as the mac hides them (`:328`).
+
+**B-8 — The leaf speaks the shell's line, not the graph's twin.**
+`LeafPanelShown{title}` renders "{title} panel." (`a11y.rs:1682`), which
+for this leaf's catalogue title is "Connections panel." — BYTE-IDENTICAL
+to `GraphStatusNote::ConnectionsPanel` (`a11y.rs:3370`). The leaf must
+not speak both. Windows keeps the shell's event, which `ActiveLeaf`
+already posts (`WorkspaceViewModel.cs:1818`), and never posts the graph
+family's twin (BD-8). The sequences, as projections onto the graph family
+plus `LeafPanelShown`: showing the leaf speaks the shell's line, then the
+summary when the load publishes; a depth change speaks the summary alone;
+a re-root speaks `GraphReRooted` then the summary; a failed load speaks
+`GraphBlocked{ConnectionsLoadFailed}` where the summary would be; an
+empty neighbourhood speaks `GraphStatus{NoConnections}` in its place.
+
+**B-9 — Ghost rows create through PR A's funnel, and do not re-root.**
+The ghost's path is core's `graph_ghost_note_path`
+(`lib.rs:3805–3808`, core `graph_queries.rs:839–858`); the create runs
+through PR A's `ISurfaceNoteCreator` seam on the workspace's own worker
+(`FileManagement/SurfaceNoteCreation.cs`,
+`WorkspaceViewModel.GraphCreate.cs`), so a leaf closed meanwhile cannot
+swallow the landing. The mac's completion order is: the note opens, ONE
+`GraphStatus{NoteCreated}` is posted, and then the tree refreshes if the
+graph changed — it does NOT re-root
+(`ConnectionsPanel.swift:255–310`, the refresh at `:301`).
+
+**B-10 — The tree is built the outline's way, because no tree substrate
+exists.** `Grids/AccessibleDataGrid.cs` is the only accessible substrate
+in the shell; there is no `AccessibleTree` of any kind, and trees are ad
+hoc. The leaf follows the closest structural precedent,
+`Canvas/CanvasOutlineView.cs`: a row view model carrying Name and
+ItemStatus (`:100`, `:105–118`), a `TreeView` subclass with its own
+automation peer (`:171`, `:198`), a DATA peer carrying the UIA patterns —
+the load-bearing note at `:184–197` says the patterns must sit on the
+data peer, not the container peer — a `TreeViewItem` subclass with its
+peer (`:250`, `:265`), Standard virtualisation and not Recycling
+(`:293–295`), and focus that realises the container first (`:404–412`).
+
+**B-11 — Three chordless command rows, the mac's labels byte for byte.**
+`slate.graph.showConnections`, `slate.graph.connectionsDeeper` and
+`slate.graph.connectionsShallower` join `ChordTable`'s graph rows beside
+PR A's `Ids.GraphOpenTab` (`Commands/ChordTable.cs:274`), in the
+`ChordScope.Graph` scope PR A declared and left empty (`:74`). The labels
+are the mac's, byte-identical (`SlateCommands.swift:1516–1535`), the
+lesson of PR A's TGA-8 (vi). `chords.json` is regenerated through the
+projection, never hand-edited.
+
+**B-12 — The table's `Show connections` is wired here.** PR A left
+`ShowConnectionsFromSurface` declared and null in production, so the
+action lists disabled (`GraphDocumentViewModel.cs:577`). PR B assigns it
+in the workspace's graph wiring (`Graph/WorkspaceViewModel.Graph.cs`,
+beside `RevealRowFromSurface`): the row's path becomes the leaf's new
+root, the right pane opens on the `connections` leaf, focus moves to the
+tree, and the sequence is the re-root's (B-4, B-8). The action's
+enablement fact in `GraphDocumentTests` stops needing its stub.
+
+**B-13 — §W-A: the tree over the corpus, byte-identical.** The
+`connections` section of `crates/slate-core/tests/fixtures/parity_golden/graph_queries.json`
+carries, per entry, `{path, depth, center_key, tree_depth, summary,
+incoming, outgoing}` with rows `{occurrence, parent, level, key, kind,
+embed_only, references}`; the pinned pairs are in
+`tools/ParityHarness/SurfaceSerializer.cs:1228–1236`. A Windows fact
+loads the artifact and asserts the document's tree equals it for every
+pinned pair, the shape PR A's A-14 fact uses.
+
+**B-14 — §W-C: the journey and the axe scan.** The FlaUI journey
+GraphConnections_LeafWalkDepthAndReRoot_AreClean opens Connections from a
+note, reads the summary region, walks the in and out groups by UIA,
+changes depth, re-roots on a neighbour, comes back, and scans clean under
+the axe scope graph-connections. The journey is RUN to its last step
+locally before the push, never merely built — PR A's TGA-9 lesson.
+
+**B-15 — The censuses.** The relay wall extends to the leaf: no source
+under `Graph/` announces except through `GraphAnnouncer`, with the
+existing shapes (a graph-family event constructed anywhere else, an
+alias or static import, a delegate reached by any spelling) already
+covered by `Censuses/GraphAnnouncerCensus.cs`; the leaf adds no
+exemption. The citation census gains a "B" tuple with its own floor
+(`Censuses/GraphContractsCitationCensus.cs`).
+
+**B-16 — The matrix rows.** `parity_matrix.md` moves the three
+connections ids to implemented under W6-2's status;
+`docs/plans/18_windows_port/w_c_matrix.md` gains "Graph connections leaf
+(W6-2 PR B)" with its evidence; staged claims about later slices are
+phrased without a bare "until PR X" (PR A's TGA-8 lesson).
+
+### Decisions (PR B)
+
+- **BD-1 — The filter is core's inclusive default, hard-coded until PR
+  C.** The mac hard-codes an inclusive filter for the connections load
+  (`AppState+Connections.swift:17–19`); PR C brings the shared filter.
+  Windows does the same and records it here rather than inventing a leaf
+  filter.
+- **BD-2 — Verbosity is Standard until PR C**, as PR A's AD-6 has it.
+- **BD-4 — Back is a command row on Windows.** The mac reaches Back only
+  through ⌘[ on the panel; Windows has no such chord free in the leaf, so
+  Back is a chordless row in the same scope as the other three, plus
+  Alt+Left handled on the tree. Recorded as a divergence (B-D1).
+- **BD-6 — The diamond stays two rows.** Core emits one row per
+  OCCURRENCE, not per node (`GraphConnectionRow`'s `occurrence`), and the
+  mac's own fact pins two distinct occurrences for one node id
+  (`ConnectionsPanelTests.swift:127–128`). The host does not deduplicate.
+- **BD-8 — One panel line, the shell's.** See B-8: `LeafPanelShown` is
+  the leaf's line and `GraphStatus{ConnectionsPanel}` is never posted on
+  Windows. Recorded as a divergence (B-D2).
+
+### Recorded divergences (PR B)
+
+- **B-D1 — Back is a command row, not a chord.** The mac's ⌘[ has no
+  Windows equivalent free here; the behaviour is identical, the route
+  differs.
+- **B-D2 — Windows posts `LeafPanelShown` where the mac posts
+  `GraphStatus{ConnectionsPanel}`.** The rendered strings are identical
+  (`a11y.rs:1682` against `:3370`); posting both would double the line.
+
+### Tests that pin PR B
+
+- Windows facts: ConnectionsLeafTests (the tree's shape over the shared
+  fixture, the depth clamp through core's constants, re-root and back,
+  the follow-versus-pinned rule, the ghost create, the announcement
+  sequences, the artifact comparison of B-13); the tree peer's facts
+  beside `AccessibleDataGridTests`' shape; `ChordTableTests` for the
+  three rows; the censuses of B-15; the FlaUI journey of B-14.
+- Rust: unchanged — PR 0b already pins the tree
+  (`graph_queries.rs:1269`, `:1337`, `:1370`, `:1402`, `:1423`, `:1437`)
+  and the constants (`graph_constants_are_the_named_constants`).
+- Mac: unchanged.
+
 <!-- end of the graph contracts document -->
