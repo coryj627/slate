@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-09-03 at `ed92f9d` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-09-05 at `041a9f7` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -137,13 +137,13 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.file.rename` | Rename… | ⌥⌘R | Option Command R | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
 | `slate.file.revealInFinder` | Reveal in Finder | — | — | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
 | `slate.graph.actualSize` | Graph: Actual Size | ⌘0 | Command 0 | #746 (W6-2) | pending |
-| `slate.graph.connectionsDeeper` | Connections: Deeper | — | — | #746 (W6-2) | pending |
-| `slate.graph.connectionsShallower` | Connections: Shallower | — | — | #746 (W6-2) | pending |
+| `slate.graph.connectionsDeeper` | Connections: Deeper | — | — | #746 (W6-2) | implemented; local gates green 2026-09-05; interactive CI + human AT pending |
+| `slate.graph.connectionsShallower` | Connections: Shallower | — | — | #746 (W6-2) | implemented; local gates green 2026-09-05; interactive CI + human AT pending |
 | `slate.graph.fitGraph` | Graph: Fit Graph | ⌥⌘0 | Option Command 0 | #746 (W6-2) | pending |
 | `slate.graph.mostLinked` | Graph: Most Linked Notes | — | — | #746 (W6-2) | pending |
-| `slate.graph.openTab` | Open Graph | — | — | #746 (W6-2) | implemented; local gates green 2026-09-03; interactive CI + human AT pending |
+| `slate.graph.openTab` | Open Graph | — | — | #746 (W6-2) | implemented; local gates green 2026-09-05; interactive CI + human AT pending |
 | `slate.graph.orphans` | Graph: Orphaned Notes | — | — | #746 (W6-2) | pending |
-| `slate.graph.showConnections` | Show Connections | — | — | #746 (W6-2) | pending |
+| `slate.graph.showConnections` | Show Connections | — | — | #746 (W6-2) | implemented; local gates green 2026-09-05; interactive CI + human AT pending |
 | `slate.graph.unresolved` | Graph: Unresolved Links | — | — | #746 (W6-2) | pending |
 | `slate.graph.whereAmI` | Graph: Where Am I? | ⌃⌘I | Control Command I | #746 (W6-2) | pending |
 | `slate.graph.zoomIn` | Graph: Zoom In | ⌘= | Command Equals | #746 (W6-2) | pending |

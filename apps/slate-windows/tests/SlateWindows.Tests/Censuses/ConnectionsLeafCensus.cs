@@ -239,6 +239,29 @@ public sealed class ConnectionsLeafCensus
         Assert.Contains("ConnectionsLeafSurface.FocusAnchor()", window, StringComparison.Ordinal);
     }
 
+    /// <summary>B-20: the parity matrix carries the three command rows at
+    /// the W6-2 status the generator names, and the W-C matrix carries the
+    /// leaf's row (its cells the evidence census's).</summary>
+    [Fact]
+    public void TheParityMatrixCarriesTheThreeRowsAtTheW62Status()
+    {
+        string repo = SourceText.RepoRoot();
+        string script = File.ReadAllText(Path.Combine(repo, "scripts", "generate-parity-matrix.py"));
+        var status = System.Text.RegularExpressions.Regex.Match(
+            script, "W6_2_STATUS = \\(\\s*\"([^\"]+)\"\\s*\"([^\"]+)\"\\s*\\)");
+        Assert.True(status.Success, "the generator's W6_2_STATUS is not in its two-string shape");
+        string expected = status.Groups[1].Value + status.Groups[2].Value;
+        string matrix = File.ReadAllText(Path.Combine(repo, "docs", "plans", "18_windows_port", "parity_matrix.md"));
+        foreach (string id in new[] { "slate.graph.showConnections", "slate.graph.connectionsDeeper", "slate.graph.connectionsShallower" })
+        {
+            string? row = matrix.Split('\n').FirstOrDefault(line => line.StartsWith("| `" + id + "`", StringComparison.Ordinal));
+            Assert.True(row is not null, $"{id} has no parity row");
+            Assert.EndsWith("| " + expected + " |", row.TrimEnd(), StringComparison.Ordinal);
+        }
+        string wc = File.ReadAllText(Path.Combine(repo, "docs", "plans", "18_windows_port", "w_c_matrix.md"));
+        Assert.Contains("| Graph connections leaf (W6-2 PR B) |", wc, StringComparison.Ordinal);
+    }
+
     /// <summary>B-19 (v): the depth's dataflow, across the whole shell —
     /// every write to the leaf's depth storage takes the FFI clamp's result
     /// (through the counting wrapper whose body IS the FFI call), and every

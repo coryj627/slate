@@ -37,6 +37,15 @@ public sealed class WcMatrixGraphEvidenceCensus
             ["graph_table_rows", "graph_table_columns", "GraphRow", "audio_summary"],
             ["GraphDocumentTests", "GraphTableTests", "GraphAnnouncerTests", "GraphSurfaces_TableSortSelectionAndActivation_AreClean", "TheDocumentsRowsAndSummaryEqualTheArtifactsUnderTheArtifactsFilter"],
             ["graph-table"]),
+        // W6-2 PR B, slice B1 (B-20): the Connections leaf.
+        new(
+            "Graph connections leaf (W6-2 PR B)",
+            ["ConnectionsLeafBody", "ConnectionsHeading", "ConnectionsSummary", "ConnectionsDepth", "ConnectionsStateText", "ConnectionsLeaf", "ConnectionsTree"],
+            ["Tree", "TreeItem", "ComboBox", "Text"],
+            ["Tree", "SelectionItem", "ExpandCollapse", "ScrollItem", "Invoke", "Selection"],
+            ["GraphRow", "GraphNeighborhoodSummary", "ConnectionsPhrase"],
+            ["ConnectionsLeafTests", "ConnectionsLeafViewTests", "GraphConnections_LeafWalkDepthAndReRoot_AreClean", "TheLeafsTreeIsTheSessionsRecordFieldByFieldForEveryPinnedPair"],
+            ["graph-connections"]),
     ];
 
     private sealed record Row(string Title, string[] Cells);

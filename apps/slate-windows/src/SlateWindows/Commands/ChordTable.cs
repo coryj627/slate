@@ -273,6 +273,12 @@ internal static class ChordTable
         // Graph (W6-2 #746, PR A). Ids are byte-identical to mac's.
         public const string GraphOpenTab = "slate.graph.openTab";
 
+        // Graph (W6-2 #746, PR B slice B1, contract B-14): the Connections
+        // leaf's three chordless rows.
+        public const string GraphShowConnections = "slate.graph.showConnections";
+        public const string GraphConnectionsDeeper = "slate.graph.connectionsDeeper";
+        public const string GraphConnectionsShallower = "slate.graph.connectionsShallower";
+
         // Canvas (W6-1 #745). Ids are byte-identical to mac's.
         public const string CanvasShowOutline = "slate.canvas.showOutline";
         public const string CanvasShowTable = "slate.canvas.showTable";
@@ -939,6 +945,18 @@ internal static class ChordTable
         // The label is the mac's, byte-identical (P3; MacCatalogParityTests).
         Reg(Ids.GraphOpenTab, "Open Graph", CommandSection.Graph,
             "Open the vault's graph in its tab, as a sortable table of notes."),
+        // W6-2 PR B (B-14): chordless — ChordScope.None through Reg's rule —
+        // the labels and hints the mac's byte for byte
+        // (SlateCommands.swift:1516–1535). Show reveals the leaf for the note
+        // in view (the palette's meaning; the row action's re-root is B2);
+        // Deeper and Shallower are always enabled, a bound a no-op through
+        // core's clamp.
+        Reg(Ids.GraphShowConnections, "Show Connections", CommandSection.Graph,
+            "Open the Connections leaf — the active note's local graph."),
+        Reg(Ids.GraphConnectionsDeeper, "Connections: Deeper", CommandSection.Graph,
+            "Increase the Connections leaf depth by one (up to 3 links away)."),
+        Reg(Ids.GraphConnectionsShallower, "Connections: Shallower", CommandSection.Graph,
+            "Decrease the Connections leaf depth by one (down to direct links)."),
     ];
 
     private static IEnumerable<ChordTableEntry> CanvasRows() =>

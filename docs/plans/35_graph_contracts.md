@@ -5774,6 +5774,94 @@ reason dropped from the menu action (the menu fact); the placeholder's
 trigger dropped and the focus route through the editor geometry (the
 XAML census).
 
+**TGB-5 — The three chordless rows, the matrix rows and their censuses
+(B-14, B-19, B-20).** `Commands/ChordTable.cs`: `slate.graph.showConnections`,
+`slate.graph.connectionsDeeper`, `slate.graph.connectionsShallower` in
+`GraphRows()` through `Reg` — chordless, `ChordScope.None` by Reg's rule,
+section Graph, the labels and hints the mac's byte for byte
+(`SlateCommands.swift:1516–1535`); `Commands/SlateCommandRegistrar.cs`:
+the three resolvers to the workspace's `ShowConnectionsCommand`,
+`ConnectionsDeeperCommand` and `ConnectionsShallowerCommand` — always
+enabled, a bound a no-op through core's clamp (the mac's guard).
+`chords.json` regenerated through the projection; its delivery evidence
+maps the three ids to the graph group, whose implementation references
+gain the leaf's document, the Show route and the view, and whose test
+references gain ConnectionsLeafTests and the journey.
+`scripts/generate-parity-matrix.py`: the three ids join
+W6_2_DELIVERED_COMMANDS and `parity_matrix.md` is regenerated — the
+three rows move from pending to W6_2_STATUS. `w_c_matrix.md` gains the
+row "Graph connections leaf (W6-2 PR B)" — its ten cells naming the
+leaf's automation ids, the tree's control types and patterns, the
+Name / ItemStatus / HelpText sources, the routes, the announcement
+family, the evidence and the axe label — and
+`Censuses/WcMatrixGraphEvidenceCensus.cs`'s manifest gains the
+matching surface. Facts: ChordTableTests — the three rows present,
+chordless, scope None, the labels the mac's; the registrar's resolvers
+resolving through the palette; the chords projection; the parity
+matrix's three statuses (`Censuses/ConnectionsLeafCensus`'s `TheParityMatrixCarriesTheThreeRowsAtTheW62Status`); the W-C matrix
+row's ten cells, ids, control types, patterns, name sources, evidence
+names and axe label. Gates: `cargo fmt` clean, clippy clean; the workspace's tests 2000 passed with the standing five dir-tree censuses (CI-Windows their oracle) and the perf guard failing in sequence and passing alone (12 s); `dotnet format` applied; the whole Windows test project on a fresh build, 2230 passed (the model fact, 31 s, among them); the accessibility project built and the leaf journey RUN — it failed at the palette step on both attempts when the gates ran from a BACKGROUNDED shell after the five-minute suite (a process launched without the foreground cannot take it, so the first chord never reached the app), and passed alone in the foreground in 10 s, the fourth such pass this session; the local gates now run from the foreground; CI is its oracle on the push; the mac lane is CI's. Mutations, each restored byte for
+byte, each caught by the named fact: the Deeper resolver dropped (`RegistryHoldsExactlyTheDeclaredCatalog_BothDirections`); Show Connections' label drifting from the mac's (`EverySharedCommandIdCarriesMacsLabel`); the projection stale by one label (`ChordsJson_IsExactlyTheTablesProjection`); the W6-2 status stale by a day (the parity fact); the axe scan dropped from the journey and the record fact dropped from the matrix row (`EveryEvidenceNameResolvesAndEveryAxeLabelIsScanned`); and Show Connections dropped from the delivery evidence's command map, which SURVIVED — the scope-completeness census walks the issues' commands and never saw a delivered id missing from the map — so `Censuses/DeliveryEvidenceCensus` gains `EveryImplementedCommandMapsToACommandGroup` (every command the parity matrix records as implemented maps to a group) and the mutation is caught by it.
+
+**TGB-6 — The journey (B-18, §W-C), and the ghost create's heal it
+found.** `GraphConnections_LeafWalkDepthAndReRoot_AreClean` over a
+four-note vault (Alpha → Beta, Gamma, the ghost Missing Note; Beta →
+Alpha, Delta; Gamma → Alpha; Delta → Beta), its expected labels core's
+renders through the binding BEFORE the app opens the vault (the
+accessibility project gains the SlateUniffi reference for it; the
+journey carries the mac's group-header and badge literals itself, the
+shell's `ConnectionsPhrase` being internal): Alpha opened through the
+graph table (PR A's route), Show Connections through the palette, the
+heading `Alpha.md`, the tree (ControlType Tree, Selection), the summary
+region's exact render, both group headers with their counts, the first
+outgoing row's Name and ItemStatus and its four patterns, the depth
+control's Name, HelpText and value "Links", the change to "2 links
+away" with the summary's changed render, the nested Delta row under
+Beta with its four patterns (the containers regenerate on the layout
+pass after the depth change, so the row is the one WITH nested items),
+the ghost row's Name and "Unresolved", Enter landing the file and the
+created note becoming the root, the healed neighbourhood — "Linked
+from, 1 note" with Alpha, "Links to, 0 notes" — Ctrl+Alt+Left from the
+Alpha row landing in the editor, and axe over `graph-connections`.
+Verified deviations: (i) the app writes no announcement log, so the
+timeline's `NoteCreated` line and the Show line are pinned headlessly
+(ConnectionsLeafTests), the journey pinning the surface; (ii) THE
+FINDING — the created note read "This note has no connections." for
+as long as the journey waited: core re-resolves a ghost's rows only at
+scan, rename and move time (`create_note_becomes_node_without_resolving_old_ghosts`
+pinned it: "creating a file does NOT heal existing ghost rows"), the
+mac's `createNoteFromGhost` runs its structural refresher — a full
+scan (`AppState.swift:1663`) — before it opens the note, and the
+Windows shell never rescans after a structural mutation (its create
+funnel's landing is the sidebar's barrier and tree relist, A-8), so
+the leaf's probe found the generation moved (the new node) and loaded
+a neighbourhood with Alpha's link still a ghost. Fixed in CORE, the
+smallest parity-true repair: `create_exclusive_binding` (`session.rs`)
+calls `re_resolve_unresolved_links` inside the create's own transaction
+and replays each affected source's linkset to the graph — the rename
+and batch-move paths' exact pattern — so SQLite heals at scan, move AND
+create time and the graph keeps replaying it; the pinned test is
+rewritten as `create_note_heals_matching_ghosts_in_its_own_transaction`
+(the ghost merges at the create, the edge points at the real note
+before any scan, a later scan changes nothing) with
+`create_bytes_heals_matching_embed_ghosts_too` for the bytes sibling
+(an attachment heals its embeds); the census op-pair sweep's
+"materialize+scan" op keeps agreeing with the rebuild; the mac's
+follow-up scan becomes belt and braces; no host test pinned the old
+order. B-11's "the probe follows the create's generation change" now
+delivers the healed neighbourhood, which the journey asserts; the
+owner's attention is drawn to the core change in the PR body; (iii)
+the first launch after a fresh build and the five-minute suite pays
+the JIT and scan cost inside the palette's wait (TGA-12's precedent),
+so the local gates run the journey twice and the second run is the
+verdict; (iv) the view's rows were rebuilt two or three times per
+publication (IsCurrent, IsStale and the publication each rendering),
+which the journey saw as stale group handles — the view now renders a
+publication once (`_renderedPublication`) and re-seats the selection
+otherwise, ConnectionsLeafViewTests unchanged. Gates: `cargo fmt` clean, clippy clean; the workspace's tests 2000 passed with the standing five dir-tree censuses (CI-Windows their oracle) and the perf guard failing in sequence and passing alone (12 s); `dotnet format` applied; the whole Windows test project on a fresh build, 2230 passed (the model fact, 31 s, among them); the accessibility project built and the leaf journey RUN — it failed at the palette step on both attempts when the gates ran from a BACKGROUNDED shell after the five-minute suite (a process launched without the foreground cannot take it, so the first chord never reached the app), and passed alone in the foreground in 10 s, the fourth such pass this session; the local gates now run from the foreground; CI is its oracle on the push; the mac lane is CI's.
+Mutations, each restored byte for byte, each caught by the named fact:
+the heal removed from the create's transaction, and the heal kept but its linksets not replayed to the graph — each caught by both core facts; the journey's Create step is its own witness, a shell mutation that fails the journey being restorable only with the desktop in the loop, so the two core mutations stand for it.
+
 ### Tests that pin PR B (slice B1)
 
 - ConnectionsLeafTests: the tree over the shared fixture and the
@@ -5829,7 +5917,9 @@ XAML census).
   state); the window's right-pane boundary facts (left to the editor,
   right to the terminal line); `ChordTableTests` for the three rows; the
   registrar's resolvers through the palette; the six censuses of B-19
-  and the census of B-20; the journey.
+  and the census of B-20, with `DeliveryEvidenceCensus`'s
+  `EveryImplementedCommandMapsToACommandGroup` (TGB-5); the journey, the
+  created note's healed neighbourhood included (TGB-6).
 - Mutation probes: change the tree's actual arguments; change the
   bundle's path and its paging alone; return a tree for another centre;
   drop the epoch from the token; delete a receiver check; let a rejected
@@ -5847,7 +5937,9 @@ XAML census).
   the open on an inactive leaf; disable Deeper at the bound; put the
   disabled reason on the row's hint; route focus right from the tree
   through the editor geometry.
-- Rust: the two new query facts and the surface count of twenty-six.
+- Rust: the two new query facts and the surface count of twenty-six;
+  the create's heal — `create_note_heals_matching_ghosts_in_its_own_transaction`
+  and `create_bytes_heals_matching_embed_ghosts_too` (TGB-6).
 - Mac: the literal filter and the local clamp become the calls.
 
 <!-- end of the graph contracts document -->

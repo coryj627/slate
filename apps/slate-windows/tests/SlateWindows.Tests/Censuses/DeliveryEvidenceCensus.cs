@@ -132,6 +132,29 @@ public sealed class DeliveryEvidenceCensus
         Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
 
+    /// <summary>W6-2 PR B (B-20): every command the parity matrix records
+    /// as implemented maps to a command group — the scope-completeness
+    /// check above walks the issues' commands, so a delivered id that was
+    /// never added to the map went unseen (the mutation sweep found it).</summary>
+    [Fact]
+    public void EveryImplementedCommandMapsToACommandGroup()
+    {
+        JsonElement commands = Evidence().GetProperty("commands");
+        string matrix = File.ReadAllText(Path.Combine(RepoRoot, "docs", "plans", "18_windows_port", "parity_matrix.md"));
+        var failures = new List<string>();
+        int implemented = 0;
+        foreach (Match m in Regex.Matches(matrix, @"^\| `(slate\.[\w.]+)` \| [^|]* \| [^|]* \| [^|]* \| #\d+[^|]* \| (implemented[^|]*)\|", RegexOptions.Multiline))
+        {
+            implemented++;
+            if (!commands.TryGetProperty(m.Groups[1].Value, out _))
+            {
+                failures.Add($"{m.Groups[1].Value} is implemented ({m.Groups[2].Value.Trim()}) but maps to no command group");
+            }
+        }
+        Assert.True(implemented > 100, $"the matrix parse found only {implemented} implemented rows — the row shape moved");
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
+    }
+
     [Fact]
     public void TheCanvasIssueMapsToTheAggregateOverAllFiveCommandGroups()
     {

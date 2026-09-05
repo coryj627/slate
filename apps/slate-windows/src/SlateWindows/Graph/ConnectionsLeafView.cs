@@ -214,6 +214,13 @@ internal sealed class ConnectionsLeafView : UserControl
     private readonly Dictionary<string, bool> _expansion = new(StringComparer.Ordinal);
     private string? _pendingFocus;
     private int _seenViewStateEpoch;
+
+    /// <summary>The presentation the rows were last built from: a render
+    /// for the SAME record — the install's three notifications, a
+    /// selection change, a depth notification — syncs and does not
+    /// rebuild, so the containers (and the UIA elements over them) live
+    /// as long as the record does.</summary>
+    private ConnectionsPublication? _renderedPublication;
     private bool _syncingSelection;
     private bool _syncingDepth;
 
@@ -386,6 +393,9 @@ internal sealed class ConnectionsLeafView : UserControl
         _expansion.Clear();
         _pendingFocus = null;
         SetSelectedRow(null);
+        // The next render rebuilds: the rows come back expanded, as the
+        // mac's re-mounted panel does.
+        _renderedPublication = null;
     }
 
     private void DropRows()
@@ -441,7 +451,15 @@ internal sealed class ConnectionsLeafView : UserControl
         }
         _anchor.Visibility = Visibility.Collapsed;
         _tree.Visibility = Visibility.Visible;
-        Rebuild(model, tree, publication.Bundle);
+        if (!ReferenceEquals(_renderedPublication, publication))
+        {
+            Rebuild(model, tree, publication.Bundle);
+            _renderedPublication = publication;
+        }
+        else if (model.SelectedOccurrence is { } selected && _byOccurrence.TryGetValue(selected, out ConnectionsRowViewModel? row))
+        {
+            SetSelectedRow(row);
+        }
     }
 
     private void ShowState(string visible, string accessible)
@@ -452,6 +470,7 @@ internal sealed class ConnectionsLeafView : UserControl
         _anchor.Visibility = Visibility.Visible;
         _tree.Visibility = Visibility.Collapsed;
         DropRows();
+        _renderedPublication = null;
     }
 
     private void SyncDepthControl(ConnectionsLeafViewModel model)
