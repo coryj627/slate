@@ -3604,6 +3604,26 @@ pub fn graph_label_matches(label: String, query: String) -> bool {
     core::graph_queries::label_matches(&label, &query)
 }
 
+/// The Connections leaf's fixed local filter (W6-2 PR B, B-15) —
+/// attachments ON, ghosts on, orphans off. Handle-free; the record is
+/// built field by field because the mirror converts FFI → core only.
+#[uniffi::export]
+pub fn graph_connections_filter() -> GraphFilter {
+    let filter = core::graph_queries::connections_filter();
+    GraphFilter {
+        include_attachments: filter.include_attachments,
+        include_ghosts: filter.include_ghosts,
+        orphans_only: filter.orphans_only,
+    }
+}
+
+/// The Connections depth clamp (W6-2 PR B, B-15): core's window,
+/// exported so no host reimplements it.
+#[uniffi::export]
+pub fn graph_clamp_connections_depth(depth: u32) -> u32 {
+    core::graph_queries::clamp_connections_depth(depth)
+}
+
 /// FFI mirror of [`core::graph_queries::GraphVisibilityQuery`] (0b-2).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct GraphVisibilityQuery {
@@ -13458,8 +13478,9 @@ mod tests {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mirror = std::fs::read_to_string(manifest.join("src/lib.rs")).expect("mirror source");
         let surface = core::graph_queries::GRAPH_QUERY_SURFACE;
+        // W6-2 PR A: twenty-four; PR B (B-15): twenty-six.
         assert!(
-            surface.len() >= 24,
+            surface.len() >= 26,
             "the surface list shrank to {}",
             surface.len()
         );

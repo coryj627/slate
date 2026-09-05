@@ -5533,6 +5533,53 @@ ledger the task loop discharges by code and by the model fact of B-10.
 | IGH-16 | MINOR | discharged by the spec amendment in the same commit: Term 8 |
 | IGH-17 | MINOR | discharged in the frozen text: `graph.rs:242` |
 
+### Task loop — records (PR B, slice B1)
+
+**TGB-0 — Baselines at the freeze (0fc3bbd).** GRAPH_QUERY_SURFACE
+twenty-four names; the leaf catalogue's `connections` entry empty; the
+relay constructed in `NewGraphDocument` and shut down by the document's
+`Retire()`; PR A's suites green on main at a87764e's successor.
+
+**TGB-1 — Core and FFI (B-15): the local filter and the clamp are
+queries; the surface is twenty-six.** `connections_filter()` and
+`clamp_connections_depth(depth)` in `graph_queries.rs` beside
+`clamp_depth`; both names appended to GRAPH_QUERY_SURFACE; the count
+fact asserts twenty-six; two facts — the filter is attachments ON,
+ghosts on, orphans off and NOT the default (`graph.rs:242`), and the
+clamp is the named constants at 0, 1, 3 and 99. The FFI exports
+`graph_connections_filter()` (the record built field by field: the
+mirror converts FFI → core only, `lib.rs:3415`) and
+`graph_clamp_connections_depth(depth)`; the mirror tripwire's floor
+rises to twenty-six. The mac's `connectionsFilter` becomes
+`graphConnectionsFilter()` and `clampConnectionsDepth(_:)` wraps
+`graphClampConnectionsDepth(depth:)` — the `Int` wrapper kept for its
+callers (`AppState+Connections.swift:75`, `:163`,
+`AppState+GraphConfig.swift:44`, `:68`) and its tests
+(`ConnectionsPanelTests.swift:40–43`); a negative depth clamps at the
+floor. The Windows census's floor rises to twenty-six. Gates: `cargo
+fmt` applied, clippy clean; the core lib's graph_queries facts (30
+passed, the three new included) and the FFI tripwire; the workspace's
+tests, 1999 passed, with six failures root-caused and none the change's
+— the five dir-tree censuses fail on this box with OS error 123 on
+every run (the standing local deviation; CI-Windows is their oracle),
+and `perf_guard_root_listing_under_100ms_on_10k_files` failed under the
+parallel workspace run and passed alone in 13 s; the binding
+regenerated (`generate-bindings.ps1`) and `GraphQuerySurfaceCensus`
+green; the whole Windows test project on a fresh build, 2151 passed;
+the accessibility project built and PR A's journey
+GraphSurfaces_TableSortSelectionAndActivation_AreClean RUN — it failed
+at the palette step ("CommandPaletteSearch did not become available",
+the 10 s wait) when run directly after the five-minute suite on the
+same box, and passed alone in 10 s; recorded as TGA-12 recorded the
+canvas journey, and CI is its oracle on the push. The mac suites are
+CI's — no Xcode on this box (a verified deviation: the mac lane is the
+oracle for the wrapper). Mutations, each restored byte for byte, each
+caught by the named fact and by it alone: the filter returns the
+default (`connections_filter_is_the_macs_local_filter`); the clamp
+returns its argument (`clamp_connections_depth_is_the_named_constants`);
+the clamp's name dropped from the surface
+(`graph_query_surface_names_pub_fns`).
+
 ### Tests that pin PR B (slice B1)
 
 - ConnectionsLeafTests: the tree over the shared fixture and the
