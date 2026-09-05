@@ -325,11 +325,30 @@ public sealed class PanelWorkSchedulerTests
         var probe = new Probe(context);
         probe.Run();
         Assert.True(context.Posting.Wait(TimeSpan.FromSeconds(10)), "the post never started");
-        // The post is parked. A shutdown from THIS thread must finish
-        // promptly — the lock it takes is not held across the post.
-        Task shutdown = Task.Run(probe.Shutdown);
-        Assert.True(await Task.WhenAny(shutdown, Task.Delay(TimeSpan.FromSeconds(3))) == shutdown, "the shutdown blocked behind the post");
-        context.Release.Set();
+        // The post is parked. A shutdown on a DEDICATED thread must reach
+        // and finish its work — the lock it takes is not held across the
+        // post (IPF-4: a dedicated thread, an entered barrier and a release
+        // in `finally`, so a failure cannot leave the poster hanging and a
+        // starved pool cannot be mistaken for lock inversion).
+        using var entered = new ManualResetEventSlim(false);
+        using var shutdownReturned = new ManualResetEventSlim(false);
+        var shutdown = new Thread(() =>
+        {
+            entered.Set();
+            probe.Shutdown();
+            shutdownReturned.Set();
+        });
+        try
+        {
+            shutdown.Start();
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), "the shutdown thread never started");
+            Assert.True(shutdownReturned.Wait(TimeSpan.FromSeconds(5)), "the shutdown blocked behind the parked post");
+        }
+        finally
+        {
+            context.Release.Set();
+            Assert.True(shutdown.Join(TimeSpan.FromSeconds(10)), "the shutdown thread never ended");
+        }
         Task drain = probe.DrainAll();
         Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the drain never completed");
         await drain;
@@ -338,10 +357,107 @@ public sealed class PanelWorkSchedulerTests
         Assert.Equal(0, probe.FaultedWorkForTests);
     }
 
-    /// <summary>A REAL dispatcher that has shut down (IPE-1): WPF aborts the
-    /// posted operation instead of throwing, so the promise must be
-    /// withdrawn through the operation — the drain completes without any
-    /// pumping, nothing applies, nothing faults.</summary>
+    /// <summary>A REAL dispatcher shut down with the apply ALREADY ENQUEUED
+    /// (IPE-1, IPF-1): the operation is posted while the dispatcher thread is
+    /// busy inside another operation, so it is still pending when that
+    /// operation shuts the dispatcher down — WPF ABORTS it instead of
+    /// throwing, and the promise must be withdrawn through the operation or
+    /// the drain waits forever. Nothing applies, nothing faults.</summary>
+    [Fact]
+    public async Task AnEnqueuedApplyAbortedByTheDispatchersShutdownWithdrawsItsPromise()
+    {
+        Probe? probe = null;
+        Dispatcher? dispatcher = null;
+        using var ready = new ManualResetEventSlim(false);
+        using var insideOperation = new ManualResetEventSlim(false);
+        using var releaseOperation = new ManualResetEventSlim(false);
+        using var queued = new ManualResetEventSlim(false);
+        var thread = new Thread(() =>
+        {
+            dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
+            probe = new Probe(synchronousForTests: false);
+            ready.Set();
+            Dispatcher.Run();
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "the dispatcher thread never started");
+        Assert.NotNull(probe);
+        Assert.NotNull(dispatcher);
+        Assert.True(probe.HasContext);
+        probe.ApplyQueuedForTests = queued.Set;
+
+        // Occupy the dispatcher thread: anything enqueued now waits behind
+        // this operation, which shuts the dispatcher down when released.
+        _ = dispatcher.BeginInvoke(
+            DispatcherPriority.Normal,
+            new Action(() =>
+            {
+                insideOperation.Set();
+                _ = releaseOperation.Wait(TimeSpan.FromSeconds(10));
+                dispatcher.InvokeShutdown();
+            }));
+        Assert.True(insideOperation.Wait(TimeSpan.FromSeconds(10)), "the dispatcher never entered the blocking operation");
+
+        probe.Run();
+        Assert.True(queued.Wait(TimeSpan.FromSeconds(10)), "the apply was never enqueued on the busy dispatcher");
+        // The apply is a PENDING DispatcherOperation; the shutdown aborts it.
+        releaseOperation.Set();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "the dispatcher never shut down");
+        Assert.True(dispatcher.HasShutdownFinished);
+
+        Task drain = probe.DrainAll();
+        Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the drain waited on an aborted operation");
+        await drain;
+        Assert.NotNull(probe.ComputeThread);
+        Assert.Equal(0, probe.Applies);
+        await Task.Delay(50);
+        Assert.Equal(0, probe.FaultedWorkForTests);
+    }
+
+    /// <summary>A dispatcher context handed in that targets ANOTHER thread's
+    /// dispatcher (IPF-3): its dispatcher is not knowable here, so the apply
+    /// posts through the CONTEXT — and lands on that other thread. A
+    /// scheduler that inferred the constructing thread's dispatcher instead
+    /// would post where nothing pumps and hang the drain.</summary>
+    [Fact]
+    public async Task AForeignDispatcherContextPostsThroughTheContextNotTheConstructingThread()
+    {
+        Dispatcher? owner = null;
+        using var ready = new ManualResetEventSlim(false);
+        var thread = new Thread(() =>
+        {
+            owner = Dispatcher.CurrentDispatcher;
+            ready.Set();
+            Dispatcher.Run();
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "the owner thread never started");
+        Assert.NotNull(owner);
+        try
+        {
+            // Constructed HERE, over THAT thread's dispatcher.
+            var probe = new Probe(new DispatcherSynchronizationContext(owner));
+            probe.Run();
+            Task drain = probe.DrainAll();
+            Assert.True(
+                await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain,
+                "the drain waited on an apply posted to a dispatcher nobody pumps");
+            await drain;
+            Assert.Equal(1, probe.Applies);
+            Assert.Equal(owner.Thread.ManagedThreadId, probe.ApplyThread);
+        }
+        finally
+        {
+            owner.InvokeShutdown();
+            Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "the owner dispatcher never shut down");
+        }
+    }
+
+    /// <summary>A dispatcher already dead when the body posts (IPE-1): the
+    /// refusal arm, distinct from the aborted-operation arm above.</summary>
     [Fact]
     public async Task AShutDownDispatcherAbortsThePostAndTheTrackedTaskStillCompletes()
     {

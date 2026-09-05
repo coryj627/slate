@@ -26,7 +26,14 @@ internal abstract class PanelWorkScheduler : BindableBase
     private Task? _prerequisite;
 
     protected PanelWorkScheduler(bool synchronousForTests)
-        : this(synchronousForTests, SynchronizationContext.Current)
+        : this(
+            synchronousForTests,
+            SynchronizationContext.Current,
+            // The dispatcher context CURRENT on this thread is the one WPF
+            // installs on a dispatcher's own thread, so its dispatcher is
+            // this thread's (IPF-3): named here, at the site that knows it,
+            // never inferred from a context handed in.
+            SynchronizationContext.Current is DispatcherSynchronizationContext ? Dispatcher.CurrentDispatcher : null)
     {
     }
 
@@ -34,19 +41,23 @@ internal abstract class PanelWorkScheduler : BindableBase
     /// serialized owner context names it here — the graph document
     /// installs the constructing thread's dispatcher context when none
     /// is current, the deterministic single-thread context of the
-    /// round-4 ledger's IGA-53.</summary>
-    protected PanelWorkScheduler(bool synchronousForTests, SynchronizationContext? ownerContext)
+    /// round-4 ledger's IGA-53.
+    /// <para><paramref name="ownerDispatcher"/> (IPE-1, IPF-3) is the
+    /// dispatcher that context posts to, when the CALLER knows it — a
+    /// <see cref="DispatcherSynchronizationContext"/> can target any
+    /// dispatcher, so it is never inferred here. Named, the always-async
+    /// apply posts through its <c>BeginInvoke</c>, whose operation a
+    /// shut-down dispatcher ABORTS rather than throwing, and an aborted
+    /// post withdraws its promise; unnamed, the apply posts through the
+    /// context itself and a context that throws is caught.</para></summary>
+    protected PanelWorkScheduler(
+        bool synchronousForTests,
+        SynchronizationContext? ownerContext,
+        Dispatcher? ownerDispatcher = null)
     {
         _uiContext = ownerContext;
         _synchronous = synchronousForTests;
-        // IPE-1: a dispatcher context is always constructed ON its
-        // dispatcher's thread (the graph installs the constructing thread's
-        // dispatcher when none is current; a current dispatcher context
-        // means this thread owns one), so the owner Dispatcher itself is
-        // known here — and its BeginInvoke returns the operation, which a
-        // shut-down dispatcher ABORTS rather than throwing; the always-async
-        // apply posts through it so an aborted post withdraws its promise.
-        _ownerDispatcher = ownerContext is DispatcherSynchronizationContext ? Dispatcher.CurrentDispatcher : null;
+        _ownerDispatcher = ownerDispatcher;
     }
 
     private readonly Dispatcher? _ownerDispatcher;
@@ -348,13 +359,14 @@ internal abstract class PanelWorkScheduler : BindableBase
             apply(result);
             return;
         }
-        // ONE owner for the apply (IPC-1): the promise is QUEUED under the
-        // lock — registered and posted as one transition against the
-        // shutdown flip — and the callback CLAIMS it under the lock before
-        // applying. Shutdown settles only what is still queued; a claimed
-        // apply runs to completion and settles itself, so the tracked task
-        // never completes under a running apply and no callback is posted
-        // after the flip.
+        // ONE owner for the apply (IPC-1, corrected by IPD-1 and IPF-5): the
+        // promise is REGISTERED under the lock and posted OUTSIDE it, and
+        // the callback CLAIMS it under the lock before applying. Shutdown
+        // settles only what is still registered; a claimed apply runs to
+        // completion and settles itself, so the tracked task never completes
+        // under a running apply. A callback CAN be posted after the flip —
+        // the post is deliberately outside the lock — and it then fails to
+        // claim and applies nothing.
         var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_workLock)
         {
