@@ -631,6 +631,16 @@ public partial class MainWindow : Window
             {
                 FilesTree.Focus();
             }
+            else if (_viewModel.Workspace is WorkspaceViewModel workspace
+                && workspace.ConnectionsLeafIsActive()
+                && ConnectionsLeafSurface.FocusAnchor())
+            {
+                // W6-2 PR B (rule C, Term 9): with the Connections leaf
+                // active the boundary lands on the leaf's anchor — the tree
+                // when it has rows, the state element otherwise — so the
+                // entry line speaks and the reader is IN the leaf, not on
+                // the rail.
+            }
             else
             {
                 RightPaneLeavesList.Focus();
@@ -897,7 +907,12 @@ public partial class MainWindow : Window
                 return;
             }
 
-            if (RightPaneLeavesList.IsKeyboardFocusWithin)
+            // W6-2 PR B (rule C, Term 9): the whole right-pane region — the
+            // rail AND every leaf body — is one focus boundary: Left returns
+            // to the active editor (the mac's return route), Right posts the
+            // shell's terminal line; focus inside a leaf's tree never falls
+            // through to the editor-geometry route below.
+            if (RightPaneBorder.IsKeyboardFocusWithin)
             {
                 if (e.Key == Key.Left)
                 {

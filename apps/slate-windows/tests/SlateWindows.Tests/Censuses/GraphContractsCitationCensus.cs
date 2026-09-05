@@ -76,7 +76,7 @@ public sealed class GraphContractsCitationCensus
                 // leaf's own names are unbackticked until they exist. The
                 // floor sits one below the measured population and rises with
                 // the records.
-                26),
+                27),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

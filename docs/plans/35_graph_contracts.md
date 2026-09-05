@@ -5689,6 +5689,91 @@ pre-clamp in Deeper (the depth census); the disabled reason on the
 row's hint (the row fact); the filter count enqueued ungated (the gated
 entry census).
 
+**TGB-3 — The ghost create addressed by the leaf (B-11) landed with
+TGB-2**: the SOURCE address (`GraphCreateSource.GraphTab` — PR A's every
+identity — or `GraphCreateSource.Leaf`, the root and its epoch), the
+completion's order kept (the open, then the one `NoteCreated`, then the
+caveat), the leaf's ACTIVE state not consulted (B-D10); the four ghost
+facts (lands, opens and speaks; parked across a root move; parked across
+A → B → A; parked while the leaf went inactive) and their mutations are
+TGB-2's.
+
+**TGB-4 — The tree view in the outline's shape (B-6, B-8, B-9, B-13,
+B-16; rule C, Terms 2 and 9).** `Graph/ConnectionsLeafView.cs`: the row
+view model (group, empty marker, connection row named by core's row copy
+through the relay, ItemStatus the badge in the mac's precedence,
+HelpText the activation's hint, the depth-one snippet overlaid by exact
+path), the tree's peer trio — the tree peer overriding the item-peer
+factory, the DATA peer carrying Invoke beside WPF's SelectionItem,
+ExpandCollapse and ScrollItem, and the item peer projecting NESTED rows
+through the same factory (`CanvasOutlineView.cs:171–290`); Standard
+virtualisation; the model released on null; the view-local expansion,
+selection and pending focus keyed by the root and cleared on a root
+change, pruned on a same-root refresh, cleared on a collapse through
+the document's selection; the mac's `nest` in one pass; the heading
+(the note's file name; "Connections" with no note), the summary region
+(core's render), the depth ComboBox (T17, the tags core's window in
+order, the selection mapped to the model's `SetDepth` by the tag's
+position — the view's one producer), the state label (T1–T5) under
+Term 9's ANCHOR, a focusable host element with the state's accessible
+name; focus ENTRY — from outside the leaf only — posting the document's
+line; the row menu built from core's action inventory with the disabled
+Show connections carrying B-D6's reason as its HelpText and the row's
+hint left the activation's; Return, Ctrl+Return, Alt+Up / Alt+Down
+between the groups, Menu and Shift+F10; the container realised before a
+focus delivery (the outline's walk). `MainWindow.xaml`: the leaf body
+gated on `connections` hosting the view bound to the workspace's public
+document; the placeholder's collapse trigger for the leaf; the right
+pane's landmark named RightPaneBorder. `MainWindow.xaml.cs`: the
+right-pane focus boundary lands on the leaf's anchor when the leaf is
+active (Term 9); the pane-navigation route keys on the whole right pane
+so focus inside a leaf's tree goes LEFT to the editor and RIGHT to the
+shell's terminal line, never through the editor-geometry fallthrough
+(IGH-6). Facts: ConnectionsLeafViewTests — the four patterns on a
+top-level and a nested data peer with the occurrence as the automation
+id and the row's Name, ItemStatus and HelpText; expansion surviving a
+same-root refresh and cleared on a root change; the model's release and
+the state labels per state; the empty neighbourhood under the summary
+with the anchor taking focus; the depth control's Name, HelpText, tags
+and mapping both ways; the row menu's inventory with Show connections
+disabled and its reason on the action. ConnectionsLeafCensus gains the
+XAML fact: the body gated on the id, the view bound to `Connections`,
+the placeholder's trigger, the named boundary and the window's two
+routes. Verified deviations: (i) Term 9's RIGHT route reuses the
+shell's existing terminal line (`AnnounceNoPaneInDirection`), the rail's
+own; (ii) the focus-out routes are pinned by the journey (TGB-6), not
+headlessly — the window's key route is a preview handler over the real
+window; (iii) the view clears its expansion and pending focus on the
+document's VIEW-STATE EPOCH, which the document advances on a root
+change and on a collapse and on nothing else — the first sweep found
+the view's root-change clear shadowed by its reaction to the
+document's cleared selection, which would also have cleared on a prune
+against B-6, so the epoch is the one signal and a vanished selection is
+not a clear — and the view compares the epoch's VALUE, since the second
+sweep found it clearing on the property's notification alone; the
+root-change clear is pinned by a shared-neighbour fact (two roots
+linking the same note reuse the occurrence id, so the prune alone would
+keep the memory); (iv) the first sweep also found the patterns fact
+accepting a pattern OBJECT from a peer that no longer implemented the
+provider — the fact now asserts the four provider interfaces. Gates:
+`cargo fmt` clean, clippy clean; the workspace's tests 2000 passed with
+the standing five dir-tree censuses (CI-Windows their oracle) and the
+perf guard green this run; `dotnet format` applied; the whole Windows
+test project on a fresh build, 2227 passed (the 72 leaf, view and
+census facts among them); the accessibility project built and PR A's
+journey RUN — failed at the palette step directly after the five-minute
+suite, the third such run, and passed alone in 9 s; the local gates
+script now runs the journey twice so the first launch's cost is
+visible in one run; CI is its oracle on the push; the mac lane is
+CI's. Mutations, nine, each restored byte for byte, each caught by
+the named fact: the view keyed by node id, the Invoke provider dropped
+from the data peer, the nested rows' factory removed (the patterns
+fact); the epoch not advanced on a root change, the view clearing on a
+prune, the collapse not advancing the epoch (the expansion fact); the
+reason dropped from the menu action (the menu fact); the placeholder's
+trigger dropped and the focus route through the editor geometry (the
+XAML census).
+
 ### Tests that pin PR B (slice B1)
 
 - ConnectionsLeafTests: the tree over the shared fixture and the

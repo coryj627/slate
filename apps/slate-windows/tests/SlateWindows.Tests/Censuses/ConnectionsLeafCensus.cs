@@ -212,6 +212,33 @@ public sealed class ConnectionsLeafCensus
         Assert.Empty(ungated);
     }
 
+    /// <summary>B-13: the leaf body is gated on the leaf id, hosts the view
+    /// bound to the workspace's public document, and the generic placeholder
+    /// collapses for the leaf beside the leaves it names.</summary>
+    [Fact]
+    public void TheLeafBodyIsGatedOnItsIdAndThePlaceholderRetiresForIt()
+    {
+        string xaml = File.ReadAllText(Path.Combine(ShellRoot, "MainWindow.xaml"));
+        int body = xaml.IndexOf("AutomationProperties.AutomationId=\"ConnectionsLeafBody\"", StringComparison.Ordinal);
+        Assert.True(body >= 0, "the leaf body is not in MainWindow.xaml");
+        string bodyBlock = xaml.Substring(body, Math.Min(2000, xaml.Length - body));
+        Assert.Contains("<DataTrigger Binding=\"{Binding ActiveLeaf.Id}\" Value=\"connections\">", bodyBlock, StringComparison.Ordinal);
+        Assert.Contains("<graph:ConnectionsLeafView", bodyBlock, StringComparison.Ordinal);
+        Assert.Contains("Model=\"{Binding Connections}\"", bodyBlock, StringComparison.Ordinal);
+        // The placeholder's style: a collapse trigger for the leaf id.
+        int placeholder = xaml.IndexOf("This panel is docked and ready for its feature surface.", StringComparison.Ordinal);
+        Assert.True(placeholder >= 0, "the generic placeholder is not in MainWindow.xaml");
+        string placeholderStyle = xaml.Substring(Math.Max(0, placeholder - 4000), Math.Min(4000, placeholder));
+        int trigger = placeholderStyle.LastIndexOf("Value=\"connections\"", StringComparison.Ordinal);
+        Assert.True(trigger >= 0, "the placeholder does not collapse for the leaf (B-13)");
+        Assert.Contains("<Setter Property=\"Visibility\" Value=\"Collapsed\" />", placeholderStyle.Substring(trigger), StringComparison.Ordinal);
+        // The right pane's landmark is the named focus boundary (Term 9).
+        Assert.Contains("x:Name=\"RightPaneBorder\"", xaml, StringComparison.Ordinal);
+        string window = File.ReadAllText(Path.Combine(ShellRoot, "MainWindow.xaml.cs"));
+        Assert.Contains("RightPaneBorder.IsKeyboardFocusWithin", window, StringComparison.Ordinal);
+        Assert.Contains("ConnectionsLeafSurface.FocusAnchor()", window, StringComparison.Ordinal);
+    }
+
     /// <summary>B-19 (v): the depth's dataflow, across the whole shell —
     /// every write to the leaf's depth storage takes the FFI clamp's result
     /// (through the counting wrapper whose body IS the FFI call), and every

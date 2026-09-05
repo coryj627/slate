@@ -7,6 +7,7 @@
         xmlns:bases="clr-namespace:SlateWindows.Bases"
         xmlns:grids="clr-namespace:SlateWindows.Grids"
         xmlns:templates="clr-namespace:SlateWindows.Templates"
+        xmlns:graph="clr-namespace:SlateWindows.Graph"
         Title="Slate"
         Height="720" Width="1120"
         MinHeight="480" MinWidth="760"
@@ -927,7 +928,8 @@
                                   HorizontalAlignment="Stretch"
                                   ResizeDirection="Columns"
                                   AutomationProperties.Name="Resize right pane" />
-                    <local:AutomationLandmarkBorder Grid.Column="4"
+                    <local:AutomationLandmarkBorder x:Name="RightPaneBorder"
+                            Grid.Column="4"
                             AutomationProperties.AutomationId="InspectorPane"
                             AutomationProperties.Name="Inspector"
                             Background="{DynamicResource Slate.SurfaceBrush}"
@@ -1893,6 +1895,27 @@
                                 </bases:BaseSurfaceView>
                             </DockPanel>
 
+                            <!-- W6-2 PR B (#746): the Connections leaf —
+                                 the note in view's local graph as a tree
+                                 (rule C; contracts B-13, B-16, B-18). The
+                                 heading lives inside the view: its text is
+                                 the note's file name, the mac's headerTitle. -->
+                            <DockPanel Margin="12"
+                                       AutomationProperties.AutomationId="ConnectionsLeafBody">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="connections">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <graph:ConnectionsLeafView x:Name="ConnectionsLeafSurface"
+                                                           Model="{Binding Connections}" />
+                            </DockPanel>
+
                             <!-- W4-7 (#739): the history leaf — two
                                  segments, day-grouped versions, the
                                  structured diff walkthrough, restore
@@ -1979,6 +2002,10 @@
                                                 <Setter Property="Visibility" Value="Collapsed" />
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="syncDiagnostics">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                            <!-- W6-2 PR B (B-13): the placeholder retires for the leaf. -->
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="connections">
                                                 <Setter Property="Visibility" Value="Collapsed" />
                                             </DataTrigger>
                                         </Style.Triggers>

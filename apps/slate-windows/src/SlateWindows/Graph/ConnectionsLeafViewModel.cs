@@ -237,6 +237,12 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         set => SetField(ref _selectedOccurrence, value);
     }
 
+    /// <summary>Term 2 / B-6: the VIEW-STATE epoch — advanced on a root
+    /// change and on a collapse of the pane, and on nothing else, so the
+    /// view clears its expansion and pending focus exactly then; a
+    /// same-root refresh PRUNES instead (the view's own rule).</summary>
+    public int ViewStateEpoch { get; private set; }
+
     public bool IsRetired => _retired;
 
     public ulong SeqForTests => _seq;
@@ -390,9 +396,11 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         _seq++;
         _inFlight = false;
         SelectedOccurrence = null;
+        ViewStateEpoch++;
         OnPropertyChanged(nameof(Root));
         OnPropertyChanged(nameof(RootEpoch));
         OnPropertyChanged(nameof(InFlight));
+        OnPropertyChanged(nameof(ViewStateEpoch));
         if (path is null)
         {
             _request = null;
@@ -444,6 +452,8 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         if (!_retired)
         {
             SelectedOccurrence = null;
+            ViewStateEpoch++;
+            OnPropertyChanged(nameof(ViewStateEpoch));
         }
     }
 
