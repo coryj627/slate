@@ -5862,6 +5862,40 @@ otherwise, ConnectionsLeafViewTests unchanged. Gates: `cargo fmt` clean, clippy 
 Mutations, each restored byte for byte, each caught by the named fact:
 the heal removed from the create's transaction, and the heal kept but its linksets not replayed to the graph — each caught by both core facts; the journey's Create step is its own witness, a shell mutation that fails the journey being restorable only with the desktop in the loop, so the two core mutations stand for it.
 
+**TGB-7 — The MODEL fact (B-10).**
+`ConnectionsLeafTests.Model.cs`: an executable derivation of Terms 2–9
+— `Derive(cell)` returns the shell lines, the relay lines (the summary
+a placeholder resolved after the settle), the loads the route issues
+synchronously, and the final root and staleness — over nine routes
+(the switch to the leaf, the switch away, Show, the pane toggle, a root
+change, a depth change, root → none through the tab close, the Tasks
+Review command, focus entering the anchor) crossed with the pane
+(visible, collapsed), the leaf (Connections, another), the root (a
+note, none), the presentation (current, stale) and the in-flight flag:
+192 cells, of which 69 are not states of the system and the model NAMES
+why (no root has no stale presentation and nothing in flight; a root
+transition clears the flag, so stale never has a load in flight; an
+active and mounted leaf with a root has loaded, so stale is only ever
+unmounted or inactive at rest; focus enters the anchor only while the
+leaf is shown), and 123 are driven — each from a fresh copy of the
+graph vault, arranged (the note opened while active and mounted for a
+current presentation, then moved away from or hidden; opened while
+inactive for a stale one; the last load left pending for the flag),
+the timeline cleared, the route applied, the loads compared at once,
+the workspace settled, and the timeline, root and staleness compared
+with the derivation; every divergence is listed by cell. Thirty-one
+seconds. Findings: (i) the first derivation gated speech on ACTIVE AND
+MOUNTED and eleven cells diverged — the implementation speaks a
+completion after a hide while the leaf stays active, and a depth change
+from the palette with the pane collapsed — which is the frozen text
+(Term 2: "MOUNTED is not consulted"; B-D3: "speech gates on the active
+leaf alone, the mac's predicate"), so the model was corrected, not the
+code; (ii) an open that creates the FIRST tab posts the shell's
+`TabFocused`, an in-place open into an existing tab none — the model
+carries both. Mutations only the model catches, each restored byte for
+byte: the workspace's ACTIVE predicate consulting the pane; the graph
+family's panel line skipped when Show revealed the pane — each caught by the model fact and by no other.
+
 ### Tests that pin PR B (slice B1)
 
 - ConnectionsLeafTests: the tree over the shared fixture and the
@@ -5905,7 +5939,10 @@ the heal removed from the create's transaction, and the heal kept but its linkse
   worked route crossed with the pane, leaf, root and presentation states
   and the in-flight flag, the workspace driven through the same route,
   the recorded events equal to the derivation; the away → back and hide
-  → away completions.
+  → away completions —
+  `TheModelOfTermsTwoToNineDerivesEveryRoutesTimelineAcrossEveryState`,
+  nine routes, 123 cells driven, 69 named as not states of the system
+  (TGB-7).
 - GraphAnnouncerTests gains the stored fire-time gate (0a-9's suite:
   queue, leave effective, fire, nothing) and the cross-surface High
   flush; GraphDocumentTests' retirement fact asserts the relay is
