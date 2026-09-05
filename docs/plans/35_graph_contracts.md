@@ -3137,6 +3137,17 @@ session (`VaultLifecycleViewModel.cs:928–936`). The placeholder retires
 for Graph: `IsPlaceholder` (`WorkspaceViewModel.cs:323–324`) gains
 `&& !IsGraph`, the template renders GraphSurfaceView for a graph tab,
 and a fact asserts a graph tab's placeholder text is never shown.
+**Amended by the owner on 2026-09-05 (W6-2 PR B, BD-12 — option 1 of
+the round-6 decision).** The RELAY is no longer the document's: ONE
+`GraphAnnouncer` per workspace is constructed in the workspace's
+constructor over its rendered seam and handed to every graph surface's
+document — the table's and the Connections leaf's — and it shuts down
+in the workspace's bounded drain, not at the document's retirement.
+Retirement DROPS the retiring document's pending classes (the mac's
+`cancelPending` on view departure, 0a-9) and leaves the relay live for
+the other surface. Every other clause of A-1 stands: one document,
+seated by the funnel, started by the follow method, retired with the
+last graph tab, drained at teardown.
 Pinned by facts: one document across two opens and a restore; the
 attach at each of the five sites seats and starts nothing (no FFI
 call, no announcement); rule L's path facts, each with its exact
@@ -3596,7 +3607,24 @@ and READY → `Opened` alone; Activation by tab (the restore's included)
 summary otherwise; Reopen → `Opened`, the shell's `ReopenedGraph`, then
 the summary when Term 4 loads and nothing more when it does not; a
 load failure → the status the cause owes, then `GraphBlocked{LoadFailed}`
-where the summary would be; none of these is coalesced. Pinned by facts: the class membership (both hosts'
+where the summary would be; none of these is coalesced.
+**Amended by the owner on 2026-09-05 (W6-2 PR B, BD-12 — option 1 of
+the round-6 decision).** "One relay" is one INSTANCE per WORKSPACE —
+the mac's one announcer per app: constructed once in
+`WorkspaceViewModel`'s constructor over `_announceRendered` (the one
+seed the census counts, moved out of `NewGraphDocument`), handed to the
+graph document and to the Connections leaf's document, so the four
+coalescing classes and the High flush span every graph surface;
+`Shutdown()` runs in the workspace's drain; a document's retirement
+calls the relay's `DropAllPending()` — the mac's `cancelPending` on view
+departure (`:150`), which A-1's amendment names — and the relay stays
+live. The relay also gains the filter class's FIRE-TIME GATE 0a-9 names
+(`GraphAnnouncer.swift:194–207`): a pending `GraphFilterCount` fires
+only while the graph tab is EFFECTIVE, the mac's `graphTabActive`, and
+is dropped otherwise; PR A's Windows relay had omitted it (found by PR
+B's round 5, IGF-4). Every other clause of A-10 stands: the file wall,
+the classes, the window, the High flush, the sequences.
+Pinned by facts: the class membership (both hosts'
 switch-list tests); the window, latest-wins and the High flush in a
 Windows GraphAnnouncerTests twin of the canvas's; each sequence, under the
 pumped dispatcher; Shutdown drops a pending navigation event;
@@ -4680,24 +4708,25 @@ Slice B2, a following PR before PR D (whose diagram selection sync reads
 the re-root seam), adds what B1 defers and records below: re-root on a
 neighbour with the back stack, the table's and the Bases surfaces' Show
 connections, and the selection shared with the graph document. The
-section is at revision 6, which is a DESIGN PASS under protocol rule 4;
-revisions 1–5 and the five rounds that rejected them are the ledger at
-the end, and the owner's split is BD-1.
+section is at revision 7, on the owner's amendment of A-1 and A-10
+(BD-12); revisions 1–6 and the six rounds that rejected them are the
+ledger at the end, and the owner's split is BD-1.
 
-**Why the split.** Rounds 1–3 returned 18, 19 and 24 blockers, rising,
-and three rounds running they concentrated on one question: what carries
-the graph's relay and selection when only the leaf is open. Frozen A-1
-reads "One document per workspace … retired with the last graph tab" and
-"AT MOST ONE document"; frozen A-10 ties the relay's shutdown to that
-retirement; spec R-B places the one view state on that document and has
-the leaf re-root through it. A second relay, a shared document (one
-`_seq`, one publication — it cannot carry two loads, IGD-6) and a widened
-document lifetime (IGD-4) each contradicted one of those three lines. No
-revision could resolve the triangle without amending frozen text, which
-is the owner's call, not a contracts round's. The owner chose the split:
-B1 ships the leaf as its OWN document with its OWN relay INSTANCE and its
-OWN selection, touching no frozen TEXT, and records the divergence from
-R-B (B-D1) until the amendment is decided for B2.
+**Why the split, and why the amendment.** Rounds 1–3 returned 18, 19
+and 24 blockers, rising, concentrated on one question: what carries the
+graph's relay and selection when only the leaf is open. Frozen A-1 read
+"retired with the last graph tab", frozen A-10 tied the relay's
+shutdown to that retirement, and spec R-B placed the one view state on
+that document. The owner split PR B (BD-1) so B1 could ship the leaf as
+its own document; rounds 4–6 then found that a SECOND relay instance
+contradicts A-10's "One relay" and its High flush, whatever the file
+wall says (IGE-1, IGG-1), and that the two-instance design produced
+divergences the mac's single announcer does not have (IGE-3, IGF-4). On
+2026-09-05 the owner chose, of three options, the mac's shape: ONE
+relay per workspace, constructed with the workspace and shut down in
+its drain, shared by the graph document and the leaf — A-1 and A-10 as
+amended above (BD-12). The leaf keeps its own document and its own
+selection; the shared selection stays B2's (B-D1).
 
 **What stands today.** The leaf catalogue is static
 (`WorkspaceViewModel.cs:1711–1729`); `ActiveLeaf`'s setter announces
@@ -4705,209 +4734,245 @@ R-B (B-D1) until the amendment is decided for B2.
 changes (`:1818`) and runs the per-leaf reveal hooks; right-pane
 visibility is separate state (`IsRightPaneVisible`, whose setter posts
 `RightPaneShown`/`RightPaneHidden` on every flip, `:1870–1880`), flipped
-directly by `ToggleRightPaneCommand` (`:1697`) and by directional focus,
+directly by `ToggleRightPaneCommand` (`:1697`), by directional focus,
 which then posts `LeafPanelShown(ActiveLeaf.Title)` unconditionally
-(`WorkspaceViewModel.Layout.cs:598–611`); activating an EXISTING tab
-posts `TabFocused` (`Layout.cs:75–79`); the restore writes the leaf
-field directly (`WorkspaceViewModel.Persistence.cs:44`). Every leaf body
-is a `DockPanel` in `MainWindow.xaml` gated on `ActiveLeaf.Id`; the
-newest host a `UserControl` with a `Model` dependency property that
-resolves by reflection, so the workspace property must be PUBLIC
-(`WorkspaceViewModel.History.cs:20–24`). The active note reaches leaves
-through `SyncPanels()` (`WorkspaceViewModel.cs:1759–1775`). The generic
-placeholder collapses only for the leaf ids it names
-(`MainWindow.xaml:1944–1995`). Off-dispatcher work rides PR A's
-primitive as TGA-9..TGA-14 left it; the graph document's announce gate
-is `GraphTabIsEffective()` (`WorkspaceViewModel.Graph.cs:131`), the
-mac's `graphTabActive` at its publish points
-(`AppState+GraphTable.swift:214`, `:343`, `:350`); PR A's relay fires a
-coalesced class with no fire-time gate (`GraphAnnouncer.cs:141–162`).
-The canvas already builds ONE announcer per document over the
-workspace's rendered seam (`Censuses/AnnouncementSeamCensus.cs:117–134`,
-the canvas registry fact), which is the precedent B1's relay instance
-follows.
+(`WorkspaceViewModel.Layout.cs:598–611`), and by the leaf-revealing
+commands, which reveal BEFORE they switch the leaf (Tasks Review,
+`:1854–1868`; History, `WorkspaceViewModel.History.cs:62`) where the mac
+switches first (`AppState+History.swift:716`); activating an EXISTING
+tab posts `TabFocused` (`Layout.cs:68–79`), closing one posts
+`TabClosed` (`:298`); the restore writes the leaf field directly
+(`WorkspaceViewModel.Persistence.cs:44`). Every leaf body is a
+`DockPanel` in `MainWindow.xaml` gated on `ActiveLeaf.Id`; a collapsed
+pane is a retained subtree (`MainWindow.xaml:937`) where the mac's pane
+is destroyed; the newest bodies host a `UserControl` with a `Model`
+dependency property that resolves by reflection, so the workspace
+property must be PUBLIC (`WorkspaceViewModel.History.cs:20–24`). The
+active note reaches leaves through `SyncPanels()`
+(`WorkspaceViewModel.cs:1759–1775`). The generic placeholder collapses
+only for the leaf ids it names (`MainWindow.xaml:1944–1995`). The
+right-pane focus boundary lands on the rail and posts no status
+(`MainWindow.xaml.cs:624`). Off-dispatcher work rides PR A's primitive
+as TGA-9..TGA-14 left it; the graph document's announce gate is
+`GraphTabIsEffective()` (`WorkspaceViewModel.Graph.cs:131`), the mac's
+`graphTabActive` at its publish points (`AppState+GraphTable.swift:214`,
+`:343`, `:350`); PR A's relay fires a coalesced class with no fire-time
+gate (`GraphAnnouncer.cs:141–162`) and is constructed in
+`NewGraphDocument` (`WorkspaceViewModel.Graph.cs:85`), shut down by the
+document's `Retire()` (`GraphDocumentViewModel.cs:633–641`) — both
+change under BD-12.
 
 ### Design pass (protocol rule 4, reached through rule 5) — subsystem C, the leaf's lifecycle, modelled as a rule
 
-Rounds 3, 4 and 5 each returned blockers in one subsystem — what
-starts a load of the standalone leaf, what supersedes it, and what is
-spoken when — and round 5's ten were CREATED by revision 5's fix (rule
-5): "every reveal loads" reversed the mac's mounting model (IGF-2), the
-supersession rule dropped an audible line the mac also drops (IGF-5),
-the universal load rule contradicted the no-note guard (IGF-8), the
-reloading spinner does not exist (IGF-9), the envelope authenticated one
-of two calls (IGF-3), the centre-key check consumed a query the spec did
-not name (IGF-1), and the merged timelines invented an open line and
-missed the shell's own (IGF-6, IGF-7). Each fix addressed the site a
-finding named rather than the class it belonged to. The class is the
-mac's leaf lifecycle, which was never traced site by site; it is traced
-here, and rule C is restated so that its next instance is decided by a
-term, not by a row.
+Rounds 3–6 each returned blockers in one subsystem — what starts a load
+of the standalone leaf, what supersedes it, what is spoken when — and
+rounds 5 and 6 were CREATED by the previous fix (rule 5). Revision 6
+traced the mac's leaf lifecycle and restated the rule in eight terms;
+round 6 found the terms incomplete (no precedence between triggers, no
+mount timing, no probe state machine, no retry transitions, the
+no-note sequence misattributed, focus speech outside the rule) and the
+two-instance relay unsound. Revision 7 keeps the trace, corrects it,
+and restates the rule in ten terms on the owner's one-relay amendment.
 
 **The mac, traced.** The right pane is DESTROYED when it collapses and
-rebuilt when it shows (`MainSplitView.swift:163–175`); while it exists,
-EVERY leaf is mounted, the inactive ones hidden by opacity and
-`accessibilityHidden` (`RightPaneView.swift:262–289`, the retention
-pattern). The panel's `onAppear` therefore runs at every MOUNT — the pane
-revealed by any route, or launch with the pane visible — and loads only
-when the leaf is active (`ConnectionsPanel.swift:30`); a rail switch
-between leaves does NOT remount and does not load
-(`RightPaneView.swift:361–364`: it sets the leaf and posts the panel
-line, nothing else); a note change loads only while the leaf is active
-AND the panel is mounted (`:31–37`, the `onChange` on a mounted view);
-the palette's Show loads explicitly, then reveals the pane — a second
-`onAppear` load when the pane was collapsed — then posts the panel line
-(`AppState+Connections.swift:175–180`); a depth change loads
-(`:162–166`), and every load returns before starting anything when there
-is no note in view, clearing the state instead (`:64–72`); the
-generation refresh loads silently at every level (`:146–158`); every
-load advances one sequence and a silent refresh can therefore supersede
-an audible load and speak nothing (`:73–74`, `:102–107`, `:114`); the
+rebuilt when it shows (`MainSplitView.swift:163–175`), which destroys
+every panel's view-local `@State` — the Connections selection included
+(`ConnectionsPanel.swift:18`); while the pane exists, EVERY leaf is
+mounted, the inactive ones hidden by opacity and `accessibilityHidden`
+(`RightPaneView.swift:262–289`). The panel's `onAppear` therefore runs at
+every MOUNT and loads only when the leaf is active
+(`ConnectionsPanel.swift:30`); a rail switch between leaves does NOT
+remount and does not load (`RightPaneView.swift:361–364`: it sets the
+leaf and posts the panel line, nothing else); a note change loads only
+while the leaf is active AND the panel is mounted (`:31–37`); the
+leaf-revealing commands set the leaf BEFORE revealing the pane
+(`AppState+History.swift:716`; `showConnectionsPanel`,
+`AppState+Connections.swift:175–180`, which loads explicitly, reveals —
+a second `onAppear` load when the pane was collapsed — then posts the
+panel line); a depth change loads (`:162–166`); `loadConnections` with
+no note in view clears the state and RETURNS before the sequence
+advances (`:64–72`; the increment is `:73`), and a stale completion for
+the old note is rejected by the effective-path guard (`:105–107`); the
+generation refresh loads silently at every level and, sharing the one
+sequence, supersedes a load in flight (`:146–158`, `:73–74`); the
 speech gate at publish is the active leaf alone (`:110–114`); a
-same-root reload keeps the rows visible with no indicator — the loading
-row shows only when the loaded path is not the effective path
-(`ConnectionsPanel.swift:90–93`, `:115–118`), and `connectionsLoading`
-is written but never read by the panel (`AppState+Connections.swift:78`,
-`:109`); the selection is an unscoped `@State` bound to the list
-(`ConnectionsPanel.swift:18`, `:152`) with no reset on a root change;
-the pane-revealing helper every leaf command uses assigns visibility
-without a shell line (`AppState.swift:8864–8867`), the toggle alone
-posts `RightPaneShown` (`:8855–8856`), and directional entry into the
-leaf region posts `LeafPanelShown` (`:4374–4377`). One mac detail is
-recorded, not copied: a mounted switch to the leaf after the note
-changed while it was inactive shows the loading row and starts NO load
-(`:31–36` skipped it; `onAppear` does not re-fire) — Windows loads
-(Term 3b), the evident intent of the guard's own comment.
+same-root reload keeps the rows AND a current error visible — the
+loading row shows only when the loaded path is not the effective path
+(`ConnectionsPanel.swift:90–93`, `:115–125`), and `connectionsLoading`
+is written but never read (`AppState+Connections.swift:78`, `:109`);
+the selection is unscoped and survives a root change, a depth change
+and a refresh (`ConnectionsPanel.swift:18`, `:152`); the ghost create's
+completion opens after its ownership check alone (`:278–294`); the
+pane-revealing helper assigns visibility without a shell line
+(`AppState.swift:8864–8867`), the toggle alone posts `RightPaneShown`
+(`:8855–8856`), directional entry posts `LeafPanelShown`
+(`:4374–4377`); the one announcer flushes every pending class on a High
+(`GraphAnnouncer.swift:183–188`) and gates the filter count at fire
+time (`:194–207`, 0a-9). One mac detail is recorded and diverged from: a
+mounted switch to the leaf after the note changed while it was inactive
+shows the loading row and starts NO load (`:31–36` skipped the change;
+`onAppear` does not re-fire) — Windows loads (Term 3(b), B-D11).
 
-### Rule C — the standalone leaf, restated in eight terms
+### Rule C — the standalone leaf on the shared relay, in ten terms
 
-- **Term 1 — Its own document, its own relay instance, its own
-  selection.** ConnectionsLeafViewModel is a `PanelWorkScheduler`
-  subclass beside `GraphDocumentViewModel`, not a second instance of it:
-  A-1's "at most one document" is about the graph tab's document, which
-  B1 does not touch. The leaf constructs its own INSTANCE of the one
-  relay class — `new GraphAnnouncer(_announceRendered)` inside
-  NewConnectionsLeaf, the twin of `NewGraphDocument`
-  (`WorkspaceViewModel.Graph.cs:83–97`) — over the workspace's rendered
-  seam, and shuts it down with itself. A-10 walls the relay FILE ("One
-  relay, walled by path … exempts exactly the normalised relative path
-  `Graph/GraphAnnouncer.cs`, asserts exactly one such file exists"); B1
-  adds no file and no exemption. The one-seed count and the one-boundary
-  set (`Censuses/GraphAnnouncerCensus.cs:243–261`,
-  `Censuses/AnnouncementSeamCensus.cs:564–584`) are PR A's task-loop
-  facts pinning ONE document's shape; B1's task loop replaces them with
-  an instance census that counts EVERY `GraphAnnouncer` construction in
-  the shell and requires exactly two, each inside its named owner with
-  the rendered seam as its argument (B-19, IGF-11), and two boundary
-  files with their own named seams (BD-9). The leaf keeps its own view
-  state (the root, the depth, the selected OCCURRENCE) and writes nothing
-  to `GraphViewState` (B-D1).
-- **Term 2 — Three levels: MOUNTED, ACTIVE, SPEAKING.** MOUNTED: the
-  right pane is visible (`IsRightPaneVisible`) — the mac's pane exists
-  and the leaf is in its hierarchy. ACTIVE: the leaf is `ActiveLeaf` —
-  the mac's `connectionsLeafActiveForView`, the active leaf alone
-  (`AppState+Connections.swift:20–27`). SPEAKING: ACTIVE at the moment a
-  body's apply runs, evaluated at DISPATCH (`:110–114`); MOUNTED is not
-  consulted for speech on either host (B-D3: a pane hidden mid-load
-  still speaks). ACTIVE and the graph tab's EFFECTIVE are independent
-  predicates on both hosts, so both surfaces can speak in one session
-  (Term 8).
-- **Term 3 — The trigger matrix.** A load starts from exactly these
-  events and no other; a census names the callers. Every trigger except
-  the probe requires a root (the mac's `:65–72`): with none, the NoNote
-  transition installs synchronously and nothing starts.
-  - **(a) MOUNT with the leaf ACTIVE** — the pane revealed by ANY route
-    (the toggle, directional focus, Show, launch or restore with the
-    pane visible) — an AUDIBLE load whether or not a tree is held: the
-    mac's `onAppear` at every remount (`ConnectionsPanel.swift:30`).
-  - **(b) Leaf switch while MOUNTED** — the rail, or Show when the leaf
-    was not active — an AUDIBLE load ONLY when the publication is not
-    CURRENT for the root (Term 7); when it is current, nothing loads and
-    nothing more is spoken: the mac's mounted switch (`RightPaneView.
-    swift:361–364`; the recorded detail above).
-  - **(c) The palette's Show** — an explicit AUDIBLE load always
-    (`AppState+Connections.swift:175–180`), current or not. When the pane
-    was collapsed the mac issues this load and then (a)'s, the second
-    superseding the first; Windows issues one (B-D7: the same lines).
+- **Term 1 — Its own document and selection; the workspace's one
+  relay.** ConnectionsLeafViewModel is a `PanelWorkScheduler` subclass
+  beside `GraphDocumentViewModel`, not a second instance of it: A-1's
+  "at most one document" is about the graph tab's document, which B1
+  does not touch. The relay is the workspace's ONE `GraphAnnouncer`
+  (A-10 as amended, BD-12): constructed once in the workspace's
+  constructor over `_announceRendered` — the one seed the census counts
+  — before either document, handed to `NewGraphDocument` and to
+  NewConnectionsLeaf, shut down in the workspace's drain; a document's
+  retirement calls `DropAllPending()` and leaves it live. The four
+  coalescing classes and the High flush span both surfaces, as the mac's
+  one announcer spans its app. The leaf keeps its own view state (the
+  root, the depth, the selected OCCURRENCE) and writes nothing to
+  `GraphViewState` (B-D1).
+- **Term 2 — Three levels: MOUNTED, ACTIVE, SPEAKING; view state is
+  MOUNT-scoped.** MOUNTED: the right pane is visible (`IsRightPaneVisible`)
+  — the mac's pane exists. ACTIVE: the leaf is `ActiveLeaf` — the mac's
+  `connectionsLeafActiveForView` (`AppState+Connections.swift:20–27`).
+  SPEAKING: ACTIVE at the moment a body's apply runs, evaluated at
+  DISPATCH (`:110–114`); MOUNTED is not consulted for speech on either
+  host (B-D3). A MOUNTED true → false transition clears the view's
+  selection, expansion and pending focus, as the mac's destruction of
+  the pane does (IGG-9); the document's publication, root, depth and
+  epoch survive it, as the mac's `AppState` does. ACTIVE and the graph
+  tab's EFFECTIVE are independent predicates on both hosts.
+- **Term 3 — The trigger matrix, classified once per mutation.** A load
+  starts from exactly these triggers and no other; a census names the
+  callers (B-19 iii). Every trigger except the probe requires a root:
+  with none, the NoNote transition installs synchronously and nothing
+  starts (`:64–72`). ONE mutation yields at most ONE trigger, by
+  precedence (c) > (a) > (b) > (d) — the palette's Show consumes the
+  mount and the switch its own reveal causes, and a mount consumes the
+  switch inside the same reveal (IGG-2).
+  - **(a) MOUNT with the leaf ACTIVE at the boundary** — the pane
+    revealed by ANY route; MOUNT is evaluated when the revealing route
+    RETURNS, with the leaf active THEN (IGG-3: Windows's revealers
+    reveal before they switch; the mac's switch first). The pane setter
+    arms a pending mount; every route that writes `IsRightPaneVisible =
+    true` — the toggle, directional focus, Show, the leaf-revealing
+    commands, the restore — consumes it at its own end, and the census
+    names every writer and asserts the consume (B-19 iii). An AUDIBLE
+    load whether or not a tree is held: the mac's `onAppear`
+    (`ConnectionsPanel.swift:30`).
+  - **(b) Leaf switch while MOUNTED** — the rail, or a leaf command's
+    switch — an AUDIBLE load ONLY when the publication is not CURRENT
+    for the root (Term 7); when current, nothing loads and nothing more
+    is spoken: the mac's mounted switch (`RightPaneView.swift:361–364`).
+    The stale case is B-D11.
+  - **(c) The palette's Show** — ONE explicit AUDIBLE load always
+    (`AppState+Connections.swift:175–180`), current or not; the reveal
+    and the switch it performs raise no (a) or (b). The mac issues a
+    second load when the pane was collapsed; Windows one (B-D7: the same
+    lines).
   - **(d) Root change while ACTIVE and MOUNTED** — `SyncPanels()` hands
-    the note in view; a change starts an AUDIBLE load (`:31–37`).
+    the note in view; a CHANGE observed while active and mounted starts
+    an AUDIBLE load (`:31–37`, the mounted `onChange`). The constructor's
+    first sync is the initial value, not a change: launch is (a) alone.
     Inactive or unmounted, the root is tracked, the publication becomes
-    STALE (Term 7), and (a) or (b) loads later. A rename reaches the
-    leaf through the same funnel (`RetargetPath` ends in `SyncPanels`,
+    STALE (Term 7), and (a) or (b) loads later. A rename reaches the leaf
+    through the same funnel (`RetargetPath` ends in `SyncPanels`,
     `WorkspaceViewModel.cs:2042–2047`); the leaf does nothing on rename
     or delete itself (IGD-19). Every root transition advances the leaf's
     ROOT EPOCH (B-11).
   - **(e) Depth change with a root** — an AUDIBLE load (`:162–166`); a
-    bound is a no-op; without a root, nothing (`:64–72`).
-  - **(f) The generation probe** — a SILENT load at every level
-    (`:146–158`, Term 6 of revision 5, kept: "at every level").
+    bound is a no-op; without a root, nothing.
+  - **(f) The generation probe** — Term 6's state machine, silent.
   - **(g) Root → none** — the synchronous NoNote install, no load; the
-    sequence advances so an in-flight result is foreign (`:65–72`).
-- **Term 4 — Supersession is the mac's, silent included.** Every load
-  advances `seq`; a completion whose seq is stale is dropped whole at the
-  receiver's first check and changes nothing. A SILENT probe issued
-  after an audible load supersedes it and speaks nothing — the audible
-  cause's line is lost, as the mac loses it (`:146–158` after `:73–74`;
-  IGF-5) — and an audible load issued after another speaks its own line
-  only. Both directions are pinned.
+    mac returns before its sequence advances and rejects the old note's
+    completion by the effective-path guard (`:65–72`, `:105–107`);
+    Windows rejects it by the receiver's request check and, as a
+    hardening, advances the sequence too (IGG-6).
+- **Term 4 — Supersession is audible-over-anything; the probe never
+  supersedes.** Every load advances `seq`; a completion whose seq is
+  stale is dropped whole at the receiver's first check and changes
+  nothing. An audible load issued after another speaks its own line
+  only. The probe issues no load while one is in flight (Term 6), so no
+  silent load ever supersedes an audible one — the mac's refresh can
+  (`:146–158` after `:73–74`), and Windows keeps the line: B-D12.
 - **Term 5 — The policy rides the token.** The token carries the announce
   policy — PR A's `GraphAnnouncePolicy` (`GraphDocumentViewModel.cs:
   20–24`) — fixed when the load is issued by Term 3; nothing lives on the
-  document to be promoted, and no envelope can consume a cause (IGE-4,
-  IGE-7). The token's every field stays constant.
-- **Term 6 — The envelope authenticates BOTH calls.** The body makes two
+  document to be promoted, and no envelope can consume a cause. The
+  token's every field stays constant.
+- **Term 6 — The probe is a state machine over the publication.** On the
+  lifecycle's file-change and scan-finished arms, at EVERY level, the
+  probe reads the generation off the dispatcher (A-3's crossing) and, at
+  dispatch: Ready and CURRENT with a generation older than the read →
+  a SILENT load; Ready and current and equal → nothing; Loading (a load
+  in flight) → the high-water mark is raised and no load is issued — the
+  in-flight install compares the tree's generation with the mark and
+  issues a silent load when the mark is newer (A-3's rule,
+  `GraphDocumentViewModel.cs:501–505`); Error, NoNote or STALE → the
+  high-water mark only; the next load reads fresh (IGG-4). The mac
+  reloads silently in every state (`:146–158`): B-D12 records the
+  in-flight difference; the outcomes otherwise agree.
+- **Term 7 — The publication holds; the start transition is defined for
+  every state.** Four states — NoNote, Loading(request), Ready(request,
+  tree, bundle?), Error(request, message). CURRENT: the held request's
+  root is the leaf's root. STALE: it is not — the view shows the loading
+  label, as the mac shows its loading row when the loaded path is not
+  the effective path (`ConnectionsPanel.swift:115–118`). A load's START
+  transition (IGG-5): for a DIFFERENT root, Loading(request) from any
+  state; for the SAME root, the state is kept — Ready keeps its rows
+  with no indicator (`:90–93`), Error keeps its message visible, the
+  mac's retry (`:115–125`), Loading stays Loading — only the sequence
+  advances. Empty is not a state: a Ready tree with no rows is the empty
+  neighbourhood.
+- **Term 8 — The envelope authenticates BOTH calls.** The body makes two
   calls — `graph_connections_tree(path, depth, filter)` (`lib.rs:
   1365–1370`) and, at depth one, `note_load_bundle(path, paging)`
   (`:1258–1262`, the mac's paging: cursor none, limit 200,
   `AppState+Connections.swift:91–92`) — and the envelope echoes the
-  ACTUAL arguments of each separately: the tree's path, depth and filter,
-  and the bundle's path and paging (IGF-3). The receiver, at dispatch and
+  ACTUAL arguments of each separately. The receiver, at dispatch and
   before either arm, checks the token's every field, both echoes against
   the request, and the tree's depth and centre key — the key compared
-  with `graph_stable_key_for_path(root)` (`lib.rs:3596`; consumed by the
-  spec, IGF-1). A mismatch installs nothing, advances nothing, speaks
-  nothing.
-- **Term 7 — The publication holds; a same-root reload shows nothing.**
-  Four states — NoNote, Loading(request), Ready(request, tree, bundle?),
-  Error(request, message). CURRENT: the held request's root is the
-  leaf's root. STALE: it is not (the root moved while inactive or
-  unmounted) — the view shows the loading label, as the mac shows its
-  loading row when the loaded path is not the effective one
-  (`ConnectionsPanel.swift:115–118`), and Term 3(b) loads. A same-root
-  reload keeps Ready and the rows, with NO indicator (`:90–93`; IGF-9);
-  the receiver swaps the tree in one install. Empty is not a state: a
-  Ready tree with no rows is the empty neighbourhood.
-- **Term 8 — Two relay instances, no cross-relay coalescing or flush.**
-  Their lines interleave in dispatch order. Every reachable sequence
-  matches the mac line for line — a graph load in flight when the leaf
-  is Shown speaks the panel line, then the table's summary, on both
-  hosts, the mac's table gate being `graphTabActive` — with ONE
-  exception: a `GraphFilterCount` pending in the table relay's 200 ms
-  filter class (queued by a rows-only publish,
-  `GraphDocumentViewModel.cs:511–512`) fires after a leaf `GraphBlocked`
-  on Windows, because the leaf's High event cannot flush another
-  instance and PR A's relay has no fire-time gate (`GraphAnnouncer.cs:
-  141–162`); the mac's single announcer flushes it (`GraphAnnouncer.swift:
-  183–188`) and gates it at fire time (`:194–207`, 0a-9). Recorded
-  (B-D2) and pinned; PR A's missing gate is recorded for its owner
-  below. `GraphRow` is never announced by either surface (B-8), so no
-  row-move line exists to interleave (IGF-4).
+  with `graph_stable_key_for_path(root)` (`lib.rs:3596`), sound because
+  core indexes the exact `NodeKey::Path` (`session.rs:1962`) and the
+  query preserves the exact path (`graph_queries.rs:133`). A mismatch
+  installs nothing, advances nothing, speaks nothing.
+- **Term 9 — Focus entry speaks the publication's projection, once per
+  entry.** When keyboard focus ENTERS the leaf's tree — the right-pane
+  focus boundary, which PR B routes into the tree when the leaf is
+  active (today it lands on the rail, `MainWindow.xaml.cs:624`), the
+  Show command's focus, or a Tab into it — with nothing to read, the
+  document posts once: STALE or Loading → `GraphStatus{LoadingConnections}`;
+  Ready with no rows → `GraphStatus{NoConnections}` (0a-D3, the
+  Windows-side statuses the mac keeps as static labels); Ready with
+  rows or NoNote → nothing, the focused element reads. The speech entry
+  point is censused with the load entry points (B-19 iii; IGG-12).
+- **Term 10 — One relay; the mac line for line, the divergences
+  listed.** With the workspace's one relay the four classes and the
+  High flush span both surfaces and the filter count's fire-time gate
+  is the mac's (A-10 as amended), so every reachable sequence of the two
+  surfaces matches the mac's — a graph load in flight when the leaf is
+  Shown speaks the panel line then the table's summary on both hosts; a
+  table sort's pending count is dropped by a leaf `GraphBlocked` on
+  both. The differences that remain are each a recorded divergence:
+  B-D3, B-D7, B-D8, B-D9, B-D10, B-D11, B-D12.
 
 ### The contracts (slice B1)
 
 **B-1 — One leaf per workspace, constructed before the restore, retired
-with it.** Constructed once BEFORE `Restore()` and the constructor's
-first `SyncPanels()` (beside `Citations`, `WorkspaceViewModel.cs:
-1600–1603`; the restore is `:1649`, the sync `:1650`), with its
-lifecycle-generation provider and seams installed (IPB-1's ordering),
-exposed as a PUBLIC property for the leaf body's `Model` binding, shut
-down with the workspace into the bounded drain beside the graph document
-(`ShutdownGraphDocument`, `WorkspaceViewModel.Graph.cs:223–233`). After
-the restore, Term 3(a) runs once: the pane visible and the leaf active
-with a note restored is a MOUNT.
+with it; the relay before both.** The workspace constructs the relay
+first (Term 1), then the leaf, once, BEFORE `Restore()` and the
+constructor's first `SyncPanels()` (beside `Citations`,
+`WorkspaceViewModel.cs:1600–1603`; the restore is `:1649`, the sync
+`:1650`), with its lifecycle-generation provider and seams installed
+(IPB-1's ordering), exposed as a PUBLIC property for the leaf body's
+`Model` binding; after the restore the pane's pending mount is consumed
+once (Term 3(a): launch with the pane visible and the leaf active is
+ONE load). Shutdown: the leaf retires into the bounded drain beside the
+graph document, then the relay shuts down (`ShutdownGraphDocument`,
+`WorkspaceViewModel.Graph.cs:223–233`, extended). The graph document's
+`Retire()` (`GraphDocumentViewModel.cs:633–641`) calls the relay's
+`DropAllPending()` in place of `Shutdown()` (A-1 as amended).
 
 **B-2 — The load: one body, two calls, a token and a two-part envelope,
-validated before either arm; a rejection changes nothing.** Term 6. The
+validated before either arm; a rejection changes nothing.** Term 8. The
 mac fetches the tree and, at depth one, the bundle in ONE detached task
 and a bundle failure fails the load (`AppState+Connections.swift:77–96`);
 B1 does the same in one body. The TOKEN is (this document, the session
@@ -4916,13 +4981,12 @@ the body was started against, the lifecycle generation, the request
 core's clamp — B-15 — never a host `min`/`max` (IGD-21).
 
 **B-3 — The publication: four states, request-keyed, the tree
-authoritative, CURRENT or STALE.** Term 7. The tree record already
-carries the neighbourhood's counts (`graph_queries.rs:998–1006`); the
-publication stores no second copy of the summary (IGD-17). A request for
-a different root installs Loading(request) atomically and clears the
-view state (B-6); rows render only when the publication is CURRENT.
+authoritative, CURRENT or STALE, the start transition per state.** Term
+7. The tree record already carries the neighbourhood's counts
+(`graph_queries.rs:998–1006`); the publication stores no second copy of
+the summary (IGD-17). Rows render only when the publication is CURRENT.
 
-**B-4 — Liveness is rule C's Terms 2–8.**
+**B-4 — Liveness is rule C's Terms 2–10.**
 
 **B-5 — Depth is core's clamp through a core query, read once per
 PROCESS.** The bounds are core's constants 1 and 3 (`graph_queries.rs:
@@ -4935,118 +4999,136 @@ graph depth", hinted "How many links away from this note to include."
 session-scoped (B-D4).
 
 **B-6 — The tree is core's; the OCCURRENCE is the identity, scoped by
-the root.** Core's in/out split, self-edge omission and Link+Embed
-collapsing (`graph_queries.rs:1269`, `:1337`, `:1370`, `:1402`, `:1423`,
-`:1437`); the host reorders and deduplicates nothing; nesting is by
-level and order, the mac's `ConnectionsModel.nest` (`ConnectionsPanel.
-swift:406–435`). The occurrence id — `GraphConnectionRow`'s `id`, not
-its `node_id` or `stable_key` — is the view model's identity, the UIA
-element's identity and the key for selection, expansion and focus
-restoration. The id names a direction and a key path from the first hop
-down (`graph_queries.rs:1054`, `:1162`), NOT the root, so two roots
-sharing a neighbour reuse an id: the view's selection, expansion and
-pending focus are keyed by (root, occurrence id) — a root change CLEARS
-all three; a same-root refresh or depth change PRUNES them to the ids the
-new tree carries. The mac's selection is unscoped and survives a root
-change (`ConnectionsPanel.swift:18`, `:152`); Windows's clear is a
-recorded hardening (B-D8, IGF-10).
+the root and the mount.** Core's in/out split, self-edge omission and
+Link+Embed collapsing (`graph_queries.rs:1269`, `:1337`, `:1370`,
+`:1402`, `:1423`, `:1437`); the host reorders and deduplicates nothing;
+nesting is by level and order, the mac's `ConnectionsModel.nest`
+(`ConnectionsPanel.swift:406–435`). The occurrence id —
+`GraphConnectionRow`'s `id`, not its `node_id` or `stable_key` — is the
+view model's identity, the UIA element's identity and the key for
+selection, expansion and focus restoration. The id names a direction
+and a key path from the first hop down (`graph_queries.rs:1054`,
+`:1162`), NOT the root, so two roots sharing a neighbour reuse an id:
+the view's selection, expansion and pending focus are keyed by (root,
+occurrence id) — a root change CLEARS all three, a same-root refresh or
+depth change PRUNES them to the ids the new tree carries, and a collapse
+of the pane clears them (Term 2). The mac's selection is unscoped and
+survives a root change, a depth change and a refresh
+(`ConnectionsPanel.swift:18`, `:152`), and is destroyed with the pane:
+the clears are B-D8; the pane clear is the mac's own.
 
 **B-7 — Depth one carries core's snippets**, fetched in the same body,
 overlaid by exact path at level one only (`AppState+Connections.swift:
 77–94`); a bundle failure is a load failure, as the mac has it (IGD-18);
-the bundle's own arguments are authenticated (Term 6).
+the bundle's own arguments are authenticated (Term 8).
 
 **B-8 — Row copy is core's, `embed_only` the predicate, badges in
-order.** `GraphRow` rendered through the leaf's relay
-(`a11y.rs:3250–3253`), never announced; ", embed" when `embed_only`;
-ItemStatus "Unresolved" before "Embed" before "Attachment"
-(`ConnectionsPanel.swift:311`, `:313`, `:315`), hidden from the
-accessibility tree as the mac hides them (`:328`).
+order.** `GraphRow` rendered through the relay (`a11y.rs:3250–3253`),
+never announced; ", embed" when `embed_only`; ItemStatus "Unresolved"
+before "Embed" before "Attachment" (`ConnectionsPanel.swift:311`,
+`:313`, `:315`), hidden from the accessibility tree as the mac hides
+them (`:328`).
 
 **B-9 — The row's actions are core's inventory; admission is the
-host's.** `graph_row_actions` once per kind; in B1: Open on Return, Open
-in a new tab on Ctrl+Return, Reveal in the file tree, Create note on a
-ghost; Show connections is LISTED and DISABLED with the one B1 reason,
-"Show connections is not available yet." — a Windows string the leaf
-owns until B2 wires the action and removes it (B-D6), asserted byte for
-byte in the row's hint, the menu item's HelpText and the disabled-action
-fact; core's `GraphRowActionSpec` carries only the action and its title,
-and its own comment says runtime admission is the host's
+host's; the row's hint is its activation's.** `graph_row_actions` once
+per kind; in B1: Open on Return, Open in a new tab on Ctrl+Return,
+Reveal in the file tree, Create note on a ghost; Show connections is
+LISTED and DISABLED. The ROW's hint stays T15/T16 — the ghost's or
+"Opens the note." — because Return still opens the note (the mac's
+`:243–250`; IGG-15); the one B1 reason, "Show connections is not
+available yet." — a Windows string the leaf owns until B2 wires the
+action and removes it (B-D6) — appears ONLY on the disabled menu
+action's HelpText and in the disabled-action fact, the substrate's
+per-action reason (`Grids/AccessibleDataGrid.cs:1366`; the mac's menu
+hint, `:258–270`). Core's `GraphRowActionSpec` carries only the action
+and its title, and its own comment says runtime admission is the host's
 (`graph_queries.rs:806–819`, IGD-23). Invoke, SelectionItem,
 ExpandCollapse and ScrollItem on the DATA peer of every row, top-level
 and nested; Alt+Up and Alt+Down between the groups; Menu and Shift+F10
 for the actions.
 
 **B-10 — The announcements: the graph family's projection, then the
-merged timelines.** `LeafPanelShown{title}` renders "Connections panel."
-(`a11y.rs:1682`), byte-identical to `GraphStatusNote::ConnectionsPanel`
-(`:3370`). Windows posts the shell's line on a leaf SWITCH (the setter's
-own) and the graph family's line on a palette Show of the
-already-active leaf, so the panel is named once per invocation on both
-hosts (B-D5); the restore posts neither. Speech is gated at dispatch on
-SPEAKING. First the graph family alone, every cause and every terminal
-outcome (the projection A-10's sequences use):
+merged timelines by root and by state.** `LeafPanelShown{title}`
+renders "Connections panel." (`a11y.rs:1682`), byte-identical to
+`GraphStatusNote::ConnectionsPanel` (`:3370`). Windows posts the shell's
+line on a leaf SWITCH (the setter's own) and the graph family's line on
+a palette Show of the already-active leaf, so the panel is named once
+per invocation on both hosts (B-D5); the restore posts neither. Speech
+is gated at dispatch on SPEAKING. First the graph family alone:
 
-| Cause (Term 3) | Outcome at dispatch | Spoken, in order |
+| Cause (Term 3) | Outcome at dispatch | Spoken |
 | --- | --- | --- |
-| (a) mount, (b) stale switch, (c) Show, (d) root change, (e) depth change | READY | the summary — the counts zero when the tree has no rows |
+| (a) mount, (b) stale switch, (c) Show, (d) root change, (e) depth change — WITH a root | READY | the summary — the counts zero when the tree has no rows |
 | the same | ERROR | `GraphBlocked{ConnectionsLoadFailed}` |
 | (b) switch with a CURRENT publication | no load | nothing |
-| any trigger with no root | NoNote, no load | nothing |
+| any trigger WITHOUT a root | NoNote, no load | nothing |
 | (g) root → none | NoNote | nothing |
-| an audible load superseded by a SILENT probe | the probe's result | nothing — the mac's own (Term 4) |
 | an audible load superseded by an audible load | the superseder's | its summary or failure line only |
-| Focus enters the leaf | LOADING, or STALE | `GraphStatus{LoadingConnections}` (0a-D3) |
-| Focus enters the leaf | READY, no rows | `GraphStatus{NoConnections}` (0a-D3) |
-| Focus enters the leaf | READY, rows | nothing — the focused row reads |
-| (f) probe | any | nothing |
+| (f) probe, any state | Term 6 | nothing |
+| Focus enters the leaf (Term 9) | STALE or Loading | `GraphStatus{LoadingConnections}` |
+| Focus enters the leaf | READY, no rows | `GraphStatus{NoConnections}` |
+| Focus enters the leaf | READY with rows, or NoNote | nothing — the focused element reads |
 | any load not SPEAKING at dispatch | any | nothing |
 
-Then the merged timelines, the shell's lines included, each pinned by a
-fact over the timeline (TGA-9's shape; "the summary" below means the
-summary or, on failure, the failure line):
+Then the merged timelines, the shell's lines included, split by root
+and by the publication's state where they differ, each pinned by a fact
+over the timeline ("the summary" means the summary or, on failure, the
+failure line; "the focus line" means Term 9's line or nothing):
 
 | Route | Windows lines, in order | The mac |
 | --- | --- | --- |
 | Rail switch to the leaf, CURRENT | `LeafPanelShown` (`:1818`); nothing more | the same (`RightPaneView.swift:361–364`) |
-| Rail switch, STALE | `LeafPanelShown`; the summary | `leafPanelShown`; the loading row, no load (the recorded detail) |
-| Palette Show, pane visible, leaf not active | `LeafPanelShown` (the setter); the summary | `.connectionsPanel` (identical text); the summary |
-| Palette Show, leaf active | `GraphStatus{ConnectionsPanel}`; the summary | the same |
+| Rail switch, STALE | `LeafPanelShown`; the summary | `leafPanelShown`; the loading row, no load (B-D11) |
+| Rail switch, no root | `LeafPanelShown`; nothing more | the same |
+| Rail switch AWAY from the leaf | `LeafPanelShown` for the other leaf; an in-flight result is silenced (not SPEAKING) | the same |
+| Palette Show, pane visible, leaf not active, with a root | `LeafPanelShown` (the setter); the focus line; the summary | `.connectionsPanel` (identical text); the summary |
+| Palette Show, leaf active, with a root | `GraphStatus{ConnectionsPanel}`; the focus line; the summary | the same |
+| Palette Show, no root | the panel line as above; nothing more | the same |
 | Palette Show, pane collapsed | `RightPaneShown` (B-D9); then the row above; ONE load (B-D7) | no pane line; two loads, one summary |
-| Pane toggle revealing the pane, leaf active | `RightPaneShown` (`:1877`); the summary — Term 3(a) | `.rightPaneShown` (`AppState.swift:8855`); the summary (`onAppear`) |
-| Directional focus into a collapsed pane, leaf active | `RightPaneShown` (B-D9); `LeafPanelShown` (`Layout.cs:608–610`); the summary — Term 3(a) | `leafPanelShown` (`AppState.swift:4374–4377`); the summary |
-| Directional focus into a visible pane | `LeafPanelShown`; the focus-entry line of the first table, or nothing; NO load | the same |
-| Launch or restore, pane visible, leaf active, note restored | nothing from the shell; the summary — Term 3(a) | the same |
-| Root change while ACTIVE and MOUNTED | the shell's activation lines unchanged — `TabFocused` when an existing tab is activated (`Layout.cs:75–79`), none for an in-place open (the frozen fact `AGhostsActivationCreatesItsNoteOpensItAndPostsOneNoteCreatedAfterTheOpen`); the summary | the same |
-| Root → none while active | nothing | nothing |
+| Pane toggle revealing the pane, leaf active, with a root | `RightPaneShown` (`:1877`); the summary — Term 3(a) | `.rightPaneShown` (`AppState.swift:8855`); the summary (`onAppear`) |
+| Pane toggle revealing the pane, leaf active, no root | `RightPaneShown`; nothing more | the same |
+| Pane toggle HIDING the pane | `RightPaneHidden`; an in-flight result still speaks (B-D3); the view state clears (Term 2) | the same, the view destroyed |
+| Directional focus into a collapsed pane, leaf active | `RightPaneShown` (B-D9); `LeafPanelShown` (`Layout.cs:608–610`); the focus line; the summary — Term 3(a) | `leafPanelShown` (`AppState.swift:4374–4377`); the summary |
+| Directional focus into a visible pane | `LeafPanelShown`; the focus line; NO load | the same |
+| Launch or restore, pane visible, leaf active, note restored | nothing from the shell; the summary — Term 3(a), ONE load | the same |
+| Tab activation to another NOTE while ACTIVE and MOUNTED | `TabFocused` when an existing tab is activated (`Layout.cs:68–79`), none for an in-place open; the summary | the same |
+| Tab activation to a NON-note tab while active | `TabFocused`; NoNote, nothing more (`Layout.cs:68`) | the same |
+| Tab close, the next tab a note, while active and mounted | `TabFocused` when applicable; `TabClosed` (`Layout.cs:298`); the summary | the same |
+| Tab close leaving no note | `TabClosed`; NoNote, nothing more | the same |
+| Split | `TabFocused` for the duplicate (`Layout.cs:228`); no load, the root unchanged | the same |
+| Group close | `EditorPaneFocused` (`Layout.cs:371`); then the root change's summary, or NoNote | the same |
+| Rename of the root | the shell's rename lines, unchanged; ONE load — Term 3(d); the probe defers (Term 6) | the same |
+| Delete of the root | the shell's missing-file `HostComposed` (`WorkspaceViewModel.cs:2135`); the tab closes: as a tab close | the same |
 | Depth change with a root | the summary | the same |
 | Depth change without a root, or at a bound | nothing | nothing |
 | Ghost create, source current, in-place open | the open is silent; `GraphStatus{NoteCreated}`; the caveat's High `HostComposed` when landed with one (`FilesSidebarViewModel.SurfaceNotes.cs:52–56`); the new root's summary — Term 3(d) | `.noteCreated`; the refresh |
 | Ghost create, source current, the note already open in a tab | `TabFocused`; `NoteCreated`; the caveat if any; the summary | — |
 | Ghost create, source current, dirty-navigation refusal | `NoteCreated`; the caveat if any; no root move, nothing more | — |
-| Ghost create, source not current (B-11) | `NoteCreated`; the caveat if any | `.noteCreated` and the open (B-D7 of the ledger's IGE-6, now B-D10) |
+| Ghost create, source not current (B-11) | `NoteCreated`; the caveat if any | `.noteCreated` and the open (B-D10) |
 | Ghost create fails | `GraphBlocked{NoteCreateFailed}` | the same |
-| Table sort with the count pending; leaf failure inside 200 ms | `GraphBlocked{ConnectionsLoadFailed}`; then the count (B-D2) | the failure line; the count dropped |
+| Table sort CHANGED, its count pending; leaf failure inside 200 ms | `GridSorted` (`GraphTableView.cs:85`); `GraphBlocked{ConnectionsLoadFailed}`; the count DROPPED (the one relay's High flush) | the same |
+| Table sort returned to the accepted sort, its count pending; leaf failure inside 200 ms | no `GridSorted`; the failure line; the count dropped | the same |
+| Table sort's count pending; the graph tab leaves EFFECTIVE before 200 ms | the count dropped at fire time (the gate, A-10 as amended) | the same |
 
-**B-11 — The ghost create is addressed by the LEAF and its root epoch,
-so it needs no graph tab.** PR A's funnel returns early without a graph
-tab (`WorkspaceViewModel.GraphCreate.cs:28`); the worker is generalised
-to a SOURCE address — the graph document's or the leaf's — keeping
-AD-8's every other rule and ORDER: the open before the one `NoteCreated`
+**B-11 — The ghost create is addressed by the LEAF's root and epoch, so
+it needs no graph tab.** PR A's funnel returns early without a graph tab
+(`WorkspaceViewModel.GraphCreate.cs:28`); the worker is generalised to
+a SOURCE address — the graph document's or the leaf's — keeping AD-8's
+every other rule and ORDER: the open before the one `NoteCreated`
 (`:65–78`), the lifecycle generation, the admission reason,
 `NoteLanded`, the `Unavailable` drop, the typed failures, the caveat.
-The leaf's address is (the leaf, the root the ghost belonged to, the
-root EPOCH at invocation); at completion the open runs only if the
-lifecycle generation, the leaf's ACTIVE state, the root path AND the
-exact epoch still hold — a reader who left A for B and came back to A
-has advanced the epoch twice, so a create parked across the excursion
-lands its file and its `NoteCreated` line but opens nothing (IGE-6; PR
-A's immutable-address precedent, IPC-4/IPD-2). The mac opens after its
-ownership check alone (`AppState+Connections.swift:278–294`) — B-D10.
-The leaf then takes a silent generation refresh (`:301`).
+The leaf's address is (the root the ghost belonged to, the root EPOCH at
+invocation); at completion the open runs only if the lifecycle
+generation, the root path AND the exact epoch still hold — the leaf's
+ACTIVE state is NOT consulted (IGG-8; the mac opens whatever leaf shows)
+— so a reader who left A for B and came back to A has advanced the
+epoch twice, and a create parked across the excursion lands its file
+and its `NoteCreated` line but opens nothing (PR A's immutable-address
+precedent, IPC-4/IPD-2). The mac opens after its ownership check alone
+(`AppState+Connections.swift:278–294`) — B-D10. The leaf then takes the
+probe (Term 6) on the create's generation change.
 
-**B-12 — The probe is Term 3(f)**, over the tree's generation with A-3's
-high-water mark; silent, and it supersedes (Term 4).
+**B-12 — The probe is Term 6.**
 
 **B-13 — The tree is the outline's shape, the model is released, the
 placeholder retires.** `Canvas/CanvasOutlineView.cs`: patterns on the
@@ -5054,9 +5136,10 @@ DATA peer (`:184–197`, `:219–239`, the nested rows' peer `:285–287`),
 Standard virtualisation (`:359–365`), focus that realises the container
 (`:431–453`). `Model` unsubscribes before it subscribes and on null
 clears rows, indexes, selection and pending focus and disables the
-delegates (TGA-10's finding in tree form); a root change clears the same
-(B-6). The generic placeholder collapses for `ActiveLeaf.Id ==
-"connections"` beside the leaves it names (`MainWindow.xaml:1944–1995`).
+delegates (TGA-10's finding in tree form); a root change and a collapse
+clear the same (B-6, Term 2). The generic placeholder collapses for
+`ActiveLeaf.Id == "connections"` beside the leaves it names
+(`MainWindow.xaml:1944–1995`).
 
 **B-14 — Three chordless rows in `ChordScope.None`, always enabled, the
 bounds a no-op.** `slate.graph.showConnections` (Term 3(c) — the
@@ -5087,13 +5170,14 @@ the mac's literal filter (`AppState+Connections.swift:17–19`) and its
 `clampConnectionsDepth` (`:34–37`) become the calls, the mac wrapper
 kept for its `Int` callers and its tests
 (`ConnectionsPanelTests.swift:40–43`). The spec's Consumes also names
-`graph_stable_key_for_path` (Term 6).
+`graph_stable_key_for_path` (Term 8).
 
 **B-16 — The label inventory T1–T17, byte for byte**, as a theory with
 the substitutions exercised: the no-note label, the loading label and its
 accessible name, the empty and error labels, both group headers with
 singular and plural counts, both group empties, the three badges, the
-row and action hints, and B1's one Windows string (B-D6).
+row and action hints, and B1's one Windows string on the disabled menu
+action alone (B-D6, B-9).
 
 **B-17 — §W-A: the golden keeps 0b's schema; the full record is an
 in-process fact.** The `connections` entries of `graph_queries.json` are
@@ -5128,24 +5212,31 @@ the row. RUN to the last step locally before the push.
 **B-19 — The censuses, falsifiable.** The relay wall extends to the leaf
 with no new FILE exemption. (i) The INSTANCE census: every object
 creation of type `GraphAnnouncer` across `src/SlateWindows` — by
-declared type, whatever the receiver is named — is counted; exactly two
-exist, one inside `NewGraphDocument` and one inside NewConnectionsLeaf,
-each with `_announceRendered` as its argument; a third anywhere, under
-any name, fails it (IGF-11). (ii) `AnnouncementSeamCensus` names two
-boundary files with each file's own seams (BD-9). (iii) The trigger
-census: the leaf's load entry points have exactly the callers Term 3
-names, in the workspace's Connections partial, and no other caller in
-the shell. (iv) The root census: `SyncPanels` is the ONLY method in the
-shell that assigns the leaf's root (the writer named by symbol). (v) The
-depth census, by DATAFLOW across the whole shell (IGF-12): every write
-to the leaf's depth storage has `SlateUniffiMethods.GraphClampConnectionsDepth(`
-as its right side; every value reaching that call's argument is the raw
-parameter of the leaf's public depth entry or a numeric conversion of
-the depth control's index, traced through the shell's own syntax trees
-with no arithmetic, comparison, conditional, `Math.*` call or helper
-call on the way — an alias, a pre-clamp, or a helper in any partial
-fails it. (vi) The citation census's B tuple carries a floor of one
-below the measured population.
+declared type, whatever the receiver is named — is counted; exactly ONE
+exists, in the workspace's constructor, with `_announceRendered` as its
+argument (A-10 as amended); a second anywhere, under any name, fails it
+(IGF-11, IGG-1). (ii) `AnnouncementSeamCensus` names two boundary files
+— the graph document's and the leaf's — with each file's own seams.
+(iii) The trigger and speech census: the leaf's load entry points
+(Term 3) and its speech entry points (Term 9, the status the workspace
+asks for) have exactly the callers the terms name, in the workspace's
+Connections partial and the leaf view's focus handler, and no other
+caller in the shell; every writer of `IsRightPaneVisible = true` in the
+shell consumes the pending mount at its end (Term 3(a)); each route is
+pinned to ONE load per invocation. (iv) The root census: `SyncPanels`
+is the ONLY method in the shell that assigns the leaf's root (the
+writer named by symbol). (v) The depth census, by DATAFLOW across the
+whole shell: every write to the leaf's depth storage has
+`SlateUniffiMethods.GraphClampConnectionsDepth(` as its right side;
+every value reaching that call's argument is one of exactly four
+producers — the raw parameter of the leaf's public depth entry, the
+depth control's index converted, and `Depth + 1` / `Depth - 1` inside
+`Deeper` and `Shallower` alone (the mac's `:171–172`) — traced through
+the shell's own syntax trees with no other arithmetic, comparison,
+conditional, `Math.*` call or helper call on the way; an alias, a
+pre-clamp, or a helper in any partial fails it (IGF-12). (vi) The
+citation census's B tuple carries a floor of one below the measured
+population.
 
 **B-20 — The matrix rows, as a contract.** `parity_matrix.md`: the three
 command rows `slate.graph.showConnections`,
@@ -5159,42 +5250,43 @@ the axe label; a census asserts both rows exist with those statuses.
 
 - **BD-1 — The owner split PR B on 2026-09-05.** B1 is this section; B2
   carries re-root and Back, the table's and the Bases' Show connections,
-  and the shared selection, and is where the frozen-text amendment (A-1,
-  A-10, spec R-B) is decided.
-- **BD-2 — The leaf owns its document, relay instance and selection.**
-  Rule C Term 1; the canvas's one-announcer-per-document precedent.
+  and the shared selection, and is where spec R-B's amendment is
+  decided.
+- **BD-2 — The leaf owns its document and selection**; the relay is the
+  workspace's (BD-12).
 - **BD-3 — The local filter and the depth clamp are core queries.**
 - **BD-4 — Verbosity is Standard until PR C.**
-- **BD-5 — The occurrence is the identity**, scoped by the root (B-6).
+- **BD-5 — The occurrence is the identity**, scoped by the root and the
+  mount (B-6).
 - **BD-6 — Depth is session-scoped in B1.**
-- **BD-7 — The spec's stale lines are amended**: the Goal (IGD-3), the
-  behaviour paragraph, the Consumes and Builds lines (IGE-9), and —
-  revision 6 — `graph_stable_key_for_path` in Consumes (IGF-1).
+- **BD-7 — The spec's stale lines are amended**: the Goal (IGD-3; and,
+  revision 7, its "own relay"), the behaviour paragraph, the Consumes
+  and Builds lines (IGE-9), and `graph_stable_key_for_path` in Consumes
+  (IGF-1).
 - **BD-8 — Show connections is listed and disabled in B1**, with the one
-  reason of B-9, until B2 wires it.
-- **BD-9 — A-10 walls the relay FILE; the counts are tests.** B1
-  constructs a second instance of `GraphAnnouncer` and replaces PR A's
-  one-seed and one-boundary facts with B-19's instance census and
-  two-boundary set, without touching A-10's text. The owner may
-  overrule: the alternative is an A-10 amendment to ONE workspace-owned
-  relay (the mac's one announcer per app), whose lifetime then
-  contradicts A-1 — the triangle of "Why the split", deferred to B2 with
-  the rest of the amendment. Precedent applied; the owner may overrule.
-- **BD-10 — The policy rides the token; supersession is the mac's,
-  silent included.** Terms 4–5.
-- **BD-11 — Rule 4 invoked at round 5**: the design pass above replaces
-  revision 5's Terms 3–5 with the mac's traced lifecycle; the next
-  instance of a load or speech question is decided by a term.
+  reason of B-9 on the menu action alone, until B2 wires it.
+- **BD-9 — Superseded by BD-12.** Revision 5's reading — A-10 walls the
+  file, the counts are tests — was rejected by rounds 5 and 6 (IGG-1);
+  the owner amended the text instead.
+- **BD-10 — The policy rides the token; audible supersedes; the probe
+  defers.** Terms 4–6.
+- **BD-11 — Rule 4 invoked at round 5**: the design pass replaced
+  revision 5's Terms 3–5 with the mac's traced lifecycle; revision 7
+  corrects the trace and completes the terms after round 6.
+- **BD-12 — The owner amended A-1 and A-10 on 2026-09-05 (option 1 of
+  the round-6 decision): one relay per workspace**, the mac's one
+  announcer per app, constructed with the workspace and shut down in its
+  drain, shared by the graph document and the leaf; a document's
+  retirement drops its pending classes and leaves the relay live; the
+  relay gains 0a-9's fire-time gate. The amendments are recorded in
+  place under A-1 and A-10.
 
 ### Recorded divergences (PR B, slice B1)
 
 - **B-D1 — The leaf does not write `GraphViewState.SelectedKey`** in B1;
-  spec R-B's shared selection arrives with B2 and the amendment.
-- **B-D2 — Two relay instances, independent** (Term 8): no cross-relay
-  coalescing or High flush, and no fire-time gate on the table's pending
-  filter count, so a table sort's `GraphFilterCount` still pending when
-  a leaf `GraphBlocked` lands speaks after it on Windows; the mac drops
-  it. Pinned by a timeline fact. No other reachable sequence differs.
+  spec R-B's shared selection arrives with B2.
+- **B-D2 — Withdrawn** with BD-12: one relay, one coalescing space, one
+  High flush, the mac's gate.
 - **B-D3 — Speech gates on the active leaf alone**, the mac's predicate;
   MOUNTED is not consulted, as the mac does not consult it.
 - **B-D4 — Depth does not persist across sessions in B1** and resets on
@@ -5202,12 +5294,16 @@ the axe label; a census asserts both rows exist with those statuses.
 - **B-D5 — `LeafPanelShown` on a switch, the graph family's line on a
   Show of the active leaf**; the strings are identical.
 - **B-D6 — "Show connections is not available yet."** is a Windows-only
-  B1 string with no mac twin; B2 removes it.
+  B1 string with no mac twin, on the disabled menu action's HelpText
+  alone; B2 removes it.
 - **B-D7 — One load on a collapsed-pane Show** where the mac issues two
   (the explicit load, then the remount's); the spoken lines are the
   same.
 - **B-D8 — Selection, expansion and pending focus clear on a root
-  change** (B-6); the mac's unscoped `@State` selection survives one.
+  change and are pruned on a same-root refresh or depth change** (B-6);
+  the mac's unscoped `@State` selection survives all three (a vanished
+  id stays selected there). The pane collapse clears them on both
+  hosts.
 - **B-D9 — `RightPaneShown` on every pane reveal** — the shell's W1
   setter posts it (`WorkspaceViewModel.cs:1877`) on a palette Show and a
   directional focus that reveal a collapsed pane, where the mac's helper
@@ -5216,20 +5312,28 @@ the axe label; a census asserts both rows exist with those statuses.
   change.
 - **B-D10 — The ghost create's open is suppressed when the leaf's root or
   epoch moved** (B-11); the mac opens after its ownership check alone
-  (`AppState+Connections.swift:278–294`).
+  (`AppState+Connections.swift:278–294`). The leaf's active state is not
+  consulted on either host.
+- **B-D11 — A mounted rail switch to a STALE leaf loads** (Term 3(b));
+  the mac shows its loading row and starts nothing (`ConnectionsPanel.
+  swift:31–36`, `:115–118`), the recorded mac detail.
+- **B-D12 — The probe defers to a load in flight** (Term 6, A-3's
+  high-water mark), so an audible load's line is never lost to a silent
+  refresh; the mac's refresh supersedes it and speaks nothing
+  (`AppState+Connections.swift:146–158`).
 
 ### Mac details recorded while reading (not this issue's to fix)
 
 - A mounted rail switch to the Connections leaf after the note changed
   while it was inactive shows "Loading connections…" and starts no load
-  (`ConnectionsPanel.swift:31–36` skipped the change; `onAppear` does
-  not re-fire on a mounted view). Windows loads (Term 3(b)).
+  (`ConnectionsPanel.swift:31–36`; `onAppear` does not re-fire on a
+  mounted view). Windows loads (B-D11).
 - `connectionsLoading` is written (`AppState+Connections.swift:78`,
   `:109`) and never read by the panel.
-- PR A's Windows relay has no fire-time gate on the filter class
+- PR A's Windows relay had no fire-time gate on the filter class
   (`GraphAnnouncer.cs:141–162`), where 0a-9 names the mac's
-  (`GraphAnnouncer.swift:194–207`); recorded for PR A's owner as a
-  follow-up, and the consequence for B1 is B-D2.
+  (`GraphAnnouncer.swift:194–207`); A-10 as amended adds it, and B1's
+  task loop lands it with the relay's move.
 
 ### The rounds — the ledger
 
@@ -5240,95 +5344,127 @@ B-3 (IGB-4), B-12 (IGB-5), Term 3 (IGB-6, IGB-7), B-11 (IGB-11), B-10
 B-13 (IGB-18, IGB-25), B-7 (IGB-19), BD-7 (IGB-21), B-5 (IGB-22,
 IGB-23), B-8 (IGB-24), the corrected citations (IGB-26), B-16 (IGB-27),
 B-6 (IGB-28), B-17 (IGB-29), the tests (IGB-30), B-18 and B-20 (IGB-31);
-deferred to B2 with the split: IGB-8, IGB-9, IGB-10, IGB-20; superseded
-by BD-2: IGB-1, IGB-2 (its core query survives as B-15).
+deferred to B2 with the split: IGB-8, IGB-9, IGB-10, IGB-20; IGB-1 and
+IGB-2 (one relay) — answered at last by BD-12 (its core query survives
+as B-15).
 
 **Round 2 (revision 2): twenty-two findings, nineteen blockers; rule 5,
-rule 4.** IGC-1, IGC-2 — withdrawn with revision 2's ownership move,
-superseded by BD-2; IGC-3 — Term 3; IGC-4 — Term 3(f); IGC-5 — Terms 3
-and 5; IGC-6 — Term 3(d) (no pinned root in B1); IGC-7, IGC-8, IGC-9,
-IGC-10 — B2 (re-root); IGC-11 — B2 (shared key); IGC-12 — B-7; IGC-13 —
-B-9; IGC-14 — B-10; IGC-15 — B-11; IGC-16, IGC-17 — B-14 (three rows,
-None; Back to B2); IGC-18, IGC-19 — BD-7 and B-15; IGC-20 — the tests
-below; IGC-21 — B-16; IGC-22 — this inventory.
+rule 4.** IGC-1, IGC-2 — the relay's lifetime: BD-12; IGC-3 — Term 3;
+IGC-4 — Term 6; IGC-5 — Terms 3 and 5; IGC-6 — Term 3(d) (no pinned
+root in B1); IGC-7, IGC-8, IGC-9, IGC-10 — B2 (re-root); IGC-11 — B2
+(shared key); IGC-12 — B-7; IGC-13 — B-9; IGC-14 — B-10; IGC-15 — B-11;
+IGC-16, IGC-17 — B-14 (three rows, None; Back to B2); IGC-18, IGC-19 —
+BD-7 and B-15; IGC-20 — the tests below; IGC-21 — B-16; IGC-22 — this
+inventory.
 
 **Round 3 (revision 3): twenty-nine findings, twenty-four blockers; the
 split.** IGD-1 — the brief's inventory is generated from the section
-(this revision: B-1..B-20, BD-1..BD-11, B-D1..B-D10); IGD-2 — the
+(this revision: B-1..B-20, BD-1..BD-12, B-D1..B-D12); IGD-2 — the
 round-2 ledger above, one entry per finding; IGD-3 — BD-7; IGD-4, IGD-5,
-IGD-6 — BD-2, the split's reason, and BD-9, Term 8; IGD-7 — Terms 4–5
-(supersession, not promotion); IGD-8 — Term 3(a) and B-10's restore row;
-IGD-9 — Term 3 and B-10; IGD-10, IGD-11 — B2; IGD-12 — Term 2 and B-D3;
-IGD-13 — Term 3(f); IGD-14 — Term 3(d) (no pinning); IGD-15 — Term 7;
-IGD-16 — B-10's two tables; IGD-17 — B-3; IGD-18 — B-7; IGD-19 — Term
-3(d); IGD-20 — B2; IGD-21 — B-15 and B-2; IGD-22 — B-11 (the epoch);
-IGD-23 — B-9 (the string); IGD-24 — B-17 (the golden unchanged; the
-in-process fact); IGD-25 — B-14; IGD-26 — B-18 (the four patterns,
-unconditional); IGD-27 — B-19 (v); IGD-28 — B-20; IGD-29 — B-15.
+IGD-6 — BD-1 and BD-12 (the relay), Term 10; IGD-7 — Terms 4–5; IGD-8 —
+Term 3(a) and B-10's restore row; IGD-9 — Term 3 and B-10; IGD-10,
+IGD-11 — B2; IGD-12 — Term 2 and B-D3; IGD-13 — Term 6; IGD-14 — Term
+3(d) (no pinning); IGD-15 — Term 7; IGD-16 — B-10's two tables; IGD-17 —
+B-3; IGD-18 — B-7; IGD-19 — Term 3(d); IGD-20 — B2; IGD-21 — B-15 and
+B-2; IGD-22 — B-11 (the epoch); IGD-23 — B-9 (the string, on the menu
+action); IGD-24 — B-17; IGD-25 — B-14; IGD-26 — B-18; IGD-27 — B-19 (v);
+IGD-28 — B-20; IGD-29 — B-15.
 
 **Round 4 (revision 4): sixteen findings, six blockers, falling.**
-IGE-1 — Term 1, B-19 (i), BD-9; IGE-2 — B-17; IGE-3 — Term 8 and B-D2
-(corrected by round 5, IGF-4); IGE-4 — Term 7, Terms 3–5 and BD-10;
-IGE-5 — B-10's second table; IGE-6 — Term 3(d) and B-11, B-D10; IGE-7 —
-Terms 4–6 and B-2; IGE-8 — B-6 and B-13; IGE-9 — BD-7; IGE-10 — B-9 and
-B-D6; IGE-11 — B-14; IGE-12 — B-19 (v); IGE-13 — B-17; IGE-14 — B-18;
-IGE-15 — B-D4; IGE-16 — B-15.
+IGE-1 — BD-12 (the owner's amendment; BD-9 superseded); IGE-2 — B-17;
+IGE-3 — Term 10 (one relay); IGE-4 — Term 7, Terms 3–5 and BD-10; IGE-5
+— B-10's second table; IGE-6 — Term 3(d) and B-11, B-D10; IGE-7 — Terms
+4–5, 8 and B-2; IGE-8 — B-6 and B-13; IGE-9 — BD-7; IGE-10 — B-9 and
+B-D6 (the menu action alone, IGG-15); IGE-11 — B-14; IGE-12 — B-19 (v);
+IGE-13 — B-17; IGE-14 — B-18; IGE-15 — B-D4; IGE-16 — B-15.
 
 **Round 5 (revision 5): twelve findings, ten blockers, rising; rule 5,
-rule 4 — the design pass.** IGF-1 — Term 6, B-15 and BD-7 (the query
-consumed); IGF-2 — the mac traced; Terms 2–3 (MOUNTED; the trigger
-matrix); B-D7; the recorded mac detail; IGF-3 — Term 6 and B-2, B-7 (the
-two echoes; the bundle-only mutants); IGF-4 — Term 8 and B-D2 (the
-row-move exception withdrawn; the filter-count sequence recorded and
-pinned; PR A's gate recorded); IGF-5 — Term 4 and B-10 (silent
-supersession loses the line, pinned both ways); IGF-6 — B-10's ghost
-rows (the open silent and before `NoteCreated`; `TabFocused`; the dirty
-refusal; the caveat's High line) and B-11; IGF-7 — B-D9 and B-10's pane
-rows; IGF-8 — Term 3's root requirement, 3(g), B-10's NoNote rows, B-14;
-IGF-9 — Term 7 and B-3 (no indicator); IGF-10 — B-6 and B-D8; IGF-11 —
-B-19 (i); IGF-12 — B-19 (v).
+rule 4 — the design pass.** IGF-1 — Term 8, B-15 and BD-7; IGF-2 — the
+mac traced; Terms 2–3; B-D7, B-D11; IGF-3 — Term 8 and B-2, B-7; IGF-4
+— Term 10 and A-10 as amended (the gate; B-D2 withdrawn); IGF-5 — Term
+4, Term 6 and B-D12; IGF-6 — B-10's ghost rows and B-11; IGF-7 — B-D9
+and B-10's pane rows; IGF-8 — Term 3's root requirement, 3(g), B-10's
+no-root rows, B-14; IGF-9 — Term 7 and B-3; IGF-10 — B-6 and B-D8;
+IGF-11 — B-19 (i); IGF-12 — B-19 (v).
+
+**Round 6 (revision 6): fifteen findings, fifteen blockers; the design
+judged unsound; the owner's amendment.** IGG-1 — BD-12: the owner
+amended A-1 and A-10 to one workspace relay (option 1); Term 1, Term 10,
+B-1, B-19 (i); IGG-2 — Term 3's precedence, one trigger per mutation,
+B-19 (iii)'s one-load pin; IGG-3 — Term 3(a): MOUNT evaluated at the
+route's end with the leaf active then; the pending mount and its census;
+IGG-4 — Term 6 (the probe's state machine; it defers to a load in
+flight, B-D12) and Term 4; IGG-5 — Term 7's start transition per state;
+IGG-6 — Term 3(g) (the mac returns at `:65–72`, advances at `:73`,
+rejects at `:105–107`; Windows's seq advance a recorded hardening);
+IGG-7 — B-D11 and Term 10 (the list, not "one exception"); IGG-8 —
+B-11 (ACTIVE not consulted) and B-D10; IGG-9 — Term 2 and B-6 (the pane
+collapse clears view state, the mac's destruction); IGG-10 — B-D8
+(pruning recorded); IGG-11 — B-10's rows split by root, `TabFocused` and
+`TabClosed` included; IGG-12 — Term 9 and B-19 (iii); IGG-13 — B-10's
+switch-away, hide, close, split, group-close, rename and delete rows;
+IGG-14 — B-10's two sort rows and the gate row; IGG-15 — B-9 (the row
+hint kept; the reason on the menu action alone), B-16, B-D6.
 
 ### Tests that pin PR B (slice B1)
 
 - ConnectionsLeafTests: the tree over the shared fixture and the
   thirteen-field record fact with the golden's projection (B-17); the
   depth clamp through core with the crossing counted; the four states,
-  CURRENT and STALE, under a changed root and depth; the receiver's
-  rejections (each token field; each of the tree's three echoed
-  arguments and each of the bundle's two; the centre key and depth; a
-  reversed completion; a stale sequence; a lifecycle replacement; a
-  shutdown before dispatch; a parked worker released after each, and
-  nothing changed by any rejection); the trigger matrix row by row — a
-  mount with the leaf active loads audibly, a mounted switch with a
-  current publication does not load, a mounted switch with a stale one
-  does, a Show loads current or not, a root change loads only while
-  active and mounted, a depth change loads with a root and not without,
-  the probe loads silently at every level, root → none installs NoNote
-  synchronously and drops the in-flight result; supersession both ways —
-  a silent probe after a Show speaks nothing, a Show after a probe
-  speaks once; rename through `SyncPanels` with one load; vault
-  replacement; the ghost create with no graph tab open, its open
+  CURRENT and STALE, and the start transition from each under a
+  same-root and a different-root load; the receiver's rejections (each
+  token field; each of the tree's three echoed arguments and each of the
+  bundle's two; the centre key and depth; a reversed completion; a stale
+  sequence; a lifecycle replacement; a shutdown before dispatch; a
+  parked worker released after each, and nothing changed by any
+  rejection); the trigger matrix row by row with ONE load per route — a
+  mount with the leaf active, a mount evaluated after a reveal-then-
+  switch command (History's, Tasks Review's: no leaf load), a mounted
+  switch with a current publication (no load), with a stale one (a
+  load), a Show current or not (one load, collapsed pane included), a
+  root change loading only while active and mounted, the constructor's
+  first sync loading nothing and the restore's mount loading once, a
+  depth change with a root and not without, root → none synchronously
+  with the in-flight result dropped; the probe's state machine — Ready
+  current and older (a silent load), Ready equal (nothing), Loading (the
+  mark; the install's silent reload when newer), Error / NoNote / STALE
+  (the mark only), and an audible load never superseded by the probe;
+  audible supersedes audible, speaking once; rename through `SyncPanels`
+  with one load; vault replacement; the pane collapse clearing the
+  view's selection, expansion and pending focus and keeping the
+  document's; the ghost create with no graph tab open, its open
   suppressed when the root moved and when the epoch moved with the root
-  restored (A → B → A); both tables of B-10 row by row, the four ghost
-  outcomes and the filter-count sequence included; the shared neighbour
-  across two roots and the disappeared occurrence (B-6); Deeper at the
-  maximum, Shallower at the minimum and both without a root as no-ops;
-  the label theory with B-D6's string; the disabled Show connections
-  with its reason in the hint, the HelpText and the fact.
+  restored (A → B → A), and NOT suppressed when only the leaf went
+  inactive; both tables of B-10 row by row, the two sort rows and the
+  gate row included; the shared neighbour across two roots, the vanished
+  occurrence after a depth change and after a refresh (B-6); Deeper at
+  the maximum, Shallower at the minimum and both without a root as
+  no-ops; the focus-entry line per state, once per entry; the label
+  theory; the disabled Show connections with its reason on the menu
+  action's HelpText and the fact, and the row's hint unchanged.
+- GraphAnnouncerTests gains the fire-time gate (0a-9's suite) and the
+  cross-surface High flush; GraphDocumentTests' retirement fact asserts
+  the relay is dropped-pending and live, not shut down (A-1 as amended).
 - The tree peer's facts (the four patterns on a top-level and a nested
   data peer, occurrence identity, expansion and focus restoration, the
-  model's release, the root-change clear); `ChordTableTests` for the
-  three rows; the registrar's resolvers through the palette; the six
-  censuses of B-19 and the census of B-20; the journey.
+  model's release, the root-change and collapse clears);
+  `ChordTableTests` for the three rows; the registrar's resolvers
+  through the palette; the six censuses of B-19 and the census of B-20;
+  the journey.
 - Mutation probes: change the tree's actual arguments; change the
   bundle's path and its paging alone; return a tree for another centre;
   delete a receiver check; let a rejected envelope advance state; clamp
   with a host `Math.Clamp`, a ternary, an `if` chain, an aliased
-  pre-clamp and a helper in another partial; construct a third
-  `GraphAnnouncer` under another name; make speech unconditional; load
-  on a current mounted switch; skip the mount load; drop the placeholder
-  trigger; key the view by node; announce a superseded load; open on a
-  stale epoch; disable Deeper at the bound.
+  pre-clamp and a helper in another partial; construct a second
+  `GraphAnnouncer` under another name; shut the relay down at the
+  document's retirement; drop the fire-time gate; make speech
+  unconditional; load on a current mounted switch; load twice on a
+  collapsed Show; mount-load the leaf from a reveal-then-switch command;
+  skip the mount load; issue a probe load while a load is in flight;
+  drop the placeholder trigger; key the view by node; keep the view's
+  selection across a collapse; open on a stale epoch; suppress the open
+  on an inactive leaf; disable Deeper at the bound; put the disabled
+  reason on the row's hint.
 - Rust: the two new query facts and the surface count of twenty-six.
 - Mac: the literal filter and the local clamp become the calls.
 
