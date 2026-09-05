@@ -71,12 +71,12 @@ public sealed class GraphContractsCitationCensus
                 // The leaf section: the contracts, the decisions, the
                 // divergences, the pins.
                 6_000,
-                // Revision 4 cites existing identifiers only through the
+                // Revision 5 cites existing identifiers only through the
                 // shell, its tests and the core and mac sources it names; the
                 // leaf's own names are unbackticked until they exist. The
                 // floor sits one below the measured population and rises with
                 // the records.
-                7),
+                16),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
