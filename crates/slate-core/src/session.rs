@@ -5490,6 +5490,30 @@ impl VaultSession {
                 &mut graph_sink,
             )
             .map_err(&published)?;
+        // A materialised file heals the ghost rows that named it (W6-2
+        // PR B, #746 — the Connections leaf's journey found it): the
+        // links table's unresolved rows re-resolve against the inventory
+        // that now holds this path, inside the create's own transaction,
+        // and every affected source's linkset is replayed to the graph —
+        // the rename and batch-move paths' exact pattern. Without it a
+        // note created from a graph row's ghost stayed unresolved until
+        // the next full scan, which the mac runs after every structural
+        // mutation and the Windows shell never does; SQLite now heals at
+        // scan, move AND create time, and the graph keeps replaying it.
+        let resolved_sources =
+            crate::links_db::re_resolve_unresolved_links(&tx).map_err(&published)?;
+        if graph_sink.live() {
+            for source in &resolved_sources {
+                graph_sink
+                    .stage_with(|| {
+                        Ok(crate::graph::GraphOp::LinksetChanged {
+                            source_path: source.clone(),
+                            rows: crate::links_db::graph_linkset_for(&tx, source)?,
+                        })
+                    })
+                    .map_err(&published)?;
+            }
+        }
         if let Some(stem) = bind_log {
             // Recovery re-binding, atomic with the row itself; the
             // partial UNIQUE index backstops double-binding.
