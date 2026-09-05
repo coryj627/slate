@@ -72,8 +72,11 @@ public sealed partial class ConnectionsLeafTests
         public List<string> RelayLines { get; } = [];
         public List<string> Timeline { get; } = [];
 
+        public string Root { get; }
+
         public Host(string root, Func<int>? lifecycleGeneration = null)
         {
+            Root = root;
             Session = VaultSession.OpenFilesystem(root);
             using var cancel = new CancelToken();
             Session.ScanInitial(cancel);
@@ -638,6 +641,76 @@ public sealed partial class ConnectionsLeafTests
             host.Settle();
             Assert.Equal(loads, host.Loads);
             Assert.Equal([Summary(leaf)], host.RelayLines);
+        });
+    }
+
+    /// <summary>The high-water mark (Term 6, B-D12): a generation marked
+    /// while a load is in flight reloads silently at the install ONLY when
+    /// it is strictly above the installed tree's generation, and that
+    /// reload clears the mark; a mark equal to the tree's generation
+    /// reloads nothing and stays (codoki on PR #1184 asked for the pin).</summary>
+    [Fact]
+    public void TheHighWaterMarkReloadsOnlyWhenStrictlyAboveTheInstalledTreeAndClearsAfterwards()
+    {
+        using GraphVault vault = GraphVault.Copy("high-water");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            ConnectionsLeafViewModel leaf = host.Leaf;
+            host.ActivateLeaf();
+
+            // EQUAL: the fetch parks after its crossing (its tree carries the
+            // current generation), the probe marks that same generation, and
+            // the install finds the mark not above the tree — no reload.
+            (ManualResetEventSlim gate, ManualResetEventSlim reached) = Park(leaf);
+            host.OpenNote(Hub);
+            Assert.True(reached.Wait(TimeSpan.FromSeconds(10)), "the fetch never parked");
+            host.Workspace.NotifyGraphOfVaultChange();
+            Assert.True(
+                SpinWait.SpinUntil(() =>
+                {
+                    PumpedDispatcher.Drain();
+                    return leaf.HighWaterForTests > 0;
+                }, TimeSpan.FromSeconds(10)),
+                "the probe marked nothing while the load was in flight");
+            ulong marked = leaf.HighWaterForTests;
+            int loads = host.Loads;
+            gate.Set();
+            host.Settle();
+            Assert.Equal(loads, host.Loads);
+            Assert.Equal(marked, leaf.HighWaterForTests);
+            Assert.Equal(ConnectionsLoadState.Ready, leaf.Publication.State);
+
+            // STRICTLY ABOVE: the fetch parks with the OLD generation in its
+            // tree, the vault moves on, the probe marks the new one; the
+            // install speaks the audible load's summary (the old tree's),
+            // reloads silently ONCE, installs the new tree and clears the mark.
+            string spokenForTheOldTree = Render(new GraphA11yEvent.GraphNeighborhoodSummary(
+                host.Session.GraphConnectionsTree(Two, 1, SlateUniffiMethods.GraphConnectionsFilter()).SummaryCounts));
+            (gate, reached) = Park(leaf);
+            host.OpenNote(Two);
+            Assert.True(reached.Wait(TimeSpan.FromSeconds(10)), "the second fetch never parked");
+            File.WriteAllText(Path.Combine(vault.Root, "high-water-new.md"), "[[2]]\n");
+            using (var cancel = new CancelToken())
+            {
+                host.Session.ScanInitial(cancel);
+            }
+            host.Workspace.NotifyGraphOfVaultChange();
+            Assert.True(
+                SpinWait.SpinUntil(() =>
+                {
+                    PumpedDispatcher.Drain();
+                    return leaf.HighWaterForTests > marked;
+                }, TimeSpan.FromSeconds(10)),
+                "the probe did not mark the moved generation");
+            loads = host.Loads;
+            host.Clear();
+            gate.Set();
+            host.Settle();
+            Assert.Equal(loads + 1, host.Loads);
+            Assert.Equal(0UL, leaf.HighWaterForTests);
+            Assert.Equal([spokenForTheOldTree], host.RelayLines);
+            Assert.NotEqual(spokenForTheOldTree, Summary(leaf));
         });
     }
 

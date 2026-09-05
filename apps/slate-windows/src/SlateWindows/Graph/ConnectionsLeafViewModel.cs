@@ -150,7 +150,7 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         _verbosity = verbosity;
         _lifecycleGeneration = lifecycleGeneration ?? (static () => 0);
         // Design B / B-15: the fixed local filter is core's, fetched ONCE.
-        CrossingsForTests["graph_connections_filter"]++;
+        CountCrossing("graph_connections_filter");
         _filter = SlateUniffiMethods.GraphConnectionsFilter();
         _actionsByKind = new Dictionary<GraphNodeKind, IReadOnlyList<GraphRowActionSpec>>
         {
@@ -175,7 +175,7 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
 
     private IReadOnlyList<GraphRowActionSpec> FetchRowActions(GraphNodeKind kind)
     {
-        CrossingsForTests["graph_row_actions"]++;
+        CountCrossing("graph_row_actions");
         return SlateUniffiMethods.GraphRowActions(kind);
     }
 
@@ -185,7 +185,7 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     /// and that only four producers reach its argument.</summary>
     private uint ClampDepth(uint requested)
     {
-        CrossingsForTests["graph_clamp_connections_depth"]++;
+        CountCrossing("graph_clamp_connections_depth");
         return SlateUniffiMethods.GraphClampConnectionsDepth(requested);
     }
 
@@ -279,6 +279,17 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     /// <summary>Test seam: rewrite the envelope the body returns — the
     /// receiver's rejections are stated over its echoes (Term 8).</summary>
     internal Func<ConnectionsLoadEnvelope, ConnectionsLoadEnvelope>? EnvelopeForTests { get; set; }
+
+    /// <summary>Every FFI crossing the facts count takes this ONE locked
+    /// increment, whichever thread crosses — the pool's fetch and the
+    /// owner's apply can overlap (codoki on PR #1184).</summary>
+    private void CountCrossing(string name)
+    {
+        lock (CrossingsForTests)
+        {
+            CrossingsForTests[name]++;
+        }
+    }
 
     internal Dictionary<string, int> CrossingsForTests { get; } = new(StringComparer.Ordinal)
     {
@@ -472,10 +483,7 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         StartWorkAlwaysAsync(
             () =>
             {
-                lock (CrossingsForTests)
-                {
-                    CrossingsForTests["graph_generation"]++;
-                }
+                CountCrossing("graph_generation");
                 return _session.GraphGeneration();
             },
             generation =>
@@ -544,20 +552,14 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         ConnectionsLoadEnvelope envelope;
         try
         {
-            lock (CrossingsForTests)
-            {
-                CrossingsForTests["graph_connections_tree"]++;
-            }
+            CountCrossing("graph_connections_tree");
             GraphConnectionsTree tree = token.Session.GraphConnectionsTree(request.Root, request.Depth, request.Filter);
             NoteLoadBundle? bundle = null;
             if (request.Depth == 1)
             {
                 bundlePath = request.Root;
                 bundlePaging = BundlePagingSpec;
-                lock (CrossingsForTests)
-                {
-                    CrossingsForTests["note_load_bundle"]++;
-                }
+                CountCrossing("note_load_bundle");
                 bundle = token.Session.NoteLoadBundle(bundlePath, bundlePaging);
             }
             FetchGateForTests?.Invoke();
@@ -632,7 +634,15 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
                 return;
             }
             Install(ConnectionsPublication.Error(request, failure));
-            AnnounceIfSpeaking(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.ConnectionsLoadFailed(failure)));
+            // The policy rides the token (Term 5) for the failure line as for
+            // the summary: the mac's `speak = announce && active`
+            // (`AppState+Connections.swift:118, 135`) — a silent reload that
+            // fails installs Error and says nothing (B-10's probe row; the
+            // MODEL found the line spoken on a deleted root, TGB-8).
+            if (token.Announce == GraphAnnouncePolicy.Summary)
+            {
+                AnnounceIfSpeaking(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.ConnectionsLoadFailed(failure)));
+            }
             return;
         }
         if (!bundleEchoAgrees || (wantBundle && envelope.Bundle is null) || envelope.Tree is null)
@@ -640,7 +650,7 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
             return;
         }
         GraphConnectionsTree tree = envelope.Tree;
-        CrossingsForTests["graph_stable_key_for_path"]++;
+        CountCrossing("graph_stable_key_for_path");
         if (tree.Depth != request.Depth
             || !string.Equals(tree.CenterKey, SlateUniffiMethods.GraphStableKeyForPath(request.Root), StringComparison.Ordinal))
         {

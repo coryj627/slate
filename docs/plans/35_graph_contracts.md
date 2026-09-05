@@ -5872,7 +5872,7 @@ change, a depth change, root → none through the tab close, the Tasks
 Review command, focus entering the anchor) crossed with the pane
 (visible, collapsed), the leaf (Connections, another), the root (a
 note, none), the presentation (current, stale) and the in-flight flag:
-192 cells, of which 69 are not states of the system and the model NAMES
+288 cells (the counts first recorded here, 192 and 69, were miscounted — corrected in the pass-1 sweep, TGB-8), of which 165 are not states of the system and the model NAMES
 why (no root has no stale presentation and nothing in flight; a root
 transition clears the flag, so stale never has a load in flight; an
 active and mounted leaf with a root has loaded, so stale is only ever
@@ -5895,6 +5895,91 @@ code; (ii) an open that creates the FIRST tab posts the shell's
 carries both. Mutations only the model catches, each restored byte for
 byte: the workspace's ACTIVE predicate consulting the pane; the graph
 family's panel line skipped when Show revealed the pane — each caught by the model fact and by no other.
+
+**TGB-8 — Post-implementation pass 1 (IPB-1..5) and codoki's two items:
+the sweep.** PR #1184 opened on 5c3a08b with CI green on the head (13
+checks), codoki APPROVED with two items, zero threads; codex's first
+post-implementation pass over the branch (xhigh, PR A's precedent)
+returned five findings — two blockers, three majors, no minor — and
+the verdict "not mergeable as is". Each, and its discharge in code:
+(IPB-1, blocker) the create's `Exists` and `Failed` arms posted
+`GraphBlocked{NoteCreateFailed}` through the SHELL seam, bypassing the
+one relay's High flush (A-10 as amended) — a filter count or a leaf
+line pending on the relay could speak after the failure; both arms
+now ride `_graphRelay`, the NoteCreated post alone stays A-8's direct
+one, the seam census counts that method's graph-family creations
+without `Distinct()` (a second is a second entry), and
+`AFailedCreateRidesTheRelayAndItsHighFlushDropsAPendingClass` queues
+a filter count on the workspace's relay, fails a create through a
+deterministic creator, and proves the count dropped and the failure
+the only line; PR A's existing-destination fact reads the relay's
+rendered line instead of the shell seam. (IPB-2, blocker) Bases' Show
+backlinks — its row command and its surface seam, two copies —
+opened the note in an OUTER mutation of its own, so the boundary
+reconciled the Connections root while the leaf was still active and
+mounted and loaded audibly, then switched to Backlinks: a route whose
+final leaf forbids the load (Term 3, B-10's final-state rule). ONE
+helper, `ShowBacklinksFor`, wraps the open, the switch, the reveal and
+the consume in one outer `RunWorkspaceMutation`, the Bases line after
+it; both sites call it; the route joined the model (ShowBacklinks:
+zero loads, STALE, the new root) and a mutation restores the old
+shape and fails the model. (IPB-3, major) TGB-7's cardinalities were
+miscounted — five binary dimensions over nine routes are 288 cells,
+165 named, 123 driven, not 192 and 69 (the record is corrected in
+place) — and the fact pinned only `driven >= 100`; and the nine
+routes were far short of B-10's worked rows. The model now drives
+TWENTY-FIVE routes: the leaf switch both ways, Show, the pane toggle,
+a root change, a depth change and Deeper at the bound, root → none,
+the Tasks Review and History commands, Bases' Show backlinks, focus
+entry, tab activation to another note and to a duplicate, the tab
+close with another successor and with a duplicate's, the split, the
+group close onto the same root and onto another, the ghost create and
+its failure, the rename and the delete of the root, the launch and the
+shutdown — 800 cells, 498 named as not states of the system (each
+with its reason: no root has no stale presentation or load in flight;
+a root transition clears the flag; an active mounted leaf with a root
+has loaded; focus enters only a shown leaf; the tab routes need a
+second tab; a ghost row is activated from a rendered tree; a launch
+restores no presentation, no load in flight and, the pane's visibility
+not being persisted, comes up mounted), 302 driven, the four totals
+and the route count pinned as literals; the loads are compared after
+the settle (a probe's load is asynchronous) and the root by name. The
+extension found TWO things in the code and two shell lines: (a) a
+SILENT reload that fails spoke its failure line whenever the leaf was
+active — the mac's `speak = announce && active` gates the failure as
+it gates the summary (`AppState+Connections.swift:118, 135`), B-10's
+probe row says "nothing" — so the receiver's failure arm now consults
+the token's policy like its success arm (Term 5), pinned by the
+DeleteRoot cells and a mutation; (b) nothing else in the code — the
+rest were the derivation's: the close's `TabFocused` precedes
+`TabClosed`; a retarget and a launch re-derive the outline, whose
+`OutlineCount` is the shell's line; the delete is driven as the
+lifecycle sees an external one (core's own delete trashes through
+COM and wants a thread of its own). Rows the model does not drive and
+what pins them: the directional-focus routes (the journey), the
+table's sort and count against the one relay (GraphAnnouncerTests'
+cross-surface flush), the non-note tab's own lines (PR A's facts), the
+vault replacement (the lifecycle fact and Launch). (IPB-4, major) the
+instance census read a target-typed `new(...)` by the enclosing
+method's return type first, so `GraphAnnouncer extra = new(...)`
+inside a void method was invisible: the census now compiles the
+shell's own trees (no metadata — the shell's types bind, the
+framework's do not, and the relay is the shell's) and asks the
+semantic model, the enclosing declaration its fallback, the local's
+before the method's; the exact shape is a mutation. (IPB-5, major)
+the trigger census tested the receiver's SPELLING (`Connections` or
+`leaf`) and the reveal census any consume in the member: the receiver
+is now RESOLVED through the member's locals (a local bound to the leaf
+or to its construction, a local or parameter declared as the leaf) and
+the consume must FOLLOW the assignment in its own block or an
+enclosing one; a call through a local and a consume before the reveal
+are mutations. Codoki: every FFI-crossing counter takes one locked
+increment (`CountCrossing`); the high-water mark's fact parks a
+fetch, marks, and proves the silent reload fires only when the mark is
+strictly above the installed tree's generation and clears afterwards,
+an equal mark reloading nothing — two mutations (`>=`; the clear
+dropped). Gates: `cargo fmt` clean, clippy clean, the crates byte-identical to ac6504b's (the workspace's run of 2000 passed with the six known local failures stands); `dotnet format` applied; the whole Windows test project on a fresh build, 2232 passed (the model's 302 cells, 78 s, among them); the accessibility project built and the leaf journey passed twice in the foreground, 10 s each; benchmarks build; CI and codoki on the push are the oracle. Mutations, each restored byte for byte, each
+caught by the named fact: the Failed arm back through the shell seam (`AFailedCreateRidesTheRelayAndItsHighFlushDropsAPendingClass`) and the Exists arm too (the seam census's one-site count); Show backlinks outside the mutation (the model's ShowBacklinks cells); a target-typed second relay in a void method (`ExactlyOneGraphRelayIsConstructedInTheShell`); a trigger through a local (`EveryTriggerEntryPointHasExactlyTheCallersRuleCNames`); the consume before the reveal (`EveryPaneRevealConsumesThePendingMountAndTheConstructorSeedsIt`); the silent failure spoken (the model's DeleteRoot cells); the high-water mark's equal reload and its clear dropped (`TheHighWaterMarkReloadsOnlyWhenStrictlyAboveTheInstalledTreeAndClearsAfterwards`) — nine, none survived.
 
 ### Tests that pin PR B (slice B1)
 
@@ -5941,8 +6026,8 @@ family's panel line skipped when Show revealed the pane — each caught by the m
   the recorded events equal to the derivation; the away → back and hide
   → away completions —
   `TheModelOfTermsTwoToNineDerivesEveryRoutesTimelineAcrossEveryState`,
-  nine routes, 123 cells driven, 69 named as not states of the system
-  (TGB-7).
+  twenty-five routes, 800 cells, 302 driven, 498 named as not states
+  of the system, the totals pinned (TGB-7, TGB-8).
 - GraphAnnouncerTests gains the stored fire-time gate (0a-9's suite:
   queue, leave effective, fire, nothing) and the cross-surface High
   flush; GraphDocumentTests' retirement fact asserts the relay is

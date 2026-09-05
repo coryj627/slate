@@ -125,12 +125,17 @@ internal sealed partial class WorkspaceViewModel
                 }
                 break;
             case NoteCreateResult.Exists exists:
-                _announce(new A11yEvent.Graph(new GraphA11yEvent.GraphBlocked(
-                    new GraphBlockedReason.NoteCreateFailed(exists.Message))));
+                // The failure is a HIGH graph event and rides the workspace's
+                // one relay, whose High flush drops every pending class across
+                // both surfaces (A-10 as amended); the NoteCreated line above
+                // is A-8's one direct post (codex post-implementation pass 1,
+                // IPB-1: the failure arms used to bypass the flush).
+                _graphRelay.Announce(new GraphA11yEvent.GraphBlocked(
+                    new GraphBlockedReason.NoteCreateFailed(exists.Message)));
                 break;
             case NoteCreateResult.Failed failed:
-                _announce(new A11yEvent.Graph(new GraphA11yEvent.GraphBlocked(
-                    new GraphBlockedReason.NoteCreateFailed(failed.Message))));
+                _graphRelay.Announce(new GraphA11yEvent.GraphBlocked(
+                    new GraphBlockedReason.NoteCreateFailed(failed.Message)));
                 break;
             default:
                 // Unavailable: the session is shutting down — a retired-token drop.

@@ -52,18 +52,39 @@ public sealed class ConnectionsLeafCensus
         return "<top level>";
     }
 
-    /// <summary>Invocations of a member on the leaf — <c>Connections.X(</c>
-    /// in the shell, or <c>X(</c> / <c>this.X(</c> inside the leaf itself.</summary>
+    /// <summary>Invocations of a member on the leaf, the receiver RESOLVED
+    /// (codex post-implementation pass 1, IPB-5 — the receiver's spelling
+    /// was the test): <c>Connections.X(</c> and <c>this.Connections.X(</c>;
+    /// a local that a same-member initialiser binds to the leaf
+    /// (<c>var document = Connections; document.X()</c>) or to its
+    /// construction; a local or parameter declared as
+    /// <c>ConnectionsLeafViewModel</c>.</summary>
     private static IEnumerable<(string Relative, string Owner, string Member)> LeafCalls(string member)
     {
         foreach ((string relative, CSharpSource source) in ShellSources())
         {
             foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                if (call.Expression is MemberAccessExpressionSyntax access
-                    && access.Name.Identifier.ValueText == member
-                    && (CSharpSource.Normalize(access.Expression).EndsWith("Connections", StringComparison.Ordinal)
-                        || CSharpSource.Normalize(access.Expression).EndsWith("leaf", StringComparison.Ordinal)))
+                if (call.Expression is not MemberAccessExpressionSyntax access
+                    || access.Name.Identifier.ValueText != member)
+                {
+                    continue;
+                }
+                SyntaxNode scope = call.Ancestors().FirstOrDefault(a => a is MemberDeclarationSyntax) ?? source.Root;
+                ExpressionSyntax receiver = CSharpSource.Resolve(access.Expression, scope);
+                string text = CSharpSource.Normalize(receiver);
+                bool isTheLeaf = text == "Connections"
+                    || text.EndsWith(".Connections", StringComparison.Ordinal)
+                    || (receiver is ObjectCreationExpressionSyntax created
+                        && created.Type.ToString().EndsWith("ConnectionsLeafViewModel", StringComparison.Ordinal));
+                bool typedAsTheLeaf = receiver is IdentifierNameSyntax name && scope.DescendantNodes().Any(node =>
+                    (node is ParameterSyntax parameter
+                        && parameter.Identifier.ValueText == name.Identifier.ValueText
+                        && parameter.Type?.ToString() == "ConnectionsLeafViewModel")
+                    || (node is VariableDeclarationSyntax declaration
+                        && declaration.Type.ToString() == "ConnectionsLeafViewModel"
+                        && declaration.Variables.Any(v => v.Identifier.ValueText == name.Identifier.ValueText)));
+                if (isTheLeaf || typedAsTheLeaf)
                 {
                     yield return (relative, OwnerOf(call), member);
                 }
@@ -154,8 +175,18 @@ public sealed class ConnectionsLeafCensus
                 }
                 writers++;
                 SyntaxNode? scope = assignment.Ancestors().FirstOrDefault(a => a is MethodDeclarationSyntax or ConstructorDeclarationSyntax or PropertyDeclarationSyntax or AccessorDeclarationSyntax);
-                bool consumes = scope is not null && scope.DescendantNodes().OfType<InvocationExpressionSyntax>()
-                    .Any(call => CSharpSource.Normalize(call.Expression).EndsWith("ConsumePendingMount", StringComparison.Ordinal));
+                // The consume must FOLLOW the assignment on every path (IPB-5):
+                // a later statement of the assignment's own block or of a block
+                // enclosing it — a consume before the assignment, or inside a
+                // sibling branch, reaches nothing at the route's end.
+                StatementSyntax? assigned = assignment.Ancestors().OfType<StatementSyntax>().FirstOrDefault();
+                bool consumes = scope is not null && assigned is not null && scope.DescendantNodes().OfType<InvocationExpressionSyntax>()
+                    .Where(call => CSharpSource.Normalize(call.Expression).EndsWith("ConsumePendingMount", StringComparison.Ordinal))
+                    .Select(call => call.Ancestors().OfType<StatementSyntax>().FirstOrDefault())
+                    .Any(consume => consume is not null
+                        && consume.SpanStart > assigned.Span.End
+                        && consume.Parent is not null
+                        && (ReferenceEquals(consume.Parent, assigned.Parent) || assigned.Ancestors().Contains(consume.Parent)));
                 bool insideMutation = assignment.Ancestors().OfType<InvocationExpressionSyntax>()
                     .Any(call => CSharpSource.Normalize(call.Expression).EndsWith("RunWorkspaceMutation", StringComparison.Ordinal));
                 // The setter itself is the arm, not a route.

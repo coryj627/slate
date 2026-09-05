@@ -8,6 +8,7 @@
 // typed column header, no mutable shadow of the view state.
 
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace SlateWindows.Tests.Censuses;
@@ -273,7 +274,7 @@ public sealed class GraphAnnouncerCensus
     public void ExactlyOneGraphRelayIsConstructedInTheShell()
     {
         string shellRoot = SourceText.ShellSourceRoot();
-        var creations = new List<string>();
+        var sources = new List<(string Relative, CSharpSource Source)>();
         foreach (string file in Directory.EnumerateFiles(shellRoot, "*.cs", SearchOption.AllDirectories))
         {
             string relative = Path.GetRelativePath(shellRoot, file).Replace('\\', '/');
@@ -282,7 +283,22 @@ public sealed class GraphAnnouncerCensus
             {
                 continue;
             }
-            CSharpSource source = CSharpSource.LoadPath(file);
+            sources.Add((relative, CSharpSource.LoadPath(file)));
+        }
+        // A target-typed `new(...)` is typed by its TARGET — a local's
+        // declared type, a return type, an assignment's member, a
+        // parameter — which only BINDING resolves (codex post-implementation
+        // pass 1, IPB-4: the method's return type was read first, so a
+        // `GraphAnnouncer extra = new(...)` inside a void method was
+        // invisible). The census compiles the shell's own trees — no
+        // metadata: the shell's types bind, the framework's do not, and the
+        // relay is the shell's — and asks the semantic model; a creation
+        // binding yields nothing for falls back to the nearest enclosing
+        // declaration's written type, the local's before the method's.
+        var compilation = CSharpCompilation.Create("shell-census", sources.Select(s => s.Source.Root.SyntaxTree));
+        var creations = new List<string>();
+        foreach ((string relative, CSharpSource source) in sources)
+        {
             foreach (ObjectCreationExpressionSyntax creation in source.Root
                 .DescendantNodes()
                 .OfType<ObjectCreationExpressionSyntax>())
@@ -295,20 +311,23 @@ public sealed class GraphAnnouncerCensus
                 string firstArgument = creation.ArgumentList?.Arguments.FirstOrDefault()?.Expression.ToString() ?? "<none>";
                 creations.Add($"{relative}:{owner?.Identifier.ValueText ?? "<top level>"}({firstArgument})");
             }
-            // A target-typed `new(...)` is a creation too (the relay's own
-            // helper uses it): its declared type is the method's return type.
+            SemanticModel model = compilation.GetSemanticModel(source.Root.SyntaxTree);
             foreach (ImplicitObjectCreationExpressionSyntax creation in source.Root
                 .DescendantNodes()
                 .OfType<ImplicitObjectCreationExpressionSyntax>())
             {
-                MethodDeclarationSyntax? owner = creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
-                string declared = owner?.ReturnType.ToString()
-                    ?? creation.Ancestors().OfType<VariableDeclarationSyntax>().FirstOrDefault()?.Type.ToString()
-                    ?? string.Empty;
+                TypeInfo info = model.GetTypeInfo(creation);
+                ITypeSymbol? bound = info.Type is { TypeKind: not TypeKind.Error } type ? type : info.ConvertedType;
+                string declared = bound is { TypeKind: not TypeKind.Error }
+                    ? bound.Name
+                    : creation.Ancestors().OfType<VariableDeclarationSyntax>().FirstOrDefault()?.Type.ToString()
+                        ?? creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault()?.ReturnType.ToString()
+                        ?? string.Empty;
                 if (!declared.EndsWith("GraphAnnouncer", StringComparison.Ordinal))
                 {
                     continue;
                 }
+                MethodDeclarationSyntax? owner = creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
                 string firstArgument = creation.ArgumentList.Arguments.FirstOrDefault()?.Expression.ToString() ?? "<none>";
                 creations.Add($"{relative}:{owner?.Identifier.ValueText ?? "<top level>"}({firstArgument})");
             }

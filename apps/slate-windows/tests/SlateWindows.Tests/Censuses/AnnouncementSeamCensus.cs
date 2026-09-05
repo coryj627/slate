@@ -739,8 +739,11 @@ public sealed class AnnouncementSeamCensus
                 }
             }
         }
+        // ONE site, counted, not distinct (IPB-1): the completion's single
+        // NoteCreated post; a second graph-family creation in that method —
+        // the failure arms once posted there — is a second entry and fails.
         Assert.Equal(
             ["WorkspaceViewModel.GraphCreate.cs:GraphNoteCreationCompleted"],
-            outsideSites.Distinct().OrderBy(site => site, StringComparer.Ordinal));
+            outsideSites.OrderBy(site => site, StringComparer.Ordinal));
     }
 }

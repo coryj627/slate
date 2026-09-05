@@ -45,6 +45,20 @@ public sealed partial class ConnectionsLeafTests
         public void SpeakCaveat(string caveat) => Caveats.Add(caveat);
     }
 
+    /// <summary>A creator whose every attempt FAILS with a fixed message —
+    /// the typed <c>Failed</c> arm, deterministic (IPB-1's regression).</summary>
+    private sealed class FailingCreator(string message) : FileManagement.ISurfaceNoteCreator
+    {
+        public FileManagement.NoteCreateResult TryCreateNote(string path, string content) =>
+            new FileManagement.NoteCreateResult.Failed(message);
+
+        public void NoteLanded(string path) =>
+            throw new InvalidOperationException("a failing create never lands");
+
+        public void SpeakCaveat(string caveat) =>
+            throw new InvalidOperationException("a failing create has no caveat");
+    }
+
     private static bool IsNoteCreated(A11yEvent @event) =>
         @event is A11yEvent.Graph { Event: GraphA11yEvent.GraphStatus { Note: GraphStatusNote.NoteCreated } };
 
@@ -92,6 +106,43 @@ public sealed partial class ConnectionsLeafTests
             Assert.DoesNotContain(host.ShellEvents, e => e is A11yEvent.OpenedFile);
             Assert.Equal(ConnectionsLoadState.Ready, leaf.Publication.State);
             Assert.Equal([Summary(leaf)], host.RelayLines);
+        });
+    }
+
+    /// <summary>A-10 as amended, codex post-implementation pass 1 (IPB-1):
+    /// the create's failure line is a HIGH graph event through the
+    /// workspace's ONE relay, so a class pending on that relay — the graph
+    /// table's filter count rides the same relay — is DROPPED by its flush
+    /// and never spoken after the failure; nothing lands, no NoteCreated,
+    /// the root unmoved.</summary>
+    [Fact]
+    public void AFailedCreateRidesTheRelayAndItsHighFlushDropsAPendingClass()
+    {
+        using GraphVault vault = GraphVault.Copy("ghost-create-fails");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            ConnectionsLeafViewModel leaf = host.Leaf;
+            host.Workspace.GraphNoteCreator = new FailingCreator("injected failure");
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            (GraphConnectionRow ghost, _) = FirstGhost(leaf);
+            host.Clear();
+            GraphAnnouncer relay = host.Workspace.GraphRelayForTests;
+            relay.Announce(new GraphA11yEvent.GraphFilterCount(3, 9));
+            Assert.Equal(1, relay.PendingForTests);
+
+            leaf.Activate(ghost, newTab: false);
+            DrainCreate(host);
+
+            string failure = Render(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.NoteCreateFailed("injected failure")));
+            Assert.Equal([failure], host.RelayLines);
+            Assert.Equal(0, relay.PendingForTests);
+            relay.FlushForTests();
+            Assert.Equal([failure], host.RelayLines);
+            Assert.DoesNotContain(host.ShellEvents, IsNoteCreated);
+            Assert.Equal(Hub, leaf.Root);
         });
     }
 

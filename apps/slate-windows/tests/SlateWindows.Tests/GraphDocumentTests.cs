@@ -800,15 +800,20 @@ public sealed class GraphDocumentTests
             string expectedPath = SlateUniffiMethods.GraphGhostNotePath(ghost.Label);
             File.WriteAllText(Path.Combine(vault.Root, expectedPath), "# taken\n");
             host.ShellEvents.Clear();
+            host.GraphLines.Clear();
 
             document.Activate(ghost, modified: false);
             PumpedDispatcher.PumpUntilDrained(host.Workspace.DrainGraphNoteCreationForTests());
             PumpedDispatcher.Drain();
 
-            A11yEvent blocked = Assert.Single(host.ShellEvents, e => e is A11yEvent.Graph);
-            var reason = Assert.IsType<GraphA11yEvent.GraphBlocked>(((A11yEvent.Graph)blocked).Event);
-            var failed = Assert.IsType<GraphBlockedReason.NoteCreateFailed>(reason.Reason);
-            Assert.False(string.IsNullOrEmpty(failed.Message));
+            // The failure is a HIGH graph event through the workspace's ONE
+            // relay (A-10 as amended; W6-2 PR B's post-implementation pass 1,
+            // IPB-1) — rendered there, never a direct shell post.
+            string blocked = Assert.Single(host.GraphLines);
+            string prefix = GraphAnnouncer.RenderLabel(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.NoteCreateFailed(string.Empty)));
+            Assert.StartsWith(prefix, blocked, StringComparison.Ordinal);
+            Assert.True(blocked.Length > prefix.Length, "the failure line carries no message");
+            Assert.DoesNotContain(host.ShellEvents, e => e is A11yEvent.Graph);
             Assert.Empty(creator.Landed);
         });
     }

@@ -37,6 +37,10 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>The workspace's ONE graph relay (A-10 as amended, W6-2 PR B
     /// BD-12): assigned once in the constructor by <see cref="NewGraphRelay"/>.</summary>
     private readonly GraphAnnouncer _graphRelay;
+
+    /// <summary>The workspace's one relay, for the facts that queue a
+    /// pending class on it and prove a High flush drops it (IPB-1).</summary>
+    internal GraphAnnouncer GraphRelayForTests => _graphRelay;
     private GraphActivationCause _graphCause = GraphActivationCause.Activation;
     private bool _graphWasEffective;
     private WorkspaceTabViewModel? _graphEffectiveTab;
