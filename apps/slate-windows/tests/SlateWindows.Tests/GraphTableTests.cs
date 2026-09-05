@@ -343,18 +343,19 @@ public sealed class GraphTableTests
             try
             {
                 grid.UpdateLayout();
-                // The bound is the frozen text's (A-15; IPD-3): the VIEWPORT's
-                // row capacity plus the PANEL's cache length, both READ from
-                // the realised panel — never a literal, never a share of the
-                // population. The substrate scrolls by item with a one-item
-                // cache each side; WPF's Standard virtualisation cleans up
-                // containers in a deferred pass, so up to a few viewports of
-                // containers are live between cleanups (this box: 70 over a
-                // 15-row viewport). Six viewports-plus-cache is the ceiling
-                // a bounded panel stays under and a panel that never unloads
-                // exceeds within a handful of pages.
+                // The capacity is the frozen text's (A-15): the VIEWPORT's row
+                // capacity plus the PANEL's cache length, both READ from the
+                // realised panel — never a literal, never a share of the
+                // population. The substrate virtualises rows in STANDARD mode
+                // and scrolls by item with a one-item cache each side; all
+                // four are asserted, so a substrate that changed any of them
+                // fails here rather than silently widening the bound.
                 System.Windows.Controls.VirtualizingStackPanel? panel = FindPanel(grid);
                 Assert.NotNull(panel);
+                Assert.True(grid.EnableRowVirtualization, "the grid must virtualise its rows");
+                Assert.Equal(
+                    System.Windows.Controls.VirtualizationMode.Standard,
+                    System.Windows.Controls.VirtualizingPanel.GetVirtualizationMode(grid));
                 Assert.Equal(System.Windows.Controls.ScrollUnit.Item, System.Windows.Controls.VirtualizingPanel.GetScrollUnit(grid));
                 int viewportRows = (int)Math.Ceiling(panel.ViewportHeight);
                 System.Windows.Controls.VirtualizationCacheLength cache = System.Windows.Controls.VirtualizingPanel.GetCacheLength(grid);
@@ -365,21 +366,24 @@ public sealed class GraphTableTests
                     _ => throw new InvalidOperationException("a pixel cache length has no row capacity"),
                 };
                 int capacity = viewportRows + (int)Math.Ceiling(cacheItems);
-                // The bound is the CAPACITY the frozen text names — the
-                // viewport's rows plus the panel's cache, read above — times
-                // the panel's cleanup cadence (IPE-2): WPF's Standard
-                // virtualisation does not clean containers up on every
-                // measure or on a timer; measured here it lets a jump's new
-                // page join the old ones until about four pages are live
-                // (70 over a capacity of 17), then unloads back to one page,
-                // whatever is pumped in between. Five capacities is the
-                // smallest integer ceiling above that cadence; a panel that
-                // never unloads passes it within five pages, so the claim
-                // "bounded by the capacity, never the row count" still bites.
-                int liveBound = capacity * 5;
+                // AT REST the panel holds the capacity itself, with an
+                // allowance of two for a partially visible row at each edge:
+                // that is A-15's sentence, asserted for the first page and
+                // again at the end, where nothing is in flight (IPF-2).
+                int restingBound = capacity + 2;
+                // WHILE PAGING, WPF's Standard virtualisation defers its
+                // cleanup: a jump's new containers join the old ones until
+                // the panel's own threshold trips, and no public API forces
+                // that pass (pumping does not). Measured here it peaks near
+                // four capacities before falling back to one. Five capacities
+                // is the transient ceiling — a stated empirical allowance
+                // over the contract's resting bound, not a reading of it —
+                // and a panel that never unloads exceeds it within five
+                // pages, which the sweep's `ipd3-never-unload` confirms.
+                int pagingBound = capacity * 5;
                 Assert.True(viewportRows > 0 && viewportRows < document.Publication.Rows.Count / 10, $"the viewport holds {viewportRows} rows");
                 int live = loaded - unloaded;
-                Assert.True(live > 0 && live <= liveBound, $"{live} live containers for the first page against a capacity of {capacity}");
+                Assert.True(live > 0 && live <= restingBound, $"{live} live containers for the first page against a capacity of {capacity}");
                 // Page through: the live count stays bounded, never the row count.
                 for (int page = 0; page < 20; page++)
                 {
@@ -388,19 +392,22 @@ public sealed class GraphTableTests
                     // A background frame for whatever cleanup the panel deferred.
                     PumpedDispatcher.Drain();
                     Assert.True(
-                        loaded - unloaded <= liveBound,
-                        $"{loaded - unloaded} live containers after page {page} against a bound of {liveBound} ({viewportRows} rows in the viewport, {cacheItems} cached)");
+                        loaded - unloaded <= pagingBound,
+                        $"{loaded - unloaded} live containers after page {page} against a bound of {pagingBound} ({viewportRows} rows in the viewport, {cacheItems} cached)");
                 }
                 grid.ScrollIntoView(document.Publication.Rows[^1]);
                 grid.UpdateLayout();
                 PumpedDispatcher.Drain();
                 Assert.True(
-                    loaded - unloaded <= liveBound,
-                    $"{loaded - unloaded} live containers at the end against a bound of {liveBound}");
+                    loaded - unloaded <= pagingBound,
+                    $"{loaded - unloaded} live containers at the end against a bound of {pagingBound}");
                 // Unloading HAPPENED — a panel that only realises would have
                 // twenty pages live — and never every row.
                 Assert.True(unloaded > 0, "no container was ever unloaded");
                 Assert.True(loaded < document.Publication.Rows.Count, "every row was realized");
+                // The DISTANT containers are gone: ten thousand rows from the
+                // viewport, the first row holds no container at all (IPF-2).
+                Assert.Null(grid.ItemContainerGenerator.ContainerFromItem(document.Publication.Rows[0]));
                 // Both kinds were realised along the way (the ghosts lead
                 // under links-in descending; the notes close the table).
                 Assert.Contains(GraphNodeKind.Ghost, kindsRealized);

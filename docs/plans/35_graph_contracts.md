@@ -4584,6 +4584,62 @@ captured under `Graph/` (the announcer census); the whole sweep re-run:
 fresh build; `dotnet format` clean; the graph journey passed locally in 8 seconds; the
 benchmarks and the accessibility projects build. The post-implementation loop has now run five passes, each returning fewer and lesser findings than the last (thirteen, ten, five, five, five; no blocker since the second) while the gate the program names has been met on two consecutive heads. A sixth pass runs over this commit; by the standing precedent its findings, if any, are carried in the PR conversation as the owner's ledger rather than as further commits — precedent applied; the owner may overrule.
 
+**TGA-14 — The sixth pass's ledger, discharged by the owner's word.**
+TGA-13 carried the sixth pass's findings as a ledger on the PR rather
+than as commits, by the standing precedent; the owner read it and said
+proceed, so IPF-1..6 are discharged here by code. The gate stood met on
+`61e3982` throughout — thirteen CI lanes green, codoki auto-approved on
+that head, zero unresolved threads — and none of the six was a product
+defect: (IPF-1, A-2) the dead-dispatcher fact shut its dispatcher down
+BEFORE the body posted, so the HasShutdownStarted refusal returned
+first and the `DispatcherOperation.Aborted` withdrawal the record
+claimed was never reached — a second fact now occupies the dispatcher
+thread inside a blocking operation, waits on the queued seam to prove
+the apply was ENQUEUED behind it, and lets that operation shut the
+dispatcher down, so the pending operation is genuinely aborted; the
+refusal fact stays beside it as the other arm; (IPF-2, A-15) the
+five-capacity ceiling had been applied to the FIRST page too, where
+nothing is in flight and the frozen sentence admits no excess — the
+first page and the resting count are back to the capacity plus two, the
+paging ceiling is stated for what it is (an empirical allowance over the
+contract's resting bound, five capacities against a measured peak near
+four, not a reading of "the viewport's row capacity plus the panel's
+cache length"), the stale "six capacities" comment is gone, and the fact
+now also asserts row virtualisation ON in STANDARD mode, the scroll unit,
+the realised cache values, that unloading happened, and that the first
+row holds NO container once the reader is ten thousand rows away;
+(IPF-3, A-2) the owner dispatcher was inferred from "a dispatcher
+context is constructed on its dispatcher's thread", which
+DispatcherSynchronizationContext does not guarantee — it is now a
+CONSTRUCTOR parameter, named only by callers that know it (the graph
+document when it chooses the context; the base constructor when the
+context is the one current on this thread), and a context handed in
+names none and posts through itself, pinned by a fact that hands in a
+context targeting another thread's dispatcher and asserts the apply
+lands THERE; (IPF-4) the blocking-context fact read a pool timeout as
+lock inversion — a dedicated thread with an entered barrier, a release
+in `finally` and a join; (IPF-5) the ownership comment still claimed
+registration and posting were one locked transition and that no callback
+is posted after the flip — corrected to what the code does: the post is
+outside the lock, a callback CAN be posted after the flip, and it fails
+to claim; (IPF-6, A-17) the rendered-delegate rule proved a spelling —
+under `Graph/` no declaration may take that name, and the one permitted
+reference must sit in the workspace's own `NewGraphDocument`. Mutations
+added: the aborted operation left unwithdrawn, the virtualisation mode
+switched to Recycling, the foreign dispatcher inferred, the rendered
+delegate shadowed by a local; the whole sweep re-run: 60 caught
+of 60. One mutant was withdrawn as EQUIVALENT rather than
+counted: widening the first page's bound from the resting one to the
+paging ceiling is undetectable on this fixture, because the page
+realises sixteen containers against bounds of seventeen and
+eighty-five — no test that passes today can tell the two apart, and the
+policy the capacity is read from is pinned by the Recycling mutant
+instead. Gates: 2149 Windows facts on a
+fresh build; `dotnet format` clean; the graph journey passed locally in 8 seconds; the
+benchmarks and the accessibility projects build. The loop closes here:
+six passes, 13 → 10 → 5 → 5 → 5 → 6 findings, no blocker since the
+second, no product defect since the fourth.
+
 ### Tests that pin PR A
 
 - Windows facts: GraphDocumentTests (A-1, A-2, A-3, A-4, A-7, A-8, A-9,

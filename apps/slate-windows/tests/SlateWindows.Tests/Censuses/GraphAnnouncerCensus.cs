@@ -210,11 +210,30 @@ public sealed class GraphAnnouncerCensus
                 }
                 offenders.Add($"{label}: reference {reference.Identifier.ValueText} outside a validated call");
             }
-            // IPE-5: the workspace's RENDERED-announcement delegate is the
-            // relay's one input — under Graph/ it is referenced exactly once,
-            // as the argument of the root `new GraphAnnouncer(…)`; any other
-            // reference (a direct call, a capture, a hand-off) is an
-            // offender, or the one-relay wall has a second door.
+            // IPE-5, IPF-6: the workspace's RENDERED-announcement delegate is
+            // the relay's one input — under Graph/ it is referenced exactly
+            // once, as the argument of the root `new GraphAnnouncer(…)` in
+            // the workspace's own `NewGraphDocument`; any other reference (a
+            // direct call, a capture, a hand-off) is an offender, or the
+            // one-relay wall has a second door. The name is the WORKSPACE
+            // FIELD's and nothing else's: no local, parameter or member of
+            // that name is declared under Graph/, so the identifier cannot
+            // be a same-named stand-in that leaves the real field unused.
+            foreach (SyntaxNode declaration in source.Root.DescendantNodes())
+            {
+                string? declared = declaration switch
+                {
+                    VariableDeclaratorSyntax variable => variable.Identifier.ValueText,
+                    ParameterSyntax parameter => parameter.Identifier.ValueText,
+                    PropertyDeclarationSyntax property => property.Identifier.ValueText,
+                    SingleVariableDesignationSyntax designation => designation.Identifier.ValueText,
+                    _ => null,
+                };
+                if (declared == "_announceRendered")
+                {
+                    offenders.Add($"{label}: a declaration named _announceRendered shadows the workspace's field");
+                }
+            }
             foreach (IdentifierNameSyntax reference in source.Root.DescendantNodes().OfType<IdentifierNameSyntax>())
             {
                 if (reference.Identifier.ValueText != "_announceRendered")
@@ -224,7 +243,9 @@ public sealed class GraphAnnouncerCensus
                 bool seedsTheRelay = reference.Parent is ArgumentSyntax argument
                     && argument.Parent is ArgumentListSyntax list
                     && list.Parent is ObjectCreationExpressionSyntax relayCreation
-                    && relayCreation.Type.ToString().EndsWith("GraphAnnouncer", StringComparison.Ordinal);
+                    && relayCreation.Type.ToString().EndsWith("GraphAnnouncer", StringComparison.Ordinal)
+                    && reference.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault()
+                        is { Identifier.ValueText: "NewGraphDocument" };
                 if (seedsTheRelay)
                 {
                     relaySeeds++;
