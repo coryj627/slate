@@ -561,27 +561,42 @@ public sealed class AnnouncementSeamCensus
         Assert.Contains("Announce", posters);
         Assert.Contains("Relay", posters);
 
-        CSharpSource document = CSharpSource.Load("Graph", "GraphDocumentViewModel.cs");
-        const string BoundaryFile = "GraphDocumentViewModel.cs";
-        string[] residue =
+        // W6-2 PR B (B-19 ii; A-10 as amended): TWO boundary files on the
+        // workspace's one relay — the graph document's and the Connections
+        // leaf's — each with its own named seams; every seam must be hit.
+        (string File, (string Member, string Why)[] Seams)[] boundaries =
         [
-            .. document.Root.DescendantNodes()
-                .OfType<PropertyDeclarationSyntax>()
-                .Where(property => property.ExpressionBody?.Expression
-                        is IdentifierNameSyntax field
-                    && field.Identifier.ValueText
-                        .EndsWith("announcer", StringComparison.OrdinalIgnoreCase))
-                .Select(property => property.Identifier.ValueText),
+            ("GraphDocumentViewModel.cs",
+            [
+                ("AnnounceStatus", "rule L's status the workspace asks for (Term 6)"),
+                ("AnnounceIfEffective", "the effective-gated announce (Term 2: speech at EFFECTIVE)"),
+                ("AnnounceFilterCountIfEffective", "the filter count through the relay's GATED entry (0a-9; A-10 as amended)"),
+                ("GridRelaySeam", "the grid's canonical events ride the relay uncoalesced"),
+                ("RelayGridEvent", "the surface's GridSorted on adoption (contract A-5)"),
+            ]),
+            ("ConnectionsLeafViewModel.cs",
+            [
+                ("AnnounceStatus", "rule C's status the workspace asks for (Term 9; B-D5)"),
+                ("AnnounceIfSpeaking", "the SPEAKING-gated announce (rule C, Term 2: ACTIVE at dispatch)"),
+            ]),
         ];
-        Assert.Equal(["AnnouncerForTests"], residue);
+        foreach ((string boundaryFile, _) in boundaries)
+        {
+            CSharpSource document = CSharpSource.Load("Graph", boundaryFile);
+            string[] residueOf =
+            [
+                .. document.Root.DescendantNodes()
+                    .OfType<PropertyDeclarationSyntax>()
+                    .Where(property => property.ExpressionBody?.Expression
+                            is IdentifierNameSyntax field
+                        && field.Identifier.ValueText
+                            .EndsWith("announcer", StringComparison.OrdinalIgnoreCase))
+                    .Select(property => property.Identifier.ValueText),
+            ];
+            Assert.Equal(["AnnouncerForTests"], residueOf);
+        }
+        string[] residue = ["AnnouncerForTests"];
 
-        (string Member, string Why)[] seams =
-        [
-            ("AnnounceStatus", "rule L's status the workspace asks for (Term 6)"),
-            ("AnnounceIfEffective", "the effective-gated announce (Term 2: speech at EFFECTIVE)"),
-            ("GridRelaySeam", "the grid's canonical events ride the relay uncoalesced"),
-            ("RelayGridEvent", "the surface's GridSorted on adoption (contract A-5)"),
-        ];
         var seamsFound = new HashSet<string>(StringComparer.Ordinal);
         var offenders = new List<string>();
         string root = Path.Combine(SourceText.ShellSourceRoot(), "Graph");
@@ -637,12 +652,16 @@ public sealed class AnnouncementSeamCensus
                     PropertyDeclarationSyntax property => property.Identifier.ValueText,
                     _ => "<top level>",
                 };
-                if (name == BoundaryFile && seams.Any(seam => seam.Member == ownerName))
+                (string Member, string Why)[]? seams = boundaries
+                    .Where(boundary => boundary.File == name)
+                    .Select(boundary => boundary.Seams)
+                    .FirstOrDefault();
+                if (seams is not null && seams.Any(seam => seam.Member == ownerName))
                 {
-                    _ = seamsFound.Add(ownerName);
+                    _ = seamsFound.Add(name + ":" + ownerName);
                     continue;
                 }
-                if (name == BoundaryFile && ownerName == "AnnouncerForTests")
+                if (seams is not null && ownerName == "AnnouncerForTests")
                 {
                     // The residue's own declaration.
                     continue;
@@ -652,10 +671,13 @@ public sealed class AnnouncementSeamCensus
         }
         Assert.True(
             offenders.Count == 0,
-            "graph code reaches the announcer's post surface outside the document's named seams: "
+            "graph code reaches the announcer's post surface outside the documents' named seams: "
             + string.Join("; ", offenders));
         string[] unusedSeams =
-            [.. seams.Where(seam => !seamsFound.Contains(seam.Member)).Select(seam => $"{seam.Member} ({seam.Why})")];
+            [.. boundaries
+                .SelectMany(boundary => boundary.Seams.Select(seam => (boundary.File, seam.Member, seam.Why)))
+                .Where(seam => !seamsFound.Contains(seam.File + ":" + seam.Member))
+                .Select(seam => $"{seam.File}:{seam.Member} ({seam.Why})")];
         Assert.True(
             unusedSeams.Length == 0,
             "a named graph seam never reached the announcer, so this census is exempting nothing there: "

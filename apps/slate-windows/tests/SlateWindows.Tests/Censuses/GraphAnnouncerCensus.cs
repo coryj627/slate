@@ -240,12 +240,15 @@ public sealed class GraphAnnouncerCensus
                 {
                     continue;
                 }
+                // A-10 as amended (W6-2 PR B, BD-12): the ONE seed is the
+                // workspace's relay, constructed in NewGraphRelay — no
+                // document constructs one any more.
                 bool seedsTheRelay = reference.Parent is ArgumentSyntax argument
                     && argument.Parent is ArgumentListSyntax list
                     && list.Parent is ObjectCreationExpressionSyntax relayCreation
                     && relayCreation.Type.ToString().EndsWith("GraphAnnouncer", StringComparison.Ordinal)
                     && reference.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault()
-                        is { Identifier.ValueText: "NewGraphDocument" };
+                        is { Identifier.ValueText: "NewGraphRelay" };
                 if (seedsTheRelay)
                 {
                     relaySeeds++;
@@ -259,6 +262,60 @@ public sealed class GraphAnnouncerCensus
             "graph code must announce through GraphAnnouncer (contract A-10), never directly:\n"
             + string.Join("\n", offenders));
         Assert.Equal(1, relaySeeds);
+    }
+
+    /// <summary>W6-2 PR B, B-19 (i) — A-10 as amended (BD-12): exactly ONE
+    /// <c>GraphAnnouncer</c> is constructed anywhere in the shell, by
+    /// declared type whatever the receiver is named, inside
+    /// <c>NewGraphRelay</c>, over the workspace's rendered seam; a second
+    /// anywhere, under any name, fails here (IGF-11, IGG-1).</summary>
+    [Fact]
+    public void ExactlyOneGraphRelayIsConstructedInTheShell()
+    {
+        string shellRoot = SourceText.ShellSourceRoot();
+        var creations = new List<string>();
+        foreach (string file in Directory.EnumerateFiles(shellRoot, "*.cs", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(shellRoot, file).Replace('\\', '/');
+            if (relative.StartsWith("obj/", StringComparison.Ordinal)
+                || relative.Contains("/obj/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            CSharpSource source = CSharpSource.LoadPath(file);
+            foreach (ObjectCreationExpressionSyntax creation in source.Root
+                .DescendantNodes()
+                .OfType<ObjectCreationExpressionSyntax>())
+            {
+                if (!creation.Type.ToString().EndsWith("GraphAnnouncer", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                MethodDeclarationSyntax? owner = creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
+                string firstArgument = creation.ArgumentList?.Arguments.FirstOrDefault()?.Expression.ToString() ?? "<none>";
+                creations.Add($"{relative}:{owner?.Identifier.ValueText ?? "<top level>"}({firstArgument})");
+            }
+            // A target-typed `new(...)` is a creation too (the relay's own
+            // helper uses it): its declared type is the method's return type.
+            foreach (ImplicitObjectCreationExpressionSyntax creation in source.Root
+                .DescendantNodes()
+                .OfType<ImplicitObjectCreationExpressionSyntax>())
+            {
+                MethodDeclarationSyntax? owner = creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
+                string declared = owner?.ReturnType.ToString()
+                    ?? creation.Ancestors().OfType<VariableDeclarationSyntax>().FirstOrDefault()?.Type.ToString()
+                    ?? string.Empty;
+                if (!declared.EndsWith("GraphAnnouncer", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                string firstArgument = creation.ArgumentList.Arguments.FirstOrDefault()?.Expression.ToString() ?? "<none>";
+                creations.Add($"{relative}:{owner?.Identifier.ValueText ?? "<top level>"}({firstArgument})");
+            }
+        }
+        Assert.Equal(
+            ["Graph/WorkspaceViewModel.Graph.cs:NewGraphRelay(_announceRendered)"],
+            creations);
     }
 
     /// <summary>The relay is the one file that renders (contract A-10):

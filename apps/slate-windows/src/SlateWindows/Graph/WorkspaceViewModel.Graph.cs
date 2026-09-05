@@ -33,6 +33,10 @@ internal enum GraphActivationCause
 internal sealed partial class WorkspaceViewModel
 {
     private GraphDocumentViewModel? _graphDocument;
+
+    /// <summary>The workspace's ONE graph relay (A-10 as amended, W6-2 PR B
+    /// BD-12): assigned once in the constructor by <see cref="NewGraphRelay"/>.</summary>
+    private readonly GraphAnnouncer _graphRelay;
     private GraphActivationCause _graphCause = GraphActivationCause.Activation;
     private bool _graphWasEffective;
     private WorkspaceTabViewModel? _graphEffectiveTab;
@@ -80,12 +84,20 @@ internal sealed partial class WorkspaceViewModel
         tab.AttachGraphDocument(_graphDocument);
     }
 
+    /// <summary>The workspace's ONE graph relay (A-10 as amended, W6-2 PR B
+    /// BD-12): the one seed the announcer census counts, constructed in
+    /// the constructor before either document over the rendered seam,
+    /// shared by the graph document and the Connections leaf, shut down
+    /// in the drain after both. The filter class's fire-time gate is the
+    /// graph tab's EFFECTIVE predicate — the mac's `graphTabActive`
+    /// re-checked at fire (0a-9).</summary>
+    private GraphAnnouncer NewGraphRelay() => new GraphAnnouncer(_announceRendered);
+
     private GraphDocumentViewModel NewGraphDocument()
     {
-        var announcer = new GraphAnnouncer(_announceRendered);
         var document = new GraphDocumentViewModel(
             _session,
-            announcer,
+            _graphRelay,
             isEffectiveActive: () => GraphTabIsEffective(),
             verbosity: () => GraphVerbosity.Standard,
             lifecycleGeneration: () => LifecycleGeneration());
@@ -230,6 +242,10 @@ internal sealed partial class WorkspaceViewModel
         }
         _graphNoteCreation.Shutdown();
         drains.Add(_graphNoteCreation.WhenAllWorkDrained());
+        // W6-2 PR B (B-1): the leaf beside the graph document; then the
+        // workspace's relay, after both (A-10 as amended).
+        ShutdownConnectionsLeaf(drains);
+        _graphRelay.Shutdown();
     }
 
     // --- The probe (contract A-3) -----------------------------------------
@@ -242,6 +258,8 @@ internal sealed partial class WorkspaceViewModel
         {
             document.Probe();
         }
+        // W6-2 PR B (rule C, Term 3(f)): the leaf's probe at EVERY level.
+        ProbeConnections();
     }
 
     // --- The addressed open (contract A-9) -------------------------------

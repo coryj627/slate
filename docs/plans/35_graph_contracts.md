@@ -5580,6 +5580,115 @@ returns its argument (`clamp_connections_depth_is_the_named_constants`);
 the clamp's name dropped from the surface
 (`graph_query_surface_names_pub_fns`).
 
+**TGB-2 — The leaf's document on the workspace's one relay (rule C, Terms
+1–8; B-1..B-3, B-5..B-7, B-11, B-12; A-1 and A-10 as amended).**
+`Graph/ConnectionsLeafViewModel.cs` is the document: the presentation
+(NoNote, Loading, Ready, Error, each keyed by the request that produced
+it) and the request in flight beside it; CURRENT and STALE computed from
+the presentation's root; the token carrying the root EPOCH; the
+two-echo envelope; the receiver's checks in Term 8's order — the newest
+sequence's landing clears in-flight before the lifecycle, request, root
+and epoch checks decide; the start transition per state; the probe as
+Term 6's state machine; the row copy and the actions with the row's hint
+its activation's and B-D6's string on the menu action alone; retirement
+dropping this document's pending classes from the shared relay.
+`WorkspaceViewModel.Connections.cs` is the shell's side: the leaf
+constructed after the relay and before the restore; the pending mount
+armed by the pane's setter and SEEDED by the constructor, consumed at
+every reveal route's end — the toggle, directional focus, Show, Tasks
+Review, History, the bibliography jump, the three Bases reveals, and
+the outermost mutation boundary; the root recorded inside a mutation and
+reconciled once at the boundary (`WorkspaceViewModel.Persistence.cs`,
+before PR A's cause clear); Show suppressing the mount and switch its
+own reveal causes and issuing ONE load; the probe arm at every level
+from `NotifyGraphOfVaultChange`; the drain beside the graph document,
+the relay shut down after both. The relay: `NewGraphRelay()` under
+`Graph/WorkspaceViewModel.Graph.cs` is the one seed; `GraphAnnouncer`
+gains the GATED filter entry whose gate is stored with the pending line
+and re-checked at fire, `DropAllPending` made internal; the graph
+document's rows-only publish enqueues through it and its `Retire()`
+drops instead of shutting down. `WorkspaceViewModel.GraphCreate.cs`
+generalised to a SOURCE address — the graph tab's every identity or the
+leaf's root and epoch, the leaf's ACTIVE state not consulted.
+`GraphCoreConstants` fetches core's constants once per process (0bD-11).
+Facts: ConnectionsLeafTests in four partials — the record field by field
+and the golden's projection for the six pinned pairs; the filter and the
+clamp through core; the four states and the in-flight flag; the start
+transition; STALE; the receiver's rejections (ten rewrites of the token
+and the echoes, the reversed completion, the unmounted A → B race, the
+lifecycle replacement, the shutdown before dispatch); the trigger matrix
+route by route with one load each (the seeded launch mount with the leaf
+active, with another leaf; a reveal-then-switch command; the mounted
+switch current and stale; Show current, stale and from a collapsed pane;
+the root change active-and-mounted and not; the split's sole-tab close
+as one reconciliation; depth with and without a root and at the bound;
+root → none); the probe's state machine (equal, older, in flight,
+errored, stale, no root); supersession; SPEAKING at apply (away → back
+speaks, hide → away silent); the selection scoped by root and mount and
+pruned by a refresh; the shared neighbour; focus entry per state; the row
+copy, hint and actions; the open from the leaf; the three commands; the
+label inventory. GraphAnnouncerTests gains the stored gate read at fire,
+the cross-surface High flush and the live relay after a drop;
+GraphDocumentTests' retirement fact asserts the relay live, drained and
+shared. Censuses: the instance census (exactly one construction, in
+`NewGraphRelay`, over the rendered seam); the seam census's two boundary
+files with their own seams; ConnectionsLeafCensus — the trigger entry
+points' one owner each, `SyncPanels` the only recorder and the boundary
+the only reconciler, every pane reveal consuming and the constructor
+seeding, the filter count gated and nowhere ungated, and the depth's
+dataflow: the wrapper's body IS the FFI clamp, every `_depth` write its
+result, the clamp's one caller `SetDepth` with its parameter, and
+`SetDepth`'s producers exactly core's minimum in the constructor,
+`_depth + 1`, `_depth - 1` (the view's index conversion joins in TGB-4).
+Verified deviations: (i) the first depth request is core's own minimum
+through the process-wide accessor — a producer B-19 (v)'s four do not
+name; the census names it as the constructor's, and no literal enters
+the depth; (ii) the depth census's `Math.*` sweep is scoped to `Graph/`
+and the leaf's partial — the reading view's LIST depth
+(`Reading/ReadingDocumentBuilder.cs`) is another word; (iii) a
+fabricated NEWER sequence is not a rejection shape the theory carries —
+an older sequence's landing leaves the newer in flight by design, the
+reversed-completion fact its witness; (iv) the gates' journey is PR A's
+(the leaf has no view until TGB-4); (v) the receiver's standalone
+comparison of the token's root and epoch against the live ones was an
+EQUIVALENT MUTANT — the request record carries the epoch and its
+identity check rejects the same envelopes, and every root transition
+advances the sequence — so it is written once, the sequence advance the
+guard the facts pin (the unmounted A → B race), and no mutation that
+would survive is carried; (vi) PR A's fact
+AGenerationThatArrivesDuringAnInFlightPairSupersedesItAndTheStaleResultInstallsNothing
+parked only the stale pair and asserted "nothing installed yet" against
+a superseding pair that could land first — a race the leaf's probe on
+the same vault-change arm widened (it failed one run in three alone);
+the fact now parks the superseding pair too and passed five runs
+running. Gates: `cargo fmt` clean, clippy clean; the workspace's tests
+1999 passed with the standing six — the five dir-tree censuses (OS
+error 123 on this box; CI-Windows their oracle) and the perf guard
+under the parallel run, which passed alone in 13.7 s; `dotnet format`
+applied; the whole Windows test project on a fresh build, 2219 passed
+(the 120 graph and leaf facts and censuses among them); the
+accessibility project built and PR A's journey RUN — it failed at the
+palette step directly after the five-minute suite, as at TGB-1, and
+passed alone in 10 s; CI is its oracle on the push; the mac lane is
+CI's. Mutations, twenty, each restored byte for
+byte, each caught by the named fact: the relay shut down at the
+document's retirement (the retirement fact); the gate ignored at fire
+(the stored-gate fact); a second relay instance (the instance census);
+speech unconditional (the away-and-back fact); a load on a current
+mounted switch (the current-switch fact); two loads on a collapsed Show
+(the collapsed-Show fact); a reveal-then-switch command not consuming
+(the Tasks Review fact); the seeded launch mount skipped (the launch
+fact); reconciliation inside the mutation (the split's sole-tab close);
+the probe superseding a load in flight (the in-flight probe fact); an
+errored leaf unprobed (the errored-and-stale probe fact); the open on a
+stale epoch (the excursion fact); the open suppressed on an inactive
+leaf (the inactive fact); no sequence advance on a root transition (the
+unmounted race); the bundle's echo unchecked and the centre key
+unchecked (the rejection theory); a host `Math.Clamp` and an aliased
+pre-clamp in Deeper (the depth census); the disabled reason on the
+row's hint (the row fact); the filter count enqueued ungated (the gated
+entry census).
+
 ### Tests that pin PR B (slice B1)
 
 - ConnectionsLeafTests: the tree over the shared fixture and the

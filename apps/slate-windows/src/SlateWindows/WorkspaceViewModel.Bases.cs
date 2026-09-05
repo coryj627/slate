@@ -353,6 +353,8 @@ internal sealed partial class WorkspaceViewModel
             ActiveLeaf = Leaves.Single(leaf =>
                 string.Equals(leaf.Id, "backlinks", StringComparison.Ordinal));
             IsRightPaneVisible = true;
+            // W6-2 PR B (rule C, Term 3(a)): consumed with backlinks active.
+            ConsumePendingMount();
             document.AnnounceEvent(new A11yEvent.BasesBacklinksFor(
                 DisplayNameWithoutExtension(row.FilePath)));
         });
@@ -922,6 +924,8 @@ internal sealed partial class WorkspaceViewModel
         ActiveLeaf = Leaves.Single(leaf =>
             string.Equals(leaf.Id, "basesDock", StringComparison.Ordinal));
         IsRightPaneVisible = true;
+        // W6-2 PR B (rule C, Term 3(a)): consumed with the dock active.
+        ConsumePendingMount();
         _announce(new A11yEvent.BasesDockUpdatedForNote());
     }
 
@@ -1349,6 +1353,8 @@ internal sealed partial class WorkspaceViewModel
             ActiveLeaf = Leaves.Single(leaf =>
                 string.Equals(leaf.Id, "backlinks", StringComparison.Ordinal));
             IsRightPaneVisible = true;
+            // W6-2 PR B (rule C, Term 3(a)): consumed with backlinks active.
+            ConsumePendingMount();
             document.AnnounceEvent(new A11yEvent.BasesBacklinksFor(
                 DisplayNameWithoutExtension(row.FilePath)));
         };

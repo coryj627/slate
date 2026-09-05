@@ -106,4 +106,92 @@ public sealed class GraphAnnouncerTests
             Assert.True(announcer.IsRetired);
         });
     }
+
+    // --- A-10 as amended (W6-2 PR B, BD-12): the stored fire-time gate ------
+
+    /// <summary>0a-9's fire-time gate: the filter count's gate is stored
+    /// with the pending line and re-checked when the window elapses — a
+    /// count queued while the graph tab was effective is DROPPED if the
+    /// tab left effective before it spoke (the mac's `:150`, `:194–207`).</summary>
+    [Fact]
+    public void TheFilterCountsGateIsStoredWithTheLineAndReadAtFire()
+    {
+        PumpedDispatcher.Run(() =>
+        {
+            var posted = new List<string>();
+            var announcer = new GraphAnnouncer(line => posted.Add(line.Text), TimeSpan.FromSeconds(60));
+            bool effective = true;
+
+            // Queued effective; left effective before the fire: dropped.
+            announcer.AnnounceGatedFilterCount(new GraphA11yEvent.GraphFilterCount(3, 10), () => effective);
+            Assert.Equal(1, announcer.PendingForTests);
+            effective = false;
+            announcer.FlushForTests();
+            Assert.Empty(posted);
+            Assert.Equal(1, announcer.DroppedAtFireForTests);
+            Assert.Equal(0, announcer.PendingForTests);
+
+            // Queued and still effective at the fire: posted.
+            effective = true;
+            announcer.AnnounceGatedFilterCount(new GraphA11yEvent.GraphFilterCount(3, 10), () => effective);
+            announcer.FlushForTests();
+            Assert.Equal([Render(new GraphA11yEvent.GraphFilterCount(3, 10))], posted);
+            Assert.Equal(1, announcer.DroppedAtFireForTests);
+
+            // Latest wins carries the LATEST gate: an ungated re-queue of the
+            // same class replaces a gated line, and posts.
+            posted.Clear();
+            effective = false;
+            announcer.AnnounceGatedFilterCount(new GraphA11yEvent.GraphFilterCount(1, 10), () => effective);
+            announcer.Announce(new GraphA11yEvent.GraphFilterCount(2, 10));
+            announcer.FlushForTests();
+            Assert.Equal([Render(new GraphA11yEvent.GraphFilterCount(2, 10))], posted);
+        });
+    }
+
+    /// <summary>One relay for both surfaces (A-10 as amended): a High from
+    /// EITHER surface drops the other's pending classes — the table's
+    /// pending count dies to the leaf's failure line, as the mac's one
+    /// announcer has it (`GraphAnnouncer.swift:183–188`).</summary>
+    [Fact]
+    public void AHighFromTheOtherSurfaceDropsThePendingCount()
+    {
+        PumpedDispatcher.Run(() =>
+        {
+            var posted = new List<string>();
+            var announcer = new GraphAnnouncer(line => posted.Add(line.Text), TimeSpan.FromSeconds(60));
+            announcer.AnnounceGatedFilterCount(new GraphA11yEvent.GraphFilterCount(3, 10), () => true);
+            Assert.Equal(1, announcer.PendingForTests);
+
+            announcer.Announce(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.ConnectionsLoadFailed("io error")));
+
+            Assert.Equal(0, announcer.PendingForTests);
+            announcer.FlushForTests();
+            Assert.Equal(
+                [Render(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.ConnectionsLoadFailed("io error")))],
+                posted);
+        });
+    }
+
+    /// <summary>A-1 as amended: a document's retirement drops its pending
+    /// classes and leaves the relay LIVE for the other surface.</summary>
+    [Fact]
+    public void DropAllPendingLeavesTheRelayLive()
+    {
+        PumpedDispatcher.Run(() =>
+        {
+            var posted = new List<string>();
+            var announcer = new GraphAnnouncer(line => posted.Add(line.Text), TimeSpan.FromSeconds(60));
+            announcer.Announce(new GraphA11yEvent.GraphRow(GraphVerbosity.Standard, Row("Alpha")));
+            Assert.Equal(1, announcer.PendingForTests);
+
+            announcer.DropAllPending();
+
+            Assert.Equal(0, announcer.PendingForTests);
+            Assert.False(announcer.IsRetired);
+            announcer.Announce(new GraphA11yEvent.GraphStatus(new GraphStatusNote.ConnectionsPanel()));
+            Assert.Equal([Render(new GraphA11yEvent.GraphStatus(new GraphStatusNote.ConnectionsPanel()))], posted);
+            Assert.Equal(0, announcer.RefusedAfterShutdownForTests);
+        });
+    }
 }

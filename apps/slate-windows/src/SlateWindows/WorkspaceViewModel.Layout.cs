@@ -609,6 +609,8 @@ internal sealed partial class WorkspaceViewModel
                 ? new A11yEvent.FilesRegionFocused()
                 : new A11yEvent.LeafPanelShown(ActiveLeaf.Title));
             FocusBoundaryRequested?.Invoke(this, boundary);
+            // W6-2 PR B (rule C, Term 3(a)): a directional reveal's end.
+            ConsumePendingMount();
         }
         else
         {
