@@ -44,6 +44,11 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\SlateWindows\SlateWindows.csproj"
                       ReferenceOutputAssembly="false" />
+    <!-- W6-2 PR B (B-18): the Connections journey computes core's exact
+         renders (the summary, the row copy) through the binding over the
+         vault it wrote, BEFORE launching the app — the §W-C witness asserts
+         core's sentence, not a copy of it. -->
+    <ProjectReference Include="..\..\src\SlateUniffi\SlateUniffi.csproj" />
   </ItemGroup>
 
 </Project>

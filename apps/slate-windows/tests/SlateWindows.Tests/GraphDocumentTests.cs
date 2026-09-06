@@ -293,7 +293,12 @@ public sealed class GraphDocumentTests
             host.Workspace.CloseActiveTabCommand.Execute(null);
             Assert.Null(host.Workspace.GraphDocument);
             Assert.True(first.IsRetired);
-            Assert.True(first.AnnouncerForTests.IsRetired);
+            // A-1 as amended (W6-2 PR B, BD-12): the relay is the WORKSPACE's
+            // — retirement drops the document's pending classes and leaves
+            // it live, shared with the Connections leaf.
+            Assert.False(first.AnnouncerForTests.IsRetired);
+            Assert.Equal(0, first.AnnouncerForTests.PendingForTests);
+            Assert.Same(first.AnnouncerForTests, host.Workspace.Connections.AnnouncerForTests);
             Assert.Null(first.ViewState.SelectedKey);
 
             host.GraphLines.Clear();
@@ -498,13 +503,24 @@ public sealed class GraphDocumentTests
             // to G2 and the probe runs against the held READY G1 snapshot.
             using var gate = new ManualResetEventSlim(false);
             using var reached = new ManualResetEventSlim(false);
-            bool armed = true;
+            using var secondReached = new ManualResetEventSlim(false);
+            int parks = 0;
+            // BOTH pairs park (W6-2 PR B, TGB-2): the stale one so the world
+            // can move past it, and the superseding one so the "nothing
+            // installed yet" assertion below is a fact and not a race — the
+            // leaf's probe now rides the same vault-change arm and widened
+            // the window in which the superseding pair could land first.
             document.FetchGateForTests = () =>
             {
-                if (armed)
+                int park = Interlocked.Increment(ref parks);
+                if (park == 1)
                 {
-                    armed = false;
                     reached.Set();
+                    gate.Wait(TimeSpan.FromSeconds(10));
+                }
+                else if (park == 2)
+                {
+                    secondReached.Set();
                     gate.Wait(TimeSpan.FromSeconds(10));
                 }
             };
@@ -520,6 +536,7 @@ public sealed class GraphDocumentTests
             Assert.True(
                 PumpedDispatcher.PumpUntil(() => document.SeqForTests > inFlight.Seq),
                 "the probe never superseded the in-flight pair");
+            Assert.True(secondReached.Wait(TimeSpan.FromSeconds(10)), "the superseding pair never reached the gate");
             Assert.Empty(installed);
             gate.Set();
             host.Settle();
@@ -783,15 +800,20 @@ public sealed class GraphDocumentTests
             string expectedPath = SlateUniffiMethods.GraphGhostNotePath(ghost.Label);
             File.WriteAllText(Path.Combine(vault.Root, expectedPath), "# taken\n");
             host.ShellEvents.Clear();
+            host.GraphLines.Clear();
 
             document.Activate(ghost, modified: false);
             PumpedDispatcher.PumpUntilDrained(host.Workspace.DrainGraphNoteCreationForTests());
             PumpedDispatcher.Drain();
 
-            A11yEvent blocked = Assert.Single(host.ShellEvents, e => e is A11yEvent.Graph);
-            var reason = Assert.IsType<GraphA11yEvent.GraphBlocked>(((A11yEvent.Graph)blocked).Event);
-            var failed = Assert.IsType<GraphBlockedReason.NoteCreateFailed>(reason.Reason);
-            Assert.False(string.IsNullOrEmpty(failed.Message));
+            // The failure is a HIGH graph event through the workspace's ONE
+            // relay (A-10 as amended; W6-2 PR B's post-implementation pass 1,
+            // IPB-1) — rendered there, never a direct shell post.
+            string blocked = Assert.Single(host.GraphLines);
+            string prefix = GraphAnnouncer.RenderLabel(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.NoteCreateFailed(string.Empty)));
+            Assert.StartsWith(prefix, blocked, StringComparison.Ordinal);
+            Assert.True(blocked.Length > prefix.Length, "the failure line carries no message");
+            Assert.DoesNotContain(host.ShellEvents, e => e is A11yEvent.Graph);
             Assert.Empty(creator.Landed);
         });
     }

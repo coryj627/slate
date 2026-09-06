@@ -344,6 +344,16 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
     }
 
+    /// <summary>The filter count's seam (0a-9, A-10 as amended): gated at
+    /// enqueue AND at fire by the same effective predicate.</summary>
+    private void AnnounceFilterCountIfEffective(GraphA11yEvent.GraphFilterCount @event)
+    {
+        if (!_retired && _isEffectiveActive())
+        {
+            _announcer.AnnounceGatedFilterCount(@event, () => !_retired && _isEffectiveActive());
+        }
+    }
+
     // --- The load (contract A-2) ------------------------------------------
 
     /// <summary>Issue a token and start the body (rule A).</summary>
@@ -507,8 +517,11 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         else
         {
             // The mac's rows-only publish speaks the filter count
-            // (`requestGraphTableRows`, `:343–347`), coalesced.
-            AnnounceIfEffective(new GraphA11yEvent.GraphFilterCount(
+            // (`requestGraphTableRows`, `:343–347`), coalesced — through the
+            // relay's GATED entry (A-10 as amended, W6-2 PR B): the
+            // effective predicate is stored with the line and re-checked
+            // at fire, the mac's `graphTabActive` at `:150`.
+            AnnounceFilterCountIfEffective(new GraphA11yEvent.GraphFilterCount(
                 (uint)rows.Rows.Length, (uint)Math.Min(rows.Total, uint.MaxValue)));
         }
     }
@@ -636,7 +649,11 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         _seq++;
         _request = null;
         Shutdown();
-        _announcer.Shutdown();
+        // A-1 as amended (W6-2 PR B, BD-12): the relay is the workspace's;
+        // retirement drops THIS document's pending classes — the mac's
+        // `cancelPending` on view departure — and leaves it live for the
+        // Connections leaf.
+        _announcer.DropAllPending();
         ViewState.Reset();
     }
 }

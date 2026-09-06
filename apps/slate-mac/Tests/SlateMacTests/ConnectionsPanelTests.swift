@@ -41,6 +41,9 @@ final class ConnectionsPanelTests: XCTestCase {
         XCTAssertEqual(AppState.clampConnectionsDepth(1), 1)
         XCTAssertEqual(AppState.clampConnectionsDepth(3), 3)
         XCTAssertEqual(AppState.clampConnectionsDepth(99), 3)
+        // Any Int: the conversion saturates instead of trapping (IPB-11).
+        XCTAssertEqual(AppState.clampConnectionsDepth(Int.min), 1)
+        XCTAssertEqual(AppState.clampConnectionsDepth(Int.max), 3)
         XCTAssertEqual(Int(graphConstants().connectionsDepthMax), 3)
     }
 

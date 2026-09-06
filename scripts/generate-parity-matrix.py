@@ -645,7 +645,7 @@ W6_1_STATUS = (
 # went green, not W1's — a W6-2 row that fell through to the W1 status
 # claimed gates from before the branch existed (IPA-13).
 W6_2_STATUS = (
-    "implemented; local gates green 2026-09-03; "
+    "implemented; local gates green 2026-09-05; "
     "interactive CI + human AT pending"
 )
 
@@ -655,6 +655,12 @@ W6_2_DELIVERED_COMMANDS = {
     # the navigator's and the diagram's rows in the PR that makes each
     # executable (B12's rule).
     "slate.graph.openTab",
+    # W6-2 PR B, slice B1 (#746, contracts B-14, B-20): the Connections
+    # leaf's three chordless rows, executable through the palette and the
+    # registrar.
+    "slate.graph.showConnections",
+    "slate.graph.connectionsDeeper",
+    "slate.graph.connectionsShallower",
 }
 
 W6_1_DELIVERED_COMMANDS = {

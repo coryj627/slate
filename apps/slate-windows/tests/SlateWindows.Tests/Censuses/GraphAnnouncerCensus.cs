@@ -8,6 +8,7 @@
 // typed column header, no mutable shadow of the view state.
 
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace SlateWindows.Tests.Censuses;
@@ -240,12 +241,15 @@ public sealed class GraphAnnouncerCensus
                 {
                     continue;
                 }
+                // A-10 as amended (W6-2 PR B, BD-12): the ONE seed is the
+                // workspace's relay, constructed in NewGraphRelay — no
+                // document constructs one any more.
                 bool seedsTheRelay = reference.Parent is ArgumentSyntax argument
                     && argument.Parent is ArgumentListSyntax list
                     && list.Parent is ObjectCreationExpressionSyntax relayCreation
                     && relayCreation.Type.ToString().EndsWith("GraphAnnouncer", StringComparison.Ordinal)
                     && reference.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault()
-                        is { Identifier.ValueText: "NewGraphDocument" };
+                        is { Identifier.ValueText: "NewGraphRelay" };
                 if (seedsTheRelay)
                 {
                     relaySeeds++;
@@ -259,6 +263,143 @@ public sealed class GraphAnnouncerCensus
             "graph code must announce through GraphAnnouncer (contract A-10), never directly:\n"
             + string.Join("\n", offenders));
         Assert.Equal(1, relaySeeds);
+    }
+
+    /// <summary>W6-2 PR B, B-19 (i) — A-10 as amended (BD-12): exactly ONE
+    /// <c>GraphAnnouncer</c> is constructed anywhere in the shell, by
+    /// declared type whatever the receiver is named, inside
+    /// <c>NewGraphRelay</c>, over the workspace's rendered seam; a second
+    /// anywhere, under any name, fails here (IGF-11, IGG-1).</summary>
+    private const string TheRelayType = "SlateWindows.Graph.GraphAnnouncer";
+
+    /// <summary>The creation's type as BOUND (IPB-4, IPB-8): an explicit
+    /// creation through an alias (<c>using Relay = ...GraphAnnouncer; new
+    /// Relay(...)</c>) and a target-typed <c>new(...)</c> typed by a local,
+    /// a return, an assignment or a parameter both resolve to the same
+    /// symbol; a creation binding yields nothing for falls back to the
+    /// written type — the explicit one's, or the nearest enclosing
+    /// declaration's for an implicit one, the local's before the method's.</summary>
+    private static string CreationType(SemanticModel model, BaseObjectCreationExpressionSyntax creation)
+    {
+        TypeInfo info = model.GetTypeInfo(creation);
+        ITypeSymbol? bound = info.Type is { TypeKind: not TypeKind.Error } type ? type : info.ConvertedType;
+        if (bound is { TypeKind: not TypeKind.Error })
+        {
+            return bound.ToDisplayString();
+        }
+        return creation switch
+        {
+            ObjectCreationExpressionSyntax explicitly => explicitly.Type.ToString(),
+            _ => creation.Ancestors().OfType<VariableDeclarationSyntax>().FirstOrDefault()?.Type.ToString()
+                ?? creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault()?.ReturnType.ToString()
+                ?? string.Empty,
+        };
+    }
+
+    [Fact]
+    public void ExactlyOneGraphRelayIsConstructedInTheShell()
+    {
+        // Every creation, explicit or target-typed, is typed by BINDING over
+        // the shell's own compilation (codex post-implementation passes 1 and
+        // 2, IPB-4 and IPB-8: the method's return type was read first, so a
+        // `GraphAnnouncer extra = new(...)` inside a void method was
+        // invisible; an explicit creation was read by its spelling, so a
+        // `using` alias evaded it). An alias naming the relay anywhere in the
+        // shell is forbidden outright as well.
+        var creations = new List<string>();
+        var factoryUses = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (UsingDirectiveSyntax directive in source.Root.DescendantNodes().OfType<UsingDirectiveSyntax>())
+            {
+                if (directive.Alias is not null
+                    && directive.NamespaceOrType.ToString().EndsWith("GraphAnnouncer", StringComparison.Ordinal))
+                {
+                    creations.Add($"{relative}:using alias {directive.Alias.Name} = {directive.NamespaceOrType}");
+                }
+            }
+            foreach (BaseObjectCreationExpressionSyntax creation in source.Root
+                .DescendantNodes()
+                .OfType<BaseObjectCreationExpressionSyntax>())
+            {
+                string declared = CreationType(model, creation);
+                if (declared != TheRelayType && !declared.EndsWith("GraphAnnouncer", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                MethodDeclarationSyntax? owner = creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
+                string firstArgument = creation.ArgumentList?.Arguments.FirstOrDefault()?.Expression.ToString() ?? "<none>";
+                creations.Add($"{relative}:{owner?.Identifier.ValueText ?? "<top level>"}({firstArgument})");
+            }
+            // One allocation SITE is not one instance (codex post-implementation
+            // pass 3, IPB-16): the factory's calls and its method-group
+            // references, bound — exactly the constructor's one call, and no
+            // reference that could call it later.
+            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (!IsTheFactory(model.GetSymbolInfo(call)))
+                {
+                    continue;
+                }
+                // The call's SHAPE (pass 4, IPB-27): one call expression can
+                // run many times inside a loop, a lambda or a query — the one
+                // call must be the direct right-hand side of the field's
+                // assignment, with no loop, branch, lambda or local function
+                // between it and the constructor.
+                bool direct = call.Parent is AssignmentExpressionSyntax { Left: IdentifierNameSyntax { Identifier.ValueText: "_graphRelay" } };
+                bool repeatable = call.Ancestors()
+                    .TakeWhile(ancestor => ancestor is not ConstructorDeclarationSyntax)
+                    .Any(ancestor => ancestor is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax
+                        or ForStatementSyntax or ForEachStatementSyntax or WhileStatementSyntax or DoStatementSyntax
+                        or IfStatementSyntax or ConditionalExpressionSyntax or SwitchStatementSyntax or SwitchExpressionSyntax
+                        or QueryExpressionSyntax or TryStatementSyntax);
+                factoryUses.Add($"{relative}:{OwnerOf(call)}{(direct ? string.Empty : " (not the field's direct assignment)")}{(repeatable ? " (inside a repeatable construct)" : string.Empty)}");
+            }
+            foreach (ExpressionSyntax reference in source.Root.DescendantNodes().OfType<ExpressionSyntax>())
+            {
+                if (IsAMethodGroupReference(reference) && IsTheFactory(model.GetSymbolInfo(reference)))
+                {
+                    factoryUses.Add($"{relative}:{OwnerOf(reference)} (a method-group reference)");
+                }
+            }
+        }
+        Assert.Equal(
+            ["Graph/WorkspaceViewModel.Graph.cs:NewGraphRelay(_announceRendered)"],
+            creations);
+        Assert.Equal(["WorkspaceViewModel.cs:<ctor>"], factoryUses);
+    }
+
+    private static bool IsTheFactory(SymbolInfo info)
+    {
+        IEnumerable<ISymbol> candidates = info.Symbol is { } bound ? [bound] : info.CandidateSymbols;
+        return candidates.OfType<IMethodSymbol>().Any(method =>
+            method.Name == "NewGraphRelay" && method.ContainingType.ToDisplayString() == "SlateWindows.WorkspaceViewModel");
+    }
+
+    /// <summary>A name or a member access that is neither an invocation's
+    /// callee nor the member half of a larger access — the shape in which a
+    /// method group converts to a delegate (IPB-16, IPB-17).</summary>
+    internal static bool IsAMethodGroupReference(ExpressionSyntax expression) =>
+        expression is IdentifierNameSyntax or MemberAccessExpressionSyntax
+        && !(expression.Parent is InvocationExpressionSyntax invocation && ReferenceEquals(invocation.Expression, expression))
+        && !(expression is IdentifierNameSyntax && expression.Parent is MemberAccessExpressionSyntax access && ReferenceEquals(access.Name, expression));
+
+    private static string OwnerOf(SyntaxNode node)
+    {
+        foreach (SyntaxNode ancestor in node.Ancestors())
+        {
+            switch (ancestor)
+            {
+                case MethodDeclarationSyntax method:
+                    return method.Identifier.ValueText;
+                case ConstructorDeclarationSyntax:
+                    return "<ctor>";
+                case PropertyDeclarationSyntax property:
+                    return property.Identifier.ValueText;
+            }
+        }
+        return "<top level>";
     }
 
     /// <summary>The relay is the one file that renders (contract A-10):

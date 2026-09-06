@@ -348,14 +348,30 @@ internal sealed partial class WorkspaceViewModel
 
     public System.Windows.Input.ICommand BasesShowBacklinksCommand =>
         _basesShowBacklinksCommand ??= BasesRowCommand((document, row) =>
+            ShowBacklinksFor(row.FilePath, () => document.AnnounceEvent(new A11yEvent.BasesBacklinksFor(
+                DisplayNameWithoutExtension(row.FilePath)))));
+
+    /// <summary>Bases' Show backlinks — the ONE route for both of its sites
+    /// (the row command and the surface seam): the open, the leaf switch,
+    /// the reveal and the mount's consume inside ONE outer workspace
+    /// mutation, so the boundary reconciles the Connections root against
+    /// the route's FINAL leaf, Backlinks, and issues no Connections load
+    /// (rule C, Term 3; codex post-implementation pass 1, IPB-2: the open's
+    /// own mutation used to complete first, with the leaf still active and
+    /// mounted, and load audibly). The Bases line follows the mutation.</summary>
+    internal void ShowBacklinksFor(string path, Action? announce)
+    {
+        RunWorkspaceMutation(() =>
         {
-            OpenPath(row.FilePath);
+            OpenPath(path);
             ActiveLeaf = Leaves.Single(leaf =>
                 string.Equals(leaf.Id, "backlinks", StringComparison.Ordinal));
             IsRightPaneVisible = true;
-            document.AnnounceEvent(new A11yEvent.BasesBacklinksFor(
-                DisplayNameWithoutExtension(row.FilePath)));
+            // W6-2 PR B (rule C, Term 3(a)): consumed with backlinks active.
+            ConsumePendingMount();
         });
+        announce?.Invoke();
+    }
 
     public System.Windows.Input.ICommand BasesEditPropertyCommand =>
         _basesEditPropertyCommand ??= BasesCommand(document =>
@@ -922,6 +938,8 @@ internal sealed partial class WorkspaceViewModel
         ActiveLeaf = Leaves.Single(leaf =>
             string.Equals(leaf.Id, "basesDock", StringComparison.Ordinal));
         IsRightPaneVisible = true;
+        // W6-2 PR B (rule C, Term 3(a)): consumed with the dock active.
+        ConsumePendingMount();
         _announce(new A11yEvent.BasesDockUpdatedForNote());
     }
 
@@ -1344,14 +1362,8 @@ internal sealed partial class WorkspaceViewModel
         document.CopyLinkFromSurface = row =>
             ((RelayCommand)BasesCopyLinkCommand).Execute(RowOverride(document, row));
         document.ShowBacklinksFromSurface = row =>
-        {
-            OpenPath(row.FilePath);
-            ActiveLeaf = Leaves.Single(leaf =>
-                string.Equals(leaf.Id, "backlinks", StringComparison.Ordinal));
-            IsRightPaneVisible = true;
-            document.AnnounceEvent(new A11yEvent.BasesBacklinksFor(
-                DisplayNameWithoutExtension(row.FilePath)));
-        };
+            ShowBacklinksFor(row.FilePath, () => document.AnnounceEvent(new A11yEvent.BasesBacklinksFor(
+                DisplayNameWithoutExtension(row.FilePath))));
     }
 
     private static object RowOverride(BaseDocumentViewModel document, BasesRow row)

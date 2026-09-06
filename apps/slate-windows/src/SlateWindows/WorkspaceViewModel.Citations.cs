@@ -545,6 +545,9 @@ internal sealed partial class WorkspaceViewModel
 
         ActiveLeaf = Leaves.First(
             leaf => string.Equals(leaf.Id, "bibliography", StringComparison.Ordinal));
+        // W6-2 PR B (rule C, Term 3(a)): the reveal above is consumed with
+        // the bibliography active — no Connections load.
+        ConsumePendingMount();
         // The outcome depends on entries that may still be loading, so
         // the leaf decides it — immediately when they are already
         // published, at publish time otherwise.

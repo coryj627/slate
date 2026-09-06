@@ -54,7 +54,22 @@ internal sealed class GraphAnnouncer
     public void Announce(GraphA11yEvent @event)
     {
         ArgumentNullException.ThrowIfNull(@event);
-        Emit(new A11yEvent.Graph(@event), CoalescingClassOf(@event));
+        Emit(new A11yEvent.Graph(@event), CoalescingClassOf(@event), gate: null);
+    }
+
+    /// <summary>The filter count's GATED entry (0a-9's fire-time gate; A-10
+    /// as amended, W6-2 PR B BD-12): the gate is stored with the pending
+    /// line and re-checked when the window elapses — the mac's
+    /// <c>graphTabActive</c> at fire (`GraphAnnouncer.swift:150`,
+    /// `:194–207`) — so a count queued while the graph tab was effective
+    /// is DROPPED if the tab left effective before it spoke. The census
+    /// asserts the graph document enqueues its count through this entry
+    /// and through no other.</summary>
+    public void AnnounceGatedFilterCount(GraphA11yEvent.GraphFilterCount @event, Func<bool> gate)
+    {
+        ArgumentNullException.ThrowIfNull(@event);
+        ArgumentNullException.ThrowIfNull(gate);
+        Emit(new A11yEvent.Graph(@event), EventClass.Filter, gate);
     }
 
     /// <summary>Relay a core event that is NOT graph vocabulary — the
@@ -63,7 +78,7 @@ internal sealed class GraphAnnouncer
     public void Relay(A11yEvent @event)
     {
         ArgumentNullException.ThrowIfNull(@event);
-        Emit(@event, null);
+        Emit(@event, null, gate: null);
     }
 
     /// <summary>Render a graph event WITHOUT posting (contract A-6): the
@@ -88,19 +103,19 @@ internal sealed class GraphAnnouncer
 
     internal bool IsRetired => _isShutDown;
 
-    private void Emit(A11yEvent @event, EventClass? eventClass)
+    private void Emit(A11yEvent @event, EventClass? eventClass, Func<bool>? gate)
     {
         if (_isShutDown)
         {
             RefusedAfterShutdownForTests++;
             Debug.Fail(
-                "GraphAnnouncer posted after Shutdown: the document it belongs to has "
-                + "been retired, so nothing it says can be about a surface the user can see.");
+                "GraphAnnouncer posted after Shutdown: the workspace it belongs to has "
+                + "been torn down, so nothing it says can be about a surface the user can see.");
             return;
         }
         if (!_dispatcher.CheckAccess())
         {
-            _ = _dispatcher.BeginInvoke(() => Emit(@event, eventClass));
+            _ = _dispatcher.BeginInvoke(() => Emit(@event, eventClass, gate));
             return;
         }
         RenderedAnnouncement rendered = SlateUniffiMethods.A11yRender(@event);
@@ -113,7 +128,7 @@ internal sealed class GraphAnnouncer
         }
         if (eventClass is { } coalesced)
         {
-            Debounce(coalesced, rendered);
+            Debounce(coalesced, rendered, gate);
             return;
         }
         // a11y.rs: a High graph event, announced or relayed, flushes and
@@ -138,14 +153,14 @@ internal sealed class GraphAnnouncer
         _ => null,
     };
 
-    private void Debounce(EventClass eventClass, RenderedAnnouncement rendered)
+    private void Debounce(EventClass eventClass, RenderedAnnouncement rendered, Func<bool>? gate)
     {
         if (!_pending.TryGetValue(eventClass, out PendingLine? line))
         {
             line = new PendingLine(_window, _dispatcher, () => Fire(eventClass));
             _pending[eventClass] = line;
         }
-        line.Restart(rendered);
+        line.Restart(rendered, gate);
     }
 
     private void Fire(EventClass eventClass)
@@ -154,14 +169,28 @@ internal sealed class GraphAnnouncer
         {
             return;
         }
-        RenderedAnnouncement? rendered = line.Take();
-        if (rendered is not null)
+        (RenderedAnnouncement? rendered, Func<bool>? gate) = line.Take();
+        if (rendered is null)
         {
-            _post(rendered);
+            return;
         }
+        // 0a-9's fire-time gate (A-10 as amended): a stored gate that has
+        // gone false since the line was queued DROPS it.
+        if (gate is not null && !gate())
+        {
+            DroppedAtFireForTests++;
+            return;
+        }
+        _post(rendered);
     }
 
-    private void DropAllPending()
+    /// <summary>How many gated lines the fire-time gate dropped.</summary>
+    internal int DroppedAtFireForTests { get; private set; }
+
+    /// <summary>Drop every pending class without posting — the mac's
+    /// <c>cancelPending</c> on view departure (0a-9); a document's
+    /// retirement calls it on the shared relay (A-1 as amended).</summary>
+    internal void DropAllPending()
     {
         foreach (PendingLine line in _pending.Values)
         {
@@ -189,6 +218,7 @@ internal sealed class GraphAnnouncer
     {
         private readonly DispatcherTimer _timer;
         private RenderedAnnouncement? _rendered;
+        private Func<bool>? _gate;
 
         internal PendingLine(TimeSpan window, Dispatcher dispatcher, Action onElapsed)
         {
@@ -198,19 +228,24 @@ internal sealed class GraphAnnouncer
 
         internal bool HasLine => _rendered is not null;
 
-        internal void Restart(RenderedAnnouncement rendered)
+        /// <summary>Latest wins — the line AND its gate (0a-9: the gate is
+        /// stored with the pending line, re-checked at fire).</summary>
+        internal void Restart(RenderedAnnouncement rendered, Func<bool>? gate)
         {
             _rendered = rendered;
+            _gate = gate;
             _timer.Stop();
             _timer.Start();
         }
 
-        internal RenderedAnnouncement? Take()
+        internal (RenderedAnnouncement? Rendered, Func<bool>? Gate) Take()
         {
             _timer.Stop();
             RenderedAnnouncement? rendered = _rendered;
+            Func<bool>? gate = _gate;
             _rendered = null;
-            return rendered;
+            _gate = null;
+            return (rendered, gate);
         }
     }
 }

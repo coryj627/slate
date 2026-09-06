@@ -1510,6 +1510,42 @@
       "registered": true
     },
     {
+      "id": "slate.graph.showConnections",
+      "label": "Show Connections",
+      "section": "Graph",
+      "hint": "Open the Connections leaf — the active note's local graph.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.connectionsDeeper",
+      "label": "Connections: Deeper",
+      "section": "Graph",
+      "hint": "Increase the Connections leaf depth by one (up to 3 links away).",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.connectionsShallower",
+      "label": "Connections: Shallower",
+      "section": "Graph",
+      "hint": "Decrease the Connections leaf depth by one (down to direct links).",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.sidebar.open",
       "label": "Open",
       "section": "Sidebar",
@@ -2493,12 +2529,17 @@
         "implementation": [
           "apps/slate-windows/src/SlateWindows/Graph/GraphDocumentViewModel.cs#GraphDocumentViewModel",
           "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphFollowActiveTab",
-          "apps/slate-windows/src/SlateWindows/Graph/GraphTableView.cs#GraphTableView"
+          "apps/slate-windows/src/SlateWindows/Graph/GraphTableView.cs#GraphTableView",
+          "apps/slate-windows/src/SlateWindows/Graph/ConnectionsLeafViewModel.cs#ConnectionsLeafViewModel",
+          "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Connections.cs#ShowConnections",
+          "apps/slate-windows/src/SlateWindows/Graph/ConnectionsLeafView.cs#ConnectionsLeafView"
         ],
         "tests": [
           "apps/slate-windows/tests/SlateWindows.Tests/GraphDocumentTests.cs#GraphDocumentTests",
           "apps/slate-windows/tests/SlateWindows.Tests/GraphTableTests.cs#GraphTableTests",
-          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_TableSortSelectionAndActivation_AreClean"
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_TableSortSelectionAndActivation_AreClean",
+          "apps/slate-windows/tests/SlateWindows.Tests/ConnectionsLeafTests.cs#ConnectionsLeafTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphConnections_LeafWalkDepthAndReRoot_AreClean"
         ]
       }
     },
@@ -2669,7 +2710,10 @@
       "slate.canvas.deleteMarked": "canvasMarks",
       "slate.canvas.groupMarked": "canvasMarks",
       "slate.canvas.colorMarked": "canvasMarks",
-      "slate.graph.openTab": "graph"
+      "slate.graph.openTab": "graph",
+      "slate.graph.showConnections": "graph",
+      "slate.graph.connectionsDeeper": "graph",
+      "slate.graph.connectionsShallower": "graph"
     },
     "issues": {
       "#720": "vault",

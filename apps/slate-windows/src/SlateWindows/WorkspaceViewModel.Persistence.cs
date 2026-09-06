@@ -166,6 +166,11 @@ internal sealed partial class WorkspaceViewModel
                 // (current-tab navigation) — re-derive the panels'
                 // note once per outermost mutation.
                 SyncPanels();
+                // W6-2 PR B (rule C, Term 3): the leaf's root is reconciled
+                // ONCE with the mutation's final root, then a pane reveal
+                // the mutation performed is consumed with the final leaf.
+                ReconcileConnectionsRoot();
+                ConsumePendingMount();
                 // W6-2 PR A (rule L, Term 5): the outermost boundary
                 // clears a graph cause the transition did not consume.
                 ClearGraphCauseAtMutationBoundary();

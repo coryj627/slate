@@ -8377,6 +8377,395 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// W6-2 PR B, slice B1 (#746), contract B-18 (§W-C): the Connections leaf
+    /// journey — open a note through the graph table (PR A's proven route),
+    /// Show Connections through the palette, assert the heading, the tree
+    /// (ControlType Tree, Selection), the four patterns on a top-level AND a
+    /// nested row, the summary region's exact text for the fixture's root,
+    /// both group headers with their counts, the first row's Name (core's
+    /// row copy) and ItemStatus, the depth control's Name, hint and value
+    /// before and after a change to 2 with the summary's changed text, a
+    /// ghost row's Name and Create note landing the file, directional focus
+    /// LEFT from the tree landing in the editor, and axe over the leaf. The
+    /// name is kept for B2's continuation (re-root and Back).
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void GraphConnections_LeafWalkDepthAndReRoot_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-graph-connections-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Connections Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(Path.Combine(vaultRoot, "Alpha.md"), "# Alpha\n\nLinks to [[Beta]] and [[Gamma]] and [[Missing Note]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Beta.md"), "# Beta\n\nLinks to [[Alpha]] and [[Delta]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Gamma.md"), "# Gamma\n\nLinks to [[Alpha]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Delta.md"), "# Delta\n\nLinks to [[Beta]].\n");
+
+        // The expected labels are core's renders over the same vault, read
+        // BEFORE the app opens it (no second session while the app runs).
+        string summaryAtOne;
+        string summaryAtTwo;
+        string incomingHeader;
+        string outgoingHeader;
+        string firstOutgoingName;
+        string firstOutgoingStatus;
+        string ghostName;
+        string ghostPath;
+        using (uniffi.slate_uniffi.VaultSession session = uniffi.slate_uniffi.VaultSession.OpenFilesystem(vaultRoot))
+        {
+            using var cancel = new uniffi.slate_uniffi.CancelToken();
+            session.ScanInitial(cancel);
+            uniffi.slate_uniffi.GraphFilter filter = uniffi.slate_uniffi.SlateUniffiMethods.GraphConnectionsFilter();
+            uniffi.slate_uniffi.GraphConnectionsTree one = session.GraphConnectionsTree("Alpha.md", 1, filter);
+            uniffi.slate_uniffi.GraphConnectionsTree two = session.GraphConnectionsTree("Alpha.md", 2, filter);
+            summaryAtOne = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphNeighborhoodSummary(one.SummaryCounts));
+            summaryAtTwo = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphNeighborhoodSummary(two.SummaryCounts));
+            // The mac's group headers and badges, byte for byte (B-16): the
+            // journey carries the LITERALS, the shell's ConnectionsPhrase is
+            // internal and the §W-C witness must not read the tree it tests.
+            incomingHeader = ConnectionsGroupHeader("Linked from", one.Incoming.Count(r => r.Level == 1));
+            outgoingHeader = ConnectionsGroupHeader("Links to", one.Outgoing.Count(r => r.Level == 1));
+            uniffi.slate_uniffi.GraphConnectionRow first = one.Outgoing.First(r => r.Level == 1);
+            firstOutgoingName = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphRow(
+                uniffi.slate_uniffi.GraphVerbosity.Standard, ConnectionsRowCopy(first)));
+            firstOutgoingStatus = ConnectionsBadge(first);
+            uniffi.slate_uniffi.GraphConnectionRow ghost = one.Outgoing.First(r => r.Kind == uniffi.slate_uniffi.GraphNodeKind.Ghost);
+            ghostName = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphRow(
+                uniffi.slate_uniffi.GraphVerbosity.Standard, ConnectionsRowCopy(ghost)));
+            ghostPath = uniffi.slate_uniffi.SlateUniffiMethods.GraphGhostNotePath(ghost.TargetRaw);
+        }
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-graph-connections-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "Graph connections"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            // Alpha in view, through the graph table (PR A's route): Open
+            // Graph, Enter on Alpha.
+            RunPaletteCommand(window, automation, "Open Graph");
+            AutomationElement grid = WaitForElement(window, "GraphTableGrid", TimeSpan.FromSeconds(20));
+            AutomationElement alphaCell = WaitForCellStartingWith(grid, "Note: Alpha");
+            ReassertForegroundForAChord(window);
+            alphaCell.Focus();
+            AssertEventuallyFocused(alphaCell, "the Alpha cell never took focus");
+            PressKey(VirtualKeyShort.ENTER);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphTableGrid")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "Enter on Alpha did not open the note");
+
+            // Show Connections (B-14): the leaf, its heading and its tree.
+            RunPaletteCommand(window, automation, "Show Connections");
+            AutomationElement heading = WaitForElement(window, "ConnectionsHeading", TimeSpan.FromSeconds(20));
+            Assert.Equal("Alpha.md", heading.Properties.Name.Value);
+            AutomationElement tree = WaitForElement(window, "ConnectionsTree", TimeSpan.FromSeconds(20));
+            Assert.Equal(ControlType.Tree, tree.Properties.ControlType.Value);
+            Assert.True(tree.Patterns.Selection.IsSupported, "the leaf's tree must expose Selection");
+
+            // The summary region: core's render, exact (B-18).
+            AutomationElement summary = WaitForElement(window, "ConnectionsSummary", TimeSpan.FromSeconds(10));
+            Assert.Equal(summaryAtOne, summary.Properties.Name.Value);
+
+            // Both group headers with their counts.
+            AutomationElement[] groups = tree.FindAllChildren(automation.ConditionFactory.ByControlType(ControlType.TreeItem));
+            Assert.Equal(2, groups.Length);
+            Assert.Equal(incomingHeader, groups[0].Properties.Name.Value);
+            Assert.Equal(outgoingHeader, groups[1].Properties.Name.Value);
+
+            // A top-level row: the four patterns, core's copy, the badge.
+            AutomationElement[] outgoing = groups[1].FindAllChildren(automation.ConditionFactory.ByControlType(ControlType.TreeItem));
+            Assert.NotEmpty(outgoing);
+            AutomationElement firstRow = outgoing[0];
+            Assert.Equal(firstOutgoingName, firstRow.Properties.Name.Value);
+            Assert.Equal(firstOutgoingStatus, firstRow.Properties.ItemStatus.ValueOrDefault ?? string.Empty);
+            AssertTheFourTreePatterns(firstRow, "the first outgoing row");
+
+            // The depth control (T17): Name, hint, value "Links" → "2 links
+            // away"; the summary changes; a NESTED row appears.
+            AutomationElement depth = WaitForElement(window, "ConnectionsDepth", TimeSpan.FromSeconds(10));
+            Assert.Equal("Local graph depth", depth.Properties.Name.Value);
+            Assert.Equal("How many links away from this note to include.", depth.Properties.HelpText.Value);
+            Assert.Equal("Links", depth.AsComboBox().SelectedItem?.Text);
+            depth.AsComboBox().Select("2 links away");
+            Assert.True(
+                SpinWait.SpinUntil(() => summary.Properties.Name.Value == summaryAtTwo, TimeSpan.FromSeconds(10)),
+                $"the summary did not follow the depth change; reads '{summary.Properties.Name.Value}'");
+            Assert.Equal("2 links away", depth.AsComboBox().SelectedItem?.Text);
+            // The depth change REBUILT the rows (B-6: a same-root refresh
+            // prunes and rebuilds): the group elements are new.
+            // The containers regenerate on the next layout pass, so the row
+            // is the one WITH nested items — the depth-1 container it
+            // replaced has none.
+            AutomationElement betaRow = WaitForTreeItemStartingWith(tree, automation, "Beta", requireItems: true);
+            betaRow.Patterns.ExpandCollapse.Pattern.Expand();
+            groups = tree.FindAllChildren(automation.ConditionFactory.ByControlType(ControlType.TreeItem));
+            Assert.Equal(2, groups.Length);
+            // Beta links Delta: its nested row is realised by the panel after
+            // the expand, on the next layout pass — wait for it by name.
+            AutomationElement deltaRow = WaitForTreeItemStartingWith(betaRow, automation, "Delta");
+            AssertTheFourTreePatterns(deltaRow, "the nested row");
+
+            // A ghost row: core's copy; Create note lands the file and opens it.
+            AutomationElement ghostRow = WaitForTreeItemStartingWith(groups[1], automation, "Missing Note");
+            Assert.Equal(ghostName, ghostRow.Properties.Name.Value);
+            Assert.Equal("Unresolved", ghostRow.Properties.ItemStatus.Value);
+            ReassertForegroundForAChord(window);
+            ghostRow.Focus();
+            AssertEventuallyFocused(ghostRow, "the ghost row never took focus");
+            PressKey(VirtualKeyShort.ENTER);
+            string createdPath = Path.Combine(vaultRoot, ghostPath.Replace('/', Path.DirectorySeparatorChar));
+            Assert.True(
+                SpinWait.SpinUntil(() => File.Exists(createdPath), TimeSpan.FromSeconds(10)),
+                "Create note did not land the ghost's file");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsHeading"))?.Properties.Name.Value == Path.GetFileName(ghostPath),
+                    TimeSpan.FromSeconds(10)),
+                "the created note did not become the root");
+
+            // The created note is the root now, and its neighbourhood is the
+            // HEALED one: core re-resolves the ghost rows that named the new
+            // file inside the create's own transaction (session.rs, the
+            // rename path's pattern — this journey found the Windows shell
+            // never runs the mac's follow-up scan), so Alpha is the one
+            // incoming row and nothing is outgoing. The leaf reaches it
+            // through the probe's silent load (rule C Term 6).
+            AutomationElement? treeAgain = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        AutomationElement? candidate = window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsTree"));
+                        if (candidate is not null && !candidate.Properties.IsOffscreen.ValueOrDefault)
+                        {
+                            treeAgain = candidate;
+                            return true;
+                        }
+                        return false;
+                    },
+                    TimeSpan.FromSeconds(20)),
+                "the created note's tree never showed; the leaf reads: "
+                + (window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsStateText"))?.Properties.Name.ValueOrDefault ?? "<no state text>")
+                + " / heading "
+                + (window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsHeading"))?.Properties.Name.ValueOrDefault ?? "<none>"));
+            string healedIncomingHeader = ConnectionsGroupHeader("Linked from", 1);
+            string healedOutgoingHeader = ConnectionsGroupHeader("Links to", 0);
+            AutomationElement[] healedGroups = [];
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        healedGroups = treeAgain!.FindAllChildren(automation.ConditionFactory.ByControlType(ControlType.TreeItem));
+                        return healedGroups.Length == 2
+                            && healedGroups[0].Properties.Name.ValueOrDefault == healedIncomingHeader
+                            && healedGroups[1].Properties.Name.ValueOrDefault == healedOutgoingHeader;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the created note's groups never read the healed neighbourhood; they read: "
+                + string.Join(" / ", healedGroups.Select(g => g.Properties.Name.ValueOrDefault ?? "<none>")));
+            AutomationElement alphaRow = WaitForTreeItemStartingWith(healedGroups[0], automation, "Alpha");
+            Assert.StartsWith("Alpha, ", alphaRow.Properties.Name.Value, StringComparison.Ordinal);
+
+            // Directional focus LEFT from inside the tree lands in the editor
+            // (Term 9's route), never through the editor-geometry fallthrough.
+            ReassertForegroundForAChord(window);
+            alphaRow.Focus();
+            AssertEventuallyFocused(alphaRow, "the healed incoming row never took focus");
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.LEFT);
+            AutomationElement contentPane = WaitForElement(window, "ContentPane", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && IsDescendantOf(focused, contentPane), TimeSpan.FromSeconds(10)),
+                $"Left from the leaf did not land in the editor; focus is {DescribeFocusedElement(automation)}");
+
+            // Directional ENTRY (Term 9, B-13; pass 5's IPB-30): Right from
+            // the editor crosses the named right-pane boundary and lands on
+            // the leaf's anchor — the tree, which has rows — not on the rail.
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.RIGHT);
+            Assert.True(
+                SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && (focused.Equals(tree) || IsDescendantOf(focused, tree)), TimeSpan.FromSeconds(10)),
+                $"Right from the editor did not land in the leaf's tree; focus is {DescribeFocusedElement(automation)}");
+
+            // Right from INSIDE the tree is the boundary's terminal: the
+            // shell posts its line and focus stays in the tree — it never
+            // falls through to the editor-geometry route.
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.RIGHT);
+            Assert.False(
+                SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && !focused.Equals(tree) && !IsDescendantOf(focused, tree), TimeSpan.FromSeconds(2)),
+                $"Right from inside the tree moved focus out of the leaf; focus is {DescribeFocusedElement(automation)}");
+
+            AssertAxeClean(process, "graph-connections");
+        }
+        finally
+        {
+            if (process is { HasExited: false })
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(5000);
+            }
+            process?.Dispose();
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private static string RenderGraph(uniffi.slate_uniffi.GraphA11yEvent @event) =>
+        uniffi.slate_uniffi.SlateUniffiMethods.A11yRender(new uniffi.slate_uniffi.A11yEvent.Graph(@event)).Text;
+
+    /// <summary>The mac's group header (`ConnectionsPanel.swift:192`), the
+    /// journey's own copy of the literal (B-16).</summary>
+    private static string ConnectionsGroupHeader(string title, int count) =>
+        $"{title}, {count} {(count == 1 ? "note" : "notes")}";
+
+    /// <summary>0a's row copy from the connection record (B-8).</summary>
+    private static uniffi.slate_uniffi.GraphRowCopy ConnectionsRowCopy(uniffi.slate_uniffi.GraphConnectionRow row) =>
+        new(row.Label, row.Kind, row.InLinks, row.OutLinks, row.References, row.EmbedOnly);
+
+    /// <summary>The badge in the mac's precedence (`ConnectionsPanel.swift:311–315`).</summary>
+    private static string ConnectionsBadge(uniffi.slate_uniffi.GraphConnectionRow row)
+    {
+        if (row.Kind == uniffi.slate_uniffi.GraphNodeKind.Ghost)
+        {
+            return "Unresolved";
+        }
+        if (row.EmbedOnly)
+        {
+            return "Embed";
+        }
+        return row.Kind == uniffi.slate_uniffi.GraphNodeKind.Attachment ? "Attachment" : string.Empty;
+    }
+
+    /// <summary>The palette route PR A's journey proved: Ctrl+Shift+P, the
+    /// label typed, the row selected, Enter.</summary>
+    private static void RunPaletteCommand(Window window, UIA3Automation automation, string label)
+    {
+        window.SetForeground();
+        PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+        AutomationElement search = WaitForElement(window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
+        search.Patterns.Value.Pattern.SetValue(label);
+        AutomationElement results = WaitForElement(window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
+        AutomationElement? row = null;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    try
+                    {
+                        row = results
+                            .FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                            .FirstOrDefault(item => item.Name.StartsWith(label, StringComparison.Ordinal));
+                        return row is not null;
+                    }
+                    catch (System.Runtime.InteropServices.COMException)
+                    {
+                        return false;
+                    }
+                },
+                TimeSpan.FromSeconds(10)),
+            $"the palette never listed {label}");
+        row!.Patterns.SelectionItem.Pattern.Select();
+        PressKey(VirtualKeyShort.ENTER);
+    }
+
+    /// <summary>B-18: Invoke, SelectionItem, ExpandCollapse and ScrollItem on
+    /// a row's DATA peer — unconditionally.</summary>
+    private static void AssertTheFourTreePatterns(AutomationElement row, string what)
+    {
+        Assert.True(row.Patterns.Invoke.IsSupported, what + " must expose Invoke");
+        Assert.True(row.Patterns.SelectionItem.IsSupported, what + " must expose SelectionItem");
+        Assert.True(row.Patterns.ExpandCollapse.IsSupported, what + " must expose ExpandCollapse");
+        Assert.True(row.Patterns.ScrollItem.IsSupported, what + " must expose ScrollItem");
+    }
+
+    /// <summary>A row by its Name's prefix under a group — with
+    /// <paramref name="requireItems"/>, one that has nested rows (its
+    /// ExpandCollapse state is not LeafNode), so a container the rebuild
+    /// discarded is not mistaken for the new one.</summary>
+    private static AutomationElement WaitForTreeItemStartingWith(
+        AutomationElement group, UIA3Automation automation, string prefix, bool requireItems = false)
+    {
+        AutomationElement? found = null;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    try
+                    {
+                        found = group
+                            .FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                            .FirstOrDefault(item =>
+                                (item.Properties.Name.ValueOrDefault ?? string.Empty).StartsWith(prefix, StringComparison.Ordinal)
+                                && (!requireItems
+                                    || item.Patterns.ExpandCollapse.PatternOrDefault?.ExpandCollapseState.ValueOrDefault
+                                        is FlaUI.Core.Definitions.ExpandCollapseState.Expanded
+                                        or FlaUI.Core.Definitions.ExpandCollapseState.Collapsed
+                                        or FlaUI.Core.Definitions.ExpandCollapseState.PartiallyExpanded));
+                        return found is not null;
+                    }
+                    catch (System.Runtime.InteropServices.COMException)
+                    {
+                        return false;
+                    }
+                },
+                TimeSpan.FromSeconds(10)),
+            $"no tree row named '{prefix}…' materialized under '{group.Properties.Name.ValueOrDefault}' "
+            + $"(expand state {group.Patterns.ExpandCollapse.PatternOrDefault?.ExpandCollapseState.ValueOrDefault}); "
+            + "descendants: ["
+            + string.Join(" | ", group.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .Select(item => item.Properties.Name.ValueOrDefault ?? "<null>"))
+            + "]");
+        return found!;
+    }
+
+    private static bool IsDescendantOf(AutomationElement element, AutomationElement ancestor)
+    {
+        string target = ancestor.Properties.AutomationId.ValueOrDefault ?? string.Empty;
+        for (AutomationElement? node = element; node is not null; node = node.Parent)
+        {
+            if (target.Length > 0 && node.Properties.AutomationId.ValueOrDefault == target)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static string[] TypeColumn(AutomationElement grid)
     {
         FlaUI.Core.Patterns.IGridPattern pattern = grid.Patterns.Grid.Pattern;

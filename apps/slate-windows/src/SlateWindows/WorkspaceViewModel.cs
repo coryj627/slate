@@ -1601,6 +1601,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             session, announce, synchronousForTests: !_startInteractionBackgroundWork);
         Bibliography = new Panels.BibliographyViewModel(
             session, synchronousForTests: !_startInteractionBackgroundWork);
+        // W6-2 PR B (B-1; A-10 as amended, BD-12): the workspace's one
+        // graph relay FIRST, then the Connections leaf's document — BEFORE
+        // Restore and the first SyncPanels so the root follow reaches it —
+        // and the seeded initial mount (rule C, Term 3(a)).
+        _graphRelay = NewGraphRelay();
+        Connections = NewConnectionsLeaf();
+        SeedInitialConnectionsMount();
         // W4-7: the history document — note-scoped (fed by SyncPanels),
         // silent on its own (HINV-4); flows live in the History
         // coordinator partial. The compare-vs-current hash: a markdown
@@ -1648,6 +1655,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         SeedBibliographySources(synchronousForTests: !_startInteractionBackgroundWork);
         (_root, _activeGroup) = Restore(_persistence.Load());
         SyncPanels();
+        // W6-2 PR B (rule C, Term 3(a), B-1): the first sync was the initial
+        // value, not a change; launch with the pane visible and the leaf
+        // active is the seeded mount's ONE load, consumed here.
+        FinishConnectionsConstruction();
 
         CloseTabCommand = new RelayCommand(
             parameter => RunWorkspaceMutation(() => CloseTab(parameter)),
@@ -1694,7 +1705,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         GrowPaneCommand = new RelayCommand(_ => ResizeActivePane(0.05), _ => Groups.Count > 1);
         ShrinkPaneCommand = new RelayCommand(_ => ResizeActivePane(-0.05), _ => Groups.Count > 1);
         SaveActiveCommand = new RelayCommand(_ => SaveActive(), _ => ActiveGroup.ActiveTab?.IsMarkdown == true);
-        ToggleRightPaneCommand = new RelayCommand(_ => IsRightPaneVisible = !IsRightPaneVisible, _ => true);
+        ToggleRightPaneCommand = new RelayCommand(
+            _ =>
+            {
+                IsRightPaneVisible = !IsRightPaneVisible;
+                // W6-2 PR B (rule C, Term 3(a)): the reveal route's end.
+                ConsumePendingMount();
+            },
+            _ => true);
         OpenTasksReviewCommand = new RelayCommand(_ => OpenTasksReview(), _ => true);
     }
 
@@ -1766,6 +1784,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // same-path calls are no-ops, so over-calling is refetch-free.
         Citations.NoteChanged(
             ActiveGroup.ActiveTab is { IsMarkdown: true } citedTab ? citedTab.Path : null);
+        // W6-2 PR B (rule C, Terms 3(d)/(g); B-19 iv): the Connections
+        // leaf's root follows the same funnel — recorded inside a mutation,
+        // reconciled once at its boundary; immediate outside one.
+        SyncConnectionsRoot();
         // W4-7: history follows ANY path-backed tab (contract H12 — no
         // extension filtering; .canvas/.base histories are first-class).
         History.NoteChanged(
@@ -1843,6 +1865,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 {
                     History.Reload();
                 }
+                // W6-2 PR B (rule C, Term 3(b)): the leaf-shown transition,
+                // after the shell's line — a switch loads only when stale.
+                OnLeafShown(value);
                 Persist();
             }
         }
@@ -1865,6 +1890,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             SlateWindows.Panels.TasksReviewViewModel.DisplayName(
                 TasksReview.ActiveFilter)));
         FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
+        // W6-2 PR B (rule C, Term 3(a)): the reveal route's end — the leaf
+        // active NOW is the review, so no Connections load.
+        ConsumePendingMount();
     }
 
     public bool IsRightPaneVisible
@@ -1875,6 +1903,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             if (SetField(ref _isRightPaneVisible, value))
             {
                 _announce(value ? new A11yEvent.RightPaneShown() : new A11yEvent.RightPaneHidden());
+                // W6-2 PR B (rule C, Terms 2 and 3(a)): a reveal arms the
+                // pending mount its route consumes; a collapse clears the
+                // leaf's view-local state.
+                OnRightPaneVisibilityChanged(value);
             }
         }
     }

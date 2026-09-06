@@ -57,6 +57,10 @@ pub const GRAPH_QUERY_SURFACE: &[&str] = &[
     "graph_ring_styles",
     "graph_surface_modes",
     "graph_verbosities",
+    // W6-2 PR B (B-15): the leaf's fixed local filter and its depth
+    // clamp, so no host transcribes either.
+    "graph_connections_filter",
+    "graph_clamp_connections_depth",
 ];
 
 // ---------------------------------------------------------------------------
@@ -112,6 +116,26 @@ pub fn node_diameter(in_links: u32) -> f64 {
 /// The Connections depth, clamped into the window.
 pub fn clamp_depth(depth: u32) -> u32 {
     depth.clamp(CONNECTIONS_DEPTH_MIN, CONNECTIONS_DEPTH_MAX)
+}
+
+/// The Connections leaf's fixed local filter (W6-2 PR B, B-15): the
+/// mac's `connectionsFilter` (`AppState+Connections.swift:12–19`) —
+/// attachments ON (an `![[pic.png]]` neighbour is a real local-graph
+/// connection and earns the badge), ghosts on (they carry Create note),
+/// orphans-only off (a global-table preset, never the local view). NOT
+/// `GraphFilter::default()`, which excludes attachments (`graph.rs:242`).
+pub fn connections_filter() -> GraphFilter {
+    GraphFilter {
+        include_attachments: true,
+        include_ghosts: true,
+        orphans_only: false,
+    }
+}
+
+/// The Connections depth clamp as a query (W6-2 PR B, B-15):
+/// `clamp_depth` exported so no host reimplements the window.
+pub fn clamp_connections_depth(depth: u32) -> u32 {
+    clamp_depth(depth)
 }
 
 // ---------------------------------------------------------------------------
@@ -2399,7 +2423,8 @@ mod tests {
                 "{name} names no pub fn in graph_queries, graph_config or the session"
             );
         }
-        assert_eq!(GRAPH_QUERY_SURFACE.len(), 24);
+        // W6-2 PR A (A-5): twenty-four; PR B (B-15): twenty-six.
+        assert_eq!(GRAPH_QUERY_SURFACE.len(), 26);
     }
 
     // --- W6-2 PR A, A-5 / AD-1: the default sort is fetched ------------------
@@ -2413,5 +2438,34 @@ mod tests {
             GRAPH_QUERY_SURFACE.contains(&"graph_table_default_sort"),
             "the surface names it"
         );
+    }
+
+    // --- W6-2 PR B, B-15: the local filter and the clamp are queries -------
+
+    #[test]
+    fn connections_filter_is_the_macs_local_filter() {
+        let filter = connections_filter();
+        assert!(
+            filter.include_attachments,
+            "attachments ON (the mac's reason)"
+        );
+        assert!(filter.include_ghosts, "ghosts on (they carry Create note)");
+        assert!(!filter.orphans_only, "orphans-only is a table preset");
+        assert_ne!(
+            filter,
+            GraphFilter::default(),
+            "NOT the default filter (graph.rs:242 excludes attachments)"
+        );
+        assert!(GRAPH_QUERY_SURFACE.contains(&"graph_connections_filter"));
+    }
+
+    #[test]
+    fn clamp_connections_depth_is_the_named_constants() {
+        assert_eq!(clamp_connections_depth(0), CONNECTIONS_DEPTH_MIN);
+        assert_eq!(clamp_connections_depth(1), 1);
+        assert_eq!(clamp_connections_depth(3), 3);
+        assert_eq!(clamp_connections_depth(99), CONNECTIONS_DEPTH_MAX);
+        assert_eq!(clamp_connections_depth(2), clamp_depth(2));
+        assert!(GRAPH_QUERY_SURFACE.contains(&"graph_clamp_connections_depth"));
     }
 }

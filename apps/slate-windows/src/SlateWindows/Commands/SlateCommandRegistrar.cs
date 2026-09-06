@@ -497,6 +497,11 @@ internal static class SlateCommandRegistrar
 
             // Graph (W6-2 #746, PR A, contract A-12): the one chordless row.
             [ChordTable.Ids.GraphOpenTab] = host => host.Workspace?.OpenGraphCommand,
+            // Graph (W6-2 #746, PR B slice B1, contract B-14): the leaf's three
+            // chordless rows — always enabled, a bound a no-op.
+            [ChordTable.Ids.GraphShowConnections] = host => host.Workspace?.ShowConnectionsCommand,
+            [ChordTable.Ids.GraphConnectionsDeeper] = host => host.Workspace?.ConnectionsDeeperCommand,
+            [ChordTable.Ids.GraphConnectionsShallower] = host => host.Workspace?.ConnectionsShallowerCommand,
 
             // Canvas navigator, filter, Where-am-I and modes (W6-1 PR C,
             // contract C1). Every movement row stays enabled on a canvas

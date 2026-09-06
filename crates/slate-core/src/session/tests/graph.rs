@@ -143,32 +143,30 @@ fn incremental_save_edit_links_matches_rebuild() {
 }
 
 #[test]
-fn create_note_becomes_node_without_resolving_old_ghosts() {
-    // SQLite only re-resolves unresolved rows at scan / move time —
-    // creating a file does NOT heal existing ghost rows, and the
-    // graph replays SQLite rather than improving on it.
+fn create_note_heals_matching_ghosts_in_its_own_transaction() {
+    // W6-2 PR B (#746): a materialised note re-resolves the ghost rows
+    // that named it INSIDE `create_exclusive`'s transaction — the rename
+    // and batch-move paths' pattern — so a host that never runs a full
+    // scan after a structural mutation (the Windows shell) shows the
+    // healed neighbourhood as soon as the create lands. SQLite heals at
+    // scan, move and create time; the graph replays SQLite rather than
+    // improving on it.
     let (_tmp, session) = make_vault(|p| {
         p.write_file("a.md", b"[[Fresh Note]]").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
-    let _ = built_nodes(&session);
+    let nodes = built_nodes(&session);
+    assert!(
+        nodes.iter().any(|(k, _, _)| *k == ghost("fresh note")),
+        "the fixture starts with the ghost: {nodes:?}"
+    );
 
     session.create_exclusive("Fresh Note.md", "hello").unwrap();
     assert_matches_rebuild(&session, "create_exclusive of a ghost's namesake");
     let nodes = built_nodes(&session);
     assert!(
-        nodes.iter().any(|(k, _, _)| *k == ghost("fresh note")),
-        "ghost persists until a scan/move re-resolves: {nodes:?}"
-    );
-
-    // The next scan heals: rows re-resolve, ghost merges into the
-    // Path node (ghost merge on file-materialize).
-    session.scan_initial(&CancelToken::new()).unwrap();
-    assert_matches_rebuild(&session, "scan re-resolve after materialize");
-    let nodes = built_nodes(&session);
-    assert!(
         !nodes.iter().any(|(k, _, _)| *k == ghost("fresh note")),
-        "ghost must merge into the materialized note after re-resolve: {nodes:?}"
+        "the ghost merges into the materialised note at the create itself: {nodes:?}"
     );
     let edges = built_edges(&session);
     assert!(
@@ -178,7 +176,53 @@ fn create_note_becomes_node_without_resolving_old_ghosts() {
             EdgeKind::Link,
             1
         )),
-        "reference must now point at the real note: {edges:?}"
+        "the reference points at the real note before any scan: {edges:?}"
+    );
+
+    // A later scan finds nothing left to re-resolve: the same index.
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert_matches_rebuild(&session, "scan after an already-healed create");
+    assert_eq!(
+        edges,
+        built_edges(&session),
+        "the scan changes nothing the create had not already settled"
+    );
+}
+
+#[test]
+fn create_bytes_heals_matching_embed_ghosts_too() {
+    // The bytes sibling shares the binding, so a materialised
+    // attachment heals the embeds that named it the same way.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"see ![[pic.png]]").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let nodes = built_nodes(&session);
+    assert!(
+        nodes.iter().any(|(k, _, _)| *k == ghost("pic.png")),
+        "the fixture starts with the embed's ghost: {nodes:?}"
+    );
+
+    session
+        .create_exclusive_bytes("pic.png", b"\x89PNG")
+        .unwrap();
+    assert_matches_rebuild(
+        &session,
+        "create_exclusive_bytes of an embed ghost's namesake",
+    );
+    let nodes = built_nodes(&session);
+    assert!(
+        nodes.contains(&(
+            path_key("pic.png"),
+            NodeKind::Attachment,
+            "pic.png".to_string()
+        )) && !nodes.iter().any(|(k, _, _)| *k == ghost("pic.png")),
+        "the ghost merges into the attachment at the create itself: {nodes:?}"
+    );
+    let edges = built_edges(&session);
+    assert!(
+        edges.contains(&(path_key("a.md"), path_key("pic.png"), EdgeKind::Embed, 1)),
+        "the embed points at the real attachment before any scan: {edges:?}"
     );
 }
 

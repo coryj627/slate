@@ -228,12 +228,32 @@ internal abstract class PanelWorkScheduler : BindableBase
     /// observe a fault; a fact asserts this stays zero.</summary>
     internal int FaultedWorkForTests => Volatile.Read(ref _faultedWork);
 
+    /// <summary>Test seam: how many tracked tasks are pending — read from
+    /// inside a compute to prove its registration preceded it (IPB-13).</summary>
+    internal int PendingWorkForTests
+    {
+        get
+        {
+            lock (_workLock)
+            {
+                return _pendingWork.Count;
+            }
+        }
+    }
+
     private void TrackWork(Task work)
     {
         lock (_workLock)
         {
             _ = _pendingWork.Add(work);
         }
+        WatchTracked(work);
+    }
+
+    /// <summary>The tracked task's removal, and its fault counted, once
+    /// it completes.</summary>
+    private void WatchTracked(Task work)
+    {
         _ = work.ContinueWith(
             completed =>
             {
@@ -301,12 +321,52 @@ internal abstract class PanelWorkScheduler : BindableBase
     {
         ArgumentNullException.ThrowIfNull(compute);
         ArgumentNullException.ThrowIfNull(apply);
-        if (_isShutDown)
+        // Test seam: the caller parked BEFORE the admission, so a fact can
+        // shut the scheduler down here and prove nothing is tracked after
+        // the flip.
+        BeforeRegisterForTests?.Invoke();
+        // The registration PRECEDES the worker (codex post-implementation
+        // pass 3, IPB-13): an async method's synchronous prefix queues the
+        // pool body before it returns its task, so tracking that task
+        // afterwards left a window in which a drain on another thread saw
+        // an empty set while a compute was live. A placeholder joins the
+        // tracked set first and completes — faulted or not — when the real
+        // task does. Admission and registration are ONE transition under
+        // the work lock (pass 5, IPB-29): a shutdown lands either before
+        // the check, and nothing is registered, or after the registration,
+        // and the drain waits for the placeholder — never between.
+        var registered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_workLock)
         {
-            return;
+            if (_isShutDown)
+            {
+                return;
+            }
+            _ = _pendingWork.Add(registered.Task);
         }
-        TrackWork(RunAlwaysAsync(compute, apply));
+        WatchTracked(registered.Task);
+        _ = RunAlwaysAsync(compute, apply).ContinueWith(
+            completed =>
+            {
+                if (completed.IsFaulted)
+                {
+                    registered.SetException(completed.Exception!.InnerExceptions);
+                }
+                else
+                {
+                    registered.SetResult();
+                }
+            },
+            TaskContinuationOptions.ExecuteSynchronously);
+        // Test seam: the caller parked right after the schedule, so a fact
+        // can read the tracked set from inside a compute that is already
+        // running and prove the registration preceded it.
+        AfterScheduleForTests?.Invoke();
     }
+
+    internal Action? AfterScheduleForTests { get; set; }
+
+    internal Action? BeforeRegisterForTests { get; set; }
 
     private async Task RunAlwaysAsync<T>(Func<T> compute, Action<T> apply)
     {

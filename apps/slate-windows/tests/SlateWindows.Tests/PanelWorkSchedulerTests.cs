@@ -214,6 +214,75 @@ public sealed class PanelWorkSchedulerTests
         });
     }
 
+    /// <summary>W6-2 PR B's post-implementation pass 3 (IPB-13; A-2, B-1):
+    /// the registration precedes the worker — when a compute starts, its
+    /// task is already in the tracked set, so a drain observed from inside
+    /// the compute is pending, never complete; the placeholder completes
+    /// with the real task and the drain returns after the apply.</summary>
+    [Fact]
+    public void AComputeStartsOnlyAfterItsRegistrationAndADrainWaitsForIt()
+    {
+        WithPumpedContext(pump =>
+        {
+            var probe = new Probe(synchronousForTests: false);
+            int pendingAtStart = -1;
+            bool drainCompleteAtStart = true;
+            // The caller is PARKED right after it scheduled the worker, until
+            // the compute has read the tracked set: whatever the caller does
+            // after the schedule cannot be what the compute saw.
+            using var computeRead = new ManualResetEventSlim(false);
+            probe.BeforeComputeForTests = () =>
+            {
+                pendingAtStart = probe.PendingWorkForTests;
+                drainCompleteAtStart = probe.WhenAllWorkDrained().IsCompleted;
+                computeRead.Set();
+            };
+            probe.AfterScheduleForTests = () => Assert.True(computeRead.Wait(TimeSpan.FromSeconds(10)), "the compute never started");
+            probe.Run();
+            Task drain = probe.DrainAll();
+            Assert.True(pump(() => drain.IsCompleted), "the tracked task completed");
+            drain.GetAwaiter().GetResult();
+            Assert.Equal(1, pendingAtStart);
+            Assert.False(drainCompleteAtStart);
+            Assert.Equal(1, probe.Applies);
+            Assert.Equal(0, probe.PendingWorkForTests);
+        });
+    }
+
+    /// <summary>IPB-29 (pass 5's ledger): a shutdown that lands while a caller
+    /// is inside the primitive and BEFORE its admission registers nothing —
+    /// the check and the registration are one locked transition — so a drain
+    /// after the flip has nothing to wait for and the compute never starts.
+    /// The body would park on an uncompleted prerequisite, so a placeholder
+    /// registered after the flip would stay tracked and be seen.</summary>
+    [Fact]
+    public void AShutdownBeforeTheAdmissionRegistersNothingAndTheComputeNeverStarts()
+    {
+        WithPumpedContext(pump =>
+        {
+            var probe = new Probe(synchronousForTests: false);
+            var prerequisite = new TaskCompletionSource();
+            probe.GateWorkOn(prerequisite.Task);
+            using var parked = new ManualResetEventSlim(false);
+            using var release = new ManualResetEventSlim(false);
+            probe.BeforeRegisterForTests = () =>
+            {
+                parked.Set();
+                Assert.True(release.Wait(TimeSpan.FromSeconds(10)), "the caller was never released");
+            };
+            Task caller = Task.Run(() => probe.Run());
+            Assert.True(parked.Wait(TimeSpan.FromSeconds(10)), "the caller never reached the seam");
+            probe.Shutdown();
+            release.Set();
+            caller.GetAwaiter().GetResult();
+            Assert.Equal(0, probe.PendingWorkForTests);
+            Assert.True(probe.DrainAll().IsCompleted, "a drain after the flip waited for something");
+            prerequisite.SetResult();
+            Assert.Null(probe.ComputeThread);
+            Assert.Equal(0, probe.Applies);
+        });
+    }
+
     /// <summary>IPA-5: a teardown after the compute finished and before the
     /// apply was dispatched skips the apply — the tracked task still
     /// completes, so the drain returns.</summary>

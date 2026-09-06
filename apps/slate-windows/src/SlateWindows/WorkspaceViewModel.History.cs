@@ -82,6 +82,9 @@ internal sealed partial class WorkspaceViewModel
             History.Reload();
         }
         FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
+        // W6-2 PR B (rule C, Term 3(a)): the reveal route's end — the leaf
+        // active NOW is History, so no Connections load.
+        ConsumePendingMount();
     }
 
     private System.Windows.Input.ICommand? _showHistoryPanelCommand;

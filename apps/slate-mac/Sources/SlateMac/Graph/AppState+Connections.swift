@@ -9,13 +9,15 @@ import Foundation
 /// (structure + metrics + the pre-rendered `audioSummary`) plus, at
 /// depth 1, `note_load_bundle` for per-row snippets (spec §P1-1).
 extension AppState {
-    /// The default filter for the leaf: ghosts on (they carry the
-    /// "Create note" action) and attachments ON — an `![[pic.png]]`
-    /// neighbor is a real local-graph connection and earns the
-    /// attachment badge (review round 1 finding 7). Orphans-only is a
-    /// global-table preset, never the local view.
+    /// The default filter for the leaf — core's `graph_connections_filter`
+    /// (W6-2 PR B, B-15): ghosts on (they carry the "Create note" action)
+    /// and attachments ON — an `![[pic.png]]` neighbor is a real
+    /// local-graph connection and earns the attachment badge (review
+    /// round 1 finding 7). Orphans-only is a global-table preset, never
+    /// the local view. The reason lives with the query; no host
+    /// transcribes the literal.
     private var connectionsFilter: GraphFilter {
-        GraphFilter(includeAttachments: true, includeGhosts: true, orphansOnly: false)
+        graphConnectionsFilter()
     }
 
     /// True when the Connections leaf is the active right-pane leaf.
@@ -29,11 +31,16 @@ extension AppState {
     /// Core's constants (`graph_constants`, 0b-8), fetched once (design B).
     nonisolated static let graphConstantsOnce = graphConstants()
 
-    /// Clamp any incoming depth into core's window. Pure — `nonisolated`
-    /// so unit tests can call it off the main actor.
+    /// Clamp any incoming depth into core's window — core's
+    /// `graph_clamp_connections_depth` (W6-2 PR B, B-15); the wrapper
+    /// survives for its `Int` callers and its tests. Pure —
+    /// `nonisolated` so unit tests can call it off the main actor. ANY
+    /// `Int` is admitted: a negative depth saturates to zero and clamps at
+    /// the floor, one beyond `UInt32.max` saturates to it and clamps at
+    /// the ceiling — the conversion never traps (W6-2 PR B's
+    /// post-implementation pass 2, IPB-11).
     nonisolated static func clampConnectionsDepth(_ depth: Int) -> Int {
-        let c = graphConstantsOnce
-        return min(Int(c.connectionsDepthMax), max(Int(c.connectionsDepthMin), depth))
+        Int(graphClampConnectionsDepth(depth: UInt32(clamping: depth)))
     }
 
     /// Clear all Connections state — called on vault open/close so a
