@@ -170,6 +170,15 @@ LEAF_DELIVERED = {
         "implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + "
         "MainWindow leaf body; `RightPanePanelsTests` + FlaUI "
         "`RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates`"),
+    "connections": (
+        "implemented 2026-09-06 (#746, W6-2 PR B1 + B2): `ConnectionsLeafViewModel` "
+        "(its own document over the workspace's one relay and one view "
+        "state) + `ConnectionsLeafView` leaf body; re-root from the leaf's, "
+        "the table's and the Bases grid's rows and Back (`Ctrl+[`); "
+        "`ConnectionsLeafTests` (rule C's and rule D's facts and the three "
+        "model families) + `ConnectionsLeafViewTests` + "
+        "`ConnectionsReRootBasesTests` + FlaUI "
+        "`GraphConnections_LeafWalkDepthAndReRoot_AreClean`"),
     "embeds": (
         "implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + "
         "shared `EditorEmbedPreviewView` cards; `RightPanePanelsTests` "
@@ -661,6 +670,9 @@ W6_2_DELIVERED_COMMANDS = {
     "slate.graph.showConnections",
     "slate.graph.connectionsDeeper",
     "slate.graph.connectionsShallower",
+    # W6-2 PR B, slice B2 (#746, contract B2-4): Back — the mac's ⌘[ panel
+    # key as a command, Ctrl+[ delivered by the leaf's body.
+    "slate.graph.connectionsBack",
 }
 
 W6_1_DELIVERED_COMMANDS = {

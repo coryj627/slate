@@ -94,6 +94,37 @@ public sealed class GraphTableTests
         }
     }
 
+    /// <summary>W6-2 PR B2, Term 15 (IGJ-6): the table VIEW holds no write of
+    /// its own — its current row selects through the document's guarded
+    /// method — so a view retained over a closed graph tab moves nothing in
+    /// the WORKSPACE's view state, which outlives the document (B2-1).</summary>
+    [Fact]
+    public void ARetainedTableViewOverAClosedTabWritesNothing()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-retained-view");
+            GraphDocumentViewModel document = host.Open();
+            var view = new GraphTableView { Model = document };
+            AccessibleDataGrid grid = view.GridForTests;
+            GraphViewState state = host.Workspace.GraphViewStateForTests;
+            Assert.Same(state, document.ViewState);
+
+            // Live: the grid's current row writes the key through the document.
+            GraphTableRow second = document.Publication.Rows[1];
+            Assert.True(grid.SelectRow(row => ReferenceEquals(row, second)));
+            Assert.Equal(second.StableKey, state.SelectedKey);
+
+            // Retired: the retained view's current row moves nothing.
+            host.Workspace.CloseActiveTabCommand.Execute(null);
+            Assert.True(document.IsRetired);
+            GraphTableRow first = document.Publication.Rows[0];
+            _ = grid.SelectRow(row => ReferenceEquals(row, first));
+            Assert.Equal(second.StableKey, state.SelectedKey);
+            Assert.False(document.SelectRow(first.StableKey));
+        });
+    }
+
     [Fact]
     public void TheColumnsAreCoresVectorInOrderWithTheNoteColumnAsRowHeader()
     {

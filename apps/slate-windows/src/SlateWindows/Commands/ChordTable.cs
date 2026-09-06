@@ -72,6 +72,13 @@ internal enum ChordScope
     /// A's one row is chordless and carries <see cref="ChordScope.None"/>
     /// through <c>Reg</c>'s rule.</summary>
     Graph,
+
+    /// <summary>The Connections leaf's own key handling (W6-2 PR B2, B2-4):
+    /// Back's <c>Ctrl+[</c> is delivered by the leaf's BODY through its
+    /// tunnelling handler — the mac's panel-level key, so it works from
+    /// the depth control and the anchor as from the tree — with Control
+    /// alone (B2-D11), and falls through when there is nothing to pop.</summary>
+    Connections,
 }
 
 /// <summary>
@@ -278,6 +285,10 @@ internal static class ChordTable
         public const string GraphShowConnections = "slate.graph.showConnections";
         public const string GraphConnectionsDeeper = "slate.graph.connectionsDeeper";
         public const string GraphConnectionsShallower = "slate.graph.connectionsShallower";
+
+        /// <summary>W6-2 PR B2 (B2-4): the Connections leaf's Back — the mac's
+        /// panel key <c>⌘[</c>, a command on Windows (B2-D6).</summary>
+        public const string GraphConnectionsBack = "slate.graph.connectionsBack";
 
         // Canvas (W6-1 #745). Ids are byte-identical to mac's.
         public const string CanvasShowOutline = "slate.canvas.showOutline";
@@ -957,6 +968,16 @@ internal static class ChordTable
             "Increase the Connections leaf depth by one (up to 3 links away)."),
         Reg(Ids.GraphConnectionsShallower, "Connections: Shallower", CommandSection.Graph,
             "Decrease the Connections leaf depth by one (down to direct links)."),
+        // W6-2 PR B2 (B2-4, B2D-3): Back, the mac's ⌘[ panel key as a
+        // command, delivered by the leaf's body in its own scope with
+        // Control ALONE — the mac's owner fires on any set containing
+        // Command (B2-D11) — so the sidebar's history keeps Ctrl+Alt+[ and
+        // Previous Tab Ctrl+Shift+[. The chord itself follows the ⌘→Ctrl
+        // rule, so the row records no chord divergence; the mac's Back is
+        // a panel key, not a catalog command (B2-D6).
+        Reg(Ids.GraphConnectionsBack, "Connections: Back", CommandSection.Graph,
+            "Return the Connections leaf to the note it showed before the last Show connections.",
+            "⌘[", "Ctrl+[", ChordScope.Connections),
     ];
 
     private static IEnumerable<ChordTableEntry> CanvasRows() =>

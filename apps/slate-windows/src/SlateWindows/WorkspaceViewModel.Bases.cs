@@ -351,6 +351,30 @@ internal sealed partial class WorkspaceViewModel
             ShowBacklinksFor(row.FilePath, () => document.AnnounceEvent(new A11yEvent.BasesBacklinksFor(
                 DisplayNameWithoutExtension(row.FilePath)))));
 
+    private RelayCommand? _basesShowConnectionsCommand;
+
+    /// <summary>W6-2 PR B2 (B2-5): Bases' Show connections — the mac's
+    /// reserved row action realised (Bases gap O15), the row command and the
+    /// surface seam sharing ONE route.</summary>
+    public System.Windows.Input.ICommand BasesShowConnectionsCommand =>
+        _basesShowConnectionsCommand ??= BasesRowCommand((document, row) => _ = BasesShowConnectionsFor(document, row));
+
+    /// <summary>The Bases entrance to the re-root funnel, ADDRESSED (IGJ-9):
+    /// the invoking document must be the ACTIVE hosted one — the docked
+    /// surface is bound to it, so its tab is the source — else nothing;
+    /// then the funnel on the row's note. The Bases post no line of their
+    /// own: the leaf's re-root line is the route's (B2-5).</summary>
+    internal bool BasesShowConnectionsFor(BaseDocumentViewModel document, BasesRow row)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(row);
+        if (!ReferenceEquals(ActiveBaseDocument, document) || !BasesDocumentInteractive(document))
+        {
+            return false;
+        }
+        return ReRootConnectionsOn(row.FilePath);
+    }
+
     /// <summary>Bases' Show backlinks — the ONE route for both of its sites
     /// (the row command and the surface seam): the open, the leaf switch,
     /// the reveal and the mount's consume inside ONE outer workspace
@@ -631,7 +655,7 @@ internal sealed partial class WorkspaceViewModel
             _basesViewAsListCommand, _basesQuickFilterCommand,
             _basesSaveSortToViewCommand, _basesSortByColumnCommand,
             _basesOpenRowCommand, _basesCopyLinkCommand,
-            _basesShowBacklinksCommand, _basesEditPropertyCommand,
+            _basesShowBacklinksCommand, _basesShowConnectionsCommand, _basesEditPropertyCommand,
             _basesExportCsvCommand, _basesExportMarkdownCommand,
             _basesCopyMarkdownCommand,
         })
@@ -1364,6 +1388,9 @@ internal sealed partial class WorkspaceViewModel
         document.ShowBacklinksFromSurface = row =>
             ShowBacklinksFor(row.FilePath, () => document.AnnounceEvent(new A11yEvent.BasesBacklinksFor(
                 DisplayNameWithoutExtension(row.FilePath))));
+        // W6-2 PR B2 (B2-5): the seam and the action's core title.
+        document.ShowConnectionsFromSurface = row => _ = BasesShowConnectionsFor(document, row);
+        document.ShowConnectionsTitle = Connections.ActionTitle(GraphRowAction.ShowConnections);
     }
 
     private static object RowOverride(BaseDocumentViewModel document, BasesRow row)

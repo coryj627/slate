@@ -3105,7 +3105,14 @@ groups, empty until PR C reads them), `Mode: GraphSurfaceMode` (Table)
 census that no other type under `Graph/` declares a MUTABLE field of
 those five names or a second mutable copy of the filter, the query or
 the mode; the immutable request record, token, envelope and
-publication of A-2 carry copies by design. Attachment SEATS
+publication of A-2 carry copies by design. **Amended by the owner on
+2026-09-06 (W6-2 PR B2, B2D-1):** the view state is owned by the
+WORKSPACE — one instance, constructed in the workspace's constructor
+beside the relay, handed to the document at construction and to the
+Connections leaf, surviving the document's retirement (which no longer
+resets it) and dropped with the workspace; the census's wall widens to
+the workspace's graph partials and an instance census counts the one
+construction (§PR B2, B2-1). Attachment SEATS
 and never starts: every tab of kind Graph attaches through
 `AttachTabDocumentsIfNeeded` (`WorkspaceViewModel.Bases.cs:1060–1079`)
 by a new arm beside the canvas's that creates the document on the first
@@ -6382,5 +6389,1318 @@ shot. Gates: only the model's own file changed since 434d6bf, so the suite's, th
   the create's heal — `create_note_heals_matching_ghosts_in_its_own_transaction`
   and `create_bytes_heals_matching_embed_ghosts_too` (TGB-6).
 - Mac: the literal filter and the local clamp become the calls.
+
+## PR B2 — re-root and Back, Show connections from three surfaces, the shared selection
+
+**Goal (spec §PR B, slice B2 of the owner's split, BD-1).** The
+standalone leaf B1 shipped (`Graph/ConnectionsLeafViewModel.cs`, merged
+as bd1ffaf) follows the note in view and nothing else. B2 adds the
+mac's re-root: a Show connections action on ANY surface — the leaf's own
+rows, the graph table's rows, a Bases row — pins the leaf on that note
+with a back stack, `GraphReRooted` then the summary; Back (⌘[) pops one
+step and restores the prior view exactly; and the selection is SHARED
+with the graph document through `GraphViewState`, which the owner has
+now placed on the workspace (B2D-1, the amendment of A-1 and spec R-B
+recorded in place). PR D's diagram reads the re-root seam
+(`GraphDiagramView.swift:1023–1026` re-roots from a node); it is not
+built here.
+
+**This is revision 5 — FROZEN under the PR 0b precedent (protocol
+rules 5 and 4).** Round 1 (IGI-1..22, ten blockers) found revision 1's
+terms wrong; revision 2 patched them at the sites named and round 2
+(IGJ-1..17, eleven blockers) found three blockers CREATED by the
+patches — rule 5, the first time; revision 3 modelled the subsystem as
+a transition object spanning the open, and round 3 (IGK-1..21,
+fifteen blockers) found five blockers created by that model — rule 5,
+the second time; revision 4 removed the window the transition had
+tried to make safe — the pin in a mutation of its own, the open an
+ordinary open beside it — and round 4 (IGL-1..13, seven blockers)
+found five blockers created by that removal — rule 5, the third time.
+Sixty findings, thirty-six blockers across rounds 1–3 and seven in
+round 4; their pump subset — leaf state, the note in view, the focus
+and the lines around an OPEN whose dirty gate is a modal dialog that
+pumps the dispatcher (`MainWindow.xaml.cs:136–140`) — is where every
+revision's fix created the next round's blockers; the rest (the
+selection's ownership, stale-row admission, source addressing, list
+parity, the spec's counts) were found once and taken. As B1's section
+did at revision 8, this one now FREEZES: the text below is corrected
+for every round-4 finding as its discharge, and the four rounds'
+ledgers are carried as the ledger the task loop discharges by code —
+precedent applied; the owner may overrule. No round 5. Revision 4's
+order — pin first, open second — is DELIBERATELY not the mac's (the
+mac pushes, opens, then pins, loads, keys and announces,
+`AppState+Connections.swift:213–230`); it preserves the mac's outcome
+for a refused re-root (the pin stands) while holding nothing across
+the open (IGL-13).
+
+**The owner's decision (2026-09-06).** Asked how spec R-B should be
+amended for B2 — a workspace-level view state; a per-surface exception
+keeping the leaf's selection its own with Show connections as a
+hand-off; or deferral — the owner chose the workspace-level view state:
+`GraphViewState` (the selected key, the backend filter, the name query,
+the groups, the mode) is owned by the WORKSPACE, one per workspace,
+constructed beside the relay, shared by the graph document and the
+leaf, and it survives the document's retirement. The mac's
+`graphSelectedNodeKey` lives on `AppState` (`AppState.swift:3108`) —
+but the mac CLEARS it, with the table's filter, when the last graph tab
+closes (`releaseGraphStateIfUnreferenced` → `resetGraphTableState`,
+`AppState+GraphTable.swift:112–150`; `GraphTabRoutingTests.swift:352`
+asserts "closing the graph tab clears the shared selection") and drops
+it with the vault (`:145–146`). The owner's shape therefore diverges
+from the mac at the graph tab's close — recorded as B2-D4, with the
+one-line alternative the owner may take (IGI-12). On Windows a vault
+open constructs a new workspace (`VaultLifecycleViewModel.cs:986`), so
+the workspace's construction IS the mac's vault reset.
+
+### What stands today (B1, merged)
+
+- The leaf's root is the note in view and nothing else:
+  `ConnectionsLeafViewModel.NoteChanged(path, activeAndMounted)`
+  (`:406–435`) is rule C's Term 3(d) — a change advances the epoch and
+  the sequence, clears the selection, loads only while ACTIVE and
+  MOUNTED, else STALE; the workspace hands it the tab in view through
+  `SyncConnectionsRoot` and the boundary's `ReconcileConnectionsRoot`,
+  both through the one funnel `ReconcileConnectionsRootTo`
+  (`WorkspaceViewModel.Connections.cs:195–232`, B-19 (iv), IPB-31).
+  The candidate is the ACTIVE tab's path when its kind is Markdown and
+  NULL otherwise (`:197`) — and Windows has no attachment tab kind:
+  `WorkspaceItemKind` is Markdown, Canvas, Base, SavedQuery, Dashboard,
+  Graph (`WorkspacePersistence.cs:9–17`), and `ItemForPath` maps every
+  extension but `.canvas` and `.base` to Markdown
+  (`WorkspaceViewModel.cs:2322–2330`), so an opened attachment such as
+  an image is a Markdown-kind tab and IS the note in view (IGK-10) —
+  while a `.canvas` or a `.base` file, an Attachment node in core's
+  graph too (`crates/slate-core/src/session/tests/graph.rs:1670`),
+  opens as a Canvas or a Base tab and yields a NULL candidate
+  (IGL-1). `RunWorkspaceMutation` nests by depth; at the outermost
+  boundary the depth is already ZERO when `SyncPanels` runs, so
+  `SyncConnectionsRoot` reconciles at once through the funnel, and
+  `ReconcileConnectionsRoot` then REPLAYS a candidate recorded during
+  the mutation — a candidate a nested `SyncPanels()` recorded (a rename
+  hook's, `WorkspaceViewModel.cs:2079`) can be OLDER than the note the
+  boundary just applied, and the replay moves the root back to it
+  (`WorkspaceViewModel.Persistence.cs:148–176`; IGK-1, IGL-2) — a
+  latent defect of B1's mechanics against B-19 (iv)'s "reconciled
+  once", which B2 corrects. A rail switch to the leaf loads through `OnLeafShown` →
+  `Shown()` unless a Show or a pending mount suppresses it
+  (`:146–154`); the suppression is a Boolean (`:36`, `:165`). The
+  `ActiveLeaf` setter posts `LeafPanelShown` synchronously
+  (`WorkspaceViewModel.cs:1840`), the pane setter `RightPaneShown`
+  (`:1905`).
+- The palette's Show connections (`ShowConnections`, `:163–190`) is
+  Term 3(c) and the SHAPE this section reuses: under the suppression,
+  reveal the pane, activate the leaf (or post the graph family's panel
+  line when already active), consume the pending mount INERT; then, the
+  suppression released, ONE explicit audible load (`Connections.Show()`)
+  and the focus request `FocusBoundaryRequested(RightPane)`, which
+  `MainWindow` dispatches onto the leaf's anchor
+  (`MainWindow.xaml.cs:624–648`) — where B1's Term 9 posts
+  `LoadingConnections` if the load is still Loading when focus lands
+  (`ConnectionsLeafViewModel.cs:337–354`).
+- The leaf's selection is its own — `SelectedOccurrence` (`:234`), the
+  occurrence scoped by the root and the mount (B-6, BD-5) — and the
+  leaf writes no shared key (B-D1). The receiver (`:607–690`) speaks a
+  token-current completion by the active leaf alone: an audible load's
+  success posts the summary, its failure `GraphBlocked{ConnectionsLoadFailed}`
+  (`:647–665`, Term 5; IGK-14).
+- The row action Show connections is listed and DISABLED with the
+  reason "Show connections is not available yet."
+  (`IsActionEnabled` → false, `ActionDisabledReason` →
+  `ConnectionsPhrase.ShowConnectionsUnavailable`, `:721–733`; B-9,
+  B-D6). The graph table's document carries the seam
+  `ShowConnectionsFromSurface` (`GraphDocumentViewModel.cs:273`), unset
+  by the workspace (`:590`, `:617–619`); its `Execute` checks
+  retirement and the action's availability, NOT the row's membership
+  of the current publication (`:596–602`) — `GraphPublication.ContainsNode`
+  scans the SNAPSHOT's nodes (`GraphPublication.cs:89–104`), the
+  authority A-7's revalidation deliberately reads, while
+  `Publication.Rows` is the narrower vector a name or kind overlay
+  republishes (IGK-9) — and `AccessibleDataGrid`'s menu items capture
+  their row object (`Grids/AccessibleDataGrid.cs:1367`), the cached-row
+  class TGB-9 walled in the leaf (`IsRowCurrent`). Every other table
+  action is ADDRESSED: `FocusGraphAddress` (`WorkspaceViewModel.Graph.cs:293–307`)
+  makes the graph tab and its group active first (A-8/A-9). The Bases
+  surface: the GRID renderer's row actions are Open, Copy link, Show
+  backlinks, Edit property (`Bases/BaseSurfaceView.cs:689–713`); the
+  LIST renderer has no row-action mechanism at all (`:892–927`), where
+  the mac's `listRowActions` carry the same set (`BaseContainerView.swift:323–368`;
+  `p1_spec.md:51`) — a gap of the Bases port, not of this PR (IGK-15);
+  `RowCommand` admits a row while the document is Ready or Degraded
+  and the row is bound (`:996–1004`) without checking it is in the
+  current result; the seams are installed PER DOCUMENT
+  (`WorkspaceViewModel.Bases.cs:1361–1366`) and carry no source tab, so
+  `BasesOpenRow` opens through `OpenPath` into the ACTIVE group
+  (`:489–497`), as `ShowBacklinksFor` does (`:362`, IPB-2).
+- `GraphViewState` is the graph DOCUMENT's: constructed in its
+  constructor (`GraphDocumentViewModel.cs:136`), exposed at `:219`,
+  revalidated at every pair publication (`:532–538`, A-7), RESET at
+  retirement (`:657`, `GraphViewState.Reset()` `:69–76`); the table
+  VIEW writes `SelectedKey` directly from its current-row handler
+  (`GraphTableView.OnCurrentRowChanged`, `:185–197`) with no
+  retirement or publication guard — harmless while the state dies with
+  the document, not once it outlives it (IGJ-6). The no-shadow census
+  (`Censuses/GraphAnnouncerCensus.cs:564–600`) forbids a mutable copy
+  of the five NAMES under `Graph/` — by identifier, so a differently
+  named field of the same type would pass (IGK-19). The
+  announcement-seam census names the ONE graph-family posting site
+  outside `Graph/` (`AnnouncementSeamCensus.cs:686–747`: the create
+  funnel's completion) and inventories the leaf's posts inside it.
+- The leaf view is bound to the leaf's document alone
+  (`MainWindow.xaml:1915–1916`; `ConnectionsLeafView.cs:192–302`) and
+  holds no workspace reference; the palette resolves an `ICommand`
+  whose `Execute` returns nothing (`SlateCommandRegistrar.cs:132–148`)
+  (IGK-12). `Ctrl+Shift+[` is Previous Tab (`MainWindow.xaml:41–49`);
+  `Ctrl+Alt+[` and `]` are the sidebar's history (`Commands/ChordTable.cs:1313–1318`);
+  `Ctrl+[` alone is bound to nothing (IGK-16).
+- The open: the public `OpenPath(path, target)` returns nothing and
+  wraps the private `OpenPathCore` in a mutation
+  (`WorkspaceViewModel.cs:1938–1939`; IGL-8); `OpenPathCore(path,
+  target)` (`:1997–2008`) builds an IMMUTABLE item state from the path
+  and hands it to `TryOpenItem` (`WorkspaceViewModel.Layout.cs:112–160`),
+  which ACTIVATES an existing tab of the same item (`:117–125`,
+  `TabFocused` from the group's setter, SYNCHRONOUSLY and with no dirty
+  gate on that branch — IGL-4) or navigates the current tab in place
+  (`:136–155`, nothing posted) and requests the editor's focus
+  (`:123–125`, `:175`), which `MainWindow` queues at INPUT priority
+  (`MainWindow.xaml.cs:444–450`) — strictly after the leaf's focus
+  boundary, which is queued at Normal (`:624–648`; the code's own note
+  at `:1642–1647`), so an open's editor focus lands LAST (IGL-3);
+  `TryOpenItem` captures the ACTIVE TAB alone before the gate and
+  installs into it afterwards with no check that its group is still
+  hosted or still holds it (`:136–171`; the group's active-tab setter
+  checks no membership, `WorkspaceViewModel.cs:1323–1337` — IGL-6); a
+  dirty tab asks the shell's modal `MessageBox`
+  (`:143–150`; `MainWindow.xaml.cs:136–140`), and the dispatcher pumps
+  while it is up — the lifecycle adapter's rename and delete arms
+  (`VaultLifecycleViewModel.cs:728`) and any invocation can run inside
+  the open; the item state is NOT re-resolved after the dialog, so an
+  open whose path is renamed mid-dialog installs the OLD path (IGK-3 —
+  a property of every open on Windows, recorded below, not this PR's
+  to change); a refusal returns false. `RetargetPath` (`WorkspaceViewModel.cs:2037–2079`)
+  rewrites the open and closed tabs and the Base and Canvas document
+  registries by `IsSameOrDescendantPath` (`:2755–2760`, `TryRetargetPath`
+  `:2762`), persists and ends in `SyncPanels()`; a delete posts the
+  shell's High missing-file line (`:2167–2195`); the sidebar's own
+  refresh is the lifecycle adapter's (`VaultLifecycleViewModel.cs:785`).
+  The files sidebar's history records only its OWN opens
+  (`FilesSidebarViewModel.RequestOpen(…, trackHistory: true)`,
+  `:1857–1890`); `OpenPathCore`'s `FileOpened` feeds the Quick
+  Switcher's recents alone (`WorkspaceViewModel.cs:2007`,
+  `VaultLifecycleViewModel.cs:1024`).
+- Core's row-action eligibility (`graph_queries.rs:839–853`): the four
+  navigation actions — Show connections among them — belong to a Note
+  AND an Attachment (file-backed nodes); a Ghost has Create note alone.
+  The exported vector is `graph_row_actions(kind)`, each spec carrying
+  its title (`slate-uniffi/src/lib.rs:3802–3821`); `row_action_title`
+  is core-internal. The connections tree OMITS the centre node and
+  self-edges (`:1058–1070`): the leaf's own rows never show the root.
+- The B-10 model drives thirty routes over the pane, the leaf, three
+  roots, five presentations and three loads in flight (5400 cells,
+  TGB-11), one arranged cell and one route at a time, under the pumped
+  dispatcher with the production scheduler; its rename route derives
+  ONE audible load while active and mounted, else STALE
+  (`ConnectionsLeafTests.Model.cs:524–538`); the journey
+  `GraphConnections_LeafWalkDepthAndReRoot_AreClean` keeps the name B2
+  continues (B-18).
+
+### The mac's re-root, traced site by site
+
+The state (`AppState.swift:2929–2967`): `connectionsRootPath: String?`
+— nil means FOLLOW the selection, non-nil after a Show connections
+re-root; `connectionsBackStack: [(root: String?, effective: String)]` —
+each entry BOTH the prior root mode and the EFFECTIVE path at the push;
+`connectionsEffectivePath = connectionsRootPath ?? selectedFilePath`
+(`:2965–2967`) — the note the leaf describes: an explicit root wins.
+`selectedFilePath` is NOT the markdown note alone: activating a graph
+tab leaves the last note's path in it, activating a base tab assigns
+the `.base` file's own path (`AppState.swift:8792`'s red-team note;
+`AppState+Bases.swift:1253`), so from a warm graph tab the mac's
+effective path is the last note and from a base tab it is the base
+file (IGJ-5, B2-D7).
+
+`reRootConnections(on:)` (`AppState+Connections.swift:195–231`), the
+one entry every surface calls: (i) `recordExplicitSidebarNavigationIntent()`;
+(ii) ALREADY rooted here → repair the SHARED key to this node's stable
+key, activate the leaf, reveal the pane, RETURN — no push, no line, and
+no re-root load, though the reveal's own `onAppear` load runs when the
+pane was hidden (`ConnectionsPanel.swift:30`); (iii) else push `(root:
+the current root mode, effective: the current EFFECTIVE path)` — ONLY
+when there is one (`if let priorEffective`, `:213–215`) — BEFORE
+`openFile`, since `openFile` synchronously moves `selectedFilePath`;
+while pinned the effective path IS the pin; (iv) `openFile(path,
+.currentTab, advancesSidebarSelectionRevision: false)` — `Void`; a
+dirty selection arms `pendingNavigation` and rolls the selection back
+(`AppState.swift:9135–9157`) while the re-root CONTINUES to pin, load
+and announce — the mac's re-root is not undone by a refusal; (v)
+`connectionsRootPath = path`; (vi) activate the leaf; (vii)
+`loadConnections()` — audible; (viii) reveal the pane and focus it
+(`focusLeafRegionRevealingPane`, `:202–205`, `:221–224`); (ix)
+`graphSelectedNodeKey = graphStableKeyForPath(path)`; (x) announce
+`.graphReRooted(label: filename(of: path))` — "label only; the
+authoritative summary follows from the load".
+
+`connectionsBack()` (`:240–255`), `⌘[`: guard rooted AND the stack
+non-empty, else return false — the key owner falls through
+(`ConnectionsPanel.swift:52–56`: panel-level, so it works from the
+depth picker; `.ignored` when there is nothing to pop); POP;
+`connectionsRootPath = prior.root` (nil restores FOLLOW mode);
+`openFile(prior.effective, .currentTab)`; `loadConnections()`; the
+shared key = the restored node; announce `.graphReRooted(label:
+filename(of: prior.effective))`; return true. Back neither reveals the
+pane nor activates the leaf; it is not a command in the mac's catalog
+(`SlateCommands.swift:1514–1618` carries twelve graph ids, none of them
+Back).
+
+The follow rule (`ConnectionsPanel.swift:31–36`): on a selection
+change the panel reloads ONLY when not rooted and the leaf is active —
+while pinned, the note in view moves under the leaf and the leaf stays
+on its root (owner decision D-8: follow mac). Nothing unpins but Back
+and the vault reset (`resetConnectionsState`, `:48–63`, on vault
+open/close: root nil, stack empty). Neither the root nor the stack is
+persisted; neither is RENAMED or PRUNED (`:48–51`, `:195–255` carry no
+rename arm). The callers: the leaf's row action (`ConnectionsPanel.swift:280`),
+the table's — after `focusOwningGroup()` (`GraphTableView.swift:386–407,
+421`) —, the Bases' reserved row action (`AppState+Bases.swift:2779–2782`,
+"Bases gap O15 / n3 §N3-4 rule 1"), the diagram's
+(`GraphDiagramView.swift:1023–1026`, PR D). The shared key's writers,
+whole mac: the two re-root sites and Back (`AppState+Connections.swift:203,
+228, 253`), the table's current-row binding (`GraphTableView.swift:242`),
+the table's reset and revalidation clears (`AppState+GraphTable.swift:146,
+373`), the diagram (`AppState+GraphDiagram.swift:224`, PR D). The
+leaf's own row selection writes NOTHING to the shared key.
+
+`showConnectionsPanel()` (`:182–187`) — the palette's — activates the
+leaf, loads the EFFECTIVE root, reveals, posts `.connectionsPanel`:
+while pinned it reloads the pin, not the note in view. The ghost create
+(`:255–310`): the structural refresh, the ownership check, the open of
+the created note (`:301`), `NoteCreated` (`:304–305`), the generation
+refresh (`:307–308`) — under a pin the open moves the note in view and
+the refresh reloads the pin.
+
+### Design pass II — the pin never crosses an open
+
+**The invariant.** The leaf's root mode, its stack, the shared key and
+its `GraphReRooted` line change ONLY inside a workspace mutation that
+contains NO open — a PIN mutation or a POP mutation — and every such
+mutation is B1's Show shape: the reveal, the activation, the mount
+consumed inert, then the leaf's one explicit entry, then the focus
+request. The open of the note is an ORDINARY open beside it, with
+B1's own semantics (its dirty gate, its `TabFocused`, its recents, its
+rename-mid-dialog property), and under a pin the note change it causes
+is RECORDED, never loaded (Term 11). Nothing is held across the open:
+no capture, no reservation, no transition, no state to validate. What
+the dialog's pump can reach — a rename, a delete, a completion, a
+re-entrant invocation — meets B1's ordinary rules and the two hooks
+below, and nothing else.
+
+**A re-root on P** (`ReRootConnectionsOn(P)` in `WorkspaceViewModel.Connections.cs`):
+admission first — false when the workspace is disposed or the leaf is
+retired; then the same-root case (below); else:
+
+1. THE PIN MUTATION, `RunWorkspaceMutation` under the suppression:
+   reveal the pane (`RightPaneShown` when collapsed), activate the leaf
+   (`LeafPanelShown` when it changes; nothing when already active —
+   the graph family's panel line is Show's, not this route's), consume
+   the pending mount inert; then, the suppression released, the leaf's
+   `PinTo(P)`: the leaf itself captures its EFFECTIVE root at this
+   instant and pushes `(mode, effective)` — nothing when it has none —,
+   pins P, advances the epoch and the sequence (every load in flight is
+   foreign, Term 4), clears the selection, issues ONE audible load of P
+   (the leaf is active and mounted by the mutation's own construction,
+   as Show's load is — no classification is computed, IGK-2), writes
+   the shared key through `GraphStableKeyForPath`, and posts
+   `GraphReRooted(file name of P)` through the injected relay — all
+   inside the leaf, under `Graph/`. Then `FocusBoundaryRequested(RightPane)`
+   (Show's focus request, the mac's `focusLeafRegionRevealingPane`;
+   IGK-13). The mutation's boundary reconciles the unchanged note in
+   view — a no-op — and the mount was consumed inert.
+2. THE OPEN of P in the current tab — an ordinary open OUTSIDE the pin
+   mutation, in its own: `RunWorkspaceMutation(() => opened =
+   OpenPathCore(P, CurrentTab, editorFocus: false))` (IGL-8) — with its
+   editor-focus request WITHHELD for this route, so the leaf's Normal-
+   priority landing is not overtaken by the open's Input-priority one
+   (IGL-3); its `TabFocused` when it activates P's existing tab or
+   creates the first tab, its recents; under the pin the note in view
+   becomes P (recorded, no load); a dirty refusal leaves the pin, the
+   stack, the key and the line exactly as step 1 left them — the MAC's
+   outcome (B2-D5). `TryOpenItem` gains, for EVERY open, the post-gate
+   validation the pump demands: the workspace live, the captured tab's
+   group still hosted and still holding the tab, else false before any
+   replacement (IGL-6). The leaf's focus request is issued AFTER this
+   mutation, so it is the last request queued.
+
+The funnel returns true when it pinned. A re-root invoked from INSIDE
+an open's dialog (a re-entrant invocation while a pump runs) is an
+ordinary re-root: its pin mutation nests in the open's mutation, its
+load is issued directly, its boundary work joins the outer boundary
+(IGK-11, IGJ-4 — nothing to protect, nothing refused).
+
+**Back** (`ConnectionsBack()`): admission first — false when disposed
+or retired, when FOLLOWING, or when the stack is empty; then:
+
+1. THE OPEN of the top entry's `effective` in the current tab — an
+   ordinary open in its own mutation with the editor focus withheld,
+   as above, before anything moves; a refusal returns false with the
+   stack intact (B2-D5 — the mac would have popped). The open reports
+   TWO facts: the path of the item it INSTALLED (a note, an image, a
+   `.canvas`, a `.base`) and the Markdown-only candidate the boundary
+   reconciled (the installed path, or null for a Canvas or Base tab).
+2. RE-ADMISSION: the workspace live and the leaf not retired, else
+   false — the pump may have torn either down inside the open (IGL-5).
+3. THE POP MUTATION, Show's shape as above (the reveal and the
+   activation for the palette's route, B2D-8; both no-ops from the
+   leaf's own key), then the leaf's `PopTo(installedPath, candidate)`:
+   the top entry is re-read NOW — after any rename the hooks applied —
+   and the pop proceeds only if its `effective` equals the INSTALLED
+   path (a `.canvas` pin restored compares against the canvas tab
+   installed, IGL-1; IGK-3's rename-mid-dialog open installs the OLD
+   path while the hook rewrote the entry: the two differ, nothing pops,
+   the open stands, the funnel returns false); else the note in view
+   is set to the candidate, pop, restore the mode (FOLLOWING — whose
+   effective root is the note in view — or the prior pin), advance the
+   epoch and the sequence, clear the selection, ONE audible load of the
+   new effective root, the shared key of `effective` through the FFI,
+   `GraphReRooted(file name of effective)`; then the focus request.
+   Returns true.
+
+**The same-root re-root** (already pinned on P): reveal the pane and
+activate the leaf WITHOUT the suppression — B1's own triggers apply (a
+collapsed pane's mount loads, Term 3(a); a mounted switch to a STALE
+leaf loads, 3(b); a completion in flight speaks or not per B-10) —,
+repair the shared key, request the focus; no push, no load of this
+route's own, no `GraphReRooted` (IGI-3, B2D-6). It cannot originate
+from the leaf's own rows (core omits the centre node); it can from the
+table and the Bases.
+
+**The boundary, corrected (IGL-2).** The funnel keeps RECORDING through
+the boundary's own `SyncPanels()` and `ReconcileConnectionsRoot`
+reconciles ONCE with the LAST candidate recorded — the note the open
+installed — so a candidate a nested hook's `SyncPanels()` recorded
+earlier inside the pump can never be replayed over it; `NoteChanged`
+runs once per outermost mutation, with the final active tab (B-19
+(iv)'s "reconciled once", brought to the code by B2 and recorded as
+its fix to B1's mechanics).
+
+**The two hooks** — the whole rename and delete rule, with no
+transition to protect (IGK-6, IGK-7, IGK-8 dissolve): `RetargetPath(source,
+destination)` calls the leaf's `Retarget(source, destination,
+activeAndMounted)` before its `SyncPanels()`, rewriting the pin, the
+note in view and EVERY stack entry by `IsSameOrDescendantPath` (a
+folder rename moves what it contains, IGJ-11); a retarget of the PIN
+is Term 3(d)'s root move — the epoch and the sequence advance, ONE
+audible load iff active and mounted, else STALE, the probe that
+follows sees it in flight (IGJ-10), and the shared key, when it equals
+the old pin's stable key, becomes the new pin's through the FFI — a
+key that had drifted to another selection is left alone (IGL-7). The
+delete arm calls `Prune(source)`:
+every entry under `source` is removed; the pin and the note in view
+are KEPT (B1's delete route, the Error presentation — Back is the way
+out). An origin is pushed at the instant of the pin, so a later delete
+prunes it like any entry — nothing is ever pushed after the fact.
+
+**Why this holds where revisions 1–3 did not.** The forty-eight
+blockers named eleven interleavings inside the open's dialog; each now
+meets a plain B1 rule: a rename or a delete lands on a leaf whose pin
+and stack are already final (the hooks); a completion in flight during
+the re-root's open is foreign (the pin advanced the sequence before the
+open) and during Back's open is B1's own audible line (the pin is
+still live, and the leaf active — admitted in Term 14 as B1's line, not
+this route's); a depth change or a probe during either open is B1's
+over the pin; a re-entrant re-root or Back is an ordinary one; a
+retirement retires a leaf that holds no proposal; an exception inside
+the pin mutation unwinds as Show's would, with no record left behind.
+
+### Rule D — the root mode, in six terms (extends rule C; Terms 1–10 stand)
+
+- **Term 11 — Two root modes, one effective root.** The leaf is
+  FOLLOWING (the effective root is the note in view, B1's only mode) or
+  PINNED on a path (the effective root is that path whatever the note
+  in view). Every term of rule C that says "the root" means the
+  EFFECTIVE root: 3(d)'s root change, 3(g)'s none, Term 6's probe,
+  Term 7's CURRENT and STALE, Term 8's echoes, B-11's create address.
+  While PINNED, a change of the note in view is RECORDED — by
+  `NoteChanged`, which returns before the transition — and is not a
+  root change: no epoch, no load, no STALE, the selection kept. The
+  note in view is the ACTIVE tab's path when its kind is Markdown (an
+  image attachment included, IGK-10), null for a graph, base or canvas
+  tab — a `.canvas` or `.base` ATTACHMENT node can be a pin and a stack
+  entry while the note in view is null (IGL-1).
+  The trigger matrix gains one row: **(h) pin and pop** — the leaf's
+  `PinTo` and `PopTo`, each ONE audible load of the new effective root
+  whether it is current or not, superseding every load in flight, with
+  the mount and the switch of the same mutation consumed inert by
+  Show's shape.
+- **Term 12 — A re-root is a pin mutation then an ordinary open**, as
+  the design pass says. A push captures the leaf's effective root at
+  the pin — the pin while pinned; nothing when there is none (a graph,
+  base or canvas tab in view and FOLLOWING, B2-D7).
+- **Term 13 — Back is an ordinary open then a pop mutation, or
+  nothing**, as the design pass says; the pop proceeds only when the
+  top entry, as retargeted, names the note the open installed.
+- **Term 14 — The lines.** A re-root speaks, in order: the entrance's
+  own shell line when it focuses a source that was not active (the
+  table's or the Bases' `TabFocused`, IGK-17); the pane's `RightPaneShown`
+  when collapsed (B-D9); the setter's `LeafPanelShown` when the leaf
+  changes (B-D5); `GraphReRooted` — core's line "Connections: {label}"
+  (`a11y.rs:3120–3123, 3254`), posted synchronously inside the pin
+  mutation; then the open's `TabFocused`, synchronous, when it
+  activates an existing tab or creates the first — the shell's line
+  after the leaf's, since Windows opens second (B2-D8), and BEFORE the
+  load's asynchronous result (IGL-4); then B1's Term 9
+  `LoadingConnections` iff the focus lands while the pin's load is
+  still Loading (IGK-13); then, at the load's apply iff SPEAKING (Term
+  2), the summary on success or `GraphBlocked{ConnectionsLoadFailed}`
+  on failure (Term 5, IGK-14). Back speaks the open's `TabFocused`
+  first, then the pop mutation's lines in the same order. Nothing else
+  of this route's: no `OpenedFile` (the funnel does not post the shell's
+  open line; the mac's `openFile` from this route announces nothing),
+  no `ConnectionsPanel` line (Show's). B1's own lines keep their
+  places — a completion in flight during Back's open, the shell's High
+  missing-file line for a delete that lands mid-dialog — and the model
+  compares the WHOLE timeline (B-10's rule). A refused re-root's open
+  speaks what the gate posts and nothing more; the pin mutation's lines
+  came before it.
+- **Term 15 — The shared key.** `GraphViewState.SelectedKey` is written
+  by exactly five writers: the leaf's `PinTo` (the same-root repair
+  included), the leaf's `PopTo`, the leaf's `Retarget` when the key
+  equals the old pin's (IGL-7), the graph DOCUMENT's guarded selection
+  method (`SelectRow(key)` — A-7's write moves from the table VIEW into
+  the document, which refuses when retired, when the key is not in its
+  current snapshot, or when it is not the workspace's seated document;
+  the view calls it and holds no write of its own — IGJ-6) and the
+  document's revalidation clear (A-7); PR D adds the diagram as the
+  sixth. Every key the leaf writes is core's, through
+  `SlateUniffiMethods.GraphStableKeyForPath` bound at the write (the
+  census reads the right-hand side, the crossing is counted once per
+  pin, once per pop and once per key-moving retarget — IGI-19); a host-composed "p:" prefix is the
+  offence the census and a mutation name. The property's backing field
+  is written by its setter alone (IGK-19). The leaf's
+  `SelectedOccurrence` never writes the key (B-D1, B2-D1). The
+  document, while it lives, revalidates the key against its snapshot as
+  A-7 says; a key written while no document lives is revalidated at the
+  next document's first pair publication. `GraphViewState.Reset()` is
+  DELETED (IGI-17): the workspace's disposal drops the object.
+- **Term 16 — Lifecycle.** The pin, the note in view and the stack live
+  on the leaf's document; a workspace teardown drops them with the leaf
+  (B-1's drain); a launch comes up FOLLOWING with an empty stack;
+  nothing is persisted (B2D-2). The two hooks are the whole rename and
+  delete rule (IGI-8, IGJ-2, IGJ-10, IGJ-11, IGK-7; the mac has
+  neither, B2-D3). After the workspace's disposal or the leaf's
+  retirement every funnel returns false and every leaf entry refuses
+  WITHOUT mutation (IGI-20); Back re-admits after its open, before its
+  pop mutation, since the open's pump can tear either down (IGL-5).
+
+### The contracts (slice B2)
+
+**B2-1 — The view state is the workspace's (A-1 and spec R-B as amended
+by the owner, B2D-1).** ONE `GraphViewState` per workspace, constructed
+in the workspace's constructor beside the relay (NewGraphViewState
+under `Graph/WorkspaceViewModel.Graph.cs`, the direct right-hand side
+of a field assignment, no loop, lambda or branch above it — the IPB-27
+shape) and handed to the graph document at construction
+(`GraphDocumentViewModel`'s constructor takes it; `:136` no longer
+constructs one) and to the leaf. `Retire()` no longer resets it (`:657`
+goes) and `GraphViewState.Reset()` is deleted (Term 15). A re-seated
+document reads the state the previous one left: the selection survives
+closing and reopening the graph tab (B2-D4). The table view's direct
+write moves into the document's guarded `SelectRow` (Term 15). The
+censuses are COMPILATION-WIDE and symbol-based (IGJ-14) and judge by
+TYPE as A-1's "no second mutable copy" requires (IGK-19): every mutable
+field or property anywhere in the shell compilation whose type is
+`GraphFilter`, `GraphSurfaceMode` or the groups' list, outside the one
+instance and outside the immutable request, token, envelope and
+publication records (exempted by their declared kinds), is an offence;
+every assignment to `SelectedKey` is one of Term 15's five by owner;
+the backing field's writers are the setter alone; an instance census
+counts the constructions: exactly one, in the workspace's constructor.
+
+**B2-2 — The root mode on the leaf's document.** `ConnectionsLeafViewModel`
+gains `RootMode` (Following | Pinned with the path), `NoteInView`,
+`Root` (now the EFFECTIVE root: the pin, else the note in view) and the
+back stack of `(RootMode, string effective)` entries; and the entries
+the design pass names — `PinTo(path)`, `PopTo(noteInView)`,
+`Retarget(source, destination, activeAndMounted)`, `Prune(source)` —
+each called ONLY by the workspace's funnels or hooks, each refusing
+without mutation once retired (Term 16). `NoteChanged` while PINNED
+records the note in view and returns before the transition (Term 11).
+`GraphReRooted` is posted from `PinTo` and `PopTo` through the injected
+relay, under `Graph/`: the announcement-seam census's inventory of the
+leaf's posting sites gains the two, and the outside-wall inventory is
+unchanged (IGK-18). The trigger census (B-19 (iii)) extends to the four
+entries: their callers are the workspace's and nothing else,
+method-group references refused. A `Func<bool>` seam BackFromSurface
+is installed on the leaf by `NewConnectionsLeaf` for the view's key
+owner (IGK-12).
+
+**B2-3 — One re-root funnel, three ADDRESSED entrances, each walled
+against a stale row.** `WorkspaceViewModel.Connections.cs` gains
+ReRootConnectionsOn (Term 12; returns whether it pinned) and
+ConnectionsBack (Term 13; returns whether it popped). The entrances:
+the leaf's `Execute(ShowConnections, row)` through a new seam
+ShowConnectionsFromRow, enabled exactly when core's vector lists the
+action for the row's kind — a Note and an Attachment, both file-backed;
+a Ghost never (IGI-11) — with no host-side kind predicate, and admitted
+only while the row's tree was PRODUCED for the current effective root
+(`IsRowCurrent`, TGB-9); the table's `ShowConnectionsFromSurface`, set
+by the workspace to the addressed ReRootGraphRowFromSurface that runs
+`FocusGraphAddress` first (A-8's rule; the mac's `focusOwningGroup()`
+before `perform`, IGI-4) and admitted only while the captured row is
+the SAME object in the document's current `Publication.Rows` — a
+current-row guard by reference identity, not `ContainsNode`, which is
+the snapshot's and A-7's (IGK-9) — a wall added for EVERY table action
+as a B2 fix to A-8's admission (IGJ-7); the Bases' new row action
+(B2-5), addressed by its source lease. `ActionDisabledReason(ShowConnections)`
+returns null and `ConnectionsPhrase.ShowConnectionsUnavailable` is
+deleted (B-D6 withdrawn). Two caller censuses, bound: ReRootConnectionsOn's
+callers are exactly the three entrance delegates; ConnectionsBack's are
+exactly the BackFromSurface delegate `NewConnectionsLeaf` installs
+and ConnectionsBackCommand's body (IGI-2, IGK-12).
+
+**B2-4 — Back: the chord row and the key owner.** A `ChordTable` row
+`slate.graph.connectionsBack` ("Connections: Back"), mac `⌘[`, Windows
+`Ctrl+[` (the ⌘→Ctrl rule; `Ctrl+Alt+[` is the sidebar's history and
+`Ctrl+Shift+[` Previous Tab, both untouched), in a new
+`ChordScope.Connections` delivered by the leaf's body
+(`ConnectionsLeafView`'s `PreviewKeyDown` — the mac's panel-level
+owner, so it works from the depth control and the anchor as from the
+tree) and NOT by a window-level binding: the view matches
+`Keyboard.Modifiers == ModifierKeys.Control` EXACTLY (IGK-16), calls
+BackFromSurface and marks the event handled iff it returned true —
+the mac's `.ignored` fall-through. ConnectionsBackCommand, resolved
+by the registrar for the palette (R-E's drift test 1, the only one of
+the three that sees a row with no menu item — IGI-16), runs the same
+funnel; the row's resolver identity, its scope, the leaf's delivery,
+the exact-modifier fall-through for `Ctrl+Alt+[` and `Ctrl+Shift+[`
+from the tree, the depth control and the anchor, the empty-stack
+fall-through, and the deliberate absence of a menu item are pinned by
+dedicated facts. The mac's key owner accepts ANY modifier set that
+contains Command (`ConnectionsPanel.swift:52–54`); Windows requires
+Control alone — B2-D11 (IGL-10). The spec's §0, §1 table, §7 table,
+R-E, §PR B's acceptance line (four connections ids) and §5.3's matrix
+row (thirteen command rows) are amended in place for the row (IGI-15,
+IGJ-17, IGL-11). This PR verifies `Ctrl+[` free in every scope.
+
+**B2-5 — The Bases' Show connections, addressed.** A "Show connections"
+row action after "Show backlinks" in `BaseSurfaceView`'s GRID row
+actions, through a new seam on `BaseDocumentViewModel` that carries the
+SOURCE — the invoking surface's tab — beside the row (the existing
+`Action<BasesRow>` seams carry none, and a document shared by base tabs
+in two groups cannot say which invoked it, IGJ-9): the workspace's
+BasesShowConnectionsCommand validates the source tab is still hosted,
+makes its group and the tab active (the table's `FocusGraphAddress`
+shape), then enters the funnel with the row's file path. `RowCommand`
+captures the RESULT it was built over and admits the row only while
+that result is the document's current one (the stale-menu class,
+TGB-9; IGJ-8). The LIST renderer gains nothing: it has no row-action
+mechanism for any action, the Bases port's own gap against the mac's
+`listRowActions` — recorded as B2-D9, not closed here (IGK-15). The
+row's name is the `ShowConnections` spec's title from the Note vector
+of `graph_row_actions`, fetched ONCE per process (design B; the
+crossing counted) — not a Bases literal (IGI-21). The Bases post no
+line of their own for it: the leaf's `GraphReRooted` is the route's
+line (the mac's `basesShowConnections` posts no base-action event,
+unlike `basesShowBacklinks` at `:2771–2776`). From a base tab there is
+no effective root on Windows: nothing is pushed and the first Back
+after it falls through (B2-D7).
+
+**B2-6 — The follow rule while pinned (owner decision D-8: mac).** A
+note change while PINNED — a tab activation, a close's successor, a
+group close, an open from anywhere, the ghost create's open — records
+the note in view and moves nothing (Term 11); `NotifyGraphOfVaultChange`'s
+probe (Term 6) and a depth change (Term 3(e)) reload the PIN; a rename
+retargets and a delete prunes as the hooks say; a launch comes up
+FOLLOWING.
+
+**B2-7 — The ghost create while pinned (B-11 over the effective root).**
+The create is addressed by the leaf's effective root and epoch; its
+open moves the note in view under the pin (the mac's order: the
+structural refresh, the ownership check, the open at
+`AppState+Connections.swift:301`, `NoteCreated` at `:304–305`, the
+generation refresh at `:307–308`); the pinned root's neighbourhood
+refreshes SILENTLY through the probe (the healed ghost row updates),
+and B-D10's suppression reads the effective root.
+
+**B2-8 — The model (B-10): the arrangements, the routes, the composed
+routes, the whole state, the pumped dispatcher.** Three literal PINNED
+arrangements (IGJ-12): PinnedFresh — pin P, note in view P, stack
+`[(FOLLOWING, A)]`; PinnedDrifted — pin P, note in view N ≠ P, stack
+`[(FOLLOWING, A), (PINNED B)]`; PinnedNoOrigin — pin P, note in view P,
+stack empty. Every B1 route is crossed with each (3(d)'s routes
+exercise Term 11; the rename and delete routes exercise the hooks over
+the pin, the note in view and the entries, with a file and a folder).
+New routes: ReRootFromLeaf, ReRootFromTable, ReRootFromBases (a Note
+and an Attachment target each; the same-root case for the table and the
+Bases — the leaf's is named unreachable), the open's gate decision as a
+dimension of every re-root and Back route (allowed, refused), `Back`
+(to FOLLOWING, to a prior pin, with an empty stack, from FOLLOWING,
+after shutdown). The composed routes: the refusal after the pin (the
+pin stands); a rename and a delete of the pin, of an entry and of the
+just-pushed origin landing inside the open's dialog (file and folder);
+Back with the reserved note renamed inside its open (nothing pops); a
+re-entrant re-root and Back from the dialog; a completion of the
+pin's load and of a pre-existing load during each open; the pin's load
+FAILING and the pop's load failing (the failure line); the focus
+request landing before and after the pin's and the pop's load applies
+(Term 9's line) and the FINAL focused element after a drain — the leaf,
+never the editor (IGL-3); an image attachment as the source tab and as
+the target; a `.canvas` and a `.base` as the target and as a prior pin
+restored by Back (IGL-1); a canvas origin; a re-root from a cold graph
+tab, a warm graph tab and a base tab; a retirement, a tab change, a
+group change, a tab close, a depth change and a probe landing inside
+each open (IGL-5, IGL-6); the clean open's synchronous `TabFocused`
+order (IGL-4); a rename of the pin with the graph document alive,
+absent and re-seated (IGL-7). The state gains the mode, the note in
+view, the shared key, the WHOLE stack (every entry's mode and
+effective path — IGI-7), the pending mount and the focused element,
+compared after every route beside the timeline, the loads, the root,
+the staleness, the depth and the publication's state (TGB-11's rule).
+The dialog is the pumped dispatcher's: the model's gate seam pumps a
+real dispatcher frame while it decides, under the production scheduler
+(IGK-20). The totals are literals in the model, published by the
+task-loop record that lands it, as B1's were (IGL-9); every cell named
+unreachable with its reason.
+
+**B2-9 — The journey continues.** `GraphConnections_LeafWalkDepthAndReRoot_AreClean`
+gains: Show connections on the healed incoming row (the heading moves
+to that note, the tree re-roots and takes focus, the summary's text
+changes), `Ctrl+[` from inside the tree (the heading and the summary
+return), `Ctrl+[` again (nothing to pop: focus stays, no change), the
+table's Show connections from the graph tab (the graph's group focused
+first, the leaf re-roots and takes focus), and axe over
+`graph-connections` after the re-root. The Bases' route is a fact over
+the document's seam (a base fixture in the journey is PR-scope creep).
+
+**B2-10 — The censuses.** (i) the view-state instance census (B2-1);
+(ii) the shared-key writers census, compilation-wide: every assignment
+to `SelectedKey` is one of Term 15's five by owner, the backing field's
+writers are the setter alone, and the leaf's right-hand sides bind to
+`GraphStableKeyForPath`; (iii) the two funnel-caller censuses (B2-3);
+(iv) the trigger census's four new protected names (B2-2); (v) drift
+test 1 over the new row and the dedicated facts of B2-4; (vi) the
+no-shadow census, compilation-wide and by type (B2-1); (vii) the
+announcement-seam census: the leaf's inventory gains `PinTo`'s and
+`PopTo`'s posts, the outside-wall inventory unchanged, with a duplicate-
+line and a bypass mutation (IGK-18); (viii) the delivery-evidence
+census's command map gains the row; (ix) a membership census: every
+row-action `Execute` under `Graph/` binds the current-row guard and the
+Bases' `RowCommand` the captured-result guard before the seam.
+
+**B2-11 — The matrix rows.** `parity_matrix.md`'s connections rows gain
+re-root, Back and the Bases' action with their evidence ids;
+`w_c_matrix.md`'s "Graph connections leaf (W6-2 PR B)" row cites the
+continued journey; `chords.json` through the projection (never by
+hand, the staged-claim rule).
+
+**B2-12 — Core unchanged.** No new query: the stable key
+(`graph_stable_key_for_path`), the row actions and their titles
+(`graph_row_actions`, 0b-9), `GraphReRooted` (0a) are consumed as they
+stand; the surface stays twenty-six.
+
+### Decisions (PR B2)
+
+- **B2D-1 — The owner amended A-1 and spec R-B on 2026-09-06:**
+  `GraphViewState` is the workspace's, shared by the document and the
+  leaf, surviving the document's retirement.
+- **B2D-2 — Nothing persists:** the pin and the stack are session-scoped
+  (the mac persists neither); a launch is FOLLOWING.
+- **B2D-3 — Back's chord is `Ctrl+[` in `ChordScope.Connections`,
+  delivered by the leaf's body with the exact modifier, falling through
+  when there is nothing to pop**; the spec's §0, §1 table, §7 table and
+  R-E amended for the row.
+- **B2D-4 — The leaf's own selection stays its own** (`SelectedOccurrence`,
+  B-6); only a pin and a pop write the shared key from the leaf's side
+  (Term 15).
+- **B2D-5 — The pin never crosses an open:** a re-root is a pin
+  mutation on Show's shape then an ordinary open in its own mutation
+  with the editor focus withheld; Back is such an open, a re-admission,
+  then a pop mutation; nothing is held across either open.
+- **B2D-6 — The same-root re-root repairs the shared key, reveals and
+  focuses** without the suppression; B1's own triggers apply; no push,
+  no load of its own, no `GraphReRooted`.
+- **B2D-7 — A refusal undoes nothing:** a re-root's refused open leaves
+  the pin (the mac's outcome); Back's refused open pops nothing (the
+  mac would have popped) — and a pop proceeds only when the top entry
+  names the note the open installed (B2-D5).
+- **B2D-8 — Back from the palette reveals the pane and activates the
+  leaf** as a re-root does, so its one load is not STALE; the mac's Back
+  is panel-only and never faces the question (B2-D6).
+- **B2D-9 — A rename retargets the pin, the note in view and the stack
+  by the same-or-descendant predicate, a retarget of the pin being Term
+  3(d)'s root move; a delete prunes the stack and keeps the pin** (the
+  hooks; B2-D3).
+- **B2D-10 — A re-entrant re-root or Back is an ordinary one:** nothing
+  is refused for nesting, since nothing is held.
+
+### Recorded divergences (PR B2)
+
+- **B2-D1 — The leaf's row selection does not write the shared key**
+  (B-D1, kept): the mac's leaf never writes `graphSelectedNodeKey` from
+  a row; only re-root and Back do.
+- **B2-D2 — No navigation-intent seam.** The mac records an explicit
+  sidebar navigation intent on every re-root, the same-root case
+  included (`AppState+Connections.swift:196`), and withholds the
+  sidebar's selection revision on the open (`advancesSidebarSelectionRevision:
+  false`). Windows has no twin of either: the files sidebar's history
+  records only its own opens, so a re-root's open enters no sidebar
+  history and `Ctrl+Alt+[` never steps through it; there is no intent
+  to record (IGI-14).
+- **B2-D3 — A rename retargets the pin and the stack; a delete prunes
+  the stack.** The mac leaves both stale (`AppState+Connections.swift:48–51,
+  195–255` carry no rename or delete arm); Windows follows its own
+  `RetargetPath` discipline, descendants included (IGI-8, IGJ-11).
+- **B2-D4 — The shared key survives the graph tab's close.** The mac
+  clears it with the table's filter when the last graph tab closes
+  (`releaseGraphStateIfUnreferenced` → `resetGraphTableState`,
+  `AppState+GraphTable.swift:112–150`; `GraphTabRoutingTests.swift:352`);
+  the owner's amendment keeps it on the workspace. The one-line
+  alternative — the workspace resets the key and the filter when the
+  last graph tab closes while the leaf is FOLLOWING — is the owner's to
+  take (IGI-12).
+- **B2-D5 — Back's refused open pops nothing, and a pop needs the
+  opened note.** The mac pops before its `Void` `openFile`; Windows
+  opens first and pops only when the top entry, as retargeted, names
+  the note the open installed. A re-root's refused open leaves the pin
+  on both platforms (B2D-7; IGI-13, IGK-3).
+- **B2-D6 — Back is a command.** The mac's Back is the panel's key alone
+  (no catalog id); Windows' `slate.graph.connectionsBack` is
+  palette-reachable (R-E) and, from the palette, reveals and activates
+  (B2D-8).
+- **B2-D7 — No origin from a graph, a base or a canvas tab.** The mac's
+  effective path from a warm graph tab is the last note and from a base
+  tab the `.base` file itself, so its re-root pushes those and Back
+  returns to them; Windows' note in view is the Markdown-kind tab in
+  view and null otherwise (`WorkspaceViewModel.Connections.cs:197`), so
+  a re-root from a cold or a warm graph tab, a base tab or a canvas tab
+  pushes nothing and the first Back after it falls through. Recorded;
+  the owner may ask for the mac's warm-graph memory (IGJ-5).
+- **B2-D8 — The open's shell line comes after the leaf's, before the
+  load's result.** The mac opens first and silently; Windows pins first,
+  so the open's synchronous `TabFocused` follows the synchronous
+  `GraphReRooted` and precedes the asynchronous summary (Term 14,
+  IGL-4).
+- **B2-D9 — The Bases' list renderer carries no row actions**, this one
+  included: the mac's `listRowActions` carry the set
+  (`BaseContainerView.swift:323–368`; `p1_spec.md:51`), the Windows
+  list renderer has no mechanism for any (`BaseSurfaceView.cs:892–927`)
+  — the Bases port's gap, recorded here, not closed here (IGK-15).
+- **B2-D11 — Back's chord needs Control alone.** The mac's key owner
+  fires on any modifier set containing Command
+  (`ConnectionsPanel.swift:52–54`); Windows matches
+  `ModifierKeys.Control` exactly so that `Ctrl+Shift+[` (Previous Tab)
+  and `Ctrl+Alt+[` (the sidebar's history) keep their owners (B2-4,
+  IGL-10).
+- **B2-D10 — An open renamed mid-dialog installs the old path** on
+  Windows (`OpenPathCore` builds the item before the gate and
+  `TryOpenItem` installs it after, `WorkspaceViewModel.cs:1997–2008`,
+  `WorkspaceViewModel.Layout.cs:136–155`) — a property of every open,
+  outside this PR; B2's pop refuses on it (B2-D5) and its pin does not
+  depend on it (IGK-3).
+
+### The rounds — the ledger
+
+#### Round 1 on revision 1 — twenty-two findings (IGI-1..22): ten blockers, eleven majors, one minor
+
+| # | Severity | Disposition |
+|---|---|---|
+| IGI-1 | BLOCKER | the boundary had no trigger for the pin's load — revision 2's pending-first boundary (reopened by IGJ-1, IGJ-4), revision 3's commit (reopened by IGK-1, IGK-2); revision 4: the pin mutation issues its own load on Show's shape, no boundary hook (design pass II) |
+| IGI-2 | BLOCKER | Back popped before the open — revision 2's peek (reopened by IGJ-3), revision 3's reservation (reopened by IGK-4); revision 4: the open first, the pop re-reads the top entry and needs the opened note (Term 13) |
+| IGI-3 | BLOCKER | the same-root case issues no re-root load and no `GraphReRooted`; B1's triggers stand and are modelled (B2D-6) |
+| IGI-4 | BLOCKER | the table's entrance is addressed through `FocusGraphAddress`; revision 1's B2-D3 deleted |
+| IGI-5 | BLOCKER | no push without an effective root; reopened by IGJ-5 (the mac's warm graph and base origins); B2-D7 and the three modelled origins |
+| IGI-6 | BLOCKER | the push captures the EFFECTIVE root — now by the leaf itself at the pin (Term 12) |
+| IGI-7 | BLOCKER | the whole stack compared; the composed routes; the leaf's same-root unreachable; completed by IGJ-12's arrangements |
+| IGI-8 | BLOCKER | Retarget and Prune — reopened by IGJ-2, IGJ-3, IGJ-10, IGJ-11 and IGK-7; revision 4: the two hooks with nothing pending to protect |
+| IGI-9 | BLOCKER | the pane first, then the leaf — Show's shape (design pass II) |
+| IGI-10 | BLOCKER | the open's `TabFocused` in the timeline — now AFTER the leaf's lines (Term 14, B2-D8) |
+| IGI-11 | MAJOR | Note and Attachment per core's vector, a Ghost never; completed by IGJ-13 and IGK-10 |
+| IGI-12 | MAJOR | the mac's reset at the graph tab's close cited; B2-D4 with the owner's alternative |
+| IGI-13 | MAJOR | B2-D5 rewritten in revision 4: the refusal undoes nothing, as on the mac |
+| IGI-14 | MAJOR | B2-D2: no sidebar history entry, no intent seam |
+| IGI-15 | MAJOR | the spec's §0, §7 row and R-E amended; the mac's Back is a key, not a command (B2-D6) |
+| IGI-16 | MAJOR | drift test 1 alone; dedicated facts (B2-4) |
+| IGI-17 | MAJOR | `Reset()` deleted; reopened by IGJ-6 for the table view's write; the document's guarded `SelectRow` |
+| IGI-18 | MAJOR | the wall widened; reopened by IGJ-14 and IGK-19; compilation-wide by type (B2-1) |
+| IGI-19 | MAJOR | the leaf's right-hand sides bound to `GraphStableKeyForPath`, the crossing counted, a "p:" mutation |
+| IGI-20 | MAJOR | the funnels return false and the entries refuse after disposal or retirement; reopened by IGJ-3, IGJ-6 and IGK-4; revision 4 holds nothing across the open |
+| IGI-21 | MAJOR | the title from the fetched-once Note vector of `graph_row_actions` |
+| IGI-22 | MINOR | the citation and the order corrected (B2-7) |
+
+#### Round 2 on revision 2 — seventeen findings (IGJ-1..17): eleven blockers (three created by revision 2 — rule 5, first time), three majors, three minors
+
+| # | Severity | Disposition |
+|---|---|---|
+| IGJ-1 | BLOCKER | created by revision 2 — revision 3's commit with the final candidate (reopened by IGK-1, IGK-2, IGK-5, IGK-6, IGK-8); revision 4: the pop mutation runs AFTER the ordinary open, with the note in view already final (Term 13) |
+| IGJ-2 | BLOCKER | created by revision 2 — revision 3's registered proposal (reopened by IGK-3, IGK-7); revision 4: nothing is held across the open |
+| IGJ-3 | BLOCKER | the revisioned reservation (reopened by IGK-4); revision 4: the pop re-reads the top entry after the open and needs the opened note |
+| IGJ-4 | BLOCKER | created by revision 2 — one slot, a depth counter (reopened by IGK-8, IGK-11); revision 4: nothing is held, so nothing is refused for nesting (B2D-10) |
+| IGJ-5 | BLOCKER | the mac's warm-graph and base origins traced; B2-D7 |
+| IGJ-6 | BLOCKER | the table view's write into the document's guarded `SelectRow` (Term 15) |
+| IGJ-7 | BLOCKER | a wall before every table action's seam — corrected by IGK-9 to a current-row guard by reference identity |
+| IGJ-8 | BLOCKER | `RowCommand` captures the result and admits the row only while it is current (B2-5) |
+| IGJ-9 | BLOCKER | the Bases' seam carries the source tab; the command focuses it (B2-5) |
+| IGJ-10 | BLOCKER | a retarget of the pin is Term 3(d)'s root move with the classification passed in (the hooks) |
+| IGJ-11 | BLOCKER | `IsSameOrDescendantPath` everywhere; folder routes (the hooks, B2D-9) |
+| IGJ-12 | MAJOR | PinnedFresh, PinnedDrifted, PinnedNoOrigin, each crossed with every B1 route (B2-8) |
+| IGJ-13 | MAJOR | Attachment targets and sources — corrected by IGK-10: an attachment is a Markdown-kind tab and the note in view |
+| IGJ-14 | MAJOR | compilation-wide censuses — completed by IGK-19: by type, and the backing field's writers |
+| IGJ-15 | MINOR | `RetargetPath`'s scope corrected; the sidebar's refresh the adapter's |
+| IGJ-16 | MINOR | `OpenPathCore` and `TryOpenItem` both cited; `showConnectionsPanel` at `:182–187` |
+| IGJ-17 | MINOR | the spec's architecture table amended |
+
+#### Round 3 on revision 3 — twenty-one findings (IGK-1..21): fifteen blockers (five created by revision 3 — rule 5, second time), five majors, one minor; the second design pass
+
+| # | Severity | Disposition in revision 4 |
+|---|---|---|
+| IGK-1 | BLOCKER | taken — the boundary's true order recorded (depth zero at `SyncPanels`, the funnel reconciles at once, the replay a no-op); no boundary hook: the pin mutation issues its load directly (design pass II) |
+| IGK-2 | BLOCKER | taken — no classification at the pin: the mutation constructs the leaf active and mounted, as Show does |
+| IGK-3 | BLOCKER | taken — created by revision 3: nothing is held across the open; the open's rename-mid-dialog property recorded as B2-D10; the pop refuses when the top entry does not name the opened note |
+| IGK-4 | BLOCKER | taken — the key and the line are written INSIDE the pin and pop mutations by the leaf's entries, with nothing to validate later |
+| IGK-5 | BLOCKER | taken — the pin advances the sequence BEFORE the re-root's open (a completion in flight is foreign); Back's open admits B1's own completion line in the whole timeline (Term 14) |
+| IGK-6 | BLOCKER | taken — created by revision 3: no deferred intents; a depth change, a probe or a pin retarget after the pin is B1's ordinary rule over the pin |
+| IGK-7 | BLOCKER | taken — created by revision 3: the origin is pushed at the instant of the pin, so a later delete prunes it like any entry |
+| IGK-8 | BLOCKER | taken — created by revision 3: no transition record, no state machine; the pin mutation unwinds as Show's would |
+| IGK-9 | BLOCKER | taken — the table's wall is a current-row guard by reference identity in `Publication.Rows`; `ContainsNode` stays A-7's snapshot check (B2-3) |
+| IGK-10 | BLOCKER | taken — Windows has no attachment tab kind: an attachment is a Markdown-kind tab and the note in view; the model's attachment cells follow (Term 11, B2-8) |
+| IGK-11 | BLOCKER | taken — created by revision 3: admission (disposed, retired) first, then the same-root case; a re-entrant call is an ordinary one (B2D-10) |
+| IGK-12 | BLOCKER | taken — BackFromSurface (`Func<bool>`) installed by `NewConnectionsLeaf` for the view; ConnectionsBackCommand for the registrar; the caller census over both (B2-2, B2-3, B2-4) |
+| IGK-13 | BLOCKER | taken — the focus request is Show's, in the pin and pop mutations; Term 9's line admitted in Term 14 |
+| IGK-14 | BLOCKER | taken — the summary OR `GraphBlocked{ConnectionsLoadFailed}` at apply (Term 14); the failing pin's load a composed route |
+| IGK-15 | BLOCKER | taken — the grid's row actions gain the action; the list renderer's absence of any row-action mechanism recorded as the Bases port's gap (B2-D9) |
+| IGK-16 | MAJOR | taken — the exact `Control` modifier; facts for `Ctrl+Alt+[` and `Ctrl+Shift+[` from the tree, the depth control and the anchor (B2-4) |
+| IGK-17 | MAJOR | taken — the entrance's source-focus line first; the shell's lines at their positions; the whole timeline compared (Term 14) |
+| IGK-18 | MAJOR | taken — `GraphReRooted` posted from the leaf's entries under `Graph/`; the seam census's leaf inventory gains them, with mutations (B2-2, B2-10) |
+| IGK-19 | MAJOR | taken — the no-shadow census by type; the backing field's writers the setter alone (B2-1, Term 15) |
+| IGK-20 | MAJOR | taken — the state and the composed routes enumerated; the gate seam pumps a real frame under the production scheduler (B2-8) |
+| IGK-21 | MINOR | taken — the citation corrected (Term 16) |
+
+#### Round 4 on revision 4 — thirteen findings (IGL-1..13): seven blockers (five created by revision 4 — rule 5, third time), four majors, two minors → THE FREEZE at revision 5
+
+| # | Severity | Disposition in revision 5 (the discharge; carried to the task loop) |
+|---|---|---|
+| IGL-1 | BLOCKER | taken — created by revision 4: `.canvas` and `.base` are Attachment nodes that open as Canvas and Base tabs (a null candidate); the open reports the installed path and the candidate separately, `PopTo` compares the top against the installed path and sets the note in view from the candidate (Term 11, Term 13, B2-8) |
+| IGL-2 | BLOCKER | taken — created by revision 4: the boundary records through its own `SyncPanels` and reconciles ONCE with the last candidate; no replay of an older one (the boundary, corrected) |
+| IGL-3 | BLOCKER | taken — created by revision 4: the route's open withholds its Input-priority editor-focus request; the leaf's request is queued after the open; the final focused element asserted after a drain (the re-root's open, B2-8) |
+| IGL-4 | BLOCKER | taken — created by revision 4: `GraphReRooted`, then the open's synchronous `TabFocused`, then the asynchronous load result (Term 14, B2-D8) |
+| IGL-5 | BLOCKER | taken — created by revision 4: Back re-admits after its open, before the pop mutation; retirement inside each open modelled (Term 16, B2-8) |
+| IGL-6 | BLOCKER | taken — stood before: `TryOpenItem` validates, after the gate and for every open, that the workspace is live and the captured tab's group is hosted and still holds it, else false before replacement; the pump routes modelled (the re-root's open, B2-8) |
+| IGL-7 | BLOCKER | taken — stood before: `Retarget` is the fifth key writer, conditionally, through the FFI; the censuses count it; the document alive, absent and re-seated modelled (Term 15, the hooks) |
+| IGL-8 | MAJOR | taken — `RunWorkspaceMutation(() => opened = OpenPathCore(target, CurrentTab, editorFocus: false))`; Back proceeds iff opened (design pass II) |
+| IGL-9 | MAJOR | taken — the composed routes enumerated; the totals are the model's literals, published by the record that lands it (B2-8) |
+| IGL-10 | MAJOR | taken — B2-D11: Control alone on Windows, any set containing Command on the mac |
+| IGL-11 | MAJOR | taken — the spec's §PR B acceptance (four connections ids) and §5.3 (thirteen command rows) amended in place |
+| IGL-12 | MINOR | taken — the arithmetic (sixty findings, thirty-six blockers before round 4) and the class's scope corrected |
+| IGL-13 | MINOR | taken — the introduction says the order is deliberately not the mac's |
+
+**The freeze.** Rule 5 fired at rounds 2, 3 and 4: three revisions in
+a row created the next round's blockers inside one subsystem, the
+pump subset. Under the PR 0b precedent, as B1's section at revision
+8, the section is frozen at revision 5 with the round-4 text as its
+discharge and the four ledgers as the task loop's; the task loop
+discharges each row by code — a fact, a mutation, a record — and any
+row it cannot discharge as written is recorded as a verified deviation
+in its TGB2 record. Precedent applied; the owner may overrule.
+
+### Task loop — records (PR B2)
+
+**TGB2-1 — T1: the workspace's one view state, the document's guarded
+selection (B2-1, Term 15's document side).** `GraphViewState` is
+constructed ONCE, in the workspace's constructor beside the relay
+(`NewGraphViewState`, the direct right-hand side of the field's
+assignment), handed to the graph document at construction (the
+constructor's third parameter; a bare document in a fact passes its
+own) and read back through `GraphViewStateForTests`; `Retire()` no
+longer resets it and `GraphViewState.Reset()` is gone — a closed graph
+tab leaves the selection on the workspace (B2-D4) and a reopened one
+seats a document over the SAME instance, which revalidates the key it
+inherits at its first pair publication (A-7). The table view's
+current-row write moves into the document's `SelectRow(key)`, which
+refuses once retired, when the document is not the workspace's seated
+one (the factory's `isSeated` names the funnel's field; a bare
+document is its own) and when the current snapshot lacks the key
+(IGJ-6). Facts: `ClosingTheLastGraphTabRetiresTheDocumentAndAReopenSeatsAFreshOne`
+now asserts the survival, the shared instance and the refusal of the
+retired document; `SelectRowRefusesAnAbsentKeyAnUnseatedDocumentAndARetiredOne`
+(a second document over the same state, unseated by its predicate);
+`ARetainedTableViewOverAClosedTabWritesNothing` (the live grid's row
+writes through the document, the retained one over the closed tab
+moves nothing). Censuses: `ExactlyOneGraphViewStateIsConstructedInTheShell`
+(the relay census's shape — every bound creation the factory's, the
+factory's one call the constructor's direct assignment, no method-group
+reference); `TheSharedKeyIsWrittenByTheNamedOwnersAlone` (every bound
+assignment to `SelectedKey` in the shell compilation is `SelectRow`'s
+or `RevalidateSelection`'s — T2 adds the leaf's three — and the
+backing field is written by the setter alone, `ref` arguments
+included, IGK-19); `NoMutableShadowOfTheViewStateExistsInTheShell`
+(compilation-wide by TYPE — the filter, the surface mode, a list of the
+groups — with A-1's NAME rule kept under `Graph/`, where it belongs: a
+canvas's text `Filter` or the workspace's `Mode` elsewhere is its own,
+which the first run found). Mutations, each restored byte for byte, each caught by the named fact: retirement clearing the key (the retirement fact); a second `GraphViewState` constructed in the document factory (the instance census); the table view writing the key itself (the writers census); `SelectRow` without its snapshot guard, and a document seated unconditionally (the refusal fact, both); a mutable `GraphFilter` field under another name in the workspace's graph partial (the no-shadow census) — six, none survived. Gates: `dotnet format` clean; the whole Windows test project on a fresh build, 2245 passed without the model; the model alone, 1383 cells in 5 m 52 s; the accessibility project built and the leaf journey passed in the foreground, 14 s; benchmarks build (its one document construction takes the view state); CI and codoki on the push are the oracle.
+
+**TGB2-2 — T2: the root mode on the leaf's document, the two hooks, the
+boundary once (B2-2, Terms 11, 13, 15, 16; IGL-2).** The leaf takes the
+workspace's view state at construction and gains rule D's state —
+`Pin` (null while FOLLOWING), `NoteInView` (recorded in both modes),
+`Root` now the EFFECTIVE root, and `BackStack` of `(the prior pin or
+null, the effective root at the push)` — with the root transition of
+Term 3(d) factored out of `NoteChanged`, which records the note in view
+and returns under a pin: no epoch, no load, no STALE, the selection
+kept. The entries: `PinTo(path)` pushes the effective root if there is
+one, pins, runs the transition with the leaf active by the pin
+mutation's construction (one audible load, no classification computed
+— IGK-2), writes the shared key through core's stable-key crossing and
+posts `GraphReRooted` with the file name through the new named seam
+`AnnounceReRooted`, unconditionally (Term 14; the seam census's leaf
+inventory gains it, IGK-18); `PopTo(installedPath, candidate)` re-reads
+the top entry and pops only when its effective root names the path the
+open INSTALLED — the candidate, the Markdown-only note in view, is set
+separately, so a restored `.canvas` or `.base` pin compares against the
+tab installed (IGL-1) — then restores the mode and runs the transition
+with one load, the key and the line the restored node's; `Retarget(source,
+destination, activeAndMounted)` moves the pin, the note in view and
+every entry by the same-or-descendant rule, a moved PIN being Term
+3(d)'s root move with the classification the workspace passes and the
+shared key following it only while it was the pin's (IGJ-10, IGJ-11,
+IGL-7); `Prune(source)` drops the entries under the path and keeps the
+pin (B2D-9). Every entry refuses without mutation once retired. The
+workspace: `NewConnectionsLeaf` hands the view state; `RetargetPath`
+calls the rename hook before its `SyncPanels()` with the one
+classification producer the funnel shares (`ConnectionsActiveAndMounted`);
+`InvalidatePath` calls the delete hook; and the boundary is corrected —
+`SyncPanelsAtTheBoundary` keeps the root RECORDED through the
+boundary's own sync and reconciles once with the LAST candidate, so an
+older candidate a nested sync recorded inside a pump is never replayed
+over the note the mutation installed (IGL-2; B-19 (iv)'s "reconciled
+once" brought to the code, recorded as B2's fix to B1's mechanics).
+Facts (`ConnectionsLeafTests.ReRoot.cs`): the pin's push, pin, epoch,
+one load, key, crossing and lines; a note change under a pin recorded
+and loading nothing; the pop restoring FOLLOWING on the opened note and
+a prior pin, each with one load; the pop refused when the top does not
+name the installed note, when FOLLOWING and when the stack is empty;
+the rename hook over a folder, the drifted key left alone, the note in
+view moved; the delete hook; every entry refusing once retired; the
+line posted whatever the active leaf; and the boundary reconciling
+once — a rename landed inside the open's dirty dialog (the test host's
+dirty-navigation decision runs `RetargetPath`, whose nested sync
+records the old candidate) followed by the open of another note: one
+transition, one load, the opened note's root. Censuses: the trigger
+census's four new protected names with their callers (the hooks the
+workspace's, the pin and the pop the funnels' — T3); the recorder
+census pins `SyncPanelsAtTheBoundary` as the reconciler's one caller
+and the runner as its own; the writers census admits the leaf's one
+FFI-backed writer and requires its right-hand side to bind to the
+stable-key crossing (a host-composed prefix is the offence). CI on T1's
+push (b89ca8a) failed the shell accessibility gate in PR A's graph
+table journey at its FIRST chord — "CommandPaletteSearch did not become
+available" — root-caused, not a flake: the journey pressed the palette
+chord after a best-effort SetForeground without the foreground
+re-assertion the leaf journey uses (a synthesized key grants the input
+credential Windows demands of a background process), so the chord
+reached a window that did not yet hold the foreground; the site and
+the shared palette helper now re-assert first. Mutations, each restored byte for byte, each caught by the named fact: the pin loading nothing (the pin fact); a note change under a pin loading (the recorded-change fact); the pop ignoring the installed path (the refusal fact); the rename hook skipping descendants (the folder fact); the delete hook dropping the pin (the prune fact); the boundary replaying an older candidate (the boundary fact); the re-root line gated on the active leaf (the whatever-leaf fact); the key host-composed (the writers census); the entries mutating once retired (the retired fact) — nine, none survived; fifteen in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build, 2255 passed without the model; the model alone, 1383 cells in 5 m 52 s; the accessibility project built and the graph table journey passed twice and the leaf journey once, in the foreground; benchmarks build; CI and codoki on the push are the oracle.
+
+**TGB2-3 — T3: the re-root funnel and Back, the three addressed
+entrances, the open's parameter and its post-gate validation (B2-3,
+B2-5, Terms 12–13; IGL-3, IGL-5, IGL-6).** `ReRootConnectionsOn(path)`
+is Term 12 as design pass II has it: admission (a disposed workspace
+or a retired leaf refuses); the same-root case — already pinned there —
+repairs the shared key through the leaf's `RepairSharedKey`, reveals
+and activates WITHOUT the suppression so B1's own triggers apply,
+consumes the mount and requests the focus, proposing nothing (B2D-6);
+else the PIN MUTATION on the palette's Show shape — under the
+suppression the pane revealed, the leaf activated, the mount consumed
+inert, then the leaf's `PinTo` — followed, in a mutation of its own, by
+the ORDINARY open of the note through `OpenPathCore` with the editor's
+focus request withheld, and the leaf's boundary focus request last
+(IGL-3). Nothing is held across the open; a refused open leaves the pin
+standing (B2D-7). `ConnectionsBack()` is Term 13: admission (live,
+PINNED, a non-empty stack), the ordinary open of the top entry's note
+with the focus withheld — a refusal pops nothing (B2-D5) —,
+RE-ADMISSION after the open (IGL-5), then the POP MUTATION on Show's
+shape and the leaf's `PopTo` with the path the open INSTALLED and the
+Markdown candidate the boundary reconciled. The open: `OpenPathCore` and
+`TryOpenItem` take `requestEditorFocus` (true everywhere but these two
+routes), and `TryOpenItem` validates, after the dirty gate and for
+EVERY open, that the workspace is live, the captured tab's group is
+still the active one, still hosted and still holds the tab — else false
+before any replacement (IGL-6). The entrances: the leaf's
+`Execute(ShowConnections, row)` through the new seam
+`ShowConnectionsFromRow`, enabled exactly when core's vector lists the
+action for the row's kind and the row is file-backed (B-D6 withdrawn:
+`ConnectionsPhrase.ShowConnectionsUnavailable` deleted, the action's
+reason null, the B1 facts that pinned the disabled state now pin the
+enabled one); the table's `ShowConnectionsFromSurface` set to the
+addressed `ReRootGraphRowFromSurface` — `FocusGraphAddress` first, as
+every table action — and the graph document's `Execute` walled for
+EVERY action by `IsRowCurrent`, reference identity in the current
+publication's rows (not `ContainsNode`, which is the snapshot's and
+A-7's — IGK-9); the Bases' new grid row action after Show backlinks,
+named by core's title through the leaf's fetched-once vector
+(`ActionTitle`, installed on the document as `ShowConnectionsTitle` —
+IGI-21), through the per-document seam `ShowConnectionsFromSurface`
+and `BasesShowConnectionsCommand`, both `BasesShowConnectionsFor`,
+which admits the invoking document only while it is the ACTIVE hosted
+one — the docked surface is bound to the active base document, so the
+invoking tab is that document's (a verified deviation from B2-5's
+"the seam carries the source tab": the surface is one docked view, not
+one per tab, and carries no tab; the address is the document's) — and
+`RowCommand` admits a row only while the result the menu was built over
+is the document's current one (IGJ-8), the row activation included.
+Facts: the leaf's entrance (the pin, the note in view, one load, the
+key, the lines in Term 14's order); a refused open leaving the pin
+standing; the same-root case (the key repaired, the leaf activated, no
+push, no line, no load of the route's own); Back opening then popping,
+a refused open popping nothing, FOLLOWING and an empty stack falling
+through; the table's entrance from a split whose other group is active
+(the graph's group focused first, then the pin) and a copied row
+refused by the current-row wall; the re-root's open withholding the
+editor's request and the leaf's request last; an open whose active
+group changed inside the gate installing nothing; the Bases' action
+named by core's title, its entrance refused for a document that is not
+the active one and pinning from the active one with nothing pushed and
+Back falling through (B2-D7), the command sharing the route. Censuses:
+`TheReRootFunnelAndBackAreReachedByTheirEntrancesAlone` (the funnel's
+callers bound: the leaf's installer, the table's wrapper, the Bases'
+route; Back's none until T4; method-group references refused);
+`EveryRowActionGuardsTheRowsCurrencyBeforeItsSeam` (the graph
+document's and the leaf's `Execute` guard `IsRowCurrent`, the Bases
+surface's `RowCommand` the captured result, each before any seam); the
+trigger census's owners for the pin, the pop and the repair. CI on T2's
+push (ab54fa6) failed the shell accessibility gate in the Bases
+journey's FIRST axe scan — three files-tree items and two grid rows
+read on-screen with a null bounding rectangle, and "SizeOfSet and
+PositionInSet" on the tree items — none of them a surface T2 touched;
+root-caused, not a flake: the scan is a snapshot, and a realized but
+not yet arranged item reads on-screen with no rectangle for the
+layout pass's duration — the class the journey's own later wait
+already names for the grid's rows. `AssertAxeClean` now waits, bounded,
+for every on-screen tree item and grid row of the window to have a
+rectangle before every scan; a scan that still fails after the wait is
+a defect. The journey passed three times in the foreground afterwards. Mutations, each restored byte for byte, each caught by the named fact: the pin crossing the open — pinned only after the open succeeded (the refused-open fact); the same-root case pinning again (the same-root fact); Back popping without its open's success (the Back fact — which SURVIVED as first written, since the pop's own guard refuses the unchanged tab either way, and now pins that a refused open runs none of the pop mutation: with the pane collapsed and another leaf active, no pane line, no leaf line, the pane still collapsed); the table's entrance unaddressed (the table fact); the graph document's `Execute` without the current-row wall, and the Bases' `RowCommand` without the captured-result wall (the membership census, both); the open keeping the editor's focus request (the focus fact); the open skipping its post-gate validation (the group-changed fact); the Bases' entrance unaddressed (the Bases fact) — nine, none survived; twenty-four in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build, 2266 passed without the model; the model alone, 1383 cells in 5 m 51 s; the accessibility project built and, in the foreground, the Bases journey passed three times and the graph table and the leaf journeys once each; benchmarks build; CI and codoki on the push are the oracle.
+
+**TGB2-4 — T4: Back's chord row, its scope and its key owner (B2-4,
+B2D-3, B2-D6, B2-D11; IGK-12, IGK-16).** The chord table gains
+`slate.graph.connectionsBack` — "Connections: Back", the mac's `⌘[` as
+`Ctrl+[`, in the new `ChordScope.Connections` (the leaf body's own key
+handling), the thirteenth graph id with no mac catalog twin (B2-D6); the
+chord follows the ⌘→Ctrl rule, so the row records no chord divergence
+(the table's modifier-rule fact holds it to that), and the
+modifier-MATCHING divergence is B2-D11's, recorded here and at the
+owner: the leaf view's tunnelling `OnPreviewKeyDown` matches
+`Key.OemOpenBrackets` with `ModifierKeys.Control` EXACTLY, so
+`Ctrl+Shift+[` (Previous Tab) and `Ctrl+Alt+[` (the sidebar's history)
+keep their owners, and marks the event handled only when the
+workspace's Back popped — through the leaf's new RESULT-bearing seam
+`BackFromSurface` that `NewConnectionsLeaf` installs (IGK-12) — so with
+nothing to pop the chord falls through (the mac's `.ignored`). The
+registrar resolves the row to the workspace's `ConnectionsBackCommand`,
+the palette's route to the same funnel (a no-op with nothing to pop);
+no menu item backs it by design. The table's scope test scrapes the
+new scope from production as it does the canvas's: `ConnectionsChords`
+reads the key and the modifiers off the view's `IsTheBackChord`
+expression, so a chord added to the view without a row, or a row
+without a delivering site, fails in both directions. `chords.json` is
+the table's projection, regenerated through the test's own switch,
+never by hand; its delivery evidence maps the id to the graph group;
+the matrix generator's delivered rows gain the id and the parity
+matrix is regenerated (its command rows are the mac catalog's, so the
+Windows-only id adds no row — the connections leaf's row is T6's).
+Facts: `ConnectionsBackIsARegisteredConnectionsScopedRow` (the label,
+the section, both chords, the scope, the one row in it, `Ctrl+[` in no
+other scope, no chord divergence);
+`TheLeafBodyOwnsBacksChordWithControlAloneAndFallsThroughWithNothingToPop`
+(FOLLOWING falls through; pinned, `Ctrl+Alt+[`, `Ctrl+Shift+[` and
+`Ctrl+]` fall through; `Ctrl+[` pops and is handled; the emptied stack
+falls through again); drift test 1 sees the row through the registrar;
+the funnel-caller census now names Back's two callers, the command's
+body and the seam's installer; the mac-catalog parity test's
+Windows-only disposition list gains the id with B2-D6 as its reason —
+the whole suite's first run under this task failed there, an id absent
+from the mac catalog with no recorded reason, which is that test doing
+its work: the targeted filter never reached it, the gate did.
+Mutations, each restored byte for byte, each caught by the named fact: the view firing on any chord with Control SET rather than Control alone (the view fact, through `Ctrl+Alt+[`); the view marking the event handled without a pop (the view fact, through the FOLLOWING fall-through); the row registered in the Global scope (the row fact); the resolver entry deleted (which SURVIVED its first run, filtered to the drift tests — those scrape resolver BODIES for menu drift and never ask whether a registered id resolves at all; rerun under `RegistryHoldsExactlyTheDeclaredCatalog_BothDirections`, the P13(a) fact that holds the registered set and the resolvable set equal, caught — the record names the covering fact so the sweep's filter is not mistaken for the coverage); the seam installer's Back line deleted (the funnel-caller census) — five, none survived a covering fact; twenty-nine in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build — 2267 passed and the mac-catalog parity test failed on the undispositioned id, then, the disposition added, 2268 passed on a fresh build; the model alone, 1383 cells in 5 m 48 s; the accessibility project built and, in the foreground, the leaf journey and the graph table journey passed; benchmarks build; CI and codoki on the push are the oracle.
+
+**TGB2-5 — T5: the model over rule D (B2-8, B2-10 vi; IGI-7, IGJ-12,
+IGK-20, IGL-1, IGL-3, IGL-5, IGL-6, IGL-7).** Three families, each an
+executable derivation with its totals as literals. (i) The first family
+is B1's model with a MODE dimension: every B1 route crossed with
+FOLLOWING and IGJ-12's three literal pinned arrangements — PinnedFresh
+(pin Deep, note in view the pin, stack `[(FOLLOWING, Two)]`),
+PinnedDrifted (pin Deep, note in view the orphan or none or the graph
+tab beside Two, stack `[(FOLLOWING, Two), (Hub, Hub)]`), PinnedNoOrigin
+(pinned from the graph tab, whose tab the pin's open replaced in place,
+A-9; stack empty) — the presentation and the load in flight the PIN's
+(a transient failure ahead of its load; its first load parked or its
+first envelope rejected; a missing path; its FOLDER moved while the leaf
+was inactive for the stale one), and five routes joined for Term 16's
+hooks over the entries and the note in view with a file and a folder
+(RenameOrigin, DeleteOrigin, RenameNoteInView, RenameFolder,
+DeleteFolder). The derivation under a pin: a note-in-view route keeps
+the shell's lines, loads nothing, leaves the pin, and lets the load in
+flight apply and speak iff audible and ACTIVE AT APPLY (Term 11; the
+graph document drained inside the drive so its lines precede the
+leaf's); the rename and delete routes act on the pin — a moved pin is
+Term 3(d)'s root move, one audible load while active and mounted else
+stale, the key following; a deleted pin is kept, its entries pruned,
+the probe's silent reload leaving Error; a missing pin lives in no
+folder, so the folder routes are the probe's alone. The state compared
+after every route gained the pin, the note in view, the WHOLE stack
+(IGI-7), the shared key (core's stable key of the pin — cleared by a
+graph document's revalidation once the pin is missing or deleted, A-7),
+the pending mount and the last focus request. Its literals: 25,200
+cells, 17,162 named as not states of the system, 8,038 driven — 1,501
+FOLLOWING (B1's 1,383 and the two folder routes' 118) and 6,537 pinned
+— in ~46 minutes. (ii) The second
+family: the re-root and Back product — the mode, the pane, the leaf, the
+note in view, the ENTRANCE (the leaf's row, the table's row, the Bases
+grid's row, the funnel for the canvas and base targets no fixture
+surface lists), the TARGET (a note, an attachment, the pin itself, a
+canvas, a base) and the GATE (clean; a dirty tab whose dialog pumps a
+real dispatcher frame and discards; one that cancels) — Term 14's order
+derived: the table's addressing `TabFocused` when a note was in view
+(nothing pushed FOLLOWING, B2-D7; the pin pushed under a pin), the
+reveal's lines, the re-root's line, the open's `TabFocused` only when a
+tab is created from none or the target's own tab beside is activated
+(an open lands IN PLACE over the tab in view whatever its kind — a
+note's, the graph's, a base's), the summary or the failure at apply; a
+refused open leaves the pin and the note in view; a canvas or base
+target leaves no Markdown candidate (IGL-1); the same-root case repairs
+the key, reveals and activates as B1's triggers say (a mount loads, a
+switch to a current leaf does not) with no push and no line — and, from
+a note beside a WARM graph tab, the table's re-activation summary lands
+beside the leaf's load in either order (two pool fetches; compared as a
+set). Back: FOLLOWING or an empty stack falls through; a refused open
+pops nothing; else the open (`TabFocused` from no tab), the reveal, the
+line, one load, the prior mode restored. Its literals: 5,760 cells,
+5,352 named, 408 driven in under two minutes. (iii) The third
+family: the composed routes crossed with the mode, each an in-dialog
+action through the model's gate seam (IGK-20) or a particular source,
+target or load — the pin, an entry and the just-pushed origin renamed
+and deleted inside the dialog (a file and a folder; the open installs
+the path it was built for, B2-D10; a parked pin load speaks the tree it
+fetched before the action and the probe's mark reloads it silently
+once); Back with the reserved note renamed inside its open (nothing
+pops, B2-D5); a re-entrant re-root and Back from the dialog (the gate
+asked twice); the pin's load and Deeper's prior load completing inside
+the open; the pin's and the pop's load failing (the failure line); the
+focus request landing before the apply (Term 9's line) and after it,
+with the editor never asked and the leaf's boundary the last request
+(IGL-3); an image as the source; a canvas and a base restored by Back as
+prior pins (IGL-1); a canvas origin (nothing pushed); a cold and a warm
+graph tab as the source; a retirement, a tab change, a group change (the
+pane-focus command asks for the editor, as everywhere; the open installs
+nothing, IGL-6), a tab close, a depth change and a probe inside the
+open; a rename of the pin with the graph document alive, absent and
+re-seated (IGL-7). Its literals: 128 cells, 33 named, 95 driven in
+half a minute. Corrections the runs forced, all to the
+MODEL: the pin's open replaces the graph's tab in place, so PinnedNoOrigin
+has no graph tab to close and a ghost or a re-root from the graph tab
+posts no `TabFocused`; the sole tab's close in a split asks no editor
+focus; a warm graph tab re-activated by the table's address speaks its
+activation summary, a replaced one never; the model's tab lookup reads
+the active group alone (the first run aborted on a lookup across
+groups). One finding for the OWNER, recorded in the model's own text:
+when the pin's own tab is the one in view, the rename hook's fetch —
+issued before `SyncPanels()` by Term 16's frozen order — races the
+panels' first read of the renamed note, which stages core's
+MetadataTouched and moves the generation (`graph.rs`, `apply_batch`),
+so the probe's mark reloads the tree silently once when the fetch landed
+first: one load or two, the pool's order, no line either way. The model
+accepts both for those cells and names the race; deferring the hook's
+load past the panels' sync would remove it, but the frozen text places
+the hook before the sync, so the shell stands and the owner may
+overrule. Runtime: the first family drives ~6,500 pinned cells in ~40
+minutes beside Following's ~5 (the assembly disables xunit parallelism),
+so CI gains a lane of its own for the model (`windows-model`, "app
+model (windows x64)", mirroring the suite lane's setup, the aggregate
+gate needing all four) and the suite lane excludes the model's facts;
+SLATE_MODEL_ONLY narrows a development or mutation run, which then
+asserts no divergence and no totals. Mutations, each restored byte for byte, each caught by a model family (the first family narrowed to the cells that see it, through SLATE_MODEL_ONLY): a note change transitioning the root under a pin (the first family, PinnedFresh's RootChange cells); the pin pushing nothing (the second family's stacks); the pop ignoring the installed path (the third family's Back with the reserved note renamed); the rename hook leaving the entries (the first family, PinnedFresh's RenameOrigin cells); the delete hook dropping a pin under the deleted path (the first family, PinnedFresh's DeleteRoot cells); the funnel's open asking for the editor's focus (the second family's IGL-3 wall); the open skipping its post-gate validation (the third family's group change inside the dialog) — seven, none survived; thirty-six in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build without the model, 2268 passed; the three model facts alone, 48 m 33 s, every cell agreeing and every total its literal; the accessibility project built and, in the foreground, the leaf journey and the graph table journey passed; benchmarks build; CI — the suite lane, the new model lane and the gate — and codoki on the push are the oracle.
+
+**TGB2-6 — T6: the journey continues, the matrices (B2-9, B2-11; B2-3,
+B2-4, IGI-4).** `GraphConnections_LeafWalkDepthAndReRoot_AreClean` gains
+its second half: Show connections on the healed incoming row through
+the MENU key and the row's actions (the item named by core's title,
+live, invoked) — the heading moves to Alpha, the tree re-roots and
+takes focus, the summary's text changes; `Ctrl+[` from inside the tree
+— the heading and the summary return to the created note's; `Ctrl+[`
+again with nothing to pop — the heading unchanged, focus kept; Open
+Graph, the Beta row's actions through the Menu key and the table's Show
+connections — the leaf re-roots on Beta and takes focus; axe over
+`graph-connections` after the re-root. The Bases' route stays the
+document-seam fact's (`TheBasesShowConnectionsIsAddressedByTheActiveDocument`),
+a base fixture in the journey being PR-scope creep. The journey found
+two defects of B1's VIEW, both fixed here and each pinned: (i) the Menu
+key on a row opened NOTHING — the leaf assigned the row's menu inside
+ContextMenuOpening, too late for the request WPF raised it for (the
+grid's own adversarial round 4, `AccessibleDataGrid`'s comment,
+repeated), and answered the key a second time from the tree's key
+handler, marking it handled; now the tree carries ONE persistent
+`ContextMenu` from construction, mutated per request from the row the
+request targets (a pointer's row, or the selected row for the keyboard;
+a group header or empty chrome gets none) and the Menu key and
+Shift+F10 are WPF's alone (`TheRowMenuExistsFromConstructionAndTheMenuKeyIsWpfs`);
+(ii) after Back the focused element was the WINDOW: the pop issues its
+load after its open, so the boundary request landed on the rows the pop
+then replaced and WPF dropped focus with them — the re-root escaped it
+only because its load precedes its open; now a render that replaces
+the rows under keyboard focus keeps focus inside the leaf, at once and
+again after the layout pass and the generator's (the selected or first
+row's container REALIZED, the anchor's own route — a group row's id is
+no occurrence id, so the pending-focus delivery could not carry it, the
+first attempt's trap — or the state's host; focus left on a collapsed
+element counts as lost), the journey its witness. One observation for
+the owner: the state's host, Term 9's anchor when the leaf has no rows,
+is a `Border`, which projects no automation peer — focus on it reads as
+the window to UIA; B1's journey never lands there, and this one does
+not either. The matrices: `parity_matrix.md`'s leaf row for
+`connections` implemented through the generator's delivered leaves,
+naming the leaf's documents, the three entrances, Back and the
+evidence (`ConnectionsLeafTests` with the model families,
+`ConnectionsLeafViewTests`, `ConnectionsReRootBasesTests`, the
+journey); `w_c_matrix.md`'s "Graph connections leaf (W6-2 PR B)" row
+— the keyboard route's Show connections live on a note row from the
+three surfaces and `Ctrl+[`, the notification contract's
+`GraphReRooted` in Term 14's order, the automated evidence's rule D
+facts, the three families and the journey's continuation;
+`chords.json` unchanged since T4's projection. Mutations, each restored byte for byte: the row menu assigned only inside the opening event again (the view fact); the tree answering the Menu key itself again (the view fact); the focus keep-alive removed (the JOURNEY, run as the covering fact through the runner's project seam, the shell rebuilt and driven for real); and the keep-alive's deferred retries removed — which SURVIVED the journey once, after which the journey without them failed on the pop's focus one run in three and passed three in three with them back: the retries stay, a timing-bound witness the record names rather than a mutation the sweep counts. Three caught; thirty-nine in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build without the model — 2268 passed and the W-C evidence census refused an evidence name that named a partial file, not a fact; the names corrected, 2269 passed; the three model facts alone, 49 m 2 s; the accessibility project built and, in the foreground, the leaf journey — its second half included — and the graph table journey passed three times in a row; benchmarks build; CI — the suite lane, the model lane and the gate — and codoki on the push are the oracle.
+
+### Tests that pin PR B2 (revision 5's list; the task loop records what lands)
+
+- `ConnectionsLeafTests.ReRoot.cs`: the pin mutation's order on Show's
+  shape (the reveal, the activation, the mount inert, `PinTo`'s push
+  and pin and one load, the key, the line, the focus request), the
+  ordinary open after it with the editor focus withheld (allowed and
+  refused: the pin stands; the leaf the final focused element), the
+  same-root return with each B1 trigger, Back's open then pop (allowed;
+  refused: nothing pops; the top entry renamed inside the open:
+  nothing pops), Back to FOLLOWING with a drifted note in view (one load
+  of the opened note), Back to a prior pin, Back with an empty stack
+  and from FOLLOWING falling through, a re-entrant re-root and Back
+  from the dialog, the pinned note's change recorded and not loaded,
+  the probe and the depth change over the pin, the rename of the pin
+  (the audible root move) and of an entry and of a just-pushed origin
+  and their folders, the delete pruning the stack, the pin's load
+  failing (the failure line), the focus request landing while Loading
+  (Term 9's line), the ghost create while pinned, an attachment as the
+  source and the target, the shared key after each through the FFI
+  crossing, every funnel and entry after shutdown.
+- The model (B2-8), alone in its collection, under the pumped
+  dispatcher with the production scheduler.
+- `GraphDocumentTests`: the injected view state; retirement leaves it;
+  a re-seated document revalidates the key it inherits; `SelectRow`
+  refusing when retired, unseated or the key absent; a retained table
+  view across close and reopen writing nothing; `Execute` refusing a
+  captured row a rows-only republish removed while its node stays in
+  the snapshot.
+- The Bases facts: the row action's name from the fetched vector, its
+  source-carrying seam, the command's focus of the source tab, a shared
+  document in two panes, the stale-result refusal, the no-origin push.
+- `ChordTableTests` and the dedicated facts of B2-4: the row, its
+  scope, the palette reachability through ConnectionsBackCommand, the
+  leaf's delivery and exact-modifier fall-through, no menu item,
+  `Ctrl+[` free elsewhere.
+- The censuses of B2-10, with mutations for each shape they name.
+- The journey (B2-9), run to its last step locally before every push
+  (the foreground rule).
 
 <!-- end of the graph contracts document -->

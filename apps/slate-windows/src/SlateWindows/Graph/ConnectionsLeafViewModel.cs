@@ -106,6 +106,7 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
 
     private readonly VaultSession _session;
     private readonly GraphAnnouncer _announcer;
+    private readonly GraphViewState _viewState;
     private readonly Func<bool> _isActive;
     private readonly Func<GraphVerbosity> _verbosity;
     private readonly Func<int> _lifecycleGeneration;
@@ -114,7 +115,14 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     private ulong _seq;
     private ConnectionsRequest? _request;
     private bool _inFlight;
+    // Rule D, Term 11 (W6-2 PR B2): `_root` is the EFFECTIVE root — the pin
+    // while PINNED, else the note in view; `_noteInView` is recorded in
+    // both modes; the stack holds `(the prior pin or null for FOLLOWING,
+    // the effective root at the push)`, the mac's `connectionsBackStack`.
     private string? _root;
+    private string? _pin;
+    private string? _noteInView;
+    private readonly List<(string? Pin, string Effective)> _backStack = [];
     private int _rootEpoch;
     private uint _depth;
     private ulong _highWater;
@@ -127,6 +135,7 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     public ConnectionsLeafViewModel(
         VaultSession session,
         GraphAnnouncer announcer,
+        GraphViewState viewState,
         Func<bool> isActive,
         Func<GraphVerbosity> verbosity,
         SynchronizationContext? ownerContext = null,
@@ -142,10 +151,14 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(announcer);
+        ArgumentNullException.ThrowIfNull(viewState);
         ArgumentNullException.ThrowIfNull(isActive);
         ArgumentNullException.ThrowIfNull(verbosity);
         _session = session;
         _announcer = announcer;
+        // The WORKSPACE's one view state (W6-2 PR B2, B2-1): a pin and a
+        // pop write its selected key (Term 15); nothing else here reads it.
+        _viewState = viewState;
         _isActive = isActive;
         _verbosity = verbosity;
         _lifecycleGeneration = lifecycleGeneration ?? (static () => 0);
@@ -270,6 +283,15 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     // --- Seams the workspace wires (B-9, B-11) ------------------------------
 
     internal Action<string, WorkspaceOpenTarget>? OpenRowFromSurface { get; set; }
+
+    /// <summary>W6-2 PR B2 (B2-3): the row's Show connections — the
+    /// workspace's re-root funnel, on the row's file-backed path.</summary>
+    internal Action<string>? ShowConnectionsFromRow { get; set; }
+
+    /// <summary>W6-2 PR B2 (B2-4, IGK-12): the view's key owner's route to
+    /// the workspace's Back — RESULT-bearing, so the chord falls through
+    /// when there was nothing to pop (the mac's <c>.ignored</c>).</summary>
+    internal Func<bool>? BackFromSurface { get; set; }
 
     internal Action<string>? RevealRowFromSurface { get; set; }
 
@@ -405,7 +427,28 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     /// mounted — else the presentation is STALE until (a), (b) or the probe.</summary>
     public void NoteChanged(string? path, bool activeAndMounted)
     {
-        if (_retired || string.Equals(path, _root, StringComparison.Ordinal))
+        if (_retired)
+        {
+            return;
+        }
+        _noteInView = path;
+        // Rule D, Term 11 (W6-2 PR B2): while PINNED the note in view is
+        // RECORDED and is not a root change — no epoch, no load, no STALE,
+        // the selection kept; the pin is the effective root until Back.
+        if (_pin is not null)
+        {
+            return;
+        }
+        TransitionTo(path, activeAndMounted);
+    }
+
+    /// <summary>The root transition (Term 3(d), 3(g)): a same-path call is
+    /// a no-op; a change advances the epoch and the sequence (an in-flight
+    /// result for the old root is foreign), clears the selection, installs
+    /// NoNote synchronously for none, else loads iff active and mounted.</summary>
+    private void TransitionTo(string? path, bool activeAndMounted)
+    {
+        if (string.Equals(path, _root, StringComparison.Ordinal))
         {
             return;
         }
@@ -433,6 +476,200 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
             _ = Load(GraphAnnouncePolicy.Summary);
         }
     }
+
+    // --- Rule D: the root mode (W6-2 PR B2) --------------------------------------
+
+    /// <summary>The pin, or null while FOLLOWING (Term 11).</summary>
+    public string? Pin => _pin;
+
+    /// <summary>The note in view, recorded in both modes (Term 11).</summary>
+    public string? NoteInView => _noteInView;
+
+    /// <summary>The back stack, oldest first: the prior pin (null for
+    /// FOLLOWING) and the effective root at each push (Term 16).</summary>
+    public IReadOnlyList<(string? Pin, string Effective)> BackStack => _backStack;
+
+    /// <summary>Term 12 — the PIN, called ONLY inside the workspace's pin
+    /// mutation, where the leaf is active and mounted by construction: the
+    /// effective root at this instant is pushed (nothing when there is
+    /// none), the pin set, the root transition run — the epoch and the
+    /// sequence advance, every load in flight is foreign — and ONE audible
+    /// load issued; then the shared key, core's stable key of the path
+    /// (Term 15), and the re-root's line through the named seam (Term 14).
+    /// Returns false, moving nothing, once retired.</summary>
+    public bool PinTo(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (_retired)
+        {
+            return false;
+        }
+        if (_root is { } effective)
+        {
+            _backStack.Add((_pin, effective));
+        }
+        _pin = path;
+        OnPropertyChanged(nameof(Pin));
+        OnPropertyChanged(nameof(BackStack));
+        TransitionTo(path, activeAndMounted: true);
+        WriteSharedKey(path);
+        AnnounceReRooted(path);
+        return true;
+    }
+
+    /// <summary>Term 13 — the POP, called ONLY inside the workspace's pop
+    /// mutation after the ordinary open of the top entry's note: the top
+    /// entry, re-read now (a rename hook may have rewritten it), must name
+    /// the path the open INSTALLED, else nothing pops; then the note in
+    /// view is set to the open's Markdown candidate, the entry popped, its
+    /// mode restored — FOLLOWING, whose effective root is the note in view,
+    /// or the prior pin — the root transition run with ONE audible load,
+    /// the shared key the restored node's, the line its file name.</summary>
+    public bool PopTo(string installedPath, string? candidate)
+    {
+        ArgumentNullException.ThrowIfNull(installedPath);
+        if (_retired || _pin is null || _backStack.Count == 0)
+        {
+            return false;
+        }
+        (string? priorPin, string effective) = _backStack[^1];
+        if (!string.Equals(effective, installedPath, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        _backStack.RemoveAt(_backStack.Count - 1);
+        _noteInView = candidate;
+        _pin = priorPin;
+        OnPropertyChanged(nameof(Pin));
+        OnPropertyChanged(nameof(BackStack));
+        TransitionTo(_pin ?? _noteInView, activeAndMounted: true);
+        WriteSharedKey(effective);
+        AnnounceReRooted(effective);
+        return true;
+    }
+
+    /// <summary>Term 16, the rename hook (B2D-9; IGJ-10, IGJ-11): every path
+    /// equal to or under <paramref name="source"/> — the pin, the note in
+    /// view, each stack entry's pin and effective root — moves under
+    /// <paramref name="destination"/>; a moved PIN is Term 3(d)'s root move
+    /// with the classification the workspace passes, and the shared key,
+    /// when it is the old pin's, becomes the new pin's (IGL-7). Refuses,
+    /// moving nothing, once retired.</summary>
+    public void Retarget(string source, string destination, bool activeAndMounted)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(destination);
+        if (_retired)
+        {
+            return;
+        }
+        string? oldPin = _pin;
+        if (_noteInView is { } note && TryRetarget(note, source, destination, out string movedNote))
+        {
+            _noteInView = movedNote;
+        }
+        for (int index = 0; index < _backStack.Count; index++)
+        {
+            (string? pin, string effective) = _backStack[index];
+            string? movedPin = pin is not null && TryRetarget(pin, source, destination, out string p) ? p : pin;
+            string movedEffective = TryRetarget(effective, source, destination, out string e) ? e : effective;
+            _backStack[index] = (movedPin, movedEffective);
+        }
+        if (oldPin is not null && TryRetarget(oldPin, source, destination, out string newPin))
+        {
+            _pin = newPin;
+            OnPropertyChanged(nameof(Pin));
+            TransitionTo(newPin, activeAndMounted);
+            CountCrossing("graph_stable_key_for_path");
+            if (string.Equals(_viewState.SelectedKey, SlateUniffiMethods.GraphStableKeyForPath(oldPin), StringComparison.Ordinal))
+            {
+                WriteSharedKey(newPin);
+            }
+        }
+        OnPropertyChanged(nameof(BackStack));
+    }
+
+    /// <summary>Term 16, the delete hook (B2D-9): every stack entry naming
+    /// a path equal to or under <paramref name="source"/> is pruned, so Back
+    /// never opens a note that is gone; the pin and the note in view are
+    /// KEPT (B1's delete route — the Error presentation; Back is the way
+    /// out). Refuses, moving nothing, once retired.</summary>
+    public void Prune(string source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (_retired)
+        {
+            return;
+        }
+        int removed = _backStack.RemoveAll(entry =>
+            IsSameOrUnder(entry.Effective, source) || (entry.Pin is { } pin && IsSameOrUnder(pin, source)));
+        if (removed > 0)
+        {
+            OnPropertyChanged(nameof(BackStack));
+        }
+    }
+
+    /// <summary>The same-root re-root's repair of the shared key (Term 12,
+    /// B2D-6; the mac's early return writes the key too): nothing else moves.</summary>
+    public void RepairSharedKey(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (!_retired)
+        {
+            WriteSharedKey(path);
+        }
+    }
+
+    /// <summary>Term 15: the shared key is core's stable key, through the
+    /// FFI, counted; a host-composed prefix is the census's offence.</summary>
+    private void WriteSharedKey(string path)
+    {
+        CountCrossing("graph_stable_key_for_path");
+        _viewState.SelectedKey = SlateUniffiMethods.GraphStableKeyForPath(path);
+    }
+
+    /// <summary>Term 14: the re-root's line — core's `GraphReRooted` with the
+    /// note's file name (the mac's `filename(of:)`, the last path component)
+    /// — posted through the one relay UNCONDITIONALLY: the pin and the pop
+    /// mutations construct the leaf active, so no gate is consulted.</summary>
+    internal void AnnounceReRooted(string path)
+    {
+        if (!_retired)
+        {
+            _announcer.Announce(new GraphA11yEvent.GraphReRooted(System.IO.Path.GetFileName(path)));
+        }
+    }
+
+    /// <summary>The workspace's same-or-descendant predicate, over the
+    /// leaf's normalized paths (forward slashes, no trailing slash).</summary>
+    private static bool IsSameOrUnder(string path, string ancestor)
+    {
+        string normalized = Normalize(path);
+        string root = Normalize(ancestor);
+        return string.Equals(normalized, root, StringComparison.Ordinal)
+            || normalized.StartsWith(root + "/", StringComparison.Ordinal);
+    }
+
+    private static bool TryRetarget(string path, string source, string destination, out string retargeted)
+    {
+        string normalized = Normalize(path);
+        string from = Normalize(source);
+        if (string.Equals(normalized, from, StringComparison.Ordinal))
+        {
+            retargeted = Normalize(destination);
+            return true;
+        }
+        if (normalized.StartsWith(from + "/", StringComparison.Ordinal))
+        {
+            retargeted = Normalize(destination) + normalized[from.Length..];
+            return true;
+        }
+        retargeted = path;
+        return false;
+    }
+
+    private static string Normalize(string path) =>
+        string.IsNullOrWhiteSpace(path) ? string.Empty : path.Replace('\\', '/').TrimEnd('/');
 
     /// <summary>Term 3(e), B-5, B-14: the depth through core's clamp; a
     /// bound is a no-op (the mac's guard); a change with a root reloads
@@ -719,20 +956,28 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         {
             GraphRowAction.Open or GraphRowAction.OpenInNewTab => row.Path is not null && OpenRowFromSurface is not null,
             GraphRowAction.Reveal => row.Path is not null && RevealRowFromSurface is not null,
-            GraphRowAction.ShowConnections => false,
+            // W6-2 PR B2 (B2-3; B-D6 withdrawn): core's vector lists the
+            // action for a Note and an Attachment, both file-backed, never
+            // a Ghost — no host predicate on the kind; the seam the
+            // workspace wires is the re-root funnel.
+            GraphRowAction.ShowConnections => row.Path is not null && ShowConnectionsFromRow is not null,
             GraphRowAction.CreateNote => CreateNoteFromSurface is not null && CreateAdmissionReason?.Invoke() is null,
             _ => false,
         };
     }
 
-    /// <summary>B-9 / B-D6: Show connections carries the one B1 reason on
-    /// the menu action alone; Create note the host's admission reason.</summary>
+    /// <summary>B-9: Create note carries the host's admission reason; no
+    /// other action carries one (B-D6 withdrawn in B2).</summary>
     public string? ActionDisabledReason(GraphRowAction action) => action switch
     {
-        GraphRowAction.ShowConnections => ConnectionsPhrase.ShowConnectionsUnavailable,
         GraphRowAction.CreateNote => CreateAdmissionReason?.Invoke(),
         _ => null,
     };
+
+    /// <summary>The title core gives an action (0b-9), from the fetched-once
+    /// Note vector — the Bases' row action reads it (B2-5).</summary>
+    public string ActionTitle(GraphRowAction action) =>
+        _actionsByKind[GraphNodeKind.Note].First(spec => spec.Action == action).Title;
 
     /// <summary>B-9: the ROW's hint is its activation's — T15 for a ghost,
     /// T16 otherwise; a disabled create's reason replaces the ghost's.</summary>
@@ -787,6 +1032,10 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
                 break;
             case GraphRowAction.Reveal:
                 RevealRowFromSurface!(row.Path!);
+                break;
+            case GraphRowAction.ShowConnections:
+                // Rule D, Term 12: the leaf's entrance to the re-root funnel.
+                ShowConnectionsFromRow!(row.Path!);
                 break;
             case GraphRowAction.CreateNote:
                 CreateNoteFromSurface!(SlateUniffiMethods.GraphGhostNotePath(row.TargetRaw), root, _rootEpoch);

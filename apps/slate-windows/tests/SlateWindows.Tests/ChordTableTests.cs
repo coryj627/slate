@@ -735,7 +735,50 @@ public sealed class ChordTableTests
             [ChordScope.SearchOverlay] = SearchOverlayChords(),
             [ChordScope.Editor] = EditorChords(),
             [ChordScope.Canvas] = CanvasChords(),
+            [ChordScope.Connections] = ConnectionsChords(),
         };
+
+    /// <summary>The Connections leaf's own key route (W6-2 PR B2, B2-4):
+    /// the one chord its body delivers, read from <c>IsTheBackChord</c>'s
+    /// expression — the key as <c>Key.X</c>, the modifiers as
+    /// <c>ModifierKeys.Y</c> — so a chord added to the view without a table
+    /// row, or a row without a delivering site, fails here.</summary>
+    private static HashSet<string> ConnectionsChords()
+    {
+        MethodDeclarationSyntax owner =
+            CSharpSource.Load("Graph", "ConnectionsLeafView.cs").Method("IsTheBackChord");
+        MemberAccessExpressionSyntax[] accesses = [.. owner.DescendantNodes().OfType<MemberAccessExpressionSyntax>()];
+        string[] keys = [.. accesses
+            .Where(access => CSharpSource.Normalize(access.Expression) == "Key")
+            .Select(access => access.Name.Identifier.ValueText)];
+        string[] modifiers = [.. accesses
+            .Where(access => CSharpSource.Normalize(access.Expression) == "ModifierKeys")
+            .Select(access => access.Name.Identifier.ValueText)];
+        Assert.Single(keys);
+        Assert.NotEmpty(modifiers);
+        return [Canonical(string.Join("+", modifiers), keys[0])];
+    }
+
+    /// <summary>W6-2 PR B2, B2-4 / B2D-3: Back is a registered graph row in
+    /// its own Connections scope — the mac's ⌘[ as Ctrl+[ — with its
+    /// divergence recorded; the registrar resolves it (drift test 1 walks
+    /// the palette), and no menu item backs it by design.</summary>
+    [Fact]
+    public void ConnectionsBackIsARegisteredConnectionsScopedRow()
+    {
+        ChordTableEntry row = ChordTable.Entries.Single(entry => entry.Id == ChordTable.Ids.GraphConnectionsBack);
+        Assert.Equal("Connections: Back", row.Label);
+        Assert.Equal(uniffi.slate_uniffi.CommandSection.Graph, row.Section);
+        Assert.Equal("⌘[", row.MacChord);
+        Assert.Equal("Ctrl+[", row.WindowsChord);
+        Assert.Equal(ChordScope.Connections, row.Scope);
+        Assert.True(row.IsRegistered);
+        // The chord follows the ⌘→Ctrl rule; the modifier-matching
+        // divergence (B2-D11) is the key owner's, recorded in the contracts.
+        Assert.Null(row.Divergence);
+        Assert.Single(ChordTable.Entries, entry => entry.Scope == ChordScope.Connections);
+        Assert.DoesNotContain(ChordTable.Entries, entry => entry.WindowsChord == "Ctrl+[" && entry.Scope != ChordScope.Connections);
+    }
 
     /// <summary>
     /// Scopes with no source scrape, and why. Every entry is reverse-

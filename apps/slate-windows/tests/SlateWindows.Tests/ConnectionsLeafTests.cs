@@ -72,9 +72,18 @@ public sealed partial class ConnectionsLeafTests
         public List<string> RelayLines { get; } = [];
         public List<string> Timeline { get; } = [];
 
+        /// <summary>The focus requests the workspace raised, in order: the
+        /// editor's (<c>EditorPaneFocusRequested</c>) and a boundary's by
+        /// name — the model compares the LAST one after every route
+        /// (W6-2 PR B2, B2-8; IGL-3).</summary>
+        public List<string> FocusRequests { get; } = [];
+
         public string Root { get; }
 
-        public Host(string root, Func<int>? lifecycleGeneration = null)
+        public Host(
+            string root,
+            Func<int>? lifecycleGeneration = null,
+            Func<WorkspaceTabViewModel, WorkspaceItemState, WorkspaceDirtyNavigationDecision>? dirtyNavigationDecision = null)
         {
             Root = root;
             Session = VaultSession.OpenFilesystem(root);
@@ -89,6 +98,7 @@ public sealed partial class ConnectionsLeafTests
                     ShellEvents.Add(@event);
                     Timeline.Add(@event.GetType().Name);
                 },
+                dirtyNavigationDecision: dirtyNavigationDecision,
                 startInteractionBackgroundWork: false,
                 announceRendered: line =>
                 {
@@ -96,6 +106,8 @@ public sealed partial class ConnectionsLeafTests
                     Timeline.Add(line.Text);
                 },
                 lifecycleGeneration: lifecycleGeneration);
+            Workspace.EditorPaneFocusRequested += (_, _) => FocusRequests.Add("editor");
+            Workspace.FocusBoundaryRequested += (_, boundary) => FocusRequests.Add(boundary.ToString());
         }
 
         public ConnectionsLeafViewModel Leaf => Workspace.Connections;
@@ -129,6 +141,7 @@ public sealed partial class ConnectionsLeafTests
             ShellEvents.Clear();
             RelayLines.Clear();
             Timeline.Clear();
+            FocusRequests.Clear();
         }
 
         public void Dispose()

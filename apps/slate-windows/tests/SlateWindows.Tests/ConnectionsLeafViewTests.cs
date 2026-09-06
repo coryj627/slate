@@ -3,6 +3,7 @@
 
 using System.Runtime.ExceptionServices;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
@@ -104,6 +105,48 @@ public sealed class ConnectionsLeafViewTests
         {
             ExceptionDispatchInfo.Capture(failure).Throw();
         }
+    }
+
+    /// <summary>W6-2 PR B2, B2-4 / B2-D11: the leaf's body owns Back's chord
+    /// — Control alone, so the sidebar history's Ctrl+Alt+[ and Previous
+    /// Tab's Ctrl+Shift+[ keep their owners — and handles it only when the
+    /// workspace popped: with nothing to pop the chord falls through.</summary>
+    [Fact]
+    public void TheLeafBodyOwnsBacksChordWithControlAloneAndFallsThroughWithNothingToPop()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("back-chord");
+            host.ActivateLeaf();
+            host.Workspace.OpenPath("hub.md", WorkspaceOpenTarget.CurrentTab);
+            PumpedDispatcher.PumpUntilDrained(host.Leaf.WhenAllWorkDrained());
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                // FOLLOWING: nothing to pop, the chord falls through.
+                Assert.False(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control));
+
+                Assert.True(host.Workspace.ReRootConnectionsOn("2.md"));
+                PumpedDispatcher.PumpUntilDrained(host.Leaf.WhenAllWorkDrained());
+                Assert.Equal("2.md", host.Leaf.Pin);
+                // Other owners' chords fall through even while pinned.
+                Assert.False(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control | ModifierKeys.Alt));
+                Assert.False(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control | ModifierKeys.Shift));
+                Assert.False(view.TryHandleBackChord(Key.OemCloseBrackets, ModifierKeys.Control));
+                Assert.Equal("2.md", host.Leaf.Pin);
+                // Back's chord pops and is handled.
+                Assert.True(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control));
+                PumpedDispatcher.PumpUntilDrained(host.Leaf.WhenAllWorkDrained());
+                Assert.Null(host.Leaf.Pin);
+                Assert.Equal("hub.md", host.Leaf.Root);
+                // The stack empty again: the chord falls through.
+                Assert.False(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
     }
 
     /// <summary>A window hosts the view so containers realise and peers
@@ -542,12 +585,60 @@ public sealed class ConnectionsLeafViewTests
                 string[] titles = [.. menu.Items.Cast<MenuItem>().Select(i => (string)i.Header)];
                 Assert.Equal(host.Leaf.ActionSpecs(GraphNodeKind.Note).Select(s => s.Title), titles);
                 MenuItem show = menu.Items.Cast<MenuItem>().Single(i => (string)i.Header == host.Leaf.ActionSpecs(GraphNodeKind.Note).Single(s => s.Action == GraphRowAction.ShowConnections).Title);
-                Assert.False(show.IsEnabled);
-                Assert.Equal(ConnectionsPhrase.ShowConnectionsUnavailable, AutomationProperties.GetHelpText(show));
+                // Since B2 (B-D6 withdrawn): enabled, its help text the title.
+                Assert.True(show.IsEnabled);
+                Assert.Equal((string)show.Header, AutomationProperties.GetHelpText(show));
                 // The ROW's hint is its activation's, never the action's reason (B-9).
                 Assert.Equal(ConnectionsPhrase.NoteHint, note.Hint);
                 MenuItem open = menu.Items.Cast<MenuItem>().First();
                 Assert.True(open.IsEnabled);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>W6-2 PR B2 (T6, the journey's finding): the row menu EXISTS
+    /// from construction as the tree's own — WPF opens the menu that exists
+    /// when the Menu key, Shift+F10 or a right-click arrives, and a menu
+    /// first assigned inside the opening event is too late for that request
+    /// (the grid's rule) — its items rebuilt per request from the row in
+    /// core's order; and the tree's own key handler leaves the Menu key to
+    /// WPF (B1 answered it twice, and the two answers left nothing open).</summary>
+    [Fact]
+    public void TheRowMenuExistsFromConstructionAndTheMenuKeyIsWpfs()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("persistent-menu");
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                ContextMenu menu = view.RowMenuForTests;
+                Assert.Same(menu, view.TreeForTests.ContextMenu);
+                ConnectionsRowViewModel note = view.RootsForTests[1].Children.First(r => r.Row!.Kind == GraphNodeKind.Note);
+                Assert.Equal(host.Leaf.ActionSpecs(GraphNodeKind.Note).Select(s => s.Title), view.RebuildRowMenuForTests(note));
+                Assert.Same(menu, view.TreeForTests.ContextMenu);
+                // A second request rebuilds the SAME menu: the items are new,
+                // the menu is not.
+                Assert.Equal(host.Leaf.ActionSpecs(GraphNodeKind.Note).Select(s => s.Title), view.RebuildRowMenuForTests(note));
+                Assert.Same(menu, view.TreeForTests.ContextMenu);
+
+                // The Menu key through the tree: not handled here — WPF's
+                // popup service owns it.
+                note.IsSelected = true;
+                var apps = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window)!, 0, Key.Apps)
+                {
+                    RoutedEvent = Keyboard.KeyDownEvent,
+                };
+                view.TreeForTests.RaiseEvent(apps);
+                Assert.False(apps.Handled);
+                Assert.False(menu.IsOpen);
             }
             finally
             {

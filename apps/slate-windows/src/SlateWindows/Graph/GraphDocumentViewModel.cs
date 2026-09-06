@@ -76,6 +76,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     private readonly Func<bool> _isEffectiveActive;
     private readonly Func<GraphVerbosity> _verbosity;
     private readonly Func<int> _lifecycleGeneration;
+    private readonly Func<bool> _isSeated;
     private readonly Dictionary<GraphNodeKind, IReadOnlyList<GraphRowActionSpec>> _actionsByKind;
     private ulong _seq;
     private GraphTableRequest? _request;
@@ -90,10 +91,12 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     public GraphDocumentViewModel(
         VaultSession session,
         GraphAnnouncer announcer,
+        GraphViewState viewState,
         Func<bool> isEffectiveActive,
         Func<GraphVerbosity> verbosity,
         SynchronizationContext? ownerContext = null,
-        Func<int>? lifecycleGeneration = null)
+        Func<int>? lifecycleGeneration = null,
+        Func<bool>? isSeated = null)
         : base(
             synchronousForTests: false,
             ownerContext
@@ -108,8 +111,13 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(announcer);
+        ArgumentNullException.ThrowIfNull(viewState);
         ArgumentNullException.ThrowIfNull(isEffectiveActive);
         ArgumentNullException.ThrowIfNull(verbosity);
+        // A-1 as amended (W6-2 PR B2, B2D-1): the view state is the
+        // WORKSPACE's, handed in; a bare document in a fact is its own
+        // seated one.
+        _isSeated = isSeated ?? (static () => true);
         _session = session;
         _announcer = announcer;
         _isEffectiveActive = isEffectiveActive;
@@ -133,7 +141,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         // COUNTED through the wrapper, never a literal (IPC-5): a fourth
         // crossing anywhere would show here.
         ActionInventoryCrossings = CrossingsForTests["graph_row_actions"];
-        ViewState = new GraphViewState();
+        ViewState = viewState;
         _publication = GraphPublication.Initial(ViewState.Filter, DefaultSort);
     }
 
@@ -217,6 +225,28 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     // --- State ------------------------------------------------------------
 
     public GraphViewState ViewState { get; }
+
+    /// <summary>Contract A-7's write, GUARDED (W6-2 PR B2, Term 15, IGJ-6):
+    /// the table's current row selects through the document, which refuses
+    /// once retired, when it is not the workspace's seated document, or when
+    /// its current snapshot lacks the key — so a retained view over a closed
+    /// tab, or a stale document beside a re-seated one, cannot move the
+    /// workspace's state. Returns whether the key was written.</summary>
+    public bool SelectRow(string stableKey)
+    {
+        ArgumentNullException.ThrowIfNull(stableKey);
+        if (_retired || !_isSeated())
+        {
+            return false;
+        }
+        GraphPublication publication = Publication;
+        if (!publication.HoldsSnapshot || !publication.ContainsNode(stableKey))
+        {
+            return false;
+        }
+        ViewState.SelectedKey = stableKey;
+        return true;
+    }
 
     /// <summary>The residue (contract A-10's census): the one member that
     /// hands out the announcer, for the facts — production reaches the
@@ -587,7 +617,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         {
             GraphRowAction.Open or GraphRowAction.OpenInNewTab => row.Path is not null && OpenRowFromSurface is not null,
             GraphRowAction.Reveal => row.Path is not null && RevealRowFromSurface is not null,
-            GraphRowAction.ShowConnections => ShowConnectionsFromSurface is not null,
+            GraphRowAction.ShowConnections => row.Path is not null && ShowConnectionsFromSurface is not null,
             GraphRowAction.CreateNote => CreateNoteFromSurface is not null && CreateAdmissionReason?.Invoke() is null,
             _ => false,
         };
@@ -596,10 +626,22 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     public string? ActionDisabledReason(GraphRowAction action) =>
         action == GraphRowAction.CreateNote ? CreateAdmissionReason?.Invoke() : null;
 
+    /// <summary>W6-2 PR B2 (B2-3, IGJ-7, IGK-9): a row acts only while it is
+    /// the SAME object in the current publication's rows — a cached menu
+    /// item over a row a republish dropped (a name or kind overlay keeps the
+    /// node in the snapshot, so <see cref="GraphPublication.ContainsNode"/>,
+    /// A-7's revalidation check, is not this wall) acts on nothing. The
+    /// class TGB-9 walled in the Connections leaf.</summary>
+    public bool IsRowCurrent(GraphTableRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        return Publication.Rows.Any(current => ReferenceEquals(current, row));
+    }
+
     public void Execute(GraphRowAction action, GraphTableRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
-        if (_retired || !IsActionEnabled(action, row))
+        if (_retired || !IsRowCurrent(row) || !IsActionEnabled(action, row))
         {
             return;
         }
@@ -652,8 +694,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         // A-1 as amended (W6-2 PR B, BD-12): the relay is the workspace's;
         // retirement drops THIS document's pending classes — the mac's
         // `cancelPending` on view departure — and leaves it live for the
-        // Connections leaf.
+        // Connections leaf. A-1 as amended again (W6-2 PR B2, B2D-1): the
+        // view state is the workspace's too — retirement leaves it, and a
+        // re-seated document revalidates the key it inherits at its first
+        // pair publication (Term 15).
         _announcer.DropAllPending();
-        ViewState.Reset();
     }
 }

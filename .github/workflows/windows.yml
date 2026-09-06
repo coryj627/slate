@@ -1,6 +1,7 @@
 # Windows frontend CI (w0_spec §W0-2 item 3, #603): path-filtered so a
 # Windows PR doesn't block on mac checks and vice versa (the per-area
-# pattern of a11y-check.yml / swift-tests.yml). Two parallel jobs:
+# pattern of a11y-check.yml / swift-tests.yml). Three parallel jobs and a
+# gate:
 #
 #   rust-tests — the deliberate platform witnesses (slate-core, slate-cli
 #     suites: MoveFileExW no-clobber, reserved-name validation,
@@ -9,6 +10,10 @@
 #     it instead of serially in front of it.
 #   windows — release cdylib + C# bindings, app build, xUnit suite, the
 #     `dotnet format` promise, and the FlaUI binaries handoff.
+#   windows-model — the same setup and build, running only the
+#     Connections leaf's executable model (W6-2 PR B2, B2-8): three facts
+#     that drive ~7,000 fresh workspaces for ~45 minutes serially, kept
+#     out of the suite lane's wall time.
 #   flaui — the FlaUI/axe-windows shell gate, on GITHUB-HOSTED
 #     windows-latest: the 2026-07-31 spike run proved the Namespace
 #     Windows session is NON-INTERACTIVE, and the W1-1 gate launches
@@ -22,7 +27,7 @@
 #     sessions (they ship RDP, so a desktop plainly can exist).
 #
 # The historical check name "build + test (windows x64)" belongs to the
-# `gate` aggregate job, which fails unless ALL THREE lanes succeed — a
+# `gate` aggregate job, which fails unless ALL FOUR lanes succeed — a
 # branch rule (or a human) requiring the historical name still gates on
 # the platform witnesses and the accessibility gate, exactly as the
 # serial job did (adversarial review: GitHub evaluates required checks
@@ -61,7 +66,8 @@
 # PER-PROFILE (dashboard-confirmed 2026-07-31, superseding the
 # per-tag-allow-list design — the allow-list field binds every volume
 # under a profile), so trusted and PR traffic must ride separate
-# profiles; the cache TAGS (slate-windows-rust / slate-windows-app)
+# profiles; the cache TAGS (slate-windows-rust / slate-windows-app /
+# slate-windows-model)
 # remain for per-lane lineage separation within each profile.
 # PR-controlled build code can therefore never write state a main
 # build consumes, while the 7–9 adversarial-review rounds per PR still
@@ -94,7 +100,8 @@
 #      profiles (winx64-fast-pr, arm64-fast-pr, mac-actions-pr) exist
 #      with the same platform/shape/cache size;
 #   3. RELEASE (reset) each trusted volume under the protected
-#      profiles — slate-windows-rust, slate-windows-app, slate-arm64,
+#      profiles — slate-windows-rust, slate-windows-app,
+#      slate-windows-model, slate-arm64,
 #      slate-mac — discarding any generation seeded before
 #      protection;
 #   4. RE-ENABLE Actions (enabled=true) and VERIFY on the next main
@@ -408,8 +415,9 @@ jobs:
       - name: Build
         run: dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
 
+      # The Connections model (W6-2 PR B2, B2-8) runs in its own lane below.
       - name: Test
-        run: dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --configuration Release --no-build
+        run: dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --configuration Release --no-build --filter "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf"
 
       # Handoff to the flaui job: the exe resolver walks relative from
       # the test assembly, so the artifact root is apps/slate-windows
@@ -484,6 +492,132 @@ jobs:
   # non-interactive (2026-07-31 spike) and this gate needs a desktop.
   # Runs on the app lane's built binaries — no checkout, no compilers,
   # no cache; setup-dotnet supplies the runtime.
+  windows-model:
+    name: app model (windows x64)
+    runs-on: namespace-profile-winx64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-windows-model
+    # The model alone runs ~45 minutes; a cold cache adds the bindings build.
+    timeout-minutes: 90
+    # The model lane mirrors the suite lane's setup step for step (the
+    # cache attestation included); it uploads no artifact and runs no
+    # format gate — the suite lane keeps both.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          # The W6-1 reconciliation's ancestry gate (CanvasReconciliationCensus)
+          # runs `git merge-base --is-ancestor` over the ledgered merge commits;
+          # a depth-1 clone cannot answer it.
+          fetch-depth: 0
+
+      - name: Assert runner architecture matches the cache lineage
+        # See the rust-tests twin for the rationale.
+        run: |
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
+            Write-Host "::error::runner arch is $($env:PROCESSOR_ARCHITECTURE), cache lineage expects AMD64 - profile platform changed in the dashboard? Update this guard and expect one cold rebuild."
+            exit 1
+          }
+
+      # rust-toolchain.toml pins 1.95.0; rustup materializes it (plus the
+      # x86_64-pc-windows-msvc host target) on the first cargo call.
+
+      - name: Cache Rust build + NuGet packages (Namespace NVMe cache)
+        # `rust` mode as in the rust-tests lane (this lineage carries the
+        # RELEASE graph the bindings build needs), plus the NuGet
+        # global-packages folder as an explicit path — the action unions
+        # `cache:` modes with `path:` entries (swift-tests.yml pattern;
+        # spacectl has no nuget mode).
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        with:
+          cache: rust
+          path: |
+            ~/.nuget/packages
+
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (runbook step 4): read BEFORE any build
+        # repopulates the volume, so a cold mount is distinguishable
+        # from a surviving stale generation. Measured at the VOLUME
+        # ROOT (adversarial round 4: junction/symlink mount points make
+        # per-directory sizing lie; NSC_CACHE_PATH holds the real
+        # content for every cache mode).
+        run: |
+          $root = $env:NSC_CACHE_PATH
+          if (-not $root) {
+            Write-Host "::error::NSC_CACHE_PATH missing - cache volume not mounted"
+            exit 1
+          }
+          try {
+            # Fail CLOSED (adversarial rounds 7-8): SilentlyContinue let
+            # a failed root enumeration print the cold sentinel and an
+            # unreadable child render as 0.00 GiB (System Volume
+            # Information, observed live); Get-ChildItem on a FILE path
+            # succeeds and would attest a plausible 0.00 GiB, so the
+            # root must resolve as a DIRECTORY first - a mount or access
+            # failure must never masquerade as a cold attestation.
+            $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+          } catch {
+            Write-Host "::error::cannot resolve cache volume root ${root}: $_"
+            exit 1
+          }
+          if (-not $rootItem.PSIsContainer) {
+            Write-Host "::error::cache volume root $root is not a directory - attestation impossible"
+            exit 1
+          }
+          try {
+            $children = @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)
+          } catch {
+            Write-Host "::error::cannot enumerate cache volume root ${root}: $_"
+            exit 1
+          }
+          $metadata = @('System Volume Information', '$RECYCLE.BIN', 'containerscache', 'gitmirror', 'lost+found')
+          $children = @($children | Where-Object { $metadata -notcontains $_.Name })
+          if ($children.Count -eq 0) { "cache volume empty (cold mount)" }
+          foreach ($child in $children) {
+            try {
+              $bytes = (Get-ChildItem -LiteralPath $child.FullName -Recurse -Force -ErrorAction Stop |
+                Measure-Object Length -Sum).Sum
+              '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
+            } catch {
+              Write-Host "::warning::cannot measure $($child.Name) - measurement incomplete, NOT cold"
+            }
+          }
+
+      - name: Cache uniffi-bindgen-cs
+        id: bindgen-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
+        with:
+          path: ~/.cargo/bin/uniffi-bindgen-cs.exe
+          key: uniffi-bindgen-cs-v0.11.0+v0.31.0-${{ runner.os }}-x64
+
+      - name: Install uniffi-bindgen-cs
+        if: steps.bindgen-cache.outputs.cache-hit != 'true'
+        # Tag pinned to the workspace's uniffi minor (w0_spec §Decision
+        # consequences: upgraded in lockstep with the uniffi dependency).
+        # ~/.cargo/bin is deliberately NOT on the cache volume (the
+        # rust.yml/taiki-e reasoning: never shadow the image toolchain),
+        # so the binary keeps riding the GitHub cache, which Namespace
+        # runners proxy.
+        run: cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0 uniffi-bindgen-cs --locked
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Generate C# bindings (builds slate_uniffi x64 cdylib)
+        run: ./apps/slate-windows/generate-bindings.ps1 -Locked
+
+      - name: Build
+        run: dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
+
+      # W6-2 PR B2 (B2-8): the Connections leaf's executable model — three
+      # facts over rule C's routes crossed with rule D's modes, the re-root
+      # and Back product and the composed routes — drives ~7,000 fresh
+      # workspaces and runs ~45 minutes serially (the assembly disables
+      # xunit parallelism), so it has a lane of its own beside the suite.
+      - name: Test (the Connections model)
+        run: dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --configuration Release --no-build --filter "FullyQualifiedName~ConnectionsLeafTests.TheModelOf"
+
+
   flaui:
     name: shell accessibility gate (windows x64)
     needs: [windows]
@@ -539,14 +673,14 @@ jobs:
   # at 1x.
   gate:
     name: build + test (windows x64)
-    needs: [rust-tests, windows, flaui]
+    needs: [rust-tests, windows, windows-model, flaui]
     if: ${{ always() }}
     runs-on: namespace-profile-x64-fast
     timeout-minutes: 5
     steps:
       - name: Verify all windows lanes succeeded
         run: |
-          if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.flaui.result }}" != "success" ]; then
-            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} flaui=${{ needs.flaui.result }}"
+          if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.windows-model.result }}" != "success" ] || [ "${{ needs.flaui.result }}" != "success" ]; then
+            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} model=${{ needs.windows-model.result }} flaui=${{ needs.flaui.result }}"
             exit 1
           fi

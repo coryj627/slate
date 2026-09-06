@@ -98,6 +98,13 @@ public sealed class ConnectionsLeafCensus
             ("Shown", ["WorkspaceViewModel.Connections.cs:OnLeafShown"]),
             ("Show", ["WorkspaceViewModel.Connections.cs:ShowConnections"]),
             ("NoteChanged", ["WorkspaceViewModel.Connections.cs:ReconcileConnectionsRootTo"]),
+            // Rule D's entries (W6-2 PR B2, B2-2): the pin and the pop are
+            // the funnels' (T3); the rename and delete hooks the workspace's.
+            ("PinTo", ["WorkspaceViewModel.Connections.cs:ReRootConnectionsOn"]),
+            ("PopTo", ["WorkspaceViewModel.Connections.cs:ConnectionsBack"]),
+            ("RepairSharedKey", ["WorkspaceViewModel.Connections.cs:ReRootConnectionsOn"]),
+            ("Retarget", ["WorkspaceViewModel.cs:RetargetPath"]),
+            ("Prune", ["WorkspaceViewModel.cs:InvalidatePath"]),
             ("Probe", ["WorkspaceViewModel.Connections.cs:ProbeConnections"]),
             ("Deeper", ["WorkspaceViewModel.Connections.cs:ConnectionsDeeperCommand"]),
             ("Shallower", ["WorkspaceViewModel.Connections.cs:ConnectionsShallowerCommand"]),
@@ -181,6 +188,7 @@ public sealed class ConnectionsLeafCensus
         var recorders = new List<string>();
         var reconcilers = new List<string>();
         var funnels = new List<string>();
+        var boundarySyncs = new List<string>();
         foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
             SemanticModel model = ShellCompilation.ModelFor(source);
@@ -204,12 +212,20 @@ public sealed class ConnectionsLeafCensus
                 {
                     funnels.Add($"{relative}:{OwnerOf(call)}");
                 }
+                // The boundary's sync (W6-2 PR B2, IGL-2): the panels synced
+                // with the root RECORDED, then reconciled once — called by
+                // the mutation runner's boundary and nothing else.
+                if (methods.Any(method => method.Name == "SyncPanelsAtTheBoundary"))
+                {
+                    boundarySyncs.Add($"{relative}:{OwnerOf(call)}");
+                }
             }
         }
         Assert.Equal(["WorkspaceViewModel.cs:SyncPanels"], recorders);
-        Assert.Equal(["WorkspaceViewModel.Persistence.cs:RunWorkspaceMutation"], reconcilers);
+        Assert.Equal(["WorkspaceViewModel.Connections.cs:SyncPanelsAtTheBoundary"], reconcilers);
+        Assert.Equal(["WorkspaceViewModel.Persistence.cs:RunWorkspaceMutation"], boundarySyncs);
         Assert.Equal(["WorkspaceViewModel.Connections.cs:SyncConnectionsRoot", "WorkspaceViewModel.Connections.cs:ReconcileConnectionsRoot"], funnels);
-        string[] offenders = [.. ProtectedReferences(["SyncConnectionsRoot", "ReconcileConnectionsRoot", "ReconcileConnectionsRootTo"], TheWorkspaceType)];
+        string[] offenders = [.. ProtectedReferences(["SyncConnectionsRoot", "ReconcileConnectionsRoot", "ReconcileConnectionsRootTo", "SyncPanelsAtTheBoundary"], TheWorkspaceType)];
         Assert.True(offenders.Length == 0, "the root's recorder, reconciler or funnel is reached other than by a bound call:\n" + string.Join("\n", offenders));
     }
 
@@ -218,6 +234,92 @@ public sealed class ConnectionsLeafCensus
     private static bool IsWorkspaceMethod(SemanticModel model, InvocationExpressionSyntax call, string name) =>
         Candidates(model.GetSymbolInfo(call)).OfType<IMethodSymbol>()
             .Any(method => method.Name == name && method.ContainingType.ToDisplayString() == TheWorkspaceType);
+
+    /// <summary>W6-2 PR B2, B2-3 / B2-10 (iii): the re-root funnel's callers,
+    /// bound, are exactly the three entrances — the leaf's seam installer,
+    /// the table's addressed wrapper, the Bases' command and seam — and
+    /// Back's are exactly its key owner's installer and its command (T4);
+    /// a method-group reference to either is an offence.</summary>
+    [Fact]
+    public void TheReRootFunnelAndBackAreReachedByTheirEntrancesAlone()
+    {
+        var reRoots = new List<string>();
+        var backs = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                IMethodSymbol[] methods = [.. Candidates(model.GetSymbolInfo(call)).OfType<IMethodSymbol>()
+                    .Where(method => method.ContainingType.ToDisplayString() == TheWorkspaceType)];
+                if (methods.Any(method => method.Name == "ReRootConnectionsOn"))
+                {
+                    reRoots.Add($"{relative}:{OwnerOf(call)}");
+                }
+                if (methods.Any(method => method.Name == "ConnectionsBack"))
+                {
+                    backs.Add($"{relative}:{OwnerOf(call)}");
+                }
+            }
+        }
+        Assert.Equal(
+            [
+                "Graph/WorkspaceViewModel.Graph.cs:ReRootGraphRowFromSurface",
+                "WorkspaceViewModel.Bases.cs:BasesShowConnectionsFor",
+                "WorkspaceViewModel.Connections.cs:NewConnectionsLeaf",
+            ],
+            reRoots.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            [
+                "WorkspaceViewModel.Connections.cs:ConnectionsBackCommand",
+                "WorkspaceViewModel.Connections.cs:NewConnectionsLeaf",
+            ],
+            backs.Order(StringComparer.Ordinal));
+        string[] offenders = [.. ProtectedReferences(["ReRootConnectionsOn", "ConnectionsBack"], TheWorkspaceType)];
+        Assert.True(offenders.Length == 0, "the funnel or Back is reached other than by a bound call:\n" + string.Join("\n", offenders));
+    }
+
+    /// <summary>W6-2 PR B2, B2-10 (ix): every row-action <c>Execute</c> under
+    /// <c>Graph/</c> guards the row's currency — the document's
+    /// <c>IsRowCurrent</c> — before any seam, and the Bases surface's
+    /// <c>RowCommand</c> guards the captured result's currency before its
+    /// body (TGB-9's class, IGJ-7, IGJ-8).</summary>
+    [Fact]
+    public void EveryRowActionGuardsTheRowsCurrencyBeforeItsSeam()
+    {
+        var failures = new List<string>();
+        foreach ((string file, string method, string guard) in new[]
+        {
+            ("Graph/GraphDocumentViewModel.cs", "Execute", "IsRowCurrent"),
+            ("Graph/ConnectionsLeafViewModel.cs", "Execute", "IsRowCurrent"),
+            ("Bases/BaseSurfaceView.cs", "RowCommand", "ReferenceEquals"),
+        })
+        {
+            (string relative, CSharpSource source) = ShellCompilation.Sources.First(entry => entry.Relative == file);
+            MethodDeclarationSyntax execute = source.Root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+                .First(candidate => candidate.Identifier.ValueText == method);
+            InvocationExpressionSyntax? guarded = execute.DescendantNodes().OfType<InvocationExpressionSyntax>()
+                .FirstOrDefault(call => CalleeName(call) == guard);
+            if (guarded is null)
+            {
+                failures.Add($"{relative}:{method} has no {guard} guard");
+                continue;
+            }
+            // Every seam invocation (a delegate property's call) sits AFTER
+            // the guard in the method's text — the guard is its admission.
+            foreach (InvocationExpressionSyntax call in execute.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                bool seam = call.Expression is PostfixUnaryExpressionSyntax { Operand: IdentifierNameSyntax name }
+                    && name.Identifier.ValueText.EndsWith("FromSurface", StringComparison.Ordinal)
+                    || call.Expression is IdentifierNameSyntax { Identifier.ValueText: "body" };
+                if (seam && call.SpanStart < guarded.SpanStart)
+                {
+                    failures.Add($"{relative}:{method} reaches {CSharpSource.Normalize(call.Expression)} before its {guard} guard");
+                }
+            }
+        }
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
+    }
 
     /// <summary>The consume, BOUND (IPB-18): the workspace's own method; an
     /// invocation the compilation cannot bind is not a consume.</summary>

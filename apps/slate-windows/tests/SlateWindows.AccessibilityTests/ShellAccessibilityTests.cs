@@ -822,6 +822,15 @@ public sealed class ShellAccessibilityTests
 
     internal static void AssertAxeClean(Process process, string surface)
     {
+        // The scan is a snapshot, and a realized-but-unarranged tree item or
+        // grid row reads on-screen with a null rectangle for the layout
+        // pass's duration: CI failed the Bases journey's first scan that way
+        // on W6-2 PR B2's second push (three files-tree items and two grid
+        // rows, none of them changed by the push), the class the journey's
+        // own later wait already names. Every scan now waits, bounded, for
+        // the realized items' rectangles; a scan that still fails after the
+        // wait is a defect, not a race.
+        WaitForRealizedItemBounds(process);
         var config = Config.Builder.ForProcessId(process.Id).Build();
         var output = ScannerFactory.CreateScanner(config).Scan(null);
         Assert.NotEmpty(output.WindowScanOutputs);
@@ -842,6 +851,41 @@ public sealed class ShellAccessibilityTests
                 errors.Select(error =>
                     $"{error.Rule.ID}: {error.Rule.Description}; " +
                     string.Join(", ", error.Element.Properties))));
+    }
+
+    /// <summary>Wait, bounded, until every on-screen TreeItem and DataItem
+    /// of the process's main window has a non-empty bounding rectangle —
+    /// the layout has arranged what it realized — before an axe scan.</summary>
+    private static void WaitForRealizedItemBounds(Process process)
+    {
+        using var automation = new UIA3Automation();
+        Window? window = automation
+            .GetDesktop()
+            .FindFirstChild(automation.ConditionFactory.ByProcessId(process.Id))
+            ?.AsWindow();
+        if (window is null)
+        {
+            return;
+        }
+        _ = SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    return window
+                        .FindAllDescendants(automation.ConditionFactory
+                            .ByControlType(ControlType.TreeItem)
+                            .Or(automation.ConditionFactory.ByControlType(ControlType.DataItem)))
+                        .All(item =>
+                            item.Properties.IsOffscreen.ValueOrDefault
+                            || !item.Properties.BoundingRectangle.ValueOrDefault.IsEmpty);
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return false;
+                }
+            },
+            TimeSpan.FromSeconds(10));
     }
 
     private static object DescribeAxeError(Axe.Windows.Automation.ScanResult error) => new
@@ -8187,7 +8231,7 @@ public sealed class ShellAccessibilityTests
                     return items.Length >= 3;
                 },
                 TimeSpan.FromSeconds(15)),
-            "the canvas table's row-actions menu never opened on the Menu key "
+            "the row-actions menu never opened on the Menu key "
             + $"(saw {items.Length} items)");
         return items;
     }
@@ -8251,8 +8295,12 @@ public sealed class ShellAccessibilityTests
             window.SetForeground();
             window.Focus();
 
-            // The chordless row, through the palette (contract A-12).
-            window.SetForeground();
+            // The chordless row, through the palette (contract A-12). The
+            // FIRST chord after launch needs the foreground credential a
+            // synthesized key grants (CI on W6-2 PR B2's first push failed
+            // here: the chord reached a window that did not yet hold the
+            // foreground — the leaf journey's rule, TGB2-2).
+            ReassertForegroundForAChord(window);
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
             AutomationElement search = WaitForElement(window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
             search.Patterns.Value.Pattern.SetValue("Open Graph");
@@ -8414,6 +8462,7 @@ public sealed class ShellAccessibilityTests
         string firstOutgoingStatus;
         string ghostName;
         string ghostPath;
+        string showConnectionsTitle;
         using (uniffi.slate_uniffi.VaultSession session = uniffi.slate_uniffi.VaultSession.OpenFilesystem(vaultRoot))
         {
             using var cancel = new uniffi.slate_uniffi.CancelToken();
@@ -8436,6 +8485,10 @@ public sealed class ShellAccessibilityTests
             ghostName = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphRow(
                 uniffi.slate_uniffi.GraphVerbosity.Standard, ConnectionsRowCopy(ghost)));
             ghostPath = uniffi.slate_uniffi.SlateUniffiMethods.GraphGhostNotePath(ghost.TargetRaw);
+            // W6-2 PR B2 (B2-3, B2-5): the row action's title is core's, from
+            // the Note vector — the journey carries the literal it reads.
+            showConnectionsTitle = uniffi.slate_uniffi.SlateUniffiMethods.GraphRowActions(uniffi.slate_uniffi.GraphNodeKind.Note)
+                .Single(spec => spec.Action == uniffi.slate_uniffi.GraphRowAction.ShowConnections).Title;
         }
 
         Process? process = null;
@@ -8622,6 +8675,100 @@ public sealed class ShellAccessibilityTests
                 SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && !focused.Equals(tree) && !IsDescendantOf(focused, tree), TimeSpan.FromSeconds(2)),
                 $"Right from inside the tree moved focus out of the leaf; focus is {DescribeFocusedElement(automation)}");
 
+            // ---- W6-2 PR B2 (B2-9): the continuation ----------------------------
+            // Show connections on the healed incoming row (the leaf's own
+            // entrance, B2-3): the heading moves to that note, the tree
+            // re-roots and takes focus, the summary's text changes.
+            string healedSummary = summary.Properties.Name.Value;
+            ReassertForegroundForAChord(window);
+            alphaRow.Focus();
+            AssertEventuallyFocused(alphaRow, "the healed incoming row never took focus for the menu");
+            // The MENU key (not Shift+F10): B1's leaf assigned the row's menu
+            // inside ContextMenuOpening — too late for the request WPF raised
+            // it for, so the Menu key opened nothing (the grid's adversarial
+            // round 4, repeated); T6 gives the tree a persistent menu.
+            // The MENU key (not Shift+F10): B1's leaf answered it with a menu
+            // of its own beside WPF's popup service, and the two answers left
+            // no menu open (the grid's adversarial round 4, repeated); T6
+            // gives the tree a persistent menu and leaves the key to WPF.
+            PressKey(VirtualKeyShort.APPS);
+            AutomationElement[] leafRowActions = WaitForRowActionItems(automation, process.Id);
+            AutomationElement showConnections = Assert.Single(
+                leafRowActions,
+                item => string.Equals(item.Properties.Name.ValueOrDefault, showConnectionsTitle, StringComparison.Ordinal));
+            Assert.True(showConnections.Properties.IsEnabled.Value, "Show connections must be live on a note row (B2-3)");
+            showConnections.Patterns.Invoke.Pattern.Invoke();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsHeading"))?.Properties.Name.ValueOrDefault == "Alpha.md",
+                    TimeSpan.FromSeconds(10)),
+                "Show connections did not re-root the leaf on Alpha; the heading reads "
+                + (window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsHeading"))?.Properties.Name.ValueOrDefault ?? "<none>"));
+            AutomationElement reRootedTree = WaitForElement(window, "ConnectionsTree", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && (focused.Equals(reRootedTree) || IsDescendantOf(focused, reRootedTree)), TimeSpan.FromSeconds(10)),
+                $"the re-rooted leaf did not take focus; focus is {DescribeFocusedElement(automation)}");
+            AutomationElement reRootedSummary = WaitForElement(window, "ConnectionsSummary", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(() => !string.Equals(reRootedSummary.Properties.Name.ValueOrDefault, healedSummary, StringComparison.Ordinal), TimeSpan.FromSeconds(10)),
+                "the summary did not change with the re-root");
+
+            // Ctrl+[ from inside the tree (B2-4): the heading and the summary
+            // return to the note the leaf showed before.
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_4);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsHeading"))?.Properties.Name.ValueOrDefault == Path.GetFileName(ghostPath),
+                    TimeSpan.FromSeconds(10)),
+                "Ctrl+[ did not return the leaf to the note it showed before");
+            AutomationElement returnedSummary = WaitForElement(window, "ConnectionsSummary", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(() => string.Equals(returnedSummary.Properties.Name.ValueOrDefault, healedSummary, StringComparison.Ordinal), TimeSpan.FromSeconds(10)),
+                $"the summary did not return; reads '{returnedSummary.Properties.Name.ValueOrDefault}'");
+
+            // Ctrl+[ again: nothing to pop — the chord falls through, focus
+            // stays, nothing changes.
+            AutomationElement returnedTree = WaitForElement(window, "ConnectionsTree", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && (focused.Equals(returnedTree) || IsDescendantOf(focused, returnedTree)), TimeSpan.FromSeconds(10)),
+                $"the popped leaf did not keep focus; focus is {DescribeFocusedElement(automation)}");
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_4);
+            Assert.False(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsHeading"))?.Properties.Name.ValueOrDefault != Path.GetFileName(ghostPath)
+                        || !(automation.FocusedElement() is { } focused && (focused.Equals(returnedTree) || IsDescendantOf(focused, returnedTree))),
+                    TimeSpan.FromSeconds(2)),
+                "a second Ctrl+[ with nothing to pop changed the leaf or moved focus");
+
+            // The table's Show connections from the graph tab (B2-3, IGI-4):
+            // the graph's group is focused first, then the leaf re-roots on
+            // the row's note and takes focus.
+            RunPaletteCommand(window, automation, "Open Graph");
+            AutomationElement gridAgain = WaitForElement(window, "GraphTableGrid", TimeSpan.FromSeconds(20));
+            AutomationElement betaCell = WaitForCellStartingWith(gridAgain, "Note: Beta");
+            ReassertForegroundForAChord(window);
+            betaCell.Focus();
+            AssertEventuallyFocused(betaCell, "the Beta cell never took focus for the menu");
+            PressKey(VirtualKeyShort.APPS);
+            AutomationElement[] tableRowActions = WaitForRowActionItems(automation, process.Id);
+            AutomationElement tableShowConnections = Assert.Single(
+                tableRowActions,
+                item => string.Equals(item.Properties.Name.ValueOrDefault, showConnectionsTitle, StringComparison.Ordinal));
+            Assert.True(tableShowConnections.Properties.IsEnabled.Value, "the table's Show connections must be live on a note row (B2-3)");
+            tableShowConnections.Patterns.Invoke.Pattern.Invoke();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsHeading"))?.Properties.Name.ValueOrDefault == "Beta.md",
+                    TimeSpan.FromSeconds(10)),
+                "the table's Show connections did not re-root the leaf on Beta; the heading reads "
+                + (window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("ConnectionsHeading"))?.Properties.Name.ValueOrDefault ?? "<none>"));
+            AutomationElement betaTree = WaitForElement(window, "ConnectionsTree", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && (focused.Equals(betaTree) || IsDescendantOf(focused, betaTree)), TimeSpan.FromSeconds(10)),
+                $"the leaf re-rooted from the table did not take focus; focus is {DescribeFocusedElement(automation)}");
+
             AssertAxeClean(process, "graph-connections");
         }
         finally
@@ -8675,7 +8822,7 @@ public sealed class ShellAccessibilityTests
     /// label typed, the row selected, Enter.</summary>
     private static void RunPaletteCommand(Window window, UIA3Automation automation, string label)
     {
-        window.SetForeground();
+        ReassertForegroundForAChord(window);
         PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
         AutomationElement search = WaitForElement(window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
         search.Patterns.Value.Pattern.SetValue(label);

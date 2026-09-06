@@ -1606,6 +1606,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // Restore and the first SyncPanels so the root follow reaches it —
         // and the seeded initial mount (rule C, Term 3(a)).
         _graphRelay = NewGraphRelay();
+        // W6-2 PR B2 (B2-1; A-1 and spec R-B as amended by the owner on
+        // 2026-09-06): the workspace's ONE view state, beside the relay,
+        // handed to the graph document and the leaf, dropped with the
+        // workspace — the instance census counts this one construction.
+        _graphViewState = NewGraphViewState();
         Connections = NewConnectionsLeaf();
         SeedInitialConnectionsMount();
         // W4-7: the history document — note-scoped (fed by SyncPanels),
@@ -1994,7 +1999,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     private void ActivateReadingTag(string tag) =>
         ReadingTagActivated?.Invoke(this, tag);
 
-    private bool OpenPathCore(string path, WorkspaceOpenTarget target)
+    private bool OpenPathCore(string path, WorkspaceOpenTarget target, bool requestEditorFocus = true)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -2002,7 +2007,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         }
 
         WorkspaceItemState item = ItemForPath(path);
-        if (TryOpenItem(item, target))
+        if (TryOpenItem(item, target, requestEditorFocus))
         {
             FileOpened?.Invoke(this, path);
             Persist();
@@ -2070,6 +2075,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         RetargetBaseDocuments(source, destination);
         // Same reason, same shape, for the canvas registry (CD-32).
         RetargetCanvasDocuments(source, destination);
+        // W6-2 PR B2 (rule D, the rename hook; B2D-9): the Connections
+        // leaf's pin, note in view and every stack entry move by the same
+        // predicate — a retarget of the PIN is Term 3(d)'s root move with
+        // the classification the funnel uses.
+        Connections.Retarget(source, destination, ConnectionsActiveAndMounted());
 
         Persist();
         // A rename that touched the ACTIVE tab changed its Path in
@@ -2184,6 +2194,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
         _closedTabs.RemoveAll(entry =>
             IsPathBacked(entry.Item) && IsSameOrDescendantPath(entry.Item.Path, invalidated));
+        // W6-2 PR B2 (rule D, the delete hook; B2D-9): the leaf's stack
+        // entries under the deleted path are pruned, so Back never opens a
+        // note that is gone; the pin and the note in view are kept (the
+        // Error presentation, B1's delete route).
+        Connections.Prune(invalidated);
         RaiseCommandStates();
         Persist();
         if (affected > 0)
