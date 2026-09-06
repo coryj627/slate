@@ -25,10 +25,13 @@ Issue: [#746](https://github.com/coryj627/slate/issues/746) · Milestone W (GH 2
 ```
 apps/slate-windows/src/SlateWindows/Graph/
   GraphDocumentViewModel.cs    PR A   the ONE graph document (singleton, on the workspace): owns the snapshot,
-                                      the generation probe, LoadState, the published table rows, GraphViewState;
+                                      the generation probe, LoadState, the published table rows; reads and writes
+                                      the WORKSPACE's GraphViewState (owned by the document until the owner's
+                                      2026-09-06 amendment — W6-2 PR B2, B2D-1);
                                       PanelWorkScheduler conventions (FFI off-dispatcher, generation-guarded publishes)
   GraphViewState.cs            PR A   { SelectedKey: string?, Filter, NameQuery, Groups, Mode } — the ONLY view state
-                                      (P2-5): Table, Diagram and the Connections leaf read/write it, never copy
+                                      (P2-5), owned by the WORKSPACE since PR B2 (B2D-1, 2026-09-06): Table, Diagram
+                                      and the Connections leaf read/write it, never copy
   GraphSurfaceView.xaml(.cs)   PR A   tab body: header (Table/Diagram switcher, filter field PR C, presets), load/empty/
                                       error states, the two projections (visibility-gated: exactly one in the UIA tree),
                                       the Where-am-I panel (PR C), the inspector (PR E)
