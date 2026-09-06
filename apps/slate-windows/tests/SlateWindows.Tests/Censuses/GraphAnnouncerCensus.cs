@@ -307,6 +307,7 @@ public sealed class GraphAnnouncerCensus
         // `using` alias evaded it). An alias naming the relay anywhere in the
         // shell is forbidden outright as well.
         var creations = new List<string>();
+        var factoryUses = new List<string>();
         foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
             SemanticModel model = ShellCompilation.ModelFor(source);
@@ -331,10 +332,61 @@ public sealed class GraphAnnouncerCensus
                 string firstArgument = creation.ArgumentList?.Arguments.FirstOrDefault()?.Expression.ToString() ?? "<none>";
                 creations.Add($"{relative}:{owner?.Identifier.ValueText ?? "<top level>"}({firstArgument})");
             }
+            // One allocation SITE is not one instance (codex post-implementation
+            // pass 3, IPB-16): the factory's calls and its method-group
+            // references, bound — exactly the constructor's one call, and no
+            // reference that could call it later.
+            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (IsTheFactory(model.GetSymbolInfo(call)))
+                {
+                    factoryUses.Add($"{relative}:{OwnerOf(call)}");
+                }
+            }
+            foreach (ExpressionSyntax reference in source.Root.DescendantNodes().OfType<ExpressionSyntax>())
+            {
+                if (IsAMethodGroupReference(reference) && IsTheFactory(model.GetSymbolInfo(reference)))
+                {
+                    factoryUses.Add($"{relative}:{OwnerOf(reference)} (a method-group reference)");
+                }
+            }
         }
         Assert.Equal(
             ["Graph/WorkspaceViewModel.Graph.cs:NewGraphRelay(_announceRendered)"],
             creations);
+        Assert.Equal(["WorkspaceViewModel.cs:<ctor>"], factoryUses);
+    }
+
+    private static bool IsTheFactory(SymbolInfo info)
+    {
+        IEnumerable<ISymbol> candidates = info.Symbol is { } bound ? [bound] : info.CandidateSymbols;
+        return candidates.OfType<IMethodSymbol>().Any(method =>
+            method.Name == "NewGraphRelay" && method.ContainingType.ToDisplayString() == "SlateWindows.WorkspaceViewModel");
+    }
+
+    /// <summary>A name or a member access that is neither an invocation's
+    /// callee nor the member half of a larger access — the shape in which a
+    /// method group converts to a delegate (IPB-16, IPB-17).</summary>
+    internal static bool IsAMethodGroupReference(ExpressionSyntax expression) =>
+        expression is IdentifierNameSyntax or MemberAccessExpressionSyntax
+        && !(expression.Parent is InvocationExpressionSyntax invocation && ReferenceEquals(invocation.Expression, expression))
+        && !(expression is IdentifierNameSyntax && expression.Parent is MemberAccessExpressionSyntax access && ReferenceEquals(access.Name, expression));
+
+    private static string OwnerOf(SyntaxNode node)
+    {
+        foreach (SyntaxNode ancestor in node.Ancestors())
+        {
+            switch (ancestor)
+            {
+                case MethodDeclarationSyntax method:
+                    return method.Identifier.ValueText;
+                case ConstructorDeclarationSyntax:
+                    return "<ctor>";
+                case PropertyDeclarationSyntax property:
+                    return property.Identifier.ValueText;
+            }
+        }
+        return "<top level>";
     }
 
     /// <summary>The relay is the one file that renders (contract A-10):

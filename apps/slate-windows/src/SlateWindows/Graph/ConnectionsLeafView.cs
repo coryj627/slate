@@ -736,7 +736,19 @@ internal sealed class ConnectionsLeafView : UserControl
             string? reason = model.ActionDisabledReason(spec.Action);
             AutomationProperties.SetHelpText(item, reason ?? spec.Title);
             GraphRowAction action = spec.Action;
-            item.Click += (_, _) => model.Execute(action, core);
+            // A cached menu item acts only through a row the view still holds
+            // (codex post-implementation pass 3, IPB-12): a collapse and a
+            // root change re-render, releasing the rows they drop, so a
+            // dropped row's delegate is gone; and the document refuses a row
+            // its current root's tree does not list.
+            item.Click += (_, _) =>
+            {
+                if (row.Activate is null || !ReferenceEquals(Model, model))
+                {
+                    return;
+                }
+                model.Execute(action, core);
+            };
             menu.Items.Add(item);
         }
         return menu;

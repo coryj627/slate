@@ -115,7 +115,57 @@ public sealed class ConnectionsLeafCensus
                 failures.Add($"{member}: callers [{string.Join(", ", found)}], expected [{string.Join(", ", owners)}]");
             }
         }
+        // A method-group reference to a trigger, or a call to a trigger's
+        // name that binds to nothing, is an offence (codex post-implementation
+        // pass 3, IPB-17): a delegate-bound call hides behind `Action.Invoke`,
+        // and an unbound reference — a member the compilation cannot see —
+        // is refused rather than trusted.
+        failures.AddRange(ProtectedReferences([.. expected.Select(e => e.Member)]));
         Assert.True(failures.Count == 0, string.Join("\n", failures));
+    }
+
+    private static IEnumerable<ISymbol> Candidates(SymbolInfo info) =>
+        info.Symbol is { } bound ? [bound] : info.CandidateSymbols;
+
+    private static string CalleeName(InvocationExpressionSyntax call) => call.Expression switch
+    {
+        MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+        IdentifierNameSyntax bare => bare.Identifier.ValueText,
+        _ => string.Empty,
+    };
+
+    /// <summary>Every method-group reference to one of the leaf's named
+    /// members, and every call to one of those names the compilation binds
+    /// to nothing (IPB-17).</summary>
+    private static IEnumerable<string> ProtectedReferences(string[] members)
+    {
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (ExpressionSyntax reference in source.Root.DescendantNodes().OfType<ExpressionSyntax>())
+            {
+                if (!GraphAnnouncerCensus.IsAMethodGroupReference(reference))
+                {
+                    continue;
+                }
+                if (Candidates(model.GetSymbolInfo(reference)).OfType<IMethodSymbol>()
+                    .Any(method => members.Contains(method.Name) && method.ContainingType.ToDisplayString() == TheLeafType))
+                {
+                    yield return $"{relative}:{OwnerOf(reference)} references {CSharpSource.Normalize(reference)} as a method group";
+                }
+            }
+            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (!members.Contains(CalleeName(call)))
+                {
+                    continue;
+                }
+                if (!Candidates(model.GetSymbolInfo(call)).Any())
+                {
+                    yield return $"{relative}:{OwnerOf(call)} calls {CSharpSource.Normalize(call.Expression)} and the compilation binds it to nothing";
+                }
+            }
+        }
     }
 
     /// <summary>B-19 (iii): the root's writers — <c>SyncPanels</c> records,
@@ -146,9 +196,79 @@ public sealed class ConnectionsLeafCensus
         Assert.Equal(["WorkspaceViewModel.Persistence.cs:RunWorkspaceMutation"], reconcilers);
     }
 
+    /// <summary>The consume, BOUND (IPB-18): the workspace's own method; an
+    /// invocation the compilation cannot bind is not a consume.</summary>
     private static bool IsConsume(IOperation operation) =>
-        operation.Syntax is InvocationExpressionSyntax call
-        && CSharpSource.Normalize(call.Expression).EndsWith("ConsumePendingMount", StringComparison.Ordinal);
+        operation is IInvocationOperation invocation
+        && invocation.TargetMethod.Name == "ConsumePendingMount"
+        && invocation.TargetMethod.ContainingType.ToDisplayString() == "SlateWindows.WorkspaceViewModel";
+
+    /// <summary>The control-flow graph the reveal lives in: the member's,
+    /// then — descending outermost first — every anonymous function's or
+    /// local function's enclosing the reveal (IPB-18: a reveal inside a
+    /// command lambda used to fall back to statement order). Null when the
+    /// graph cannot be built, which the census treats as an offence.</summary>
+    private static ControlFlowGraph? GraphFor(SemanticModel model, SyntaxNode scope, SyntaxNode target)
+    {
+        ControlFlowGraph? graph;
+        try
+        {
+            graph = model.GetOperation(scope) switch
+            {
+                IMethodBodyOperation body => ControlFlowGraph.Create(body),
+                IConstructorBodyOperation body => ControlFlowGraph.Create(body),
+                _ => null,
+            };
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+        if (graph is null)
+        {
+            return null;
+        }
+        SyntaxNode[] functions =
+        [
+            .. target.Ancestors()
+                .TakeWhile(ancestor => !ReferenceEquals(ancestor, scope))
+                .Where(ancestor => ancestor is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)
+                .Reverse(),
+        ];
+        foreach (SyntaxNode function in functions)
+        {
+            ControlFlowGraph? inner = null;
+            try
+            {
+                if (function is LocalFunctionStatementSyntax local)
+                {
+                    if (model.GetDeclaredSymbol(local) is IMethodSymbol symbol)
+                    {
+                        inner = graph.GetLocalFunctionControlFlowGraph(symbol);
+                    }
+                }
+                else
+                {
+                    IFlowAnonymousFunctionOperation? lambda = graph.Blocks
+                        .SelectMany(BlockOperations)
+                        .SelectMany(operation => operation.DescendantsAndSelf())
+                        .OfType<IFlowAnonymousFunctionOperation>()
+                        .FirstOrDefault(operation => operation.Syntax.Span == function.Span);
+                    inner = lambda is null ? null : graph.GetAnonymousFunctionControlFlowGraph(lambda);
+                }
+            }
+            catch (ArgumentException)
+            {
+                inner = null;
+            }
+            if (inner is null)
+            {
+                return null;
+            }
+            graph = inner;
+        }
+        return graph;
+    }
 
     private static IEnumerable<IOperation> BlockOperations(BasicBlock block) =>
         block.BranchValue is { } branch ? block.Operations.Append(branch) : block.Operations;
@@ -175,23 +295,12 @@ public sealed class ConnectionsLeafCensus
     /// to the statement order in the reveal's own or an enclosing block.</summary>
     private static bool ConsumePostDominates(SemanticModel model, SyntaxNode scope, AssignmentExpressionSyntax assignment)
     {
-        ControlFlowGraph? graph = null;
-        try
-        {
-            graph = model.GetOperation(scope) switch
-            {
-                IMethodBodyOperation body => ControlFlowGraph.Create(body),
-                IConstructorBodyOperation body => ControlFlowGraph.Create(body),
-                _ => null,
-            };
-        }
-        catch (ArgumentException)
-        {
-            graph = null;
-        }
+        ControlFlowGraph? graph = GraphFor(model, scope, assignment);
         if (graph is null)
         {
-            return ConsumeFollowsSyntactically(scope, assignment);
+            // Fail closed (IPB-18): a reveal whose execution scope cannot be
+            // analysed is an offence, not a fallback.
+            return false;
         }
         BasicBlock? start = null;
         int startIndex = -1;
@@ -209,7 +318,7 @@ public sealed class ConnectionsLeafCensus
         }
         if (start is null)
         {
-            return ConsumeFollowsSyntactically(scope, assignment);
+            return false;
         }
         if (BlockOperations(start).Skip(startIndex + 1).Any(op => op.DescendantsAndSelf().Any(IsConsume)))
         {
@@ -238,18 +347,6 @@ public sealed class ConnectionsLeafCensus
             }
         }
         return true;
-    }
-
-    private static bool ConsumeFollowsSyntactically(SyntaxNode scope, AssignmentExpressionSyntax assignment)
-    {
-        StatementSyntax? assigned = assignment.Ancestors().OfType<StatementSyntax>().FirstOrDefault();
-        return assigned is not null && scope.DescendantNodes().OfType<InvocationExpressionSyntax>()
-            .Where(call => CSharpSource.Normalize(call.Expression).EndsWith("ConsumePendingMount", StringComparison.Ordinal))
-            .Select(call => call.Ancestors().OfType<StatementSyntax>().FirstOrDefault())
-            .Any(consume => consume is not null
-                && consume.SpanStart > assigned.Span.End
-                && consume.Parent is not null
-                && (ReferenceEquals(consume.Parent, assigned.Parent) || assigned.Ancestors().Contains(consume.Parent)));
     }
 
     /// <summary>B-19 (iii): every writer of <c>IsRightPaneVisible = true</c>
@@ -433,12 +530,25 @@ public sealed class ConnectionsLeafCensus
         // conversion; nothing else, and no comparison, conditional,
         // `Math.*` or helper on the way.
         var producers = new List<string>();
-        foreach ((string relative, CSharpSource source) in ShellSources())
+        var offenders = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
+            SemanticModel model = ShellCompilation.ModelFor(source);
             foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                string callee = CSharpSource.Normalize(call.Expression);
-                if (!(callee == "SetDepth" || callee.EndsWith(".SetDepth", StringComparison.Ordinal)))
+                if (CalleeName(call) != "SetDepth")
+                {
+                    continue;
+                }
+                // BOUND (IPB-17): the leaf's SetDepth, whatever the receiver's
+                // spelling; a call the compilation binds to nothing is refused.
+                ISymbol[] candidates = [.. Candidates(model.GetSymbolInfo(call))];
+                if (candidates.Length == 0)
+                {
+                    offenders.Add($"{relative}:{OwnerOf(call)} calls SetDepth and the compilation binds it to nothing");
+                    continue;
+                }
+                if (!candidates.OfType<IMethodSymbol>().Any(method => method.ContainingType.ToDisplayString() == TheLeafType))
                 {
                     continue;
                 }
@@ -448,7 +558,19 @@ public sealed class ConnectionsLeafCensus
                     argument.Contains("Math.", StringComparison.Ordinal) || argument.Contains('?') || argument.Contains('<') || argument.Contains('>'),
                     $"a host clamp or comparison reaches the depth: {argument}");
             }
+            // A method-group reference to SetDepth would call it through a
+            // delegate, outside the inventory (IPB-17).
+            foreach (ExpressionSyntax reference in source.Root.DescendantNodes().OfType<ExpressionSyntax>())
+            {
+                if (GraphAnnouncerCensus.IsAMethodGroupReference(reference)
+                    && Candidates(model.GetSymbolInfo(reference)).OfType<IMethodSymbol>()
+                        .Any(method => method.Name == "SetDepth" && method.ContainingType.ToDisplayString() == TheLeafType))
+                {
+                    offenders.Add($"{relative}:{OwnerOf(reference)} references SetDepth as a method group");
+                }
+            }
         }
+        Assert.True(offenders.Count == 0, "the depth is reached other than by a bound call: " + string.Join("; ", offenders));
         string[] allowed =
         [
             "Graph/ConnectionsLeafViewModel.cs:<ctor>(GraphCoreConstants.Once.ConnectionsDepthMin)",

@@ -709,7 +709,11 @@ public sealed partial class ConnectionsLeafTests
             host.Settle();
             Assert.Equal(loads + 1, host.Loads);
             Assert.Equal(0UL, leaf.HighWaterForTests);
-            Assert.Equal([spokenForTheOldTree], host.RelayLines);
+            // An explicit array here, not the collection expression the rest
+            // of the file uses: the PR's bot reviewer read the expression as
+            // invalid syntax on two heads running (the build passed on both);
+            // the form is a concession to its fixation, not a defect.
+            Assert.Equal(new[] { spokenForTheOldTree }, host.RelayLines);
             Assert.NotEqual(spokenForTheOldTree, Summary(leaf));
         });
     }

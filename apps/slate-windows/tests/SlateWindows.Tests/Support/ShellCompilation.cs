@@ -52,6 +52,27 @@ internal static class ShellCompilation
             + "global using System.Threading.Tasks;\n",
             parseOptions,
             path: "GlobalUsings.census.cs");
+        // The XAML-generated partials — the x:Name fields, InitializeComponent —
+        // live under obj/ after a build; the newest copy of each is added so
+        // a call through an x:Name field BINDS instead of failing closed
+        // (codex post-implementation pass 3, IPB-17).
+        var generated = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string objRoot = Path.Combine(shellRoot, "obj");
+        if (Directory.Exists(objRoot))
+        {
+            foreach (string file in Directory.EnumerateFiles(objRoot, "*.g.cs", SearchOption.AllDirectories))
+            {
+                string name = Path.GetFileName(file);
+                if (!generated.TryGetValue(name, out string? existing)
+                    || File.GetLastWriteTimeUtc(file) > File.GetLastWriteTimeUtc(existing))
+                {
+                    generated[name] = file;
+                }
+            }
+        }
+        IEnumerable<SyntaxTree> generatedTrees = generated.Values
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(path => CSharpSyntaxTree.ParseText(File.ReadAllText(path), parseOptions, path: path));
         var references = new List<MetadataReference>();
         foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
@@ -67,7 +88,7 @@ internal static class ShellCompilation
         }
         var compilation = CSharpCompilation.Create(
             "shell-census",
-            sources.Select(s => s.Source.Root.SyntaxTree).Append(globalUsings),
+            sources.Select(s => s.Source.Root.SyntaxTree).Append(globalUsings).Concat(generatedTrees),
             references,
             new CSharpCompilationOptions(
                 OutputKind.DynamicallyLinkedLibrary,

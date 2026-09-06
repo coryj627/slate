@@ -344,6 +344,66 @@ public sealed class ConnectionsLeafViewTests
         });
     }
 
+    /// <summary>Codex post-implementation pass 3 (IPB-12; Term 2, B-6, B-9):
+    /// a cached MENU item is inert after a collapse (the view's row actions
+    /// are suspended until the next render) and after a root change the
+    /// leaf did not load for (the document refuses a row of a tree that is
+    /// not the current root's, the old tree staying rendered and STALE).</summary>
+    [Fact]
+    public void ACachedMenuItemIsInertAfterACollapseAndAfterAStaleRootChange()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("cached-menu");
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                host.ActivateLeaf();
+                host.OpenNote(Hub);
+                host.Settle();
+                ConnectionsRowViewModel row = view.RootsForTests
+                    .SelectMany(group => group.Children)
+                    .First(r => r.Row is { Kind: GraphNodeKind.Note, Path: not null } && r.Row.Path != Two);
+                MenuItem open = view.BuildRowMenu(row).Items.OfType<MenuItem>().First(item => item.IsEnabled);
+
+                // Collapsed: the rows stay until the next render, their actions
+                // suspended — the item opens nothing.
+                host.Workspace.IsRightPaneVisible = false;
+                open.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                host.Settle();
+                Assert.Equal(Hub, host.Workspace.ActiveGroup.ActiveTab!.Path);
+
+                // Revealed: the mount's load re-renders and a fresh menu is built;
+                // then the root moves while the leaf is INACTIVE — the old tree
+                // stays rendered and stale — and the item is refused by the
+                // document.
+                host.Workspace.IsRightPaneVisible = true;
+                host.Settle();
+                ConnectionsRowViewModel again = view.RootsForTests
+                    .SelectMany(group => group.Children)
+                    .First(r => r.Row?.Id == row.Row!.Id);
+                MenuItem fresh = view.BuildRowMenu(again).Items.OfType<MenuItem>().First(item => item.IsEnabled);
+                host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "outline");
+                host.OpenNote(Two);
+                host.Settle();
+                Assert.True(host.Leaf.IsStale);
+                // The view's wall: the root change re-rendered the stale tree
+                // and released the cached row. The document's wall: the row's
+                // core record is of a tree that is not the current root's.
+                Assert.Null(again.Activate);
+                Assert.False(host.Leaf.IsRowCurrent(again.Row!));
+                fresh.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                host.Leaf.Activate(again.Row!, newTab: false);
+                host.Settle();
+                Assert.Equal(Two, host.Workspace.ActiveGroup.ActiveTab!.Path);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
     /// <summary>Codex post-implementation pass 2 (IPB-6; B-9, B-13): a row
     /// the view dropped — after a root change, and after the model's
     /// release — is INERT for a cached automation peer: its activation

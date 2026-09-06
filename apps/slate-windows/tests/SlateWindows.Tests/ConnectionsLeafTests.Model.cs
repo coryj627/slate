@@ -42,10 +42,13 @@ public sealed partial class ConnectionsLeafTests
     /// tab remains — IPB-7).</summary>
     private enum RootState { Note, None, NoneBesideNote }
 
-    /// <summary>The presentation at rest: Ready and current; stale (the root
-    /// moved while unmounted or inactive); Error (the root is a note core
-    /// cannot load — a missing path — and the load that failed is current).</summary>
-    private enum Presentation { Current, Stale, Error }
+    /// <summary>The presentation: Ready and current; stale (the root moved
+    /// while unmounted or inactive); Error (the root is a note core cannot
+    /// load — a missing path — and the load that failed is current); Loading
+    /// (the root's FIRST load in flight, no tree yet — the flag set by
+    /// definition). A load in flight over a Ready or an Error presentation is
+    /// a same-root RELOAD, the rows or the Error kept (Term 7) — IPB-14.</summary>
+    private enum Presentation { Current, Stale, Error, Loading }
 
     private enum Route
     {
@@ -110,9 +113,9 @@ public sealed partial class ConnectionsLeafTests
     /// crossed with the route inventory; the cells the model names as not
     /// states of the system; the cells driven.</summary>
     private const int PinnedRoutes = 30;
-    private const int PinnedCells = 2 * 2 * 3 * 3 * 2 * PinnedRoutes;
-    private const int PinnedUnreachable = 1549;
-    private const int PinnedDriven = 611;
+    private const int PinnedCells = 2 * 2 * 3 * 4 * 2 * PinnedRoutes;
+    private const int PinnedUnreachable = 2172;
+    private const int PinnedDriven = 708;
 
     private static readonly Route[] SecondTabRoutes =
     [
@@ -126,14 +129,16 @@ public sealed partial class ConnectionsLeafTests
         Route.GroupCloseOtherRoot,
     ];
 
+    /// <summary>The routes the graph tab in view cannot take: the singleton
+    /// neither duplicates nor splits (its commands' CanExecute), and a pane
+    /// close onto the SAME root would need a second non-note beside it
+    /// (IPB-15: the closes onto the note beside it ARE driven).</summary>
     private static readonly Route[] SingletonRefusedRoutes =
     [
         Route.TabActivateDuplicate,
         Route.TabCloseDuplicate,
         Route.Split,
-        Route.SplitSoleTabClose,
         Route.GroupCloseSameRoot,
-        Route.GroupCloseOtherRoot,
     ];
 
     private static readonly Route[] GhostRoutes =
@@ -154,9 +159,17 @@ public sealed partial class ConnectionsLeafTests
         {
             return "no root: the presentation is NoNote and nothing is in flight";
         }
+        if (cell.Presentation == Presentation.Loading && !cell.InFlight)
+        {
+            return "a Loading presentation IS the root's first load in flight";
+        }
         if (cell.InFlight && cell.Presentation == Presentation.Stale)
         {
             return "a root transition clears the in-flight flag (Term 7), so a stale presentation never has a load in flight";
+        }
+        if (cell.Route == Route.DeeperAtBound && cell.InFlight && cell.Presentation == Presentation.Current)
+        {
+            return "at the bound over a current tree no same-root reload can be issued: Deeper is core's clamp returning the depth, and the probe finds the tree current and equal";
         }
         if (cell.Presentation == Presentation.Stale && cell.Leaf == LeafState.Connections && cell.Pane == Pane.Visible)
         {
@@ -172,7 +185,7 @@ public sealed partial class ConnectionsLeafTests
         }
         if (SingletonRefusedRoutes.Contains(cell.Route) && cell.Root == RootState.NoneBesideNote)
         {
-            return "the tab in view is the graph's singleton, which neither duplicates nor splits (its commands' CanExecute refuse it)";
+            return "the tab in view is the graph's singleton, which neither duplicates nor splits (its commands' CanExecute refuse it); a pane close onto the same root would need a second non-note";
         }
         if (GhostRoutes.Contains(cell.Route) && (cell.Root != RootState.Note || cell.Presentation != Presentation.Current))
         {
@@ -207,16 +220,17 @@ public sealed partial class ConnectionsLeafTests
 
     /// <summary>The depth the arrangement leaves: three at the bound's
     /// route; two where the load left in flight is a same-root reload with
-    /// the rows or the Error kept (the ghost routes, the Error presentation)
-    /// — except the split's sole-tab close, whose pending load is Two's at
-    /// one; one otherwise.</summary>
+    /// the rows or the Error kept (every in-flight cell but a Loading one);
+    /// one otherwise.</summary>
     private static uint DepthBefore(Cell cell) =>
         cell.Route == Route.DeeperAtBound ? 3u
-        : cell.InFlight && cell.Route != Route.SplitSoleTabClose && (cell.Presentation == Presentation.Error || GhostRoutes.Contains(cell.Route)) ? 2u
+        : SameRootReloadInFlight(cell) ? 2u
         : 1u;
 
+    /// <summary>A load in flight over a Ready or an Error presentation is a
+    /// same-root RELOAD (IPB-14); over a Loading one it is the root's first.</summary>
     private static bool SameRootReloadInFlight(Cell cell) =>
-        cell.InFlight && cell.Route != Route.SplitSoleTabClose && (cell.Presentation == Presentation.Error || GhostRoutes.Contains(cell.Route));
+        cell.InFlight && cell.Presentation != Presentation.Loading;
 
     private static Derivation Derive(Cell cell, Fixture fixture)
     {
@@ -391,7 +405,7 @@ public sealed partial class ConnectionsLeafTests
                     // rows, for Error or for NoNote; then the in-flight
                     // completion speaks (the leaf is shown).
                     var timeline = new List<string>();
-                    if (hasRoot && cell.Presentation != Presentation.Error && cell.InFlight && !SameRootReloadInFlight(cell))
+                    if (hasRoot && cell.Presentation == Presentation.Loading)
                     {
                         timeline.Add(LoadingLine());
                     }
@@ -431,7 +445,8 @@ public sealed partial class ConnectionsLeafTests
                     // (Term 3(d)); the in-flight result for the closed note
                     // foreign.
                     int loads = active && mounted ? 1 : 0;
-                    return new(["TabClosed", .. (loads == 1 ? [LinePlaceholder] : Array.Empty<string>())], loads, ArrangedNote(cell), loads == 0);
+                    string survivor = cell.Root == RootState.NoneBesideNote ? Two : ArrangedNote(cell);
+                    return new(["TabClosed", .. (loads == 1 ? [LinePlaceholder] : Array.Empty<string>())], loads, survivor, loads == 0);
                 }
             case Route.GroupCloseSameRoot:
                 // `EditorPaneFocused`; the surviving group shows the same note.
@@ -673,14 +688,17 @@ public sealed partial class ConnectionsLeafTests
                     host.Settle();
                     host.Workspace.SplitRightCommand.Execute(null);
                     host.Settle();
-                    gate = Arm();
-                    host.OpenNote(Two);
-                    WaitParked();
-                    if (!cell.InFlight)
+                    if (cell.Presentation == Presentation.Loading)
                     {
-                        host.Settle();
+                        // Two's FIRST load is the one in flight.
+                        gate = Arm();
+                        host.OpenNote(Two);
+                        WaitParked();
+                        return true;
                     }
-                    return true;
+                    host.OpenNote(Two);
+                    host.Settle();
+                    break;
                 case Route.GhostCreateAlreadyOpen:
                     host.Settle();
                     host.Workspace.OpenPath(fixture.GhostPath, WorkspaceOpenTarget.NewTab);
@@ -727,10 +745,28 @@ public sealed partial class ConnectionsLeafTests
             if (cell.Root == RootState.NoneBesideNote)
             {
                 host.OpenNote(Two);
+                bool splitPane = cell.Route is Route.SplitSoleTabClose or Route.GroupCloseOtherRoot;
+                if (splitPane)
+                {
+                    // The graph in a pane of its own beside the note's (IPB-15).
+                    host.Workspace.SplitRightCommand.Execute(null);
+                    host.Settle();
+                }
                 host.Workspace.OpenGraph();
                 // The graph tab's own load is the ARRANGEMENT's: drained before
                 // the timeline is cleared, so it cannot land inside the route.
                 SettleTheGraph(host);
+                if (cell.Route == Route.SplitSoleTabClose)
+                {
+                    // The graph the SOLE tab of the split's pane.
+                    host.Workspace.ActiveGroup.ActiveTab = TabFor(host, Two);
+                    host.Workspace.CloseActiveTabCommand.Execute(null);
+                    host.Settle();
+                    SettleTheGraph(host);
+                    Assert.True(
+                        host.Workspace.ActiveGroup.Tabs.Count == 1 && host.Workspace.ActiveGroup.ActiveTab!.IsGraph,
+                        $"{cell}: the split's pane does not hold the graph alone");
+                }
             }
             if (cell.Leaf == LeafState.Connections)
             {
@@ -763,7 +799,7 @@ public sealed partial class ConnectionsLeafTests
             return null;
         }
         host.ActivateLeaf();
-        bool pendingIsTheRootsOwn = cell.InFlight && !SameRootReloadInFlight(cell) && cell.Route != Route.SplitSoleTabClose;
+        bool pendingIsTheRootsOwn = cell.Presentation == Presentation.Loading && cell.Route != Route.SplitSoleTabClose;
         if (pendingIsTheRootsOwn)
         {
             gate = Arm();
@@ -788,7 +824,23 @@ public sealed partial class ConnectionsLeafTests
         }
         if (cell.InFlight)
         {
+            // The arranged state, asserted (IPB-14): the flag, the presentation
+            // the flag is over, the root and the pending request's depth.
             Assert.True(host.Leaf.InFlight, $"{cell}: the arrangement left nothing in flight");
+            // The presentation is the root IN VIEW's: Missing's Error, or Two's
+            // Ready where the split's sole-tab close arranged Two.
+            ConnectionsLoadState expectedState = cell.Presentation == Presentation.Loading
+                ? ConnectionsLoadState.Loading
+                : RootBefore(cell) == Missing ? ConnectionsLoadState.Error : ConnectionsLoadState.Ready;
+            Assert.True(
+                host.Leaf.Publication.State == expectedState,
+                $"{cell}: the arrangement left the presentation {host.Leaf.Publication.State}, not {expectedState}");
+            Assert.True(
+                string.Equals(host.Leaf.Root, RootBefore(cell), StringComparison.Ordinal),
+                $"{cell}: the arrangement left the root {host.Leaf.Root ?? "none"}, not {RootBefore(cell)}");
+            Assert.True(
+                host.Leaf.Request is { } request && request.Depth == DepthBefore(cell),
+                $"{cell}: the pending request is not at depth {DepthBefore(cell)}");
         }
         else
         {
@@ -895,8 +947,11 @@ public sealed partial class ConnectionsLeafTests
             case Route.RenameRoot:
                 host.Session.RenameFile(Hub, RenamedRoot);
                 host.Workspace.RetargetPath(Hub, RenamedRoot);
-                host.Workspace.NotifyGraphOfVaultChange();
-                WaitForTheProbesDecision(host);
+                {
+                    int pending = host.Leaf.PendingWorkForTests;
+                    host.Workspace.NotifyGraphOfVaultChange();
+                    WaitForTheProbesDecision(host, cell, pending);
+                }
                 break;
             case Route.DeleteRoot:
                 {
@@ -913,8 +968,9 @@ public sealed partial class ConnectionsLeafTests
                         host.Session.ScanInitial(cancel);
                     }
                     host.Workspace.InvalidatePath(RootBefore(cell) ?? Hub);
+                    int pending = host.Leaf.PendingWorkForTests;
                     host.Workspace.NotifyGraphOfVaultChange();
-                    WaitForTheProbesDecision(host);
+                    WaitForTheProbesDecision(host, cell, pending);
                     break;
                 }
             case Route.Shutdown:
@@ -944,18 +1000,20 @@ public sealed partial class ConnectionsLeafTests
     /// decision has applied — the mark, with a load in flight; a load,
     /// otherwise — so a fetch parked in flight is released AFTER it and
     /// the two never race.</summary>
-    private static void WaitForTheProbesDecision(Host host)
+    private static void WaitForTheProbesDecision(Host host, Cell cell, int pendingBefore)
     {
-        int loadsBefore = host.Loads;
-        ulong generation = host.Session.GraphGeneration();
-        bool inFlight = host.Leaf.InFlight;
+        // The probe's tracked task completes after its apply (Term 7), so the
+        // leaf's pending count is back at or below what it was before the
+        // probe was issued only once the decision — the mark, a load, or
+        // nothing — has applied; a load the route issued may complete
+        // meanwhile, which only lowers the count further.
         Assert.True(
             SpinWait.SpinUntil(() =>
             {
                 PumpedDispatcher.Drain();
-                return inFlight ? host.Leaf.HighWaterForTests >= generation : host.Loads > loadsBefore || !host.Leaf.InFlight && host.Leaf.Root is null;
-            }, TimeSpan.FromSeconds(10)),
-            "the probe's decision never applied");
+                return host.Leaf.PendingWorkForTests <= pendingBefore;
+            }, TimeSpan.FromSeconds(30)),
+            $"{cell}: the probe's decision never applied (pending {host.Leaf.PendingWorkForTests} against {pendingBefore}, in flight {host.Leaf.InFlight}, root {host.Leaf.Root ?? "none"})");
     }
 
     private static IEnumerable<Cell> Cells()

@@ -6054,6 +6054,71 @@ converted with `UInt32(max(0, depth))`, which traps above
 takes `Int.min` and `Int.max`. Gates: `cargo fmt` clean, clippy clean, the crates byte-identical to ac6504b's (the workspace's run stands); `dotnet format` applied; the whole Windows test project on a fresh build, 2233 passed without the model, and the model alone, 611 cells in 2 m 38 s — run concurrently with the suite once, the model showed the graph tab's arrangement load landing inside a route, so the arrangement now drains the graph document before the timeline clears; the accessibility project built and the leaf journey passed twice in the foreground, 10 s each; benchmarks build; the mac's XCTest lane is CI's, where the clamp's new cases run; CI and codoki on the push are the oracle. Mutations, each restored
 byte for byte, each caught by the named fact: the stale row acting (`ARowOfATreeTheDocumentNoLongerHoldsIsInertAndARefreshedRootsRowIsNot`); the view keeping a dropped row's delegate (`ADroppedRowIsInertForACachedPeer`); the reconciliation ignoring the mount (the model's collapsed root-change cells); a second relay through a `using` alias in a class of its own (`ExactlyOneGraphRelayIsConstructedInTheShell`); a trigger through a property (`EveryTriggerEntryPointHasExactlyTheCallersRuleCNames`); a return between the reveal and the consume (`EveryPaneRevealConsumesThePendingMountAndTheConstructorSeedsIt`); a literal producer in the view (`EveryDepthWriteIsTheFfiClampsResultAndOnlyTheNamedProducersReachIt`) — seven, none survived.
 
+**TGB-10 — Post-implementation pass 3 (IPB-12..18): the sweep.** On
+95387c9, CI green (13 checks), no thread open, codoki re-raising its
+false positive twice over ("remains open from a previous review") with
+its confidence at 1/5 — the one flagged assertion now uses an explicit
+array, a concession to the reviewer's fixation and not a defect; codex's
+third pass returned seven findings — one blocker, six majors, no minor.
+Each, and its discharge: (IPB-12, blocker, reopening IPB-6) the row
+menu's click closures captured the document and the core row, and
+after a root change the leaf did not load for — inactive or unmounted,
+Term 3(d) — the OLD tree stays rendered and STALE, so the document's
+occurrence check admitted a row of it against the root that replaced
+it. Two walls again: the document acts on a row only while the current
+publication's tree was PRODUCED for the current root
+(`IsRowCurrent` compares the producing request's root), and a menu
+item acts only through a row the view still holds and a model it still
+shows — a collapse and a root change both RE-RENDER (the epoch clears
+the view state and the rebuild releases every dropped row), so the
+mac's destroyed view has its twin in released rows; a suspension flag
+written first alongside proved redundant (its mutation survived: the
+release already made the item inert) and was removed. Fact:
+`ACachedMenuItemIsInertAfterACollapseAndAfterAStaleRootChange` (a
+cached item opens nothing after the collapse; after the inactive root
+change the re-render released the row and the document refuses its
+record). (IPB-13, major) `StartWorkAlwaysAsync` tracked the task an
+async method returned AFTER that method's synchronous prefix had
+queued the pool body, so a drain on another thread could see an empty
+set while a compute was live: a placeholder joins the tracked set
+under the lock BEFORE the worker is scheduled and completes, faulted or
+not, with the real task;
+`AComputeStartsOnlyAfterItsRegistrationAndADrainWaitsForIt` reads the
+tracked count and a drain's state from inside the compute. (IPB-14,
+major, reopening IPB-7) the model's "current, in flight" cells were
+the root's FIRST load parked — Loading, no tree — while the dimension
+said Ready: the presentation gains LOADING as its own value (the flag
+set by definition), and a load in flight over Ready or Error is now
+always a same-root RELOAD with the rows or the Error kept (Term 7) —
+Deeper's, parked — the arranged state asserted before the route (the
+flag, the publication's state, the root, the pending request's depth);
+at the bound over a current tree no reload can be issued (Deeper is
+the clamp, the probe finds the tree equal), named. (IPB-15, major,
+reopening IPB-7) the graph tab in a pane of its own beside a note's
+pane: the pane's close onto the note and the graph's sole-tab close
+are driven (a root change from none); the close onto the SAME root
+would need a second non-note and stays named. THIRTY routes over three
+roots and FOUR presentations: 2880 cells, 2172 named, 708 driven, the
+totals pinned. (IPB-16, major, reopening IPB-8) the instance census
+counted allocation sites: a second `NewGraphRelay()` call would have
+been a second relay unseen — the factory's calls and its method-group
+references are censused, bound: the constructor's one call, nothing
+else. (IPB-17, major, reopening IPB-9) a delegate-bound call (`Action
+fire = Connections.Mounted; fire();`) hid behind `Action.Invoke`, and
+so would a `SetDepth` through a delegate: every method-group reference
+to a trigger or to `SetDepth` is an offence, every call to one of those
+names the compilation binds to nothing is refused rather than trusted
+(fail closed), the depth producers are bound rather than spelled, and
+the compilation now carries the XAML-generated partials from `obj/`
+(the newest copy of each) so a call through an `x:Name` field binds.
+(IPB-18, major, reopening IPB-9) the reveal inside the ToggleRightPane
+command's lambda fell back to statement order: the control-flow graph
+now descends into every anonymous function or local function enclosing
+the reveal, the consume is bound to the workspace's own method, and a
+reveal whose scope cannot be analysed is an offence (no fallback).
+Gates: `cargo fmt` clean, clippy clean, the crates and the mac sources byte-identical to 95387c9's (their runs stand); `dotnet format` applied; the whole Windows test project on a fresh build, 2235 passed without the model; the model alone, 708 cells in 3 m 4 s — run concurrently with the suite it starved a probe wait, and alone it found the wait itself wrong for a rename with the leaf active (the new root's load may complete before the probe decides, a valid order), so the driver now waits on the leaf's tracked-work count, which falls only once the probe's own task has applied; the accessibility project built and the leaf journey passed twice in the foreground, 10 s each; benchmarks build; CI and codoki on the push are the oracle. Mutations, each restored byte for byte, each caught by
+the named fact: the menu item ignoring a released row (`ACachedMenuItemIsInertAfterACollapseAndAfterAStaleRootChange`); the stale tree's row acting (the same fact, the document's wall); the registration after the worker, the caller parked at the seam (`AComputeStartsOnlyAfterItsRegistrationAndADrainWaitsForIt`); a second factory call (`ExactlyOneGraphRelayIsConstructedInTheShell`); a trigger through a delegate (`EveryTriggerEntryPointHasExactlyTheCallersRuleCNames`); the depth through a delegate (`EveryDepthWriteIsTheFfiClampsResultAndOnlyTheNamedProducersReachIt`); a return inside the command lambda (`EveryPaneRevealConsumesThePendingMountAndTheConstructorSeedsIt`) — seven, none survived; the suspension flag's mutation, which survived, took the flag with it.
+
 ### Tests that pin PR B (slice B1)
 
 - ConnectionsLeafTests: the tree over the shared fixture and the
@@ -6099,9 +6164,9 @@ byte for byte, each caught by the named fact: the stale row acting (`ARowOfATree
   the recorded events equal to the derivation; the away → back and hide
   → away completions —
   `TheModelOfTermsTwoToNineDerivesEveryRoutesTimelineAcrossEveryState`,
-  thirty routes over three roots and three presentations, 2160 cells,
-  611 driven, 1549 named as not states of the system, the totals
-  pinned (TGB-7, TGB-8, TGB-9).
+  thirty routes over three roots and four presentations, 2880 cells,
+  708 driven, 2172 named as not states of the system, the totals
+  pinned (TGB-7, TGB-8, TGB-9, TGB-10).
 - GraphAnnouncerTests gains the stored fire-time gate (0a-9's suite:
   queue, leave effective, fire, nothing) and the cross-surface High
   flush; GraphDocumentTests' retirement fact asserts the relay is

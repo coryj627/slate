@@ -737,7 +737,14 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     internal bool IsRowCurrent(GraphConnectionRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
-        return Publication.Tree is { } tree
+        // The tree must be the CURRENT root's (codex post-implementation pass
+        // 3, IPB-12): a root change while inactive or unmounted keeps the old
+        // tree rendered and STALE (Term 3(d)), and a row of that tree must
+        // not act against the root that replaced it.
+        ConnectionsPublication publication = Publication;
+        return publication.Tree is { } tree
+            && publication.ProducedBy is { } produced
+            && string.Equals(produced.Root, _root, StringComparison.Ordinal)
             && (tree.Incoming.Any(current => current.Id == row.Id)
                 || tree.Outgoing.Any(current => current.Id == row.Id));
     }

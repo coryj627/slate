@@ -214,6 +214,41 @@ public sealed class PanelWorkSchedulerTests
         });
     }
 
+    /// <summary>W6-2 PR B's post-implementation pass 3 (IPB-13; A-2, B-1):
+    /// the registration precedes the worker — when a compute starts, its
+    /// task is already in the tracked set, so a drain observed from inside
+    /// the compute is pending, never complete; the placeholder completes
+    /// with the real task and the drain returns after the apply.</summary>
+    [Fact]
+    public void AComputeStartsOnlyAfterItsRegistrationAndADrainWaitsForIt()
+    {
+        WithPumpedContext(pump =>
+        {
+            var probe = new Probe(synchronousForTests: false);
+            int pendingAtStart = -1;
+            bool drainCompleteAtStart = true;
+            // The caller is PARKED right after it scheduled the worker, until
+            // the compute has read the tracked set: whatever the caller does
+            // after the schedule cannot be what the compute saw.
+            using var computeRead = new ManualResetEventSlim(false);
+            probe.BeforeComputeForTests = () =>
+            {
+                pendingAtStart = probe.PendingWorkForTests;
+                drainCompleteAtStart = probe.WhenAllWorkDrained().IsCompleted;
+                computeRead.Set();
+            };
+            probe.AfterScheduleForTests = () => Assert.True(computeRead.Wait(TimeSpan.FromSeconds(10)), "the compute never started");
+            probe.Run();
+            Task drain = probe.DrainAll();
+            Assert.True(pump(() => drain.IsCompleted), "the tracked task completed");
+            drain.GetAwaiter().GetResult();
+            Assert.Equal(1, pendingAtStart);
+            Assert.False(drainCompleteAtStart);
+            Assert.Equal(1, probe.Applies);
+            Assert.Equal(0, probe.PendingWorkForTests);
+        });
+    }
+
     /// <summary>IPA-5: a teardown after the compute finished and before the
     /// apply was dispatched skips the apply — the tracked task still
     /// completes, so the drain returns.</summary>

@@ -228,6 +228,19 @@ internal abstract class PanelWorkScheduler : BindableBase
     /// observe a fault; a fact asserts this stays zero.</summary>
     internal int FaultedWorkForTests => Volatile.Read(ref _faultedWork);
 
+    /// <summary>Test seam: how many tracked tasks are pending — read from
+    /// inside a compute to prove its registration preceded it (IPB-13).</summary>
+    internal int PendingWorkForTests
+    {
+        get
+        {
+            lock (_workLock)
+            {
+                return _pendingWork.Count;
+            }
+        }
+    }
+
     private void TrackWork(Task work)
     {
         lock (_workLock)
@@ -305,8 +318,35 @@ internal abstract class PanelWorkScheduler : BindableBase
         {
             return;
         }
-        TrackWork(RunAlwaysAsync(compute, apply));
+        // The registration PRECEDES the worker (codex post-implementation
+        // pass 3, IPB-13): an async method's synchronous prefix queues the
+        // pool body before it returns its task, so tracking that task
+        // afterwards left a window in which a drain on another thread saw
+        // an empty set while a compute was live. A placeholder joins the
+        // tracked set first, under the lock, and completes — faulted or
+        // not — when the real task does.
+        var registered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        TrackWork(registered.Task);
+        _ = RunAlwaysAsync(compute, apply).ContinueWith(
+            completed =>
+            {
+                if (completed.IsFaulted)
+                {
+                    registered.SetException(completed.Exception!.InnerExceptions);
+                }
+                else
+                {
+                    registered.SetResult();
+                }
+            },
+            TaskContinuationOptions.ExecuteSynchronously);
+        // Test seam: the caller parked right after the schedule, so a fact
+        // can read the tracked set from inside a compute that is already
+        // running and prove the registration preceded it.
+        AfterScheduleForTests?.Invoke();
     }
+
+    internal Action? AfterScheduleForTests { get; set; }
 
     private async Task RunAlwaysAsync<T>(Func<T> compute, Action<T> apply)
     {
