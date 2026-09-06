@@ -3105,7 +3105,14 @@ groups, empty until PR C reads them), `Mode: GraphSurfaceMode` (Table)
 census that no other type under `Graph/` declares a MUTABLE field of
 those five names or a second mutable copy of the filter, the query or
 the mode; the immutable request record, token, envelope and
-publication of A-2 carry copies by design. Attachment SEATS
+publication of A-2 carry copies by design. **Amended by the owner on
+2026-09-06 (W6-2 PR B2, B2D-1):** the view state is owned by the
+WORKSPACE — one instance, constructed in the workspace's constructor
+beside the relay, handed to the document at construction and to the
+Connections leaf, surviving the document's retirement (which no longer
+resets it) and dropped with the workspace; the census's wall widens to
+the workspace's graph partials and an instance census counts the one
+construction (§PR B2, B2-1). Attachment SEATS
 and never starts: every tab of kind Graph attaches through
 `AttachTabDocumentsIfNeeded` (`WorkspaceViewModel.Bases.cs:1060–1079`)
 by a new arm beside the canvas's that creates the document on the first
@@ -6382,5 +6389,393 @@ shot. Gates: only the model's own file changed since 434d6bf, so the suite's, th
   the create's heal — `create_note_heals_matching_ghosts_in_its_own_transaction`
   and `create_bytes_heals_matching_embed_ghosts_too` (TGB-6).
 - Mac: the literal filter and the local clamp become the calls.
+
+## PR B2 — re-root and Back, Show connections from three surfaces, the shared selection
+
+**Goal (spec §PR B, slice B2 of the owner's split, BD-1).** The
+standalone leaf B1 shipped (`Graph/ConnectionsLeafViewModel.cs`, merged
+as bd1ffaf) follows the note in view and nothing else. B2 adds the
+mac's re-root: a Show connections action on ANY surface — the leaf's own
+rows, the graph table's rows, a Bases row — pins the leaf on that note
+with a back stack, `GraphReRooted` then the summary; Back (⌘[) pops one
+step and restores the prior view exactly; and the selection is SHARED
+with the graph document through `GraphViewState`, which the owner has
+now placed on the workspace (B2D-1, the amendment of A-1 and spec R-B
+recorded in place). PR D's diagram reads the re-root seam
+(`GraphDiagramView.swift:1023–1026` re-roots from a node); it is not
+built here. This is revision 1; round 1's findings are numbered IGI-n.
+
+**The owner's decision (2026-09-06).** Asked how spec R-B should be
+amended for B2 — a workspace-level view state; a per-surface exception
+keeping the leaf's selection its own with Show connections as a
+hand-off; or deferral — the owner chose the workspace-level view state:
+`GraphViewState` (the selected key, the backend filter, the name query,
+the groups, the mode) is owned by the WORKSPACE, one per workspace,
+constructed beside the relay, shared by the graph document and the
+leaf, and it survives the document's retirement. This is the mac's
+shape: `graphSelectedNodeKey` and the table's filter live on
+`AppState` (`AppState.swift:3108`, `AppState+GraphTable.swift:140–150`),
+outlive the graph tab, and are dropped only with the vault
+(`AppState+GraphTable.swift:145–146` clears the key in the table's
+reset). On Windows a vault open constructs a new workspace
+(`VaultLifecycleViewModel.cs:986`), so the workspace's construction IS
+the mac's reset.
+
+### What stands today (B1, merged)
+
+- The leaf's root is the note in view and nothing else:
+  `ConnectionsLeafViewModel.NoteChanged(path, activeAndMounted)`
+  (`:406–435`) is rule C's Term 3(d) — a change advances the epoch and
+  the sequence, clears the selection, loads only while ACTIVE and
+  MOUNTED, else STALE; the workspace hands it the markdown tab in view
+  through `SyncConnectionsRoot` and the boundary's
+  `ReconcileConnectionsRoot`, both through the one funnel
+  `ReconcileConnectionsRootTo` (`WorkspaceViewModel.Connections.cs:195–232`,
+  B-19 (iv), IPB-31). `Root` (`:196`) is that path.
+- The leaf's selection is its own — `SelectedOccurrence` (`:234`), the
+  occurrence scoped by the root and the mount (B-6, BD-5) — and the
+  leaf writes no shared key (B-D1).
+- The row action Show connections is listed and DISABLED with the
+  reason "Show connections is not available yet."
+  (`IsActionEnabled` → false, `ActionDisabledReason` →
+  `ConnectionsPhrase.ShowConnectionsUnavailable`, `:721–733`; B-9,
+  B-D6). The graph table's document carries the seam
+  `ShowConnectionsFromSurface` (`GraphDocumentViewModel.cs:273`), unset
+  by the workspace, so the table's Show connections is disabled too
+  (`:590`, `:617–619`). The Bases surface has no Show connections row
+  action at all — its rows carry Open, Copy link, Show backlinks and
+  Edit property (`Bases/BaseSurfaceView.cs:690–712`), the backlinks one
+  through `BaseDocumentViewModel.ShowBacklinksFromSurface` (`:259`) and
+  the workspace's `ShowBacklinksFor` (`WorkspaceViewModel.Bases.cs:362`,
+  IPB-2's one mutation).
+- `GraphViewState` is the graph DOCUMENT's: constructed in its
+  constructor (`GraphDocumentViewModel.cs:136`), exposed at `:219`,
+  revalidated at every pair publication (`:532–538`, A-7), RESET at
+  retirement (`:657`, `GraphViewState.Reset()` `:69–76`). The no-shadow
+  census (`Censuses/GraphAnnouncerCensus.cs:564–600`) forbids a mutable
+  copy of the five names anywhere else under `Graph/`.
+- The palette's Show connections (`WorkspaceViewModel.ShowConnections`,
+  `:163`) is Term 3(c): one audible load of the note in view, the pane
+  revealed, the leaf activated — it re-roots nothing.
+- The chord table's brackets: `Ctrl+Alt+[` and `Ctrl+Alt+]` are the
+  sidebar's history (`Commands/ChordTable.cs:1313–1318`, the mac's
+  `⌃⌘[`); `Ctrl+[` is bound to nothing in any scope.
+- The B-10 model drives thirty routes over the pane, the leaf, three
+  roots, five presentations and three loads in flight (5400 cells, TGB-11);
+  the journey `GraphConnections_LeafWalkDepthAndReRoot_AreClean` keeps
+  the name B2 continues (B-18).
+
+### The mac's re-root, traced site by site
+
+The state (`AppState.swift:2929–2967`): `connectionsRootPath: String?`
+— nil means FOLLOW the selection, non-nil after a Show connections
+re-root; `connectionsBackStack: [(root: String?, effective: String)]` —
+each entry BOTH the prior root mode and the note that was in view;
+`connectionsEffectivePath = connectionsRootPath ?? selectedFilePath` —
+the note the leaf describes: an explicit root wins.
+
+`reRootConnections(on:)` (`AppState+Connections.swift:195–231`), the
+one entry every surface calls: (i) `recordExplicitSidebarNavigationIntent()`;
+(ii) ALREADY rooted here → repair the SHARED key to this node's stable
+key, activate the leaf, reveal the pane, RETURN — no push, no load, no
+line (the same-root early return must not leave the shared key
+diverged, P2-5 review finding 5); (iii) else push `(root: the current
+root mode, effective: the current effective path)` BEFORE `openFile`,
+since `openFile` synchronously moves `selectedFilePath` (review round
+1 finding 2); (iv) `openFile(path, .currentTab,
+advancesSidebarSelectionRevision: false)`; (v) `connectionsRootPath =
+path`; (vi) activate the leaf; (vii) `loadConnections()` — audible;
+(viii) reveal the pane; (ix) `graphSelectedNodeKey =
+graphStableKeyForPath(path)`; (x) announce `.graphReRooted(label:
+filename(of: path))` — "label only; the authoritative summary follows
+from the load".
+
+`connectionsBack()` (`:240–255`), `⌘[`: guard rooted AND the stack
+non-empty, else return false — the key owner falls through
+(`ConnectionsPanel.swift:52–56`: panel-level, so it works from the
+depth picker; `.ignored` when there is nothing to pop); pop;
+`connectionsRootPath = prior.root` (nil restores FOLLOW mode);
+`openFile(prior.effective, .currentTab)` — always, so the selection is
+restored whether the prior mode was a pin or follow (review round 3
+finding 1); `loadConnections()`; the shared key = the restored node;
+announce `.graphReRooted(label: filename(of: prior.effective))`; return
+true.
+
+The follow rule (`ConnectionsPanel.swift:31–36`): on a selection
+change the panel reloads ONLY when not rooted and the leaf is active —
+while pinned, the note in view moves under the leaf and the leaf stays
+on its root (owner decision D-8: follow mac). Nothing unpins but Back
+and the vault reset (`resetConnectionsState`, `:48–63`, on vault
+open/close: root nil, stack empty). Neither the root nor the stack is
+persisted. The callers: the leaf's row action (`ConnectionsPanel.swift:280`),
+the table's (`GraphTableView.swift:421`), the Bases' reserved row action
+(`AppState+Bases.swift:2779–2782`, "Bases gap O15 / n3 §N3-4 rule 1"),
+the diagram's (`GraphDiagramView.swift:1023–1026`, PR D). The shared
+key's writers, whole mac: the two re-root sites and Back
+(`AppState+Connections.swift:203, 228, 253`), the table's current-row
+binding (`GraphTableView.swift:242`), the table's reset and
+revalidation clears (`AppState+GraphTable.swift:146, 373`), the diagram
+(`AppState+GraphDiagram.swift:224`, PR D). The leaf's own row selection
+writes NOTHING to the shared key.
+
+`showConnectionsPanel()` (`:184–190`) — the palette's — activates,
+loads the EFFECTIVE root, reveals, posts `.connectionsPanel`: while
+pinned it reloads the pin, not the note in view.
+
+### Rule D — the root mode, in six terms (extends rule C; Terms 1–10 stand)
+
+- **Term 11 — Two root modes, one effective root.** The leaf is
+  FOLLOWING (the effective root is the note in view, B1's only mode) or
+  PINNED on a path (the effective root is that path whatever the note
+  in view). Every term of rule C that says "the root" means the
+  EFFECTIVE root: 3(d)'s root change, 3(g)'s none, Term 6's probe,
+  Term 7's CURRENT and STALE, Term 8's echoes, B-11's create address.
+  While PINNED, a change of the note in view is RECORDED (it is the
+  `effective` a later push captures) and is not a root change: no
+  epoch, no load, no STALE, the selection kept.
+- **Term 12 — A re-root is ONE workspace mutation.** Show connections on
+  a path P from any surface runs inside the outermost mutation
+  boundary (B1's Term 3, IGH-4; IPB-2's `ShowBacklinksFor` shape): the
+  push of `(mode, effective)` captured BEFORE the open; the open of P
+  in the current tab (a dirty refusal aborts the whole re-root before
+  the pin — nothing pushed, nothing pinned); the pin; the leaf
+  activation; the pane reveal. The boundary's reconciliation then sees
+  the pin and the effective root moved P-ward, and issues ONE audible
+  load (Term 3(d) over the effective root) — never the open's own load
+  followed by the pin's. Already pinned on P: no push, no open, no
+  load; the shared key repaired, the leaf activated, the pane revealed.
+- **Term 13 — Back is ONE workspace mutation, or nothing.** With a pin
+  and a non-empty stack: pop `(mode, effective)`; the mode restored
+  (FOLLOWING, or a pin on the prior root); the open of `effective` in
+  the current tab; the leaf active; the boundary's ONE audible load of
+  the restored effective root. Without a pin, or with an empty stack:
+  nothing — the chord falls through to whatever owns it next. A dirty
+  refusal of the open aborts the pop (the entry stays).
+- **Term 14 — The lines.** A re-root or a Back that loads speaks, in
+  order: the pane's `RightPaneShown` when collapsed (B-D9), the
+  setter's `LeafPanelShown` when the leaf changes (B-D5), `GraphReRooted`
+  with the note's file name (core's line "Connections: {label}",
+  `a11y.rs:3120–3123, 3254`) posted synchronously at the mutation's
+  end, then the summary at the load's apply iff SPEAKING (Term 2). The
+  same-root re-root speaks the reveal lines alone. Nothing else — the
+  shell's `OpenedFile` for the re-root's open is NOT posted (the mac's
+  `openFile` from this route announces nothing; the leaf's line is the
+  route's).
+- **Term 15 — The shared key.** `GraphViewState.SelectedKey` is written
+  by exactly: a re-root (the stable key of P, the same-root case
+  included), a Back (the restored node's), the graph table's current
+  row (A-7) and the document's revalidation clear (A-7); PR D adds the
+  diagram. The leaf's `SelectedOccurrence` never writes it (B-D1
+  narrowed to B2-D1). The document, while it lives, revalidates the key
+  against its snapshot as A-7 says; a key written while no document
+  lives is revalidated at the next document's first pair publication.
+- **Term 16 — Session-scoped.** The pin and the stack live on the leaf's
+  document; a workspace teardown drops them with the leaf (B-1's
+  drain); a launch comes up FOLLOWING with an empty stack; nothing is
+  persisted (B2D-2, the mac).
+
+### The contracts (slice B2)
+
+**B2-1 — The view state is the workspace's (A-1 and spec R-B as amended
+by the owner, B2D-1).** ONE `GraphViewState` per workspace, constructed
+in the workspace's constructor beside the relay (`NewGraphViewState()`
+under `Graph/WorkspaceViewModel.Graph.cs`, the direct right-hand side
+of a field assignment, no loop, lambda or branch above it — the IPB-27
+shape) and handed to the graph document at construction
+(`GraphDocumentViewModel`'s constructor takes it; `:136` no longer
+constructs one) and to the leaf. `Retire()` no longer resets it (`:657`
+goes; `GraphViewState.Reset()` is called by nothing and is removed, or
+kept for the workspace's drain alone — round 1 decides). A re-seated
+document (A-1's "seated by the funnel") reads the state the previous
+one left: the selection survives closing and reopening the graph tab,
+as the mac's `graphSelectedNodeKey` does. The no-shadow census extends
+its five-name wall from `Graph/` to the workspace partials that touch
+the graph (`WorkspaceViewModel.Graph.cs`, `.Connections.cs`,
+`.GraphCreate.cs`), and an instance census counts the constructions:
+exactly one, in the workspace's constructor.
+
+**B2-2 — The root mode on the leaf's document.** `ConnectionsLeafViewModel`
+gains `RootMode` (`Following` | `Pinned(path)`), `NoteInView`
+(recorded by `NoteChanged` in both modes), `Root` (now the EFFECTIVE
+root: the pin, else the note in view) and the back stack of
+`(RootMode, string effective)`. `NoteChanged` while PINNED records the
+note in view and returns before the transition (Term 11). Two new
+entries, both called ONLY by the workspace's re-root funnel: `PinTo(path)`
+— the push, the pin, the transition to the new effective root WITHOUT
+a load (the boundary loads, Term 12) — and `PopPin()` returning the
+popped entry or null (Term 13). The trigger census (B-19 (iii)) extends
+to both: their callers are the workspace's funnel and nothing else,
+method-group references refused.
+
+**B2-3 — One re-root funnel in the workspace.** `WorkspaceViewModel.Connections.cs`
+gains `ReRootConnectionsOn(string path)`: `RunWorkspaceMutation` around
+the sequence of Term 12, the open through `OpenPathCore(path,
+CurrentTab)` (the dirty confirmation's refusal returns false and aborts
+the re-root before the pin), the leaf activated through the
+`ActiveLeaf` setter, the pane revealed with the pending mount armed and
+consumed at the route's end (B-19 (iii)'s reveal census), the shared
+key written, `GraphReRooted` posted through the relay at the mutation's
+end. The three surfaces reach it: the leaf's `Execute(ShowConnections,
+row)` through a new seam ShowConnectionsFromRow (real notes only —
+the mac's `if let p = row.path`; a ghost row's Show connections stays
+disabled with core's eligibility, B-9); the table's
+`ShowConnectionsFromSurface` set by the workspace beside
+`OpenGraphRowFromSurface` in `WorkspaceViewModel.Graph.cs`; the Bases'
+new row action. `ActionDisabledReason(ShowConnections)` returns null
+and `ConnectionsPhrase.ShowConnectionsUnavailable` is deleted (B-D6
+withdrawn). A census binds every caller of the funnel: exactly the
+three seams' delegates and Back, nothing else.
+
+**B2-4 — Back: the chord row and the key owner.** A `ChordTable` row
+`slate.graph.connectionsBack` ("Connections: Back"), mac `⌘[`, Windows
+`Ctrl+[` (the ⌘→Ctrl rule; `Ctrl+Alt+[` is the sidebar's history and
+stays), in a new `ChordScope.Connections` delivered by the leaf's body
+(`ConnectionsLeafView`'s `PreviewKeyDown` — the mac's panel-level
+owner, so it works from the depth control and the anchor as from the
+tree) and NOT by a window-level binding; when `PopPin()` has nothing to
+pop the view leaves the event unhandled and the chord falls through
+(the mac's `.ignored`). The workspace's `ConnectionsBack()` is the
+funnel for Term 13 — one mutation — and the palette row runs it too
+(palette-reachable per R-E's drift test 1; the palette's invocation
+with nothing to pop is a no-op). The table PR adjudicates the scope
+and verifies `Ctrl+[` free in every scope (spec §7's rule).
+
+**B2-5 — The Bases' Show connections.** A "Show connections" row action
+after "Show backlinks" in `BaseSurfaceView`'s row actions, through
+`BaseDocumentViewModel.ShowConnectionsFromSurface` (the backlinks
+seam's shape, `:259`) and the workspace's BasesShowConnectionsCommand
+(`WorkspaceViewModel.Bases.cs`, beside `BasesShowBacklinksCommand`,
+`:349`), which calls the funnel with the row's file path — the mac's
+`basesShowConnections` (`AppState+Bases.swift:2779–2782`), the gap O15
+that the mac realised with Milestone P. The row's name is core's
+`GraphRowAction.ShowConnections` title (`graph_row_action_title`,
+0b-9), not a Bases literal. The Bases post no line of their own for it:
+the leaf's `GraphReRooted` is the route's line (the mac's
+`basesShowConnections` posts no base-action event, unlike
+`basesShowBacklinks` at `:2771–2776`).
+
+**B2-6 — The follow rule while pinned (owner decision D-8: mac).** A
+note change while PINNED — a tab activation, a close's successor, a
+group close, an open from anywhere, the ghost create's open — records
+the note in view and moves nothing (Term 11); `NotifyGraphOfVaultChange`'s
+probe (Term 6) and a depth change (Term 3(e)) reload the PIN; a rename
+of the pinned note retargets the pin (B1's rename route over the
+effective root); a delete of the pinned note leaves the pin and the
+Error presentation (B1's delete route) — Back is the way out, as on the
+mac. A launch comes up FOLLOWING (Term 16).
+
+**B2-7 — The ghost create while pinned (B-11 over the effective root).**
+The create is addressed by the leaf's effective root and epoch; its
+open moves the note in view under the pin (mac: `openFile` then the
+refresh, `AppState+Connections.swift:290–296`); the pinned root's
+neighbourhood refreshes SILENTLY through the probe (the healed ghost
+row updates), and B-D10's suppression reads the effective root.
+
+**B2-8 — The model (B-10) grows the routes and a column.** New routes:
+`ReRootFromLeaf`, ReRootFromTable, ReRootFromBases (each in the
+other-root and the same-root case), ReRootDirtyRefusal, `Back` (to
+FOLLOWING, to a prior pin, with an empty stack, from FOLLOWING), and
+every B1 route crossed with a new root dimension value PINNED (the
+note in view beside the pin, so 3(d)'s routes exercise Term 11). The
+state gains the shared key and the stack depth, compared after every
+route beside the timeline, the loads, the root, the staleness, the
+depth and the publication's state (TGB-11's rule). The totals pinned as
+literals; every cell named unreachable with its reason.
+
+**B2-9 — The journey continues.** `GraphConnections_LeafWalkDepthAndReRoot_AreClean`
+gains: Show connections on the healed incoming row (the heading moves
+to that note, the tree re-roots, the summary's text changes), `Ctrl+[`
+from inside the tree (the heading and the summary return), `Ctrl+[`
+again (nothing to pop: focus stays, no change), the table's Show
+connections from the graph tab (the leaf re-roots and takes focus),
+and axe over `graph-connections` after the re-root. The Bases' route
+is a fact over `BaseDocumentViewModel`'s seam (a base fixture in the
+journey is PR-scope creep).
+
+**B2-10 — The censuses.** (i) the view-state instance census (B2-1);
+(ii) the shared-key writers census: every assignment to `SelectedKey`
+under `Graph/` and the workspace's graph partials, bound, is one of
+Term 15's four (five with PR D), by owner name; (iii) the re-root
+funnel census (B2-3) and Back's (B2-4); (iv) the trigger census's new
+protected names (B2-2); (v) R-E's three drift tests over the new row;
+(vi) the no-shadow census over the widened wall (B2-1); (vii) the
+announcement-seam census unchanged: `GraphReRooted` is 0a's event
+through the one relay, no `HostComposed` under `Graph/`.
+
+**B2-11 — The matrix rows.** `parity_matrix.md`'s connections rows gain
+re-root, Back and the Bases' action with their evidence ids;
+`w_c_matrix.md`'s "Graph connections leaf (W6-2 PR B)" row cites the
+continued journey; `chords.json` through the projection (never by
+hand, the staged-claim rule).
+
+**B2-12 — Core unchanged.** No new query: the stable key
+(`graph_stable_key_for_path`), the row-action title and eligibility
+(0b-9), `GraphReRooted` (0a) are consumed as they stand; the surface
+stays twenty-six.
+
+### Decisions (PR B2)
+
+- **B2D-1 — The owner amended A-1 and spec R-B on 2026-09-06:**
+  `GraphViewState` is the workspace's, shared by the document and the
+  leaf, surviving the document's retirement (the mac's `AppState`
+  ownership).
+- **B2D-2 — Nothing persists:** the pin and the stack are session-scoped
+  (the mac persists neither); a launch is FOLLOWING.
+- **B2D-3 — Back's chord is `Ctrl+[` in `ChordScope.Connections`,
+  delivered by the leaf's body, falling through when there is nothing
+  to pop** — subject to the table PR's adjudication.
+- **B2D-4 — The leaf's own selection stays its own** (`SelectedOccurrence`,
+  B-6); only a re-root and a Back write the shared key from the leaf's
+  side (Term 15).
+- **B2D-5 — A re-root and a Back are one mutation each** (Terms 12,
+  13), reconciled once at the boundary — one load, not two.
+- **B2D-6 — The same-root re-root repairs the shared key and reveals**,
+  loads nothing and speaks the reveal lines alone (the mac's early
+  return).
+- **B2D-7 — A dirty refusal aborts the whole re-root or Back** before
+  any state moves (the open is the first thing the mutation does after
+  the capture; the capture is discarded on refusal).
+
+### Recorded divergences (PR B2)
+
+- **B2-D1 — The leaf's row selection does not write the shared key**
+  (B-D1, kept): the mac's leaf never writes `graphSelectedNodeKey` from
+  a row; only re-root and Back do.
+- **B2-D2 — The sidebar's selection history records the re-root's open
+  as any open.** The mac withholds the sidebar revision
+  (`advancesSidebarSelectionRevision: false`) and records an explicit
+  navigation intent; the Windows files sidebar has neither seam
+  (`recordExplicitSidebarNavigationIntent` and the revision have no
+  twin under `apps/slate-windows`), and `Ctrl+Alt+[` (sidebar history
+  back) will therefore step back through a re-root's open. Recorded;
+  the owner may ask for a suppressed entry.
+- **B2-D3 — The graph tab's row action re-roots from the graph's own
+  pane without changing the active group** unless the open needs it —
+  the mac's `perform(.showConnections)` calls `reRootConnections` from
+  wherever the table lives; Windows' `OpenPathCore` opens in the
+  ACTIVE group, so the re-root's open lands in the active group, which
+  is the graph's when the action was taken from its pane — the same
+  outcome by a different route (`OpenGraphRowFromSurface`'s
+  `FocusGraphAddress` precedent).
+
+### Tests that pin PR B2 (revision 1's list; the task loop records what lands)
+
+- `ConnectionsLeafTests.ReRoot.cs`: the funnel's order (push before
+  open; one load; the lines), the same-root return, the dirty refusal
+  aborting before the pin, Back to FOLLOWING restoring the note, Back
+  to a prior pin, Back with an empty stack falling through, the pinned
+  note's change recorded and not loaded, the probe over the pin, the
+  rename and delete of a pinned root, the ghost create while pinned,
+  the shared key after each.
+- The model (B2-8), alone in its collection.
+- `GraphDocumentTests`: the injected view state; retirement leaves it;
+  a re-seated document revalidates the key it inherits.
+- BaseDocumentViewModelTests / BasesSurfaceTests: the row action's
+  name from core, its seam, the command.
+- `ChordTableTests` / the delivery-evidence census: the new row, its
+  scope, the palette reachability, `Ctrl+[` free elsewhere.
+- The censuses of B2-10.
+- The journey (B2-9), run to its last step locally before every push
+  (the foreground rule).
 
 <!-- end of the graph contracts document -->

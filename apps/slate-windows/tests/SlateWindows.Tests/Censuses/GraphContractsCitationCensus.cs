@@ -67,7 +67,7 @@ public sealed class GraphContractsCitationCensus
             (
                 "B",
                 "## PR B — the Connections leaf",
-                "<!-- end of the graph contracts document -->",
+                "## PR B2 — re-root and Back, Show connections from three surfaces, the shared selection",
                 // The leaf section: the contracts, the decisions, the
                 // divergences, the pins.
                 6_000,
@@ -77,6 +77,18 @@ public sealed class GraphContractsCitationCensus
                 // floor sits one below the measured population and rises with
                 // the records.
                 82),
+            (
+                "B2",
+                "## PR B2 — re-root and Back, Show connections from three surfaces, the shared selection",
+                "<!-- end of the graph contracts document -->",
+                // The re-root section: rule D, the contracts, the decisions,
+                // the divergences, the pins.
+                6_000,
+                // Revision 1 cites existing identifiers only through the
+                // shell, its tests and the core and mac sources it names; B2's
+                // own names are unbackticked until they exist. The floor sits
+                // one below the measured population and rises with the records.
+                26),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
