@@ -6277,6 +6277,27 @@ the sweep. Gates: the crates and the mac sources untouched since c1938c5 (TGB-10
 on three consecutive heads, two passes without a blocker, the last
 pass's ledger landed on the owner's word.
 
+**TGB-14 — CI's failure on 434d6bf, root-caused.** The Windows lanes
+failed on 434d6bf in the MODEL fact alone, 38 s in: "TabActivateOther
+from [Collapsed, Other, Note, Loading, a silent load in flight]: the
+probe issued no reload" — the arrangement's wait for the probe's
+silent reload expired. Not a flake: for the routes with a tab beside
+(the other tab's activation, the close's successor, the group close
+onto another root) the arrangement opens Two while the leaf is
+INACTIVE — the root recorded, no load, STALE — and the leaf's later
+activation issues Two's load (Term 3(b)), which the at-rest path did
+not settle before the presentation's seams armed. The Loading
+presentation's one-shot rejection was armed next and, on CI's timing,
+Two's envelope reached the rewrite first and spent it: the root's own
+first load landed ACCEPTED, a Ready tree current and equal in
+generation, and the probe rightly issued nothing. The same window
+threatened the Audible arm's park and the Error arm's injected failure
+for those routes. Two changes, both in the arrangement: the activation
+is settled before any seam arms (the load it issues lands first), and
+the rejection is bound to the root being arranged — an envelope for
+another root, foreign to the receiver anyway, cannot spend the one
+shot. Gates: only the model's own file changed since 434d6bf, so the suite's, the journey's and the mutations' runs stand; the model alone on a fresh build, 1383 cells in 5 m 51 s; `dotnet format` applied. CI and codoki on the push are the oracle.
+
 ### Tests that pin PR B (slice B1)
 
 - ConnectionsLeafTests: the tree over the shared fixture and the

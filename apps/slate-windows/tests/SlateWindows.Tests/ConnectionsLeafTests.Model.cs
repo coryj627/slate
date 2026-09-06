@@ -772,14 +772,17 @@ public sealed partial class ConnectionsLeafTests
             };
         }
 
-        // The NEXT envelope rejected at the receiver (the Loading presentation
-        // with nothing in flight): the tree's echo names another path.
-        void RejectOnce()
+        // The root's NEXT envelope rejected at the receiver (the Loading
+        // presentation with nothing in flight): the tree's echo names
+        // another path. Bound to the root being arranged, so an envelope
+        // for another root — foreign to the receiver anyway — cannot spend
+        // the one shot.
+        void RejectOnce(string root)
         {
             bool armed = true;
             host.Leaf.EnvelopeForTests = envelope =>
             {
-                if (!armed)
+                if (!armed || !string.Equals(envelope.Token.Request.Root, root, StringComparison.Ordinal))
                 {
                     return envelope;
                 }
@@ -813,7 +816,7 @@ public sealed partial class ConnectionsLeafTests
                         WaitParked();
                         return;
                     }
-                    RejectOnce();
+                    RejectOnce(path);
                     OpenThe(path, newTab);
                     host.Settle();
                     host.Leaf.EnvelopeForTests = null;
@@ -972,6 +975,12 @@ public sealed partial class ConnectionsLeafTests
             return null;
         }
         host.ActivateLeaf();
+        // The activation's own load — Two's, for a route whose tab beside
+        // was opened while the leaf was inactive (Term 3(b)) — LANDS before
+        // any seam arms: CI (434d6bf) spent the one-shot rejection on that
+        // foreign envelope, the root landed Ready and the probe rightly
+        // issued nothing.
+        host.Settle();
         if (cell.Route == Route.SplitSoleTabClose)
         {
             // The note before the split, at rest; the split; Two in the
