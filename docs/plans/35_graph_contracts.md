@@ -7398,6 +7398,85 @@ credential Windows demands of a background process), so the chord
 reached a window that did not yet hold the foreground; the site and
 the shared palette helper now re-assert first. Mutations, each restored byte for byte, each caught by the named fact: the pin loading nothing (the pin fact); a note change under a pin loading (the recorded-change fact); the pop ignoring the installed path (the refusal fact); the rename hook skipping descendants (the folder fact); the delete hook dropping the pin (the prune fact); the boundary replaying an older candidate (the boundary fact); the re-root line gated on the active leaf (the whatever-leaf fact); the key host-composed (the writers census); the entries mutating once retired (the retired fact) — nine, none survived; fifteen in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build, 2255 passed without the model; the model alone, 1383 cells in 5 m 52 s; the accessibility project built and the graph table journey passed twice and the leaf journey once, in the foreground; benchmarks build; CI and codoki on the push are the oracle.
 
+**TGB2-3 — T3: the re-root funnel and Back, the three addressed
+entrances, the open's parameter and its post-gate validation (B2-3,
+B2-5, Terms 12–13; IGL-3, IGL-5, IGL-6).** `ReRootConnectionsOn(path)`
+is Term 12 as design pass II has it: admission (a disposed workspace
+or a retired leaf refuses); the same-root case — already pinned there —
+repairs the shared key through the leaf's `RepairSharedKey`, reveals
+and activates WITHOUT the suppression so B1's own triggers apply,
+consumes the mount and requests the focus, proposing nothing (B2D-6);
+else the PIN MUTATION on the palette's Show shape — under the
+suppression the pane revealed, the leaf activated, the mount consumed
+inert, then the leaf's `PinTo` — followed, in a mutation of its own, by
+the ORDINARY open of the note through `OpenPathCore` with the editor's
+focus request withheld, and the leaf's boundary focus request last
+(IGL-3). Nothing is held across the open; a refused open leaves the pin
+standing (B2D-7). `ConnectionsBack()` is Term 13: admission (live,
+PINNED, a non-empty stack), the ordinary open of the top entry's note
+with the focus withheld — a refusal pops nothing (B2-D5) —,
+RE-ADMISSION after the open (IGL-5), then the POP MUTATION on Show's
+shape and the leaf's `PopTo` with the path the open INSTALLED and the
+Markdown candidate the boundary reconciled. The open: `OpenPathCore` and
+`TryOpenItem` take `requestEditorFocus` (true everywhere but these two
+routes), and `TryOpenItem` validates, after the dirty gate and for
+EVERY open, that the workspace is live, the captured tab's group is
+still the active one, still hosted and still holds the tab — else false
+before any replacement (IGL-6). The entrances: the leaf's
+`Execute(ShowConnections, row)` through the new seam
+`ShowConnectionsFromRow`, enabled exactly when core's vector lists the
+action for the row's kind and the row is file-backed (B-D6 withdrawn:
+`ConnectionsPhrase.ShowConnectionsUnavailable` deleted, the action's
+reason null, the B1 facts that pinned the disabled state now pin the
+enabled one); the table's `ShowConnectionsFromSurface` set to the
+addressed `ReRootGraphRowFromSurface` — `FocusGraphAddress` first, as
+every table action — and the graph document's `Execute` walled for
+EVERY action by `IsRowCurrent`, reference identity in the current
+publication's rows (not `ContainsNode`, which is the snapshot's and
+A-7's — IGK-9); the Bases' new grid row action after Show backlinks,
+named by core's title through the leaf's fetched-once vector
+(`ActionTitle`, installed on the document as `ShowConnectionsTitle` —
+IGI-21), through the per-document seam `ShowConnectionsFromSurface`
+and `BasesShowConnectionsCommand`, both `BasesShowConnectionsFor`,
+which admits the invoking document only while it is the ACTIVE hosted
+one — the docked surface is bound to the active base document, so the
+invoking tab is that document's (a verified deviation from B2-5's
+"the seam carries the source tab": the surface is one docked view, not
+one per tab, and carries no tab; the address is the document's) — and
+`RowCommand` admits a row only while the result the menu was built over
+is the document's current one (IGJ-8), the row activation included.
+Facts: the leaf's entrance (the pin, the note in view, one load, the
+key, the lines in Term 14's order); a refused open leaving the pin
+standing; the same-root case (the key repaired, the leaf activated, no
+push, no line, no load of the route's own); Back opening then popping,
+a refused open popping nothing, FOLLOWING and an empty stack falling
+through; the table's entrance from a split whose other group is active
+(the graph's group focused first, then the pin) and a copied row
+refused by the current-row wall; the re-root's open withholding the
+editor's request and the leaf's request last; an open whose active
+group changed inside the gate installing nothing; the Bases' action
+named by core's title, its entrance refused for a document that is not
+the active one and pinning from the active one with nothing pushed and
+Back falling through (B2-D7), the command sharing the route. Censuses:
+`TheReRootFunnelAndBackAreReachedByTheirEntrancesAlone` (the funnel's
+callers bound: the leaf's installer, the table's wrapper, the Bases'
+route; Back's none until T4; method-group references refused);
+`EveryRowActionGuardsTheRowsCurrencyBeforeItsSeam` (the graph
+document's and the leaf's `Execute` guard `IsRowCurrent`, the Bases
+surface's `RowCommand` the captured result, each before any seam); the
+trigger census's owners for the pin, the pop and the repair. CI on T2's
+push (ab54fa6) failed the shell accessibility gate in the Bases
+journey's FIRST axe scan — three files-tree items and two grid rows
+read on-screen with a null bounding rectangle, and "SizeOfSet and
+PositionInSet" on the tree items — none of them a surface T2 touched;
+root-caused, not a flake: the scan is a snapshot, and a realized but
+not yet arranged item reads on-screen with no rectangle for the
+layout pass's duration — the class the journey's own later wait
+already names for the grid's rows. `AssertAxeClean` now waits, bounded,
+for every on-screen tree item and grid row of the window to have a
+rectangle before every scan; a scan that still fails after the wait is
+a defect. The journey passed three times in the foreground afterwards. Mutations, each restored byte for byte, each caught by the named fact: the pin crossing the open — pinned only after the open succeeded (the refused-open fact); the same-root case pinning again (the same-root fact); Back popping without its open's success (the Back fact — which SURVIVED as first written, since the pop's own guard refuses the unchanged tab either way, and now pins that a refused open runs none of the pop mutation: with the pane collapsed and another leaf active, no pane line, no leaf line, the pane still collapsed); the table's entrance unaddressed (the table fact); the graph document's `Execute` without the current-row wall, and the Bases' `RowCommand` without the captured-result wall (the membership census, both); the open keeping the editor's focus request (the focus fact); the open skipping its post-gate validation (the group-changed fact); the Bases' entrance unaddressed (the Bases fact) — nine, none survived; twenty-four in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build, 2266 passed without the model; the model alone, 1383 cells in 5 m 51 s; the accessibility project built and, in the foreground, the Bases journey passed three times and the graph table and the leaf journeys once each; benchmarks build; CI and codoki on the push are the oracle.
+
 ### Tests that pin PR B2 (revision 5's list; the task loop records what lands)
 
 - `ConnectionsLeafTests.ReRoot.cs`: the pin mutation's order on Show's

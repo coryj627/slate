@@ -1999,7 +1999,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     private void ActivateReadingTag(string tag) =>
         ReadingTagActivated?.Invoke(this, tag);
 
-    private bool OpenPathCore(string path, WorkspaceOpenTarget target)
+    private bool OpenPathCore(string path, WorkspaceOpenTarget target, bool requestEditorFocus = true)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -2007,7 +2007,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         }
 
         WorkspaceItemState item = ItemForPath(path);
-        if (TryOpenItem(item, target))
+        if (TryOpenItem(item, target, requestEditorFocus))
         {
             FileOpened?.Invoke(this, path);
             Persist();

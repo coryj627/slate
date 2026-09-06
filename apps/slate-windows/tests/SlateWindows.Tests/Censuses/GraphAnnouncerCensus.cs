@@ -456,6 +456,8 @@ public sealed class GraphAnnouncerCensus
             // (Term 15): the pin, the pop, the key-moving retarget.
             "Graph/ConnectionsLeafViewModel.cs:WriteSharedKey",
         ];
+        // The leaf's writer is reached by exactly the pin, the pop, the
+        // key-moving retarget and the same-root repair (Term 15).
         var writers = new List<string>();
         var fieldWriters = new List<string>();
         foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)

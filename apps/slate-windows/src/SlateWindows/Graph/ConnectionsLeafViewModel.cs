@@ -284,6 +284,10 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
 
     internal Action<string, WorkspaceOpenTarget>? OpenRowFromSurface { get; set; }
 
+    /// <summary>W6-2 PR B2 (B2-3): the row's Show connections — the
+    /// workspace's re-root funnel, on the row's file-backed path.</summary>
+    internal Action<string>? ShowConnectionsFromRow { get; set; }
+
     internal Action<string>? RevealRowFromSurface { get; set; }
 
     /// <summary>The create funnel, addressed by the LEAF (B-11): the
@@ -597,6 +601,17 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         if (removed > 0)
         {
             OnPropertyChanged(nameof(BackStack));
+        }
+    }
+
+    /// <summary>The same-root re-root's repair of the shared key (Term 12,
+    /// B2D-6; the mac's early return writes the key too): nothing else moves.</summary>
+    public void RepairSharedKey(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (!_retired)
+        {
+            WriteSharedKey(path);
         }
     }
 
@@ -936,20 +951,28 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         {
             GraphRowAction.Open or GraphRowAction.OpenInNewTab => row.Path is not null && OpenRowFromSurface is not null,
             GraphRowAction.Reveal => row.Path is not null && RevealRowFromSurface is not null,
-            GraphRowAction.ShowConnections => false,
+            // W6-2 PR B2 (B2-3; B-D6 withdrawn): core's vector lists the
+            // action for a Note and an Attachment, both file-backed, never
+            // a Ghost — no host predicate on the kind; the seam the
+            // workspace wires is the re-root funnel.
+            GraphRowAction.ShowConnections => row.Path is not null && ShowConnectionsFromRow is not null,
             GraphRowAction.CreateNote => CreateNoteFromSurface is not null && CreateAdmissionReason?.Invoke() is null,
             _ => false,
         };
     }
 
-    /// <summary>B-9 / B-D6: Show connections carries the one B1 reason on
-    /// the menu action alone; Create note the host's admission reason.</summary>
+    /// <summary>B-9: Create note carries the host's admission reason; no
+    /// other action carries one (B-D6 withdrawn in B2).</summary>
     public string? ActionDisabledReason(GraphRowAction action) => action switch
     {
-        GraphRowAction.ShowConnections => ConnectionsPhrase.ShowConnectionsUnavailable,
         GraphRowAction.CreateNote => CreateAdmissionReason?.Invoke(),
         _ => null,
     };
+
+    /// <summary>The title core gives an action (0b-9), from the fetched-once
+    /// Note vector — the Bases' row action reads it (B2-5).</summary>
+    public string ActionTitle(GraphRowAction action) =>
+        _actionsByKind[GraphNodeKind.Note].First(spec => spec.Action == action).Title;
 
     /// <summary>B-9: the ROW's hint is its activation's — T15 for a ghost,
     /// T16 otherwise; a disabled create's reason replaces the ghost's.</summary>
@@ -1004,6 +1027,10 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
                 break;
             case GraphRowAction.Reveal:
                 RevealRowFromSurface!(row.Path!);
+                break;
+            case GraphRowAction.ShowConnections:
+                // Rule D, Term 12: the leaf's entrance to the re-root funnel.
+                ShowConnectionsFromRow!(row.Path!);
                 break;
             case GraphRowAction.CreateNote:
                 CreateNoteFromSurface!(SlateUniffiMethods.GraphGhostNotePath(row.TargetRaw), root, _rootEpoch);

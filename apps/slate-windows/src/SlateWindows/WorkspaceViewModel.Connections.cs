@@ -84,6 +84,7 @@ internal sealed partial class WorkspaceViewModel
             verbosity: () => GraphVerbosity.Standard,
             lifecycleGeneration: () => LifecycleGeneration());
         leaf.OpenRowFromSurface = (path, target) => OpenConnectionsRowFromSurface(path, target);
+        leaf.ShowConnectionsFromRow = path => ReRootConnectionsOn(path);
         leaf.RevealRowFromSurface = path => RevealConnectionsRowFromSurface(path);
         leaf.CreateNoteFromSurface = (path, root, epoch) => CreateConnectionsNoteFromSurface(path, root, epoch);
         leaf.CreateAdmissionReason = () => GraphCreateAdmissionReason?.Invoke();
@@ -186,6 +187,134 @@ internal sealed partial class WorkspaceViewModel
         }
         Connections.Show();
         FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
+    }
+
+    // --- Rule D: the re-root funnel and Back (W6-2 PR B2, Terms 12, 13) --------------
+
+    /// <summary>Term 12 — the ONE re-root funnel, every surface's entrance
+    /// (B2-3): admission first; the same-root case repairs the key, reveals
+    /// and activates WITHOUT the suppression (B1's own triggers apply,
+    /// B2D-6) and proposes nothing; else the PIN MUTATION on the palette's
+    /// Show shape — under the suppression, the pane revealed, the leaf
+    /// activated, the mount consumed inert; then the leaf's <c>PinTo</c>
+    /// (its push, pin, epoch, ONE audible load, the key, the line) and the
+    /// focus request — followed, in a mutation of its own, by the ORDINARY
+    /// open of the note with the editor's focus withheld (IGL-3): nothing
+    /// is held across the open, whose refusal leaves the pin standing (the
+    /// mac's outcome, B2D-7). Returns whether it pinned.</summary>
+    internal bool ReRootConnectionsOn(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (_workspaceDisposed || Connections.IsRetired)
+        {
+            return false;
+        }
+        if (string.Equals(Connections.Pin, path, StringComparison.Ordinal))
+        {
+            // Already pinned here (the mac's early return): the shared key
+            // repaired, the reveal and the activation as B1's triggers say.
+            Connections.RepairSharedKey(path);
+            if (!IsRightPaneVisible)
+            {
+                IsRightPaneVisible = true;
+            }
+            if (!ConnectionsLeafIsActive())
+            {
+                ActiveLeaf = Leaves.First(option => string.Equals(option.Id, ConnectionsLeafId, StringComparison.Ordinal));
+            }
+            ConsumePendingMount();
+            FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
+            return false;
+        }
+        bool pinned = false;
+        RunWorkspaceMutation(() =>
+        {
+            _suppressConnectionsTriggers = true;
+            try
+            {
+                if (!IsRightPaneVisible)
+                {
+                    IsRightPaneVisible = true;
+                }
+                if (!ConnectionsLeafIsActive())
+                {
+                    ActiveLeaf = Leaves.First(option => string.Equals(option.Id, ConnectionsLeafId, StringComparison.Ordinal));
+                }
+                ConsumePendingMount();
+            }
+            finally
+            {
+                _suppressConnectionsTriggers = false;
+            }
+            pinned = Connections.PinTo(path);
+        });
+        if (!pinned)
+        {
+            return false;
+        }
+        // The ordinary open, beside the pin: under the pin the note change
+        // is recorded and loads nothing (Term 11).
+        RunWorkspaceMutation(() => _ = OpenPathCore(path, WorkspaceOpenTarget.CurrentTab, requestEditorFocus: false));
+        FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
+        return true;
+    }
+
+    /// <summary>Term 13 — Back: false (the chord falls through) unless live,
+    /// PINNED and the stack non-empty; then the ORDINARY open of the top
+    /// entry's note with the editor's focus withheld, before anything moves
+    /// — a refusal pops nothing (B2-D5); RE-ADMISSION after the open, since
+    /// its dialog's pump can tear the workspace or the leaf down (IGL-5);
+    /// then the POP MUTATION on Show's shape and the leaf's <c>PopTo</c>
+    /// with the path the open INSTALLED and the Markdown candidate the
+    /// boundary reconciled — the pop proceeds only when the top entry, as
+    /// retargeted, names the installed path (IGL-1, IGK-3) — and the focus
+    /// request. Returns whether it popped.</summary>
+    internal bool ConnectionsBack()
+    {
+        if (_workspaceDisposed || Connections.IsRetired || Connections.Pin is null || Connections.BackStack.Count == 0)
+        {
+            return false;
+        }
+        string target = Connections.BackStack[^1].Effective;
+        bool opened = false;
+        RunWorkspaceMutation(() => opened = OpenPathCore(target, WorkspaceOpenTarget.CurrentTab, requestEditorFocus: false));
+        if (!opened || _workspaceDisposed || Connections.IsRetired)
+        {
+            return false;
+        }
+        string? installed = ActiveGroup.ActiveTab?.Path;
+        string? candidate = ActiveGroup.ActiveTab is { IsMarkdown: true } tab ? tab.Path : null;
+        if (installed is null)
+        {
+            return false;
+        }
+        bool popped = false;
+        RunWorkspaceMutation(() =>
+        {
+            _suppressConnectionsTriggers = true;
+            try
+            {
+                if (!IsRightPaneVisible)
+                {
+                    IsRightPaneVisible = true;
+                }
+                if (!ConnectionsLeafIsActive())
+                {
+                    ActiveLeaf = Leaves.First(option => string.Equals(option.Id, ConnectionsLeafId, StringComparison.Ordinal));
+                }
+                ConsumePendingMount();
+            }
+            finally
+            {
+                _suppressConnectionsTriggers = false;
+            }
+            popped = Connections.PopTo(installed, candidate);
+        });
+        if (popped)
+        {
+            FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
+        }
+        return popped;
     }
 
     /// <summary>Terms 3(d) and 3(g), B-19 (iv): <c>SyncPanels()</c> hands

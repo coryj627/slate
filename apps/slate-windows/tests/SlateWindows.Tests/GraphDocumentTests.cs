@@ -726,9 +726,11 @@ public sealed class GraphDocumentTests
             GraphTableRow note = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note);
             Assert.True(document.IsActionEnabled(GraphRowAction.Open, note));
             Assert.True(document.IsActionEnabled(GraphRowAction.Reveal, note));
-            Assert.False(document.IsActionEnabled(GraphRowAction.ShowConnections, note));
-            document.ShowConnectionsFromSurface = _ => { };
+            // Since W6-2 PR B2 (B2-3) the workspace installs the seam: the
+            // action is enabled for a file-backed row, and only through it.
             Assert.True(document.IsActionEnabled(GraphRowAction.ShowConnections, note));
+            document.ShowConnectionsFromSurface = null;
+            Assert.False(document.IsActionEnabled(GraphRowAction.ShowConnections, note));
             // The inventory did not grow with the rows.
             Assert.Equal(3, document.ActionInventoryCrossings);
         });

@@ -617,7 +617,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         {
             GraphRowAction.Open or GraphRowAction.OpenInNewTab => row.Path is not null && OpenRowFromSurface is not null,
             GraphRowAction.Reveal => row.Path is not null && RevealRowFromSurface is not null,
-            GraphRowAction.ShowConnections => ShowConnectionsFromSurface is not null,
+            GraphRowAction.ShowConnections => row.Path is not null && ShowConnectionsFromSurface is not null,
             GraphRowAction.CreateNote => CreateNoteFromSurface is not null && CreateAdmissionReason?.Invoke() is null,
             _ => false,
         };
@@ -626,10 +626,22 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     public string? ActionDisabledReason(GraphRowAction action) =>
         action == GraphRowAction.CreateNote ? CreateAdmissionReason?.Invoke() : null;
 
+    /// <summary>W6-2 PR B2 (B2-3, IGJ-7, IGK-9): a row acts only while it is
+    /// the SAME object in the current publication's rows — a cached menu
+    /// item over a row a republish dropped (a name or kind overlay keeps the
+    /// node in the snapshot, so <see cref="GraphPublication.ContainsNode"/>,
+    /// A-7's revalidation check, is not this wall) acts on nothing. The
+    /// class TGB-9 walled in the Connections leaf.</summary>
+    public bool IsRowCurrent(GraphTableRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        return Publication.Rows.Any(current => ReferenceEquals(current, row));
+    }
+
     public void Execute(GraphRowAction action, GraphTableRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
-        if (_retired || !IsActionEnabled(action, row))
+        if (_retired || !IsRowCurrent(row) || !IsActionEnabled(action, row))
         {
             return;
         }

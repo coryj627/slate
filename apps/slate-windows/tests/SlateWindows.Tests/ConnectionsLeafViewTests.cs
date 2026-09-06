@@ -542,8 +542,9 @@ public sealed class ConnectionsLeafViewTests
                 string[] titles = [.. menu.Items.Cast<MenuItem>().Select(i => (string)i.Header)];
                 Assert.Equal(host.Leaf.ActionSpecs(GraphNodeKind.Note).Select(s => s.Title), titles);
                 MenuItem show = menu.Items.Cast<MenuItem>().Single(i => (string)i.Header == host.Leaf.ActionSpecs(GraphNodeKind.Note).Single(s => s.Action == GraphRowAction.ShowConnections).Title);
-                Assert.False(show.IsEnabled);
-                Assert.Equal(ConnectionsPhrase.ShowConnectionsUnavailable, AutomationProperties.GetHelpText(show));
+                // Since B2 (B-D6 withdrawn): enabled, its help text the title.
+                Assert.True(show.IsEnabled);
+                Assert.Equal((string)show.Header, AutomationProperties.GetHelpText(show));
                 // The ROW's hint is its activation's, never the action's reason (B-9).
                 Assert.Equal(ConnectionsPhrase.NoteHint, note.Hint);
                 MenuItem open = menu.Items.Cast<MenuItem>().First();

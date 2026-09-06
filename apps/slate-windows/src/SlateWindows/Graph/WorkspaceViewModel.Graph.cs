@@ -124,6 +124,7 @@ internal sealed partial class WorkspaceViewModel
             isSeated: () => created is not null && ReferenceEquals(_graphDocument, created));
         created = document;
         document.OpenRowFromSurface = (row, target) => OpenGraphRowFromSurface(row.Path!, target);
+        document.ShowConnectionsFromSurface = row => ReRootGraphRowFromSurface(row);
         document.RevealRowFromSurface = path => RevealGraphRowFromSurface(path);
         document.CreateNoteFromSurface = path => CreateGraphNoteFromSurface(path);
         document.CreateAdmissionReason = () => GraphCreateAdmissionReason?.Invoke();
@@ -304,6 +305,21 @@ internal sealed partial class WorkspaceViewModel
             _announce(new A11yEvent.OpenedFile(System.IO.Path.GetFileName(path)));
         }
         return opened;
+    }
+
+    /// <summary>W6-2 PR B2 (B2-3, IGI-4): the table's Show connections,
+    /// ADDRESSED — the graph tab and its group made active first, as every
+    /// table action is (A-8; the mac's <c>focusOwningGroup()</c> before
+    /// <c>perform</c>), then the workspace's re-root funnel on the row's
+    /// path. False when no graph tab exists (a stale address).</summary>
+    internal bool ReRootGraphRowFromSurface(GraphTableRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        if (row.Path is not { } path || !FocusGraphAddress())
+        {
+            return false;
+        }
+        return ReRootConnectionsOn(path);
     }
 
     /// <summary>Make the graph's group and tab active, synchronously —

@@ -822,6 +822,15 @@ public sealed class ShellAccessibilityTests
 
     internal static void AssertAxeClean(Process process, string surface)
     {
+        // The scan is a snapshot, and a realized-but-unarranged tree item or
+        // grid row reads on-screen with a null rectangle for the layout
+        // pass's duration: CI failed the Bases journey's first scan that way
+        // on W6-2 PR B2's second push (three files-tree items and two grid
+        // rows, none of them changed by the push), the class the journey's
+        // own later wait already names. Every scan now waits, bounded, for
+        // the realized items' rectangles; a scan that still fails after the
+        // wait is a defect, not a race.
+        WaitForRealizedItemBounds(process);
         var config = Config.Builder.ForProcessId(process.Id).Build();
         var output = ScannerFactory.CreateScanner(config).Scan(null);
         Assert.NotEmpty(output.WindowScanOutputs);
@@ -842,6 +851,41 @@ public sealed class ShellAccessibilityTests
                 errors.Select(error =>
                     $"{error.Rule.ID}: {error.Rule.Description}; " +
                     string.Join(", ", error.Element.Properties))));
+    }
+
+    /// <summary>Wait, bounded, until every on-screen TreeItem and DataItem
+    /// of the process's main window has a non-empty bounding rectangle —
+    /// the layout has arranged what it realized — before an axe scan.</summary>
+    private static void WaitForRealizedItemBounds(Process process)
+    {
+        using var automation = new UIA3Automation();
+        Window? window = automation
+            .GetDesktop()
+            .FindFirstChild(automation.ConditionFactory.ByProcessId(process.Id))
+            ?.AsWindow();
+        if (window is null)
+        {
+            return;
+        }
+        _ = SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    return window
+                        .FindAllDescendants(automation.ConditionFactory
+                            .ByControlType(ControlType.TreeItem)
+                            .Or(automation.ConditionFactory.ByControlType(ControlType.DataItem)))
+                        .All(item =>
+                            item.Properties.IsOffscreen.ValueOrDefault
+                            || !item.Properties.BoundingRectangle.ValueOrDefault.IsEmpty);
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return false;
+                }
+            },
+            TimeSpan.FromSeconds(10));
     }
 
     private static object DescribeAxeError(Axe.Windows.Automation.ScanResult error) => new

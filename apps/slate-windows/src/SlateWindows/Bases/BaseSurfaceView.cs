@@ -691,26 +691,36 @@ internal sealed class BaseSurfaceView : UserControl
             new()
             {
                 Name = "Open",
-                Execute = row => RowCommand(row, (m, r) => m.OpenRowFromSurface?.Invoke(r)),
+                Execute = row => RowCommand(row, result, (m, r) => m.OpenRowFromSurface?.Invoke(r)),
             },
             new()
             {
                 Name = "Copy link",
-                Execute = row => RowCommand(row, (m, r) => m.CopyLinkFromSurface?.Invoke(r)),
+                Execute = row => RowCommand(row, result, (m, r) => m.CopyLinkFromSurface?.Invoke(r)),
             },
             new()
             {
                 Name = "Show backlinks",
-                Execute = row => RowCommand(row, (m, r) => m.ShowBacklinksFromSurface?.Invoke(r)),
-            },
-            new()
-            {
-                Name = "Edit property",
-                Execute = _ => OnEditSelectedPropertyRequested(),
-                IsVisible = _ => result.Columns.Any(column =>
-                    BaseCellEditPolicy.PropertyKey(column) is not null),
+                Execute = row => RowCommand(row, result, (m, r) => m.ShowBacklinksFromSurface?.Invoke(r)),
             },
         };
+        if (model.ShowConnectionsTitle is { } showConnections)
+        {
+            // W6-2 PR B2 (B2-5): the mac's reserved row action (Bases gap
+            // O15), named by core's title, after Show backlinks.
+            rowActions.Add(new()
+            {
+                Name = showConnections,
+                Execute = row => RowCommand(row, result, (m, r) => m.ShowConnectionsFromSurface?.Invoke(r)),
+            });
+        }
+        rowActions.Add(new()
+        {
+            Name = "Edit property",
+            Execute = _ => OnEditSelectedPropertyRequested(),
+            IsVisible = _ => result.Columns.Any(column =>
+                BaseCellEditPolicy.PropertyKey(column) is not null),
+        });
         _grid.Bind(
             columns,
             rows,
@@ -724,7 +734,7 @@ internal sealed class BaseSurfaceView : UserControl
             // the dispatcher — a synchronous producer here could do
             // neither (red team round 1), and nothing subscribes the
             // substrate's ExportProduced in production.
-            rowActivated: row => RowCommand(row, (m, r) => m.OpenRowFromSurface?.Invoke(r)));
+            rowActivated: row => RowCommand(row, result, (m, r) => m.OpenRowFromSurface?.Invoke(r)));
         _grid.SetSortIndicator(model.SortState);
         _grid.CurrentRowChanged -= OnCurrentRowChanged;
         _grid.CurrentRowChanged += OnCurrentRowChanged;
@@ -994,12 +1004,16 @@ internal sealed class BaseSurfaceView : UserControl
     }
 
     private void RowCommand(
-        object row, Action<BaseDocumentViewModel, BasesRow> body)
+        object row, BasesResultSet result, Action<BaseDocumentViewModel, BasesRow> body)
     {
         // The C13 admission the menu commands already respect (codex
         // round 5: context-menu row actions reached the coordinator
-        // from a Loading surface's stale rows).
+        // from a Loading surface's stale rows) — and the RESULT the menu
+        // was built over must still be the document's current one (W6-2
+        // PR B2, IGJ-8): a republish while the menu is open makes its
+        // captured row stale, the class TGB-9 walled in the leaf.
         if (Model is { State: BaseLoadState.Ready or BaseLoadState.Degraded } model
+            && ReferenceEquals(model.Result, result)
             && row is BaseGridRowViewModel bound)
         {
             model.SelectedRow = bound.Row;
