@@ -782,7 +782,9 @@ public sealed partial class ConnectionsLeafTests
             bool armed = true;
             host.Leaf.EnvelopeForTests = envelope =>
             {
-                if (!armed || !string.Equals(envelope.Token.Request.Root, root, StringComparison.Ordinal))
+                if (!armed
+                    || envelope is not { Token.Request.Root: { } envelopeRoot }
+                    || !string.Equals(envelopeRoot, root, StringComparison.Ordinal))
                 {
                     return envelope;
                 }
