@@ -180,6 +180,7 @@ public sealed class ConnectionsLeafCensus
         // reference to either an offence, an unbound call to either refused.
         var recorders = new List<string>();
         var reconcilers = new List<string>();
+        var funnels = new List<string>();
         foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
             SemanticModel model = ShellCompilation.ModelFor(source);
@@ -195,13 +196,28 @@ public sealed class ConnectionsLeafCensus
                 {
                     reconcilers.Add($"{relative}:{OwnerOf(call)}");
                 }
+                // The funnel that owns the leaf's ONE NoteChanged call (pass
+                // 5, IPB-31): reached only by the recorder outside a mutation
+                // and by the boundary's reconciler — a direct call would pass
+                // the buffering.
+                if (methods.Any(method => method.Name == "ReconcileConnectionsRootTo"))
+                {
+                    funnels.Add($"{relative}:{OwnerOf(call)}");
+                }
             }
         }
         Assert.Equal(["WorkspaceViewModel.cs:SyncPanels"], recorders);
         Assert.Equal(["WorkspaceViewModel.Persistence.cs:RunWorkspaceMutation"], reconcilers);
-        string[] offenders = [.. ProtectedReferences(["SyncConnectionsRoot", "ReconcileConnectionsRoot"], TheWorkspaceType)];
-        Assert.True(offenders.Length == 0, "the root's recorder or reconciler is reached other than by a bound call:\n" + string.Join("\n", offenders));
+        Assert.Equal(["WorkspaceViewModel.Connections.cs:SyncConnectionsRoot", "WorkspaceViewModel.Connections.cs:ReconcileConnectionsRoot"], funnels);
+        string[] offenders = [.. ProtectedReferences(["SyncConnectionsRoot", "ReconcileConnectionsRoot", "ReconcileConnectionsRootTo"], TheWorkspaceType)];
+        Assert.True(offenders.Length == 0, "the root's recorder, reconciler or funnel is reached other than by a bound call:\n" + string.Join("\n", offenders));
     }
+
+    /// <summary>A call the compilation binds to the workspace's named method
+    /// (IPB-32): a same-suffixed name elsewhere is not it.</summary>
+    private static bool IsWorkspaceMethod(SemanticModel model, InvocationExpressionSyntax call, string name) =>
+        Candidates(model.GetSymbolInfo(call)).OfType<IMethodSymbol>()
+            .Any(method => method.Name == name && method.ContainingType.ToDisplayString() == TheWorkspaceType);
 
     /// <summary>The consume, BOUND (IPB-18): the workspace's own method; an
     /// invocation the compilation cannot bind is not a consume.</summary>
@@ -387,9 +403,17 @@ public sealed class ConnectionsLeafCensus
                 // every path from the assignment to the member's exit passes a
                 // consume — over Roslyn's control-flow graph, so a `return`
                 // between the two is the offence it is.
-                bool consumes = scope is not null && ConsumePostDominates(ShellCompilation.ModelFor(source), scope, assignment);
-                bool insideMutation = assignment.Ancestors().OfType<InvocationExpressionSyntax>()
-                    .Any(call => CSharpSource.Normalize(call.Expression).EndsWith("RunWorkspaceMutation", StringComparison.Ordinal));
+                SemanticModel model = ShellCompilation.ModelFor(source);
+                bool consumes = scope is not null && ConsumePostDominates(model, scope, assignment);
+                // Inside the mutation's OWN delegate (pass 5, IPB-32): the
+                // reveal sits in an anonymous function that is an argument of
+                // a call the compilation binds to the workspace's
+                // RunWorkspaceMutation — a call whose name merely ends that
+                // way binds to something else and exempts nothing.
+                bool insideMutation = assignment.Ancestors().OfType<AnonymousFunctionExpressionSyntax>()
+                    .Any(function => function.Parent is ArgumentSyntax argument
+                        && argument.Parent?.Parent is InvocationExpressionSyntax call
+                        && IsWorkspaceMethod(model, call, "RunWorkspaceMutation"));
                 // The setter itself is the arm, not a route.
                 bool isTheSetter = scope is AccessorDeclarationSyntax && relative == "WorkspaceViewModel.cs";
                 if (!consumes && !insideMutation && !isTheSetter)
@@ -399,7 +423,7 @@ public sealed class ConnectionsLeafCensus
             }
             foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                if (CSharpSource.Normalize(call.Expression).EndsWith("SeedInitialConnectionsMount", StringComparison.Ordinal)
+                if (IsWorkspaceMethod(ShellCompilation.ModelFor(source), call, "SeedInitialConnectionsMount")
                     && relative == "WorkspaceViewModel.cs"
                     && OwnerOf(call) == "<ctor>")
                 {
@@ -420,21 +444,30 @@ public sealed class ConnectionsLeafCensus
     {
         var gated = new List<string>();
         var ungated = new List<string>();
-        foreach ((string relative, CSharpSource source) in ShellSources())
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
             if (!relative.StartsWith("Graph/", StringComparison.Ordinal) || relative == "Graph/GraphAnnouncer.cs")
             {
                 continue;
             }
+            SemanticModel model = ShellCompilation.ModelFor(source);
             foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                string callee = CSharpSource.Normalize(call.Expression);
-                bool carriesCount = call.ArgumentList.Arguments.Any(a => a.Expression.ToString().Contains("GraphFilterCount", StringComparison.Ordinal));
-                if (callee.EndsWith("AnnounceGatedFilterCount", StringComparison.Ordinal))
+                // BOUND (pass 5, IPB-33): the callee is the relay's own method
+                // and the argument's TYPE is the filter-count event — a local
+                // alias carries the type the text hid; a relay call the
+                // compilation cannot bind is refused rather than trusted.
+                IMethodSymbol[] relayMethods = [.. Candidates(model.GetSymbolInfo(call)).OfType<IMethodSymbol>()
+                    .Where(method => method.ContainingType.ToDisplayString() == "SlateWindows.Graph.GraphAnnouncer")];
+                bool unboundRelayCall = relayMethods.Length == 0
+                    && CalleeName(call).StartsWith("Announce", StringComparison.Ordinal)
+                    && !Candidates(model.GetSymbolInfo(call)).Any();
+                bool carriesCount = call.ArgumentList.Arguments.Any(argument => IsTheFilterCountEvent(model.GetTypeInfo(argument.Expression).Type));
+                if (relayMethods.Any(method => method.Name == "AnnounceGatedFilterCount"))
                 {
                     gated.Add($"{relative}:{OwnerOf(call)}");
                 }
-                else if (carriesCount && (callee.EndsWith("Announce", StringComparison.Ordinal) || callee.EndsWith("AnnounceIfEffective", StringComparison.Ordinal)))
+                else if (carriesCount && (relayMethods.Length > 0 || unboundRelayCall))
                 {
                     ungated.Add($"{relative}:{OwnerOf(call)}");
                 }
@@ -443,6 +476,11 @@ public sealed class ConnectionsLeafCensus
         Assert.Equal(["Graph/GraphDocumentViewModel.cs:AnnounceFilterCountIfEffective"], gated);
         Assert.Empty(ungated);
     }
+
+    /// <summary>The bindings' <c>GraphA11yEvent.GraphFilterCount</c>, by its
+    /// bound type (IPB-33).</summary>
+    private static bool IsTheFilterCountEvent(ITypeSymbol? type) =>
+        type is { Name: "GraphFilterCount", ContainingType.Name: "GraphA11yEvent" };
 
     /// <summary>B-13: the leaf body is gated on the leaf id, hosts the view
     /// bound to the workspace's public document, and the generic placeholder

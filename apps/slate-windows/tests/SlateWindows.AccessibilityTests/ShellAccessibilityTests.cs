@@ -8604,6 +8604,24 @@ public sealed class ShellAccessibilityTests
                 SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && IsDescendantOf(focused, contentPane), TimeSpan.FromSeconds(10)),
                 $"Left from the leaf did not land in the editor; focus is {DescribeFocusedElement(automation)}");
 
+            // Directional ENTRY (Term 9, B-13; pass 5's IPB-30): Right from
+            // the editor crosses the named right-pane boundary and lands on
+            // the leaf's anchor — the tree, which has rows — not on the rail.
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.RIGHT);
+            Assert.True(
+                SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && (focused.Equals(tree) || IsDescendantOf(focused, tree)), TimeSpan.FromSeconds(10)),
+                $"Right from the editor did not land in the leaf's tree; focus is {DescribeFocusedElement(automation)}");
+
+            // Right from INSIDE the tree is the boundary's terminal: the
+            // shell posts its line and focus stays in the tree — it never
+            // falls through to the editor-geometry route.
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.RIGHT);
+            Assert.False(
+                SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && !focused.Equals(tree) && !IsDescendantOf(focused, tree), TimeSpan.FromSeconds(2)),
+                $"Right from inside the tree moved focus out of the leaf; focus is {DescribeFocusedElement(automation)}");
+
             AssertAxeClean(process, "graph-connections");
         }
         finally

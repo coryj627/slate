@@ -6237,6 +6237,46 @@ conversation as the owner's ledger with their dispositions rather than
 as further commits: precedent applied; the owner may overrule, and on
 the owner's word they land as one commit.
 
+**TGB-13 — The fifth pass's ledger, discharged by the owner's word.** On
+2026-09-06 the owner said the word ("Fix the open ledger items") and
+the five items of TGB-12's ledger landed as one commit, each with its
+fact and its mutation: (IPB-29) admission and registration in the
+always-async primitive are ONE transition under the work lock — a
+shutdown lands either before the check, and nothing is registered, or
+after the registration, and the drain waits for the placeholder, never
+between; the caller can be parked before the admission
+(`BeforeRegisterForTests`), and the barrier fact
+`AShutdownBeforeTheAdmissionRegistersNothingAndTheComputeNeverStarts`
+shuts the scheduler down while the caller is parked there, over a
+prerequisite that never completes (so a placeholder registered after
+the flip would stay tracked and be seen): nothing tracked, the drain
+already complete, the compute never started. (IPB-30) the journey
+`GraphConnections_LeafWalkDepthAndReRoot_AreClean` drives directional
+ENTRY — Right from the editor crosses the named boundary and lands in
+the leaf's tree, the anchor when it has rows, not on the rail — and the
+boundary's terminal — Right from inside the tree keeps focus in the
+tree, the shell's line posted, no fall-through to the editor-geometry
+route. (IPB-31) the recorder and reconciler census inventories the
+funnel that owns the leaf's one `NoteChanged` call: bound, its callers
+are exactly the recorder outside a mutation and the boundary's
+reconciler, and a method-group reference to it is an offence. (IPB-32)
+the reveal census exempts a reveal only inside an anonymous function
+that is an argument of a call the compilation binds to the workspace's
+own `RunWorkspaceMutation`, and finds the seed by the same binding — a
+same-suffixed name elsewhere exempts nothing. (IPB-33) the gated-filter
+census binds the callee to the relay's own methods and the argument's
+TYPE to the bindings' filter-count event, so a local alias carries what
+the text hid; a relay call the compilation cannot bind is refused.
+Mutations, each restored byte for byte, each caught by the named fact:
+the admission outside the lock — the check before the seam, the
+registration after (the barrier fact); the funnel called directly from
+Show (the recorder census); a reveal under a helper named to end in
+RunWorkspaceMutation (the reveal census); the filter count through a
+typed local (the gated census) — four, none survived; seventy-seven in
+the sweep. Gates: the crates and the mac sources untouched since c1938c5 (TGB-10's cargo runs stand); `dotnet format` applied; the whole Windows test project on a fresh build, 2239 passed without the model; the model alone, 1383 cells in 5 m 52 s; the accessibility project built and the extended leaf journey passed twice in the foreground, 14 s each; benchmarks build; CI and codoki on the push are the oracle. The loop's record closes here: the gate met
+on three consecutive heads, two passes without a blocker, the last
+pass's ledger landed on the owner's word.
+
 ### Tests that pin PR B (slice B1)
 
 - ConnectionsLeafTests: the tree over the shared fixture and the

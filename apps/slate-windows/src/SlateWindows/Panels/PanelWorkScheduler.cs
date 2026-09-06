@@ -247,6 +247,13 @@ internal abstract class PanelWorkScheduler : BindableBase
         {
             _ = _pendingWork.Add(work);
         }
+        WatchTracked(work);
+    }
+
+    /// <summary>The tracked task's removal, and its fault counted, once
+    /// it completes.</summary>
+    private void WatchTracked(Task work)
+    {
         _ = work.ContinueWith(
             completed =>
             {
@@ -314,19 +321,30 @@ internal abstract class PanelWorkScheduler : BindableBase
     {
         ArgumentNullException.ThrowIfNull(compute);
         ArgumentNullException.ThrowIfNull(apply);
-        if (_isShutDown)
-        {
-            return;
-        }
+        // Test seam: the caller parked BEFORE the admission, so a fact can
+        // shut the scheduler down here and prove nothing is tracked after
+        // the flip.
+        BeforeRegisterForTests?.Invoke();
         // The registration PRECEDES the worker (codex post-implementation
         // pass 3, IPB-13): an async method's synchronous prefix queues the
         // pool body before it returns its task, so tracking that task
         // afterwards left a window in which a drain on another thread saw
         // an empty set while a compute was live. A placeholder joins the
-        // tracked set first, under the lock, and completes — faulted or
-        // not — when the real task does.
+        // tracked set first and completes — faulted or not — when the real
+        // task does. Admission and registration are ONE transition under
+        // the work lock (pass 5, IPB-29): a shutdown lands either before
+        // the check, and nothing is registered, or after the registration,
+        // and the drain waits for the placeholder — never between.
         var registered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        TrackWork(registered.Task);
+        lock (_workLock)
+        {
+            if (_isShutDown)
+            {
+                return;
+            }
+            _ = _pendingWork.Add(registered.Task);
+        }
+        WatchTracked(registered.Task);
         _ = RunAlwaysAsync(compute, apply).ContinueWith(
             completed =>
             {
@@ -347,6 +365,8 @@ internal abstract class PanelWorkScheduler : BindableBase
     }
 
     internal Action? AfterScheduleForTests { get; set; }
+
+    internal Action? BeforeRegisterForTests { get; set; }
 
     private async Task RunAlwaysAsync<T>(Func<T> compute, Action<T> apply)
     {

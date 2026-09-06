@@ -249,6 +249,40 @@ public sealed class PanelWorkSchedulerTests
         });
     }
 
+    /// <summary>IPB-29 (pass 5's ledger): a shutdown that lands while a caller
+    /// is inside the primitive and BEFORE its admission registers nothing —
+    /// the check and the registration are one locked transition — so a drain
+    /// after the flip has nothing to wait for and the compute never starts.
+    /// The body would park on an uncompleted prerequisite, so a placeholder
+    /// registered after the flip would stay tracked and be seen.</summary>
+    [Fact]
+    public void AShutdownBeforeTheAdmissionRegistersNothingAndTheComputeNeverStarts()
+    {
+        WithPumpedContext(pump =>
+        {
+            var probe = new Probe(synchronousForTests: false);
+            var prerequisite = new TaskCompletionSource();
+            probe.GateWorkOn(prerequisite.Task);
+            using var parked = new ManualResetEventSlim(false);
+            using var release = new ManualResetEventSlim(false);
+            probe.BeforeRegisterForTests = () =>
+            {
+                parked.Set();
+                Assert.True(release.Wait(TimeSpan.FromSeconds(10)), "the caller was never released");
+            };
+            Task caller = Task.Run(() => probe.Run());
+            Assert.True(parked.Wait(TimeSpan.FromSeconds(10)), "the caller never reached the seam");
+            probe.Shutdown();
+            release.Set();
+            caller.GetAwaiter().GetResult();
+            Assert.Equal(0, probe.PendingWorkForTests);
+            Assert.True(probe.DrainAll().IsCompleted, "a drain after the flip waited for something");
+            prerequisite.SetResult();
+            Assert.Null(probe.ComputeThread);
+            Assert.Equal(0, probe.Applies);
+        });
+    }
+
     /// <summary>IPA-5: a teardown after the compute finished and before the
     /// apply was dispatched skips the apply — the tracked task still
     /// completes, so the drain returns.</summary>
