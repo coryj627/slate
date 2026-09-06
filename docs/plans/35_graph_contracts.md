@@ -7519,6 +7519,103 @@ from the mac catalog with no recorded reason, which is that test doing
 its work: the targeted filter never reached it, the gate did.
 Mutations, each restored byte for byte, each caught by the named fact: the view firing on any chord with Control SET rather than Control alone (the view fact, through `Ctrl+Alt+[`); the view marking the event handled without a pop (the view fact, through the FOLLOWING fall-through); the row registered in the Global scope (the row fact); the resolver entry deleted (which SURVIVED its first run, filtered to the drift tests — those scrape resolver BODIES for menu drift and never ask whether a registered id resolves at all; rerun under `RegistryHoldsExactlyTheDeclaredCatalog_BothDirections`, the P13(a) fact that holds the registered set and the resolvable set equal, caught — the record names the covering fact so the sweep's filter is not mistaken for the coverage); the seam installer's Back line deleted (the funnel-caller census) — five, none survived a covering fact; twenty-nine in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build — 2267 passed and the mac-catalog parity test failed on the undispositioned id, then, the disposition added, 2268 passed on a fresh build; the model alone, 1383 cells in 5 m 48 s; the accessibility project built and, in the foreground, the leaf journey and the graph table journey passed; benchmarks build; CI and codoki on the push are the oracle.
 
+**TGB2-5 — T5: the model over rule D (B2-8, B2-10 vi; IGI-7, IGJ-12,
+IGK-20, IGL-1, IGL-3, IGL-5, IGL-6, IGL-7).** Three families, each an
+executable derivation with its totals as literals. (i) The first family
+is B1's model with a MODE dimension: every B1 route crossed with
+FOLLOWING and IGJ-12's three literal pinned arrangements — PinnedFresh
+(pin Deep, note in view the pin, stack `[(FOLLOWING, Two)]`),
+PinnedDrifted (pin Deep, note in view the orphan or none or the graph
+tab beside Two, stack `[(FOLLOWING, Two), (Hub, Hub)]`), PinnedNoOrigin
+(pinned from the graph tab, whose tab the pin's open replaced in place,
+A-9; stack empty) — the presentation and the load in flight the PIN's
+(a transient failure ahead of its load; its first load parked or its
+first envelope rejected; a missing path; its FOLDER moved while the leaf
+was inactive for the stale one), and five routes joined for Term 16's
+hooks over the entries and the note in view with a file and a folder
+(RenameOrigin, DeleteOrigin, RenameNoteInView, RenameFolder,
+DeleteFolder). The derivation under a pin: a note-in-view route keeps
+the shell's lines, loads nothing, leaves the pin, and lets the load in
+flight apply and speak iff audible and ACTIVE AT APPLY (Term 11; the
+graph document drained inside the drive so its lines precede the
+leaf's); the rename and delete routes act on the pin — a moved pin is
+Term 3(d)'s root move, one audible load while active and mounted else
+stale, the key following; a deleted pin is kept, its entries pruned,
+the probe's silent reload leaving Error; a missing pin lives in no
+folder, so the folder routes are the probe's alone. The state compared
+after every route gained the pin, the note in view, the WHOLE stack
+(IGI-7), the shared key (core's stable key of the pin — cleared by a
+graph document's revalidation once the pin is missing or deleted, A-7),
+the pending mount and the last focus request. Its literals: 25,200
+cells, 17,162 named as not states of the system, 8,038 driven — 1,501
+FOLLOWING (B1's 1,383 and the two folder routes' 118) and 6,537 pinned
+— in ~46 minutes. (ii) The second
+family: the re-root and Back product — the mode, the pane, the leaf, the
+note in view, the ENTRANCE (the leaf's row, the table's row, the Bases
+grid's row, the funnel for the canvas and base targets no fixture
+surface lists), the TARGET (a note, an attachment, the pin itself, a
+canvas, a base) and the GATE (clean; a dirty tab whose dialog pumps a
+real dispatcher frame and discards; one that cancels) — Term 14's order
+derived: the table's addressing `TabFocused` when a note was in view
+(nothing pushed FOLLOWING, B2-D7; the pin pushed under a pin), the
+reveal's lines, the re-root's line, the open's `TabFocused` only when a
+tab is created from none or the target's own tab beside is activated
+(an open lands IN PLACE over the tab in view whatever its kind — a
+note's, the graph's, a base's), the summary or the failure at apply; a
+refused open leaves the pin and the note in view; a canvas or base
+target leaves no Markdown candidate (IGL-1); the same-root case repairs
+the key, reveals and activates as B1's triggers say (a mount loads, a
+switch to a current leaf does not) with no push and no line — and, from
+a note beside a WARM graph tab, the table's re-activation summary lands
+beside the leaf's load in either order (two pool fetches; compared as a
+set). Back: FOLLOWING or an empty stack falls through; a refused open
+pops nothing; else the open (`TabFocused` from no tab), the reveal, the
+line, one load, the prior mode restored. Its literals: 5,760 cells,
+5,352 named, 408 driven in under two minutes. (iii) The third
+family: the composed routes crossed with the mode, each an in-dialog
+action through the model's gate seam (IGK-20) or a particular source,
+target or load — the pin, an entry and the just-pushed origin renamed
+and deleted inside the dialog (a file and a folder; the open installs
+the path it was built for, B2-D10; a parked pin load speaks the tree it
+fetched before the action and the probe's mark reloads it silently
+once); Back with the reserved note renamed inside its open (nothing
+pops, B2-D5); a re-entrant re-root and Back from the dialog (the gate
+asked twice); the pin's load and Deeper's prior load completing inside
+the open; the pin's and the pop's load failing (the failure line); the
+focus request landing before the apply (Term 9's line) and after it,
+with the editor never asked and the leaf's boundary the last request
+(IGL-3); an image as the source; a canvas and a base restored by Back as
+prior pins (IGL-1); a canvas origin (nothing pushed); a cold and a warm
+graph tab as the source; a retirement, a tab change, a group change (the
+pane-focus command asks for the editor, as everywhere; the open installs
+nothing, IGL-6), a tab close, a depth change and a probe inside the
+open; a rename of the pin with the graph document alive, absent and
+re-seated (IGL-7). Its literals: 128 cells, 33 named, 95 driven in
+half a minute. Corrections the runs forced, all to the
+MODEL: the pin's open replaces the graph's tab in place, so PinnedNoOrigin
+has no graph tab to close and a ghost or a re-root from the graph tab
+posts no `TabFocused`; the sole tab's close in a split asks no editor
+focus; a warm graph tab re-activated by the table's address speaks its
+activation summary, a replaced one never; the model's tab lookup reads
+the active group alone (the first run aborted on a lookup across
+groups). One finding for the OWNER, recorded in the model's own text:
+when the pin's own tab is the one in view, the rename hook's fetch —
+issued before `SyncPanels()` by Term 16's frozen order — races the
+panels' first read of the renamed note, which stages core's
+MetadataTouched and moves the generation (`graph.rs`, `apply_batch`),
+so the probe's mark reloads the tree silently once when the fetch landed
+first: one load or two, the pool's order, no line either way. The model
+accepts both for those cells and names the race; deferring the hook's
+load past the panels' sync would remove it, but the frozen text places
+the hook before the sync, so the shell stands and the owner may
+overrule. Runtime: the first family drives ~6,500 pinned cells in ~40
+minutes beside Following's ~5 (the assembly disables xunit parallelism),
+so CI gains a lane of its own for the model (`windows-model`, "app
+model (windows x64)", mirroring the suite lane's setup, the aggregate
+gate needing all four) and the suite lane excludes the model's facts;
+SLATE_MODEL_ONLY narrows a development or mutation run, which then
+asserts no divergence and no totals. Mutations, each restored byte for byte, each caught by a model family (the first family narrowed to the cells that see it, through SLATE_MODEL_ONLY): a note change transitioning the root under a pin (the first family, PinnedFresh's RootChange cells); the pin pushing nothing (the second family's stacks); the pop ignoring the installed path (the third family's Back with the reserved note renamed); the rename hook leaving the entries (the first family, PinnedFresh's RenameOrigin cells); the delete hook dropping a pin under the deleted path (the first family, PinnedFresh's DeleteRoot cells); the funnel's open asking for the editor's focus (the second family's IGL-3 wall); the open skipping its post-gate validation (the third family's group change inside the dialog) — seven, none survived; thirty-six in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build without the model, 2268 passed; the three model facts alone, 48 m 33 s, every cell agreeing and every total its literal; the accessibility project built and, in the foreground, the leaf journey and the graph table journey passed; benchmarks build; CI — the suite lane, the new model lane and the gate — and codoki on the push are the oracle.
+
 ### Tests that pin PR B2 (revision 5's list; the task loop records what lands)
 
 - `ConnectionsLeafTests.ReRoot.cs`: the pin mutation's order on Show's
