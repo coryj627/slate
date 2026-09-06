@@ -183,7 +183,7 @@ Each PR section lists: **Goal · Consumes · Builds · Behavior pinned · Tests 
 
 **Tests.** `ConnectionsLeafTests` (tree shape, depth, re-root/back, ghost create, active-note follow), FlaUI `GraphConnections_LeafWalkDepthAndReRoot_AreClean` (axe `graph-connections`). **§W-A:** the tree over the corpus byte-identical.
 
-**Evidence / acceptance.** From a note, the user opens Connections, hears the neighbourhood summary, walks in/out links two hops deep, re-roots on a neighbour and comes back. Matrix rows: the three connections ids ✓; `w_c_matrix.md` "Graph connections leaf (W6-2 PR B)".
+**Evidence / acceptance.** From a note, the user opens Connections, hears the neighbourhood summary, walks in/out links two hops deep, re-roots on a neighbour and comes back. Matrix rows: the four connections ids ✓ (B1's three and B2's `slate.graph.connectionsBack` — amended with §PR B2, B2-4); `w_c_matrix.md` "Graph connections leaf (W6-2 PR B)".
 
 **Hand-off.** The leaf's re-root seam, read by D's diagram selection sync.
 
@@ -279,7 +279,7 @@ Each PR section lists: **Goal · Consumes · Builds · Behavior pinned · Tests 
 | §W-D | graph family in `corpus.json` + both census mirrors; the trigger-parity table | 0a; closed F |
 | §W-G | audit register seeded (§2), closed by re-grep | 0a/0b; closed F |
 | §K | snapshot marshalling (A) + layout driver and renderer (D) with P's budgets asserted | A, D; recorded F |
-| Matrix | 12 command rows + the `connections` leaf row + the surface row + `chords.json` delivery evidence | per PR; regenerated F |
+| Matrix | 13 command rows (12 of the mac's catalogue and B2's `slate.graph.connectionsBack`, §PR B2 B2-4) + the `connections` leaf row + the surface row + `chords.json` delivery evidence | per PR; regenerated F |
 | Human AT | `reports/w6_2_graph_at_checklist.md` | F (release residual) |
 
 ### 5.4 Branching and review
