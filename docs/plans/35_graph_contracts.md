@@ -6198,6 +6198,45 @@ restored active records the root and loads nothing. Gates: the crates and the ma
 Mutations, each restored byte for byte, each caught by the named fact:
 the reveal through the graph surface's address (`RevealFromTheLeafReachesTheSidebarWithNoGraphTab`); the create worker without its dispatcher (`ACreateCompletionAbortedByTheDispatchersShutdownWithdrawsItsPromise`); the factory call inside a lambda (`ExactlyOneGraphRelayIsConstructedInTheShell`); a recorder through a delegate (`SyncPanelsIsTheOnlyRecorderAndTheBoundaryTheOnlyReconciler`); and three the MODEL alone catches — a rejected echo leaving the flag set, a silent load's summary spoken, Deeper at the bound loading (`TheModelOfTermsTwoToNineDerivesEveryRoutesTimelineAcrossEveryState`) — seven, none survived; seventy-three in the sweep.
 
+**TGB-12 — The standing gate MET on e823752, the fifth codex pass, the
+stop.** On e823752 every CI lane passed (thirteen checks, the shell
+accessibility gate among them), codoki APPROVED the head ("no issues
+found") and the PR carried zero unresolved threads: the gate the
+program names was met on that head, as it had been on c1938c5 before
+it. The fifth codex pass at xhigh over that commit returned no blocker,
+five majors and no minor, IPB-29..33, each verified: (IPB-29, A-2,
+reopening IPB-13) the always-async entry reads the shutdown flag
+outside the work lock and registers its placeholder under it, so a
+caller past the check when the flip lands registers after a drain has
+reported the set empty — refuted as a hazard: the teardown flips BEFORE
+it drains (the leaf's Retire shuts the scheduler down, then the
+workspace drains it) and every later gate — the prerequisite's, the
+pool's under the lock, the apply's — refuses the body, so nothing runs,
+the placeholder completes at once and the drain's report is true; the
+atomic check-and-register is a tidy-up worth a barrier fact. (IPB-30,
+B-10, B-13, Term 9, reopening IPB-3) the model's focus entry is the
+document's own call (`FocusEntered`, the boundary's one call, censused),
+WPF focus being nothing the pumped host can drive: the journey drives
+LEFT from the tree and Show's landing, not directional ENTRY from the
+editor nor RIGHT from the leaf (the shell's terminal line) — a journey
+gap, two chord steps. (IPB-31, B-19 (iv), reopening IPB-28)
+`ReconcileConnectionsRootTo` owns the one `NoteChanged` call and is not
+inventoried: a new partial could call it directly, past the buffering —
+a census gap, the IPB-28 shape applied to it. (IPB-32, B-19 (iii),
+reopening IPB-18) the reveal census exempts a reveal under any
+invocation whose text ENDS in `RunWorkspaceMutation`, and finds the seed
+by the same suffix — bind both to the workspace's symbols. (IPB-33,
+B-19 (ii), Term 10) the gated-filter census recognises the filter-count
+event by the argument's TEXT, so a local alias would pass it — bind the
+argument's type. Five verification items, no product defect. The loop's
+findings ran five, six, seven, ten and five across the passes, their
+blockers two, one, one, none and none: the gate met on two consecutive
+heads and two consecutive passes without a blocker — by the standing
+precedent (TGA-13) the fifth pass's findings are carried in the PR
+conversation as the owner's ledger with their dispositions rather than
+as further commits: precedent applied; the owner may overrule, and on
+the owner's word they land as one commit.
+
 ### Tests that pin PR B (slice B1)
 
 - ConnectionsLeafTests: the tree over the shared fixture and the
