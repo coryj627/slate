@@ -1243,6 +1243,13 @@ public sealed partial class ConnectionsLeafTests
                 }, TimeSpan.FromSeconds(10)),
                 $"{cell}: the probe issued no reload");
             WaitParked();
+            // The graph document's own silent refresh, which the same probe
+            // issued, is the ARRANGEMENT's: drained here (the leaf's fetch
+            // stays parked), so a refresh still in flight cannot revalidate
+            // the shared key against a snapshot older than the route's move
+            // (CI, 35ed323: a pinned rename beside the graph tab lost its key
+            // to the pre-rename snapshot once, in Release).
+            SettleTheGraph(host);
         }
 
         // The route's props after the note.
@@ -1641,6 +1648,9 @@ public sealed partial class ConnectionsLeafTests
                     }, TimeSpan.FromSeconds(10)),
                     $"{cell}: the probe issued no reload");
                 WaitParked();
+                // The graph document's own refresh is the arrangement's (see
+                // the FOLLOWING arrangement): drained before the route.
+                SettleTheGraph(host);
             }
         }
 
@@ -2101,7 +2111,7 @@ public sealed partial class ConnectionsLeafTests
                 }
                 if (loads != expected.Loads && loads != expected.LoadsOr)
                 {
-                    mismatch.Add($"loads {loads}, derived {expected.Loads}{(expected.LoadsOr is { } or ? $" or {or}" : string.Empty)}");
+                    mismatch.Add($"loads {loads}, derived {expected.Loads}{(expected.LoadsOr is { } alternative ? $" or {alternative}" : string.Empty)}");
                 }
                 if (!timeline.SequenceEqual(host.Timeline))
                 {

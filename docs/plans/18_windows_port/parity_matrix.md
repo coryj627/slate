@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-09-06 at `0f00f22` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-09-06 at `148a339` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -222,7 +222,7 @@ The palette surface itself (ranking via the W0.5-1 core engine, sections, recent
 | `outline` | #734 (W4-2) | implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + MainWindow leaf body; `RightPanePanelsTests` + FlaUI `RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates` |
 | `backlinks` | #734 (W4-2) | implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + MainWindow leaf body; `RightPanePanelsTests` + FlaUI `RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates` |
 | `outgoingLinks` | #734 (W4-2) | implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + MainWindow leaf body; `RightPanePanelsTests` + FlaUI `RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates` |
-| `connections` | #746 (W6-2) | pending |
+| `connections` | #746 (W6-2) | implemented 2026-09-06 (#746, W6-2 PR B1 + B2): `ConnectionsLeafViewModel` (its own document over the workspace's one relay and one view state) + `ConnectionsLeafView` leaf body; re-root from the leaf's, the table's and the Bases grid's rows and Back (`Ctrl+[`); `ConnectionsLeafTests` (rule C's and rule D's facts and the three model families) + `ConnectionsLeafViewTests` + `ConnectionsReRootBasesTests` + FlaUI `GraphConnections_LeafWalkDepthAndReRoot_AreClean` |
 | `embeds` | #734 (W4-2) | implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + shared `EditorEmbedPreviewView` cards; `RightPanePanelsTests` + FlaUI `RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates` |
 | `math` | #729 (W3-2) | pending |
 | `code` | #731 (W3-4) | pending |

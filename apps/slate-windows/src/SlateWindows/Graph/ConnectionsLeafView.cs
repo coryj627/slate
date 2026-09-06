@@ -200,6 +200,7 @@ internal sealed class ConnectionsLeafView : UserControl
     private const string OutgoingGroupId = "group:out";
 
     private readonly ConnectionsTree _tree;
+    private readonly ContextMenu _rowMenu = new();
     private readonly TextBlock _heading;
     private readonly TextBlock _summary;
     private readonly ComboBox _depth;
@@ -280,6 +281,13 @@ internal sealed class ConnectionsLeafView : UserControl
         _tree.KeyDown += OnTreeKeyDown;
         _tree.MouseDoubleClick += OnTreeDoubleClick;
         _tree.GotKeyboardFocus += (_, e) => OnFocusEntered(e);
+        // The row menu EXISTS from construction and is MUTATED per request,
+        // never replaced (the grid's rule, `AccessibleDataGrid`): WPF decides
+        // whether to open on the Menu key, Shift+F10 or a right-click by the
+        // menu that exists when the request arrives, and a menu first
+        // assigned inside ContextMenuOpening is too late for that request —
+        // the Menu key on a row opened nothing (W6-2 PR B2's journey, T6).
+        _tree.ContextMenu = _rowMenu;
         _tree.AddHandler(ContextMenuOpeningEvent, new ContextMenuEventHandler(OnRowContextMenuOpening), handledEventsToo: false);
 
         var panel = new DockPanel();
@@ -303,6 +311,14 @@ internal sealed class ConnectionsLeafView : UserControl
     }
 
     internal TreeView TreeForTests => _tree;
+
+    /// <summary>The tree's persistent row menu (the grid's rule).</summary>
+    internal ContextMenu RowMenuForTests => _rowMenu;
+
+    /// <summary>What a request for the row's menu leaves in the persistent
+    /// menu: the titles, in core's order; empty when the row has none.</summary>
+    internal IReadOnlyList<string> RebuildRowMenuForTests(ConnectionsRowViewModel row) =>
+        RebuildRowMenu(row) ? [.. _rowMenu.Items.OfType<MenuItem>().Select(item => (string)item.Header)] : [];
 
     internal IReadOnlyList<ConnectionsRowViewModel> RootsForTests => _roots;
 
@@ -412,6 +428,7 @@ internal sealed class ConnectionsLeafView : UserControl
     /// second wall.</summary>
     private void DropRows()
     {
+        _rowsReplaced = true;
         foreach (ConnectionsRowViewModel root in _roots)
         {
             Release(root);
@@ -436,7 +453,74 @@ internal sealed class ConnectionsLeafView : UserControl
 
     // --- Rendering -------------------------------------------------------------------
 
+    /// <summary>A render that REPLACES the rows (a root change, a same-root
+    /// refresh, a state) under keyboard focus would drop focus to the
+    /// window with the row it was on: the leaf keeps focus inside itself —
+    /// on its anchor, the selected or first row when it has rows, the
+    /// state's host otherwise — so a re-root's or Back's request that landed
+    /// before the load applied (Term 9's line) still ends in the leaf
+    /// (IGL-3; W6-2 PR B2's journey, T6: Back's pop issues its load after
+    /// its open, so the boundary request lands on the rows the pop
+    /// replaces).</summary>
     private void Render()
+    {
+        bool inside = _tree.IsKeyboardFocusWithin || _anchor.IsKeyboardFocusWithin;
+        _rowsReplaced = false;
+        RenderCore();
+        if (inside && _rowsReplaced)
+        {
+            KeepFocusInside();
+        }
+    }
+
+    private bool _rowsReplaced;
+
+    /// <summary>The anchor, at once, then again after the layout pass and
+    /// after the generator's when the first attempt could not land: the
+    /// selected or first row's container REALIZED (the anchor's own route,
+    /// <see cref="FocusAnchor"/> — a group row's id is no occurrence id, so
+    /// the pending-focus delivery cannot carry it), or the state's host. The
+    /// containers of a tree just made visible are not always there to
+    /// realize at once — the journey's pop landed on the window one run in
+    /// three without the retries — and WPF leaves keyboard focus on the
+    /// element that collapsed, so focus on an invisible element counts as
+    /// lost.</summary>
+    private void KeepFocusInside()
+    {
+        if (TryFocusInside())
+        {
+            return;
+        }
+        RetryFocusInside(attempts: 3);
+    }
+
+    private void RetryFocusInside(int attempts)
+    {
+        if (attempts <= 0)
+        {
+            return;
+        }
+        _ = Dispatcher.BeginInvoke(attempts == 3 ? DispatcherPriority.Loaded : DispatcherPriority.Background, () =>
+        {
+            bool inside = IsKeyboardFocusWithin && Keyboard.FocusedElement is UIElement { IsVisible: true };
+            if (!inside && !TryFocusInside())
+            {
+                RetryFocusInside(attempts - 1);
+            }
+        });
+    }
+
+    private bool TryFocusInside()
+    {
+        if (_tree.Visibility == Visibility.Visible && _roots.Count > 0)
+        {
+            ConnectionsRowViewModel target = _tree.SelectedItem as ConnectionsRowViewModel ?? _roots[0];
+            return RealizeContainer(target) is { } container && container.Focus();
+        }
+        return _anchor.Focus();
+    }
+
+    private void RenderCore()
     {
         ConnectionsLeafViewModel? model = Model;
         if (model is null)
@@ -531,6 +615,7 @@ internal sealed class ConnectionsLeafView : UserControl
 
     private void Rebuild(ConnectionsLeafViewModel model, GraphConnectionsTree tree, NoteLoadBundle? bundle)
     {
+        _rowsReplaced = true;
         var snippetsIn = new Dictionary<string, string>(StringComparer.Ordinal);
         var snippetsOut = new Dictionary<string, string>(StringComparer.Ordinal);
         if (bundle is not null)
@@ -653,7 +738,6 @@ internal sealed class ConnectionsLeafView : UserControl
         }
         ConnectionsRowViewModel? current = _tree.SelectedItem as ConnectionsRowViewModel;
         bool alt = (Keyboard.Modifiers & ModifierKeys.Alt) != 0;
-        bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
         Key key = e.Key == Key.System ? e.SystemKey : e.Key;
         if (key == Key.Return && current is { Row: not null })
         {
@@ -672,11 +756,12 @@ internal sealed class ConnectionsLeafView : UserControl
             JumpGroup(key == Key.Down);
             e.Handled = true;
         }
-        else if (key == Key.Apps || (key == Key.F10 && shift))
-        {
-            OpenRowMenu(current);
-            e.Handled = true;
-        }
+        // The Menu key and Shift+F10 are WPF's: its popup service raises
+        // ContextMenuOpening on the focused row and opens the tree's
+        // persistent menu (the grid's route, `AccessibleDataGrid`). B1 opened
+        // a menu of its own here as well and marked the key handled, and the
+        // two answers to the one key left NO menu open on the Menu key
+        // (W6-2 PR B2's journey, T6).
     }
 
     private void JumpGroup(bool down)
@@ -699,27 +784,36 @@ internal sealed class ConnectionsLeafView : UserControl
         }
     }
 
+    /// <summary>WPF's request for the tree's menu (the Menu key, Shift+F10,
+    /// a right-click): a POINTER request targets the row under the cursor
+    /// and gets no menu over a group header or empty chrome; the keyboard
+    /// request (cursor coordinates -1) targets the selected row. The
+    /// persistent menu's items are rebuilt from that row.</summary>
     private void OnRowContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
-        if (Model is null)
+        bool pointerRequest = e.CursorLeft >= 0 || e.CursorTop >= 0;
+        ConnectionsRowViewModel? row = pointerRequest
+            ? (e.OriginalSource as FrameworkElement)?.DataContext as ConnectionsRowViewModel
+            : _tree.SelectedItem as ConnectionsRowViewModel;
+        if (Model is null || row?.Row is null || !RebuildRowMenu(row))
         {
-            return;
-        }
-        if (e.OriginalSource is FrameworkElement { DataContext: ConnectionsRowViewModel { Row: not null } row } element)
-        {
-            element.ContextMenu = BuildRowMenu(row);
+            e.Handled = true;
         }
     }
 
-    private void OpenRowMenu(ConnectionsRowViewModel? row)
+    /// <summary>The persistent menu MUTATED to the row's actions (never
+    /// replaced): the items of <see cref="BuildRowMenu"/> moved across.</summary>
+    private bool RebuildRowMenu(ConnectionsRowViewModel row)
     {
-        if (row?.Row is null || Model is null)
+        ContextMenu built = BuildRowMenu(row);
+        _rowMenu.Items.Clear();
+        while (built.Items.Count > 0)
         {
-            return;
+            object item = built.Items[0];
+            built.Items.RemoveAt(0);
+            _ = _rowMenu.Items.Add(item);
         }
-        ContextMenu menu = BuildRowMenu(row);
-        menu.PlacementTarget = RealizeContainer(row) ?? (UIElement)_tree;
-        menu.IsOpen = true;
+        return _rowMenu.Items.Count > 0;
     }
 
     /// <summary>B-9: core's action inventory for the row's kind, in

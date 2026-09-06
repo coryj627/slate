@@ -774,7 +774,7 @@ public sealed partial class ConnectionsLeafTests
                 }
                 if (loads != expected.Loads && loads != expected.LoadsOr)
                 {
-                    mismatch.Add($"loads {loads}, derived {expected.Loads}{(expected.LoadsOr is { } or ? $" or {or}" : string.Empty)}");
+                    mismatch.Add($"loads {loads}, derived {expected.Loads}{(expected.LoadsOr is { } alternative ? $" or {alternative}" : string.Empty)}");
                 }
                 if (!TimelinesAgree(host.Timeline, timeline, expected.Unordered))
                 {

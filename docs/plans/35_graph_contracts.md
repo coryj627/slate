@@ -7616,6 +7616,54 @@ gate needing all four) and the suite lane excludes the model's facts;
 SLATE_MODEL_ONLY narrows a development or mutation run, which then
 asserts no divergence and no totals. Mutations, each restored byte for byte, each caught by a model family (the first family narrowed to the cells that see it, through SLATE_MODEL_ONLY): a note change transitioning the root under a pin (the first family, PinnedFresh's RootChange cells); the pin pushing nothing (the second family's stacks); the pop ignoring the installed path (the third family's Back with the reserved note renamed); the rename hook leaving the entries (the first family, PinnedFresh's RenameOrigin cells); the delete hook dropping a pin under the deleted path (the first family, PinnedFresh's DeleteRoot cells); the funnel's open asking for the editor's focus (the second family's IGL-3 wall); the open skipping its post-gate validation (the third family's group change inside the dialog) — seven, none survived; thirty-six in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build without the model, 2268 passed; the three model facts alone, 48 m 33 s, every cell agreeing and every total its literal; the accessibility project built and, in the foreground, the leaf journey and the graph table journey passed; benchmarks build; CI — the suite lane, the new model lane and the gate — and codoki on the push are the oracle.
 
+**TGB2-6 — T6: the journey continues, the matrices (B2-9, B2-11; B2-3,
+B2-4, IGI-4).** `GraphConnections_LeafWalkDepthAndReRoot_AreClean` gains
+its second half: Show connections on the healed incoming row through
+the MENU key and the row's actions (the item named by core's title,
+live, invoked) — the heading moves to Alpha, the tree re-roots and
+takes focus, the summary's text changes; `Ctrl+[` from inside the tree
+— the heading and the summary return to the created note's; `Ctrl+[`
+again with nothing to pop — the heading unchanged, focus kept; Open
+Graph, the Beta row's actions through the Menu key and the table's Show
+connections — the leaf re-roots on Beta and takes focus; axe over
+`graph-connections` after the re-root. The Bases' route stays the
+document-seam fact's (`TheBasesShowConnectionsIsAddressedByTheActiveDocument`),
+a base fixture in the journey being PR-scope creep. The journey found
+two defects of B1's VIEW, both fixed here and each pinned: (i) the Menu
+key on a row opened NOTHING — the leaf assigned the row's menu inside
+ContextMenuOpening, too late for the request WPF raised it for (the
+grid's own adversarial round 4, `AccessibleDataGrid`'s comment,
+repeated), and answered the key a second time from the tree's key
+handler, marking it handled; now the tree carries ONE persistent
+`ContextMenu` from construction, mutated per request from the row the
+request targets (a pointer's row, or the selected row for the keyboard;
+a group header or empty chrome gets none) and the Menu key and
+Shift+F10 are WPF's alone (`TheRowMenuExistsFromConstructionAndTheMenuKeyIsWpfs`);
+(ii) after Back the focused element was the WINDOW: the pop issues its
+load after its open, so the boundary request landed on the rows the pop
+then replaced and WPF dropped focus with them — the re-root escaped it
+only because its load precedes its open; now a render that replaces
+the rows under keyboard focus keeps focus inside the leaf, at once and
+again after the layout pass and the generator's (the selected or first
+row's container REALIZED, the anchor's own route — a group row's id is
+no occurrence id, so the pending-focus delivery could not carry it, the
+first attempt's trap — or the state's host; focus left on a collapsed
+element counts as lost), the journey its witness. One observation for
+the owner: the state's host, Term 9's anchor when the leaf has no rows,
+is a `Border`, which projects no automation peer — focus on it reads as
+the window to UIA; B1's journey never lands there, and this one does
+not either. The matrices: `parity_matrix.md`'s leaf row for
+`connections` implemented through the generator's delivered leaves,
+naming the leaf's documents, the three entrances, Back and the
+evidence (`ConnectionsLeafTests` with the model families,
+`ConnectionsLeafViewTests`, `ConnectionsReRootBasesTests`, the
+journey); `w_c_matrix.md`'s "Graph connections leaf (W6-2 PR B)" row
+— the keyboard route's Show connections live on a note row from the
+three surfaces and `Ctrl+[`, the notification contract's
+`GraphReRooted` in Term 14's order, the automated evidence's rule D
+facts, the three families and the journey's continuation;
+`chords.json` unchanged since T4's projection. Mutations, each restored byte for byte: the row menu assigned only inside the opening event again (the view fact); the tree answering the Menu key itself again (the view fact); the focus keep-alive removed (the JOURNEY, run as the covering fact through the runner's project seam, the shell rebuilt and driven for real); and the keep-alive's deferred retries removed — which SURVIVED the journey once, after which the journey without them failed on the pop's focus one run in three and passed three in three with them back: the retries stay, a timing-bound witness the record names rather than a mutation the sweep counts. Three caught; thirty-nine in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build without the model — 2268 passed and the W-C evidence census refused an evidence name that named a partial file, not a fact; the names corrected, 2269 passed; the three model facts alone, 49 m 2 s; the accessibility project built and, in the foreground, the leaf journey — its second half included — and the graph table journey passed three times in a row; benchmarks build; CI — the suite lane, the model lane and the gate — and codoki on the push are the oracle.
+
 ### Tests that pin PR B2 (revision 5's list; the task loop records what lands)
 
 - `ConnectionsLeafTests.ReRoot.cs`: the pin mutation's order on Show's

@@ -599,4 +599,51 @@ public sealed class ConnectionsLeafViewTests
             }
         });
     }
+
+    /// <summary>W6-2 PR B2 (T6, the journey's finding): the row menu EXISTS
+    /// from construction as the tree's own — WPF opens the menu that exists
+    /// when the Menu key, Shift+F10 or a right-click arrives, and a menu
+    /// first assigned inside the opening event is too late for that request
+    /// (the grid's rule) — its items rebuilt per request from the row in
+    /// core's order; and the tree's own key handler leaves the Menu key to
+    /// WPF (B1 answered it twice, and the two answers left nothing open).</summary>
+    [Fact]
+    public void TheRowMenuExistsFromConstructionAndTheMenuKeyIsWpfs()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("persistent-menu");
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                ContextMenu menu = view.RowMenuForTests;
+                Assert.Same(menu, view.TreeForTests.ContextMenu);
+                ConnectionsRowViewModel note = view.RootsForTests[1].Children.First(r => r.Row!.Kind == GraphNodeKind.Note);
+                Assert.Equal(host.Leaf.ActionSpecs(GraphNodeKind.Note).Select(s => s.Title), view.RebuildRowMenuForTests(note));
+                Assert.Same(menu, view.TreeForTests.ContextMenu);
+                // A second request rebuilds the SAME menu: the items are new,
+                // the menu is not.
+                Assert.Equal(host.Leaf.ActionSpecs(GraphNodeKind.Note).Select(s => s.Title), view.RebuildRowMenuForTests(note));
+                Assert.Same(menu, view.TreeForTests.ContextMenu);
+
+                // The Menu key through the tree: not handled here — WPF's
+                // popup service owns it.
+                note.IsSelected = true;
+                var apps = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window)!, 0, Key.Apps)
+                {
+                    RoutedEvent = Keyboard.KeyDownEvent,
+                };
+                view.TreeForTests.RaiseEvent(apps);
+                Assert.False(apps.Handled);
+                Assert.False(menu.IsOpen);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
 }
