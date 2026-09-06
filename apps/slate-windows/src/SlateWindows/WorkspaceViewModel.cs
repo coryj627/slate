@@ -2075,6 +2075,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         RetargetBaseDocuments(source, destination);
         // Same reason, same shape, for the canvas registry (CD-32).
         RetargetCanvasDocuments(source, destination);
+        // W6-2 PR B2 (rule D, the rename hook; B2D-9): the Connections
+        // leaf's pin, note in view and every stack entry move by the same
+        // predicate — a retarget of the PIN is Term 3(d)'s root move with
+        // the classification the funnel uses.
+        Connections.Retarget(source, destination, ConnectionsActiveAndMounted());
 
         Persist();
         // A rename that touched the ACTIVE tab changed its Path in
@@ -2189,6 +2194,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
         _closedTabs.RemoveAll(entry =>
             IsPathBacked(entry.Item) && IsSameOrDescendantPath(entry.Item.Path, invalidated));
+        // W6-2 PR B2 (rule D, the delete hook; B2D-9): the leaf's stack
+        // entries under the deleted path are pruned, so Back never opens a
+        // note that is gone; the pin and the note in view are kept (the
+        // Error presentation, B1's delete route).
+        Connections.Prune(invalidated);
         RaiseCommandStates();
         Persist();
         if (affected > 0)

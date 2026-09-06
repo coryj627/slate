@@ -7336,6 +7336,68 @@ groups — with A-1's NAME rule kept under `Graph/`, where it belongs: a
 canvas's text `Filter` or the workspace's `Mode` elsewhere is its own,
 which the first run found). Mutations, each restored byte for byte, each caught by the named fact: retirement clearing the key (the retirement fact); a second `GraphViewState` constructed in the document factory (the instance census); the table view writing the key itself (the writers census); `SelectRow` without its snapshot guard, and a document seated unconditionally (the refusal fact, both); a mutable `GraphFilter` field under another name in the workspace's graph partial (the no-shadow census) — six, none survived. Gates: `dotnet format` clean; the whole Windows test project on a fresh build, 2245 passed without the model; the model alone, 1383 cells in 5 m 52 s; the accessibility project built and the leaf journey passed in the foreground, 14 s; benchmarks build (its one document construction takes the view state); CI and codoki on the push are the oracle.
 
+**TGB2-2 — T2: the root mode on the leaf's document, the two hooks, the
+boundary once (B2-2, Terms 11, 13, 15, 16; IGL-2).** The leaf takes the
+workspace's view state at construction and gains rule D's state —
+`Pin` (null while FOLLOWING), `NoteInView` (recorded in both modes),
+`Root` now the EFFECTIVE root, and `BackStack` of `(the prior pin or
+null, the effective root at the push)` — with the root transition of
+Term 3(d) factored out of `NoteChanged`, which records the note in view
+and returns under a pin: no epoch, no load, no STALE, the selection
+kept. The entries: `PinTo(path)` pushes the effective root if there is
+one, pins, runs the transition with the leaf active by the pin
+mutation's construction (one audible load, no classification computed
+— IGK-2), writes the shared key through core's stable-key crossing and
+posts `GraphReRooted` with the file name through the new named seam
+`AnnounceReRooted`, unconditionally (Term 14; the seam census's leaf
+inventory gains it, IGK-18); `PopTo(installedPath, candidate)` re-reads
+the top entry and pops only when its effective root names the path the
+open INSTALLED — the candidate, the Markdown-only note in view, is set
+separately, so a restored `.canvas` or `.base` pin compares against the
+tab installed (IGL-1) — then restores the mode and runs the transition
+with one load, the key and the line the restored node's; `Retarget(source,
+destination, activeAndMounted)` moves the pin, the note in view and
+every entry by the same-or-descendant rule, a moved PIN being Term
+3(d)'s root move with the classification the workspace passes and the
+shared key following it only while it was the pin's (IGJ-10, IGJ-11,
+IGL-7); `Prune(source)` drops the entries under the path and keeps the
+pin (B2D-9). Every entry refuses without mutation once retired. The
+workspace: `NewConnectionsLeaf` hands the view state; `RetargetPath`
+calls the rename hook before its `SyncPanels()` with the one
+classification producer the funnel shares (`ConnectionsActiveAndMounted`);
+`InvalidatePath` calls the delete hook; and the boundary is corrected —
+`SyncPanelsAtTheBoundary` keeps the root RECORDED through the
+boundary's own sync and reconciles once with the LAST candidate, so an
+older candidate a nested sync recorded inside a pump is never replayed
+over the note the mutation installed (IGL-2; B-19 (iv)'s "reconciled
+once" brought to the code, recorded as B2's fix to B1's mechanics).
+Facts (`ConnectionsLeafTests.ReRoot.cs`): the pin's push, pin, epoch,
+one load, key, crossing and lines; a note change under a pin recorded
+and loading nothing; the pop restoring FOLLOWING on the opened note and
+a prior pin, each with one load; the pop refused when the top does not
+name the installed note, when FOLLOWING and when the stack is empty;
+the rename hook over a folder, the drifted key left alone, the note in
+view moved; the delete hook; every entry refusing once retired; the
+line posted whatever the active leaf; and the boundary reconciling
+once — a rename landed inside the open's dirty dialog (the test host's
+dirty-navigation decision runs `RetargetPath`, whose nested sync
+records the old candidate) followed by the open of another note: one
+transition, one load, the opened note's root. Censuses: the trigger
+census's four new protected names with their callers (the hooks the
+workspace's, the pin and the pop the funnels' — T3); the recorder
+census pins `SyncPanelsAtTheBoundary` as the reconciler's one caller
+and the runner as its own; the writers census admits the leaf's one
+FFI-backed writer and requires its right-hand side to bind to the
+stable-key crossing (a host-composed prefix is the offence). CI on T1's
+push (b89ca8a) failed the shell accessibility gate in PR A's graph
+table journey at its FIRST chord — "CommandPaletteSearch did not become
+available" — root-caused, not a flake: the journey pressed the palette
+chord after a best-effort SetForeground without the foreground
+re-assertion the leaf journey uses (a synthesized key grants the input
+credential Windows demands of a background process), so the chord
+reached a window that did not yet hold the foreground; the site and
+the shared palette helper now re-assert first. Mutations, each restored byte for byte, each caught by the named fact: the pin loading nothing (the pin fact); a note change under a pin loading (the recorded-change fact); the pop ignoring the installed path (the refusal fact); the rename hook skipping descendants (the folder fact); the delete hook dropping the pin (the prune fact); the boundary replaying an older candidate (the boundary fact); the re-root line gated on the active leaf (the whatever-leaf fact); the key host-composed (the writers census); the entries mutating once retired (the retired fact) — nine, none survived; fifteen in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build, 2255 passed without the model; the model alone, 1383 cells in 5 m 52 s; the accessibility project built and the graph table journey passed twice and the leaf journey once, in the foreground; benchmarks build; CI and codoki on the push are the oracle.
+
 ### Tests that pin PR B2 (revision 5's list; the task loop records what lands)
 
 - `ConnectionsLeafTests.ReRoot.cs`: the pin mutation's order on Show's

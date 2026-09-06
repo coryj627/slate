@@ -8251,8 +8251,12 @@ public sealed class ShellAccessibilityTests
             window.SetForeground();
             window.Focus();
 
-            // The chordless row, through the palette (contract A-12).
-            window.SetForeground();
+            // The chordless row, through the palette (contract A-12). The
+            // FIRST chord after launch needs the foreground credential a
+            // synthesized key grants (CI on W6-2 PR B2's first push failed
+            // here: the chord reached a window that did not yet hold the
+            // foreground — the leaf journey's rule, TGB2-2).
+            ReassertForegroundForAChord(window);
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
             AutomationElement search = WaitForElement(window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
             search.Patterns.Value.Pattern.SetValue("Open Graph");
@@ -8675,7 +8679,7 @@ public sealed class ShellAccessibilityTests
     /// label typed, the row selected, Enter.</summary>
     private static void RunPaletteCommand(Window window, UIA3Automation automation, string label)
     {
-        window.SetForeground();
+        ReassertForegroundForAChord(window);
         PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
         AutomationElement search = WaitForElement(window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
         search.Patterns.Value.Pattern.SetValue(label);

@@ -98,6 +98,12 @@ public sealed class ConnectionsLeafCensus
             ("Shown", ["WorkspaceViewModel.Connections.cs:OnLeafShown"]),
             ("Show", ["WorkspaceViewModel.Connections.cs:ShowConnections"]),
             ("NoteChanged", ["WorkspaceViewModel.Connections.cs:ReconcileConnectionsRootTo"]),
+            // Rule D's entries (W6-2 PR B2, B2-2): the pin and the pop are
+            // the funnels' (T3); the rename and delete hooks the workspace's.
+            ("PinTo", []),
+            ("PopTo", []),
+            ("Retarget", ["WorkspaceViewModel.cs:RetargetPath"]),
+            ("Prune", ["WorkspaceViewModel.cs:InvalidatePath"]),
             ("Probe", ["WorkspaceViewModel.Connections.cs:ProbeConnections"]),
             ("Deeper", ["WorkspaceViewModel.Connections.cs:ConnectionsDeeperCommand"]),
             ("Shallower", ["WorkspaceViewModel.Connections.cs:ConnectionsShallowerCommand"]),
@@ -181,6 +187,7 @@ public sealed class ConnectionsLeafCensus
         var recorders = new List<string>();
         var reconcilers = new List<string>();
         var funnels = new List<string>();
+        var boundarySyncs = new List<string>();
         foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
             SemanticModel model = ShellCompilation.ModelFor(source);
@@ -204,12 +211,20 @@ public sealed class ConnectionsLeafCensus
                 {
                     funnels.Add($"{relative}:{OwnerOf(call)}");
                 }
+                // The boundary's sync (W6-2 PR B2, IGL-2): the panels synced
+                // with the root RECORDED, then reconciled once — called by
+                // the mutation runner's boundary and nothing else.
+                if (methods.Any(method => method.Name == "SyncPanelsAtTheBoundary"))
+                {
+                    boundarySyncs.Add($"{relative}:{OwnerOf(call)}");
+                }
             }
         }
         Assert.Equal(["WorkspaceViewModel.cs:SyncPanels"], recorders);
-        Assert.Equal(["WorkspaceViewModel.Persistence.cs:RunWorkspaceMutation"], reconcilers);
+        Assert.Equal(["WorkspaceViewModel.Connections.cs:SyncPanelsAtTheBoundary"], reconcilers);
+        Assert.Equal(["WorkspaceViewModel.Persistence.cs:RunWorkspaceMutation"], boundarySyncs);
         Assert.Equal(["WorkspaceViewModel.Connections.cs:SyncConnectionsRoot", "WorkspaceViewModel.Connections.cs:ReconcileConnectionsRoot"], funnels);
-        string[] offenders = [.. ProtectedReferences(["SyncConnectionsRoot", "ReconcileConnectionsRoot", "ReconcileConnectionsRootTo"], TheWorkspaceType)];
+        string[] offenders = [.. ProtectedReferences(["SyncConnectionsRoot", "ReconcileConnectionsRoot", "ReconcileConnectionsRootTo", "SyncPanelsAtTheBoundary"], TheWorkspaceType)];
         Assert.True(offenders.Length == 0, "the root's recorder, reconciler or funnel is reached other than by a bound call:\n" + string.Join("\n", offenders));
     }
 

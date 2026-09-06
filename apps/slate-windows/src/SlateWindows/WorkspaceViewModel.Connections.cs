@@ -79,6 +79,7 @@ internal sealed partial class WorkspaceViewModel
         var leaf = new ConnectionsLeafViewModel(
             _session,
             _graphRelay,
+            _graphViewState,
             isActive: () => ConnectionsLeafIsActive(),
             verbosity: () => GraphVerbosity.Standard,
             lifecycleGeneration: () => LifecycleGeneration());
@@ -195,7 +196,12 @@ internal sealed partial class WorkspaceViewModel
     private void SyncConnectionsRoot()
     {
         string? candidate = ActiveGroup.ActiveTab is { IsMarkdown: true } tab ? tab.Path : null;
-        if (_persistenceBatchDepth > 0)
+        // Inside a mutation, AND through the boundary's own SyncPanels (W6-2
+        // PR B2, IGL-2): the boundary reconciles ONCE with the LAST candidate
+        // recorded — a candidate a nested SyncPanels recorded earlier inside a
+        // pump (a rename hook's) is overwritten, never replayed over the note
+        // the mutation installed.
+        if (_persistenceBatchDepth > 0 || _connectionsBoundaryRecording)
         {
             _connectionsRootCandidate = candidate;
             _connectionsRootPending = true;
@@ -203,6 +209,35 @@ internal sealed partial class WorkspaceViewModel
         }
         ReconcileConnectionsRootTo(candidate);
     }
+
+    private bool _connectionsBoundaryRecording;
+
+    /// <summary>The outermost boundary's panel sync, with the leaf's root
+    /// RECORDED through it and reconciled once afterwards (IGL-2).</summary>
+    private void SyncPanelsAtTheBoundary()
+    {
+        _connectionsBoundaryRecording = true;
+        try
+        {
+            SyncPanels();
+        }
+        finally
+        {
+            _connectionsBoundaryRecording = false;
+        }
+        ReconcileConnectionsRoot();
+    }
+
+    /// <summary>Rule C, Term 3(d)'s classification, the one producer the
+    /// funnel and the rename hook share (IGJ-10): the root change loads only
+    /// while ACTIVE and MOUNTED, not during construction, not under a
+    /// pending mount, not under a route's suppression.</summary>
+    private bool ConnectionsActiveAndMounted() =>
+        !_constructingConnections
+        && !_mountPending
+        && !_suppressConnectionsTriggers
+        && ConnectionsLeafIsActive()
+        && ConnectionsLeafIsMounted();
 
     /// <summary>The outermost mutation boundary's reconciliation (Term 3).</summary>
     private void ReconcileConnectionsRoot()
@@ -222,12 +257,7 @@ internal sealed partial class WorkspaceViewModel
         // A pending mount will load at its consume with the final leaf;
         // the root change itself loads only while active and mounted and
         // not during construction (the initial value is not a change).
-        bool activeAndMounted = !_constructingConnections
-            && !_mountPending
-            && !_suppressConnectionsTriggers
-            && ConnectionsLeafIsActive()
-            && ConnectionsLeafIsMounted();
-        Connections.NoteChanged(candidate, activeAndMounted);
+        Connections.NoteChanged(candidate, ConnectionsActiveAndMounted());
     }
 
     /// <summary>Term 3(f): the lifecycle's file-change and scan-finished

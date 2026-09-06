@@ -452,6 +452,9 @@ public sealed class GraphAnnouncerCensus
         [
             "Graph/GraphDocumentViewModel.cs:SelectRow",
             "Graph/GraphDocumentViewModel.cs:RevalidateSelection",
+            // The leaf's three, all through its one FFI-backed writer
+            // (Term 15): the pin, the pop, the key-moving retarget.
+            "Graph/ConnectionsLeafViewModel.cs:WriteSharedKey",
         ];
         var writers = new List<string>();
         var fieldWriters = new List<string>();
@@ -463,7 +466,18 @@ public sealed class GraphAnnouncerCensus
                 ISymbol? target = model.GetSymbolInfo(assignment.Left).Symbol;
                 if (target is IPropertySymbol { Name: "SelectedKey" } property && property.ContainingType.ToDisplayString() == TheViewStateType)
                 {
-                    writers.Add($"{relative}:{OwnerOf(assignment)}");
+                    string owner = $"{relative}:{OwnerOf(assignment)}";
+                    // The leaf's key is CORE's (Term 15, IGI-19): the
+                    // right-hand side binds to the stable-key crossing, never
+                    // a host-composed prefix.
+                    if (relative == "Graph/ConnectionsLeafViewModel.cs")
+                    {
+                        bool coresKey = assignment.Right is InvocationExpressionSyntax rhs
+                            && model.GetSymbolInfo(rhs).Symbol is IMethodSymbol { Name: "GraphStableKeyForPath" } stable
+                            && stable.ContainingType.Name == "SlateUniffiMethods";
+                        owner += coresKey ? string.Empty : " (not core's stable key)";
+                    }
+                    writers.Add(owner);
                 }
                 if (target is IFieldSymbol { Name: "_selectedKey" } field && field.ContainingType.ToDisplayString() == TheViewStateType)
                 {
