@@ -34,10 +34,13 @@ extension AppState {
     /// Clamp any incoming depth into core's window — core's
     /// `graph_clamp_connections_depth` (W6-2 PR B, B-15); the wrapper
     /// survives for its `Int` callers and its tests. Pure —
-    /// `nonisolated` so unit tests can call it off the main actor. A
-    /// negative depth clamps at the floor.
+    /// `nonisolated` so unit tests can call it off the main actor. ANY
+    /// `Int` is admitted: a negative depth saturates to zero and clamps at
+    /// the floor, one beyond `UInt32.max` saturates to it and clamps at
+    /// the ceiling — the conversion never traps (W6-2 PR B's
+    /// post-implementation pass 2, IPB-11).
     nonisolated static func clampConnectionsDepth(_ depth: Int) -> Int {
-        Int(graphClampConnectionsDepth(depth: UInt32(max(0, depth))))
+        Int(graphClampConnectionsDepth(depth: UInt32(clamping: depth)))
     }
 
     /// Clear all Connections state — called on vault open/close so a

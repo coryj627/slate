@@ -13,6 +13,8 @@
 
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.FlowAnalysis;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace SlateWindows.Tests.Censuses;
 
@@ -59,32 +61,26 @@ public sealed class ConnectionsLeafCensus
     /// (<c>var document = Connections; document.X()</c>) or to its
     /// construction; a local or parameter declared as
     /// <c>ConnectionsLeafViewModel</c>.</summary>
+    private const string TheLeafType = "SlateWindows.Graph.ConnectionsLeafViewModel";
+
+    /// <summary>Invocations of a member of the leaf, BOUND (codex
+    /// post-implementation pass 2, IPB-9 — locals were resolved, fields,
+    /// properties, casts and method groups were not): every invocation whose
+    /// bound method, or every candidate when overload resolution is
+    /// incomplete, is the leaf type's member of that name, whatever the
+    /// receiver's spelling.</summary>
     private static IEnumerable<(string Relative, string Owner, string Member)> LeafCalls(string member)
     {
-        foreach ((string relative, CSharpSource source) in ShellSources())
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
+            SemanticModel model = ShellCompilation.ModelFor(source);
             foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                if (call.Expression is not MemberAccessExpressionSyntax access
-                    || access.Name.Identifier.ValueText != member)
-                {
-                    continue;
-                }
-                SyntaxNode scope = call.Ancestors().FirstOrDefault(a => a is MemberDeclarationSyntax) ?? source.Root;
-                ExpressionSyntax receiver = CSharpSource.Resolve(access.Expression, scope);
-                string text = CSharpSource.Normalize(receiver);
-                bool isTheLeaf = text == "Connections"
-                    || text.EndsWith(".Connections", StringComparison.Ordinal)
-                    || (receiver is ObjectCreationExpressionSyntax created
-                        && created.Type.ToString().EndsWith("ConnectionsLeafViewModel", StringComparison.Ordinal));
-                bool typedAsTheLeaf = receiver is IdentifierNameSyntax name && scope.DescendantNodes().Any(node =>
-                    (node is ParameterSyntax parameter
-                        && parameter.Identifier.ValueText == name.Identifier.ValueText
-                        && parameter.Type?.ToString() == "ConnectionsLeafViewModel")
-                    || (node is VariableDeclarationSyntax declaration
-                        && declaration.Type.ToString() == "ConnectionsLeafViewModel"
-                        && declaration.Variables.Any(v => v.Identifier.ValueText == name.Identifier.ValueText)));
-                if (isTheLeaf || typedAsTheLeaf)
+                SymbolInfo info = model.GetSymbolInfo(call);
+                IEnumerable<ISymbol> candidates = info.Symbol is { } bound ? [bound] : info.CandidateSymbols;
+                if (candidates.OfType<IMethodSymbol>().Any(method =>
+                        method.Name == member
+                        && method.ContainingType.ToDisplayString() == TheLeafType))
                 {
                     yield return (relative, OwnerOf(call), member);
                 }
@@ -106,7 +102,9 @@ public sealed class ConnectionsLeafCensus
             ("Deeper", ["WorkspaceViewModel.Connections.cs:ConnectionsDeeperCommand"]),
             ("Shallower", ["WorkspaceViewModel.Connections.cs:ConnectionsShallowerCommand"]),
             ("ViewCollapsed", ["WorkspaceViewModel.Connections.cs:OnRightPaneVisibilityChanged"]),
-            ("AnnounceStatus", ["WorkspaceViewModel.Connections.cs:ShowConnections"]),
+            // Term 9's entry lines are the document's own two calls (bound,
+            // IPB-9: a call inside the leaf counts like any other).
+            ("AnnounceStatus", ["Graph/ConnectionsLeafViewModel.cs:FocusEntered", "Graph/ConnectionsLeafViewModel.cs:FocusEntered", "WorkspaceViewModel.Connections.cs:ShowConnections"]),
         ];
         var failures = new List<string>();
         foreach ((string member, string[] owners) in expected)
@@ -148,6 +146,112 @@ public sealed class ConnectionsLeafCensus
         Assert.Equal(["WorkspaceViewModel.Persistence.cs:RunWorkspaceMutation"], reconcilers);
     }
 
+    private static bool IsConsume(IOperation operation) =>
+        operation.Syntax is InvocationExpressionSyntax call
+        && CSharpSource.Normalize(call.Expression).EndsWith("ConsumePendingMount", StringComparison.Ordinal);
+
+    private static IEnumerable<IOperation> BlockOperations(BasicBlock block) =>
+        block.BranchValue is { } branch ? block.Operations.Append(branch) : block.Operations;
+
+    private static IEnumerable<BasicBlock> Successors(BasicBlock block)
+    {
+        if (block.FallThroughSuccessor?.Destination is { } fall)
+        {
+            yield return fall;
+        }
+        if (block.ConditionalSuccessor?.Destination is { } conditional)
+        {
+            yield return conditional;
+        }
+    }
+
+    /// <summary>Every path from the reveal to the member's exit passes a
+    /// consume (IPB-9): Roslyn's control-flow graph over the member, the
+    /// reveal's block found by its syntax, a consume later in that block
+    /// satisfying it at once, otherwise the walk over successors stopping at
+    /// every block that consumes; reaching the exit is the offence. A
+    /// member the graph cannot be built for (an expression body the
+    /// operation tree does not model, a reveal inside a lambda) falls back
+    /// to the statement order in the reveal's own or an enclosing block.</summary>
+    private static bool ConsumePostDominates(SemanticModel model, SyntaxNode scope, AssignmentExpressionSyntax assignment)
+    {
+        ControlFlowGraph? graph = null;
+        try
+        {
+            graph = model.GetOperation(scope) switch
+            {
+                IMethodBodyOperation body => ControlFlowGraph.Create(body),
+                IConstructorBodyOperation body => ControlFlowGraph.Create(body),
+                _ => null,
+            };
+        }
+        catch (ArgumentException)
+        {
+            graph = null;
+        }
+        if (graph is null)
+        {
+            return ConsumeFollowsSyntactically(scope, assignment);
+        }
+        BasicBlock? start = null;
+        int startIndex = -1;
+        foreach (BasicBlock block in graph.Blocks)
+        {
+            IOperation[] operations = [.. BlockOperations(block)];
+            for (int index = 0; index < operations.Length; index++)
+            {
+                if (operations[index].DescendantsAndSelf().Any(op => op.Syntax.Span == assignment.Span))
+                {
+                    start = block;
+                    startIndex = index;
+                }
+            }
+        }
+        if (start is null)
+        {
+            return ConsumeFollowsSyntactically(scope, assignment);
+        }
+        if (BlockOperations(start).Skip(startIndex + 1).Any(op => op.DescendantsAndSelf().Any(IsConsume)))
+        {
+            return true;
+        }
+        var seen = new HashSet<BasicBlock>();
+        var pending = new Stack<BasicBlock>(Successors(start));
+        while (pending.Count > 0)
+        {
+            BasicBlock block = pending.Pop();
+            if (!seen.Add(block))
+            {
+                continue;
+            }
+            if (block.Kind == BasicBlockKind.Exit)
+            {
+                return false;
+            }
+            if (BlockOperations(block).Any(op => op.DescendantsAndSelf().Any(IsConsume)))
+            {
+                continue;
+            }
+            foreach (BasicBlock next in Successors(block))
+            {
+                pending.Push(next);
+            }
+        }
+        return true;
+    }
+
+    private static bool ConsumeFollowsSyntactically(SyntaxNode scope, AssignmentExpressionSyntax assignment)
+    {
+        StatementSyntax? assigned = assignment.Ancestors().OfType<StatementSyntax>().FirstOrDefault();
+        return assigned is not null && scope.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(call => CSharpSource.Normalize(call.Expression).EndsWith("ConsumePendingMount", StringComparison.Ordinal))
+            .Select(call => call.Ancestors().OfType<StatementSyntax>().FirstOrDefault())
+            .Any(consume => consume is not null
+                && consume.SpanStart > assigned.Span.End
+                && consume.Parent is not null
+                && (ReferenceEquals(consume.Parent, assigned.Parent) || assigned.Ancestors().Contains(consume.Parent)));
+    }
+
     /// <summary>B-19 (iii): every writer of <c>IsRightPaneVisible = true</c>
     /// in the shell reaches the pending mount's consume at its route's end
     /// — the consume call in the same method, or the outermost mutation
@@ -159,7 +263,7 @@ public sealed class ConnectionsLeafCensus
         var offenders = new List<string>();
         int writers = 0;
         bool seeded = false;
-        foreach ((string relative, CSharpSource source) in ShellSources())
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
             foreach (AssignmentExpressionSyntax assignment in source.Root.DescendantNodes().OfType<AssignmentExpressionSyntax>())
             {
@@ -175,18 +279,11 @@ public sealed class ConnectionsLeafCensus
                 }
                 writers++;
                 SyntaxNode? scope = assignment.Ancestors().FirstOrDefault(a => a is MethodDeclarationSyntax or ConstructorDeclarationSyntax or PropertyDeclarationSyntax or AccessorDeclarationSyntax);
-                // The consume must FOLLOW the assignment on every path (IPB-5):
-                // a later statement of the assignment's own block or of a block
-                // enclosing it — a consume before the assignment, or inside a
-                // sibling branch, reaches nothing at the route's end.
-                StatementSyntax? assigned = assignment.Ancestors().OfType<StatementSyntax>().FirstOrDefault();
-                bool consumes = scope is not null && assigned is not null && scope.DescendantNodes().OfType<InvocationExpressionSyntax>()
-                    .Where(call => CSharpSource.Normalize(call.Expression).EndsWith("ConsumePendingMount", StringComparison.Ordinal))
-                    .Select(call => call.Ancestors().OfType<StatementSyntax>().FirstOrDefault())
-                    .Any(consume => consume is not null
-                        && consume.SpanStart > assigned.Span.End
-                        && consume.Parent is not null
-                        && (ReferenceEquals(consume.Parent, assigned.Parent) || assigned.Ancestors().Contains(consume.Parent)));
+                // The consume must POST-DOMINATE the reveal (IPB-5, IPB-9):
+                // every path from the assignment to the member's exit passes a
+                // consume — over Roslyn's control-flow graph, so a `return`
+                // between the two is the offence it is.
+                bool consumes = scope is not null && ConsumePostDominates(ShellCompilation.ModelFor(source), scope, assignment);
                 bool insideMutation = assignment.Ancestors().OfType<InvocationExpressionSyntax>()
                     .Any(call => CSharpSource.Normalize(call.Expression).EndsWith("RunWorkspaceMutation", StringComparison.Ordinal));
                 // The setter itself is the arm, not a route.
@@ -358,8 +455,12 @@ public sealed class ConnectionsLeafCensus
             // Normalised text carries no spaces.
             "Graph/ConnectionsLeafViewModel.cs:Deeper(_depth+1)",
             "Graph/ConnectionsLeafViewModel.cs:Shallower(_depth-1)",
+            // The view's ONE producer: the depth control's selected index
+            // converted (codex post-implementation pass 2, IPB-10: the view
+            // was admitted by path, so any literal in it passed).
+            "Graph/ConnectionsLeafView.cs:OnDepthSelectionChanged(checked((uint)(_depth.SelectedIndex+1)))",
         ];
-        string[] unexpected = [.. producers.Where(p => !allowed.Contains(p) && !p.StartsWith("Graph/ConnectionsLeafView.cs:", StringComparison.Ordinal))];
+        string[] unexpected = [.. producers.Where(p => !allowed.Contains(p))];
         Assert.True(unexpected.Length == 0, "an unnamed producer reaches the depth: " + string.Join("; ", unexpected));
         foreach (string name in allowed)
         {

@@ -146,6 +146,54 @@ public sealed partial class ConnectionsLeafTests
         });
     }
 
+    /// <summary>Codex post-implementation pass 2 (IPB-6; B-6, B-9, B-11): a
+    /// row acts only while the tree that rendered it is the one the document
+    /// holds — a ghost row and a note row of Hub's tree, neither listed by
+    /// Two's, are inert once the root moved to Two (no create, no open, no
+    /// line), while the rows of an earlier tree of the SAME root are the
+    /// same rows after a refresh (the occurrence id survives, B-6).</summary>
+    [Fact]
+    public void ARowOfATreeTheDocumentNoLongerHoldsIsInertAndARefreshedRootsRowIsNot()
+    {
+        using GraphVault vault = GraphVault.Copy("stale-row");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            ConnectionsLeafViewModel leaf = host.Leaf;
+            var creator = new RecordingCreator(host.Session);
+            host.Workspace.GraphNoteCreator = creator;
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            GraphConnectionsTree twos = host.Session.GraphConnectionsTree(Two, 1, leaf.Filter);
+            HashSet<string> twosIds = [.. twos.Incoming.Concat(twos.Outgoing).Select(row => row.Id)];
+            GraphConnectionRow[] hubs = [.. leaf.Publication.Tree!.Incoming, .. leaf.Publication.Tree!.Outgoing];
+            GraphConnectionRow hubGhost = hubs.First(row => row.Kind == GraphNodeKind.Ghost && !twosIds.Contains(row.Id));
+            GraphConnectionRow hubNote = hubs.First(row => row.Kind == GraphNodeKind.Note && row.Path is not null && row.Path != Two && !twosIds.Contains(row.Id));
+
+            // The same root refreshed at another depth: the same rows.
+            host.Workspace.ConnectionsDeeperCommand.Execute(null);
+            host.Settle();
+            Assert.True(leaf.IsRowCurrent(hubGhost));
+            Assert.True(leaf.IsRowCurrent(hubNote));
+
+            host.OpenNote(Two);
+            host.Settle();
+            host.Clear();
+            Assert.False(leaf.IsRowCurrent(hubGhost));
+            Assert.False(leaf.IsRowCurrent(hubNote));
+            leaf.Activate(hubGhost, newTab: false);
+            DrainCreate(host);
+            leaf.Activate(hubNote, newTab: false);
+            host.Settle();
+
+            Assert.Empty(creator.Created);
+            Assert.Equal(Two, host.Workspace.ActiveGroup.ActiveTab!.Path);
+            Assert.Equal(Two, leaf.Root);
+            Assert.Empty(host.Timeline);
+        });
+    }
+
     [Fact]
     public void AGhostsCreateParkedAcrossARootMoveLandsAndSpeaksButOpensNothing()
     {

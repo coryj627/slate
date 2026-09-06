@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -398,11 +399,39 @@ internal sealed class ConnectionsLeafView : UserControl
         _renderedPublication = null;
     }
 
+    /// <summary>The expansion handler each row carries, kept so the drop
+    /// can detach it.</summary>
+    private readonly Dictionary<ConnectionsRowViewModel, PropertyChangedEventHandler> _expansionHandlers = [];
+
+    /// <summary>Dropped rows are INERT (codex post-implementation pass 2,
+    /// IPB-6): a screen reader's cached automation peer can still hold a
+    /// row the view dropped after a root change, a refresh or a release,
+    /// so its activation delegate and its expansion handler go with it —
+    /// it can neither act on the document nor write the view's expansion
+    /// memory. The document refuses a row its tree no longer lists as the
+    /// second wall.</summary>
     private void DropRows()
     {
+        foreach (ConnectionsRowViewModel root in _roots)
+        {
+            Release(root);
+        }
         _roots.Clear();
         _byOccurrence.Clear();
         _parentOf.Clear();
+    }
+
+    private void Release(ConnectionsRowViewModel row)
+    {
+        row.Activate = null;
+        if (_expansionHandlers.Remove(row, out PropertyChangedEventHandler? handler))
+        {
+            row.PropertyChanged -= handler;
+        }
+        foreach (ConnectionsRowViewModel child in row.Children)
+        {
+            Release(child);
+        }
     }
 
     // --- Rendering -------------------------------------------------------------------
@@ -568,13 +597,15 @@ internal sealed class ConnectionsLeafView : UserControl
             ConnectionsRowViewModel item = ConnectionsRowViewModel.ForRow(model, row, snippet);
             item.Activate = r => model.Activate(r.Row!, newTab: (Keyboard.Modifiers & ModifierKeys.Control) != 0);
             item.IsExpanded = !_expansion.TryGetValue(row.Id, out bool expanded) || expanded;
-            item.PropertyChanged += (_, args) =>
+            PropertyChangedEventHandler remember = (_, args) =>
             {
                 if (args.PropertyName == nameof(ConnectionsRowViewModel.IsExpanded))
                 {
                     _expansion[row.Id] = item.IsExpanded;
                 }
             };
+            item.PropertyChanged += remember;
+            _expansionHandlers[item] = remember;
             ConnectionsRowViewModel parent = stack.Count > 0 ? stack[^1].Item : group;
             parent.Children.Add(item);
             _parentOf[item] = parent;

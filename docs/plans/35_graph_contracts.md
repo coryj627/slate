@@ -5981,6 +5981,79 @@ an equal mark reloading nothing — two mutations (`>=`; the clear
 dropped). Gates: `cargo fmt` clean, clippy clean, the crates byte-identical to ac6504b's (the workspace's run of 2000 passed with the six known local failures stands); `dotnet format` applied; the whole Windows test project on a fresh build, 2232 passed (the model's 302 cells, 78 s, among them); the accessibility project built and the leaf journey passed twice in the foreground, 10 s each; benchmarks build; CI and codoki on the push are the oracle. Mutations, each restored byte for byte, each
 caught by the named fact: the Failed arm back through the shell seam (`AFailedCreateRidesTheRelayAndItsHighFlushDropsAPendingClass`) and the Exists arm too (the seam census's one-site count); Show backlinks outside the mutation (the model's ShowBacklinks cells); a target-typed second relay in a void method (`ExactlyOneGraphRelayIsConstructedInTheShell`); a trigger through a local (`EveryTriggerEntryPointHasExactlyTheCallersRuleCNames`); the consume before the reveal (`EveryPaneRevealConsumesThePendingMountAndTheConstructorSeedsIt`); the silent failure spoken (the model's DeleteRoot cells); the high-water mark's equal reload and its clear dropped (`TheHighWaterMarkReloadsOnlyWhenStrictlyAboveTheInstalledTreeAndClearsAfterwards`) — nine, none survived.
 
+**TGB-9 — Post-implementation pass 2 (IPB-6..11): the sweep.** On
+d81cc4f, CI green (13 checks), codoki's second review a false positive
+(a C# 12 collection expression read as invalid syntax; refuted with
+the build check's link and resolved) and a request to restore the very
+fallback order IPB-4 found wrong; codex's second pass returned six
+findings — one blocker, four majors, one minor — and confirmed IPB-1
+and IPB-2 discharged. Each, and its discharge: (IPB-6, blocker) the
+view's dropped rows kept their activation delegates and their
+expansion handlers, so a screen reader's cached automation peer could
+invoke a row of a tree the document no longer held — for a ghost, the
+stale target paired with the CURRENT root and epoch. Two walls: the
+view releases every dropped row (the delegate nulled, the handler
+detached, recursively) on a root change, a refresh and the model's
+release; the document acts on a row only while the current
+publication's tree lists its occurrence id (B-6: a same-root refresh
+keeps the ids, so the rows of an earlier tree of the same root are the
+same rows), `IsRowCurrent` in `Execute`'s admission. Facts:
+`ARowOfATreeTheDocumentNoLongerHoldsIsInertAndARefreshedRootsRowIsNot`
+(a ghost row and a note row of Hub's tree, neither listed by Two's,
+inert after the root moved — no create, no open, no line — and current
+after a depth refresh) and `ADroppedRowIsInertForACachedPeer` (the
+cached row's delegate gone after a root change and after the release,
+its toggle writing no expansion memory). (IPB-7, major, reopening
+IPB-3) the model excluded reachable states and read its expected
+summaries from the workspace's own publication. Now: the root has
+THREE states — a note, no tab, and the GRAPH tab in view with a note
+beside it (its tab activation, its close and its restore derived; the
+singleton's duplicate, split and group routes named as refused by
+their commands); the presentation THREE — Ready and current, stale,
+and ERROR (a missing path, every audible load's line the failure core
+reports, the probe's silent reload over it, the switch that does not
+reload it); a ghost is actionable during a same-root reload (Term 7
+keeps the rows — the in-flight load for the ghost routes and the Error
+presentation is Deeper's, the rows or the Error kept); FIVE more
+worked routes — the non-note activation (PR A's Opened and snapshot
+summary through the same relay, Opened alone when already effective),
+the split's sole-tab close (A → none → B in one mutation), the ghost
+create onto an already-open tab, its dirty-navigation refusal, and its
+source moved while parked; THIRTY routes, 2160 cells, 1549 named, 611
+driven, the totals pinned; every expected line — a tree's summary or a
+failure — derived from the FIXTURE through the session for the root
+and depth the derivation names, never from the publication; the root
+and the depth asserted always. Making "in flight during the route" a
+STATE rather than a race: a load left in flight is PARKED inside its
+fetch after its crossings (the seam now parks a failing fetch too) and
+released only after the route's synchronous part; the probe's decision
+is awaited before that release (the mark, or the load); a ghost route
+drains the creation without settling the leaf. The extension found
+nothing further in the code — the derivation's own corrections were
+the close's `TabFocused` before `TabClosed`, the outline's count on a
+retarget and on a launch of an existing note, and the graph document's
+own drain where a route seats one. (IPB-8, major, reopening IPB-4) an
+explicit creation through a `using` alias evaded the spelling test:
+every creation, explicit or target-typed, is now BOUND over one
+compilation of the shell's own trees with the test process's metadata
+(`Support/ShellCompilation.cs`, the SDK's implicit usings supplied) and
+compared with the relay's fully qualified symbol; an alias naming the
+relay anywhere in the shell fails outright. (IPB-9, major, reopening
+IPB-5) the trigger census now binds every invocation to its method
+symbol — a call through a field, a property, a cast or a method group
+counts like any other, and the document's own two `AnnounceStatus`
+calls (Term 9) join the expected owners — and the reveal census walks
+Roslyn's control-flow graph: every path from the reveal to the member's
+exit must pass a consume, so a `return` between them is the offence it
+is (the syntactic order stays the fallback for a member the graph is
+not built for). (IPB-10, major) the depth census admitted the view by
+path: the view's ONE producer is named exactly, the depth control's
+selected index converted. (IPB-11, minor) the mac's `Int` clamp
+converted with `UInt32(max(0, depth))`, which traps above
+`UInt32.max`: `UInt32(clamping:)` saturates both ways, and the test
+takes `Int.min` and `Int.max`. Gates: `cargo fmt` clean, clippy clean, the crates byte-identical to ac6504b's (the workspace's run stands); `dotnet format` applied; the whole Windows test project on a fresh build, 2233 passed without the model, and the model alone, 611 cells in 2 m 38 s — run concurrently with the suite once, the model showed the graph tab's arrangement load landing inside a route, so the arrangement now drains the graph document before the timeline clears; the accessibility project built and the leaf journey passed twice in the foreground, 10 s each; benchmarks build; the mac's XCTest lane is CI's, where the clamp's new cases run; CI and codoki on the push are the oracle. Mutations, each restored
+byte for byte, each caught by the named fact: the stale row acting (`ARowOfATreeTheDocumentNoLongerHoldsIsInertAndARefreshedRootsRowIsNot`); the view keeping a dropped row's delegate (`ADroppedRowIsInertForACachedPeer`); the reconciliation ignoring the mount (the model's collapsed root-change cells); a second relay through a `using` alias in a class of its own (`ExactlyOneGraphRelayIsConstructedInTheShell`); a trigger through a property (`EveryTriggerEntryPointHasExactlyTheCallersRuleCNames`); a return between the reveal and the consume (`EveryPaneRevealConsumesThePendingMountAndTheConstructorSeedsIt`); a literal producer in the view (`EveryDepthWriteIsTheFfiClampsResultAndOnlyTheNamedProducersReachIt`) — seven, none survived.
+
 ### Tests that pin PR B (slice B1)
 
 - ConnectionsLeafTests: the tree over the shared fixture and the
@@ -6026,8 +6099,9 @@ caught by the named fact: the Failed arm back through the shell seam (`AFailedCr
   the recorded events equal to the derivation; the away → back and hide
   → away completions —
   `TheModelOfTermsTwoToNineDerivesEveryRoutesTimelineAcrossEveryState`,
-  twenty-five routes, 800 cells, 302 driven, 498 named as not states
-  of the system, the totals pinned (TGB-7, TGB-8).
+  thirty routes over three roots and three presentations, 2160 cells,
+  611 driven, 1549 named as not states of the system, the totals
+  pinned (TGB-7, TGB-8, TGB-9).
 - GraphAnnouncerTests gains the stored fire-time gate (0a-9's suite:
   queue, leave effective, fire, nothing) and the cross-surface High
   flush; GraphDocumentTests' retirement fact asserts the relay is

@@ -270,65 +270,65 @@ public sealed class GraphAnnouncerCensus
     /// declared type whatever the receiver is named, inside
     /// <c>NewGraphRelay</c>, over the workspace's rendered seam; a second
     /// anywhere, under any name, fails here (IGF-11, IGG-1).</summary>
+    private const string TheRelayType = "SlateWindows.Graph.GraphAnnouncer";
+
+    /// <summary>The creation's type as BOUND (IPB-4, IPB-8): an explicit
+    /// creation through an alias (<c>using Relay = ...GraphAnnouncer; new
+    /// Relay(...)</c>) and a target-typed <c>new(...)</c> typed by a local,
+    /// a return, an assignment or a parameter both resolve to the same
+    /// symbol; a creation binding yields nothing for falls back to the
+    /// written type — the explicit one's, or the nearest enclosing
+    /// declaration's for an implicit one, the local's before the method's.</summary>
+    private static string CreationType(SemanticModel model, BaseObjectCreationExpressionSyntax creation)
+    {
+        TypeInfo info = model.GetTypeInfo(creation);
+        ITypeSymbol? bound = info.Type is { TypeKind: not TypeKind.Error } type ? type : info.ConvertedType;
+        if (bound is { TypeKind: not TypeKind.Error })
+        {
+            return bound.ToDisplayString();
+        }
+        return creation switch
+        {
+            ObjectCreationExpressionSyntax explicitly => explicitly.Type.ToString(),
+            _ => creation.Ancestors().OfType<VariableDeclarationSyntax>().FirstOrDefault()?.Type.ToString()
+                ?? creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault()?.ReturnType.ToString()
+                ?? string.Empty,
+        };
+    }
+
     [Fact]
     public void ExactlyOneGraphRelayIsConstructedInTheShell()
     {
-        string shellRoot = SourceText.ShellSourceRoot();
-        var sources = new List<(string Relative, CSharpSource Source)>();
-        foreach (string file in Directory.EnumerateFiles(shellRoot, "*.cs", SearchOption.AllDirectories))
-        {
-            string relative = Path.GetRelativePath(shellRoot, file).Replace('\\', '/');
-            if (relative.StartsWith("obj/", StringComparison.Ordinal)
-                || relative.Contains("/obj/", StringComparison.Ordinal))
-            {
-                continue;
-            }
-            sources.Add((relative, CSharpSource.LoadPath(file)));
-        }
-        // A target-typed `new(...)` is typed by its TARGET — a local's
-        // declared type, a return type, an assignment's member, a
-        // parameter — which only BINDING resolves (codex post-implementation
-        // pass 1, IPB-4: the method's return type was read first, so a
+        // Every creation, explicit or target-typed, is typed by BINDING over
+        // the shell's own compilation (codex post-implementation passes 1 and
+        // 2, IPB-4 and IPB-8: the method's return type was read first, so a
         // `GraphAnnouncer extra = new(...)` inside a void method was
-        // invisible). The census compiles the shell's own trees — no
-        // metadata: the shell's types bind, the framework's do not, and the
-        // relay is the shell's — and asks the semantic model; a creation
-        // binding yields nothing for falls back to the nearest enclosing
-        // declaration's written type, the local's before the method's.
-        var compilation = CSharpCompilation.Create("shell-census", sources.Select(s => s.Source.Root.SyntaxTree));
+        // invisible; an explicit creation was read by its spelling, so a
+        // `using` alias evaded it). An alias naming the relay anywhere in the
+        // shell is forbidden outright as well.
         var creations = new List<string>();
-        foreach ((string relative, CSharpSource source) in sources)
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
-            foreach (ObjectCreationExpressionSyntax creation in source.Root
-                .DescendantNodes()
-                .OfType<ObjectCreationExpressionSyntax>())
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (UsingDirectiveSyntax directive in source.Root.DescendantNodes().OfType<UsingDirectiveSyntax>())
             {
-                if (!creation.Type.ToString().EndsWith("GraphAnnouncer", StringComparison.Ordinal))
+                if (directive.Alias is not null
+                    && directive.NamespaceOrType.ToString().EndsWith("GraphAnnouncer", StringComparison.Ordinal))
+                {
+                    creations.Add($"{relative}:using alias {directive.Alias.Name} = {directive.NamespaceOrType}");
+                }
+            }
+            foreach (BaseObjectCreationExpressionSyntax creation in source.Root
+                .DescendantNodes()
+                .OfType<BaseObjectCreationExpressionSyntax>())
+            {
+                string declared = CreationType(model, creation);
+                if (declared != TheRelayType && !declared.EndsWith("GraphAnnouncer", StringComparison.Ordinal))
                 {
                     continue;
                 }
                 MethodDeclarationSyntax? owner = creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
                 string firstArgument = creation.ArgumentList?.Arguments.FirstOrDefault()?.Expression.ToString() ?? "<none>";
-                creations.Add($"{relative}:{owner?.Identifier.ValueText ?? "<top level>"}({firstArgument})");
-            }
-            SemanticModel model = compilation.GetSemanticModel(source.Root.SyntaxTree);
-            foreach (ImplicitObjectCreationExpressionSyntax creation in source.Root
-                .DescendantNodes()
-                .OfType<ImplicitObjectCreationExpressionSyntax>())
-            {
-                TypeInfo info = model.GetTypeInfo(creation);
-                ITypeSymbol? bound = info.Type is { TypeKind: not TypeKind.Error } type ? type : info.ConvertedType;
-                string declared = bound is { TypeKind: not TypeKind.Error }
-                    ? bound.Name
-                    : creation.Ancestors().OfType<VariableDeclarationSyntax>().FirstOrDefault()?.Type.ToString()
-                        ?? creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault()?.ReturnType.ToString()
-                        ?? string.Empty;
-                if (!declared.EndsWith("GraphAnnouncer", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-                MethodDeclarationSyntax? owner = creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
-                string firstArgument = creation.ArgumentList.Arguments.FirstOrDefault()?.Expression.ToString() ?? "<none>";
                 creations.Add($"{relative}:{owner?.Identifier.ValueText ?? "<top level>"}({firstArgument})");
             }
         }

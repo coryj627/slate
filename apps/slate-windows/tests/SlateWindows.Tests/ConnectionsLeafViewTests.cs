@@ -344,6 +344,61 @@ public sealed class ConnectionsLeafViewTests
         });
     }
 
+    /// <summary>Codex post-implementation pass 2 (IPB-6; B-9, B-13): a row
+    /// the view dropped — after a root change, and after the model's
+    /// release — is INERT for a cached automation peer: its activation
+    /// delegate is gone, so invoking it opens nothing; its expansion
+    /// handler is detached, so toggling it writes no expansion memory.</summary>
+    [Fact]
+    public void ADroppedRowIsInertForACachedPeer()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("dropped-row");
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                host.ActivateLeaf();
+                host.OpenNote(Hub);
+                host.Settle();
+                ConnectionsRowViewModel cached = view.RootsForTests
+                    .SelectMany(group => group.Children)
+                    .First(row => row.Row is { Kind: GraphNodeKind.Note, Path: not null } && row.Row.Path != Two);
+                Assert.NotNull(cached.Activate);
+
+                // The root moved: the old tree's rows were dropped.
+                host.OpenNote(Two);
+                host.Settle();
+                Assert.Null(cached.Activate);
+                cached.RaiseActivate();
+                host.Settle();
+                Assert.Equal(Two, host.Workspace.ActiveGroup.ActiveTab!.Path);
+                Assert.Equal(Two, host.Leaf.Root);
+                bool wasExpanded = cached.IsExpanded;
+                cached.IsExpanded = !wasExpanded;
+                // A fresh render of the same root keeps its own memory: the
+                // detached row wrote none.
+                host.Workspace.ConnectionsDeeperCommand.Execute(null);
+                host.Settle();
+                Assert.All(
+                    view.RootsForTests.SelectMany(group => group.Children).Where(row => row.Row?.Id == cached.Row?.Id),
+                    row => Assert.True(row.IsExpanded));
+
+                // The model's release drops the live rows the same way.
+                ConnectionsRowViewModel live = view.RootsForTests.SelectMany(group => group.Children).First(row => row.Row is not null);
+                Assert.NotNull(live.Activate);
+                view.Model = null;
+                Assert.Null(live.Activate);
+                live.RaiseActivate();
+                Assert.Equal(Two, host.Workspace.ActiveGroup.ActiveTab!.Path);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
     [Fact]
     public void TheEmptyNeighbourhoodShowsT4UnderTheSummary()
     {

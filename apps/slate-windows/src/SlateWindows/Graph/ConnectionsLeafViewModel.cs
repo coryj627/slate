@@ -568,11 +568,15 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         }
         catch (VaultException exception)
         {
+            // The test seam parks a FAILING fetch as it parks a successful one
+            // (the model holds an Error's reload in flight across a route).
+            FetchGateForTests?.Invoke();
             envelope = new ConnectionsLoadEnvelope(
                 token, request.Root, request.Depth, request.Filter, bundlePath, bundlePaging, null, null, exception.Message);
         }
         catch (Exception exception) when (exception is InvalidOperationException or System.IO.IOException)
         {
+            FetchGateForTests?.Invoke();
             envelope = new ConnectionsLoadEnvelope(
                 token, request.Root, request.Depth, request.Filter, bundlePath, bundlePaging, null, null, exception.Message);
         }
@@ -726,10 +730,27 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         return ConnectionsPhrase.NoteHint;
     }
 
+    /// <summary>Whether the current publication's tree still lists the
+    /// row — by its occurrence id, which names the same target (B-6): a
+    /// row of an earlier tree of the same root that the refresh kept is
+    /// the same row; a row of a tree the document no longer holds is not.</summary>
+    internal bool IsRowCurrent(GraphConnectionRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        return Publication.Tree is { } tree
+            && (tree.Incoming.Any(current => current.Id == row.Id)
+                || tree.Outgoing.Any(current => current.Id == row.Id));
+    }
+
     public void Execute(GraphRowAction action, GraphConnectionRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
-        if (_retired || !IsActionEnabled(action, row) || _root is not { } root)
+        // A row acts only while the tree that rendered it is the one held
+        // (codex post-implementation pass 2, IPB-6): a screen reader's cached
+        // element can invoke a row the view dropped after a root change, a
+        // refresh or a release, and a ghost's create would pair a stale
+        // target with the CURRENT root and epoch.
+        if (_retired || !IsRowCurrent(row) || !IsActionEnabled(action, row) || _root is not { } root)
         {
             return;
         }
