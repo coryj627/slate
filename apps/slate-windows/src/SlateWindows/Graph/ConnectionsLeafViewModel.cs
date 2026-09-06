@@ -249,6 +249,13 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
 
     public ulong HighWaterForTests => _highWater;
 
+    /// <summary>The policy the request in flight was issued under (Term 5),
+    /// null when nothing is in flight — the model asserts the arranged
+    /// pending load's token.</summary>
+    internal GraphAnnouncePolicy? PendingPolicyForTests => _inFlight ? _pendingPolicy : null;
+
+    private GraphAnnouncePolicy _pendingPolicy;
+
     /// <summary>How many loads this document ISSUED (Term 3's one-per-route
     /// pins read this on the owner thread; the FFI crossings are counted
     /// on the pool and are not a synchronous witness).</summary>
@@ -525,6 +532,7 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         }
         string root = _root ?? throw new InvalidOperationException("a load needs a root (rule C, Term 3)");
         _seq++;
+        _pendingPolicy = announce;
         LoadsIssuedForTests++;
         var request = new ConnectionsRequest(root, _depth, _filter, _rootEpoch);
         _request = request;
@@ -562,21 +570,29 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
                 CountCrossing("note_load_bundle");
                 bundle = token.Session.NoteLoadBundle(bundlePath, bundlePaging);
             }
-            FetchGateForTests?.Invoke();
             envelope = new ConnectionsLoadEnvelope(
                 token, request.Root, request.Depth, request.Filter, bundlePath, bundlePaging, tree, bundle, null);
         }
         catch (VaultException exception)
         {
-            // The test seam parks a FAILING fetch as it parks a successful one
-            // (the model holds an Error's reload in flight across a route).
-            FetchGateForTests?.Invoke();
             envelope = new ConnectionsLoadEnvelope(
                 token, request.Root, request.Depth, request.Filter, bundlePath, bundlePaging, null, null, exception.Message);
         }
         catch (Exception exception) when (exception is InvalidOperationException or System.IO.IOException)
         {
+            envelope = new ConnectionsLoadEnvelope(
+                token, request.Root, request.Depth, request.Filter, bundlePath, bundlePaging, null, null, exception.Message);
+        }
+        // The test seam, ONCE per fetch on either path: a park holds the
+        // worker here after its crossings, a successful fetch's or a failing
+        // one's (the model holds an Error's reload in flight across a route);
+        // a throw here is this fetch's failure (the model's transient one).
+        try
+        {
             FetchGateForTests?.Invoke();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or System.IO.IOException)
+        {
             envelope = new ConnectionsLoadEnvelope(
                 token, request.Root, request.Depth, request.Filter, bundlePath, bundlePaging, null, null, exception.Message);
         }

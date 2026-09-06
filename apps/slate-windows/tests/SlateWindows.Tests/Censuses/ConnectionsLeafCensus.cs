@@ -134,10 +134,12 @@ public sealed class ConnectionsLeafCensus
         _ => string.Empty,
     };
 
-    /// <summary>Every method-group reference to one of the leaf's named
+    private const string TheWorkspaceType = "SlateWindows.WorkspaceViewModel";
+
+    /// <summary>Every method-group reference to one of a type's named
     /// members, and every call to one of those names the compilation binds
-    /// to nothing (IPB-17).</summary>
-    private static IEnumerable<string> ProtectedReferences(string[] members)
+    /// to nothing (IPB-17, IPB-28).</summary>
+    private static IEnumerable<string> ProtectedReferences(string[] members, string containingType = TheLeafType)
     {
         foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
@@ -149,7 +151,7 @@ public sealed class ConnectionsLeafCensus
                     continue;
                 }
                 if (Candidates(model.GetSymbolInfo(reference)).OfType<IMethodSymbol>()
-                    .Any(method => members.Contains(method.Name) && method.ContainingType.ToDisplayString() == TheLeafType))
+                    .Any(method => members.Contains(method.Name) && method.ContainingType.ToDisplayString() == containingType))
                 {
                     yield return $"{relative}:{OwnerOf(reference)} references {CSharpSource.Normalize(reference)} as a method group";
                 }
@@ -173,20 +175,23 @@ public sealed class ConnectionsLeafCensus
     [Fact]
     public void SyncPanelsIsTheOnlyRecorderAndTheBoundaryTheOnlyReconciler()
     {
+        // BOUND (codex post-implementation pass 4, IPB-28): the recorder's and
+        // the reconciler's callers by their method symbols, a method-group
+        // reference to either an offence, an unbound call to either refused.
         var recorders = new List<string>();
         var reconcilers = new List<string>();
-        foreach ((string relative, CSharpSource source) in ShellSources())
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
+            SemanticModel model = ShellCompilation.ModelFor(source);
             foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                string callee = call.Expression is MemberAccessExpressionSyntax access
-                    ? access.Name.Identifier.ValueText
-                    : call.Expression is IdentifierNameSyntax bare ? bare.Identifier.ValueText : string.Empty;
-                if (callee == "SyncConnectionsRoot")
+                IMethodSymbol[] methods = [.. Candidates(model.GetSymbolInfo(call)).OfType<IMethodSymbol>()
+                    .Where(method => method.ContainingType.ToDisplayString() == TheWorkspaceType)];
+                if (methods.Any(method => method.Name == "SyncConnectionsRoot"))
                 {
                     recorders.Add($"{relative}:{OwnerOf(call)}");
                 }
-                if (callee == "ReconcileConnectionsRoot")
+                if (methods.Any(method => method.Name == "ReconcileConnectionsRoot"))
                 {
                     reconcilers.Add($"{relative}:{OwnerOf(call)}");
                 }
@@ -194,6 +199,8 @@ public sealed class ConnectionsLeafCensus
         }
         Assert.Equal(["WorkspaceViewModel.cs:SyncPanels"], recorders);
         Assert.Equal(["WorkspaceViewModel.Persistence.cs:RunWorkspaceMutation"], reconcilers);
+        string[] offenders = [.. ProtectedReferences(["SyncConnectionsRoot", "ReconcileConnectionsRoot"], TheWorkspaceType)];
+        Assert.True(offenders.Length == 0, "the root's recorder or reconciler is reached other than by a bound call:\n" + string.Join("\n", offenders));
     }
 
     /// <summary>The consume, BOUND (IPB-18): the workspace's own method; an

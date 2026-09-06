@@ -16,23 +16,57 @@ namespace SlateWindows.Tests;
 /// </summary>
 public sealed partial class ConnectionsLeafTests
 {
-    /// <summary>Park the leaf's worker after both crossings; the caller
-    /// moves the world on the dispatcher, then releases.</summary>
-    private static (ManualResetEventSlim Gate, ManualResetEventSlim Reached) Park(ConnectionsLeafViewModel leaf)
+    /// <summary>A fetch parked after its crossings (codex post-implementation
+    /// pass 4, IPB-21): the caller moves the world on the dispatcher, then
+    /// releases; a release that never came within the bound is RECORDED,
+    /// so a fact can fail on it instead of testing a fetch that resumed on
+    /// its own.</summary>
+    private sealed class ParkedFetch : IDisposable
     {
-        var gate = new ManualResetEventSlim(false);
-        var reached = new ManualResetEventSlim(false);
+        public ManualResetEventSlim Gate { get; } = new(false);
+
+        public ManualResetEventSlim Reached { get; } = new(false);
+
+        public bool TimedOut { get; private set; }
+
+        internal void Hold()
+        {
+            Reached.Set();
+            if (!Gate.Wait(TimeSpan.FromSeconds(30)))
+            {
+                TimedOut = true;
+            }
+        }
+
+        public void Deconstruct(out ManualResetEventSlim gate, out ManualResetEventSlim reached)
+        {
+            gate = Gate;
+            reached = Reached;
+        }
+
+        public void Dispose()
+        {
+            Gate.Dispose();
+            Reached.Dispose();
+        }
+    }
+
+    /// <summary>Park the leaf's NEXT fetch after both crossings — armed
+    /// BEFORE the load is issued (IPB-21: a fast fetch could cross before a
+    /// seam installed after the open).</summary>
+    private static ParkedFetch Park(ConnectionsLeafViewModel leaf)
+    {
+        var parked = new ParkedFetch();
         bool armed = true;
         leaf.FetchGateForTests = () =>
         {
             if (armed)
             {
                 armed = false;
-                reached.Set();
-                gate.Wait(TimeSpan.FromSeconds(10));
+                parked.Hold();
             }
         };
-        return (gate, reached);
+        return parked;
     }
 
     private static void AssertNothingChanged(Host host, ConnectionsPublication before, int loadsBefore)
@@ -196,22 +230,20 @@ public sealed partial class ConnectionsLeafTests
             using var host = new Host(vault.Root);
             ConnectionsLeafViewModel leaf = host.Leaf;
             host.ActivateLeaf();
+            // Armed BEFORE the open (IPB-21).
+            using ParkedFetch parked = Park(leaf);
             host.OpenNote(Hub);
-            (ManualResetEventSlim gate, ManualResetEventSlim reached) = Park(leaf);
-            using (gate)
-            using (reached)
-            {
-                Assert.True(reached.Wait(TimeSpan.FromSeconds(10)), "the load never reached the gate");
-                host.Clear();
-                leaf.Retire();
-                gate.Set();
-                PumpedDispatcher.PumpUntilDrained(leaf.WhenAllWorkDrained());
-                PumpedDispatcher.Drain();
+            Assert.True(parked.Reached.Wait(TimeSpan.FromSeconds(10)), "the load never reached the gate");
+            host.Clear();
+            leaf.Retire();
+            parked.Gate.Set();
+            PumpedDispatcher.PumpUntilDrained(leaf.WhenAllWorkDrained());
+            PumpedDispatcher.Drain();
 
-                Assert.True(leaf.IsRetired);
-                Assert.Equal(ConnectionsLoadState.NoNote, leaf.Publication.State);
-                Assert.Empty(host.RelayLines);
-            }
+            Assert.False(parked.TimedOut);
+            Assert.True(leaf.IsRetired);
+            Assert.Equal(ConnectionsLoadState.NoNote, leaf.Publication.State);
+            Assert.Empty(host.RelayLines);
         });
     }
 
@@ -225,20 +257,19 @@ public sealed partial class ConnectionsLeafTests
             using var host = new Host(vault.Root, () => generation);
             ConnectionsLeafViewModel leaf = host.Leaf;
             host.ActivateLeaf();
+            // Armed BEFORE the open (IPB-21).
+            using ParkedFetch parked = Park(leaf);
             host.OpenNote(Hub);
-            (ManualResetEventSlim gate, ManualResetEventSlim reached) = Park(leaf);
-            using (gate)
-            using (reached)
-            {
-                Assert.True(reached.Wait(TimeSpan.FromSeconds(10)), "the load never reached the gate");
-                host.Clear();
-                generation = 2;
-                gate.Set();
-                host.Settle();
+            Assert.True(parked.Reached.Wait(TimeSpan.FromSeconds(10)), "the load never reached the gate");
+            host.Clear();
+            generation = 2;
+            parked.Gate.Set();
+            host.Settle();
 
-                Assert.Equal(ConnectionsLoadState.Loading, leaf.Publication.State);
-                Assert.Empty(host.RelayLines);
-            }
+            Assert.False(parked.TimedOut);
+            Assert.Equal(ConnectionsLoadState.Loading, leaf.Publication.State);
+            Assert.False(leaf.InFlight);
+            Assert.Empty(host.RelayLines);
         });
     }
 

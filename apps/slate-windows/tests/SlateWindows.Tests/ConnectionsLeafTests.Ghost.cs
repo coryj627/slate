@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Windows.Threading;
 using SlateWindows.Graph;
 using uniffi.slate_uniffi;
 
@@ -191,6 +192,108 @@ public sealed partial class ConnectionsLeafTests
             Assert.Equal(Two, host.Workspace.ActiveGroup.ActiveTab!.Path);
             Assert.Equal(Two, leaf.Root);
             Assert.Empty(host.Timeline);
+        });
+    }
+
+    /// <summary>Codex post-implementation pass 4 (IPB-19; B-9, Term 1): the
+    /// leaf's Reveal in file tree reaches the sidebar's select-path seam
+    /// WITHOUT a graph tab — the graph tab's addressed reveal returned early
+    /// without one, and the standalone leaf's enabled action did nothing.</summary>
+    [Fact]
+    public void RevealFromTheLeafReachesTheSidebarWithNoGraphTab()
+    {
+        using GraphVault vault = GraphVault.Copy("reveal-no-graph");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            ConnectionsLeafViewModel leaf = host.Leaf;
+            var revealed = new List<string>();
+            host.Workspace.GraphRevealInSidebar = path => revealed.Add(path);
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            Assert.Null(host.Workspace.GraphDocument);
+            GraphConnectionRow note = leaf.Publication.Tree!.Outgoing.First(row => row.Kind == GraphNodeKind.Note && row.Path is not null);
+            Assert.True(leaf.IsActionEnabled(GraphRowAction.Reveal, note));
+
+            leaf.Execute(GraphRowAction.Reveal, note);
+
+            Assert.Equal([note.Path], revealed);
+            Assert.Null(host.Workspace.GraphDocument);
+            Assert.Equal(Hub, host.Workspace.ActiveGroup.ActiveTab!.Path);
+        });
+    }
+
+    /// <summary>Codex post-implementation pass 4 (IPB-20; A-2, B-1, B-11): the
+    /// create worker names its owner DISPATCHER beside its context, so a
+    /// completion enqueued while the dispatcher is busy and then ABORTED by
+    /// its shutdown withdraws its promise — the create's drain completes,
+    /// nothing applies (the generic scheduler's own fact, on this worker).</summary>
+    [Fact]
+    public async Task ACreateCompletionAbortedByTheDispatchersShutdownWithdrawsItsPromise()
+    {
+        GraphNoteCreationWorker? worker = null;
+        Dispatcher? dispatcher = null;
+        using var ready = new ManualResetEventSlim(false);
+        using var insideOperation = new ManualResetEventSlim(false);
+        using var releaseOperation = new ManualResetEventSlim(false);
+        using var queued = new ManualResetEventSlim(false);
+        var thread = new Thread(() =>
+        {
+            dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
+            worker = new GraphNoteCreationWorker();
+            ready.Set();
+            Dispatcher.Run();
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "the dispatcher thread never started");
+        Assert.NotNull(worker);
+        Assert.NotNull(dispatcher);
+        worker.ApplyQueuedForTests = queued.Set;
+
+        _ = dispatcher.BeginInvoke(
+            DispatcherPriority.Normal,
+            new Action(() =>
+            {
+                insideOperation.Set();
+                _ = releaseOperation.Wait(TimeSpan.FromSeconds(10));
+                dispatcher.InvokeShutdown();
+            }));
+        Assert.True(insideOperation.Wait(TimeSpan.FromSeconds(10)), "the dispatcher never entered the blocking operation");
+
+        int completions = 0;
+        worker.Run(
+            () => new FileManagement.NoteCreateResult.Failed("never applied"),
+            _ => Interlocked.Increment(ref completions));
+        Assert.True(queued.Wait(TimeSpan.FromSeconds(10)), "the completion was never enqueued on the busy dispatcher");
+        releaseOperation.Set();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "the dispatcher never shut down");
+        Assert.True(dispatcher.HasShutdownFinished);
+
+        Task drain = worker.WhenAllWorkDrained();
+        Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the create's drain waited on an aborted operation");
+        await drain;
+        Assert.Equal(0, Volatile.Read(ref completions));
+    }
+
+    /// <summary>Codex post-implementation pass 4 (IPB-27; A-10 as amended,
+    /// B-19 i): the runtime witness beside the source census — the leaf and
+    /// the graph document speak through the SAME relay instance, the
+    /// workspace's one.</summary>
+    [Fact]
+    public void TheLeafAndTheGraphDocumentShareTheWorkspacesOneRelayAtRuntime()
+    {
+        using GraphVault vault = GraphVault.Copy("one-relay");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            GraphAnnouncer relay = host.Workspace.GraphRelayForTests;
+            Assert.Same(relay, host.Leaf.AnnouncerForTests);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            Assert.Same(relay, host.Workspace.GraphDocument!.AnnouncerForTests);
         });
     }
 

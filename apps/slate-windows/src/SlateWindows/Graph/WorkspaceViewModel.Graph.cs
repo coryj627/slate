@@ -335,11 +335,24 @@ internal sealed partial class WorkspaceViewModel
 internal sealed class GraphNoteCreationWorker : PanelWorkScheduler
 {
     public GraphNoteCreationWorker()
+        : this(
+            SynchronizationContext.Current as System.Windows.Threading.DispatcherSynchronizationContext,
+            System.Windows.Threading.Dispatcher.CurrentDispatcher)
+    {
+    }
+
+    /// <summary>The owner DISPATCHER is named beside its context (codex
+    /// post-implementation pass 4, IPB-20): only the named-dispatcher post
+    /// observes an aborted operation and withdraws its promise, so a
+    /// completion posted after the dispatcher's shutdown began cannot leave
+    /// the create's drain pending.</summary>
+    private GraphNoteCreationWorker(
+        System.Windows.Threading.DispatcherSynchronizationContext? current,
+        System.Windows.Threading.Dispatcher dispatcher)
         : base(
             synchronousForTests: false,
-            SynchronizationContext.Current as System.Windows.Threading.DispatcherSynchronizationContext
-                ?? new System.Windows.Threading.DispatcherSynchronizationContext(
-                    System.Windows.Threading.Dispatcher.CurrentDispatcher))
+            current ?? new System.Windows.Threading.DispatcherSynchronizationContext(dispatcher),
+            dispatcher)
     {
     }
 

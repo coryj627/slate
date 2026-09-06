@@ -338,10 +338,23 @@ public sealed class GraphAnnouncerCensus
             // reference that could call it later.
             foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                if (IsTheFactory(model.GetSymbolInfo(call)))
+                if (!IsTheFactory(model.GetSymbolInfo(call)))
                 {
-                    factoryUses.Add($"{relative}:{OwnerOf(call)}");
+                    continue;
                 }
+                // The call's SHAPE (pass 4, IPB-27): one call expression can
+                // run many times inside a loop, a lambda or a query — the one
+                // call must be the direct right-hand side of the field's
+                // assignment, with no loop, branch, lambda or local function
+                // between it and the constructor.
+                bool direct = call.Parent is AssignmentExpressionSyntax { Left: IdentifierNameSyntax { Identifier.ValueText: "_graphRelay" } };
+                bool repeatable = call.Ancestors()
+                    .TakeWhile(ancestor => ancestor is not ConstructorDeclarationSyntax)
+                    .Any(ancestor => ancestor is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax
+                        or ForStatementSyntax or ForEachStatementSyntax or WhileStatementSyntax or DoStatementSyntax
+                        or IfStatementSyntax or ConditionalExpressionSyntax or SwitchStatementSyntax or SwitchExpressionSyntax
+                        or QueryExpressionSyntax or TryStatementSyntax);
+                factoryUses.Add($"{relative}:{OwnerOf(call)}{(direct ? string.Empty : " (not the field's direct assignment)")}{(repeatable ? " (inside a repeatable construct)" : string.Empty)}");
             }
             foreach (ExpressionSyntax reference in source.Root.DescendantNodes().OfType<ExpressionSyntax>())
             {

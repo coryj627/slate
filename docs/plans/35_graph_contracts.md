@@ -6119,6 +6119,85 @@ reveal whose scope cannot be analysed is an offence (no fallback).
 Gates: `cargo fmt` clean, clippy clean, the crates and the mac sources byte-identical to 95387c9's (their runs stand); `dotnet format` applied; the whole Windows test project on a fresh build, 2235 passed without the model; the model alone, 708 cells in 3 m 4 s — run concurrently with the suite it starved a probe wait, and alone it found the wait itself wrong for a rename with the leaf active (the new root's load may complete before the probe decides, a valid order), so the driver now waits on the leaf's tracked-work count, which falls only once the probe's own task has applied; the accessibility project built and the leaf journey passed twice in the foreground, 10 s each; benchmarks build; CI and codoki on the push are the oracle. Mutations, each restored byte for byte, each caught by
 the named fact: the menu item ignoring a released row (`ACachedMenuItemIsInertAfterACollapseAndAfterAStaleRootChange`); the stale tree's row acting (the same fact, the document's wall); the registration after the worker, the caller parked at the seam (`AComputeStartsOnlyAfterItsRegistrationAndADrainWaitsForIt`); a second factory call (`ExactlyOneGraphRelayIsConstructedInTheShell`); a trigger through a delegate (`EveryTriggerEntryPointHasExactlyTheCallersRuleCNames`); the depth through a delegate (`EveryDepthWriteIsTheFfiClampsResultAndOnlyTheNamedProducersReachIt`); a return inside the command lambda (`EveryPaneRevealConsumesThePendingMountAndTheConstructorSeedsIt`) — seven, none survived; the suspension flag's mutation, which survived, took the flag with it.
 
+**TGB-11 — Post-implementation pass 4 (IPB-19..28): the sweep.** On
+c1938c5 the standing gate was met — CI green (13 checks), codoki
+"auto-approved (no issues found)" on that head, no thread open — and
+codex's fourth pass returned ten findings: no blocker, ten majors, no
+minor (its validation note: the lifecycle receiver fact could not reach
+its graph setup in codex's environment, where the spell-checker's COM
+creation is refused; the fact runs here). Each, and its discharge:
+(IPB-19, major) the leaf's Reveal handed the path to the GRAPH
+surface's reveal, which returns before the sidebar seam when no graph
+tab is effective — so the standalone leaf's Reveal did nothing without
+a graph tab beside it (B-9): the leaf's reveal is its own
+(`RevealConnectionsRowFromSurface`) and reaches the sidebar seam
+directly; fact `RevealFromTheLeafReachesTheSidebarWithNoGraphTab`.
+(IPB-20, major) the create worker built its synchronization context
+but handed the scheduler no owner dispatcher, so a completion posted
+after the dispatcher's shutdown could neither be observed nor
+withdrawn: the worker's constructor chain passes its dispatcher and an
+aborted post withdraws the promise; fact
+`ACreateCompletionAbortedByTheDispatchersShutdownWithdrawsItsPromise`.
+(IPB-21, major) `Park` waited ten seconds and discarded the result,
+and two receiver facts started the load before the seam was armed: the
+parked fetch is an object that holds thirty seconds and records a
+time-out the model reports as a divergence of its own ("the parked
+fetch resumed on its own before the route released it"), and every
+park is armed before the load it parks. (IPB-22, major, reopening
+IPB-14) Loading with nothing in flight — the newest sequence landed
+REJECTED, the flag clear and the presentation still Loading (Term 7) —
+was named unreachable: it is arranged through a rejected first-load
+envelope (the seam rewrites the tree's path echo) and driven across
+every route, the model asserting nothing in flight before it. (IPB-23,
+major, reopening IPB-7 and IPB-14) the model read the pending load's
+audibility off the ROUTE: the cell gains a third dimension — nothing,
+an AUDIBLE load or a SILENT one in flight — the audible one Deeper's
+reload over a tree or an Error (Shallower first at the bound), the
+silent one the probe's over a moved vault, an Error, a Missing or a
+Loading; the arranged token's policy is asserted and the derivation
+speaks the completion iff the token is audible and the leaf active at
+apply (Term 5, B-D3). (IPB-24, major, reopening IPB-14) Deeper at the
+bound with a reload in flight IS reachable — Shallower then Deeper,
+the second parked: driven, the route the clamp's no-op and the parked
+reload speaking after it; the Error arm at the bound injects two
+failures, since the Shallower that precedes the parked Deeper would
+otherwise heal it. (IPB-25, major, reopening IPB-15) the pane close
+onto the SAME no-note root: a canvas beside the note in the surviving
+group, the graph in a pane of its own — the close lands on the canvas
+and the root stays none; driven. (IPB-26, major, reopening IPB-7)
+Error was the missing root's: the presentations split — ERROR a
+transient failure over an existing root (the fetch seam throws once,
+the envelope carries the failure), MISSING the root that is not in the
+graph (its own Error state, from core) — so the rename of an Error
+root is driven and only the rename of a missing one is named (core
+refuses it); the fetch seam runs once per fetch, after the fetch's own
+try/catch, on either path. (IPB-27, major, reopening IPB-16) the
+instance census accepted one factory EXPRESSION wherever it sat: the
+one call must be the direct right-hand side of the field's assignment
+in the constructor with no loop, lambda or branch above it — a call
+inside any of those is an offence; fact
+`ExactlyOneGraphRelayIsConstructedInTheShell`. (IPB-28, major) the
+recorder and reconciler census recognised the textual callee: bound
+now, and every method-group reference to a recorder or a reconciler is
+an offence, so a delegate cannot carry one; fact
+`SyncPanelsIsTheOnlyRecorderAndTheBoundaryTheOnlyReconciler`. The
+model, rebuilt to these: thirty routes over three roots, FIVE
+presentations and THREE loads in flight — 5400 cells, 4017 named, 1383
+driven, the totals pinned; every cell now compares the publication's
+STATE after the route beside the timeline, the loads, the root, the
+staleness and the depth. What the rebuild taught: STALE at rest is
+NoNote over a root (the note opened while the leaf was inactive — a
+root the presentation is not for); a switch to the leaf speaks the
+audible completion parked before it (IGH-14's other half — the
+derivation had read the leaf's activity before the route); the split's
+sole-tab close over a missing survivor holds Two Ready, so its silent
+reload needs the vault moved; the graph tab's summary after the
+arrangement's bump counts the note added (the fixture reports both
+lines from core over a copy of its own); a launch with another leaf
+restored active records the root and loads nothing. Gates: the crates and the mac sources byte-identical to c1938c5's, so TGB-10's cargo runs stand; `dotnet format` applied; the whole Windows test project on a fresh build, 2238 passed without the model; the model alone, 1383 cells in 5 m 55 s; the accessibility project built and the leaf journey passed twice in the foreground, 10 s each; benchmarks build; CI and codoki on the push are the oracle.
+Mutations, each restored byte for byte, each caught by the named fact:
+the reveal through the graph surface's address (`RevealFromTheLeafReachesTheSidebarWithNoGraphTab`); the create worker without its dispatcher (`ACreateCompletionAbortedByTheDispatchersShutdownWithdrawsItsPromise`); the factory call inside a lambda (`ExactlyOneGraphRelayIsConstructedInTheShell`); a recorder through a delegate (`SyncPanelsIsTheOnlyRecorderAndTheBoundaryTheOnlyReconciler`); and three the MODEL alone catches — a rejected echo leaving the flag set, a silent load's summary spoken, Deeper at the bound loading (`TheModelOfTermsTwoToNineDerivesEveryRoutesTimelineAcrossEveryState`) — seven, none survived; seventy-three in the sweep.
+
 ### Tests that pin PR B (slice B1)
 
 - ConnectionsLeafTests: the tree over the shared fixture and the
@@ -6164,9 +6243,10 @@ the named fact: the menu item ignoring a released row (`ACachedMenuItemIsInertAf
   the recorded events equal to the derivation; the away → back and hide
   → away completions —
   `TheModelOfTermsTwoToNineDerivesEveryRoutesTimelineAcrossEveryState`,
-  thirty routes over three roots and four presentations, 2880 cells,
-  708 driven, 2172 named as not states of the system, the totals
-  pinned (TGB-7, TGB-8, TGB-9, TGB-10).
+  thirty routes over three roots, five presentations and three loads in
+  flight, 5400 cells, 1383 driven, 4017 named as not states of the
+  system, the totals pinned, the publication's state compared after
+  every route (TGB-7, TGB-8, TGB-9, TGB-10, TGB-11).
 - GraphAnnouncerTests gains the stored fire-time gate (0a-9's suite:
   queue, leave effective, fire, nothing) and the cross-surface High
   flush; GraphDocumentTests' retirement fact asserts the relay is

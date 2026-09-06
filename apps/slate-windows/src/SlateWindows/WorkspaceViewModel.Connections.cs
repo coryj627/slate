@@ -83,7 +83,7 @@ internal sealed partial class WorkspaceViewModel
             verbosity: () => GraphVerbosity.Standard,
             lifecycleGeneration: () => LifecycleGeneration());
         leaf.OpenRowFromSurface = (path, target) => OpenConnectionsRowFromSurface(path, target);
-        leaf.RevealRowFromSurface = path => RevealGraphRowFromSurface(path);
+        leaf.RevealRowFromSurface = path => RevealConnectionsRowFromSurface(path);
         leaf.CreateNoteFromSurface = (path, root, epoch) => CreateConnectionsNoteFromSurface(path, root, epoch);
         leaf.CreateAdmissionReason = () => GraphCreateAdmissionReason?.Invoke();
         return leaf;
@@ -236,6 +236,22 @@ internal sealed partial class WorkspaceViewModel
     private void ProbeConnections() => Connections.Probe();
 
     // --- The seams ----------------------------------------------------------------------
+
+    /// <summary>B-9: reveal a row's note in the files sidebar from the LEAF —
+    /// the sidebar's select-path seam directly, no graph tab addressed (the
+    /// mac's <c>revealInFileTree</c>; codex post-implementation pass 4,
+    /// IPB-19: the graph tab's addressed reveal returned early without a
+    /// tab, so a standalone leaf's enabled Reveal did nothing).</summary>
+    internal bool RevealConnectionsRowFromSurface(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (GraphRevealInSidebar is not { } reveal)
+        {
+            return false;
+        }
+        reveal(path);
+        return true;
+    }
 
     /// <summary>B-9: open a row's note in the ACTIVE pane; on success the
     /// shell's <c>OpenedFile</c> posts through the workspace's announcer.</summary>
