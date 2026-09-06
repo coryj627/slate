@@ -269,7 +269,12 @@ public sealed class ConnectionsLeafCensus
                 "WorkspaceViewModel.Connections.cs:NewConnectionsLeaf",
             ],
             reRoots.Order(StringComparer.Ordinal));
-        Assert.Equal([], backs.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            [
+                "WorkspaceViewModel.Connections.cs:ConnectionsBackCommand",
+                "WorkspaceViewModel.Connections.cs:NewConnectionsLeaf",
+            ],
+            backs.Order(StringComparer.Ordinal));
         string[] offenders = [.. ProtectedReferences(["ReRootConnectionsOn", "ConnectionsBack"], TheWorkspaceType)];
         Assert.True(offenders.Length == 0, "the funnel or Back is reached other than by a bound call:\n" + string.Join("\n", offenders));
     }

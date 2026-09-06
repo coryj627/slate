@@ -288,6 +288,11 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     /// workspace's re-root funnel, on the row's file-backed path.</summary>
     internal Action<string>? ShowConnectionsFromRow { get; set; }
 
+    /// <summary>W6-2 PR B2 (B2-4, IGK-12): the view's key owner's route to
+    /// the workspace's Back — RESULT-bearing, so the chord falls through
+    /// when there was nothing to pop (the mac's <c>.ignored</c>).</summary>
+    internal Func<bool>? BackFromSurface { get; set; }
+
     internal Action<string>? RevealRowFromSurface { get; set; }
 
     /// <summary>The create funnel, addressed by the LEAF (B-11): the

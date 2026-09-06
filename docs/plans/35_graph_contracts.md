@@ -7477,6 +7477,48 @@ for every on-screen tree item and grid row of the window to have a
 rectangle before every scan; a scan that still fails after the wait is
 a defect. The journey passed three times in the foreground afterwards. Mutations, each restored byte for byte, each caught by the named fact: the pin crossing the open — pinned only after the open succeeded (the refused-open fact); the same-root case pinning again (the same-root fact); Back popping without its open's success (the Back fact — which SURVIVED as first written, since the pop's own guard refuses the unchanged tab either way, and now pins that a refused open runs none of the pop mutation: with the pane collapsed and another leaf active, no pane line, no leaf line, the pane still collapsed); the table's entrance unaddressed (the table fact); the graph document's `Execute` without the current-row wall, and the Bases' `RowCommand` without the captured-result wall (the membership census, both); the open keeping the editor's focus request (the focus fact); the open skipping its post-gate validation (the group-changed fact); the Bases' entrance unaddressed (the Bases fact) — nine, none survived; twenty-four in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build, 2266 passed without the model; the model alone, 1383 cells in 5 m 51 s; the accessibility project built and, in the foreground, the Bases journey passed three times and the graph table and the leaf journeys once each; benchmarks build; CI and codoki on the push are the oracle.
 
+**TGB2-4 — T4: Back's chord row, its scope and its key owner (B2-4,
+B2D-3, B2-D6, B2-D11; IGK-12, IGK-16).** The chord table gains
+`slate.graph.connectionsBack` — "Connections: Back", the mac's `⌘[` as
+`Ctrl+[`, in the new `ChordScope.Connections` (the leaf body's own key
+handling), the thirteenth graph id with no mac catalog twin (B2-D6); the
+chord follows the ⌘→Ctrl rule, so the row records no chord divergence
+(the table's modifier-rule fact holds it to that), and the
+modifier-MATCHING divergence is B2-D11's, recorded here and at the
+owner: the leaf view's tunnelling `OnPreviewKeyDown` matches
+`Key.OemOpenBrackets` with `ModifierKeys.Control` EXACTLY, so
+`Ctrl+Shift+[` (Previous Tab) and `Ctrl+Alt+[` (the sidebar's history)
+keep their owners, and marks the event handled only when the
+workspace's Back popped — through the leaf's new RESULT-bearing seam
+`BackFromSurface` that `NewConnectionsLeaf` installs (IGK-12) — so with
+nothing to pop the chord falls through (the mac's `.ignored`). The
+registrar resolves the row to the workspace's `ConnectionsBackCommand`,
+the palette's route to the same funnel (a no-op with nothing to pop);
+no menu item backs it by design. The table's scope test scrapes the
+new scope from production as it does the canvas's: `ConnectionsChords`
+reads the key and the modifiers off the view's `IsTheBackChord`
+expression, so a chord added to the view without a row, or a row
+without a delivering site, fails in both directions. `chords.json` is
+the table's projection, regenerated through the test's own switch,
+never by hand; its delivery evidence maps the id to the graph group;
+the matrix generator's delivered rows gain the id and the parity
+matrix is regenerated (its command rows are the mac catalog's, so the
+Windows-only id adds no row — the connections leaf's row is T6's).
+Facts: `ConnectionsBackIsARegisteredConnectionsScopedRow` (the label,
+the section, both chords, the scope, the one row in it, `Ctrl+[` in no
+other scope, no chord divergence);
+`TheLeafBodyOwnsBacksChordWithControlAloneAndFallsThroughWithNothingToPop`
+(FOLLOWING falls through; pinned, `Ctrl+Alt+[`, `Ctrl+Shift+[` and
+`Ctrl+]` fall through; `Ctrl+[` pops and is handled; the emptied stack
+falls through again); drift test 1 sees the row through the registrar;
+the funnel-caller census now names Back's two callers, the command's
+body and the seam's installer; the mac-catalog parity test's
+Windows-only disposition list gains the id with B2-D6 as its reason —
+the whole suite's first run under this task failed there, an id absent
+from the mac catalog with no recorded reason, which is that test doing
+its work: the targeted filter never reached it, the gate did.
+Mutations, each restored byte for byte, each caught by the named fact: the view firing on any chord with Control SET rather than Control alone (the view fact, through `Ctrl+Alt+[`); the view marking the event handled without a pop (the view fact, through the FOLLOWING fall-through); the row registered in the Global scope (the row fact); the resolver entry deleted (which SURVIVED its first run, filtered to the drift tests — those scrape resolver BODIES for menu drift and never ask whether a registered id resolves at all; rerun under `RegistryHoldsExactlyTheDeclaredCatalog_BothDirections`, the P13(a) fact that holds the registered set and the resolvable set equal, caught — the record names the covering fact so the sweep's filter is not mistaken for the coverage); the seam installer's Back line deleted (the funnel-caller census) — five, none survived a covering fact; twenty-nine in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build — 2267 passed and the mac-catalog parity test failed on the undispositioned id, then, the disposition added, 2268 passed on a fresh build; the model alone, 1383 cells in 5 m 48 s; the accessibility project built and, in the foreground, the leaf journey and the graph table journey passed; benchmarks build; CI and codoki on the push are the oracle.
+
 ### Tests that pin PR B2 (revision 5's list; the task loop records what lands)
 
 - `ConnectionsLeafTests.ReRoot.cs`: the pin mutation's order on Show's

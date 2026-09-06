@@ -754,6 +754,32 @@ internal sealed class ConnectionsLeafView : UserControl
         return menu;
     }
 
+    /// <summary>W6-2 PR B2 (B2-4): the leaf BODY owns Back's chord, tunnelling
+    /// — the mac's panel-level key, so it works from the depth control and
+    /// the anchor as from the tree — and marks the event handled only when
+    /// the workspace popped; with nothing to pop the chord falls through to
+    /// whatever owns it next (the mac's <c>.ignored</c>).</summary>
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        ArgumentNullException.ThrowIfNull(e);
+        base.OnPreviewKeyDown(e);
+        if (!e.Handled && TryHandleBackChord(e.Key == Key.System ? e.SystemKey : e.Key, Keyboard.Modifiers))
+        {
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>The key owner's decision, for the facts: handled iff the
+    /// chord is Back's and the workspace popped.</summary>
+    internal bool TryHandleBackChord(Key key, ModifierKeys modifiers) =>
+        IsTheBackChord(key, modifiers) && Model?.BackFromSurface?.Invoke() == true;
+
+    /// <summary>Back's chord, matched EXACTLY (B2-D11): Control alone, so
+    /// Ctrl+Shift+[ (Previous Tab) and Ctrl+Alt+[ (the sidebar's history)
+    /// keep their owners. The chord table's scope scrape reads this body.</summary>
+    private static bool IsTheBackChord(Key key, ModifierKeys modifiers) =>
+        key == Key.OemOpenBrackets && modifiers == ModifierKeys.Control;
+
     private void OnFocusEntered(KeyboardFocusChangedEventArgs e)
     {
         // Entry only: focus arriving from OUTSIDE the leaf's host — a move

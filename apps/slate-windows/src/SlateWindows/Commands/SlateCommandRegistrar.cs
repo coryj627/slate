@@ -502,6 +502,7 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.GraphShowConnections] = host => host.Workspace?.ShowConnectionsCommand,
             [ChordTable.Ids.GraphConnectionsDeeper] = host => host.Workspace?.ConnectionsDeeperCommand,
             [ChordTable.Ids.GraphConnectionsShallower] = host => host.Workspace?.ConnectionsShallowerCommand,
+            [ChordTable.Ids.GraphConnectionsBack] = host => host.Workspace?.ConnectionsBackCommand,
 
             // Canvas navigator, filter, Where-am-I and modes (W6-1 PR C,
             // contract C1). Every movement row stays enabled on a canvas

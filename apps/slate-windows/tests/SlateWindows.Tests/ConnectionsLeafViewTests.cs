@@ -3,6 +3,7 @@
 
 using System.Runtime.ExceptionServices;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
@@ -104,6 +105,48 @@ public sealed class ConnectionsLeafViewTests
         {
             ExceptionDispatchInfo.Capture(failure).Throw();
         }
+    }
+
+    /// <summary>W6-2 PR B2, B2-4 / B2-D11: the leaf's body owns Back's chord
+    /// — Control alone, so the sidebar history's Ctrl+Alt+[ and Previous
+    /// Tab's Ctrl+Shift+[ keep their owners — and handles it only when the
+    /// workspace popped: with nothing to pop the chord falls through.</summary>
+    [Fact]
+    public void TheLeafBodyOwnsBacksChordWithControlAloneAndFallsThroughWithNothingToPop()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("back-chord");
+            host.ActivateLeaf();
+            host.Workspace.OpenPath("hub.md", WorkspaceOpenTarget.CurrentTab);
+            PumpedDispatcher.PumpUntilDrained(host.Leaf.WhenAllWorkDrained());
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                // FOLLOWING: nothing to pop, the chord falls through.
+                Assert.False(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control));
+
+                Assert.True(host.Workspace.ReRootConnectionsOn("2.md"));
+                PumpedDispatcher.PumpUntilDrained(host.Leaf.WhenAllWorkDrained());
+                Assert.Equal("2.md", host.Leaf.Pin);
+                // Other owners' chords fall through even while pinned.
+                Assert.False(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control | ModifierKeys.Alt));
+                Assert.False(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control | ModifierKeys.Shift));
+                Assert.False(view.TryHandleBackChord(Key.OemCloseBrackets, ModifierKeys.Control));
+                Assert.Equal("2.md", host.Leaf.Pin);
+                // Back's chord pops and is handled.
+                Assert.True(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control));
+                PumpedDispatcher.PumpUntilDrained(host.Leaf.WhenAllWorkDrained());
+                Assert.Null(host.Leaf.Pin);
+                Assert.Equal("hub.md", host.Leaf.Root);
+                // The stack empty again: the chord falls through.
+                Assert.False(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
     }
 
     /// <summary>A window hosts the view so containers realise and peers

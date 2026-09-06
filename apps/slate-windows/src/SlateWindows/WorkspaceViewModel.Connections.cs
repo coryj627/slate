@@ -62,6 +62,15 @@ internal sealed partial class WorkspaceViewModel
     public System.Windows.Input.ICommand ConnectionsShallowerCommand =>
         _connectionsShallowerCommand ??= new RelayCommand(_ => Connections.Shallower(), _ => true);
 
+    private RelayCommand? _connectionsBackCommand;
+
+    /// <summary>`slate.graph.connectionsBack` (W6-2 PR B2, B2-4): the
+    /// palette's and the registrar's route to <see cref="ConnectionsBack"/>;
+    /// with nothing to pop it is a no-op (the key owner, unlike the
+    /// palette, reads the result to fall through).</summary>
+    public System.Windows.Input.ICommand ConnectionsBackCommand =>
+        _connectionsBackCommand ??= new RelayCommand(_ => _ = ConnectionsBack(), _ => true);
+
     /// <summary>Rule C, Term 2 — ACTIVE: the leaf is the active leaf, the
     /// mac's predicate; pane visibility is not consulted (B-D3).</summary>
     internal bool ConnectionsLeafIsActive() =>
@@ -85,6 +94,8 @@ internal sealed partial class WorkspaceViewModel
             lifecycleGeneration: () => LifecycleGeneration());
         leaf.OpenRowFromSurface = (path, target) => OpenConnectionsRowFromSurface(path, target);
         leaf.ShowConnectionsFromRow = path => ReRootConnectionsOn(path);
+        // The view's key owner reads the result to fall through (B2-4).
+        leaf.BackFromSurface = () => ConnectionsBack();
         leaf.RevealRowFromSurface = path => RevealConnectionsRowFromSurface(path);
         leaf.CreateNoteFromSurface = (path, root, epoch) => CreateConnectionsNoteFromSurface(path, root, epoch);
         leaf.CreateAdmissionReason = () => GraphCreateAdmissionReason?.Invoke();

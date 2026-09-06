@@ -661,6 +661,9 @@ W6_2_DELIVERED_COMMANDS = {
     "slate.graph.showConnections",
     "slate.graph.connectionsDeeper",
     "slate.graph.connectionsShallower",
+    # W6-2 PR B, slice B2 (#746, contract B2-4): Back — the mac's ⌘[ panel
+    # key as a command, Ctrl+[ delivered by the leaf's body.
+    "slate.graph.connectionsBack",
 }
 
 W6_1_DELIVERED_COMMANDS = {

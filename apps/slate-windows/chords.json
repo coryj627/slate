@@ -1546,6 +1546,18 @@
       "registered": true
     },
     {
+      "id": "slate.graph.connectionsBack",
+      "label": "Connections: Back",
+      "section": "Graph",
+      "hint": "Return the Connections leaf to the note it showed before the last Show connections.",
+      "macChord": "⌘[",
+      "mac": "Command Left Bracket",
+      "windows": "Ctrl+[",
+      "windowsSpoken": "Control Left Bracket",
+      "scope": "Connections",
+      "registered": true
+    },
+    {
       "id": "slate.sidebar.open",
       "label": "Open",
       "section": "Sidebar",
@@ -2713,7 +2725,8 @@
       "slate.graph.openTab": "graph",
       "slate.graph.showConnections": "graph",
       "slate.graph.connectionsDeeper": "graph",
-      "slate.graph.connectionsShallower": "graph"
+      "slate.graph.connectionsShallower": "graph",
+      "slate.graph.connectionsBack": "graph"
     },
     "issues": {
       "#720": "vault",
