@@ -7300,6 +7300,42 @@ discharges each row by code — a fact, a mutation, a record — and any
 row it cannot discharge as written is recorded as a verified deviation
 in its TGB2 record. Precedent applied; the owner may overrule.
 
+### Task loop — records (PR B2)
+
+**TGB2-1 — T1: the workspace's one view state, the document's guarded
+selection (B2-1, Term 15's document side).** `GraphViewState` is
+constructed ONCE, in the workspace's constructor beside the relay
+(`NewGraphViewState`, the direct right-hand side of the field's
+assignment), handed to the graph document at construction (the
+constructor's third parameter; a bare document in a fact passes its
+own) and read back through `GraphViewStateForTests`; `Retire()` no
+longer resets it and `GraphViewState.Reset()` is gone — a closed graph
+tab leaves the selection on the workspace (B2-D4) and a reopened one
+seats a document over the SAME instance, which revalidates the key it
+inherits at its first pair publication (A-7). The table view's
+current-row write moves into the document's `SelectRow(key)`, which
+refuses once retired, when the document is not the workspace's seated
+one (the factory's `isSeated` names the funnel's field; a bare
+document is its own) and when the current snapshot lacks the key
+(IGJ-6). Facts: `ClosingTheLastGraphTabRetiresTheDocumentAndAReopenSeatsAFreshOne`
+now asserts the survival, the shared instance and the refusal of the
+retired document; `SelectRowRefusesAnAbsentKeyAnUnseatedDocumentAndARetiredOne`
+(a second document over the same state, unseated by its predicate);
+`ARetainedTableViewOverAClosedTabWritesNothing` (the live grid's row
+writes through the document, the retained one over the closed tab
+moves nothing). Censuses: `ExactlyOneGraphViewStateIsConstructedInTheShell`
+(the relay census's shape — every bound creation the factory's, the
+factory's one call the constructor's direct assignment, no method-group
+reference); `TheSharedKeyIsWrittenByTheNamedOwnersAlone` (every bound
+assignment to `SelectedKey` in the shell compilation is `SelectRow`'s
+or `RevalidateSelection`'s — T2 adds the leaf's three — and the
+backing field is written by the setter alone, `ref` arguments
+included, IGK-19); `NoMutableShadowOfTheViewStateExistsInTheShell`
+(compilation-wide by TYPE — the filter, the surface mode, a list of the
+groups — with A-1's NAME rule kept under `Graph/`, where it belongs: a
+canvas's text `Filter` or the workspace's `Mode` elsewhere is its own,
+which the first run found). Mutations, each restored byte for byte, each caught by the named fact: retirement clearing the key (the retirement fact); a second `GraphViewState` constructed in the document factory (the instance census); the table view writing the key itself (the writers census); `SelectRow` without its snapshot guard, and a document seated unconditionally (the refusal fact, both); a mutable `GraphFilter` field under another name in the workspace's graph partial (the no-shadow census) — six, none survived. Gates: `dotnet format` clean; the whole Windows test project on a fresh build, 2245 passed without the model; the model alone, 1383 cells in 5 m 52 s; the accessibility project built and the leaf journey passed in the foreground, 14 s; benchmarks build (its one document construction takes the view state); CI and codoki on the push are the oracle.
+
 ### Tests that pin PR B2 (revision 5's list; the task loop records what lands)
 
 - `ConnectionsLeafTests.ReRoot.cs`: the pin mutation's order on Show's

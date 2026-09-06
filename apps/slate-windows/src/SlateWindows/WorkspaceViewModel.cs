@@ -1606,6 +1606,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // Restore and the first SyncPanels so the root follow reaches it —
         // and the seeded initial mount (rule C, Term 3(a)).
         _graphRelay = NewGraphRelay();
+        // W6-2 PR B2 (B2-1; A-1 and spec R-B as amended by the owner on
+        // 2026-09-06): the workspace's ONE view state, beside the relay,
+        // handed to the graph document and the leaf, dropped with the
+        // workspace — the instance census counts this one construction.
+        _graphViewState = NewGraphViewState();
         Connections = NewConnectionsLeaf();
         SeedInitialConnectionsMount();
         // W4-7: the history document — note-scoped (fed by SyncPanels),

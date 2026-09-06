@@ -370,11 +370,121 @@ public sealed class GraphAnnouncerCensus
         Assert.Equal(["WorkspaceViewModel.cs:<ctor>"], factoryUses);
     }
 
-    private static bool IsTheFactory(SymbolInfo info)
+    private static bool IsTheFactory(SymbolInfo info) => IsWorkspaceFactory(info, "NewGraphRelay");
+
+    private static bool IsWorkspaceFactory(SymbolInfo info, string name)
     {
         IEnumerable<ISymbol> candidates = info.Symbol is { } bound ? [bound] : info.CandidateSymbols;
         return candidates.OfType<IMethodSymbol>().Any(method =>
-            method.Name == "NewGraphRelay" && method.ContainingType.ToDisplayString() == "SlateWindows.WorkspaceViewModel");
+            method.Name == name && method.ContainingType.ToDisplayString() == "SlateWindows.WorkspaceViewModel");
+    }
+
+    private const string TheViewStateType = "SlateWindows.Graph.GraphViewState";
+
+    /// <summary>W6-2 PR B2, B2-1 (A-1 and spec R-B as amended by the owner on
+    /// 2026-09-06): the workspace's ONE view state — every creation bound
+    /// over the shell's compilation is the factory's, and the factory's one
+    /// call is the direct right-hand side of the constructor's field
+    /// assignment with no loop, branch, lambda or local function above it;
+    /// no method-group reference to the factory exists (the relay census's
+    /// shape, IPB-27).</summary>
+    [Fact]
+    public void ExactlyOneGraphViewStateIsConstructedInTheShell()
+    {
+        var creations = new List<string>();
+        var factoryUses = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (UsingDirectiveSyntax directive in source.Root.DescendantNodes().OfType<UsingDirectiveSyntax>())
+            {
+                if (directive.Alias is not null
+                    && directive.NamespaceOrType.ToString().EndsWith("GraphViewState", StringComparison.Ordinal))
+                {
+                    creations.Add($"{relative}:using alias {directive.Alias.Name} = {directive.NamespaceOrType}");
+                }
+            }
+            foreach (BaseObjectCreationExpressionSyntax creation in source.Root.DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>())
+            {
+                string declared = CreationType(model, creation);
+                if (declared != TheViewStateType && !declared.EndsWith("GraphViewState", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                creations.Add($"{relative}:{OwnerOf(creation)}");
+            }
+            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (!IsWorkspaceFactory(model.GetSymbolInfo(call), "NewGraphViewState"))
+                {
+                    continue;
+                }
+                bool direct = call.Parent is AssignmentExpressionSyntax { Left: IdentifierNameSyntax { Identifier.ValueText: "_graphViewState" } };
+                bool repeatable = call.Ancestors()
+                    .TakeWhile(ancestor => ancestor is not ConstructorDeclarationSyntax)
+                    .Any(ancestor => ancestor is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax
+                        or ForStatementSyntax or ForEachStatementSyntax or WhileStatementSyntax or DoStatementSyntax
+                        or IfStatementSyntax or ConditionalExpressionSyntax or SwitchStatementSyntax or SwitchExpressionSyntax
+                        or QueryExpressionSyntax or TryStatementSyntax);
+                factoryUses.Add($"{relative}:{OwnerOf(call)}{(direct ? string.Empty : " (not the field's direct assignment)")}{(repeatable ? " (inside a repeatable construct)" : string.Empty)}");
+            }
+            foreach (ExpressionSyntax reference in source.Root.DescendantNodes().OfType<ExpressionSyntax>())
+            {
+                if (IsAMethodGroupReference(reference) && IsWorkspaceFactory(model.GetSymbolInfo(reference), "NewGraphViewState"))
+                {
+                    factoryUses.Add($"{relative}:{OwnerOf(reference)} (a method-group reference)");
+                }
+            }
+        }
+        Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:NewGraphViewState"], creations);
+        Assert.Equal(["WorkspaceViewModel.cs:<ctor>"], factoryUses);
+    }
+
+    /// <summary>W6-2 PR B2, Term 15 / B2-10 (ii): every assignment to
+    /// <c>GraphViewState.SelectedKey</c> anywhere in the shell's compilation,
+    /// bound, is one of the named writers by owner; and the property's
+    /// backing field is written by its setter alone — a helper writing the
+    /// field directly would evade a census over the property (IGK-19).</summary>
+    [Fact]
+    public void TheSharedKeyIsWrittenByTheNamedOwnersAlone()
+    {
+        string[] allowed =
+        [
+            "Graph/GraphDocumentViewModel.cs:SelectRow",
+            "Graph/GraphDocumentViewModel.cs:RevalidateSelection",
+        ];
+        var writers = new List<string>();
+        var fieldWriters = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (AssignmentExpressionSyntax assignment in source.Root.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                ISymbol? target = model.GetSymbolInfo(assignment.Left).Symbol;
+                if (target is IPropertySymbol { Name: "SelectedKey" } property && property.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    writers.Add($"{relative}:{OwnerOf(assignment)}");
+                }
+                if (target is IFieldSymbol { Name: "_selectedKey" } field && field.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    fieldWriters.Add($"{relative}:{OwnerOf(assignment)}");
+                }
+            }
+            // `SetField(ref _selectedKey, value)` is the setter's write: a
+            // `ref` argument naming the field anywhere else is a writer too.
+            foreach (ArgumentSyntax argument in source.Root.DescendantNodes().OfType<ArgumentSyntax>())
+            {
+                if (argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword)
+                    && model.GetSymbolInfo(argument.Expression).Symbol is IFieldSymbol { Name: "_selectedKey" } field
+                    && field.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    fieldWriters.Add($"{relative}:{OwnerOf(argument)}");
+                }
+            }
+        }
+        string[] offenders = [.. writers.Where(writer => !allowed.Contains(writer))];
+        Assert.True(offenders.Length == 0, "the shared key is written outside the named owners:\n" + string.Join("\n", offenders));
+        Assert.Equal(["Graph/GraphViewState.cs:SelectedKey"], fieldWriters.Distinct());
     }
 
     /// <summary>A name or a member access that is neither an invocation's
@@ -556,43 +666,79 @@ public sealed class GraphAnnouncerCensus
         Assert.True(offenders.Count == 0, "a column header is typed under Graph/: " + string.Join(", ", offenders));
     }
 
-    /// <summary>Contract A-1 / spec R-B: no other type under <c>Graph/</c>
-    /// declares a MUTABLE field of the view state's five names or a second
-    /// mutable copy of the filter, the query or the mode; the immutable
-    /// request, token, envelope and publication carry copies by design.</summary>
+    /// <summary>Contract A-1 / spec R-B, as amended for W6-2 PR B2 (B2-1,
+    /// IGK-19): no type in the WHOLE shell compilation, outside the one
+    /// <c>GraphViewState</c>, declares a MUTABLE field or property of the
+    /// view state's five names OR of its value TYPES — the filter, the
+    /// surface mode, the groups' list — whatever the member is called; the
+    /// immutable request, token, envelope and publication records carry
+    /// copies by design, exempt by their declared kinds (init-only or
+    /// readonly), never by a file list.</summary>
     [Fact]
-    public void NoMutableShadowOfTheViewStateExistsUnderGraph()
+    public void NoMutableShadowOfTheViewStateExistsInTheShell()
     {
         string[] names = ["SelectedKey", "Filter", "NameQuery", "Groups", "Mode"];
+        string[] types = ["uniffi.slate_uniffi.GraphFilter", "uniffi.slate_uniffi.GraphSurfaceMode"];
         var offenders = new List<string>();
-        foreach (string file in GraphSources())
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
-            if (Relative(file) == "GraphViewState.cs")
+            if (relative == "Graph/GraphViewState.cs")
             {
                 continue;
             }
-            CSharpSource source = CSharpSource.LoadPath(file);
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            // A-1's NAME rule holds under Graph/ (a `Filter` or a `Mode` of
+            // another surface elsewhere in the shell is its own); the TYPE
+            // rule holds everywhere.
+            bool underGraph = relative.StartsWith("Graph/", StringComparison.Ordinal);
             foreach (PropertyDeclarationSyntax property in source.Root.DescendantNodes().OfType<PropertyDeclarationSyntax>())
             {
                 bool mutable = property.AccessorList?.Accessors.Any(a => a.Kind() == Microsoft.CodeAnalysis.CSharp.SyntaxKind.SetAccessorDeclaration) == true;
-                if (mutable && names.Contains(property.Identifier.ValueText, StringComparer.Ordinal))
+                if (!mutable)
                 {
-                    offenders.Add($"{Relative(file)}: {property.Identifier.ValueText}");
+                    continue;
+                }
+                ITypeSymbol? type = model.GetDeclaredSymbol(property)?.Type;
+                if ((underGraph && names.Contains(property.Identifier.ValueText, StringComparer.Ordinal)) || IsAViewStateValueType(type, types))
+                {
+                    offenders.Add($"{relative}: {property.Identifier.ValueText}");
                 }
             }
             foreach (FieldDeclarationSyntax field in source.Root.DescendantNodes().OfType<FieldDeclarationSyntax>())
             {
                 bool immutable = field.Modifiers.Any(m => m.ValueText is "readonly" or "const");
+                if (immutable)
+                {
+                    continue;
+                }
+                ITypeSymbol? type = model.GetTypeInfo(field.Declaration.Type).Type;
                 foreach (VariableDeclaratorSyntax variable in field.Declaration.Variables)
                 {
                     string bare = variable.Identifier.ValueText.TrimStart('_');
-                    if (!immutable && names.Any(n => string.Equals(n, bare, StringComparison.OrdinalIgnoreCase)))
+                    if ((underGraph && names.Any(n => string.Equals(n, bare, StringComparison.OrdinalIgnoreCase))) || IsAViewStateValueType(type, types))
                     {
-                        offenders.Add($"{Relative(file)}: {variable.Identifier.ValueText}");
+                        offenders.Add($"{relative}: {variable.Identifier.ValueText}");
                     }
                 }
             }
         }
-        Assert.True(offenders.Count == 0, "a mutable shadow of the view state exists under Graph/: " + string.Join(", ", offenders));
+        Assert.True(offenders.Count == 0, "a mutable shadow of the view state exists in the shell: " + string.Join(", ", offenders));
+    }
+
+    /// <summary>The filter, the mode, or a list of the config's groups.</summary>
+    private static bool IsAViewStateValueType(ITypeSymbol? type, string[] valueTypes)
+    {
+        if (type is null)
+        {
+            return false;
+        }
+        string display = type.ToDisplayString().TrimEnd('?');
+        if (valueTypes.Contains(display))
+        {
+            return true;
+        }
+        return type is INamedTypeSymbol { IsGenericType: true, TypeArguments.Length: 1 } list
+            && list.TypeArguments[0].ToDisplayString() == "uniffi.slate_uniffi.GraphGroup"
+            && list.Name is "IReadOnlyList" or "List" or "IList" or "IReadOnlyCollection";
     }
 }

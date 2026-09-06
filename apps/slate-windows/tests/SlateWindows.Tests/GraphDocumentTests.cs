@@ -288,7 +288,8 @@ public sealed class GraphDocumentTests
             host.Workspace.OpenGraph();
             host.Settle();
             GraphDocumentViewModel first = host.Document;
-            first.ViewState.SelectedKey = first.Publication.Rows[0].StableKey;
+            string chosen = first.Publication.Rows[0].StableKey;
+            Assert.True(first.SelectRow(chosen));
 
             host.Workspace.CloseActiveTabCommand.Execute(null);
             Assert.Null(host.Workspace.GraphDocument);
@@ -299,13 +300,69 @@ public sealed class GraphDocumentTests
             Assert.False(first.AnnouncerForTests.IsRetired);
             Assert.Equal(0, first.AnnouncerForTests.PendingForTests);
             Assert.Same(first.AnnouncerForTests, host.Workspace.Connections.AnnouncerForTests);
-            Assert.Null(first.ViewState.SelectedKey);
+            // A-1 as amended again (W6-2 PR B2, B2D-1; B2-1): the view state
+            // is the WORKSPACE's — retirement leaves it, the selection
+            // survives the graph tab's close (B2-D4), and the retired
+            // document can no longer write it (Term 15).
+            Assert.Same(host.Workspace.GraphViewStateForTests, first.ViewState);
+            Assert.Equal(chosen, host.Workspace.GraphViewStateForTests.SelectedKey);
+            Assert.False(first.SelectRow(chosen));
 
             host.GraphLines.Clear();
             host.Workspace.OpenGraph();
             host.Settle();
             Assert.NotSame(first, host.Document);
             Assert.Equal([Opened(), Summary(host.Document)], host.GraphLines);
+            // The re-seated document reads the state the previous one left
+            // and revalidates the inherited key at its first pair
+            // publication: the node is still in the snapshot, so it stays.
+            Assert.Same(first.ViewState, host.Document.ViewState);
+            Assert.Equal(chosen, host.Document.ViewState.SelectedKey);
+        });
+    }
+
+    /// <summary>W6-2 PR B2, Term 15 (IGJ-6): the document's guarded selection
+    /// refuses a key its current snapshot lacks, a document that is not the
+    /// workspace's seated one, and a retired one — each without writing.</summary>
+    [Fact]
+    public void SelectRowRefusesAnAbsentKeyAnUnseatedDocumentAndARetiredOne()
+    {
+        using GraphVault vault = GraphVault.Copy("select-row");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            string chosen = document.Publication.Rows[0].StableKey;
+            Assert.True(document.SelectRow(chosen));
+            Assert.False(document.SelectRow("p:nowhere.md"));
+            Assert.Equal(chosen, document.ViewState.SelectedKey);
+
+            // A bare document beside the workspace's, over the SAME state,
+            // that is not the seated one: refused, the key untouched.
+            bool seated = true;
+            var lines = new List<string>();
+            var beside = new GraphDocumentViewModel(
+                host.Session,
+                new GraphAnnouncer(line => lines.Add(line.Text)),
+                document.ViewState,
+                isEffectiveActive: () => true,
+                verbosity: () => GraphVerbosity.Standard,
+                isSeated: () => seated);
+            _ = beside.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            PumpedDispatcher.PumpUntilDrained(beside.WhenAllWorkDrained());
+            string other = beside.Publication.Rows[1].StableKey;
+            Assert.True(beside.SelectRow(other));
+            seated = false;
+            Assert.False(beside.SelectRow(chosen));
+            Assert.Equal(other, document.ViewState.SelectedKey);
+            beside.Retire();
+
+            host.Workspace.CloseActiveTabCommand.Execute(null);
+            Assert.True(document.IsRetired);
+            Assert.False(document.SelectRow(chosen));
+            Assert.Equal(other, host.Workspace.GraphViewStateForTests.SelectedKey);
         });
     }
 
@@ -565,6 +622,7 @@ public sealed class GraphDocumentTests
             var document = new GraphDocumentViewModel(
                 host.Session,
                 new GraphAnnouncer(line => lines.Add(line.Text)),
+                new GraphViewState(),
                 isEffectiveActive: () => true,
                 verbosity: () => GraphVerbosity.Standard);
             Assert.False(document.Publication.HoldsSnapshot);
@@ -1025,6 +1083,7 @@ public sealed class GraphDocumentTests
             var document = new GraphDocumentViewModel(
                 host.Session,
                 new GraphAnnouncer(line => lines.Add(line.Text)),
+                new GraphViewState(),
                 isEffectiveActive: () => true,
                 verbosity: () => GraphVerbosity.Standard,
                 lifecycleGeneration: () => Volatile.Read(ref generation));
