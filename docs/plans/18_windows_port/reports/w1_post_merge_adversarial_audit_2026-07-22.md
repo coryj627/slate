@@ -5,10 +5,10 @@
 This audit covers the 71 files merged for W1 in squash commit
 `a8c7b96078f7988d64b1f07882493a03311dacee`. It reviews completeness,
 correctness, maintainability, documentation, reliability, performance,
-security, and accessibility. Evidence included the merged diff, Graphify's W1
-architecture map, the W1 specification and execution report, the existing W1
-red-team suites, hostile-input and concurrency source probes, the WPF control
-and automation contracts, and a clean Release build/test baseline.
+security, and accessibility. Evidence included the merged diff, the W1
+specification and execution report, the existing W1 red-team suites,
+hostile-input and concurrency source probes, the WPF control and automation
+contracts, and a clean Release build/test baseline.
 
 The pre-remediation baseline was:
 

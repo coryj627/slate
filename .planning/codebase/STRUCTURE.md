@@ -45,7 +45,6 @@ slate/                              # Cargo workspace root
 ├── .github/workflows/              # CI: rust.yml, swift-tests.yml, a11y-check.yml, license-headers.yml
 ├── .planning/codebase/             # GSD codebase map documents (this directory)
 ├── .claude/                        # Claude worktrees and project config
-├── graphify-out/                   # graphify analysis output cache (generated; not committed)
 ├── target/                         # Cargo build output (not committed)
 ├── Cargo.toml                      # Workspace manifest (members: slate-core, slate-uniffi)
 ├── Cargo.lock                      # Lockfile
@@ -207,11 +206,6 @@ slate/                              # Cargo workspace root
 - Purpose: Hidden vault metadata directory created by `VaultSession.open`
 - Contains: `cache.sqlite` (index), `prefs.json` (citations prefs), `tmp/` (atomic write staging)
 - Not in the repository — created at runtime inside the user's chosen vault folder
-
-**`graphify-out/`:**
-- Purpose: Output cache for the graphify skill's AST/semantic analysis
-- Generated: Yes
-- Committed: No (in .gitignore)
 
 **`target/`:**
 - Purpose: Cargo build output including compiled dylib/staticlib

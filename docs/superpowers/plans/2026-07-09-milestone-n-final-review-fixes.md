@@ -45,8 +45,8 @@ SwiftUI/AppKit, XCTest.
   sidecar document.
 - `docs/plans/17_bases/at_smoke_checklist.md` remains unchecked until a human
   runs it.
-- Do not stage or modify the pre-existing Graphify, `.agents`,
-  `.github/skills`, `.graphify_*`, or demo-vault pizza-toppings changes.
+- Do not stage or modify the pre-existing `.agents`, `.github/skills`, or
+  demo-vault pizza-toppings changes.
 
 ---
 

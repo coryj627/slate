@@ -45,12 +45,6 @@ SwiftUI/AppKit, XCTest, UserDefaults, GitHub Actions.
 - `FileRecentsStore` currently writes `.slate/file-recents.json` with 50 entries.
   FL's locked persistence boundary says recents are device-local, so that store
   must migrate rather than coexist with a second sidebar-only recents store.
-- The checked-in Graphify snapshot is advisory: 12,472 nodes, 25,585 edges, and
-  334 communities. It identifies `FileTreeSidebar.swift` (3,176 lines),
-  `AppState.swift`, the command registry, session/FFI, `SettingsView`, and
-  `FileRecentsStore` as the primary coupling seams. The report also claims a
-  zero-file corpus and its files are locally modified, so use topology only;
-  never treat its counts as a correctness gate or modify/stage it in FL work.
 - The workspace Apple HIG skill currently contains its manifest only; its
   required `routing-index.md` and `distilled/` corpus are absent. HIG acceptance
   below therefore cites the official Apple guidance directly.
@@ -837,5 +831,4 @@ Milestone FL is complete only when:
   the existing experience without lost state.
 - Automated accessibility is 100/100 and every new text pairing clears the
   project APCA floor in both appearances; human AT status is reported honestly.
-- The Graphify artifacts and the pre-existing Milestone W branch changes remain
-  untouched.
+- The pre-existing Milestone W branch changes remain untouched.
