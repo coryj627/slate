@@ -126,8 +126,8 @@ public sealed partial class ConnectionsLeafTests
 
     private const int ComposedRoutes = 49;
     private const int ComposedCells = PinnedModes * ComposedRoutes;
-    private const int ComposedUnreachable = 71;
-    private const int ComposedDriven = 125;
+    private const int ComposedUnreachable = 59;
+    private const int ComposedDriven = 137;
 
     private static readonly Composed[] DialogRoutes =
     [
@@ -248,11 +248,6 @@ public sealed partial class ConnectionsLeafTests
             case Composed.ReentrantBackInDialog:
             case Composed.PopLoadFails:
                 return hasEntries ? null : "Back falls through: FOLLOWING, or an empty stack";
-            case Composed.AttachmentSource:
-            case Composed.CanvasOrigin:
-            case Composed.CanvasPriorPinRestored:
-            case Composed.BasePriorPinRestored:
-                return cell.Pinned ? "the source tab is the effective root only FOLLOWING; under a pin the push is the pin's (Term 12)" : null;
             case Composed.RenamePinGraphAlive:
             case Composed.RenamePinGraphAbsent:
             case Composed.RenamePinGraphReseated:
@@ -449,22 +444,27 @@ public sealed partial class ConnectionsLeafTests
                 // and the editor's was never raised (IGL-3).
                 return new([.. reRooted, LinePlaceholder], 1, target, plain, "RightPane", Asked: 0);
             case Composed.AttachmentSource:
-                // An image in view FOLLOWING is the effective root: pushed.
-                return new([.. reRooted, LinePlaceholder], 1, target, Pinned(target, target, [(null, Attachment)]), "RightPane", Asked: 0);
+                // An image in view FOLLOWING is the effective root: pushed. Under
+                // a pin the image is the note in view and the pin the effective
+                // root (Term 11): the pin is pushed (Term 12; IPC-14).
+                return new([.. reRooted, LinePlaceholder], 1, target, Pinned(target, target, cell.Pinned ? pushed : [(null, Attachment)]), "RightPane", Asked: 0);
             case Composed.CanvasPriorPinRestored:
             case Composed.BasePriorPinRestored:
                 {
-                    // A canvas (a base) pinned, then a note, then Back: the open of
-                    // the canvas lands IN PLACE as its own kind of tab — no Markdown
-                    // candidate — and the pop restores the canvas as the pin, its
-                    // tree loaded; the note in view none (IGL-1).
+                    // A canvas (a base) pinned over the arranged state, then a note,
+                    // then Back: the open of the canvas lands IN PLACE as its own
+                    // kind of tab — no Markdown candidate — and the pop restores the
+                    // canvas as the pin, its tree loaded; the note in view none
+                    // (IGL-1). Under a pin the arranged pin sits below the canvas's
+                    // entry and stays there (IPC-14).
                     string prior = cell.Route == Composed.CanvasPriorPinRestored ? Board : NotesBase;
-                    return new([ReRooted(prior), LinePlaceholder], 1, prior, new(prior, null, [(null, noteInView)], StableKey(prior)), "RightPane", Asked: 0);
+                    return new([ReRooted(prior), LinePlaceholder], 1, prior, new(prior, null, [.. pushed], StableKey(prior)), "RightPane", Asked: 0);
                 }
             case Composed.CanvasOrigin:
-                // A canvas in view has no effective root (B2-D7): nothing pushed;
-                // the open replaces the canvas's tab in place.
-                return new([.. reRooted, LinePlaceholder], 1, target, Pinned(target, target, []), "RightPane", Asked: 0);
+                // A canvas in view has no effective root FOLLOWING (B2-D7): nothing
+                // pushed; under a pin the pin is pushed (Term 12; IPC-14). The open
+                // replaces the canvas's tab in place either way.
+                return new([.. reRooted, LinePlaceholder], 1, target, Pinned(target, target, cell.Pinned ? pushed : []), "RightPane", Asked: 0);
             case Composed.ColdGraphTabSource:
             case Composed.WarmGraphTabSource:
                 {
@@ -482,8 +482,9 @@ public sealed partial class ConnectionsLeafTests
                 // The leaf retired inside the dialog (IGL-5): the open installs,
                 // the boundary's note change is refused, the parked load's result
                 // is dropped; the pin the mutation set stands, the note in view is
-                // the arranged one, and Back afterwards falls through.
-                return new(reRooted, 1, target, Pinned(target, noteInView, pushed), "RightPane");
+                // the arranged one, and Back afterwards falls through. The
+                // retirement installs NoNote and clears the flight (IPC-15).
+                return new(reRooted, 1, target, Pinned(target, noteInView, pushed), "RightPane", State: ConnectionsLoadState.NoNote);
             case Composed.TabChangeInDialog:
                 // Another tab activated inside the dialog (`TabFocused`; the note
                 // in view recorded under the pin); the open re-activates the tab it
@@ -614,8 +615,9 @@ public sealed partial class ConnectionsLeafTests
             case Composed.RetirementInBackDialog:
                 // The leaf retired inside Back's open: the re-admission after the
                 // open refuses (IGL-5) — nothing pops, no request; the open
-                // installed the top's note but the retired leaf recorded nothing.
-                return new([], 0, pinBefore, Pinned(pinBefore!, noteInView, stackBefore), null);
+                // installed the top's note but the retired leaf recorded nothing;
+                // the retirement installs NoNote and clears the flight (IPC-15).
+                return new([], 0, pinBefore, Pinned(pinBefore!, noteInView, stackBefore), null, State: ConnectionsLoadState.NoNote);
             case Composed.TabChangeInBackDialog:
                 // The tab beside activated inside Back's open (`TabFocused`,
                 // recorded under the pin); the open re-activates the captured tab
@@ -703,26 +705,33 @@ public sealed partial class ConnectionsLeafTests
                 Assert.True(parked.Reached.Wait(TimeSpan.FromSeconds(10)), $"{cell}: Deeper's reload never parked");
                 break;
             case Composed.AttachmentSource:
+                // The image in view: the effective root FOLLOWING; under a pin
+                // the note in view alone, the pin the root (Term 11).
                 host.Workspace.OpenPath(Attachment, WorkspaceOpenTarget.CurrentTab);
                 host.Settle();
-                Assert.Equal(Attachment, host.Leaf.Root);
+                Assert.Equal(cell.Pinned ? PinBefore(modeCell) : Attachment, host.Leaf.Root);
+                Assert.Equal(Attachment, host.Leaf.NoteInView);
                 break;
             case Composed.CanvasOrigin:
+                // The canvas in view: no root FOLLOWING (B2-D7); under a pin the
+                // pin stays the root and no note is in view.
                 host.Workspace.OpenPath(Board, WorkspaceOpenTarget.CurrentTab);
                 SettleTheDocuments(host);
-                Assert.Null(host.Leaf.Root);
+                Assert.Equal(cell.Pinned ? PinBefore(modeCell) : null, host.Leaf.Root);
+                Assert.Null(host.Leaf.NoteInView);
                 break;
             case Composed.CanvasPriorPinRestored:
             case Composed.BasePriorPinRestored:
                 {
                     string prior = cell.Route == Composed.CanvasPriorPinRestored ? Board : NotesBase;
+                    (string? Pin, string Effective) push = PushOf(cell);
                     Assert.True(host.Workspace.ReRootConnectionsOn(prior));
                     SettleTheDocuments(host);
                     Assert.Equal(prior, host.Leaf.Pin);
                     Assert.Null(host.Leaf.NoteInView);
                     Assert.True(host.Workspace.ReRootConnectionsOn(ReRootTarget));
                     SettleTheDocuments(host);
-                    Assert.Equal([(null, noteInView), (prior, prior)], host.Leaf.BackStack);
+                    Assert.Equal([.. StackBefore(modeCell), push, (prior, prior)], host.Leaf.BackStack);
                     break;
                 }
             case Composed.ColdGraphTabSource:
@@ -1102,25 +1111,29 @@ public sealed partial class ConnectionsLeafTests
                 {
                     mismatch.Add($"root {host.Leaf.Root ?? "none"}, derived {expected.Root ?? "none"}");
                 }
-                if (cell.Route is not (Composed.RetirementInDialog or Composed.RetirementInBackDialog))
+                // Every route, the retirements included (IPC-15): a retired leaf
+                // holds NoNote, nothing in flight, its depth and root retained.
+                bool retirement = cell.Route is Composed.RetirementInDialog or Composed.RetirementInBackDialog;
+                if (host.Leaf.IsRetired != retirement)
                 {
-                    if (host.Leaf.Root is not null && host.Leaf.IsStale)
-                    {
-                        mismatch.Add("stale after the route");
-                    }
-                    if (host.Leaf.InFlight)
-                    {
-                        mismatch.Add("a load still in flight after the settle");
-                    }
-                    if (host.Leaf.Root is not null && host.Leaf.Depth != expected.Depth)
-                    {
-                        mismatch.Add($"depth {host.Leaf.Depth}, derived {expected.Depth}");
-                    }
-                    ConnectionsLoadState state = expected.State ?? (expected.Root is null ? ConnectionsLoadState.NoNote : LoadedStateOf(host, expected.Root));
-                    if (host.Leaf.Publication.State != state)
-                    {
-                        mismatch.Add($"state {host.Leaf.Publication.State}, derived {state}");
-                    }
+                    mismatch.Add(retirement ? "the leaf survived its retirement" : "the leaf retired");
+                }
+                if (!retirement && host.Leaf.Root is not null && host.Leaf.IsStale)
+                {
+                    mismatch.Add("stale after the route");
+                }
+                if (host.Leaf.InFlight)
+                {
+                    mismatch.Add("a load still in flight after the settle");
+                }
+                if (host.Leaf.Root is not null && host.Leaf.Depth != expected.Depth)
+                {
+                    mismatch.Add($"depth {host.Leaf.Depth}, derived {expected.Depth}");
+                }
+                ConnectionsLoadState state = expected.State ?? (expected.Root is null ? ConnectionsLoadState.NoNote : LoadedStateOf(host, expected.Root));
+                if (host.Leaf.Publication.State != state)
+                {
+                    mismatch.Add($"state {host.Leaf.Publication.State}, derived {state}");
                 }
                 if (!string.Equals(host.Leaf.Pin, expected.Mode.Pin, StringComparison.Ordinal))
                 {

@@ -36,12 +36,13 @@ internal sealed record GraphLoadToken(
     GraphTableRequest Request,
     ulong Seq,
     GraphLoadKind Kind,
-    GraphAnnouncePolicy Announce,
-    int SelectionGeneration);
+    GraphAnnouncePolicy Announce);
 
 /// <summary>The worker ENVELOPE (contract A-2; the round-3 ledger's
 /// IGA-22, IGA-43): the inputs the body actually used beside its
-/// results, because neither result carries its inputs.</summary>
+/// results, because neither result carries its inputs — and the
+/// selection generation the worker OBSERVED immediately before its
+/// snapshot crossing (IPC-13), which the apply compares against.</summary>
 internal sealed record GraphLoadEnvelope(
     GraphLoadToken Token,
     GraphFilter Filter,
@@ -49,7 +50,8 @@ internal sealed record GraphLoadEnvelope(
     GraphTableSort Sort,
     GraphSnapshot? Snapshot,
     GraphTableRows? Rows,
-    string? Failure);
+    string? Failure,
+    int SelectionGeneration = 0);
 
 /// <summary>What one installed publication answered — the surface's
 /// adoption announcement reads it (contract A-5).</summary>
@@ -411,7 +413,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                 Publication = GraphPublication.Initial(request.Query.Filter, Publication.AcceptedSort);
             }
         }
-        var token = new GraphLoadToken(this, _session, _lifecycleGeneration(), request, _seq, kind, announce, ViewState.SelectionGeneration);
+        var token = new GraphLoadToken(this, _session, _lifecycleGeneration(), request, _seq, kind, announce);
         StartWorkAlwaysAsync(() => Fetch(token), Receive);
         return token;
     }
@@ -432,6 +434,11 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     private GraphLoadEnvelope Fetch(GraphLoadToken token)
     {
         GraphFilter filter = token.Request.Query.Filter;
+        // The selection this fetch OBSERVES, read on the pool immediately
+        // before the snapshot crossing (IPC-13): a key written between the
+        // load's issue and this read is older than the snapshot and is this
+        // publication's to judge; one written after it is the next's.
+        int observed = ViewState.SelectionGeneration;
         try
         {
             GraphSnapshot? snapshot = null;
@@ -449,15 +456,15 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             }
             GraphTableRows rows = token.Session.GraphTableRows(token.Request.Query, token.Request.Sort);
             FetchGateForTests?.Invoke();
-            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, snapshot, rows, null);
+            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, snapshot, rows, null, observed);
         }
         catch (VaultException exception)
         {
-            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, null, null, exception.Message);
+            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, null, null, exception.Message, observed);
         }
         catch (Exception exception) when (exception is InvalidOperationException or System.IO.IOException)
         {
-            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, null, null, exception.Message);
+            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, null, null, exception.Message, observed);
         }
     }
 
@@ -531,7 +538,14 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         bool answeredSort = _requestedSort is not null;
         _requestedSort = null;
         Publication = next;
-        RevalidateSelection(next, token.SelectionGeneration);
+        if (token.Kind == GraphLoadKind.Pair)
+        {
+            // A NEW snapshot judges the key (the mac revalidates at the
+            // snapshot's publish point and on its generation change alone);
+            // a rows-only publication carries the held one, which already
+            // judged — or never saw — the key.
+            RevalidateSelection(next, envelope.SelectionGeneration);
+        }
         PublicationInstalled?.Invoke(new GraphPublicationInstall(previous, next, answeredSort));
         if (token.Kind == GraphLoadKind.Pair)
         {
@@ -562,11 +576,13 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// the node (the mac's `revalidateGraphSelection(against:)`).</summary>
     private void RevalidateSelection(GraphPublication publication, int selectionGenerationAtFetch)
     {
-        // Only the selection this load OBSERVED when its fetch began: a key
-        // written since — a pinned rename's, a re-root's — is newer than the
-        // snapshot and is the next publication's to judge (codex
-        // post-implementation pass 2, IPC-8: a pair fetched before the rename
-        // erased the retargeted key).
+        // Only the selection this load OBSERVED immediately before its
+        // snapshot crossing: a key written since — a pinned rename's, a
+        // re-root's — is newer than the snapshot and is the next
+        // publication's to judge (codex post-implementation pass 2, IPC-8: a
+        // pair fetched before the rename erased the retargeted key; pass 3,
+        // IPC-13: the observation is the worker's, not the issue's, so a key
+        // written before the fetch began IS judged by it).
         if (ViewState.SelectionGeneration != selectionGenerationAtFetch)
         {
             return;

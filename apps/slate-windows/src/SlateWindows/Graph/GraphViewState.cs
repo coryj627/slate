@@ -24,6 +24,7 @@ namespace SlateWindows.Graph;
 internal sealed class GraphViewState : BindableBase
 {
     private string? _selectedKey;
+    private int _selectionGeneration;
     private GraphFilter _filter = DefaultFilter();
     private string _nameQuery = string.Empty;
     private IReadOnlyList<GraphGroup> _groups = [];
@@ -45,17 +46,21 @@ internal sealed class GraphViewState : BindableBase
             // Every write moves the selection's generation, even to the same
             // key: a publication revalidates only the selection it observed
             // when its fetch began (IPC-8).
-            SelectionGeneration++;
+            Interlocked.Increment(ref _selectionGeneration);
             SetField(ref _selectedKey, value);
         }
     }
 
     /// <summary>The count of writes to <see cref="SelectedKey"/>: a graph
-    /// load captures it when its fetch begins, and its publication clears
-    /// the key only while no write has happened since — an older snapshot
-    /// never erases a key written after it was fetched (codex
-    /// post-implementation pass 2, IPC-8; A-7).</summary>
-    public int SelectionGeneration { get; private set; }
+    /// load's worker reads it on the pool immediately before its snapshot
+    /// crossing — not when the load was issued (codex post-implementation
+    /// pass 3, IPC-13: a write between the issue and the fetch is OLDER than
+    /// the snapshot and is that publication's to judge) — and its
+    /// publication clears the key only while no write has happened since:
+    /// an older snapshot never erases a key written after it was fetched
+    /// (pass 2, IPC-8; A-7). Written on the owner's thread, read from the
+    /// pool: a volatile read of an interlocked count.</summary>
+    public int SelectionGeneration => Volatile.Read(ref _selectionGeneration);
 
     /// <summary>The backend filter the snapshot is fetched under.</summary>
     public GraphFilter Filter

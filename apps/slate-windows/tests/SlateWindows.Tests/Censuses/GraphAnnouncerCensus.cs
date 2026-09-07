@@ -457,8 +457,20 @@ public sealed class GraphAnnouncerCensus
             "Graph/ConnectionsLeafViewModel.cs:WriteSharedKey",
         ];
         // The leaf's writer is reached by exactly the pin, the pop, the
-        // key-moving retarget and the same-root repair (Term 15).
+        // key-moving retarget and the same-root repair (Term 15) — bound
+        // invocations and method-group references alike, asserted as a set
+        // (codex post-implementation pass 3, IPC-16: an allowlist over the
+        // assignment owners alone let a fifth caller of the helper in, and
+        // a deleted document writer out).
+        string[] leafCallers =
+        [
+            "Graph/ConnectionsLeafViewModel.cs:PinTo",
+            "Graph/ConnectionsLeafViewModel.cs:PopTo",
+            "Graph/ConnectionsLeafViewModel.cs:RepairSharedKey",
+            "Graph/ConnectionsLeafViewModel.cs:Retarget",
+        ];
         var writers = new List<string>();
+        var callers = new List<string>();
         var fieldWriters = new List<string>();
         foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
@@ -497,10 +509,32 @@ public sealed class GraphAnnouncerCensus
                     fieldWriters.Add($"{relative}:{OwnerOf(argument)}");
                 }
             }
+            // The helper's callers, bound: every invocation of the leaf's
+            // WriteSharedKey and every method-group reference to it.
+            foreach (InvocationExpressionSyntax invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (IsTheLeafsWriter(model.GetSymbolInfo(invocation).Symbol))
+                {
+                    callers.Add($"{relative}:{OwnerOf(invocation)}");
+                }
+            }
+            foreach (ExpressionSyntax reference in source.Root.DescendantNodes().OfType<ExpressionSyntax>())
+            {
+                if (IsAMethodGroupReference(reference) && IsTheLeafsWriter(model.GetSymbolInfo(reference).Symbol))
+                {
+                    callers.Add($"{relative}:{OwnerOf(reference)} (a method-group reference)");
+                }
+            }
         }
-        string[] offenders = [.. writers.Where(writer => !allowed.Contains(writer))];
-        Assert.True(offenders.Length == 0, "the shared key is written outside the named owners:\n" + string.Join("\n", offenders));
+        // The assignment owners EXACTLY — each named owner present once, no
+        // other — so a deleted document writer fails as a sixth would.
+        Assert.Equal(allowed.Order(StringComparer.Ordinal), writers.Order(StringComparer.Ordinal));
+        Assert.Equal(leafCallers, callers.Order(StringComparer.Ordinal));
         Assert.Equal(["Graph/GraphViewState.cs:SelectedKey"], fieldWriters.Distinct());
+
+        static bool IsTheLeafsWriter(ISymbol? symbol) =>
+            symbol is IMethodSymbol { Name: "WriteSharedKey" } method
+            && method.ContainingType.ToDisplayString() == "SlateWindows.Graph.ConnectionsLeafViewModel";
     }
 
     /// <summary>A name or a member access that is neither an invocation's

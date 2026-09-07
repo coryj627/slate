@@ -689,6 +689,113 @@ public sealed partial class ConnectionsLeafTests
         });
     }
 
+    /// <summary>A-7 / Term 15 — codex post-implementation pass 3, IPC-13: the
+    /// selection a publication judges is the one its WORKER observed
+    /// immediately before the snapshot crossing, not the one at issue. A pair
+    /// parked BEFORE its compute, a key written while it waits, the pair
+    /// released: its snapshot is newer than the write and lacks the node —
+    /// the key clears. (The inverse of the IPC-8 fact, whose pair parks
+    /// AFTER its crossings.)</summary>
+    [Fact]
+    public void ASnapshotFetchedAfterAKeyWriteJudgesIt()
+    {
+        using GraphVault vault = GraphVault.Copy("newer-snapshot");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root, () => 1);
+            host.OpenNote(Hub);
+            host.Workspace.OpenGraph();
+            SettleTheDocuments(host);
+            GraphDocumentViewModel document = host.Workspace.GraphDocument!;
+            // Attachments in; the image selected.
+            document.ViewState.Filter = new GraphFilter(true, true, false);
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            SettleTheDocuments(host);
+            GraphTableRow image = document.Publication.Rows.First(row => row.Kind == GraphNodeKind.Attachment);
+            Assert.True(document.SelectRow(image.StableKey));
+            Assert.Equal(image.StableKey, host.Workspace.GraphViewStateForTests.SelectedKey);
+
+            // Attachments out: the pair issued and parked BEFORE its compute.
+            using var reached = new ManualResetEventSlim(false);
+            using var gate = new ManualResetEventSlim(false);
+            document.BeforeComputeForTests = () =>
+            {
+                reached.Set();
+                gate.Wait(TimeSpan.FromSeconds(30));
+            };
+            document.ViewState.Filter = GraphViewState.DefaultFilter();
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            Assert.True(reached.Wait(TimeSpan.FromSeconds(10)), "the pair never parked before its compute");
+            document.BeforeComputeForTests = null;
+            // The key written while the pair waits: the image, from the
+            // publication still held.
+            Assert.True(document.SelectRow(image.StableKey));
+
+            // The pair fetches AFTER the write: its snapshot lacks the image and
+            // judges the key — cleared.
+            gate.Set();
+            SettleTheDocuments(host);
+            Assert.False(document.Publication.ContainsNode(image.StableKey));
+            Assert.Null(host.Workspace.GraphViewStateForTests.SelectedKey);
+        });
+    }
+
+    /// <summary>A-7 — codex post-implementation pass 3, IPC-13's rows-only
+    /// arm: a reorder publishes the HELD snapshot again and judges nothing —
+    /// a key the leaf wrote for a note that snapshot does not carry (the
+    /// graph filtered to orphans, the pin a linked note) survives the sort;
+    /// the next PAIR, over a snapshot that lacks it, clears it (the mac
+    /// revalidates at the snapshot's publish point and on its generation
+    /// change alone). The sort must stay rows-only: the vault is unmoved,
+    /// so the rows' generation is the held snapshot's.</summary>
+    [Fact]
+    public void AReorderNeverJudgesAKeyTheHeldSnapshotLacks()
+    {
+        using GraphVault vault = GraphVault.Copy("reorder-key");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root, () => 1);
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            // The graph beside, filtered to orphans: Hub, linked, is absent.
+            host.Workspace.SplitRightCommand.Execute(null);
+            host.Workspace.OpenGraph();
+            SettleTheDocuments(host);
+            GraphDocumentViewModel document = host.Workspace.GraphDocument!;
+            document.ViewState.Filter = new GraphFilter(false, true, true);
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            SettleTheDocuments(host);
+            Assert.True(host.Workspace.FocusDirectionalPane("horizontal", -1));
+            SettleTheDocuments(host);
+            string key = StableKey(Hub);
+            Assert.False(document.Publication.ContainsNode(key));
+
+            // The leaf pins Hub: its key written (Term 15) for a node the held
+            // snapshot does not carry.
+            Assert.True(host.Workspace.ReRootConnectionsOn(Hub));
+            host.Settle();
+            Assert.Equal(key, host.Workspace.GraphViewStateForTests.SelectedKey);
+            ulong held = document.Publication.Generation;
+
+            // A sort over the held snapshot: rows only, the key untouched.
+            GraphTableSort other = document.Publication.AcceptedSort with { Ascending = !document.Publication.AcceptedSort.Ascending };
+            int pairsBefore = document.CrossingsForTests["graph_snapshot"];
+            document.SetSort(other);
+            SettleTheDocuments(host);
+            Assert.Equal(other, document.Publication.AcceptedSort);
+            Assert.Equal(held, document.Publication.Generation);
+            Assert.Equal(pairsBefore, document.CrossingsForTests["graph_snapshot"]);
+            Assert.Equal(key, host.Workspace.GraphViewStateForTests.SelectedKey);
+
+            // The next PAIR — the same filter — judges it: cleared.
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+            SettleTheDocuments(host);
+            Assert.False(document.Publication.ContainsNode(key));
+            Assert.Null(host.Workspace.GraphViewStateForTests.SelectedKey);
+        });
+    }
+
     /// <summary>Terms 12 and 13 — codex post-implementation pass 2, IPC-12: a
     /// pin of the very note in view and a pop back onto the very root each
     /// advance the epoch and issue ONE audible load, superseding a load in

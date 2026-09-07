@@ -53,7 +53,7 @@ public sealed partial class ConnectionsLeafTests
     /// timeline's LAST entries are completions of independent documents,
     /// whose order among themselves the system does not fix (two fetches
     /// on the pool: the model compares them as a set).</summary>
-    private sealed record ReRootDerivation(string[] Timeline, int Loads, string? Root, RootMode Mode, string? Focus, int Unordered = 0);
+    private sealed record ReRootDerivation(string[] Timeline, int Loads, string? Root, RootMode Mode, string? Focus, int Unordered = 0, uint Depth = 1);
 
     private const string TableTarget = "10.md";
     private const string Attachment = "pic.png";
@@ -556,13 +556,19 @@ public sealed partial class ConnectionsLeafTests
                 string[] timeline =
                 [
                     .. expected.Timeline.Select(entry => entry == LinePlaceholder
-                        ? expected.Root is { } root ? LineFor(host, root, host.Leaf.Depth) : "<no root to report>"
+                        ? expected.Root is { } root ? LineFor(host, root, expected.Depth) : "<no root to report>"
                         : entry),
                 ];
                 var mismatch = new List<string>();
                 if (loads != expected.Loads)
                 {
                     mismatch.Add($"loads {loads}, derived {expected.Loads}");
+                }
+                // The depth is the leaf's own and survives a root change (rule
+                // C): derived, never read back from the leaf (IPC-15).
+                if (host.Leaf.Root is not null && host.Leaf.Depth != expected.Depth)
+                {
+                    mismatch.Add($"depth {host.Leaf.Depth}, derived {expected.Depth}");
                 }
                 if (!TimelinesAgree(host.Timeline, timeline, expected.Unordered))
                 {

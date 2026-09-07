@@ -7797,6 +7797,56 @@ stays the no-op
 (`PinningTheNoteInViewItselfAndPoppingBackOntoItEachLoadOnce`, an older
 load in flight made foreign each time). Mutations, each restored byte for byte: the revalidation ignoring the selection's generation (the older-publication fact); the Bases entrance refusing an inactive source instead of addressing it (the two-group fact); the Bases entrance admitting the document alone again (the addressed fact); the remembered key kept after a drifted rename (the retarget fact); the pin's forced transition removed (the same-effective fact) — five caught. A sixth, the immediate keep-alive's rule removed, SURVIVED the integrated fact and is an equivalent mutant: WPF moves keyboard focus off a removed or collapsed row only after the render, never inside it, so no handler can move focus elsewhere between the render's capture and the immediate repair; the rule stays as the deferred retries' twin and the record names the mutant rather than counting it. Fifty in the sweep. Gates: `dotnet format` clean; the whole Windows test project on a fresh build, 2,276 facts passing without the model, then the three model facts alone (25,200 / 5,760 / 196 cells, no divergence, 1 h 18 m); the accessibility project built and both graph journeys run in the foreground on that build (the leaf's 24 s, the table's 9 s, both passing); the benchmarks project built. One lesson from the chain: the IPC-8 fact first failed its own arrangement — the graph document's probe fetches only when core's generation moved and only while a graph tab is some group's ACTIVE tab, and it issues the pair from a dispatcher continuation, so the fact parks it with the vault bumped, the graph in a group beside, and a PUMPED wait; its earlier "catch" of the revalidation mutation was that arrangement failing, so the mutation was re-run against the passing fact and caught on the key it clears.
 
+**TGB2-9 — Post-implementation pass 3 (IPC-13..16): the sweep.** The
+standing gate was met on 31c3d22 — every lane green, the model's and
+the accessibility gate's among them, codoki approved with no thread
+open — and codex's third pass returned four findings: one blocker,
+three majors, no minor; every one landed here. Each, and its
+discharge: (IPC-13, blocker; re-opened IPC-8) the selection generation
+rode the LOAD TOKEN, captured when the load was issued, but a pair's
+fetch begins later — after the scheduler's prerequisite and the pool's
+dispatch — so a key written in that interval (an attachment selected
+from the still-visible publication after attachments were filtered
+out) was read as newer than a snapshot that in truth followed it, and
+the absent key survived; now the WORKER reads the generation
+immediately before its snapshot crossing (an interlocked count, read
+volatile from the pool), the envelope carries that observation and the
+apply compares against it (`ASnapshotFetchedAfterAKeyWriteJudgesIt`: a
+pair parked BEFORE its compute, the key written while it waits, the
+pair released — its snapshot lacks the node and clears the key; the
+IPC-8 fact, whose pair parks AFTER its crossings, stands beside it as
+the other arm). The same reading closed the rows-only arm: a sort
+publishes the HELD snapshot again, and the mac revalidates at the
+snapshot's publish point and on its generation change alone
+(`AppState+GraphTable.swift:231`, `GraphTableView.swift:289`), so a
+rows-only publication judges nothing — a key the leaf wrote for a note
+the held snapshot never carried survives a reorder
+(`AReorderNeverJudgesAKeyTheHeldSnapshotLacks`); before, it was
+cleared. (IPC-14, major) the composed family named the attachment
+source, the canvas origin and the two prior-pin-restored routes
+unreachable under a pin, on the reasoning that the source tab is the
+effective root only FOLLOWING — but Term 11 records an image or a
+canvas in view under a pin as the note in view (none, for a canvas)
+while the pin stays the effective root, and the re-root pushes the pin
+(Term 12): all four are driven in every pinned mode now, the pin pushed
+below the canvas's entry for the restored routes; the family is 196
+cells, 59 named unreachable, 137 driven. (IPC-15, major) the re-root
+family built its expected line from the leaf's OWN depth and asserted
+none — now the derivation carries the depth (the leaf's own, surviving a
+root change under rule C) and the family asserts it; the first family
+compared nothing after a Shutdown and the composed family skipped
+staleness, the flight, the depth and the presentation for both
+retirement routes — now every route compares: a retired leaf holds
+NoNote, nothing in flight, its root, its depth and rule D's whole state
+retained, and the retirement itself is asserted (`IsRetired`) on every
+cell. (IPC-16, major) the shared-key census allowed the leaf's private
+writer as an assignment owner without binding its callers, and tested
+only for unexpected owners, so a fifth caller of the helper and a
+deleted document writer both passed — now the assignment owners are an
+exact multiset and every bound invocation or method-group reference to
+the helper must be one of the pin, the pop, the retarget and the
+same-root repair. Mutations, each restored byte for byte: the generation captured at the load's issue again (the parked-before-compute fact); every publication revalidating, the rows-only one included (the reorder fact — its first arrangement rode a vault bump, which turned the sort into a superseding pair, and the mutation survived it; rewritten over an orphans-only filter with the generation and the snapshot crossings asserted unmoved, it catches); an image under a pin recorded as no note in view (the composed family narrowed to the attachment source); the pin's load resetting the depth (the composed family's prior-load route at depth two); the retirement leaving the flight, and leaving the presentation (the composed family's in-dialog retirement); a fifth caller of the leaf's writer, and the document's revalidation writer deleted (the census) — eight caught. Fifty-eight in the sweep. Gates: `dotnet format` clean; the whole Windows test project on a fresh build, 2,278 facts passing without the model, then the three model facts alone (25,200 / 5,760 / 196 cells, no divergence, 1 h 18 m; the first family's Shutdown cells verified narrowed first, 25 minutes on their own); the accessibility project built and both graph journeys run in the foreground on that build (the leaf's 24 s, the table's 9 s, both passing); the benchmarks project built.
+
 ### Tests that pin PR B2 (revision 5's list; the task loop records what lands)
 
 - `ConnectionsLeafTests.ReRoot.cs`: the pin mutation's order on Show's

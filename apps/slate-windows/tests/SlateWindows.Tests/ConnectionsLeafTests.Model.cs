@@ -870,8 +870,10 @@ public sealed partial class ConnectionsLeafTests
                     return new([.. (exists ? ["OutlineCount"] : Array.Empty<string>()), .. (loads == 1 ? [LinePlaceholder] : Array.Empty<string>())], loads, rootBefore, hasRoot ? loads == 0 : null, State: hasRoot && loads == 0 ? ConnectionsLoadState.NoNote : null);
                 }
             case Route.Shutdown:
-                // The leaf retires into the drain, the relay after it: nothing.
-                return new([], 0, rootBefore, null);
+                // The leaf retires into the drain, the relay after it: nothing
+                // spoken; NoNote installed, the flight cleared, the root, the
+                // depth and rule D's state retained (IPC-15).
+                return new([], 0, rootBefore, null, State: ConnectionsLoadState.NoNote);
             default:
                 throw new InvalidOperationException($"the model derives no route {cell.Route}");
         }
@@ -2137,7 +2139,13 @@ public sealed partial class ConnectionsLeafTests
                 {
                     mismatch.Add($"timeline [{string.Join(" | ", host.Timeline)}], derived [{string.Join(" | ", timeline)}]");
                 }
-                if (cell.Route != Route.Shutdown)
+                // Every route, the shutdown included (IPC-15): the retired leaf
+                // holds NoNote, nothing in flight, its root, its depth and rule
+                // D's state retained.
+                if (host.Leaf.IsRetired != (cell.Route == Route.Shutdown))
+                {
+                    mismatch.Add(cell.Route == Route.Shutdown ? "the leaf survived the shutdown" : "the leaf retired");
+                }
                 {
                     if (!string.Equals(host.Leaf.Root, expected.Root, StringComparison.Ordinal))
                     {
