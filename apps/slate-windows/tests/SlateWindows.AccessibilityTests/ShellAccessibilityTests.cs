@@ -8523,6 +8523,28 @@ public sealed class ShellAccessibilityTests
             // Graph, Enter on Alpha.
             RunPaletteCommand(window, automation, "Open Graph");
             AutomationElement grid = WaitForElement(window, "GraphTableGrid", TimeSpan.FromSeconds(20));
+
+            // W6-2 PR B2 (IPC-1): with the graph tab in view the leaf has no
+            // note — Show Connections lands the right-pane boundary on Term
+            // 9's no-row anchor, which UIA must see: the focused element
+            // carries the leaf's identity and the state's own text as its
+            // Name (a plain Border projected nothing, and a reader heard the
+            // window).
+            RunPaletteCommand(window, automation, "Show Connections");
+            AutomationElement stateText = WaitForElement(window, "ConnectionsStateText", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => automation.FocusedElement() is { } focused
+                        && focused.Properties.AutomationId.ValueOrDefault == "ConnectionsLeaf",
+                    TimeSpan.FromSeconds(10)),
+                $"the boundary did not land on the no-row anchor as UIA sees it; focus is {DescribeFocusedElement(automation)}");
+            AutomationElement anchor = automation.FocusedElement();
+            Assert.Equal(stateText.Properties.Name.Value, anchor.Properties.Name.Value);
+            Assert.False(string.IsNullOrWhiteSpace(anchor.Properties.Name.Value), "the anchor carries no name");
+            Assert.Equal(ControlType.Group, anchor.Properties.ControlType.Value);
+            // Back to the table for Alpha.
+            ReassertForegroundForAChord(window);
+            grid = WaitForElement(window, "GraphTableGrid", TimeSpan.FromSeconds(10));
             AutomationElement alphaCell = WaitForCellStartingWith(grid, "Note: Alpha");
             ReassertForegroundForAChord(window);
             alphaCell.Focus();

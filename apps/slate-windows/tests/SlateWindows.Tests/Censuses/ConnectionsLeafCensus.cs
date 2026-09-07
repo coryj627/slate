@@ -287,17 +287,46 @@ public sealed class ConnectionsLeafCensus
     [Fact]
     public void EveryRowActionGuardsTheRowsCurrencyBeforeItsSeam()
     {
+        // The dispatchers are FOUND, not listed (codex post-implementation
+        // pass 1, IPC-7): every method of the shell that takes core's
+        // `GraphRowAction` first, a row beside it, and returns nothing is a
+        // row-action dispatcher (the enablement, title and reason queries
+        // return a value), and every `RowCommand` under Bases is the grid's;
+        // the set found must be the set named, so a dispatcher a new file
+        // adds fails here before its guard is even read.
+        var expected = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Graph/GraphDocumentViewModel.cs:Execute"] = "IsRowCurrent",
+            ["Graph/ConnectionsLeafViewModel.cs:Execute"] = "IsRowCurrent",
+            ["Bases/BaseSurfaceView.cs:RowCommand"] = "ReferenceEquals",
+        };
+        var found = new List<(string Relative, MethodDeclarationSyntax Method)>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (MethodDeclarationSyntax method in source.Root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+            {
+                bool rowAction = method.ParameterList.Parameters.Count >= 2
+                    && method.ReturnType is PredefinedTypeSyntax { Keyword.ValueText: "void" }
+                    && method.ParameterList.Parameters[0].Type is { } first
+                    && model.GetTypeInfo(first).Type?.ToDisplayString() == "uniffi.slate_uniffi.GraphRowAction";
+                bool basesRow = relative.StartsWith("Bases/", StringComparison.Ordinal)
+                    && method.Identifier.ValueText == "RowCommand";
+                if (rowAction || basesRow)
+                {
+                    found.Add((relative, method));
+                }
+            }
+        }
+        Assert.Equal(
+            expected.Keys.OrderBy(key => key, StringComparer.Ordinal),
+            found.Select(entry => $"{entry.Relative}:{entry.Method.Identifier.ValueText}").OrderBy(key => key, StringComparer.Ordinal));
+
         var failures = new List<string>();
-        foreach ((string file, string method, string guard) in new[]
+        foreach ((string relative, MethodDeclarationSyntax execute) in found)
         {
-            ("Graph/GraphDocumentViewModel.cs", "Execute", "IsRowCurrent"),
-            ("Graph/ConnectionsLeafViewModel.cs", "Execute", "IsRowCurrent"),
-            ("Bases/BaseSurfaceView.cs", "RowCommand", "ReferenceEquals"),
-        })
-        {
-            (string relative, CSharpSource source) = ShellCompilation.Sources.First(entry => entry.Relative == file);
-            MethodDeclarationSyntax execute = source.Root.DescendantNodes().OfType<MethodDeclarationSyntax>()
-                .First(candidate => candidate.Identifier.ValueText == method);
+            string method = execute.Identifier.ValueText;
+            string guard = expected[$"{relative}:{method}"];
             InvocationExpressionSyntax? guarded = execute.DescendantNodes().OfType<InvocationExpressionSyntax>()
                 .FirstOrDefault(call => CalleeName(call) == guard);
             if (guarded is null)

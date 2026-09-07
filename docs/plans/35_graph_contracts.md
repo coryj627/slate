@@ -7664,6 +7664,79 @@ three surfaces and `Ctrl+[`, the notification contract's
 facts, the three families and the journey's continuation;
 `chords.json` unchanged since T4's projection. Mutations, each restored byte for byte: the row menu assigned only inside the opening event again (the view fact); the tree answering the Menu key itself again (the view fact); the focus keep-alive removed (the JOURNEY, run as the covering fact through the runner's project seam, the shell rebuilt and driven for real); and the keep-alive's deferred retries removed — which SURVIVED the journey once, after which the journey without them failed on the pop's focus one run in three and passed three in three with them back: the retries stay, a timing-bound witness the record names rather than a mutation the sweep counts. Three caught; thirty-nine in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build without the model — 2268 passed and the W-C evidence census refused an evidence name that named a partial file, not a fact; the names corrected, 2269 passed; the three model facts alone, 49 m 2 s; the accessibility project built and, in the foreground, the leaf journey — its second half included — and the graph table journey passed three times in a row; benchmarks build; CI — the suite lane, the model lane and the gate — and codoki on the push are the oracle.
 
+**TGB2-7 — Post-implementation pass 1 (IPC-1..7): the sweep.** On
+672f385 codoki had approved with no thread open, and the model lane
+had failed twice on the pool's order — a pinned rename beside a warm
+graph tab whose own silent refresh was still in flight revalidated the
+shared key against the pre-rename snapshot (35ed323), then two shutdown
+cells whose unparked failing load a new drain applied before the
+arranged-state check (672f385): the arrangement drains the graph
+document's refresh only while the leaf's fetch is PARKED, never for the
+shutdown route. Codex's first pass returned seven findings — two
+blockers, five majors, no minor — and every one landed here. Each, and
+its discharge: (IPC-1, blocker) Term 9's anchor when the leaf has no
+rows was a `Border`, which projects no automation peer, so a reader
+whose focus landed there heard the window — TGB2-6's own observation,
+which its journey never reached; now `ConnectionsAnchor` projects a
+peer (a Group carrying the leaf's identity, the state's accessible text
+as its Name, its keyboard focusability), `FocusAnchor` lays the body
+out before focusing it (the boundary fell to the rail while the anchor
+a reveal had just switched in was not yet visible), the view fact
+`TheNoRowAnchorProjectsAPeerNamedByTheStateInEveryNoRowPresentation`
+reads the peer over no note, a rejected first load, a stale root, an
+error and an empty tree, and the journey opens with the graph tab in
+view and asserts the focused element UIA reports after Show
+Connections is the anchor, named by the state. (IPC-2, blocker) the
+window deferred the editor's focus request at Input priority and a
+boundary's at Normal, so a group change pumped inside a re-root's
+dialog could land focus in the editor AFTER the leaf's own request
+(IGL-3) — the model saw request order only; now `FocusRequestArbiter`
+stamps every request with a generation and a deferred callback lands
+only while its generation is the latest, whatever the priorities
+(`TheLastRequestRaisedLandsWhateverThePriorities`, both orders and a
+lone request). (IPC-3, major) the focus keep-alive's deferred retries
+would have taken focus back from a live element the user had moved to;
+now a repair runs only for focus that is LOST — on nothing, on the
+window, or on an element that collapsed
+(`FocusCountsAsLostOnNothingTheWindowOrACollapsedElementOnly`). (IPC-4,
+major) the composed family drove what lands inside a RE-ROOT's open
+only, and folder variants for the pin alone; now seventeen routes join
+it — inside BACK's open: the pin and a lower entry renamed and deleted
+(the probe's decision lands after the pop and marks over its load: one
+load), a re-entrant re-root (the top no longer names the installed note,
+nothing pops), Deeper's prior load released inside (its line, then the
+pop's at that depth), a retirement, a tab change, a group change, a
+tab close, a depth change and a probe; Back from inside a re-root's
+open (the pushed entry popped, the outer open recorded under the
+restored pin — a root change FOLLOWING); and the folder variants over an
+entry and over the just-pushed origin from a FOLLOWING start on Deep,
+the folder's note — 49 routes, 196 cells, 71 named, 125 driven in half
+a minute. (IPC-5, major) the pinned arrangements refused every note in
+view but the pin's, though a tab close, the graph, a canvas or a base
+tab records none and keeps the pin (Term 11): the note in view is now
+orthogonal to the pin and the stack in the first two families —
+PinnedFresh and PinnedNoOrigin driven from no tab and from the graph
+tab beside Two as PinnedDrifted was, the pin's tab closed after the
+pin — the first family 25,200 cells, 12,812 named, 12,388 driven in an
+hour and a quarter (every cell agreeing on the first run, its literals
+then pinned and the family run again alone) and the second family
+5,760 cells, 5,216 named, 544
+driven (a Back from the graph tab under PinnedFresh activates Two's
+own tab beside it, the one `TabFocused` an in-place open posts).
+(IPC-6, major) a key-moving retarget crossed core's stable key twice —
+once to compare the drifted key with the old pin's, once to write —
+where Term 15 counts once; now the leaf remembers the key it wrote for
+its pin and compares without a crossing
+(`RetargetMovesThePinTheEntriesAndTheKeyByTheDescendantRule` counts
+one crossing for the move and none for a drifted key). (IPC-7, major)
+the membership census named its three dispatchers; now it FINDS them —
+every method of the shell taking `GraphRowAction` first, a row beside
+it and returning nothing, and every `RowCommand` under Bases — and the
+set found must be the set named, so a dispatcher a new file adds fails
+the census before its guard is read. Codoki's one thread on 148a339
+(the `or` designation read as a compile error) was refuted and answered
+by a plain name in 672f385. Mutations, each restored byte for byte, each caught by the named fact: the anchor a plain `Border` again, and its peer denying keyboard focus (the anchor-peer fact, twice); the arbiter letting a stale request land (the arbiter fact); the repair treating a live visible element elsewhere as lost focus (the lost-focus fact); the retarget crossing core's stable key a second time for the comparison (the retarget fact's crossing count); a new row-action dispatcher with a seam and no guard, added to a graph file (the membership census, which now finds dispatchers by their bound signature) — six, none survived; forty-five in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build without the model, 2272 passed; the three model facts — the second and third alone, 2 m 53 s; the first alone, 1 h 15 m, every cell agreeing; the accessibility project built and, in the foreground, the leaf journey — its no-row opening included — and the graph table journey passed; benchmarks build; CI — the suite lane, the model lane and the gate — and codoki on the push are the oracle.
+
 ### Tests that pin PR B2 (revision 5's list; the task loop records what lands)
 
 - `ConnectionsLeafTests.ReRoot.cs`: the pin mutation's order on Show's

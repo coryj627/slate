@@ -441,13 +441,19 @@ public partial class MainWindow : Window
         _ = TryFocus(CanvasPromptClearMarksButton);
     }
 
+    /// <summary>The editor's and the boundaries' deferred focus requests,
+    /// arbitrated so the LAST one raised lands whatever their priorities
+    /// (W6-2 PR B2, IPC-2).</summary>
+    private readonly FocusRequestArbiter _focusRequests = new();
+
     private void Workspace_EditorPaneFocusRequested(
         object? sender,
         WorkspaceGroupViewModel group)
     {
-        _ = Dispatcher.InvokeAsync(
-            () => FocusEditorPane(group),
-            DispatcherPriority.Input);
+        _ = _focusRequests.Post(
+            Dispatcher,
+            DispatcherPriority.Input,
+            () => FocusEditorPane(group));
     }
 
     private void ObserveQuickSwitcher(QuickSwitcherViewModel? switcher)
@@ -625,7 +631,7 @@ public partial class MainWindow : Window
         object? sender,
         WorkspaceFocusBoundary boundary)
     {
-        _ = Dispatcher.InvokeAsync(() =>
+        _ = _focusRequests.Post(Dispatcher, DispatcherPriority.Normal, () =>
         {
             if (boundary == WorkspaceFocusBoundary.Files)
             {

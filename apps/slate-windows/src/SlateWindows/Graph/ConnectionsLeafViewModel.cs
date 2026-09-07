@@ -123,6 +123,9 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     private string? _pin;
     private string? _noteInView;
     private readonly List<(string? Pin, string Effective)> _backStack = [];
+    // Term 15: the key this leaf last wrote for its pin, kept so a
+    // key-moving retarget compares without a second crossing (IPC-6).
+    private string? _pinKey;
     private int _rootEpoch;
     private uint _depth;
     private ulong _highWater;
@@ -580,8 +583,11 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
             _pin = newPin;
             OnPropertyChanged(nameof(Pin));
             TransitionTo(newPin, activeAndMounted);
-            CountCrossing("graph_stable_key_for_path");
-            if (string.Equals(_viewState.SelectedKey, SlateUniffiMethods.GraphStableKeyForPath(oldPin), StringComparison.Ordinal))
+            // The key follows the pin only while it is still the pin's — the
+            // key this leaf wrote for it, remembered, so the comparison costs
+            // no crossing and a key-moving retarget crosses ONCE (Term 15,
+            // IPC-6).
+            if (_pinKey is not null && string.Equals(_viewState.SelectedKey, _pinKey, StringComparison.Ordinal))
             {
                 WriteSharedKey(newPin);
             }
@@ -626,6 +632,11 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     {
         CountCrossing("graph_stable_key_for_path");
         _viewState.SelectedKey = SlateUniffiMethods.GraphStableKeyForPath(path);
+        // The pin's key, remembered: a pin and the same-root repair write
+        // the pin's own; a pop writes the restored node's, which is the
+        // restored pin's when one is restored (a pinned entry records its
+        // pin as its effective root) and no pin's when FOLLOWING returns.
+        _pinKey = _pin is null ? null : _viewState.SelectedKey;
     }
 
     /// <summary>Term 14: the re-root's line — core's `GraphReRooted` with the

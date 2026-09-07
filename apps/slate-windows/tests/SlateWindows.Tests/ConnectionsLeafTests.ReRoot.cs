@@ -199,9 +199,15 @@ public sealed partial class ConnectionsLeafTests
             Assert.Equal([(null, Hub), ("notes/nested/other.md", "notes/nested/other.md")], host.Leaf.BackStack);
             int epoch = host.Leaf.RootEpoch;
             int loadsBefore = host.Loads;
+            int crossings = host.Leaf.CrossingsForTests["graph_stable_key_for_path"];
             host.Clear();
 
             host.Leaf.Retarget("notes/nested", "moved", activeAndMounted: true);
+            // Term 15: a key-moving retarget crosses core's stable key ONCE
+            // — the comparison with the old pin's key is the leaf's own
+            // memory of what it wrote, no crossing (IPC-6) — before the
+            // load's receiver adds its centre-key check at apply.
+            Assert.Equal(crossings + 1, host.Leaf.CrossingsForTests["graph_stable_key_for_path"]);
             host.Settle();
             Assert.Equal("moved/deep.md", host.Leaf.Pin);
             Assert.Equal("moved/deep.md", host.Leaf.Root);
@@ -210,9 +216,12 @@ public sealed partial class ConnectionsLeafTests
             Assert.Equal([(null, Hub), ("moved/other.md", "moved/other.md")], host.Leaf.BackStack);
             Assert.Equal(StableKey("moved/deep.md"), host.Workspace.GraphViewStateForTests.SelectedKey);
 
-            // A key that drifted to another selection is left alone.
+            // A key that drifted to another selection is left alone — and the
+            // comparison costs no crossing at all.
             host.Workspace.GraphViewStateForTests.SelectedKey = StableKey(Hub);
+            crossings = host.Leaf.CrossingsForTests["graph_stable_key_for_path"];
             host.Leaf.Retarget("moved", "elsewhere", activeAndMounted: false);
+            Assert.Equal(crossings, host.Leaf.CrossingsForTests["graph_stable_key_for_path"]);
             Assert.Equal("elsewhere/deep.md", host.Leaf.Pin);
             Assert.Equal(StableKey(Hub), host.Workspace.GraphViewStateForTests.SelectedKey);
             Assert.True(host.Leaf.IsStale);

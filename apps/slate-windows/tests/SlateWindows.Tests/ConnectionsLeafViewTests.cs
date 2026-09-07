@@ -646,4 +646,129 @@ public sealed class ConnectionsLeafViewTests
             }
         });
     }
+
+    /// <summary>Term 9's anchor with no rows — codex post-implementation
+    /// pass 1, IPC-1: the state's host projects a UIA peer carrying the
+    /// leaf's identity, the state's accessible text as its Name and its
+    /// keyboard focusability, in EVERY no-row presentation — no note, the
+    /// root's first load (Loading), a stale root, an error, and a tree with
+    /// no rows — so a reader whose focus lands there reads the state, never
+    /// the window.</summary>
+    [Fact]
+    public void TheNoRowAnchorProjectsAPeerNamedByTheStateInEveryNoRowPresentation()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("anchor-peer");
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                AutomationPeer Peer()
+                {
+                    AutomationPeer? peer = UIElementAutomationPeer.CreatePeerForElement(view.AnchorForTests);
+                    Assert.NotNull(peer);
+                    Assert.IsType<ConnectionsAnchorAutomationPeer>(peer);
+                    Assert.Equal("ConnectionsLeaf", peer.GetAutomationId());
+                    Assert.Equal(AutomationControlType.Group, peer.GetAutomationControlType());
+                    Assert.True(peer.IsControlElement());
+                    Assert.True(peer.IsContentElement());
+                    return peer;
+                }
+
+                // No note: the anchor shown, focusable, named by the state.
+                Assert.Equal(Visibility.Visible, view.AnchorForTests.Visibility);
+                Assert.Equal(ConnectionsPhrase.NoNote, Peer().GetName());
+                Assert.True(Peer().IsKeyboardFocusable());
+                Assert.True(view.AnchorForTests.Focus());
+                Assert.True(view.AnchorForTests.IsKeyboardFocused);
+
+                // The root's first load REJECTED at the receiver (the tree's
+                // echo names another path): Loading, nothing in flight.
+                host.ActivateLeaf();
+                bool armed = true;
+                host.Leaf.EnvelopeForTests = envelope =>
+                {
+                    if (!armed)
+                    {
+                        return envelope;
+                    }
+                    armed = false;
+                    return envelope with { TreePath = "rejected.md" };
+                };
+                host.OpenNote(Hub);
+                host.Settle();
+                host.Leaf.EnvelopeForTests = null;
+                Assert.Equal(ConnectionsLoadState.Loading, host.Leaf.Publication.State);
+                Assert.Equal(Visibility.Visible, view.AnchorForTests.Visibility);
+                Assert.Equal(ConnectionsPhrase.LoadingAccessible, Peer().GetName());
+                host.Workspace.ConnectionsDeeperCommand.Execute(null);
+                host.Settle();
+                Assert.Equal(Visibility.Collapsed, view.AnchorForTests.Visibility);
+
+                // A stale root: the note moved while the leaf was inactive.
+                host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "outline");
+                host.OpenNote(Two);
+                host.Settle();
+                Assert.True(host.Leaf.IsStale);
+                Assert.Equal(Visibility.Visible, view.AnchorForTests.Visibility);
+                Assert.Equal(ConnectionsPhrase.LoadingAccessible, Peer().GetName());
+                host.ActivateLeaf();
+                host.Settle();
+
+                // An error: the next fetch fails.
+                int remaining = 1;
+                host.Leaf.FetchGateForTests = () =>
+                {
+                    if (remaining-- > 0)
+                    {
+                        throw new InvalidOperationException("injected");
+                    }
+                };
+                host.Workspace.ConnectionsDeeperCommand.Execute(null);
+                host.Settle();
+                Assert.Equal(Visibility.Visible, view.AnchorForTests.Visibility);
+                Assert.Equal(ConnectionsPhrase.Error("injected"), Peer().GetName());
+
+                // No rows: a note nothing links and that links nothing.
+                host.OpenNote("orphan.md");
+                host.Settle();
+                Assert.Equal(Visibility.Visible, view.AnchorForTests.Visibility);
+                Assert.Equal(ConnectionsPhrase.Empty, Peer().GetName());
+                Assert.True(view.AnchorForTests.Focus());
+                Assert.True(view.AnchorForTests.IsKeyboardFocused);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>The focus keep-alive's repair rule — codex post-implementation
+    /// pass 1, IPC-3: focus counts as LOST on nothing, on the window, or on an
+    /// element no longer visible; a live visible element elsewhere is the
+    /// user's move and is left alone.</summary>
+    [Fact]
+    public void FocusCountsAsLostOnNothingTheWindowOrACollapsedElementOnly()
+    {
+        RunSta(() =>
+        {
+            var window = new Window { Width = 200, Height = 200, ShowInTaskbar = false, WindowStyle = WindowStyle.None };
+            var visible = new TextBox();
+            var collapsed = new TextBox { Visibility = Visibility.Collapsed };
+            window.Content = new StackPanel { Children = { visible, collapsed } };
+            window.Show();
+            try
+            {
+                Assert.True(ConnectionsLeafView.FocusIsLost(null));
+                Assert.True(ConnectionsLeafView.FocusIsLost(window));
+                Assert.True(ConnectionsLeafView.FocusIsLost(collapsed));
+                Assert.False(ConnectionsLeafView.FocusIsLost(visible));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
 }

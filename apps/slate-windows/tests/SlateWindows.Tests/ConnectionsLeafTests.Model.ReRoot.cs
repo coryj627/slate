@@ -61,8 +61,8 @@ public sealed partial class ConnectionsLeafTests
     private const string AllBase = "All.base";
 
     private const int ReRootCells = PinnedModes * 2 * 2 * 3 * 4 * 5 * 3 * 2;
-    private const int ReRootUnreachable = 5352;
-    private const int ReRootDriven = 408;
+    private const int ReRootUnreachable = 5216;
+    private const int ReRootDriven = 544;
 
     /// <summary>A mutable dirty gate for the model: the decision to give,
     /// and what lands inside the dialog first (the composed routes).</summary>
@@ -97,10 +97,6 @@ public sealed partial class ConnectionsLeafTests
 
     private static string? UnreachableReRoot(ReRootCell cell)
     {
-        if (cell.Mode is Mode.PinnedFresh or Mode.PinnedNoOrigin && cell.Root != RootState.Note)
-        {
-            return "the arrangement's note in view is the pin (IGJ-12): its tab is the one in view";
-        }
         if (cell.Gate != Gate.Clean && cell.Root != RootState.Note)
         {
             return "the dirty gate stands before an in-place open of a note's tab; from no tab, the graph tab or the base tab the open creates a tab and asks nothing";
@@ -221,8 +217,11 @@ public sealed partial class ConnectionsLeafTests
             (string? priorPin, string effective) = stackBefore[^1];
             // An open lands IN PLACE over the tab in view whatever its kind
             // (a note's, the graph's — contract A-9 — a base's): `TabFocused`
-            // only when there is no tab at all and one is created.
-            string[] popOpened = cell.Root == RootState.None ? ["TabFocused"] : [];
+            // only when there is no tab at all and one is created, or when
+            // the top's note has a tab of its own beside the graph (Two,
+            // PinnedFresh's origin) that the open activates.
+            bool topTabBeside = cell.Root == RootState.NoneBesideNote && string.Equals(effective, Two, StringComparison.Ordinal);
+            string[] popOpened = cell.Root == RootState.None || topTabBeside ? ["TabFocused"] : [];
             RootMode popped = new(priorPin, effective, stackBefore[..^1], StableKey(effective));
             return new([.. popOpened, .. reveal, ReRooted(effective), LinePlaceholder], 1, priorPin ?? effective, popped, "RightPane");
         }

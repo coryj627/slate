@@ -63,6 +63,26 @@ public sealed partial class ConnectionsLeafTests
         RenamePinGraphAlive,
         RenamePinGraphAbsent,
         RenamePinGraphReseated,
+        // Codex post-implementation pass 1, IPC-4: the folder variants over an
+        // ENTRY and over the just-pushed ORIGIN (a FOLLOWING start from Deep,
+        // the folder's note), and what lands inside BACK's open.
+        RenameEntryFolderInDialog,
+        DeleteEntryFolderInDialog,
+        RenameOriginFolderInDialog,
+        DeleteOriginFolderInDialog,
+        RenamePinInBackDialog,
+        DeletePinInBackDialog,
+        RenameEntryInBackDialog,
+        DeleteEntryInBackDialog,
+        ReentrantReRootInBackDialog,
+        ReentrantBackInReRootDialog,
+        PriorLoadCompletesInBackDialog,
+        RetirementInBackDialog,
+        TabChangeInBackDialog,
+        GroupChangeInBackDialog,
+        TabCloseInBackDialog,
+        DepthChangeInBackDialog,
+        ProbeInBackDialog,
     }
 
     private sealed record ComposedCell(Mode Mode, Composed Route)
@@ -95,10 +115,19 @@ public sealed partial class ConnectionsLeafTests
     private const string RenamedReRootTarget = "10-renamed.md";
     private const string RenamedHub = "hub-renamed.md";
 
-    private const int ComposedRoutes = 32;
+    /// <summary>The line the pin's tree reports at the route's depth, as it
+    /// stood before the drive (a prior load released inside Back's open).</summary>
+    private const string PinLinePlaceholder = "<pin-line>";
+
+    /// <summary>The note beside for what lands inside BACK's open: not the
+    /// top entry's note, whose existing tab an open would ACTIVATE without
+    /// asking.</summary>
+    private const string BesideForBack = ReRootTarget;
+
+    private const int ComposedRoutes = 49;
     private const int ComposedCells = PinnedModes * ComposedRoutes;
-    private const int ComposedUnreachable = 33;
-    private const int ComposedDriven = 95;
+    private const int ComposedUnreachable = 71;
+    private const int ComposedDriven = 125;
 
     private static readonly Composed[] DialogRoutes =
     [
@@ -121,6 +150,55 @@ public sealed partial class ConnectionsLeafTests
         Composed.TabCloseInDialog,
         Composed.DepthChangeInDialog,
         Composed.ProbeInDialog,
+        Composed.RenameEntryFolderInDialog,
+        Composed.DeleteEntryFolderInDialog,
+        Composed.RenameOriginFolderInDialog,
+        Composed.DeleteOriginFolderInDialog,
+        Composed.RenamePinInBackDialog,
+        Composed.DeletePinInBackDialog,
+        Composed.RenameEntryInBackDialog,
+        Composed.DeleteEntryInBackDialog,
+        Composed.ReentrantReRootInBackDialog,
+        Composed.ReentrantBackInReRootDialog,
+        Composed.PriorLoadCompletesInBackDialog,
+        Composed.RetirementInBackDialog,
+        Composed.TabChangeInBackDialog,
+        Composed.GroupChangeInBackDialog,
+        Composed.TabCloseInBackDialog,
+        Composed.DepthChangeInBackDialog,
+        Composed.ProbeInBackDialog,
+    ];
+
+    /// <summary>The routes whose drive is BACK (the others re-root).</summary>
+    private static readonly Composed[] BackRoutes =
+    [
+        Composed.BackWithReservedRenamed,
+        Composed.ReentrantBackInDialog,
+        Composed.PopLoadFails,
+        Composed.CanvasPriorPinRestored,
+        Composed.BasePriorPinRestored,
+        Composed.RenamePinInBackDialog,
+        Composed.DeletePinInBackDialog,
+        Composed.RenameEntryInBackDialog,
+        Composed.DeleteEntryInBackDialog,
+        Composed.ReentrantReRootInBackDialog,
+        Composed.PriorLoadCompletesInBackDialog,
+        Composed.RetirementInBackDialog,
+        Composed.TabChangeInBackDialog,
+        Composed.GroupChangeInBackDialog,
+        Composed.TabCloseInBackDialog,
+        Composed.DepthChangeInBackDialog,
+        Composed.ProbeInBackDialog,
+    ];
+
+    /// <summary>The routes that start FOLLOWING from Deep — the folder's
+    /// note — so an entry or the just-pushed origin lives in a folder.</summary>
+    private static readonly Composed[] FromDeepRoutes =
+    [
+        Composed.RenameEntryFolderInDialog,
+        Composed.DeleteEntryFolderInDialog,
+        Composed.RenameOriginFolderInDialog,
+        Composed.DeleteOriginFolderInDialog,
     ];
 
     /// <summary>The routes whose pin's load is PARKED before the drive and
@@ -128,10 +206,12 @@ public sealed partial class ConnectionsLeafTests
     /// what lands inside the dialog lands over a load in flight — the
     /// dialog's own pump (IGK-20) would otherwise apply a fast fetch before
     /// the action, the pool's order — and, for the probe, over a tree older
-    /// than the vault. Deeper's prior load is the arrangement's own park.</summary>
+    /// than the vault. A Back route parks nothing before its drive (the
+    /// pop's load follows its open); Deeper's prior load is the
+    /// arrangement's own park.</summary>
     private static readonly Composed[] ParkedRoutes =
     [
-        .. DialogRoutes.Where(route => route != Composed.PriorLoadCompletesInDialog),
+        .. DialogRoutes.Where(route => route != Composed.PriorLoadCompletesInDialog && !BackRoutes.Contains(route)),
         Composed.FocusLandsBeforeApply,
     ];
 
@@ -147,13 +227,10 @@ public sealed partial class ConnectionsLeafTests
         Composed.DeletePinFolderInDialog,
         Composed.DeleteEntryInDialog,
         Composed.DeleteOriginInDialog,
-    ];
-
-    private static readonly Composed[] BackRoutes =
-    [
-        Composed.BackWithReservedRenamed,
-        Composed.ReentrantBackInDialog,
-        Composed.PopLoadFails,
+        Composed.RenameEntryFolderInDialog,
+        Composed.DeleteEntryFolderInDialog,
+        Composed.RenameOriginFolderInDialog,
+        Composed.DeleteOriginFolderInDialog,
     ];
 
     private static string? UnreachableComposed(ComposedCell cell)
@@ -180,9 +257,43 @@ public sealed partial class ConnectionsLeafTests
             case Composed.RenamePinGraphAbsent:
             case Composed.RenamePinGraphReseated:
                 return cell.Pinned ? null : "the shared key follows the PIN (IGL-7); FOLLOWING has none";
+            case Composed.RenameEntryFolderInDialog:
+            case Composed.DeleteEntryFolderInDialog:
+            case Composed.RenameOriginFolderInDialog:
+            case Composed.DeleteOriginFolderInDialog:
+                return cell.Pinned ? "the folder's note is a FOLLOWING start's origin or entry (the pinned arrangements' origins are Two and Hub, at the root)" : null;
+            case Composed.RenameEntryInBackDialog:
+            case Composed.DeleteEntryInBackDialog:
+                return cell.Mode == Mode.PinnedDrifted ? null : "an entry that is not the top needs PinnedDrifted's two";
+            case Composed.RenamePinInBackDialog:
+            case Composed.DeletePinInBackDialog:
+            case Composed.ReentrantReRootInBackDialog:
+            case Composed.PriorLoadCompletesInBackDialog:
+            case Composed.RetirementInBackDialog:
+            case Composed.TabChangeInBackDialog:
+            case Composed.GroupChangeInBackDialog:
+            case Composed.TabCloseInBackDialog:
+            case Composed.DepthChangeInBackDialog:
+            case Composed.ProbeInBackDialog:
+                return hasEntries ? null : "Back falls through: FOLLOWING, or an empty stack";
             default:
                 return null;
         }
+    }
+
+    /// <summary>The arranged state a composed route starts from: the mode's,
+    /// or — for the folder routes — a FOLLOWING start from Deep, with Hub
+    /// pinned over it for the ENTRY variants (the stack then holds
+    /// <c>(FOLLOWING, Deep)</c> below the route's push).</summary>
+    private static (string? Pin, string NoteInView, (string? Pin, string Effective)[] Stack) ArrangedFor(ComposedCell cell)
+    {
+        Cell modeCell = ModeCellOf(cell);
+        return cell.Route switch
+        {
+            Composed.RenameEntryFolderInDialog or Composed.DeleteEntryFolderInDialog => (Hub, Hub, [(null, Deep)]),
+            Composed.RenameOriginFolderInDialog or Composed.DeleteOriginFolderInDialog => (null, Deep, []),
+            _ => (cell.Pinned ? PinBefore(modeCell) : null, NoteInViewBefore(modeCell)!, StackBefore(modeCell)),
+        };
     }
 
     /// <summary>The first family's cell the arrangement borrows: the mode
@@ -206,13 +317,17 @@ public sealed partial class ConnectionsLeafTests
     private static ComposedDerivation DeriveComposed(ComposedCell cell, Fixture fixture)
     {
         Cell modeCell = ModeCellOf(cell);
-        string? pinBefore = cell.Pinned ? PinBefore(modeCell) : null;
-        string noteInView = NoteInViewBefore(modeCell)!;
-        (string? Pin, string Effective)[] stackBefore = StackBefore(modeCell);
-        (string? Pin, string Effective) push = PushOf(cell);
+        (string? pinBefore, string noteInView, (string? Pin, string Effective)[] stackBefore) = ArrangedFor(cell);
+        // The entry a re-root pushes from the arranged state: the pin, or
+        // FOLLOWING the note in view.
+        (string? Pin, string Effective) push = pinBefore is null ? (null, noteInView) : (pinBefore, pinBefore);
         List<(string? Pin, string Effective)> pushed = [.. stackBefore, push];
         string target = ReRootTarget;
         string[] reRooted = [ReRooted(target)];
+        // Back's top entry, where there is one: its prior mode and its note.
+        (string? topPin, string topNote) = stackBefore.Length > 0 ? stackBefore[^1] : (null, string.Empty);
+        (string? Pin, string Effective)[] popped = stackBefore.Length > 0 ? stackBefore[..^1] : [];
+        string? rootAfterPop = topPin ?? topNote;
         RootMode Pinned(string pin, string? inView, IEnumerable<(string? Pin, string Effective)> stack) =>
             new(pin, inView, [.. stack], StableKey(pin));
         RootMode plain = Pinned(target, target, pushed);
@@ -412,6 +527,118 @@ public sealed partial class ConnectionsLeafTests
                     string? inView = pinsTab ? renamed : noteInView;
                     return new([LinePlaceholder], 1, renamed, Pinned(renamed, inView, stackBefore), null, Asked: 0, LoadsOr: pinsTab ? 2 : null);
                 }
+            case Composed.RenameEntryFolderInDialog:
+                // FOLLOWING from Deep with Hub pinned over it: the entry
+                // (FOLLOWING, Deep) lives in a folder; the folder moved inside
+                // the re-root's dialog moves the entry (Term 16); no tab shows
+                // it; the parked pin load speaks the tree before, the mark
+                // reloads once.
+                return new([.. reRooted, LinePlaceholder], 2, target, Pinned(target, target, [(null, MovedPin()), push]), "RightPane");
+            case Composed.DeleteEntryFolderInDialog:
+                // The folder deleted: the entry under it pruned, the pin's push
+                // above it kept.
+                return new([.. reRooted, LinePlaceholder], 2, target, Pinned(target, target, [push]), "RightPane");
+            case Composed.RenameOriginFolderInDialog:
+                // FOLLOWING from Deep: the just-pushed origin lives in a folder;
+                // the folder moved inside the dialog moves the origin's entry and
+                // the dirty tab retargets before the open replaces it (no outline
+                // line: Deep has no heading).
+                return new([.. reRooted, LinePlaceholder], 2, target, Pinned(target, target, [(null, MovedPin())]), "RightPane");
+            case Composed.DeleteOriginFolderInDialog:
+                // The origin's folder deleted: its entry pruned and its tab — the
+                // dirty one — invalidated (the shell's missing-file line) before
+                // the open replaces it.
+                return new([.. reRooted, "HostComposed", LinePlaceholder], 2, target, Pinned(target, target, []), "RightPane");
+            case Composed.RenamePinInBackDialog:
+                // The pin renamed inside Back's open: Term 16 moves it with an
+                // audible load, which the pop's transition makes foreign; the
+                // pop restores the prior mode on the top's note and speaks it.
+                return new([ReRooted(topNote), LinePlaceholder], 2, rootAfterPop, Pinned(rootAfterPop!, topNote, popped) with { Pin = topPin }, "RightPane");
+            case Composed.DeletePinInBackDialog:
+                {
+                    // The pin's file deleted inside Back's open: the delete hook
+                    // keeps the pin and prunes nothing (the entries name Two and
+                    // Hub); the shell's missing-file line iff the pin's tab is the
+                    // one in view (PinnedFresh); the probe's decision — a pool
+                    // read applied on the dispatcher — lands only after the
+                    // dialog returned and the pop transitioned, where it finds
+                    // the pop's load in flight and marks (Term 6); the pop's tree
+                    // is current, so the pop's load is the one load.
+                    string[] missing = cell.Mode == Mode.PinnedFresh ? ["HostComposed"] : [];
+                    return new([.. missing, ReRooted(topNote), LinePlaceholder], 1, rootAfterPop, Pinned(rootAfterPop!, topNote, popped) with { Pin = topPin }, "RightPane");
+                }
+            case Composed.RenameEntryInBackDialog:
+                // PinnedDrifted's lower entry (FOLLOWING, Two) renamed inside
+                // Back's open of Hub: the entry moves; no tab shows Two; the
+                // probe's decision lands after the pop and marks over its load
+                // (see DeletePinInBackDialog); the pop proceeds on the top,
+                // untouched — one load.
+                return new([ReRooted(topNote), LinePlaceholder], 1, rootAfterPop, Pinned(rootAfterPop!, topNote, [(null, RenamedOrigin)]) with { Pin = topPin }, "RightPane");
+            case Composed.DeleteEntryInBackDialog:
+                // The lower entry's note deleted: the entry pruned (no tab, no
+                // line); the probe marks after the pop; the pop leaves the stack
+                // empty — one load.
+                return new([ReRooted(topNote), LinePlaceholder], 1, rootAfterPop, Pinned(rootAfterPop!, topNote, []) with { Pin = topPin }, "RightPane");
+            case Composed.ReentrantReRootInBackDialog:
+                {
+                    // A re-root from inside Back's open: its pin mutation pushes
+                    // the pin and pins the new note (one load), its own open asks
+                    // the same dirty tab again and installs; Back's open then
+                    // installs the top's note over it and finds the top no longer
+                    // names the installed note — nothing pops (B2-D5).
+                    List<(string? Pin, string Effective)> stack = [.. stackBefore, (pinBefore, pinBefore!)];
+                    return new([ReRooted(ReentrantTarget), LinePlaceholder], 1, ReentrantTarget, Pinned(ReentrantTarget, topNote, stack), "RightPane", Asked: 2);
+                }
+            case Composed.ReentrantBackInReRootDialog:
+                {
+                    // Back from inside a re-root's open, after the pin mutation
+                    // pushed: the inner open of the top's note — the note in view
+                    // itself under PinnedFresh, PinnedNoOrigin and FOLLOWING (no
+                    // dialog: the target is already in view), the orphan's dirty
+                    // tab under PinnedDrifted (a second dialog) — and the pop
+                    // restores the pushed entry's mode with its load; the outer
+                    // open then installs the target: FOLLOWING, a root change and
+                    // its load (the pop's foreign); under a restored pin, recorded.
+                    bool following = pinBefore is null;
+                    string restored = push.Pin ?? push.Effective;
+                    string rootAfter = following ? target : restored;
+                    RootMode mode = new(push.Pin, target, [.. stackBefore], following ? StableKey(push.Effective) : StableKey(restored));
+                    return new([.. reRooted, ReRooted(push.Effective), LinePlaceholder], following ? 3 : 2, rootAfter, mode, "RightPane", Asked: cell.Mode == Mode.PinnedDrifted ? 2 : 1);
+                }
+            case Composed.PriorLoadCompletesInBackDialog:
+                // Deeper's reload over the pin, parked before the route, released
+                // inside Back's open: it applies and speaks the pin's tree at
+                // depth two (audible, the leaf active); then the pop's load at
+                // that depth.
+                return new([PinLinePlaceholder, ReRooted(topNote), LinePlaceholder], 1, rootAfterPop, Pinned(rootAfterPop!, topNote, popped) with { Pin = topPin }, "RightPane", Depth: 2);
+            case Composed.RetirementInBackDialog:
+                // The leaf retired inside Back's open: the re-admission after the
+                // open refuses (IGL-5) — nothing pops, no request; the open
+                // installed the top's note but the retired leaf recorded nothing.
+                return new([], 0, pinBefore, Pinned(pinBefore!, noteInView, stackBefore), null);
+            case Composed.TabChangeInBackDialog:
+                // The tab beside activated inside Back's open (`TabFocused`,
+                // recorded under the pin); the open re-activates the captured tab
+                // (`TabFocused`) and installs; the pop proceeds.
+                return new(["TabFocused", "TabFocused", ReRooted(topNote), LinePlaceholder], 1, rootAfterPop, Pinned(rootAfterPop!, topNote, popped) with { Pin = topPin }, "RightPane");
+            case Composed.GroupChangeInBackDialog:
+                // The other group made active inside Back's open: the open
+                // installs nothing (IGL-6) and Back pops nothing; the pane-focus
+                // command's editor request is the last one.
+                return new(["EditorPaneFocused"], 0, pinBefore, Pinned(pinBefore!, noteInView, stackBefore), "editor", EditorRequested: true);
+            case Composed.TabCloseInBackDialog:
+                // The tab beside activated and closed inside Back's open; the open
+                // installs into the captured tab; the pop proceeds.
+                return new(["TabFocused", "TabFocused", "TabClosed", ReRooted(topNote), LinePlaceholder], 1, rootAfterPop, Pinned(rootAfterPop!, topNote, popped) with { Pin = topPin }, "RightPane");
+            case Composed.DepthChangeInBackDialog:
+                // Deeper inside Back's open: a load over the pin at the new depth,
+                // foreign at the pop's transition; the pop's own load at that
+                // depth.
+                return new([ReRooted(topNote), LinePlaceholder], 2, rootAfterPop, Pinned(rootAfterPop!, topNote, popped) with { Pin = topPin }, "RightPane", Depth: 2);
+            case Composed.ProbeInBackDialog:
+                // The probe inside Back's open over a current tree at the vault's
+                // generation: nothing; the pop's load alone.
+                return new([ReRooted(topNote), LinePlaceholder], 1, rootAfterPop, Pinned(rootAfterPop!, topNote, popped) with { Pin = topPin }, "RightPane");
             default:
                 throw new InvalidOperationException($"the model derives no composed route {cell.Route}");
         }
@@ -436,9 +663,45 @@ public sealed partial class ConnectionsLeafTests
         }
         ParkedFetch? parked = Arrange(host, modeCell, fixture, 0);
         Assert.Null(parked);
+        if (FromDeepRoutes.Contains(cell.Route))
+        {
+            // FOLLOWING from Deep, the folder's note; Hub pinned over it for the
+            // entry variants, so (FOLLOWING, Deep) is an entry below the route's
+            // push.
+            host.OpenNote(Deep);
+            host.Settle();
+            if (cell.Route is Composed.RenameEntryFolderInDialog or Composed.DeleteEntryFolderInDialog)
+            {
+                Assert.True(host.Workspace.ReRootConnectionsOn(Hub), $"{cell}: the funnel refused Hub");
+                host.Settle();
+            }
+            (string? pin, string inView, (string? Pin, string Effective)[] stack) = ArrangedFor(cell);
+            Assert.Equal(pin, host.Leaf.Pin);
+            Assert.Equal(inView, host.Leaf.NoteInView);
+            Assert.Equal(stack, host.Leaf.BackStack);
+            noteInView = inView;
+        }
 
         switch (cell.Route)
         {
+            case Composed.TabChangeInBackDialog:
+            case Composed.TabCloseInBackDialog:
+                // A tab beside that is NOT the top entry's note (Back's open
+                // would activate that tab and ask nothing).
+                host.Workspace.OpenPath(BesideForBack, WorkspaceOpenTarget.NewTab);
+                host.Workspace.ActiveGroup.ActiveTab = TabFor(host, noteInView);
+                host.Settle();
+                break;
+            case Composed.GroupChangeInBackDialog:
+                host.Workspace.SplitRightCommand.Execute(null);
+                host.Settle();
+                break;
+            case Composed.PriorLoadCompletesInBackDialog:
+                host.Settle();
+                parked = Park(host.Leaf);
+                host.Workspace.ConnectionsDeeperCommand.Execute(null);
+                Assert.True(parked.Reached.Wait(TimeSpan.FromSeconds(10)), $"{cell}: Deeper's reload never parked");
+                break;
             case Composed.AttachmentSource:
                 host.Workspace.OpenPath(Attachment, WorkspaceOpenTarget.CurrentTab);
                 host.Settle();
@@ -519,7 +782,7 @@ public sealed partial class ConnectionsLeafTests
         {
             host.ActivateLeaf();
         }
-        if (cell.Route != Composed.PriorLoadCompletesInDialog)
+        if (cell.Route is not (Composed.PriorLoadCompletesInDialog or Composed.PriorLoadCompletesInBackDialog))
         {
             host.Settle();
             Assert.True(host.Leaf.Root is null || host.Leaf.IsCurrent, $"{cell}: the arrangement left the presentation stale");
@@ -568,6 +831,33 @@ public sealed partial class ConnectionsLeafTests
             ,
             Composed.DepthChangeInDialog => () => host.Workspace.ConnectionsDeeperCommand.Execute(null),
             Composed.ProbeInDialog => () => host.Workspace.NotifyGraphOfVaultChange(),
+            Composed.RenameEntryFolderInDialog or Composed.RenameOriginFolderInDialog => () => RenameFolderIn(host, PinFolder, MovedFolder),
+            Composed.DeleteEntryFolderInDialog or Composed.DeleteOriginFolderInDialog => () => DeleteFolderIn(host, PinFolder),
+            Composed.RenamePinInBackDialog => () => RenameIn(host, PinBefore(modeCell), RenamedPin(modeCell)),
+            Composed.DeletePinInBackDialog => () => DeleteIn(host, PinBefore(modeCell)),
+            Composed.RenameEntryInBackDialog => () => RenameIn(host, Two, RenamedOrigin),
+            Composed.DeleteEntryInBackDialog => () => DeleteIn(host, Two),
+            Composed.ReentrantReRootInBackDialog => () => Assert.True(host.Workspace.ReRootConnectionsOn(ReentrantTarget), $"{cell}: the re-entrant re-root refused"),
+            // The pin mutation pushed before this open, so the inner Back has
+            // an entry to pop in every mode.
+            Composed.ReentrantBackInReRootDialog => () => Assert.True(host.Workspace.ConnectionsBack(), $"{cell}: the re-entrant Back popped nothing"),
+            Composed.PriorLoadCompletesInBackDialog => () =>
+            {
+                gate.Parked!.Gate.Set();
+                host.Settle();
+            }
+            ,
+            Composed.RetirementInBackDialog => () => host.Leaf.Retire(),
+            Composed.TabChangeInBackDialog => () => host.Workspace.ActiveGroup.ActiveTab = TabFor(host, BesideForBack),
+            Composed.GroupChangeInBackDialog => () => Assert.True(host.Workspace.FocusDirectionalPane("horizontal", -1), $"{cell}: no group to move to"),
+            Composed.TabCloseInBackDialog => () =>
+            {
+                host.Workspace.ActiveGroup.ActiveTab = TabFor(host, BesideForBack);
+                host.Workspace.CloseActiveTabCommand.Execute(null);
+            }
+            ,
+            Composed.DepthChangeInBackDialog => () => host.Workspace.ConnectionsDeeperCommand.Execute(null),
+            Composed.ProbeInBackDialog => () => host.Workspace.NotifyGraphOfVaultChange(),
             _ => null,
         };
         return parked;
@@ -674,6 +964,24 @@ public sealed partial class ConnectionsLeafTests
                 Assert.True(host.Workspace.ReRootConnectionsOn(ReRootTarget), $"{cell}: the funnel refused");
                 Assert.False(host.Workspace.ConnectionsBack(), $"{cell}: Back reached a retired leaf");
                 break;
+            case Composed.RenamePinInBackDialog:
+            case Composed.DeletePinInBackDialog:
+            case Composed.RenameEntryInBackDialog:
+            case Composed.DeleteEntryInBackDialog:
+            case Composed.PriorLoadCompletesInBackDialog:
+            case Composed.TabChangeInBackDialog:
+            case Composed.TabCloseInBackDialog:
+            case Composed.DepthChangeInBackDialog:
+            case Composed.ProbeInBackDialog:
+                Assert.True(host.Workspace.ConnectionsBack(), $"{cell}: Back popped nothing");
+                break;
+            case Composed.ReentrantReRootInBackDialog:
+            case Composed.RetirementInBackDialog:
+            case Composed.GroupChangeInBackDialog:
+                // The top no longer names the installed note, the leaf retired,
+                // or the open installed nothing: the outer Back pops nothing.
+                Assert.False(host.Workspace.ConnectionsBack(), $"{cell}: the outer Back popped");
+                break;
             default:
                 Assert.True(host.Workspace.ReRootConnectionsOn(ReRootTarget), $"{cell}: the funnel refused");
                 break;
@@ -731,6 +1039,7 @@ public sealed partial class ConnectionsLeafTests
                 int before;
                 ParkedFetch? parked = null;
                 string? lineBefore = null;
+                string? pinLineBefore = null;
                 try
                 {
                     parked = ArrangeComposed(host, cell, fixture, gate);
@@ -740,11 +1049,17 @@ public sealed partial class ConnectionsLeafTests
                         // before the dialog's action.
                         lineBefore = LineFor(host, rootBefore, expected.Depth);
                     }
+                    if (host.Leaf.Pin is { } pinnedBefore)
+                    {
+                        // The pin's own line at the route's depth, before the drive
+                        // (a prior load over the pin released inside Back's open).
+                        pinLineBefore = LineFor(host, pinnedBefore, expected.Depth);
+                    }
                     host.Clear();
                     before = host.Loads;
                     parked = DriveComposed(host, cell, gate, parked);
                     parked?.Gate.Set();
-                    if (cell.Route != Composed.RetirementInDialog)
+                    if (cell.Route is not (Composed.RetirementInDialog or Composed.RetirementInBackDialog))
                     {
                         SettleTheDocuments(host);
                     }
@@ -763,9 +1078,12 @@ public sealed partial class ConnectionsLeafTests
                 int loads = host.Loads - before;
                 string[] timeline =
                 [
-                    .. expected.Timeline.Select(entry => entry == LinePlaceholder
-                        ? lineBefore ?? (expected.Root is { } root ? LineFor(host, root, expected.Depth) : "<no root to report>")
-                        : entry),
+                    .. expected.Timeline.Select(entry => entry switch
+                    {
+                        LinePlaceholder => lineBefore ?? (expected.Root is { } root ? LineFor(host, root, expected.Depth) : "<no root to report>"),
+                        PinLinePlaceholder => pinLineBefore ?? "<no pin before the route>",
+                        _ => entry,
+                    }),
                 ];
                 var mismatch = new List<string>();
                 if (parked is { TimedOut: true })
@@ -784,7 +1102,7 @@ public sealed partial class ConnectionsLeafTests
                 {
                     mismatch.Add($"root {host.Leaf.Root ?? "none"}, derived {expected.Root ?? "none"}");
                 }
-                if (cell.Route != Composed.RetirementInDialog)
+                if (cell.Route is not (Composed.RetirementInDialog or Composed.RetirementInBackDialog))
                 {
                     if (host.Leaf.Root is not null && host.Leaf.IsStale)
                     {

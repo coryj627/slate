@@ -150,6 +150,35 @@ internal sealed class ConnectionsRowDataPeer : TreeViewDataItemAutomationPeer, I
     public void Invoke() => (Item as ConnectionsRowViewModel)?.RaiseActivate();
 }
 
+/// <summary>Term 9's anchor when the leaf has no rows: the state's host,
+/// focusable and — unlike the <see cref="Border"/> it is — projected to
+/// UI Automation with its identity (`ConnectionsLeaf`), its Name (the
+/// state's accessible text) and its keyboard focus, so a reader whose
+/// focus lands here reads the state, not the window (W6-2 PR B2, IPC-1:
+/// a plain Border creates no peer).</summary>
+internal sealed class ConnectionsAnchor : Border
+{
+    protected override AutomationPeer OnCreateAutomationPeer() => new ConnectionsAnchorAutomationPeer(this);
+}
+
+internal sealed class ConnectionsAnchorAutomationPeer : FrameworkElementAutomationPeer
+{
+    public ConnectionsAnchorAutomationPeer(ConnectionsAnchor owner)
+        : base(owner)
+    {
+    }
+
+    protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Group;
+
+    protected override string GetClassNameCore() => nameof(ConnectionsAnchor);
+
+    protected override bool IsControlElementCore() => true;
+
+    protected override bool IsContentElementCore() => true;
+
+    protected override bool IsKeyboardFocusableCore() => Owner is UIElement { Focusable: true, IsEnabled: true, IsVisible: true };
+}
+
 internal sealed class ConnectionsTreeItem : TreeViewItem
 {
     protected override DependencyObject GetContainerForItemOverride() => new ConnectionsTreeItem();
@@ -249,7 +278,7 @@ internal sealed class ConnectionsLeafView : UserControl
         AutomationProperties.SetAutomationId(_state, "ConnectionsStateText");
 
         // Term 9: the anchor — focusable when there is nothing to read.
-        _anchor = new Border { Focusable = true, Child = _state, Margin = new Thickness(0, 8, 0, 8) };
+        _anchor = new ConnectionsAnchor { Focusable = true, Child = _state, Margin = new Thickness(0, 8, 0, 8) };
         AutomationProperties.SetAutomationId(_anchor, "ConnectionsLeaf");
         AutomationProperties.SetName(_anchor, ConnectionsPhrase.Title);
         _anchor.GotKeyboardFocus += (_, e) => OnFocusEntered(e);
@@ -343,6 +372,11 @@ internal sealed class ConnectionsLeafView : UserControl
     /// boundary lands here when the leaf is active.</summary>
     public bool FocusAnchor()
     {
+        // The body may have been switched in by the same reveal that asked
+        // for the boundary: laid out here, so the state's host can take
+        // focus at once (the journey's no-row step, IPC-1: the boundary fell
+        // to the rail while the anchor was not yet visible).
+        UpdateLayout();
         if (_tree.Visibility == Visibility.Visible && _roots.Count > 0)
         {
             ConnectionsRowViewModel first = _tree.SelectedItem as ConnectionsRowViewModel ?? _roots[0];
@@ -502,13 +536,21 @@ internal sealed class ConnectionsLeafView : UserControl
         }
         _ = Dispatcher.BeginInvoke(attempts == 3 ? DispatcherPriority.Loaded : DispatcherPriority.Background, () =>
         {
-            bool inside = IsKeyboardFocusWithin && Keyboard.FocusedElement is UIElement { IsVisible: true };
-            if (!inside && !TryFocusInside())
+            // Repair only focus that is LOST — on nothing, on the window, or
+            // on an element that collapsed under it; a move the user made
+            // meanwhile to a live element elsewhere stands (IPC-3).
+            if (FocusIsLost(Keyboard.FocusedElement) && !TryFocusInside())
             {
                 RetryFocusInside(attempts - 1);
             }
         });
     }
+
+    /// <summary>Whether keyboard focus is nowhere a reader can be: on
+    /// nothing, on the window itself, or on an element no longer visible
+    /// (WPF leaves focus on an element that collapsed).</summary>
+    internal static bool FocusIsLost(IInputElement? focused) =>
+        focused is null || focused is Window || focused is UIElement { IsVisible: false };
 
     private bool TryFocusInside()
     {

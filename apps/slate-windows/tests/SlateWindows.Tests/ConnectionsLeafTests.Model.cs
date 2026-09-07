@@ -191,8 +191,8 @@ public sealed partial class ConnectionsLeafTests
     private const int PinnedModes = 4;
     private const int PinnedRoutes = 35;
     private const int PinnedCells = PinnedModes * 2 * 2 * 3 * 5 * 3 * PinnedRoutes;
-    private const int PinnedUnreachable = 17162;
-    private const int PinnedDriven = 8038;
+    private const int PinnedUnreachable = 12812;
+    private const int PinnedDriven = 12388;
 
     private static readonly Route[] SecondTabRoutes =
     [
@@ -246,10 +246,6 @@ public sealed partial class ConnectionsLeafTests
         if (cell.Pinned && cell.Route == Route.Launch)
         {
             return "nothing persists (B2D-2): a launch comes up FOLLOWING, so no pinned arrangement survives it";
-        }
-        if (cell.Mode is Mode.PinnedFresh or Mode.PinnedNoOrigin && cell.Root != RootState.Note)
-        {
-            return "the arrangement's note in view is the pin (IGJ-12): its tab is the one in view";
         }
         if (OriginRoutes.Contains(cell.Route) && cell.Mode is Mode.Following or Mode.PinnedNoOrigin)
         {
@@ -353,13 +349,18 @@ public sealed partial class ConnectionsLeafTests
         };
 
     /// <summary>The note in view the arrangement leaves (Term 11): FOLLOWING,
-    /// the root; PinnedFresh and PinnedNoOrigin, the pin; PinnedDrifted, the
-    /// orphan, or none.</summary>
+    /// the root; under a pin, the note the cell's root state names —
+    /// PinnedFresh's and PinnedNoOrigin's the pin, PinnedDrifted's the
+    /// orphan — or none: the note in view is ORTHOGONAL to the pin and the
+    /// stack (IPC-5: after either arrangement a tab close, a graph, a canvas
+    /// or a base tab records none and keeps the pin), so every pinned
+    /// arrangement is driven from a note, from no tab and from the graph tab
+    /// beside a note.</summary>
     private static string? NoteInViewBefore(Cell cell) => cell.Mode switch
     {
         Mode.Following => RootBefore(cell),
         Mode.PinnedDrifted => cell.Root == RootState.Note ? Orphan : null,
-        _ => PinBefore(cell),
+        _ => cell.Root == RootState.Note ? PinBefore(cell) : null,
     };
 
     /// <summary>IGJ-12's stacks: the prior mode and the effective root at
@@ -822,7 +823,8 @@ public sealed partial class ConnectionsLeafTests
                     // (the mark above its generation); a failure, after which the
                     // mark waits for the next install. Nothing else spoken; the
                     // root gone, the presentation Error.
-                    string[] missing = pinned && cell.Mode == Mode.PinnedDrifted ? [] : ["HostComposed"];
+                    bool pinsTabInView = !pinned || (cell.Root == RootState.Note && cell.Mode != Mode.PinnedDrifted);
+                    string[] missing = pinsTabInView ? ["HostComposed"] : [];
                     return new([.. missing, .. pending], probeLoads, rootBefore, false, State: ConnectionsLoadState.Error);
                 }
             case Route.RenameFolder when pinned && cell.Presentation != Presentation.Missing:
@@ -898,7 +900,10 @@ public sealed partial class ConnectionsLeafTests
             Route.RenameFolder when pinInTheFolder => MovedPin(),
             _ => PinBefore(cell),
         };
-        string? before = cell.Mode == Mode.PinnedDrifted ? NoteInViewBefore(cell) : pin;
+        // The note in view as arranged — the pin's own tab retargets with a
+        // renamed or moved pin, so PinnedFresh's and PinnedNoOrigin's note in
+        // view is the pin AFTER the route.
+        string? before = cell.Mode != Mode.PinnedDrifted && cell.Root == RootState.Note ? pin : NoteInViewBefore(cell);
         // Under a pin the parked create's open is NOT suppressed — the root
         // it compares is the pin, which did not move (B-11) — so the created
         // note opens in place after the note in view moved to Two.
@@ -1244,12 +1249,18 @@ public sealed partial class ConnectionsLeafTests
                 $"{cell}: the probe issued no reload");
             WaitParked();
             // The graph document's own silent refresh, which the same probe
-            // issued, is the ARRANGEMENT's: drained here (the leaf's fetch
-            // stays parked), so a refresh still in flight cannot revalidate
-            // the shared key against a snapshot older than the route's move
-            // (CI, 35ed323: a pinned rename beside the graph tab lost its key
-            // to the pre-rename snapshot once, in Release).
-            SettleTheGraph(host);
+            // issued, is the ARRANGEMENT's: drained here while the leaf's
+            // fetch stays parked, so a refresh still in flight cannot
+            // revalidate the shared key against a snapshot older than the
+            // route's move (CI, 35ed323: a pinned rename beside the graph tab
+            // lost its key to the pre-rename snapshot once, in Release). Never
+            // with the fetch UNPARKED (the shutdown route): the drain's pump
+            // would apply a fast failure and leave nothing in flight (CI,
+            // 672f385).
+            if (parked is not null)
+            {
+                SettleTheGraph(host);
+            }
         }
 
         // The route's props after the note.
@@ -1523,13 +1534,18 @@ public sealed partial class ConnectionsLeafTests
             Assert.True(host.Leaf.IsStale, $"{cell}: the folder move did not leave the pin stale");
         }
 
-        // The note in view.
-        if (cell.Mode == Mode.PinnedDrifted)
+        // The note in view — orthogonal to the pin and the stack (IPC-5): a
+        // note (the pin's own tab as the arrangement left it, or the orphan
+        // opened in place for PinnedDrifted), no tab at all (the pin's tab
+        // closed: recorded none, the pin kept), or the graph tab beside Two.
         {
             switch (cell.Root)
             {
                 case RootState.Note:
-                    OpenThe(Orphan, newTab: false);
+                    if (cell.Mode == Mode.PinnedDrifted)
+                    {
+                        OpenThe(Orphan, newTab: false);
+                    }
                     break;
                 case RootState.None:
                     CloseTheTab(pin);
@@ -1649,8 +1665,12 @@ public sealed partial class ConnectionsLeafTests
                     $"{cell}: the probe issued no reload");
                 WaitParked();
                 // The graph document's own refresh is the arrangement's (see
-                // the FOLLOWING arrangement): drained before the route.
-                SettleTheGraph(host);
+                // the FOLLOWING arrangement): drained before the route, the
+                // leaf's fetch parked.
+                if (parked is not null)
+                {
+                    SettleTheGraph(host);
+                }
             }
         }
 
