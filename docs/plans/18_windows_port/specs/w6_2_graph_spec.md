@@ -34,14 +34,18 @@ apps/slate-windows/src/SlateWindows/Graph/
                                       and R-B, W6-2 PR C CD-Q1, `35_graph_contracts.md` §PR C C-4)
                                       (P2-5), owned by the WORKSPACE since PR B2 (B2D-1, 2026-09-06): Table, Diagram
                                       and the Connections leaf read/write it, never copy
-  GraphSurfaceView.xaml(.cs)   PR A   tab body: header (Table/Diagram switcher, filter field PR C, presets), load/empty/
-                                      error states, the two projections (visibility-gated: exactly one in the UIA tree),
-                                      the Where-am-I panel (PR C), the inspector (PR E)
+  GraphSurfaceView.xaml(.cs)   PR A   tab body: header (Table/Diagram switcher; the filter field, its count region and
+                                      Clear — PR C; the presets are palette and menu ROWS, not header controls — §PR C
+                                      C-3, C-5), load/empty/error states on a focusable state host (PR C, C-17), the two
+                                      projections (visibility-gated: exactly one in the UIA tree), the Where-am-I panel
+                                      (PR C), the inspector (PR E)
   GraphTableView.cs            PR A   the textual projection: AccessibleDataGrid over core's rows (0b), nine columns,
                                       row actions from core's action set (0b)
   ConnectionsLeafView.cs       PR B   the right-pane Connections leaf: the neighbourhood tree from core (0b),
                                       depth 1–3, re-root + back stack, ghost → create note
-  GraphNavigator.cs            PR C   the command layer (where-am-I, presets, mode switching, filter, zoom routing)
+  GraphNavigator.cs            PR C   the command layer, one per WORKSPACE (§PR C C-1): the presets, Where-am-I, the
+                                      needle's write and clear, the Escape ladder, the ChordScope.Graph map; PR D adds
+                                      the viewport verbs and the mode switch to the same map (amended, §PR C CD-11)
   GraphDiagramView.cs          PR D   the visual projection (custom FrameworkElement + per-node peers, windowed;
                                       tier B summary above core's threshold), the layout session driver
   GraphInspectorView.xaml      PR E   filters / groups / display / forces (P2-4), sliders that announce once settled
@@ -203,7 +207,7 @@ Each PR section lists: **Goal · Consumes · Builds · Behavior pinned · Tests 
 
 **Evidence / acceptance.** The user filters by name, hears the count, jumps to orphans; asking Where am I and reading the panel is PR D's step under CD-Q2's default (this PR's journey asserts the disabled row and the chord's fall-through). Matrix rows: the three preset ids ✓, `slate.graph.whereAmI` pending until the graph's diagram slice (W6-2 PR D; CD-Q2's default); `w_c_matrix.md` "Graph navigator, filter and Where-am-I (W6-2 PR C)".
 
-**Hand-off.** The navigator's routing seam for zoom and Where-am-I, taken by D.
+**Hand-off.** The navigator's Where-am-I READBACK seam (a `Func` PR D's diagram installs, §PR C C-8) and its chord map's `AddChord` shape (C-11): PR D adds the four viewport verbs and the mode switch to that map and installs the seam. No zoom seam exists in C (amended, CD-11).
 
 ### PR D — Diagram: renderer, per-node peers, tiers, the layout driver, zoom
 
