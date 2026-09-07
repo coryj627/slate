@@ -161,3 +161,8 @@ apps/slate-mac/Sources/slate_uniffiFFI/slate_uniffiFFI.h
 
 # Local convenience symlink to the latest built app bundle (AT testing)
 /slate-mac-*.app
+
+# repomix packs the whole tree into a single multi-megabyte file for AI
+# tooling. Regenerate on demand with `repomix --include-logs`; the pack is
+# a build artifact of the working tree, never a committed source of truth.
+repomix-output.*
