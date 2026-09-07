@@ -449,9 +449,14 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     /// a no-op; a change advances the epoch and the sequence (an in-flight
     /// result for the old root is foreign), clears the selection, installs
     /// NoNote synchronously for none, else loads iff active and mounted.</summary>
-    private void TransitionTo(string? path, bool activeAndMounted)
+    private void TransitionTo(string? path, bool activeAndMounted, bool force = false)
     {
-        if (string.Equals(path, _root, StringComparison.Ordinal))
+        // A same-path NOTE change is a no-op; a pin or a pop is FORCED — Terms
+        // 12 and 13 promise the epoch, the sequence and ONE audible load
+        // whether or not the effective root already stands there (a note in
+        // view pinned as itself, a pop back onto the very root; codex
+        // post-implementation pass 2, IPC-12).
+        if (!force && string.Equals(path, _root, StringComparison.Ordinal))
         {
             return;
         }
@@ -514,7 +519,7 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         _pin = path;
         OnPropertyChanged(nameof(Pin));
         OnPropertyChanged(nameof(BackStack));
-        TransitionTo(path, activeAndMounted: true);
+        TransitionTo(path, activeAndMounted: true, force: true);
         WriteSharedKey(path);
         AnnounceReRooted(path);
         return true;
@@ -545,7 +550,7 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         _pin = priorPin;
         OnPropertyChanged(nameof(Pin));
         OnPropertyChanged(nameof(BackStack));
-        TransitionTo(_pin ?? _noteInView, activeAndMounted: true);
+        TransitionTo(_pin ?? _noteInView, activeAndMounted: true, force: true);
         WriteSharedKey(effective);
         AnnounceReRooted(effective);
         return true;
@@ -590,6 +595,14 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
             if (_pinKey is not null && string.Equals(_viewState.SelectedKey, _pinKey, StringComparison.Ordinal))
             {
                 WriteSharedKey(newPin);
+            }
+            else
+            {
+                // The key had drifted: the pin moved without it, and the key
+                // this leaf remembers no longer names its pin — forgotten, so
+                // a later rename cannot mistake the old key, reselected, for
+                // the pin's (codex post-implementation pass 2, IPC-11).
+                _pinKey = null;
             }
         }
         OnPropertyChanged(nameof(BackStack));

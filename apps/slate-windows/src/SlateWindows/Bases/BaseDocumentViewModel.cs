@@ -262,7 +262,13 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// workspace's re-root funnel on the row's note, addressed by this
     /// document being the active hosted one; the docked surface is bound to
     /// the active base document, so the invoking tab is that document's.</summary>
-    internal Action<BasesRow>? ShowConnectionsFromSurface { get; set; }
+    /// <summary>W6-2 PR B2 (B2-5, IGJ-9): the seam carries the SOURCE — the
+    /// invoking surface's tab — beside the row, because one document can be
+    /// hosted by base tabs in two groups, one surface per tab, and the
+    /// document alone cannot say which invoked it (codex post-implementation
+    /// pass 2, IPC-9: a cached action from the inactive group's surface
+    /// re-rooted from the active one).</summary>
+    internal Action<WorkspaceTabViewModel, BasesRow>? ShowConnectionsFromSurface { get; set; }
 
     /// <summary>The action's name is core's title for
     /// <c>GraphRowAction.ShowConnections</c> (0b-9), from the Note vector

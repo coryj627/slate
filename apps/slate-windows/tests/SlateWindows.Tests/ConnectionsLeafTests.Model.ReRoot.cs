@@ -227,18 +227,15 @@ public sealed partial class ConnectionsLeafTests
         }
 
         string target = TargetPath(cell);
-        if (cell.Entrance == Entrance.Bases && noteTab)
-        {
-            // IGJ-9: the invoking document is not the active tab's — refused
-            // by address, nothing moves.
-            return new([], 0, rootBefore, unchanged, null);
-        }
-        // The table's entrance makes the graph tab active first (IGI-4): the
-        // shell's `TabFocused` when a note was in view, and the note in view
-        // becomes none — FOLLOWING, the root goes with it (Term 3(g)), so
-        // nothing is pushed (B2-D7); under a pin it is recorded.
-        string[] address = cell.Entrance == Entrance.Table && noteTab ? ["TabFocused"] : [];
-        string? noteInViewAtThePin = cell.Entrance == Entrance.Table ? null : noteInViewBefore;
+        // The table's entrance makes the graph tab active first (IGI-4), and
+        // the Bases' the invoking surface's tab (B2-5, IGJ-9; codex
+        // post-implementation pass 2, IPC-9 — the entrance is addressed, not
+        // refused): the shell's `TabFocused` when a note was in view, and the
+        // note in view becomes none — FOLLOWING, the root goes with it (Term
+        // 3(g)), so nothing is pushed (B2-D7); under a pin it is recorded.
+        bool addressed = cell.Entrance is Entrance.Table or Entrance.Bases;
+        string[] address = addressed && noteTab ? ["TabFocused"] : [];
+        string? noteInViewAtThePin = addressed ? null : noteInViewBefore;
         if (cell.Target == Target.SameRoot)
         {
             // B2D-6: already pinned on the path — the key repaired, the reveal
@@ -250,7 +247,7 @@ public sealed partial class ConnectionsLeafTests
             // the leaf's own load (issued after it); a re-root's open replaces
             // that tab in place and its document retires before its line.
             int loads = mounted ? 0 : 1;
-            string[] graph = address.Length > 0 ? [fixture.GraphSummary] : [];
+            string[] graph = cell.Entrance == Entrance.Table && address.Length > 0 ? [fixture.GraphSummary] : [];
             RootMode repaired = new(pinBefore, noteInViewAtThePin, stackBefore, StableKey(pinBefore!));
             // Two fetches on the pool — the graph's and the leaf's — land in
             // either order.
@@ -436,7 +433,8 @@ public sealed partial class ConnectionsLeafTests
                     BaseDocumentViewModel document = Assert.IsType<BaseDocumentViewModel>(baseTab.Base);
                     Assert.Equal(BaseLoadState.Ready, document.State);
                     BasesRow row = document.Result!.Rows.First(candidate => string.Equals(candidate.FilePath, target, StringComparison.Ordinal));
-                    _ = host.Workspace.BasesShowConnectionsFor(document, row);
+                    // The invoking SOURCE is the base tab's surface (B2-5).
+                    _ = host.Workspace.BasesShowConnectionsFor(baseTab, document, row);
                     break;
                 }
             case Entrance.Funnel:

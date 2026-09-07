@@ -91,20 +91,38 @@ public sealed class ConnectionsReRootBasesTests : IDisposable
             Assert.Equal(BaseLoadState.Ready, notes.State);
             BasesRow row = notes.Result!.Rows[0];
 
-            // Another base active: the Notes document is not the invoking
-            // one's host — refused, nothing pinned.
+            // Another base active: the invoking SOURCE is the Notes tab —
+            // hosted, inactive — and the entrance is ADDRESSED to it: the
+            // tab is made active, then the funnel pins (B2-5; codex
+            // post-implementation pass 2, IPC-9). A source that is not hosted
+            // — a tab no group holds — invokes nothing.
+            WorkspaceTabViewModel notesTab = workspace.ActiveGroup.ActiveTab!;
             workspace.OpenPath("Other.base", WorkspaceOpenTarget.NewTab);
-            Assert.NotSame(notes, workspace.ActiveGroup.ActiveTab!.Base);
-            Assert.False(workspace.BasesShowConnectionsFor(notes, row));
+            WorkspaceTabViewModel otherTab = workspace.ActiveGroup.ActiveTab!;
+            Assert.NotSame(notes, otherTab.Base);
+            // A source that hosts another document invokes nothing.
+            Assert.False(workspace.BasesShowConnectionsFor(otherTab, notes, row));
             Assert.Null(workspace.Connections.Pin);
+            // A source that is gone — a duplicate of the Notes tab, hosting the
+            // same document, then closed — invokes nothing.
+            workspace.ActiveGroup.ActiveTab = notesTab;
+            workspace.DuplicateTabCommand.Execute(null);
+            WorkspaceTabViewModel closing = workspace.ActiveGroup.ActiveTab!;
+            Assert.NotSame(notesTab, closing);
+            Assert.Same(notes, closing.Base);
+            workspace.CloseActiveTabCommand.Execute(null);
+            Assert.DoesNotContain(closing, workspace.ActiveGroup.Tabs);
+            Assert.False(workspace.BasesShowConnectionsFor(closing, notes, row));
+            Assert.Null(workspace.Connections.Pin);
+            workspace.ActiveGroup.ActiveTab = otherTab;
+            Assert.NotSame(notesTab, workspace.ActiveGroup.ActiveTab);
 
-            // The Notes tab active: the funnel pins the leaf on the row's
-            // note; from a base tab there was no effective root, so nothing
-            // was pushed and Back falls through.
-            workspace.ActiveGroup.ActiveTab = workspace.ActiveGroup.Tabs.First(tab => ReferenceEquals(tab.Base, notes));
-            Assert.Same(notes, workspace.ActiveGroup.ActiveTab!.Base);
+            // The Notes tab as the source while another is in view: made
+            // active first, then the funnel pins the leaf on the row's note;
+            // from a base tab there was no effective root, so nothing was
+            // pushed and Back falls through.
             Assert.Null(workspace.Connections.Root);
-            Assert.True(workspace.BasesShowConnectionsFor(notes, row));
+            Assert.True(workspace.BasesShowConnectionsFor(notesTab, notes, row));
             Settle(workspace);
             Assert.Equal(row.FilePath, workspace.Connections.Pin);
             Assert.Equal(row.FilePath, workspace.Connections.Root);
@@ -123,6 +141,45 @@ public sealed class ConnectionsReRootBasesTests : IDisposable
             workspace.BasesShowConnectionsCommand.Execute(null);
             Settle(workspace);
             Assert.Equal(reopened.Result!.Rows[1].FilePath, workspace.Connections.Pin);
+        });
+    }
+
+    /// <summary>B2-5 (IGJ-9; codex post-implementation pass 2, IPC-9): ONE
+    /// document hosted by base tabs in TWO groups — a surface per tab — and
+    /// an action invoked from the surface whose group is NOT active: the
+    /// source tab's group and the tab are made active first, then the funnel
+    /// pins, so the re-root's open lands in the invoking group, never the
+    /// other; the document-level check alone could not tell them apart.</summary>
+    [Fact]
+    public void AnActionFromTheInactiveGroupsSurfaceAddressesThatGroupFirst()
+    {
+        PumpedDispatcher.Run(() =>
+        {
+            using WorkspaceViewModel workspace = Workspace();
+            workspace.OpenPath("Notes.base");
+            BaseDocumentViewModel notes = Assert.IsType<BaseDocumentViewModel>(workspace.ActiveGroup.ActiveTab!.Base);
+            WorkspaceTabViewModel first = workspace.ActiveGroup.ActiveTab!;
+            WorkspaceGroupViewModel firstGroup = workspace.ActiveGroup;
+            // The split duplicates the tab into a new, active group: the same
+            // document, a second tab, a second surface.
+            workspace.SplitRightCommand.Execute(null);
+            WorkspaceGroupViewModel secondGroup = workspace.ActiveGroup;
+            Assert.NotSame(firstGroup, secondGroup);
+            WorkspaceTabViewModel second = secondGroup.ActiveTab!;
+            Assert.Same(notes, second.Base);
+            Assert.Same(notes, first.Base);
+            Assert.Same(notes, workspace.ActiveBaseDocument);
+            BasesRow row = notes.Result!.Rows[0];
+
+            // The FIRST group's surface invokes while the second is active.
+            Assert.True(workspace.BasesShowConnectionsFor(first, notes, row));
+            Settle(workspace);
+            Assert.Same(firstGroup, workspace.ActiveGroup);
+            Assert.Equal(row.FilePath, workspace.Connections.Pin);
+            // The re-root's open landed in the invoking group: its tab now
+            // shows the note; the second group's tab still shows the base.
+            Assert.Equal(row.FilePath, firstGroup.ActiveTab!.Path);
+            Assert.Same(notes, secondGroup.ActiveTab!.Base);
         });
     }
 }

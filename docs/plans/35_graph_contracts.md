@@ -7737,6 +7737,66 @@ the census before its guard is read. Codoki's one thread on 148a339
 (the `or` designation read as a compile error) was refuted and answered
 by a plain name in 672f385. Mutations, each restored byte for byte, each caught by the named fact: the anchor a plain `Border` again, and its peer denying keyboard focus (the anchor-peer fact, twice); the arbiter letting a stale request land (the arbiter fact); the repair treating a live visible element elsewhere as lost focus (the lost-focus fact); the retarget crossing core's stable key a second time for the comparison (the retarget fact's crossing count); a new row-action dispatcher with a seam and no guard, added to a graph file (the membership census, which now finds dispatchers by their bound signature) — six, none survived; forty-five in the sweep. Gates: `dotnet format` applied; the whole Windows test project on a fresh build without the model, 2272 passed; the three model facts — the second and third alone, 2 m 53 s; the first alone, 1 h 15 m, every cell agreeing; the accessibility project built and, in the foreground, the leaf journey — its no-row opening included — and the graph table journey passed; benchmarks build; CI — the suite lane, the model lane and the gate — and codoki on the push are the oracle.
 
+**TGB2-8 — Post-implementation pass 2 (IPC-8..12): the sweep.** On
+bf57f02 the model lane passed and codoki approved with no thread open;
+the accessibility gate failed the graph TABLE journey's opening chord —
+the palette refuses while the vault is still opening
+(`CommandPaletteNeedsVault`, P14), and the window shows before the
+vault has opened, so a first chord can reach a palette that cannot
+open: both graph journeys now wait for the files tree, the open
+vault's witness, before their first chord (`WaitForVaultOpen`; T1's CI
+failure at the same line had the same shape, and the foreground
+credential TGB2-2 added narrowed it without closing it). Codex's second
+pass returned five findings — two blockers, three majors, no minor —
+and every one landed here. Each, and its discharge: (IPC-8, blocker) a
+graph publication revalidated the CURRENT shared key against its own
+snapshot, so a pair fetched before a pinned rename — a silent refresh
+still in flight — erased the key the rename had just written (the race
+CI showed on 35ed323, which TGB2-7 settled in the model's arrangement
+alone); now `GraphViewState.SelectionGeneration` counts every write,
+the load token carries the generation its fetch began under, and a
+publication clears the key only while no write has happened since
+(`AnOlderPublicationDoesNotEraseAKeyWrittenAfterItsFetchBegan`: the
+pair parked, the pin renamed, the pair released — the new key
+survives it and the next publication). (IPC-9, blocker) B2-5's frozen
+text says the Bases seam carries the SOURCE — the invoking surface's
+tab — and the workspace makes its group and tab active before the
+funnel; T3 carried the row alone and refused unless the document was
+the active tab's, on the claim that the surface is one docked view —
+wrong: `WorkspaceTemplates.xaml` puts a `BaseSurfaceView` in every
+tab's body, so one document hosted by base tabs in two groups has two
+surfaces, and a cached action from the inactive group's surface passed
+the document check and re-rooted from the ACTIVE group; now the
+surface carries its tab (`Tab`, bound to the tab it is the body of),
+the seam is `Action<WorkspaceTabViewModel, BasesRow>`,
+`BasesShowConnectionsFor(source, document, row)` requires the source
+hosted and hosting the document, makes its group and the tab active
+(the table's `FocusGraphAddress` shape) and enters the funnel — a
+source that is gone or hosts another document invokes nothing
+(`AnActionFromTheInactiveGroupsSurfaceAddressesThatGroupFirst`; the
+addressed fact re-read: a duplicate of the tab closed is gone, another
+base's tab hosts another document); the second family's Bases
+entrance from a note in view is ADDRESSED, not refused — TGB2-3's
+verified deviation is withdrawn. (IPC-10, major) the keep-alive's
+immediate branch ran unconditionally where the deferred retries
+applied the lost-focus rule; now it runs only for focus still on what
+the render replaces — inside the tree or on the state's host — or
+already lost, and an integrated fact
+(`TheKeepAliveRepairsLostFocusAndLeavesALiveMoveElsewhere`) shows lost
+focus landing back in the leaf and a move to a live sibling left
+alone. (IPC-11, major) a rename that moved the pin WITHOUT its key left
+the remembered key naming the old pin, so the old key reselected would
+have passed a later rename's comparison as the pin's; now the memory
+is forgotten when the key does not follow (the retarget fact: the old
+pin's key selected again, a further rename leaves it and crosses
+nothing). (IPC-12, major) a pin of the very note in view and a pop
+back onto the very root skipped Term 3(d)'s same-path no-op — no
+epoch, no load — where Terms 12 and 13 promise ONE audible load; now
+the pin and the pop FORCE the transition, a same-path note change
+stays the no-op
+(`PinningTheNoteInViewItselfAndPoppingBackOntoItEachLoadOnce`, an older
+load in flight made foreign each time). Mutations, each restored byte for byte: the revalidation ignoring the selection's generation (the older-publication fact); the Bases entrance refusing an inactive source instead of addressing it (the two-group fact); the Bases entrance admitting the document alone again (the addressed fact); the remembered key kept after a drifted rename (the retarget fact); the pin's forced transition removed (the same-effective fact) — five caught. A sixth, the immediate keep-alive's rule removed, SURVIVED the integrated fact and is an equivalent mutant: WPF moves keyboard focus off a removed or collapsed row only after the render, never inside it, so no handler can move focus elsewhere between the render's capture and the immediate repair; the rule stays as the deferred retries' twin and the record names the mutant rather than counting it. Fifty in the sweep. Gates: `dotnet format` clean; the whole Windows test project on a fresh build, 2,276 facts passing without the model, then the three model facts alone (25,200 / 5,760 / 196 cells, no divergence, 1 h 18 m); the accessibility project built and both graph journeys run in the foreground on that build (the leaf's 24 s, the table's 9 s, both passing); the benchmarks project built. One lesson from the chain: the IPC-8 fact first failed its own arrangement — the graph document's probe fetches only when core's generation moved and only while a graph tab is some group's ACTIVE tab, and it issues the pair from a dispatcher continuation, so the fact parks it with the vault bumped, the graph in a group beside, and a PUMPED wait; its earlier "catch" of the revalidation mutation was that arrangement failing, so the mutation was re-run against the passing fact and caught on the key it clears.
+
 ### Tests that pin PR B2 (revision 5's list; the task loop records what lands)
 
 - `ConnectionsLeafTests.ReRoot.cs`: the pin mutation's order on Show's

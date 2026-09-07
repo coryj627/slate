@@ -40,8 +40,22 @@ internal sealed class GraphViewState : BindableBase
     public string? SelectedKey
     {
         get => _selectedKey;
-        set => SetField(ref _selectedKey, value);
+        set
+        {
+            // Every write moves the selection's generation, even to the same
+            // key: a publication revalidates only the selection it observed
+            // when its fetch began (IPC-8).
+            SelectionGeneration++;
+            SetField(ref _selectedKey, value);
+        }
     }
+
+    /// <summary>The count of writes to <see cref="SelectedKey"/>: a graph
+    /// load captures it when its fetch begins, and its publication clears
+    /// the key only while no write has happened since — an older snapshot
+    /// never erases a key written after it was fetched (codex
+    /// post-implementation pass 2, IPC-8; A-7).</summary>
+    public int SelectionGeneration { get; private set; }
 
     /// <summary>The backend filter the snapshot is fetched under.</summary>
     public GraphFilter Filter

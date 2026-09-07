@@ -8299,7 +8299,12 @@ public sealed class ShellAccessibilityTests
             // FIRST chord after launch needs the foreground credential a
             // synthesized key grants (CI on W6-2 PR B2's first push failed
             // here: the chord reached a window that did not yet hold the
-            // foreground — the leaf journey's rule, TGB2-2).
+            // foreground — the leaf journey's rule, TGB2-2) — and an OPEN
+            // vault: the palette refuses while the vault is still opening
+            // (`CommandPaletteNeedsVault`, contract P14), and the window shows
+            // before the vault has opened; the files tree is the vault's
+            // witness (CI on bf57f02, TGB2-8).
+            WaitForVaultOpen(window);
             ReassertForegroundForAChord(window);
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
             AutomationElement search = WaitForElement(window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
@@ -8518,6 +8523,9 @@ public sealed class ShellAccessibilityTests
                 TimeSpan.FromSeconds(30));
             window.SetForeground();
             window.Focus();
+            // The palette refuses while the vault is still opening (P14): the
+            // files tree is the open vault's witness (TGB2-8).
+            WaitForVaultOpen(window);
 
             // Alpha in view, through the graph table (PR A's route): Open
             // Graph, Enter on Alpha.
@@ -8983,6 +8991,15 @@ public sealed class ShellAccessibilityTests
     /// menu navigation (the recorded `GridConformanceTests` lesson,
     /// which matters here because the next key is Ctrl+Alt+S).
     /// </summary>
+    /// <summary>The vault OPEN, as the shell shows it: the files tree exists
+    /// only once the vault has opened, and the palette refuses a chord until
+    /// then (<c>CommandPaletteNeedsVault</c>, contract P14) — the window
+    /// shows first. A journey's first chord waits for it (CI on bf57f02:
+    /// the graph table journey's opening chord reached a vault still
+    /// opening; TGB2-8).</summary>
+    private static void WaitForVaultOpen(Window window) =>
+        _ = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
+
     private static void ReassertForegroundForAChord(Window window)
     {
         Keyboard.Press(VirtualKeyShort.CONTROL);

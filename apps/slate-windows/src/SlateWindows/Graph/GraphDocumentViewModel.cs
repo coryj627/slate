@@ -36,7 +36,8 @@ internal sealed record GraphLoadToken(
     GraphTableRequest Request,
     ulong Seq,
     GraphLoadKind Kind,
-    GraphAnnouncePolicy Announce);
+    GraphAnnouncePolicy Announce,
+    int SelectionGeneration);
 
 /// <summary>The worker ENVELOPE (contract A-2; the round-3 ledger's
 /// IGA-22, IGA-43): the inputs the body actually used beside its
@@ -410,7 +411,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                 Publication = GraphPublication.Initial(request.Query.Filter, Publication.AcceptedSort);
             }
         }
-        var token = new GraphLoadToken(this, _session, _lifecycleGeneration(), request, _seq, kind, announce);
+        var token = new GraphLoadToken(this, _session, _lifecycleGeneration(), request, _seq, kind, announce, ViewState.SelectionGeneration);
         StartWorkAlwaysAsync(() => Fetch(token), Receive);
         return token;
     }
@@ -530,7 +531,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         bool answeredSort = _requestedSort is not null;
         _requestedSort = null;
         Publication = next;
-        RevalidateSelection(next);
+        RevalidateSelection(next, token.SelectionGeneration);
         PublicationInstalled?.Invoke(new GraphPublicationInstall(previous, next, answeredSort));
         if (token.Kind == GraphLoadKind.Pair)
         {
@@ -559,8 +560,17 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// <summary>Contract A-7: the shared key survives a reorder and a
     /// filter overlay; it clears only when the SNAPSHOT no longer carries
     /// the node (the mac's `revalidateGraphSelection(against:)`).</summary>
-    private void RevalidateSelection(GraphPublication publication)
+    private void RevalidateSelection(GraphPublication publication, int selectionGenerationAtFetch)
     {
+        // Only the selection this load OBSERVED when its fetch began: a key
+        // written since — a pinned rename's, a re-root's — is newer than the
+        // snapshot and is the next publication's to judge (codex
+        // post-implementation pass 2, IPC-8: a pair fetched before the rename
+        // erased the retargeted key).
+        if (ViewState.SelectionGeneration != selectionGenerationAtFetch)
+        {
+            return;
+        }
         if (ViewState.SelectedKey is { } key && publication.HoldsSnapshot && !publication.ContainsNode(key))
         {
             ViewState.SelectedKey = null;

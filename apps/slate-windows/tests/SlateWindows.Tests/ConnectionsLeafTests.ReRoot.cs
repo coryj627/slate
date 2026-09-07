@@ -224,13 +224,21 @@ public sealed partial class ConnectionsLeafTests
             Assert.Equal(crossings, host.Leaf.CrossingsForTests["graph_stable_key_for_path"]);
             Assert.Equal("elsewhere/deep.md", host.Leaf.Pin);
             Assert.Equal(StableKey(Hub), host.Workspace.GraphViewStateForTests.SelectedKey);
+            // The pin moved without its key, so the key the leaf remembered
+            // no longer names its pin (IPC-11): the OLD pin's key selected
+            // again is not the pin's, and the next rename leaves it alone.
+            host.Workspace.GraphViewStateForTests.SelectedKey = StableKey("moved/deep.md");
+            host.Leaf.Retarget("elsewhere", "again", activeAndMounted: false);
+            Assert.Equal("again/deep.md", host.Leaf.Pin);
+            Assert.Equal(StableKey("moved/deep.md"), host.Workspace.GraphViewStateForTests.SelectedKey);
+            Assert.Equal(crossings, host.Leaf.CrossingsForTests["graph_stable_key_for_path"]);
             Assert.True(host.Leaf.IsStale);
             Assert.Equal(1, host.Loads - loadsBefore);
 
             // The note in view moves too; a path outside the source does not.
             host.Leaf.Retarget(Hub, "hub-renamed.md", activeAndMounted: true);
             Assert.Equal("hub-renamed.md", host.Leaf.NoteInView);
-            Assert.Equal([(null, "hub-renamed.md"), ("elsewhere/other.md", "elsewhere/other.md")], host.Leaf.BackStack);
+            Assert.Equal([(null, "hub-renamed.md"), ("again/other.md", "again/other.md")], host.Leaf.BackStack);
         });
     }
 
@@ -613,6 +621,129 @@ public sealed partial class ConnectionsLeafTests
                 Assert.Equal(1, host.Loads - loadsBefore);
                 Assert.Equal([LineFor(host, Two, 1)], host.RelayLines);
             }
+        });
+    }
+
+    /// <summary>Term 15 / A-7 — codex post-implementation pass 2, IPC-8: a
+    /// graph publication revalidates only the selection it OBSERVED when
+    /// its fetch began. A pair parked before the pin's rename applies after
+    /// the rename wrote the new key: the old snapshot lacks the new node,
+    /// and the key survives; the next publication, over a snapshot that
+    /// carries it, keeps it too.</summary>
+    [Fact]
+    public void AnOlderPublicationDoesNotEraseAKeyWrittenAfterItsFetchBegan()
+    {
+        using GraphVault vault = GraphVault.Copy("older-publication");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root, () => 1);
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            Assert.True(host.Workspace.ReRootConnectionsOn(Deep));
+            host.Settle();
+            // The graph VISIBLE in a group beside (a hidden graph tab is
+            // never probed), the pin's own tab in view in the active group.
+            host.Workspace.SplitRightCommand.Execute(null);
+            host.Workspace.OpenGraph();
+            SettleTheDocuments(host);
+            Assert.True(host.Workspace.FocusDirectionalPane("horizontal", -1));
+            SettleTheDocuments(host);
+            Assert.Same(TabFor(host, Deep), host.Workspace.ActiveGroup.ActiveTab);
+            Assert.True(host.Workspace.GraphTabIsVisible());
+            GraphDocumentViewModel document = host.Workspace.GraphDocument!;
+            Assert.Equal(StableKey(Deep), host.Workspace.GraphViewStateForTests.SelectedKey);
+
+            // The vault moved on (a probe over an unmoved generation fetches
+            // nothing); the graph's next pair PARKED after its crossings: its
+            // snapshot is the vault before the rename.
+            BumpTheVault(host, 1);
+            using var reached = new ManualResetEventSlim(false);
+            using var gate = new ManualResetEventSlim(false);
+            document.FetchGateForTests = () =>
+            {
+                reached.Set();
+                gate.Wait(TimeSpan.FromSeconds(30));
+            };
+            host.Workspace.NotifyGraphOfVaultChange();
+            // The probe's generation read lands on the dispatcher before the
+            // pair is issued: pump until the fetch parks.
+            Assert.True(PumpedDispatcher.PumpUntil(() => reached.IsSet, TimeSpan.FromSeconds(10)), "the graph's pair never parked");
+            document.FetchGateForTests = null;
+
+            // The pin renamed meanwhile: the key moves to the new pin.
+            host.Session.RenameFile(Deep, "deep-renamed.md");
+            host.Workspace.RetargetPath(Deep, "notes/nested/deep-renamed.md");
+            Assert.Equal(StableKey("notes/nested/deep-renamed.md"), host.Workspace.GraphViewStateForTests.SelectedKey);
+
+            // The older pair applies: the new key survives it.
+            gate.Set();
+            SettleTheDocuments(host);
+            Assert.Equal(StableKey("notes/nested/deep-renamed.md"), host.Workspace.GraphViewStateForTests.SelectedKey);
+
+            // A publication over the vault as it now stands carries the node
+            // and keeps the key; one over a vault where it is gone clears it.
+            host.Workspace.NotifyGraphOfVaultChange();
+            SettleTheDocuments(host);
+            Assert.Equal(StableKey("notes/nested/deep-renamed.md"), host.Workspace.GraphViewStateForTests.SelectedKey);
+        });
+    }
+
+    /// <summary>Terms 12 and 13 — codex post-implementation pass 2, IPC-12: a
+    /// pin of the very note in view and a pop back onto the very root each
+    /// advance the epoch and issue ONE audible load, superseding a load in
+    /// flight; a same-path NOTE change stays the no-op it was.</summary>
+    [Fact]
+    public void PinningTheNoteInViewItselfAndPoppingBackOntoItEachLoadOnce()
+    {
+        using GraphVault vault = GraphVault.Copy("same-effective");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root, () => 1);
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+
+            // Deeper's reload parked in flight; the pin of Hub itself makes it
+            // foreign and loads once more.
+            ParkedFetch parked = Park(host.Leaf);
+            host.Workspace.ConnectionsDeeperCommand.Execute(null);
+            Assert.True(parked.Reached.Wait(TimeSpan.FromSeconds(10)), "Deeper's reload never parked");
+            int epoch = host.Leaf.RootEpoch;
+            int loadsBefore = host.Loads;
+            host.Clear();
+            Assert.True(host.Workspace.ReRootConnectionsOn(Hub));
+            parked.Gate.Set();
+            host.Settle();
+            parked.Dispose();
+            Assert.Equal(Hub, host.Leaf.Pin);
+            Assert.Equal(Hub, host.Leaf.Root);
+            Assert.Equal([(null, Hub)], host.Leaf.BackStack);
+            Assert.Equal(epoch + 1, host.Leaf.RootEpoch);
+            Assert.Equal(1, host.Loads - loadsBefore);
+            Assert.Equal([ReRooted(Hub), LineFor(host, Hub, 2)], host.RelayLines);
+
+            // Back: the open of Hub is a no-op (the tab in view), the pop
+            // restores FOLLOWING on the very root — the epoch and one load again.
+            epoch = host.Leaf.RootEpoch;
+            loadsBefore = host.Loads;
+            host.Clear();
+            Assert.True(host.Workspace.ConnectionsBack());
+            host.Settle();
+            Assert.Null(host.Leaf.Pin);
+            Assert.Equal(Hub, host.Leaf.Root);
+            Assert.Empty(host.Leaf.BackStack);
+            Assert.Equal(epoch + 1, host.Leaf.RootEpoch);
+            Assert.Equal(1, host.Loads - loadsBefore);
+            Assert.Equal([ReRooted(Hub), LineFor(host, Hub, 2)], host.RelayLines);
+
+            // A same-path note change: no epoch, no load.
+            epoch = host.Leaf.RootEpoch;
+            loadsBefore = host.Loads;
+            host.OpenNote(Hub);
+            host.Settle();
+            Assert.Equal(epoch, host.Leaf.RootEpoch);
+            Assert.Equal(0, host.Loads - loadsBefore);
         });
     }
 }

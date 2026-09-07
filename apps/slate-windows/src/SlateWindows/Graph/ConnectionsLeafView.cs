@@ -521,6 +521,16 @@ internal sealed class ConnectionsLeafView : UserControl
     /// lost.</summary>
     private void KeepFocusInside()
     {
+        // At once only when focus is still on what the render replaces —
+        // inside the tree or on the state's host — or already lost; a
+        // synchronous handler that moved focus to a live element elsewhere
+        // during the render stands (codex post-implementation pass 2,
+        // IPC-10, re-opening IPC-3 for the immediate branch).
+        bool onTheReplaced = _tree.IsKeyboardFocusWithin || _anchor.IsKeyboardFocusWithin;
+        if (!onTheReplaced && !FocusIsLost(Keyboard.FocusedElement))
+        {
+            return;
+        }
         if (TryFocusInside())
         {
             return;

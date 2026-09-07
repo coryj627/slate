@@ -205,6 +205,23 @@ internal sealed class BaseSurfaceView : UserControl
         set => SetValue(ModelProperty, value);
     }
 
+    /// <summary>W6-2 PR B2 (B2-5): the tab THIS surface is the body of —
+    /// one surface per tab, a document shared by the tabs that host it —
+    /// carried by the Show connections seam as the invoking source
+    /// (IGJ-9; codex post-implementation pass 2, IPC-9).</summary>
+    public static readonly DependencyProperty TabProperty =
+        DependencyProperty.Register(
+            nameof(Tab),
+            typeof(WorkspaceTabViewModel),
+            typeof(BaseSurfaceView),
+            new PropertyMetadata(null));
+
+    public WorkspaceTabViewModel? Tab
+    {
+        get => (WorkspaceTabViewModel?)GetValue(TabProperty);
+        set => SetValue(TabProperty, value);
+    }
+
     /// <summary>The dock/read-only posture (the mac
     /// BaseReadOnlyResultView): no editing seam, no row actions, no
     /// activation — navigation and the quick filter remain. The
@@ -711,7 +728,15 @@ internal sealed class BaseSurfaceView : UserControl
             rowActions.Add(new()
             {
                 Name = showConnections,
-                Execute = row => RowCommand(row, result, (m, r) => m.ShowConnectionsFromSurface?.Invoke(r)),
+                // The invoking SOURCE is this surface's tab (B2-5): a surface
+                // whose tab is gone invokes nothing.
+                Execute = row => RowCommand(row, result, (m, r) =>
+                {
+                    if (Tab is { } source)
+                    {
+                        m.ShowConnectionsFromSurface?.Invoke(source, r);
+                    }
+                }),
             });
         }
         rowActions.Add(new()

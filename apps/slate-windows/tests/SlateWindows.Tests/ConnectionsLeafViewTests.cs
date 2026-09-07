@@ -771,4 +771,79 @@ public sealed class ConnectionsLeafViewTests
             }
         });
     }
+
+    /// <summary>The keep-alive, integrated — codex post-implementation pass 2,
+    /// IPC-10: a render that replaces the rows under keyboard focus lands
+    /// focus back inside the leaf when focus was lost with them; but a
+    /// handler that moved focus to a live sibling the moment the tree lost it
+    /// keeps that focus — the immediate branch repairs only what it replaced
+    /// or what is lost, never a live move elsewhere.</summary>
+    [Fact]
+    public void TheKeepAliveRepairsLostFocusAndLeavesALiveMoveElsewhere()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("keep-alive");
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            var view = new ConnectionsLeafView { Model = host.Leaf };
+            var sibling = new TextBox();
+            var window = new Window
+            {
+                Width = 400,
+                Height = 600,
+                ShowInTaskbar = false,
+                WindowStyle = WindowStyle.None,
+                Content = new StackPanel { Children = { sibling, view } },
+            };
+            window.Show();
+            view.UpdateLayout();
+            try
+            {
+                // Focus on a row; a root change replaces the rows: focus lands
+                // back inside the leaf (its anchor while Loading, a row after).
+                ConnectionsRowViewModel row = view.RootsForTests[1].Children.First(r => r.Row!.Kind == GraphNodeKind.Note);
+                Assert.True(view.RealizeContainer(row)!.Focus());
+                Assert.True(view.TreeForTests.IsKeyboardFocusWithin);
+                host.OpenNote(Two);
+                host.Settle();
+                view.UpdateLayout();
+                PumpedDispatcher.Drain();
+                Assert.True(view.IsKeyboardFocusWithin, "the render replaced the rows and lost focus to the window");
+                Assert.False(sibling.IsKeyboardFocused);
+
+                // Focus on a row again; the moment the tree loses focus-within
+                // (its rows replaced), a handler moves focus to the sibling:
+                // the keep-alive leaves it there.
+                ConnectionsRowViewModel again = view.RootsForTests[1].Children.First(r => r.Row!.Kind == GraphNodeKind.Note);
+                Assert.True(view.RealizeContainer(again)!.Focus());
+                void MoveToSibling(object sender, DependencyPropertyChangedEventArgs e)
+                {
+                    if (e.NewValue is false)
+                    {
+                        _ = sibling.Focus();
+                    }
+                }
+                view.TreeForTests.IsKeyboardFocusWithinChanged += MoveToSibling;
+                try
+                {
+                    host.OpenNote(Hub);
+                    host.Settle();
+                    view.UpdateLayout();
+                    PumpedDispatcher.Drain();
+                    Assert.True(sibling.IsKeyboardFocused, "the keep-alive took focus back from a live element the user had moved to");
+                    Assert.False(view.IsKeyboardFocusWithin);
+                }
+                finally
+                {
+                    view.TreeForTests.IsKeyboardFocusWithinChanged -= MoveToSibling;
+                }
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
 }
