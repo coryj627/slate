@@ -88,6 +88,16 @@ public sealed partial class ConnectionsLeafTests
             PumpedDispatcher.Drain();
             Action? inside = InsideTheDialog;
             InsideTheDialog = null;
+            // The pin's parked load must have CROSSED before anything lands
+            // inside the dialog: the pool starts the fetch late on a loaded
+            // runner, and an in-dialog delete that precedes the crossings
+            // hands the "older" tree the vault as it stands after the delete
+            // (CI on 11a9c2a: two delete routes, one load, the new tree
+            // spoken).
+            if (inside is not null && Parked is { } parked && !parked.Reached.IsSet)
+            {
+                Assert.True(parked.Reached.Wait(TimeSpan.FromSeconds(10)), "the parked load never reached its gate before the dialog acted");
+            }
             inside?.Invoke();
             return Decision;
         }
