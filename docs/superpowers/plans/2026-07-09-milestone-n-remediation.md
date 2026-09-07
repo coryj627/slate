@@ -26,7 +26,7 @@ intentionally open.
 - Swift UI changes keep `a11y-check` at 100/100 and add no global keyboard chord.
 - Performance gates are p50: query < 50 ms at 10k and < 200 ms at 50k, cache hit < 2 ms, parse/serialize < 5 ms, cancellation < 100 ms at 10k, and scan regression no worse than 5%.
 - Do not mark human AT PASS; `at_smoke_checklist.md` remains open until a human executes it.
-- Do not stage or modify pre-existing Graphify output, `.agents`, `.github/skills`, `.graphify_*`, or demo-vault pizza-toppings changes.
+- Do not stage or modify pre-existing `.agents`, `.github/skills`, or demo-vault pizza-toppings changes.
 
 ---
 

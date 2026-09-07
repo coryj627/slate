@@ -150,7 +150,6 @@ open FAIL.
   per issue, the U1-internal-order + U1-6-promotion deltas noted).
 - Each milestone doc gets its "✅ shipped" header rewrite in the U0 style (what shipped,
   PR refs, deviations).
-- `/graphify` refresh over the changed corpus (project convention after milestones).
 - Memory files updated (program shipped; new invariants recorded: workspace censuses,
   composed-save law, rewrite invariant).
 

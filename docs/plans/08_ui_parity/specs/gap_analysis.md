@@ -1,10 +1,9 @@
 # U1–U5 gap analysis: plan vs. current state (2026-07-03)
 
 Written before spec authoring, per the program's required-reading step. Sources: the six
-plan docs in `docs/plans/08_ui_parity/`, the refreshed knowledge graph (`graphify-out/`,
-2026-07-03, post-U0), and three deep code surveys (center column, sidebar + panels, Rust
-core). Each gap below records the discrepancy and the **resolution baked into the specs**,
-so no executor has to re-litigate them.
+plan docs in `docs/plans/08_ui_parity/` and three deep code surveys (center column,
+sidebar + panels, Rust core). Each gap below records the discrepancy and the **resolution
+baked into the specs**, so no executor has to re-litigate them.
 
 ## G1 — "Preserve the existing per-file open/rename/delete" describes a UI that does not exist
 
@@ -182,9 +181,6 @@ beyond the default menu. **Resolution:** Help = open the repository README/docs 
 
 ## Non-gaps (verified assumptions)
 
-- The graphify graph is fresh (2026-07-03, includes U0 deliverables); its structure
-  matches the surveys. Known noise from the 2026-05-22 memory (`ok` token communities)
-  persists but doesn't affect U planning.
 - U0 deliverables are exactly as the plans describe: `SlateSymbol` (private
   `systemName`, labeled builders, source-lint test), `Tokens` (spacing/type/color +
   `contrastPairings` registry), `PresentationReady` (3 assertions + honest coverage
