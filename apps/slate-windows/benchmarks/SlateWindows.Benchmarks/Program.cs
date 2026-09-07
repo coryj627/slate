@@ -306,7 +306,7 @@ public class GraphOpenBenchmarks
         {
             var announcer = new SlateWindows.Graph.GraphAnnouncer(_ => { });
             var document = new SlateWindows.Graph.GraphDocumentViewModel(
-                Session(), announcer, () => false, () => GraphVerbosity.Standard);
+                Session(), announcer, new SlateWindows.Graph.GraphViewState(), () => false, () => GraphVerbosity.Standard);
             _ = document.Load(SlateWindows.Graph.GraphLoadKind.Pair, SlateWindows.Graph.GraphAnnouncePolicy.Silent);
             Task drain = document.WhenAllWorkDrained();
             var clock = System.Diagnostics.Stopwatch.StartNew();

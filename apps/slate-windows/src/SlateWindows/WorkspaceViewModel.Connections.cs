@@ -62,6 +62,15 @@ internal sealed partial class WorkspaceViewModel
     public System.Windows.Input.ICommand ConnectionsShallowerCommand =>
         _connectionsShallowerCommand ??= new RelayCommand(_ => Connections.Shallower(), _ => true);
 
+    private RelayCommand? _connectionsBackCommand;
+
+    /// <summary>`slate.graph.connectionsBack` (W6-2 PR B2, B2-4): the
+    /// palette's and the registrar's route to <see cref="ConnectionsBack"/>;
+    /// with nothing to pop it is a no-op (the key owner, unlike the
+    /// palette, reads the result to fall through).</summary>
+    public System.Windows.Input.ICommand ConnectionsBackCommand =>
+        _connectionsBackCommand ??= new RelayCommand(_ => _ = ConnectionsBack(), _ => true);
+
     /// <summary>Rule C, Term 2 — ACTIVE: the leaf is the active leaf, the
     /// mac's predicate; pane visibility is not consulted (B-D3).</summary>
     internal bool ConnectionsLeafIsActive() =>
@@ -79,10 +88,14 @@ internal sealed partial class WorkspaceViewModel
         var leaf = new ConnectionsLeafViewModel(
             _session,
             _graphRelay,
+            _graphViewState,
             isActive: () => ConnectionsLeafIsActive(),
             verbosity: () => GraphVerbosity.Standard,
             lifecycleGeneration: () => LifecycleGeneration());
         leaf.OpenRowFromSurface = (path, target) => OpenConnectionsRowFromSurface(path, target);
+        leaf.ShowConnectionsFromRow = path => ReRootConnectionsOn(path);
+        // The view's key owner reads the result to fall through (B2-4).
+        leaf.BackFromSurface = () => ConnectionsBack();
         leaf.RevealRowFromSurface = path => RevealConnectionsRowFromSurface(path);
         leaf.CreateNoteFromSurface = (path, root, epoch) => CreateConnectionsNoteFromSurface(path, root, epoch);
         leaf.CreateAdmissionReason = () => GraphCreateAdmissionReason?.Invoke();
@@ -187,6 +200,134 @@ internal sealed partial class WorkspaceViewModel
         FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
     }
 
+    // --- Rule D: the re-root funnel and Back (W6-2 PR B2, Terms 12, 13) --------------
+
+    /// <summary>Term 12 — the ONE re-root funnel, every surface's entrance
+    /// (B2-3): admission first; the same-root case repairs the key, reveals
+    /// and activates WITHOUT the suppression (B1's own triggers apply,
+    /// B2D-6) and proposes nothing; else the PIN MUTATION on the palette's
+    /// Show shape — under the suppression, the pane revealed, the leaf
+    /// activated, the mount consumed inert; then the leaf's <c>PinTo</c>
+    /// (its push, pin, epoch, ONE audible load, the key, the line) and the
+    /// focus request — followed, in a mutation of its own, by the ORDINARY
+    /// open of the note with the editor's focus withheld (IGL-3): nothing
+    /// is held across the open, whose refusal leaves the pin standing (the
+    /// mac's outcome, B2D-7). Returns whether it pinned.</summary>
+    internal bool ReRootConnectionsOn(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (_workspaceDisposed || Connections.IsRetired)
+        {
+            return false;
+        }
+        if (string.Equals(Connections.Pin, path, StringComparison.Ordinal))
+        {
+            // Already pinned here (the mac's early return): the shared key
+            // repaired, the reveal and the activation as B1's triggers say.
+            Connections.RepairSharedKey(path);
+            if (!IsRightPaneVisible)
+            {
+                IsRightPaneVisible = true;
+            }
+            if (!ConnectionsLeafIsActive())
+            {
+                ActiveLeaf = Leaves.First(option => string.Equals(option.Id, ConnectionsLeafId, StringComparison.Ordinal));
+            }
+            ConsumePendingMount();
+            FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
+            return false;
+        }
+        bool pinned = false;
+        RunWorkspaceMutation(() =>
+        {
+            _suppressConnectionsTriggers = true;
+            try
+            {
+                if (!IsRightPaneVisible)
+                {
+                    IsRightPaneVisible = true;
+                }
+                if (!ConnectionsLeafIsActive())
+                {
+                    ActiveLeaf = Leaves.First(option => string.Equals(option.Id, ConnectionsLeafId, StringComparison.Ordinal));
+                }
+                ConsumePendingMount();
+            }
+            finally
+            {
+                _suppressConnectionsTriggers = false;
+            }
+            pinned = Connections.PinTo(path);
+        });
+        if (!pinned)
+        {
+            return false;
+        }
+        // The ordinary open, beside the pin: under the pin the note change
+        // is recorded and loads nothing (Term 11).
+        RunWorkspaceMutation(() => _ = OpenPathCore(path, WorkspaceOpenTarget.CurrentTab, requestEditorFocus: false));
+        FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
+        return true;
+    }
+
+    /// <summary>Term 13 — Back: false (the chord falls through) unless live,
+    /// PINNED and the stack non-empty; then the ORDINARY open of the top
+    /// entry's note with the editor's focus withheld, before anything moves
+    /// — a refusal pops nothing (B2-D5); RE-ADMISSION after the open, since
+    /// its dialog's pump can tear the workspace or the leaf down (IGL-5);
+    /// then the POP MUTATION on Show's shape and the leaf's <c>PopTo</c>
+    /// with the path the open INSTALLED and the Markdown candidate the
+    /// boundary reconciled — the pop proceeds only when the top entry, as
+    /// retargeted, names the installed path (IGL-1, IGK-3) — and the focus
+    /// request. Returns whether it popped.</summary>
+    internal bool ConnectionsBack()
+    {
+        if (_workspaceDisposed || Connections.IsRetired || Connections.Pin is null || Connections.BackStack.Count == 0)
+        {
+            return false;
+        }
+        string target = Connections.BackStack[^1].Effective;
+        bool opened = false;
+        RunWorkspaceMutation(() => opened = OpenPathCore(target, WorkspaceOpenTarget.CurrentTab, requestEditorFocus: false));
+        if (!opened || _workspaceDisposed || Connections.IsRetired)
+        {
+            return false;
+        }
+        string? installed = ActiveGroup.ActiveTab?.Path;
+        string? candidate = ActiveGroup.ActiveTab is { IsMarkdown: true } tab ? tab.Path : null;
+        if (installed is null)
+        {
+            return false;
+        }
+        bool popped = false;
+        RunWorkspaceMutation(() =>
+        {
+            _suppressConnectionsTriggers = true;
+            try
+            {
+                if (!IsRightPaneVisible)
+                {
+                    IsRightPaneVisible = true;
+                }
+                if (!ConnectionsLeafIsActive())
+                {
+                    ActiveLeaf = Leaves.First(option => string.Equals(option.Id, ConnectionsLeafId, StringComparison.Ordinal));
+                }
+                ConsumePendingMount();
+            }
+            finally
+            {
+                _suppressConnectionsTriggers = false;
+            }
+            popped = Connections.PopTo(installed, candidate);
+        });
+        if (popped)
+        {
+            FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
+        }
+        return popped;
+    }
+
     /// <summary>Terms 3(d) and 3(g), B-19 (iv): <c>SyncPanels()</c> hands
     /// the note in view — the markdown tab, as the note panels' funnel
     /// has it. Inside a workspace mutation the candidate is RECORDED and
@@ -195,7 +336,12 @@ internal sealed partial class WorkspaceViewModel
     private void SyncConnectionsRoot()
     {
         string? candidate = ActiveGroup.ActiveTab is { IsMarkdown: true } tab ? tab.Path : null;
-        if (_persistenceBatchDepth > 0)
+        // Inside a mutation, AND through the boundary's own SyncPanels (W6-2
+        // PR B2, IGL-2): the boundary reconciles ONCE with the LAST candidate
+        // recorded — a candidate a nested SyncPanels recorded earlier inside a
+        // pump (a rename hook's) is overwritten, never replayed over the note
+        // the mutation installed.
+        if (_persistenceBatchDepth > 0 || _connectionsBoundaryRecording)
         {
             _connectionsRootCandidate = candidate;
             _connectionsRootPending = true;
@@ -203,6 +349,35 @@ internal sealed partial class WorkspaceViewModel
         }
         ReconcileConnectionsRootTo(candidate);
     }
+
+    private bool _connectionsBoundaryRecording;
+
+    /// <summary>The outermost boundary's panel sync, with the leaf's root
+    /// RECORDED through it and reconciled once afterwards (IGL-2).</summary>
+    private void SyncPanelsAtTheBoundary()
+    {
+        _connectionsBoundaryRecording = true;
+        try
+        {
+            SyncPanels();
+        }
+        finally
+        {
+            _connectionsBoundaryRecording = false;
+        }
+        ReconcileConnectionsRoot();
+    }
+
+    /// <summary>Rule C, Term 3(d)'s classification, the one producer the
+    /// funnel and the rename hook share (IGJ-10): the root change loads only
+    /// while ACTIVE and MOUNTED, not during construction, not under a
+    /// pending mount, not under a route's suppression.</summary>
+    private bool ConnectionsActiveAndMounted() =>
+        !_constructingConnections
+        && !_mountPending
+        && !_suppressConnectionsTriggers
+        && ConnectionsLeafIsActive()
+        && ConnectionsLeafIsMounted();
 
     /// <summary>The outermost mutation boundary's reconciliation (Term 3).</summary>
     private void ReconcileConnectionsRoot()
@@ -222,12 +397,7 @@ internal sealed partial class WorkspaceViewModel
         // A pending mount will load at its consume with the final leaf;
         // the root change itself loads only while active and mounted and
         // not during construction (the initial value is not a change).
-        bool activeAndMounted = !_constructingConnections
-            && !_mountPending
-            && !_suppressConnectionsTriggers
-            && ConnectionsLeafIsActive()
-            && ConnectionsLeafIsMounted();
-        Connections.NoteChanged(candidate, activeAndMounted);
+        Connections.NoteChanged(candidate, ConnectionsActiveAndMounted());
     }
 
     /// <summary>Term 3(f): the lifecycle's file-change and scan-finished

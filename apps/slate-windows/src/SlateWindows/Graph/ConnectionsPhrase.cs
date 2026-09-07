@@ -53,10 +53,6 @@ internal static class ConnectionsPhrase
     public const string DepthHint = "How many links away from this note to include.";
     public static readonly string[] DepthTags = ["Links", "2 links away", "3 links away"];
 
-    /// <summary>B-D6 — Show connections, listed and disabled until B2, on
-    /// the menu action's HelpText alone (B-9). Windows-only; no mac twin.</summary>
-    public const string ShowConnectionsUnavailable = "Show connections is not available yet.";
-
     /// <summary>The leaf heading's name with no note (the mac's
     /// `navigationTitle`, `:29`); with a note, the note's file name (`:77–79`).</summary>
     public const string Title = "Connections";

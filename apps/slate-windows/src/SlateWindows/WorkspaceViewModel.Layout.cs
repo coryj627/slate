@@ -100,7 +100,7 @@ internal sealed partial class WorkspaceViewModel
         }
     }
 
-    private bool TryOpenItem(WorkspaceItemState item, WorkspaceOpenTarget target)
+    private bool TryOpenItem(WorkspaceItemState item, WorkspaceOpenTarget target, bool requestEditorFocus = true)
     {
         if (item.Kind == WorkspaceItemKind.Graph && TryFocusGlobalGraph())
         {
@@ -121,19 +121,26 @@ internal sealed partial class WorkspaceViewModel
             if (existing is not null)
             {
                 ActiveGroup.ActiveTab = existing;
-                RequestActiveEditorFocus();
+                if (requestEditorFocus)
+                {
+                    RequestActiveEditorFocus();
+                }
                 return true;
             }
 
             if (target == WorkspaceOpenTarget.NewTab)
             {
                 AddTab(ActiveGroup, item, activate: true);
-                RequestActiveEditorFocus();
+                if (requestEditorFocus)
+                {
+                    RequestActiveEditorFocus();
+                }
                 return true;
             }
         }
 
-        WorkspaceTabViewModel? active = ActiveGroup.ActiveTab;
+        WorkspaceGroupViewModel group = ActiveGroup;
+        WorkspaceTabViewModel? active = group.ActiveTab;
         if (active is null)
         {
             AddTab(ActiveGroup, item, activate: true);
@@ -145,6 +152,19 @@ internal sealed partial class WorkspaceViewModel
                 WorkspaceDirtyNavigationDecision decision = _dirtyNavigationDecision(active, item);
                 if (decision == WorkspaceDirtyNavigationDecision.Cancel
                     || (decision == WorkspaceDirtyNavigationDecision.Save && !active.Save()))
+                {
+                    return false;
+                }
+                // The gate is a MODAL dialog that pumps the dispatcher (W6-2
+                // PR B2, IGL-6): a group switch, a tab close or a teardown can
+                // land while it is up, and the captured tab would then be
+                // replaced inside a group that no longer holds it, or no
+                // longer exists. Every open validates its address after the
+                // gate, before any replacement.
+                if (_workspaceDisposed
+                    || !ReferenceEquals(ActiveGroup, group)
+                    || !Groups.Contains(group)
+                    || !group.Tabs.Contains(active))
                 {
                     return false;
                 }
@@ -172,7 +192,13 @@ internal sealed partial class WorkspaceViewModel
             RaiseCommandStates();
         }
 
-        RequestActiveEditorFocus();
+        // Withheld for the re-root's and Back's opens (W6-2 PR B2, IGL-3):
+        // the editor's request is queued at Input priority and would
+        // otherwise land after the leaf's own boundary request.
+        if (requestEditorFocus)
+        {
+            RequestActiveEditorFocus();
+        }
         return true;
     }
 

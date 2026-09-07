@@ -351,6 +351,52 @@ internal sealed partial class WorkspaceViewModel
             ShowBacklinksFor(row.FilePath, () => document.AnnounceEvent(new A11yEvent.BasesBacklinksFor(
                 DisplayNameWithoutExtension(row.FilePath)))));
 
+    private RelayCommand? _basesShowConnectionsCommand;
+
+    /// <summary>W6-2 PR B2 (B2-5): Bases' Show connections — the mac's
+    /// reserved row action realised (Bases gap O15), the row command and the
+    /// surface seam sharing ONE route.</summary>
+    public System.Windows.Input.ICommand BasesShowConnectionsCommand =>
+        _basesShowConnectionsCommand ??= BasesRowCommand((document, row) =>
+        {
+            // The palette's source is the tab in view, which the row command
+            // has already found to host the active document.
+            if (ActiveGroup.ActiveTab is { } source)
+            {
+                _ = BasesShowConnectionsFor(source, document, row);
+            }
+        });
+
+    /// <summary>The Bases entrance to the re-root funnel, ADDRESSED (B2-5,
+    /// IGJ-9): the SOURCE is the invoking surface's tab — one surface per
+    /// tab, the document shared by every tab that hosts it — which must
+    /// still be hosted and still own the document; then its group and the
+    /// tab are made active (the table's <c>FocusGraphAddress</c> shape,
+    /// the mac's <c>focusOwningGroup()</c>) and the funnel runs on the row's
+    /// note. A source that is gone, or that no longer hosts the document,
+    /// invokes nothing. The Bases post no line of their own: the leaf's
+    /// re-root line is the route's. (Codex post-implementation pass 2,
+    /// IPC-9: the seam carried the row alone and the check admitted the
+    /// document, so a cached action from the inactive group's surface
+    /// re-rooted from the active one — TGB2-3's "one docked view" was wrong.)</summary>
+    internal bool BasesShowConnectionsFor(WorkspaceTabViewModel source, BaseDocumentViewModel document, BasesRow row)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(row);
+        WorkspaceGroupViewModel? owner = Groups.FirstOrDefault(group => group.Tabs.Contains(source));
+        if (owner is null || !ReferenceEquals(source.Base, document) || !BasesDocumentInteractive(document))
+        {
+            return false;
+        }
+        if (!ReferenceEquals(ActiveGroup, owner) || !ReferenceEquals(owner.ActiveTab, source))
+        {
+            ActiveGroup = owner;
+            owner.ActiveTab = source;
+        }
+        return ReRootConnectionsOn(row.FilePath);
+    }
+
     /// <summary>Bases' Show backlinks — the ONE route for both of its sites
     /// (the row command and the surface seam): the open, the leaf switch,
     /// the reveal and the mount's consume inside ONE outer workspace
@@ -631,7 +677,7 @@ internal sealed partial class WorkspaceViewModel
             _basesViewAsListCommand, _basesQuickFilterCommand,
             _basesSaveSortToViewCommand, _basesSortByColumnCommand,
             _basesOpenRowCommand, _basesCopyLinkCommand,
-            _basesShowBacklinksCommand, _basesEditPropertyCommand,
+            _basesShowBacklinksCommand, _basesShowConnectionsCommand, _basesEditPropertyCommand,
             _basesExportCsvCommand, _basesExportMarkdownCommand,
             _basesCopyMarkdownCommand,
         })
@@ -1364,6 +1410,9 @@ internal sealed partial class WorkspaceViewModel
         document.ShowBacklinksFromSurface = row =>
             ShowBacklinksFor(row.FilePath, () => document.AnnounceEvent(new A11yEvent.BasesBacklinksFor(
                 DisplayNameWithoutExtension(row.FilePath))));
+        // W6-2 PR B2 (B2-5): the seam and the action's core title.
+        document.ShowConnectionsFromSurface = (source, row) => _ = BasesShowConnectionsFor(source, document, row);
+        document.ShowConnectionsTitle = Connections.ActionTitle(GraphRowAction.ShowConnections);
     }
 
     private static object RowOverride(BaseDocumentViewModel document, BasesRow row)

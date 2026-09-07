@@ -437,6 +437,7 @@
                  collapsed unless this tab IS a base, so UIA only ever
                  sees the one live document surface. -->
             <bases:BaseSurfaceView Grid.Row="1"
+                                   Tab="{Binding}"
                                    Model="{Binding Base}"
                                    Visibility="{Binding IsBaseVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <bases:DashboardSurfaceView Grid.Row="1"

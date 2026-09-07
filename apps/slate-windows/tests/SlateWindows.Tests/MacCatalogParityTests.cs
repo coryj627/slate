@@ -278,6 +278,10 @@ public sealed class MacCatalogParityTests
                 + "mac's slate.file.delete now acts on the tree selection, "
                 + "which Windows also registers; the checkbox flow is the "
                 + "Windows-only extra).",
+            ["slate.graph.connectionsBack"] =
+                "W6-2 PR B2, B2-D6: mac's ⌘[ is a panel key the Connections leaf's "
+                + "key handling owns, with no catalog id; Windows mints the id so the "
+                + "chord table carries the row and the palette reaches the same funnel.",
         };
 
     /// <summary>

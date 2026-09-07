@@ -190,7 +190,12 @@ internal sealed class GraphTableView : UserControl
         }
         if (row is GraphTableRow current)
         {
-            model.ViewState.SelectedKey = current.StableKey;
+            // The view holds no write of its own (W6-2 PR B2, Term 15,
+            // IGJ-6): the DOCUMENT's guarded selection refuses a retired or
+            // unseated document and a key its current snapshot lacks, so a
+            // retained view over a closed tab cannot move the workspace's
+            // state.
+            _ = model.SelectRow(current.StableKey);
         }
     }
 

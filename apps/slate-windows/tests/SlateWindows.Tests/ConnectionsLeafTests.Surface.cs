@@ -224,12 +224,13 @@ public sealed partial class ConnectionsLeafTests
             Assert.Equal(ConnectionsPhrase.GhostHint, leaf.RowHint(ghost));
             Assert.Equal(ghost.References, ConnectionsLeafViewModel.RowCopy(ghost).References);
 
-            // B-9: Show connections is listed, disabled, with the one B1
-            // reason on the ACTION alone — never the row's hint (IGG-15).
+            // B-9: Show connections is listed and, since B2 (B-D6 withdrawn),
+            // ENABLED for a file-backed row through the workspace's funnel;
+            // it carries no reason, and the row's hint is its activation's.
             Assert.Contains(leaf.ActionSpecs(GraphNodeKind.Note), spec => spec.Action == GraphRowAction.ShowConnections);
-            Assert.False(leaf.IsActionEnabled(GraphRowAction.ShowConnections, note));
-            Assert.Equal(ConnectionsPhrase.ShowConnectionsUnavailable, leaf.ActionDisabledReason(GraphRowAction.ShowConnections));
-            Assert.DoesNotContain(ConnectionsPhrase.ShowConnectionsUnavailable, leaf.RowHint(note), StringComparison.Ordinal);
+            Assert.True(leaf.IsActionEnabled(GraphRowAction.ShowConnections, note));
+            Assert.Null(leaf.ActionDisabledReason(GraphRowAction.ShowConnections));
+            Assert.False(leaf.ActionAppliesTo(GraphRowAction.ShowConnections, GraphNodeKind.Ghost));
             Assert.True(leaf.IsActionEnabled(GraphRowAction.Open, note));
             Assert.True(leaf.IsActionEnabled(GraphRowAction.Reveal, note));
             Assert.False(leaf.IsActionEnabled(GraphRowAction.Open, ghost));

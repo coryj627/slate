@@ -578,6 +578,7 @@ public sealed class AnnouncementSeamCensus
             [
                 ("AnnounceStatus", "rule C's status the workspace asks for (Term 9; B-D5)"),
                 ("AnnounceIfSpeaking", "the SPEAKING-gated announce (rule C, Term 2: ACTIVE at dispatch)"),
+                ("AnnounceReRooted", "the re-root's line, unconditional — the pin and pop mutations construct the leaf active (W6-2 PR B2, rule D Term 14)"),
             ]),
         ];
         foreach ((string boundaryFile, _) in boundaries)

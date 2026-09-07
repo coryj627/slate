@@ -3,6 +3,7 @@
 
 using System.Runtime.ExceptionServices;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
@@ -104,6 +105,48 @@ public sealed class ConnectionsLeafViewTests
         {
             ExceptionDispatchInfo.Capture(failure).Throw();
         }
+    }
+
+    /// <summary>W6-2 PR B2, B2-4 / B2-D11: the leaf's body owns Back's chord
+    /// — Control alone, so the sidebar history's Ctrl+Alt+[ and Previous
+    /// Tab's Ctrl+Shift+[ keep their owners — and handles it only when the
+    /// workspace popped: with nothing to pop the chord falls through.</summary>
+    [Fact]
+    public void TheLeafBodyOwnsBacksChordWithControlAloneAndFallsThroughWithNothingToPop()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("back-chord");
+            host.ActivateLeaf();
+            host.Workspace.OpenPath("hub.md", WorkspaceOpenTarget.CurrentTab);
+            PumpedDispatcher.PumpUntilDrained(host.Leaf.WhenAllWorkDrained());
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                // FOLLOWING: nothing to pop, the chord falls through.
+                Assert.False(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control));
+
+                Assert.True(host.Workspace.ReRootConnectionsOn("2.md"));
+                PumpedDispatcher.PumpUntilDrained(host.Leaf.WhenAllWorkDrained());
+                Assert.Equal("2.md", host.Leaf.Pin);
+                // Other owners' chords fall through even while pinned.
+                Assert.False(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control | ModifierKeys.Alt));
+                Assert.False(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control | ModifierKeys.Shift));
+                Assert.False(view.TryHandleBackChord(Key.OemCloseBrackets, ModifierKeys.Control));
+                Assert.Equal("2.md", host.Leaf.Pin);
+                // Back's chord pops and is handled.
+                Assert.True(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control));
+                PumpedDispatcher.PumpUntilDrained(host.Leaf.WhenAllWorkDrained());
+                Assert.Null(host.Leaf.Pin);
+                Assert.Equal("hub.md", host.Leaf.Root);
+                // The stack empty again: the chord falls through.
+                Assert.False(view.TryHandleBackChord(Key.OemOpenBrackets, ModifierKeys.Control));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
     }
 
     /// <summary>A window hosts the view so containers realise and peers
@@ -542,12 +585,260 @@ public sealed class ConnectionsLeafViewTests
                 string[] titles = [.. menu.Items.Cast<MenuItem>().Select(i => (string)i.Header)];
                 Assert.Equal(host.Leaf.ActionSpecs(GraphNodeKind.Note).Select(s => s.Title), titles);
                 MenuItem show = menu.Items.Cast<MenuItem>().Single(i => (string)i.Header == host.Leaf.ActionSpecs(GraphNodeKind.Note).Single(s => s.Action == GraphRowAction.ShowConnections).Title);
-                Assert.False(show.IsEnabled);
-                Assert.Equal(ConnectionsPhrase.ShowConnectionsUnavailable, AutomationProperties.GetHelpText(show));
+                // Since B2 (B-D6 withdrawn): enabled, its help text the title.
+                Assert.True(show.IsEnabled);
+                Assert.Equal((string)show.Header, AutomationProperties.GetHelpText(show));
                 // The ROW's hint is its activation's, never the action's reason (B-9).
                 Assert.Equal(ConnectionsPhrase.NoteHint, note.Hint);
                 MenuItem open = menu.Items.Cast<MenuItem>().First();
                 Assert.True(open.IsEnabled);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>W6-2 PR B2 (T6, the journey's finding): the row menu EXISTS
+    /// from construction as the tree's own — WPF opens the menu that exists
+    /// when the Menu key, Shift+F10 or a right-click arrives, and a menu
+    /// first assigned inside the opening event is too late for that request
+    /// (the grid's rule) — its items rebuilt per request from the row in
+    /// core's order; and the tree's own key handler leaves the Menu key to
+    /// WPF (B1 answered it twice, and the two answers left nothing open).</summary>
+    [Fact]
+    public void TheRowMenuExistsFromConstructionAndTheMenuKeyIsWpfs()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("persistent-menu");
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                ContextMenu menu = view.RowMenuForTests;
+                Assert.Same(menu, view.TreeForTests.ContextMenu);
+                ConnectionsRowViewModel note = view.RootsForTests[1].Children.First(r => r.Row!.Kind == GraphNodeKind.Note);
+                Assert.Equal(host.Leaf.ActionSpecs(GraphNodeKind.Note).Select(s => s.Title), view.RebuildRowMenuForTests(note));
+                Assert.Same(menu, view.TreeForTests.ContextMenu);
+                // A second request rebuilds the SAME menu: the items are new,
+                // the menu is not.
+                Assert.Equal(host.Leaf.ActionSpecs(GraphNodeKind.Note).Select(s => s.Title), view.RebuildRowMenuForTests(note));
+                Assert.Same(menu, view.TreeForTests.ContextMenu);
+
+                // The Menu key through the tree: not handled here — WPF's
+                // popup service owns it.
+                note.IsSelected = true;
+                var apps = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window)!, 0, Key.Apps)
+                {
+                    RoutedEvent = Keyboard.KeyDownEvent,
+                };
+                view.TreeForTests.RaiseEvent(apps);
+                Assert.False(apps.Handled);
+                Assert.False(menu.IsOpen);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>Term 9's anchor with no rows — codex post-implementation
+    /// pass 1, IPC-1: the state's host projects a UIA peer carrying the
+    /// leaf's identity, the state's accessible text as its Name and its
+    /// keyboard focusability, in EVERY no-row presentation — no note, the
+    /// root's first load (Loading), a stale root, an error, and a tree with
+    /// no rows — so a reader whose focus lands there reads the state, never
+    /// the window.</summary>
+    [Fact]
+    public void TheNoRowAnchorProjectsAPeerNamedByTheStateInEveryNoRowPresentation()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("anchor-peer");
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                AutomationPeer Peer()
+                {
+                    AutomationPeer? peer = UIElementAutomationPeer.CreatePeerForElement(view.AnchorForTests);
+                    Assert.NotNull(peer);
+                    Assert.IsType<ConnectionsAnchorAutomationPeer>(peer);
+                    Assert.Equal("ConnectionsLeaf", peer.GetAutomationId());
+                    Assert.Equal(AutomationControlType.Group, peer.GetAutomationControlType());
+                    Assert.True(peer.IsControlElement());
+                    Assert.True(peer.IsContentElement());
+                    return peer;
+                }
+
+                // No note: the anchor shown, focusable, named by the state.
+                Assert.Equal(Visibility.Visible, view.AnchorForTests.Visibility);
+                Assert.Equal(ConnectionsPhrase.NoNote, Peer().GetName());
+                Assert.True(Peer().IsKeyboardFocusable());
+                Assert.True(view.AnchorForTests.Focus());
+                Assert.True(view.AnchorForTests.IsKeyboardFocused);
+
+                // The root's first load REJECTED at the receiver (the tree's
+                // echo names another path): Loading, nothing in flight.
+                host.ActivateLeaf();
+                bool armed = true;
+                host.Leaf.EnvelopeForTests = envelope =>
+                {
+                    if (!armed)
+                    {
+                        return envelope;
+                    }
+                    armed = false;
+                    return envelope with { TreePath = "rejected.md" };
+                };
+                host.OpenNote(Hub);
+                host.Settle();
+                host.Leaf.EnvelopeForTests = null;
+                Assert.Equal(ConnectionsLoadState.Loading, host.Leaf.Publication.State);
+                Assert.Equal(Visibility.Visible, view.AnchorForTests.Visibility);
+                Assert.Equal(ConnectionsPhrase.LoadingAccessible, Peer().GetName());
+                host.Workspace.ConnectionsDeeperCommand.Execute(null);
+                host.Settle();
+                Assert.Equal(Visibility.Collapsed, view.AnchorForTests.Visibility);
+
+                // A stale root: the note moved while the leaf was inactive.
+                host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "outline");
+                host.OpenNote(Two);
+                host.Settle();
+                Assert.True(host.Leaf.IsStale);
+                Assert.Equal(Visibility.Visible, view.AnchorForTests.Visibility);
+                Assert.Equal(ConnectionsPhrase.LoadingAccessible, Peer().GetName());
+                host.ActivateLeaf();
+                host.Settle();
+
+                // An error: the next fetch fails.
+                int remaining = 1;
+                host.Leaf.FetchGateForTests = () =>
+                {
+                    if (remaining-- > 0)
+                    {
+                        throw new InvalidOperationException("injected");
+                    }
+                };
+                host.Workspace.ConnectionsDeeperCommand.Execute(null);
+                host.Settle();
+                Assert.Equal(Visibility.Visible, view.AnchorForTests.Visibility);
+                Assert.Equal(ConnectionsPhrase.Error("injected"), Peer().GetName());
+
+                // No rows: a note nothing links and that links nothing.
+                host.OpenNote("orphan.md");
+                host.Settle();
+                Assert.Equal(Visibility.Visible, view.AnchorForTests.Visibility);
+                Assert.Equal(ConnectionsPhrase.Empty, Peer().GetName());
+                Assert.True(view.AnchorForTests.Focus());
+                Assert.True(view.AnchorForTests.IsKeyboardFocused);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>The focus keep-alive's repair rule — codex post-implementation
+    /// pass 1, IPC-3: focus counts as LOST on nothing, on the window, or on an
+    /// element no longer visible; a live visible element elsewhere is the
+    /// user's move and is left alone.</summary>
+    [Fact]
+    public void FocusCountsAsLostOnNothingTheWindowOrACollapsedElementOnly()
+    {
+        RunSta(() =>
+        {
+            var window = new Window { Width = 200, Height = 200, ShowInTaskbar = false, WindowStyle = WindowStyle.None };
+            var visible = new TextBox();
+            var collapsed = new TextBox { Visibility = Visibility.Collapsed };
+            window.Content = new StackPanel { Children = { visible, collapsed } };
+            window.Show();
+            try
+            {
+                Assert.True(ConnectionsLeafView.FocusIsLost(null));
+                Assert.True(ConnectionsLeafView.FocusIsLost(window));
+                Assert.True(ConnectionsLeafView.FocusIsLost(collapsed));
+                Assert.False(ConnectionsLeafView.FocusIsLost(visible));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>The keep-alive, integrated — codex post-implementation pass 2,
+    /// IPC-10: a render that replaces the rows under keyboard focus lands
+    /// focus back inside the leaf when focus was lost with them; but a
+    /// handler that moved focus to a live sibling the moment the tree lost it
+    /// keeps that focus — the immediate branch repairs only what it replaced
+    /// or what is lost, never a live move elsewhere.</summary>
+    [Fact]
+    public void TheKeepAliveRepairsLostFocusAndLeavesALiveMoveElsewhere()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("keep-alive");
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            var view = new ConnectionsLeafView { Model = host.Leaf };
+            var sibling = new TextBox();
+            var window = new Window
+            {
+                Width = 400,
+                Height = 600,
+                ShowInTaskbar = false,
+                WindowStyle = WindowStyle.None,
+                Content = new StackPanel { Children = { sibling, view } },
+            };
+            window.Show();
+            view.UpdateLayout();
+            try
+            {
+                // Focus on a row; a root change replaces the rows: focus lands
+                // back inside the leaf (its anchor while Loading, a row after).
+                ConnectionsRowViewModel row = view.RootsForTests[1].Children.First(r => r.Row!.Kind == GraphNodeKind.Note);
+                Assert.True(view.RealizeContainer(row)!.Focus());
+                Assert.True(view.TreeForTests.IsKeyboardFocusWithin);
+                host.OpenNote(Two);
+                host.Settle();
+                view.UpdateLayout();
+                PumpedDispatcher.Drain();
+                Assert.True(view.IsKeyboardFocusWithin, "the render replaced the rows and lost focus to the window");
+                Assert.False(sibling.IsKeyboardFocused);
+
+                // Focus on a row again; the moment the tree loses focus-within
+                // (its rows replaced), a handler moves focus to the sibling:
+                // the keep-alive leaves it there.
+                ConnectionsRowViewModel again = view.RootsForTests[1].Children.First(r => r.Row!.Kind == GraphNodeKind.Note);
+                Assert.True(view.RealizeContainer(again)!.Focus());
+                void MoveToSibling(object sender, DependencyPropertyChangedEventArgs e)
+                {
+                    if (e.NewValue is false)
+                    {
+                        _ = sibling.Focus();
+                    }
+                }
+                view.TreeForTests.IsKeyboardFocusWithinChanged += MoveToSibling;
+                try
+                {
+                    host.OpenNote(Hub);
+                    host.Settle();
+                    view.UpdateLayout();
+                    PumpedDispatcher.Drain();
+                    Assert.True(sibling.IsKeyboardFocused, "the keep-alive took focus back from a live element the user had moved to");
+                    Assert.False(view.IsKeyboardFocusWithin);
+                }
+                finally
+                {
+                    view.TreeForTests.IsKeyboardFocusWithinChanged -= MoveToSibling;
+                }
             }
             finally
             {

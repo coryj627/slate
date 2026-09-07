@@ -40,7 +40,9 @@ internal sealed record GraphLoadToken(
 
 /// <summary>The worker ENVELOPE (contract A-2; the round-3 ledger's
 /// IGA-22, IGA-43): the inputs the body actually used beside its
-/// results, because neither result carries its inputs.</summary>
+/// results, because neither result carries its inputs — and the
+/// selection generation the worker OBSERVED immediately before its
+/// snapshot crossing (IPC-13), which the apply compares against.</summary>
 internal sealed record GraphLoadEnvelope(
     GraphLoadToken Token,
     GraphFilter Filter,
@@ -48,7 +50,8 @@ internal sealed record GraphLoadEnvelope(
     GraphTableSort Sort,
     GraphSnapshot? Snapshot,
     GraphTableRows? Rows,
-    string? Failure);
+    string? Failure,
+    int SelectionGeneration = 0);
 
 /// <summary>What one installed publication answered — the surface's
 /// adoption announcement reads it (contract A-5).</summary>
@@ -76,6 +79,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     private readonly Func<bool> _isEffectiveActive;
     private readonly Func<GraphVerbosity> _verbosity;
     private readonly Func<int> _lifecycleGeneration;
+    private readonly Func<bool> _isSeated;
     private readonly Dictionary<GraphNodeKind, IReadOnlyList<GraphRowActionSpec>> _actionsByKind;
     private ulong _seq;
     private GraphTableRequest? _request;
@@ -90,10 +94,12 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     public GraphDocumentViewModel(
         VaultSession session,
         GraphAnnouncer announcer,
+        GraphViewState viewState,
         Func<bool> isEffectiveActive,
         Func<GraphVerbosity> verbosity,
         SynchronizationContext? ownerContext = null,
-        Func<int>? lifecycleGeneration = null)
+        Func<int>? lifecycleGeneration = null,
+        Func<bool>? isSeated = null)
         : base(
             synchronousForTests: false,
             ownerContext
@@ -108,8 +114,13 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(announcer);
+        ArgumentNullException.ThrowIfNull(viewState);
         ArgumentNullException.ThrowIfNull(isEffectiveActive);
         ArgumentNullException.ThrowIfNull(verbosity);
+        // A-1 as amended (W6-2 PR B2, B2D-1): the view state is the
+        // WORKSPACE's, handed in; a bare document in a fact is its own
+        // seated one.
+        _isSeated = isSeated ?? (static () => true);
         _session = session;
         _announcer = announcer;
         _isEffectiveActive = isEffectiveActive;
@@ -133,7 +144,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         // COUNTED through the wrapper, never a literal (IPC-5): a fourth
         // crossing anywhere would show here.
         ActionInventoryCrossings = CrossingsForTests["graph_row_actions"];
-        ViewState = new GraphViewState();
+        ViewState = viewState;
         _publication = GraphPublication.Initial(ViewState.Filter, DefaultSort);
     }
 
@@ -217,6 +228,28 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     // --- State ------------------------------------------------------------
 
     public GraphViewState ViewState { get; }
+
+    /// <summary>Contract A-7's write, GUARDED (W6-2 PR B2, Term 15, IGJ-6):
+    /// the table's current row selects through the document, which refuses
+    /// once retired, when it is not the workspace's seated document, or when
+    /// its current snapshot lacks the key — so a retained view over a closed
+    /// tab, or a stale document beside a re-seated one, cannot move the
+    /// workspace's state. Returns whether the key was written.</summary>
+    public bool SelectRow(string stableKey)
+    {
+        ArgumentNullException.ThrowIfNull(stableKey);
+        if (_retired || !_isSeated())
+        {
+            return false;
+        }
+        GraphPublication publication = Publication;
+        if (!publication.HoldsSnapshot || !publication.ContainsNode(stableKey))
+        {
+            return false;
+        }
+        ViewState.SelectedKey = stableKey;
+        return true;
+    }
 
     /// <summary>The residue (contract A-10's census): the one member that
     /// hands out the announcer, for the facts — production reaches the
@@ -401,6 +434,11 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     private GraphLoadEnvelope Fetch(GraphLoadToken token)
     {
         GraphFilter filter = token.Request.Query.Filter;
+        // The selection this fetch OBSERVES, read on the pool immediately
+        // before the snapshot crossing (IPC-13): a key written between the
+        // load's issue and this read is older than the snapshot and is this
+        // publication's to judge; one written after it is the next's.
+        int observed = ViewState.SelectionGeneration;
         try
         {
             GraphSnapshot? snapshot = null;
@@ -418,15 +456,15 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             }
             GraphTableRows rows = token.Session.GraphTableRows(token.Request.Query, token.Request.Sort);
             FetchGateForTests?.Invoke();
-            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, snapshot, rows, null);
+            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, snapshot, rows, null, observed);
         }
         catch (VaultException exception)
         {
-            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, null, null, exception.Message);
+            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, null, null, exception.Message, observed);
         }
         catch (Exception exception) when (exception is InvalidOperationException or System.IO.IOException)
         {
-            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, null, null, exception.Message);
+            return new GraphLoadEnvelope(token, filter, token.Request.Query, token.Request.Sort, null, null, exception.Message, observed);
         }
     }
 
@@ -500,7 +538,14 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         bool answeredSort = _requestedSort is not null;
         _requestedSort = null;
         Publication = next;
-        RevalidateSelection(next);
+        if (token.Kind == GraphLoadKind.Pair)
+        {
+            // A NEW snapshot judges the key (the mac revalidates at the
+            // snapshot's publish point and on its generation change alone);
+            // a rows-only publication carries the held one, which already
+            // judged — or never saw — the key.
+            RevalidateSelection(next, envelope.SelectionGeneration);
+        }
         PublicationInstalled?.Invoke(new GraphPublicationInstall(previous, next, answeredSort));
         if (token.Kind == GraphLoadKind.Pair)
         {
@@ -529,8 +574,19 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// <summary>Contract A-7: the shared key survives a reorder and a
     /// filter overlay; it clears only when the SNAPSHOT no longer carries
     /// the node (the mac's `revalidateGraphSelection(against:)`).</summary>
-    private void RevalidateSelection(GraphPublication publication)
+    private void RevalidateSelection(GraphPublication publication, int selectionGenerationAtFetch)
     {
+        // Only the selection this load OBSERVED immediately before its
+        // snapshot crossing: a key written since — a pinned rename's, a
+        // re-root's — is newer than the snapshot and is the next
+        // publication's to judge (codex post-implementation pass 2, IPC-8: a
+        // pair fetched before the rename erased the retargeted key; pass 3,
+        // IPC-13: the observation is the worker's, not the issue's, so a key
+        // written before the fetch began IS judged by it).
+        if (ViewState.SelectionGeneration != selectionGenerationAtFetch)
+        {
+            return;
+        }
         if (ViewState.SelectedKey is { } key && publication.HoldsSnapshot && !publication.ContainsNode(key))
         {
             ViewState.SelectedKey = null;
@@ -587,7 +643,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         {
             GraphRowAction.Open or GraphRowAction.OpenInNewTab => row.Path is not null && OpenRowFromSurface is not null,
             GraphRowAction.Reveal => row.Path is not null && RevealRowFromSurface is not null,
-            GraphRowAction.ShowConnections => ShowConnectionsFromSurface is not null,
+            GraphRowAction.ShowConnections => row.Path is not null && ShowConnectionsFromSurface is not null,
             GraphRowAction.CreateNote => CreateNoteFromSurface is not null && CreateAdmissionReason?.Invoke() is null,
             _ => false,
         };
@@ -596,10 +652,22 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     public string? ActionDisabledReason(GraphRowAction action) =>
         action == GraphRowAction.CreateNote ? CreateAdmissionReason?.Invoke() : null;
 
+    /// <summary>W6-2 PR B2 (B2-3, IGJ-7, IGK-9): a row acts only while it is
+    /// the SAME object in the current publication's rows — a cached menu
+    /// item over a row a republish dropped (a name or kind overlay keeps the
+    /// node in the snapshot, so <see cref="GraphPublication.ContainsNode"/>,
+    /// A-7's revalidation check, is not this wall) acts on nothing. The
+    /// class TGB-9 walled in the Connections leaf.</summary>
+    public bool IsRowCurrent(GraphTableRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        return Publication.Rows.Any(current => ReferenceEquals(current, row));
+    }
+
     public void Execute(GraphRowAction action, GraphTableRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
-        if (_retired || !IsActionEnabled(action, row))
+        if (_retired || !IsRowCurrent(row) || !IsActionEnabled(action, row))
         {
             return;
         }
@@ -652,8 +720,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         // A-1 as amended (W6-2 PR B, BD-12): the relay is the workspace's;
         // retirement drops THIS document's pending classes — the mac's
         // `cancelPending` on view departure — and leaves it live for the
-        // Connections leaf.
+        // Connections leaf. A-1 as amended again (W6-2 PR B2, B2D-1): the
+        // view state is the workspace's too — retirement leaves it, and a
+        // re-seated document revalidates the key it inherits at its first
+        // pair publication (Term 15).
         _announcer.DropAllPending();
-        ViewState.Reset();
     }
 }

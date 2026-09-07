@@ -38,6 +38,11 @@ internal sealed partial class WorkspaceViewModel
     /// BD-12): assigned once in the constructor by <see cref="NewGraphRelay"/>.</summary>
     private readonly GraphAnnouncer _graphRelay;
 
+    /// <summary>The workspace's one view state (B2-1).</summary>
+    private readonly GraphViewState _graphViewState;
+
+    internal GraphViewState GraphViewStateForTests => _graphViewState;
+
     /// <summary>The workspace's one relay, for the facts that queue a
     /// pending class on it and prove a High flush drops it (IPB-1).</summary>
     internal GraphAnnouncer GraphRelayForTests => _graphRelay;
@@ -97,15 +102,29 @@ internal sealed partial class WorkspaceViewModel
     /// re-checked at fire (0a-9).</summary>
     private GraphAnnouncer NewGraphRelay() => new GraphAnnouncer(_announceRendered);
 
+    /// <summary>The workspace's ONE view state (W6-2 PR B2, B2-1; A-1 and
+    /// spec R-B as amended by the owner on 2026-09-06): constructed in the
+    /// constructor beside the relay, shared by the graph document and the
+    /// Connections leaf, surviving the document's retirement, dropped with
+    /// the workspace. The instance census counts the factory's one call.</summary>
+    private GraphViewState NewGraphViewState() => new GraphViewState();
+
     private GraphDocumentViewModel NewGraphDocument()
     {
+        GraphDocumentViewModel? created = null;
         var document = new GraphDocumentViewModel(
             _session,
             _graphRelay,
+            _graphViewState,
             isEffectiveActive: () => GraphTabIsEffective(),
             verbosity: () => GraphVerbosity.Standard,
-            lifecycleGeneration: () => LifecycleGeneration());
+            lifecycleGeneration: () => LifecycleGeneration(),
+            // SEATED (Term 15): the document the funnel holds now — a
+            // retired or superseded document's selection is refused.
+            isSeated: () => created is not null && ReferenceEquals(_graphDocument, created));
+        created = document;
         document.OpenRowFromSurface = (row, target) => OpenGraphRowFromSurface(row.Path!, target);
+        document.ShowConnectionsFromSurface = row => ReRootGraphRowFromSurface(row);
         document.RevealRowFromSurface = path => RevealGraphRowFromSurface(path);
         document.CreateNoteFromSurface = path => CreateGraphNoteFromSurface(path);
         document.CreateAdmissionReason = () => GraphCreateAdmissionReason?.Invoke();
@@ -286,6 +305,21 @@ internal sealed partial class WorkspaceViewModel
             _announce(new A11yEvent.OpenedFile(System.IO.Path.GetFileName(path)));
         }
         return opened;
+    }
+
+    /// <summary>W6-2 PR B2 (B2-3, IGI-4): the table's Show connections,
+    /// ADDRESSED — the graph tab and its group made active first, as every
+    /// table action is (A-8; the mac's <c>focusOwningGroup()</c> before
+    /// <c>perform</c>), then the workspace's re-root funnel on the row's
+    /// path. False when no graph tab exists (a stale address).</summary>
+    internal bool ReRootGraphRowFromSurface(GraphTableRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        if (row.Path is not { } path || !FocusGraphAddress())
+        {
+            return false;
+        }
+        return ReRootConnectionsOn(path);
     }
 
     /// <summary>Make the graph's group and tab active, synchronously —
