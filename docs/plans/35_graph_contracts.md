@@ -7886,4 +7886,1136 @@ same-root repair. Mutations, each restored byte for byte: the generation capture
 - The journey (B2-9), run to its last step locally before every push
   (the foreground rule).
 
+## PR C — the navigator, the presets, the filter field, Where-am-I, verbosity, the config
+
+**Goal (spec §PR C).** The command layer over the graph tab A shipped
+and the leaf B1 and B2 shipped: the three preset commands (Orphaned
+Notes, Unresolved Links, Most Linked Notes — parameterisations of the
+table, each speaking its headline in place of the summary), the name
+filter field with its count and Clear, the Where-am-I row, panel and
+readback plumbing (`Ctrl+Alt+Shift+I`, `ChordScope.Graph`, the scope
+A-12 declared), the graph's Verbosity submenu (three check items over
+core's `graph_verbosities()`), and the `.slate/graph.json` lifecycle
+through core's codec (0b-12) — read at the workspace's construction,
+written debounced by one serialised writer. PR D's diagram takes the
+navigator's readback and viewport seams; PR E's inspector takes the
+config's groups, display and forces.
+
+**This is revision 1.** Four questions below are the OWNER's and are
+marked PENDING; the text is written to the frozen sections' shape
+wherever one exists and names the alternative beside it, so round 1 can
+review the application of each default without the choice itself being
+a finding (the B2 precedent: "report only where the text applies it
+wrongly").
+
+**Owner decisions required before revision 2 (recorded here, answered
+in place):**
+
+- **CD-Q1 — Where does the preset's KIND OVERLAY live?** Core's
+  `GraphVisibilityQuery` is three fields — the backend filter, the
+  needle, `kind_only` (`graph_queries.rs:225–229`) — and the Unresolved
+  preset is `kind_only = Ghost`, which `GraphFilter` cannot express
+  (`:222–224`; the mac's `graphTableKindFilter`, `AppState.swift:3006`,
+  read by the table's query at `:3009–3012`, the diagram at
+  `GraphDiagramTests.swift:665–683` and Where-am-I at
+  `AppState+GraphDiagram.swift:300–306`). Frozen A-1 fixes the view
+  state at FIVE fields "and nothing else"; frozen B2-1 walls a second
+  mutable copy of the query by type. The overlay is cross-projection
+  state (the table's query, D's diagram, Where-am-I's clause) and
+  belongs in the one view state — **the default written below: a sixth
+  field `KindOnly: GraphNodeKind?` (null) on `GraphViewState`, the
+  amendment of A-1 and spec R-B recorded in place by the owner** (CD-2).
+  The alternative — the overlay as transient DOCUMENT state, as the mac
+  holds it beside `AppState` — keeps A-1's five fields but puts a
+  visibility input outside the record R-B calls the one view state,
+  where D's diagram must reach for it and the retirement drops it while
+  the filter it rode in on survives.
+- **CD-Q2 — Where-am-I on the TABLE.** Spec §PR C says the readback
+  reads "the zoom (when the diagram shows)" and its acceptance line has
+  the user "ask Where am I and read the panel" in this PR. The frozen
+  schema 0a-2b has `zoom_percent: u32`, a MANDATORY slot the template
+  always renders ("zoom N percent", `a11y.rs:3308`), the invariant
+  10..=400 (0a-2b), and the selection a DIAGRAM row (`references ==
+  in_links`, `embed == false`); 0a-6 pins "the host's reachable states"
+  by the eight witnesses, every one a diagram state; and the mac answers
+  ⌃⌘I on the graph ONLY in Diagram mode (`whereAmIRouteTarget`,
+  `AppState+GraphDiagram.swift:367–373`: `.graph` iff
+  `graphDiagramZoomActive`, `:320–322`; Table mode is `.none`, a silent
+  no-op). A Table readback would either fabricate a zoom the reader is
+  not looking at or amend 0a-2b. **The default written below: the mac's
+  — the readback is the DIAGRAM's; this PR builds the row, the chord,
+  the command, the panel, the navigator's verb and the readback SEAM,
+  and the verb is admitted only when the seam answers (PR D's), so in
+  this PR the row is listed and disabled (AD-3's shape) and the chord
+  falls through; the spec's acceptance line moves to D (CD-11).** The
+  alternative the owner may take: amend 0a-2b in place — `zoom_percent:
+  Option<u32>`, the clause rendered only when present, a ninth witness
+  (NoSelection, no zoom, Normal) on both lanes, `lib.rs`'s mirror, the
+  mac's site passing `.some` — and a Table readback whose selection is
+  the shared key's SNAPSHOT node rendered the diagram's way
+  (`references = in_links`, `embed = false`), landing in this PR.
+  Recommended: the alternative, because it is what the spec's own text
+  asks for and a pull surface on the table is worth the one witness;
+  written as the default because 0a is frozen.
+- **CD-Q3 — A preset's headline under a superseding silent pair.** The
+  mac clears its pending preset on ANY successful publish and speaks it
+  only when the publishing load was audible and the tab active
+  (`AppState+GraphTable.swift:235–243`), and a newer token drops the
+  older result whole (`:206–208`, `:292`): a probe's silent pair issued
+  while the preset's pair is in flight (A-3's superseding pair; the
+  mac's `refreshGraphTableIfGraphChanged`, `:480–510`) is the load that
+  publishes, and the headline is LOST — one file change during the
+  fetch reaches it. **The default written below: parity — the policy
+  rides the preset's token (BD-10's principle), a superseding silent
+  pair publishes silently, and the loss is recorded as an accepted risk
+  (CR-1) with the mac's own race cited.** The alternative: the leaf's
+  Term 5 extended to the table — a silent pair that supersedes an
+  AUDIBLE pair (Summary or Preset) inherits its policy — which amends
+  the "silent pair" wording of frozen A-2 and A-3 and the mac's
+  behaviour with it. Recommended: the alternative, for the same reason
+  BD-10 took it for the leaf; written as parity because A is frozen.
+- **CD-Q4 — The needle's fetch cadence.** The mac issues a rows-only
+  token on EVERY needle keystroke with no debounce
+  (`GraphTableView.swift:282`; `requestGraphTableRows`,
+  `AppState+GraphTable.swift:321–356`) and coalesces only the COUNT
+  (200 ms, the filter class). At 10k rows each keystroke is one
+  `graph_table_rows` crossing that formats and orders every visible row
+  (the A-15 rows workload, measured; not budgeted). **The default
+  written below: parity — one rows-only token per keystroke, the
+  receiver's `seq` publishing only the last (A-2), the cost recorded and
+  measured in the task loop (CR-2).** The alternative: a host debounce
+  on the FETCH (the canvas's machine bounds a burst to two matches,
+  `CanvasFilterMachine.cs:80–85`), which changes when the count and the
+  rows land relative to the keystroke and has no mac twin. Not
+  recommended; listed so the round does not have to raise it.
+
+### What stands today (A, B1, B2 merged)
+
+- The view state is the workspace's one instance (B2-1;
+  `WorkspaceViewModel.cs:1613`, `NewGraphViewState` at
+  `WorkspaceViewModel.Graph.cs:109`), five fields
+  (`GraphViewState.cs:24–92`): `NameQuery` is declared and "PR C writes
+  it; empty here" (`:72–77`); `Groups` "PR C reads them; empty here"
+  (`:79–84`); `Mode` only Table (`:86–91`). The no-shadow census judges
+  by the five names and by type
+  (`NoMutableShadowOfTheViewStateExistsInTheShell`,
+  `GraphAnnouncerCensus.cs:728`); the instance census counts the one
+  construction (`ExactlyOneGraphViewStateIsConstructedInTheShell`,
+  `:392`).
+- The document's request already carries the needle: `Load` builds
+  `new GraphVisibilityQuery(ViewState.Filter, ViewState.NameQuery, null)`
+  (`GraphDocumentViewModel.cs:400–402`) — the third argument, the kind
+  overlay, is the literal `null`. Nothing observes `NameQuery`; nothing
+  issues a token when it changes. The rows-only receiver already speaks
+  the count on every rows-only publication through the relay's gated
+  entry (`:551–560`, `AnnounceFilterCountIfEffective` `:381–387`;
+  `AnnounceGatedFilterCount`, `GraphAnnouncer.cs:67–72`) — a sort speaks
+  the count too, the mac's `:343–347`.
+- The token's policy is two-valued: `GraphAnnouncePolicy` is `Summary`
+  or `Silent` (`GraphDocumentViewModel.cs:20–24`); the pair's receiver
+  speaks `GraphSnapshotSummary` under `Summary` (`:539–542`). Rule L's
+  cause has three values — Activation, Open, Reopen
+  (`WorkspaceViewModel.Graph.cs:181–229`); the boundary clears it
+  (`WorkspaceViewModel.Persistence.cs:177`; AD-12).
+- The header is the kind label and the switcher (`GraphSurfaceView.cs:
+  39–85`, `BuildSwitcher` `:119–139`; Diagram disabled, `:131`). There
+  is no filter field, no summary region, no Where-am-I panel, no
+  `PreviewKeyDown` on the surface. The grid's `FilterRequested` seam
+  (`AccessibleDataGrid.cs:104`, its `FilterCommand` `:90–91`, `:193–198`)
+  is unsubscribed by the graph table; the canvas table subscribes it
+  (`CanvasTableView.cs:68`).
+- The document and the leaf read a constant verbosity —
+  `verbosity: () => GraphVerbosity.Standard` at
+  `WorkspaceViewModel.Graph.cs:117` and `WorkspaceViewModel.Connections.cs:93`
+  (AD-6, BD-4); both hold a `Func<GraphVerbosity>` and read it at every
+  render (`GraphDocumentViewModel.cs:293`, `ConnectionsLeafViewModel.cs:280`,
+  `:348`).
+- `ChordScope.Graph` is declared (`ChordTable.cs:74`) and dispositioned
+  as "no graph chord is delivered yet … PR C replaces this entry with its
+  scrape" (`ScopesWithoutAProductionScrape`, `ChordTableTests.cs:787–796`).
+  The graph rows are the five chordless-or-Connections rows
+  (`GraphRows`, `ChordTable.cs:954–981`). The canvas's Where-am-I row
+  carries `Ctrl+Alt+Shift+I` in `ChordScope.Canvas` with the Shift
+  disambiguation (`:992–996`, `WhereAmIShiftDisambiguation` `:927–931`);
+  the Bases' Where-am-I is chordless (`:870–871`). Shared chords are
+  dispositioned per pair in `SharedCommandChords` (canvas C16).
+- No Graph menu exists in `MainWindow.xaml`; the canvas has a top-level
+  menu with a `_Verbosity` submenu of three `CheckMenuItem`s bound
+  OneWay to `CanvasPreferences` and a parameterised
+  `SetVerbosityCommand` (`:511–530`; `CanvasPreferencesViewModel.cs:
+  35–125`, the m1 re-selection rule at `:102–113`); the three
+  `windows.canvas.setVerbosity*` rows are `Unreg` dispositions
+  (`ChordTable.cs:1234–1239`). The canvas's verbosity is DEVICE-local
+  (`AppPreferencesStore.cs:29–41`); the graph's is the VAULT's (spec §0
+  item 7; 0aD-6; 0bD-7).
+- Windows reads no `.slate/graph.json`. Core's codec is complete
+  (0b-12): `graph_config_default()` (`lib.rs:4405–4408`),
+  `graph_config_decode(json)` (`:4413–4419`), `graph_config_encode(config,
+  existing_json)` (`:4425–4433`), `graph_verbosities()` (`:4245–4254`;
+  the spec at `graph_config.rs:172–180`, the vector `:217–225`), the
+  record `GraphConfig` (`lib.rs:4290–4299`; the defaults
+  `graph_config.rs:288–312`). The leaf's depth is session-scoped (B-D4,
+  BD-6): the constructor seeds core's minimum and the depth census
+  allows four producers (`ConnectionsLeafCensus.cs:749–759`).
+- The parity matrix carries `slate.graph.orphans`, `unresolved`,
+  `mostLinked` and `whereAmI` as pending (`parity_matrix.md:143, 145,
+  147–148`); the generator's W6_2_DELIVERED_COMMANDS lists the five
+  shipped ids (`generate-parity-matrix.py:661–675`);
+  `w_c_matrix.md` has the table and leaf rows (`:44`, `:46`) and the
+  canvas navigator row (`:48`) whose shape this PR's row takes.
+
+### The mac, traced site by site
+
+- **The preset funnel** — `openGraphPreset(_:advancesSidebarSelectionRevision:)`,
+  `AppState+GraphTable.swift:429–458`: the mutation gate
+  (`propertyEditNavigationDisabledReason`, `:433–436`); the sidebar
+  intent (`:437–439`); then, BEFORE any open, `graphTableTextFilter = ""`,
+  `graphTableKindFilter = graphPresetKind(preset)`, `graphTableFilter =
+  graphPresetFilter(preset)`, `graphTablePendingPreset = preset`
+  (`:440–443`); then EXACTLY one load (`:444–457`): an existing tab
+  that is the active group's active tab → `loadGraphTable()` explicitly
+  (`:451`, because `activateGraphTab`'s same-tab guard would no-op,
+  `:81–83`); an existing tab elsewhere → `activateTab` (`:453`, whose
+  `activateGraphTab` loads, `:109`); no tab → `openTab(.graph, activate:
+  false)` then `activateTab` (`:456`). NO `graphStatus(.opened)` — that
+  line is `openGraphTab`'s alone (`:72`).
+- **The mapping** — `graphPresetFilter` (`:403–417`): Orphans =
+  attachments off, ghosts OFF, orphans only; Unresolved = attachments
+  off, ghosts on, orphans off; MostLinked = the default filter.
+  `graphPresetKind` (`:421–423`): Ghost for Unresolved, nil otherwise.
+  Pinned by `testPresetFilterAndKindMapping`
+  (`GraphCommandsTests.swift:56–77`).
+- **The token under a preset** — `loadGraphTable` issues the token with
+  the DEFAULT sort while a preset is pending (`:179–183`; 0b-7's "a
+  preset is a request like any other"): the sort resets, the needle is
+  empty, the kind overlay is the preset's.
+- **The headline in place of the summary** — the publish path
+  (`:216–256`): the snapshot and filter publish (`:219–222`), the rows
+  through the receiver (`:226`), the selection revalidated (`:231`), the
+  pending preset READ AND CLEARED unconditionally (`:235–236`), then
+  `guard speak, published` (`:237`; `speak = announce != .silent &&
+  graphTabActive`, `:214`) — an inaudible or unpublished load clears the
+  preset WITHOUT speaking it — then the headline (`:238–243`) or the
+  summary (`:244–248`). `graphPresetEvent` (`:465–475`): Orphans and
+  Unresolved carry `rows.rows.count` (the rows core returned for the
+  query, overlay included); MostLinked names row zero under the default
+  sort (`label`, `linksIn`) or `NoNotesToRank`. Pinned by
+  `testPresetAnnouncesOnceFromFreshSnapshotNoReplay`
+  (`GraphTabRoutingTests.swift:246–280`: exactly one headline, the
+  summary NOT spoken, a later silent refresh does not replay).
+- **A manual backend-filter change clears the preset** —
+  `setGraphTableFilter` (`:382–397`): the kind overlay and the pending
+  preset drop FIRST (`:388–389`), then the filter re-fetches with the
+  `.filterCount` policy and persists (`:392`, `:396`);
+  `testManualFilterToggleClearsPresetStateAndDoesNotAnnounceStalePreset`
+  (`:217–244`). A NEEDLE change does not clear the overlay
+  (`GraphTableView.swift:177–184`: the binding writes the field and
+  schedules a save; `:282` issues the rows-only token).
+- **The close reset and the plain reopen** —
+  `releaseGraphStateIfUnreferenced` → `resetGraphTableState`
+  (`AppState+GraphTable.swift:120–155`): the filter, the needle, the kind
+  overlay, the pending preset, the sort, the snapshot and the shared key
+  all reset at the LAST graph tab's close (B2-D4 already records that
+  Windows keeps the key). `activateGraphTab` (`:80–110`) restores the
+  PERSISTED filter and needle and clears the overlay on a FRESH open
+  only — `graphTablePendingPreset == nil && graphTableSnapshot == nil`
+  (`:106–108`; `applyPersistedGraphFilter`, `AppState+GraphConfig.swift:
+  80–84`) — so a transient preset never becomes sticky and a re-activation
+  preserves the view. Pinned by
+  `testGraphTabCloseResetsPresetViewStateIncludingBackendFilter`
+  (`:282–309`) and `testPersistedFilterIsRestoredOnPlainReopen`
+  (`:311–340`).
+- **The filter bar** — `GraphContainerView.filterBar`
+  (`GraphTableView.swift:131–175`): the mode picker ("Graph view mode",
+  `:140–141`), the name field ONLY in Table mode (`:146–153`; placeholder
+  "Filter notes", accessibility label "Filter graph by note name"), the
+  three backend toggles with their hints (`:155–160` — PR E's on
+  Windows, spec §PR E), the inspector button (`:164–170`). No summary
+  region, no Clear button, no chord reaches the field. The needle's
+  binding (`:177–184`) writes the raw text and schedules a save; the
+  token is issued by the table's `onChange` (`:280–283`) — needle OR kind
+  overlay — and the count speaks when the rows publish (`:343–347`),
+  gated at fire (`GraphAnnouncer.swift:194–207`; A-10 as amended).
+  Pinned by `testGraphFilterCountFollowsTheNeedle`
+  (`GraphTabRoutingTests.swift:169–188`).
+- **The config lifecycle** — the eager load at vault activation
+  (`AppState.swift:9922`, `loadGraphConfig`); `applyLoadedGraphConfig`
+  (`AppState+GraphConfig.swift:41–47`: the aggregate, the depth through
+  the clamp, the ANNOUNCER's verbosity, writable) and the failure arm
+  (`:51–57`: defaults, depth 1, Standard, read-only); the save aggregate
+  (`:61–71`: the live filter and needle folded into `filters`, the depth,
+  the announcer's verbosity); `scheduleGraphConfigSave` (`:95–123`: the
+  vault-and-writable guard `:96–97`, the 400 ms debounce `:113`, the
+  per-vault monotonic generation `:110–111`, the actor `:115`); the
+  actor (`GraphConfigStore.swift:133–161`: a superseded generation
+  dropped `:141`, failures logged `:148–159`); the store (`:19–109`: a
+  missing file is the default `:31`, the codec core's `:44`, `:87`, an
+  unreadable existing file REFUSES the write `:66–78`, atomic `:93`);
+  the vault-close reset (`AppState.swift:11180–11183`). The depth
+  persists: `setConnectionsDepth` schedules a save
+  (`AppState+Connections.swift:169–175`).
+- **Verbosity** — declared and applied from the config (0b-14, the
+  sites above); NO switch exists on the mac (the mac-details register of
+  0a; `GraphAnnouncer.swift:94–96`); the titles and tags come from
+  `graphVerbosities()` (`:19–29`);
+  `testLoadedConfigAppliesVerbosityToTheAnnouncer`,
+  `testMalformedConfigFallsBackToStandard`,
+  `testSaveAggregateCarriesTheLiveVerbosity`
+  (`GraphConfigTests.swift:234–270`).
+- **Where-am-I** — `graphDiagramWhereAmI` / `graphDiagramWhereAmIEvent`
+  (`AppState+GraphDiagram.swift:276–313`): nil without a diagram model;
+  the selection from the model's row copy with the topology's component;
+  the filter clause from the backend flags or `UnresolvedOnly` when the
+  overlay is Ghost (`:300–306`); the zoom from the viewport (`:309`);
+  the RAW needle (`:311`; core trims, 0a-6). The route
+  (`:359–380`): canvas → graph (iff `graphDiagramZoomActive`, `:320–322`)
+  → bases → none; ONE menu item "Where Am I?" with ⌃⌘I
+  (`SlateMacApp.swift:597–600`) and the palette row
+  (`SlateCommands.swift:1613–1618`, "Graph: Where Am I?", ⌃⌘I). No
+  panel on the graph (the canvas has one, `CanvasContainerView.swift:
+  113–114`, `:209–217`). Pinned by `testWhereAmIRoutePriorityGraphReachable`,
+  `testWhereAmIRoutePrefersCanvasOverGraph`,
+  `testWhereAmIReadbackIncludesClientFilters`
+  (`GraphDiagramTests.swift:412–470`).
+- **The catalog** — `SlateCommands.swift:1537–1556`: "Graph: Orphaned
+  Notes" / "Open the graph filtered to orphans — notes with no links in
+  or out."; "Graph: Unresolved Links" / "Open the graph filtered to
+  unresolved targets — broken links."; "Graph: Most Linked Notes" /
+  "Open the graph sorted by links in — the most-linked notes, the
+  hubs."; no hotkey, section `.graph`
+  (`testGraphCommandsRegisterInGraphSectionWithoutGlobalChords`,
+  `GraphCommandsTests.swift:40–53`). No menu item carries a preset
+  (`SlateMacApp.swift` names none); P1-3's "registry + palette + menu"
+  shipped as registry + palette.
+- **The mode switcher** — a picker over `GraphSurfaceMode.allCases`
+  (`GraphTableView.swift:133–137`); no command row switches the mode on
+  the mac, and the catalog has no mode id.
+### Design — three lifetimes, and where each verb lands
+
+The mac's command layer is `AppState` (everything is one object); the
+Windows shell has three lifetimes, and each part of this PR belongs to
+exactly one:
+
+- **The WORKSPACE's** (constructed once per vault beside the relay and
+  the view state, dropped with the workspace): the NAVIGATOR — the verb
+  half (the three presets, Where-am-I, the needle's clear, the ladder's
+  rungs) and the chord half (the `ChordScope.Graph` map and its
+  delivery) — and the PREFERENCES — the loaded config, the live
+  verbosity, the writer. Both exist while no graph tab does, because a
+  preset opens the tab and the leaf's depth and verbosity are read
+  before any tab exists (the mac's eager load, `AppState.swift:9922`).
+- **The DOCUMENT's** (A-1's lifetime, retired with the last tab): the
+  needle's rows-only token, the kind overlay's crossing, the preset's
+  policy on the token and its headline at publish, the count's render
+  and its speech — every one a token-and-receiver matter, and A-2's one
+  receiver stays the one receiver.
+- **The SURFACE's** (`GraphSurfaceView`, per tab body): the field, the
+  count region, Clear, the Where-am-I panel, the tunnelling key
+  delivery and the Escape ladder's focus moves — view state that
+  `Render` derives from the workspace's records, holding nothing of its
+  own beyond the syncing guards.
+
+The one rule that follows from the three: **a preset is a mutation of
+the WORKSPACE's view state followed by the shell's ordinary open, and
+the load it owes is the transition's own, with the preset's policy
+riding the token** — never a second load beside the transition's, never
+a document-level pending flag the probe could consume (the mac's
+`graphTablePendingPreset` is cleared by any publish, `:235–236`, which
+is CD-Q3's race). The arm lives beside rule L's cause, under the same
+mutation-scoped discipline (AD-12): set before the open's mutation,
+consumed at the graph's transition, cleared at the outermost boundary
+when nothing consumed it — and then the navigator issues the load
+itself, because "nothing consumed it" means the graph was already
+effective (the mac's `:450–451`).
+
+### The contracts (PR C)
+
+**C-1 — The navigator: one per workspace, the verb half and the chord
+half, one presenter seam.** `Graph/GraphNavigator.cs` — constructed in
+`WorkspaceViewModel`'s constructor AFTER the relay, the view state and
+the preferences (C-10) and BEFORE `NewConnectionsLeaf`
+(`WorkspaceViewModel.cs:1610–1616`, the order B-1 fixes extended by two
+lines), by a NewGraphNavigator factory whose one call the instance
+census counts (B2-1's shape). It holds the view state, the preferences,
+`Func<GraphDocumentViewModel?>` (the seated document — null while no
+graph tab exists), and the workspace's two funnels it needs: the
+preset's open (C-3) and the effective predicate (`GraphTabIsEffective`,
+`WorkspaceViewModel.Graph.cs:165–166`). The VERB half is public and
+windowless — `RunPreset(GraphPreset)`, `WhereAmI()`, `ClearNameQuery()`
+— reached by the workspace's commands through the registrar (rule R-E)
+and by the chord half; the CHORD half is `Bind()` registering
+three-argument `AddChord(Key.X, ModifierKeys.Y, handler)` calls, read by
+`HandleKey(key, modifiers, presenter)` from the surface's tunnelling
+handler — `CanvasNavigator`'s shape byte for byte
+(`Canvas/CanvasNavigator.cs:152`, `:176–225`, `:1067–1072`), so
+`ChordTableTests`' scrape reads it unchanged (C-11). The presenter seam
+is the graph's own interface — FocusProjection (the grid's current row,
+else the first row, else the state text's host), FocusFilterField,
+DismissTransientRegion, ProjectionHasFocus, IsFilterFieldFocused — and
+`GraphSurfaceView` implements it; attachment is on every key press and
+on keyboard focus entering the surface (the canvas's first two cases,
+C2; the graph is one tab, so the two-pane cases do not arise), kept
+afterwards so a palette verb still moves the reader in the surface they
+are in. Nothing on the seam is called by nothing. Pinned by facts: the
+one construction; every verb reachable through its registrar resolver
+with no window; the chord half consuming exactly the two chords of C-11
+and nothing else; a verb invoked with no graph tab (Where-am-I: refused
+by admission, C-8; a preset: opens the tab, C-3; clear: writes the view
+state and issues nothing, there being no document).
+
+**C-2 — Core gains the preset's two rules and its enum; the surface
+rises to twenty-eight; the mac consumes.** The preset's MAPPING —
+Orphans = `{attachments off, ghosts off, orphans only}`, Unresolved =
+`{attachments off, ghosts on, orphans off}` with `kind_only = Ghost`,
+MostLinked = the default filter — and its HEADLINE — the published
+count for Orphans and Unresolved, row zero's label and in-links for
+MostLinked, `NoNotesToRank` when there is no row — are rules the mac
+holds in Swift (`AppState+GraphTable.swift:403–423`, `:465–475`) and
+0b-7 already records as core's design ("a PRESET is a request like any
+other … its headline is the first row of that result or the result's
+`rows.count`"); spec R-D forbids a second host from re-deriving them.
+This PR moves both to `graph_queries.rs`: a `GraphPreset` enum
+(`Orphans, Unresolved, MostLinked`, uniffi), `graph_preset_query(preset)
+-> GraphVisibilityQuery` (the filter, an EMPTY needle, the kind overlay
+— one record, so the three writes the mac makes at `:440–442` are one
+value) and `graph_preset_outcome(preset, shown: u64, first:
+Option<GraphTableRow>) -> GraphPresetOutcome` — the outcome over the
+two facts every table publication already has, one row marshalled and
+not the table (a `GraphTableRows` argument would cross ten thousand
+rows to read one and a length). Both are FREE functions
+(session-less), both join GRAPH_QUERY_SURFACE and the tripwires
+(`graph_queries.rs:35–60`; the Rust count fact, the FFI floor at
+`lib.rs`, `Censuses/GraphQuerySurfaceCensus.cs:54` — twenty-six →
+twenty-eight, B-15's precedent). The mac's `GraphPreset` (`:9–18`) is
+deleted in favour of the generated enum (0a-18's `GraphSurfaceMode`
+precedent), `graphPresetFilter` and `graphPresetKind` become one call
+whose result the funnel assigns field by field (`:440–442`), and
+`graphPresetEvent` becomes `graphPresetOutcome(preset, shown:
+rows.rows.count, first: rows.rows.first)`; `testPresetFilterAndKindMapping`
+and `testPresetOutcomesAreTyped` (`GraphCommandsTests.swift:56–77`,
+`:97–125`) assert through the calls, and the same cases land as Rust
+facts (`preset_query_is_the_mac_mapping`,
+`preset_outcome_counts_or_names_row_zero`). The spec's Consumes list
+gains the three names (CD-11; 0bD-12). Pinned by facts: the Rust cases;
+the surface count; the mac lane (0bR-1's arbitration); the Windows
+crossing count — exactly two per preset invocation.
+
+**C-3 — The presets: three chordless rows, one funnel, one load, the
+policy on the token, the headline in place of the summary, transient
+state.** `ChordTable`'s `GraphRows` gains `Ids.GraphOrphans =
+slate.graph.orphans`, `Ids.GraphUnresolved = slate.graph.unresolved`,
+`Ids.GraphMostLinked = slate.graph.mostLinked` — `Reg` rows in
+`CommandSection.Graph`, chordless and therefore `ChordScope.None`
+(B-14's shape, `ChordTable.cs:954–981`), labels and hints the mac's byte
+for byte (`SlateCommands.swift:1537–1556`; `MacCatalogParityTests`'s P3
+comparison), each resolved in `BuildResolvers()` to a workspace command
+— GraphOrphansCommand, GraphUnresolvedCommand, GraphMostLinkedCommand —
+whose body is the navigator's `RunPreset(GraphPreset.X)`; `CanExecute`
+is always true (the mac's rows have no availability). `RunPreset`, in
+order: (i) the admission is the shell's open admission, whatever
+`OpenGraph()` has (`WorkspaceViewModel.cs:2020–2029`: none beyond the
+mutation funnel's own reentrancy) — the mac's
+`propertyEditNavigationDisabledReason` gate (`:433–436`) has no Windows
+twin and is recorded (C-D1); (ii) BEFORE the open and OUTSIDE any
+mutation, the view state takes `graph_preset_query(preset)`: `Filter`,
+`NameQuery` (empty) and `KindOnly` (C-4) in three writes from one
+record, the shared key untouched (the pair's revalidation judges it,
+A-7); no save is scheduled — the writes are TRANSIENT (the mac's
+`:440–443` schedule none); (iii) the workspace's preset ARM is set —
+`_graphPresetArm`, a mutation-scoped field beside `_graphCause`
+(`WorkspaceViewModel.Graph.cs:48`), holding the preset; (iv) the open
+runs as `OpenGraph()`'s mutation does — `RunWorkspaceMutation(() =>
+OpenItem(graph:singleton, NewTab))`, `WorkspaceViewModel.cs:2026–2028`
+— WITHOUT `SetGraphCause(Open)`: the cause stays Activation, so no
+`GraphStatus{Opened}` is posted (the mac's `openGraphPreset` posts none;
+`:72` is `openGraphTab`'s line alone); (v) at the graph's transition
+`GraphFollowActiveTab` (`:181–229`) reads the arm: when it is set, the
+load is issued UNCONDITIONALLY — by tab or by group, READY or not —
+with the `Preset` policy and the DEFAULT sort, and the arm is cleared;
+Term 4's by-group no-load is the pane-focus route's and is not touched
+(the mac's preset reaches `activateTab`, `:453`, whose guard at
+`:81–83` loads whenever the graph was not the active group's active
+tab — AD-15's guard, not the pane focus); (vi) the boundary clears an
+arm nothing consumed (`ClearGraphCauseAtMutationBoundary`'s site,
+`Persistence.cs:177`, extended) and REPORTS it: after the mutation the
+navigator reads whether its arm was consumed, and when it was not — the
+graph was already the active group's active tab, so no transition
+occurred — it issues `Load(Pair, Preset, DefaultSort)` on the seated
+document itself (the mac's `:450–451`). EXACTLY ONE load per
+invocation, from one of two sites (the load-caller census of C-15 names
+both). The token: `GraphAnnouncePolicy` gains `Preset` and
+`GraphLoadToken` a `Preset: GraphPreset?` that is non-null exactly
+under that policy; the request's sort is `DefaultSort` (0b-7; the mac's
+`:179–183`), so a Folder sort standing before the preset is replaced
+and `GridSorted` speaks on adoption if the accepted sort changed (A-5;
+the mac's `testPresetAfterFolderSortPublishesDefaultSortAndHeadlineTogether`).
+The RECEIVER (A-2's, `GraphDocumentViewModel.cs:472–562`): a PAIR
+publishing under `Preset` speaks `GraphPreset{outcome}` with `outcome =
+graph_preset_outcome(preset, rows.Count, rows.FirstOrDefault())`
+through `AnnounceIfEffective` IN PLACE of `GraphSnapshotSummary` —
+never both (the mac's `:237–248`); a pair FAILING under `Preset` posts
+`GraphBlocked{LoadFailed}` and no headline (A-2's arm); a superseded
+preset token drops whole and speaks nothing (CD-Q3, CR-1); a rows-only
+token never carries `Preset`, so the count is never the preset's line;
+a later silent pair cannot replay the headline because the policy rides
+the token and nothing on the document remembers it (the mac's
+`testPresetAnnouncesOnceFromFreshSnapshotNoReplay`, `:246–280`). The
+LANDING: when the preset's pair publishes, the surface seats the grid
+on the SHARED key's row when the rows carry it (A-7's re-seat) and on
+the FIRST row otherwise, writing the key through `SelectRow` (the mac's
+grid selection binding, `GraphTableView.swift:239–243`; P1-3's "land in
+grid with focus on first row") — the one publication kind for which A-7's
+"clear the currency without writing" does not apply, because the reader
+asked for this view; the open's own focus request
+(`RequestActiveEditorFocus`, `Layout.cs:217`) lands the grid. The
+overlay CLEARS on a fresh open (C-10) and on a manual backend-filter
+change — PR E's toggles, which must drop `KindOnly` before their
+re-fetch (the mac's `:388–389`; a hand-off row) — and NOT on a needle
+keystroke (the mac's `GraphTableView.swift:177–184`). Pinned by facts,
+under the pumped dispatcher: each preset from a note tab (the tab
+created, ONE load, the query equals `graph_preset_query`, the sort the
+default, no `Opened`, the headline alone at publish); from the graph
+tab already effective (no transition, one load from the navigator, the
+headline); from the graph visible in the OTHER group (by-group
+transition, READY held — still one load); the headline's three
+outcomes and `NoNotesToRank` on an empty vault; a preset whose pair
+fails; a preset whose pair is superseded by a sort issued during the
+fetch (nothing spoken — CR-1's shape, asserted so the risk is visible);
+a probe's silent pair after the headline (no replay); the landing on
+the first row with the key written, and on the key's row when present;
+a needle typed afterwards keeps the overlay; the transient writes
+schedule no save; the arm cleared at a boundary the graph never reached
+(a preset whose open was refused by a future admission — the fact
+injects the refusal).
+
+**C-4 — The kind overlay is the SIXTH field of the one view state
+(CD-Q1, pending the owner's amendment of A-1 and spec R-B).**
+`GraphViewState` gains `KindOnly: GraphNodeKind?` (null), the preset's
+overlay and core's `kind_only` (`graph_queries.rs:228`); `Load` builds
+the request as `new GraphVisibilityQuery(ViewState.Filter,
+ViewState.NameQuery, ViewState.KindOnly)` and the literal `null` at
+`GraphDocumentViewModel.cs:401` goes. Its writers are exactly three: the
+preset's write (C-3 ii), the fresh open's re-apply (C-10) and the
+inspector's manual filter change (PR E; the seam this PR leaves is the
+same write the re-apply uses) — a writers census on the name, the
+shared-key census's shape (`TheSharedKeyIsWrittenByTheNamedOwnersAlone`,
+`GraphAnnouncerCensus.cs:449`). The no-shadow census's NAME list
+(`NoMutableShadowOfTheViewStateExistsInTheShell`, `:728`) gains
+`KindOnly`; the TYPE rule stays (a `GraphNodeKind` field is a row's
+immutable kind everywhere else). Never persisted: the config schema has
+no key for it and the aggregate (C-10) does not write it (the mac's
+overlay is never saved). Where-am-I's filter clause reads it (C-8:
+`UnresolvedOnly` iff `KindOnly == Ghost`, the mac's `:300–306`), PR D's
+diagram reads it (`testDiagramHonoursThePresetKindFilterLikeTheTable`),
+and the retirement leaves it (B2-1's no-reset). Pinned by facts: the
+request carries it; the three writers; the census.
+
+**C-5 — The filter field, the count region, Clear; the grid's Ctrl+F
+reaches the field; no graph filter row.** `GraphSurfaceView`'s header
+(`:73–76`) gains, after the title and before the switcher: the FIELD
+GraphFilterField — a `TextBox`, `AutomationId` GraphFilterField,
+`Name` "Filter graph by note name" and `HelpText` "Filter notes" (the
+mac's accessibility label and placeholder, `GraphTableView.swift:
+147–152`; WPF has no placeholder, so the placeholder's text is the
+hint, recorded), `TextChanged` → the document's `SetNameQuery(text)`
+(C-6) under a syncing guard, and re-rendered from `ViewState.NameQuery`
+when they differ (a preset's empty needle, a fresh open's persisted one,
+the Escape rung's clear) — the canvas's `RenderFilter` shape
+(`CanvasSurfaceView.cs:1416–1428`); the COUNT REGION GraphFilterSummary
+— a focusable `TextBlock`, its own Tab stop, `AutomationId`
+GraphFilterSummary, `Name` = "Filter results: " + the document's
+FilterCountText (C-6) — visible exactly while the query NARROWS: the raw
+needle is non-empty or `KindOnly` is set — and collapsed otherwise (the
+grid's own summary region carries the unnarrowed counts, A-7); and
+CLEAR — GraphClearFilter, a `Button` "Clear", `Name` "Clear filter",
+visible exactly while the raw needle is non-empty, invoking the
+navigator's `ClearNameQuery()`. The grid's `FilterRequested`
+(`AccessibleDataGrid.cs:104`, raised by the substrate's `FilterCommand`
+gesture in `ChordScope.Grid`, `:193–198`) is subscribed by
+`GraphTableView` and routed to the presenter's FocusFilterField — the
+canvas table's line (`CanvasTableView.cs:68`) — so Ctrl+F from inside
+the grid reaches the field with NO new row: the mac has no chord for its
+field (Tab reaches it) and spec §7 lists none; recorded (C-D2). The
+field's KeyboardNavigation order: title, field, summary (when
+visible), Clear (when visible), the switcher (one stop), the state or
+the grid. Pinned by facts: the field's Name and HelpText; typing writes
+the view state and the field follows a programmatic needle; the region's
+Name equals "Filter results: " + the rendered count and it is a Tab
+stop exactly while narrowing; Clear's visibility and effect; the grid's
+gesture focuses the field.
+
+**C-6 — The needle's token is the document's, rows-only, one per
+change; the count speaks on publish through the gated entry and renders
+once.** `GraphDocumentViewModel` gains `SetNameQuery(string raw)`: when
+the raw text differs from `ViewState.NameQuery` it writes it — RAW, core
+trims (0b-6; the mac's binding writes the raw field, `:181`) — and
+issues `Load(RowsOnly, Silent)` under the ACCEPTED sort — the mac's
+`requestGraphTableRows` on `onChange(of: graphTableTextFilter)`
+(`GraphTableView.swift:282`); nothing else in the shell issues a token
+for the needle (the load-caller census, C-15: the needle's token is
+issued INSIDE the document, and the document's `Load` keeps its one
+outside caller plus the navigator's already-effective preset path).
+Every keystroke is one token and one `graph_table_rows` crossing; the
+receiver publishes only the token whose `seq` is current (A-2), so a
+burst lands its LAST rows once — and the count for the burst speaks
+once, coalesced by the filter class (200 ms, latest wins; A-10) and
+gated at fire (A-10 as amended). No host debounce on the FETCH (CD-Q4,
+CR-2: the mac's cadence). A `KindOnly` change issues no token of its
+own: its two writers (C-4) are followed by a pair (the preset's, the
+fresh open's transition). The COUNT: the receiver's rows-only path
+already speaks `GraphFilterCount{rows.Count, total}` through
+`AnnounceFilterCountIfEffective` (`GraphDocumentViewModel.cs:551–560`;
+a sort speaks it too, the mac's `:343–347`); this PR adds the
+document's FilterCountText — `GraphAnnouncer.RenderLabel(new
+GraphFilterCount(rows, total))` from the CURRENT publication, recomputed
+at each install and empty under LOADING and ERROR — so the region shows
+the string the relay would speak for the same publication: one event
+shape, one renderer, no second composition (the canvas's C11
+principle); the pair's publication (a preset's, a probe's) refreshes
+the region without speaking the count (the mac's `.summary` arm speaks
+no count). `ClearNameQuery()` (the navigator, C-1) = `SetNameQuery("")`
+on the seated document — a rows-only token whose count is "N of N
+shown"; no cleared line exists in the graph family and none is composed
+(R-C; the mac has no clear verb). Pinned by facts, under the pumped
+dispatcher: one token per keystroke, ten keystrokes parked then
+released publish once with the last needle and speak one count; a
+needle equal to the current one issues nothing; the raw needle crosses
+untrimmed and core's trim decides the match (a needle of U+00A0 U+2003
+matches everything — 0a-6's witness); the count's text equals the
+region's; the region is empty under LOADING and ERROR; a sort's count
+still speaks; the fire-time gate drops a count whose tab left effective
+(the amended A-10's fact re-run through this path).
+
+**C-7 — The Escape ladder lives in the surface's `PreviewKeyDown`,
+four rungs, the panel ahead of them; it clears through the document and
+seats through the presenter.** `GraphSurfaceView` overrides
+`OnPreviewKeyDown` (tunnelling, the canvas's site,
+`CanvasSurfaceView.cs:550–570`; `Key.System` unwrapped to `SystemKey`):
+after `base`, unhandled and with a model, (0) Escape with no modifiers
+while the Where-am-I panel is OPEN closes it — keyed on the panel being
+open, not on focus (CD-47's reasoning; C-8) — and is consumed; then the
+navigator's `HandleKey`. The Escape chord's rungs, in the navigator
+(`AddChord(Key.Escape, ModifierKeys.None, EscapeFromKey)`): (1) the raw
+needle is non-empty → `ClearNameQuery()` (C-6: a rows-only token; the
+count "N of N shown" is the line, on publish) then the presenter's
+FocusProjection — consumed; (2) the field or the summary holds the keys
+with no needle → FocusProjection — consumed; (3) otherwise NOT
+consumed: the press bubbles to the shell (overlay dismissal, the
+workspace's Escape) exactly as with no graph open. Rung 1 SEATS after
+it clears and speaks nothing of its own (the canvas's C6: focus lands on
+what the screen reader reads). The mac has no ladder on the graph — a
+Windows-authored behaviour recorded (C-D3), its rungs the canvas's
+minus the mode rung (no mode machine) and minus the cleared line (no
+graph event; R-C). The Escape row: a `Chord` entry
+`windows.graph.escapeLadder` in `ChordScope.Graph` with its reason
+(the canvas's Escape row's shape), no mac twin, not a command id —
+the scrape (C-11) requires a row per chord. Pinned by facts: each rung
+with the arrangement that reaches it and the one that falls through;
+the press consumed exactly once; an open panel takes it ahead of a live
+needle (the needle survives); Escape from the grid with no needle and no
+panel bubbles (the shell sees it).
+
+**C-8 — Where-am-I: the row, the shared chord, the verb admitted by
+the readback seam, the panel; the readback is the diagram's (CD-Q2,
+default).** `GraphRows` gains `Ids.GraphWhereAmI = slate.graph.whereAmI`
+— "Graph: Where Am I?", the mac's hint (`SlateCommands.swift:
+1613–1618`), mac `⌃⌘I`, Windows `Ctrl+Alt+Shift+I`, `ChordScope.Graph`,
+`divergence:` the Shift disambiguation (the canvas row's text,
+`ChordTable.cs:927–931`; owner decision D-2 — the rule's `Ctrl+Alt+I` is
+`slate.view.toggleRightPane`'s at Global scope); the pair
+(`slate.canvas.whereAmI`, `slate.graph.whereAmI`) joins the
+scope-keyed disposition list `SharedCommandChords` (canvas C16) with
+the reason "disjoint by DELIVERY: the canvas surface's and the graph
+surface's tunnelling handlers, never focused at once" — recorded per
+pair, not inferred from the scopes. The registrar resolves
+GraphWhereAmICommand → the navigator's `WhereAmI()`, whose ADMISSION is
+the readback SEAM: `Func<GraphA11yEvent.GraphWhereAmI?>`
+WhereAmIReadback on the navigator, null until PR D's diagram installs
+it and null-returning while the diagram is not the active projection
+(the mac's `graphDiagramWhereAmIEvent`, nil without a model,
+`:285–286`; the route's `graphDiagramZoomActive`, `:320–322`);
+`CanExecute` is `seam answers` and the chord arm returns false
+(unconsumed) when it does not — so in THIS PR the palette row and the
+menu item are DISABLED (AD-3's listed-and-disabled shape; the
+registrar's unavailable reason) and the chord falls through, where the
+mac's Table-mode ⌃⌘I is a silent no-op (C-D4). When admitted: ONE event
+from the seam → `WhereAmIText = GraphAnnouncer.RenderLabel(event)` (a
+bindable on the navigator) AND the document's new seam
+`AnnounceWhereAmI(event)` → `AnnounceIfEffective` through the relay —
+one render, spoken and shown (the canvas's C11), always the full row
+copy by the event's construction (0a-6). The PANEL, in
+`GraphSurfaceView` below the projection: GraphWhereAmIPanel (a named
+group, `Name` "Where am I?"), GraphWhereAmIReadback (a read-only
+`TextBox`, `AcceptsReturn`, `LiveSetting = Off` — pull, not push; `Name`
+"Where am I?"), GraphWhereAmIClose (a `Button` "Close") — the canvas's
+construction (`CanvasSurfaceView.cs:218–262`) and its `RenderWhereAmI`
+/ `CloseWhereAmI` rules (`:1460–1480`, `:1312–1340`): opening focuses
+the readback only when the surface has the keys and remembers the
+element the reader came from; Close and the Escape pre-emption restore
+focus to it only when the reader was INSIDE the panel, falling back to
+FocusProjection when it is gone; a stale text is collapsed. Not a
+`ModalSurface` (C11's reasoning). The row's status in the parity matrix
+stays PENDING in this PR with the note "the row, the chord, the panel and
+the seam; the readback admitted by the graph's diagram slice, W6-2 PR
+D" (the staged-claim phrasing); the spec's acceptance line and §7's
+"Lands C" are amended to say so (CD-11). If the owner takes CD-Q2's
+alternative, this row becomes: the seam answers on the TABLE too, from
+the shared key's node in the held SNAPSHOT rendered the diagram's way
+(`references = in_links`, `embed = false`), `NoSelection` with no key,
+no zoom clause — and the row is delivered here. Pinned by facts: the
+row, its scope, its divergence text, the shared-chord disposition, the
+resolver; the verb refused with a null seam and with a null-returning
+seam (no post, no panel, `CanExecute` false, the chord unconsumed); with
+a seam returning each of 0a-6's eight witnesses: the panel text equals
+the corpus rendering and exactly one post through the relay; the
+panel's focus rules (opened with the keys inside / outside; closed from
+inside / outside; the return element gone); Escape ahead of a live
+needle.
+**C-9 — Verbosity: the preferences object, the live read, the
+re-label, the menu's three check items over core's vector, nothing
+spoken, three dispositions.** `Graph/GraphPreferencesViewModel.cs` —
+one per workspace, constructed in the constructor AFTER the view state
+and BEFORE the navigator and the leaf (C-1's order), the one
+construction counted by the instance census. It holds the loaded config
+and its writable flag (C-10) and exposes `Verbosity` (core's
+`GraphVerbosity`, from the loaded config's `verbosity`, Standard on a
+load failure — the mac's `:45`, `:55`), `IsVerbosityTerse`,
+`IsVerbosityStandard`, `IsVerbosityVerbose`, and one parameterised
+`SetVerbosityCommand` whose parameter is a TAG matched against
+`graph_verbosities()`'s vector (fetched once per process; design B) —
+the canvas's `CanvasPreferencesViewModel` shape (`:54–75`, `:95–124`)
+including m1's rule: re-selecting the current level re-asserts the three
+check states, stores nothing and speaks nothing (`:102–113`). A change
+writes the level, raises the four properties and schedules a save
+(C-10). LIVE: the document's and the leaf's `Func<GraphVerbosity>`
+become `() => GraphPreferences.Verbosity` (the two literal sites,
+`WorkspaceViewModel.Graph.cs:117`, `WorkspaceViewModel.Connections.cs:93`),
+read at every render (`GraphDocumentViewModel.cs:293`, `:343–358`;
+`ConnectionsLeafViewModel.cs:280`, `:348`) — AD-6's and BD-4's
+"Standard until PR C" close here, and A-6's Terse fact runs against the
+real setter. RE-LABEL: the graph's row Name is a LABEL applied at
+realisation (A-6's `rowAutomationName`), and the leaf's rows carry the
+copy as their Name (B-8), so — unlike the canvas, whose verbosity only
+reaches the next announcement (C13) — a change must re-label what is on
+screen: `GraphTableView` re-binds the current publication on the
+preferences' `Verbosity` change (its `Rebind`, `:114–158`, under the
+syncing guard; the selection and the sort indicator re-seated as after
+any publication) and the leaf's view re-renders its rows' Names from
+the retained tree without a load. NOTHING is spoken for the change
+itself (the canvas's C13 reasoning: the check state is the confirmation,
+no graph event exists for it, R-C forbids composing one); the next row
+focus speaks at the new level. The MENU (C-12): three `CheckMenuItem`s
+under a `_Verbosity` submenu of the Graph menu, `AutomationId`s
+GraphVerbosityMenu, GraphVerbosityTerseMenuItem,
+GraphVerbosityStandardMenuItem, GraphVerbosityVerboseMenuItem,
+`IsCheckable`, `IsChecked` bound OneWay to the three properties,
+`Command` the setter, `CommandParameter` the TAG — the canvas block's
+shape (`MainWindow.xaml:511–530`); a census asserts the three
+parameters equal `graph_verbosities()`'s tags in order and the three
+headers its titles (with the mnemonic underscore stripped), so the XAML
+carries no level core does not (design B; the canvas's literals are the
+precedent this PR does not copy). The three `Unreg` dispositions
+`windows.graph.setVerbosityTerse`, `windows.graph.setVerbosityStandard`,
+`windows.graph.setVerbosityVerbose` ("Graph Verbosity: Terse" …) in
+`CommandSection.Graph` with a GraphVerbosityReason twin of the canvas's
+(`ChordTable.cs:1234–1247`) — not command ids, so `MacCatalogParityTests`
+is untouched. PERSISTED in the vault: the level lands in
+`.slate/graph.json`'s `verbosity` (0b-12; 0bD-7) through C-10's writer,
+so the mac reads it on its next load (0b-14's `applyLoadedGraphConfig`)
+— the one graph setting both hosts share by FILE, where the canvas's is
+device-local (C13; spec §0 item 7). Pinned by facts: the default and
+the loaded level; the setter's three tags and an unknown tag (ignored);
+m1's re-selection; the live read at the document and the leaf; a
+realised table row's Name and a leaf row's Name change from the full
+copy to the bare label and back with no load and no post; the menu
+census; the save scheduled with the level in its aggregate; the
+dispositions present and unregistered.
+
+**C-10 — The config lifecycle: the store, the read at construction,
+the seed, the writer, the aggregate, the triggers, the fresh open's
+re-apply; the depth persists.** `Graph/GraphConfigStore.cs` is the host
+I/O 0bD-3 leaves to the host — the mac's `GraphConfigStore.swift` twin
+— and nothing else: READ — `<vault>/.slate/graph.json` missing →
+`GraphConfigDefault()` and writable; present → its text through
+`GraphConfigDecode` → the config and writable; unreadable, or the codec's
+`Unparseable` / `NewerVersion` → the DEFAULT config and NOT writable,
+the file untouched, the reason logged through the shell's host log
+(the mac's `applyGraphConfigLoadFailure`, `AppState+GraphConfig.swift:
+51–57`; the store's `:27–48`). WRITE — read the existing text THROWING
+(an existing file that cannot be read refuses the write, the mac's
+`:66–78`), `GraphConfigEncode(config, existing)` (core's merge: unknown
+keys preserved, an unparseable or newer existing refused as an
+exception — logged, never thrown past the writer), the bytes to a
+temporary file beside the target and `File.Move(temp, target,
+overwrite: true)` — atomic on one volume, the mac's `.atomic` (`:93`);
+`.slate` created when missing (`:99–107`). The preferences (C-9) read
+the store ONCE in the workspace's constructor — the mac's eager load at
+vault activation (`AppState.swift:9922`); a workspace is one vault
+(`VaultLifecycleViewModel.cs:986`), so the mac's per-vault URL stamp and
+its cross-vault save guard (`:96–97`, `:105–111`) are structural here
+and not re-implemented — and SEED the view state before the leaf and
+the navigator exist: `Filter` = the config's three backend flags,
+`NameQuery` = its `nameQuery`, `Groups` = its groups (A-1's "empty until
+PR C reads them"; PR E consumes), `KindOnly` = null, `Mode` = Table in
+THIS PR whatever the file says — the switcher is A-11's (Diagram
+disabled) and PR D restores a persisted `diagram` (recorded, C-D6). The
+leaf's constructor seeds `Depth` through the clamp from the config's
+`connectionsDepth` in place of core's minimum
+(`ConnectionsLeafViewModel.cs:198–205`, the seed the depth census names
+as the constructor's producer, `ConnectionsLeafCensus.cs:749–759` —
+that entry becomes the config's read; B-D4 and BD-6 close). The
+WRITER: one per workspace, serialised — a queue of one pending
+aggregate, run on the pool through the preferences' own
+`PanelWorkScheduler` body (`StartWorkAlwaysAsync`, A-2's primitive: the
+compute is the write, the apply records the outcome), so it is TRACKED
+and drained with the workspace (`ShutdownGraphDocument`'s drains,
+`WorkspaceViewModel.Graph.cs:257–271`, gain the preferences'); a
+per-workspace monotonic GENERATION stamps every scheduled aggregate and
+the write body drops a stamp older than the newest written (the mac's
+actor, `GraphConfigStore.swift:133–142`); DEBOUNCED 400 ms by a
+dispatcher timer restarted per schedule (the mac's `:113`; a host
+constant, R-G, recorded); refused while not writable (the mac's
+`:96–97`). The AGGREGATE at each schedule (the mac's
+`graphConfigSaveAggregate`, `AppState+GraphConfig.swift:61–71`): the
+loaded config with `filters` = the view state's `Filter` and
+`NameQuery`, `connectionsDepth` = the leaf's `Depth` (through the clamp
+by construction), `verbosity` = the preferences', `mode` = the view
+state's; `groups`, `display` and `forces` as loaded (PR E writes them);
+never `KindOnly` (C-4). The TRIGGERS in this PR: `SetNameQuery` (every
+keystroke, coalesced by the debounce — the mac's binding `:182`),
+`SetVerbosityCommand` (C-9), the leaf's `SetDepth` when it changes the
+depth (a `DepthChanged` seam the workspace installs on the leaf; the
+mac's `setConnectionsDepth`, `AppState+Connections.swift:169–175`) — and
+NOT a preset (C-3). A needle typed under a transient preset persists the
+preset's backend filter with it, as the mac's aggregate reads the live
+filter (C-D7). The FRESH OPEN: `AttachGraphDocumentTo`
+(`WorkspaceViewModel.Graph.cs:89–93`), when it CREATES the document
+(A-1's fresh document after the last close) and the preset arm is NOT
+set, re-applies the loaded config's `filters` to `Filter` and
+`NameQuery` and clears `KindOnly` BEFORE the transition's load — the
+mac's `applyPersistedGraphFilter` under its two guards (`:106–108`,
+`:80–84`): a transient preset never becomes the next open's view, and an
+ACTIVATION of an existing tab preserves the view; with the arm set the
+preset's write stands. The shared key survives (B2-D4, unchanged). A
+restored session's graph tab shows the PERSISTED filter from the seed —
+the mac's restore mounts on the reset defaults and restores the
+persisted filter only at the next plain open (`GraphTableView.swift:
+53–65` loads on appear without `applyPersistedGraphFilter`); recorded
+(C-D8). VAULT CLOSE: the workspace is disposed with its preferences; a
+queued write completes inside the drain (the mac's "not cancelled",
+`AppState.swift:11176–11179`). Pinned by facts: a missing file reads
+the default and writes; each decode failure reads the default,
+read-only, the file byte-identical afterwards and every later save
+refused; an unreadable existing file refuses the write; the written
+bytes are core's canonical text with an unknown key preserved
+(`GraphConfigEncode`'s own facts, consumed); the seed of each view-state
+field and the leaf's depth (a persisted 3, a persisted 99 → 3 through
+core's clamp at decode); ten schedules in 400 ms write once with the
+last aggregate; two aggregates released out of order write the newer
+only; the aggregate's fields; each trigger schedules and a preset does
+not; the fresh open's re-apply after a preset with the arm clear, and
+no re-apply with the arm set or on an activation; the drain waits for a
+parked write; the mode read as `diagram` seeds Table.
+
+**C-11 — The chord scope's delivery and scrape; the shared chord's
+disposition; the exact modifier.** `ChordScope.Graph`'s chords are
+delivered by `GraphSurfaceView.OnPreviewKeyDown` (C-7) and NOWHERE else
+— not by a window `KeyBinding`, not by `Window_PreviewKeyDown`
+(`MainWindow.xaml.cs:657`), so a graph chord is live exactly while the
+graph surface has the keys (rule R2) and dead everywhere else; the
+modifiers are matched EXACTLY (`Keyboard.Modifiers ==` the chord's set —
+B2-D11's rule; `Ctrl+Alt+I` alone stays `slate.view.toggleRightPane`'s).
+`ChordTableTests`: `ScopesWithoutAProductionScrape` loses its
+`ChordScope.Graph` entry (`:793–795`, which said this PR would replace
+it) and `ScopedProductionChords` gains `[ChordScope.Graph] =
+GraphChords()`, the canvas scrape's shape over `GraphNavigator.Bind`'s
+three-argument `AddChord` calls (`:1000–1026`) — two chords in this PR,
+`Escape` and `Ctrl+Alt+Shift+I`, compared both ways against the
+table's Graph-scoped rows, so a chord bound with no row or a row
+nothing delivers fails naming it; `SharedCommandChords` (`:279–293`)
+gains the `slate.canvas.whereAmI | slate.graph.whereAmI` pair with
+C-8's reason; the same chord is verified free in every other scope (the
+Bases' Where-am-I is chordless, `ChordTable.cs:870–871`). PR D's four
+viewport chords join the map and the scrape by the same mechanism.
+Pinned by facts: the scrape in both directions (a planted `AddChord`
+with no row fails; a planted Graph row with no chord fails); the
+delivery from the surface with each of the two chords and the exact
+modifier (`Ctrl+Alt+I`, `Ctrl+Shift+I`, `Alt+Shift+I` unconsumed); a
+graph chord pressed with a note tab focused reaches nothing.
+
+**C-12 — The Graph menu.** `MainWindow.xaml` gains a top-level `_Graph`
+menu (`AutomationId` `GraphMenu`) beside the Canvas menu, in this
+order: Open Graph (`OpenGraphCommand`; GraphOpenTabMenuItem), a
+separator, the three presets (GraphOrphansMenuItem,
+GraphUnresolvedMenuItem, GraphMostLinkedMenuItem), Where Am I?
+(GraphWhereAmIMenuItem, `InputGestureText="{cmd:ChordText
+slate.graph.whereAmI}"` — the accelerator from the table, drift test 3
+and `MenuGestureStrings` `ChordTableTests.cs:684–718`), a separator,
+the Verbosity submenu (C-9). Every item's `Command` is the workspace
+command the registrar resolves for the same id (drift test 2:
+menu-backed rows reach the registrar's command). The mac has no graph
+menu items but the routed "Where Am I?" (`SlateMacApp.swift:597–600`);
+the presets' "registry + palette + menu" (P1-3) shipped as registry +
+palette there — the Windows menu items are recorded as an enrichment,
+not parity (C-D9). Pinned by facts: the ids, the commands, the
+accelerator, the disabled Where-am-I item in this PR (C-8).
+
+**C-13 — The label inventory, byte for byte, and the additions
+named.** A `GraphPhrase` static class under `Graph/` (the
+`ConnectionsPhrase` shape): the mac's — "Filter graph by note name"
+(the field's Name), "Filter notes" (the field's HelpText; the mac's
+placeholder), the three preset labels and hints and "Graph: Where Am
+I?" with its hint (the table rows, `MacCatalogParityTests`'s P3
+comparison); the canvas's mac strings REUSED — "Where am I?" (the panel
+and its readback's Name; `CanvasPhrase`'s), "Close", "Clear" (the
+button's content), "Clear filter" (its Name); the Windows-authored —
+"Filter results" (the count region's Name prefix; the canvas's C14
+precedent: an unlabelled region is not readable on demand), the menu's
+"Graph" and "Verbosity" headers (menu chrome, not announcement
+templates), and the three level titles from core's vector. No template
+is typed: every spoken line is an event's render (R-C; the seam census,
+C-15). Pinned by a theory over the inventory (B-16's shape).
+
+**C-14 — §W-C: the journey and the axe scan.** The FlaUI journey
+GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean, beside the table's
+and the leaf's (A-16, B-18): `WaitForVaultOpen`, open the graph from the
+palette, wait for `GraphTableGrid`; Tab from the title to
+GraphFilterField (its Name and HelpText); type a needle that matches a
+known subset of the fixture (the graph vault's labels, 0b-13); wait for
+the grid's row count to equal the subset; read GraphFilterSummary's
+Name ("Filter results: k of n shown", k the grid's row count, n the
+total); Escape → the field empties, the summary collapses, focus lands
+on a grid row; run "Graph: Orphaned Notes" from the palette → the grid
+shows the orphan subset, the summary reads "k of k shown" (the overlay
+is null, the backend filter narrows — the region shows only while the
+QUERY narrows, so it is COLLAPSED here; the fact asserts that), focus on
+the first row with its Name the row copy; run "Graph: Unresolved Links"
+→ the region reads the ghost count, every row's ItemStatus is
+"Unresolved"; "Graph: Where Am I?" in the palette is disabled and
+`Ctrl+Alt+Shift+I` on the grid moves nothing (this PR; PR D extends);
+the Graph menu's Verbosity → Terse → the focused row's Name is the bare
+label; Standard → the full copy; axe with the scan id `graph-navigator`
+(the third graph id). Run locally to its last step before every push
+(the standing rule); CI's shell accessibility lane arbitrates.
+
+**C-15 — The censuses, falsifiable.** (i) `GraphContractsCitationCensus`
+gains the "C" tuple, its floor one below the population (A-17's rule);
+(ii) the no-shadow census's sixth name (C-4); (iii) the INSTANCE census
+(`ExactlyOneGraphViewStateIsConstructedInTheShell`'s shape): exactly one
+`GraphNavigator` and one GraphPreferencesViewModel construction in the
+shell, both in the workspace's constructor through their factories;
+(iv) the load-caller census (`TheDocumentsLoadHasOneCallerOutsideTheDocument`,
+`GraphAnnouncerCensus.cs:627`) names exactly TWO outside callers —
+`GraphFollowActiveTab` and the navigator's already-effective preset
+path — and the needle's token is issued inside the document
+(`SetNameQuery`); (v) the NameQuery/KindOnly writers census (C-4, C-6):
+`NameQuery`'s writers are the constructor's seed, `SetNameQuery`, the
+preset's write and the fresh open's re-apply; `KindOnly`'s the three of
+C-4; (vi) the chord scrape and the shared-chord disposition (C-11);
+(vii) the menu census (C-9, C-12): the Verbosity items' parameters and
+headers against core's vector, the Graph menu's ids and commands;
+(viii) the depth census's producer swap (C-10) and its `DepthChanged`
+seam's one installer; (ix) the announcement-seam census: the document's
+boundary gains AnnounceWhereAmI (C-8), hit by the navigator's verb,
+and the navigator is NOT a boundary file — it posts nothing itself (a
+post from `GraphNavigator.cs` outside the named seams fails the wall,
+A-10's census on `Graph/**`); (x) the delivery-evidence census and
+`chords.json` for the four ids through the projection (A-12's
+SLATE_CHORDS_UPDATE, never by hand); (xi) `WcMatrixGraphEvidenceCensus`
+gains the row of C-16; (xii) `GraphQuerySurfaceCensus`'s floor rises to
+twenty-eight (C-2) and the schema-walk census sees no artifact change;
+(xiii) the label theory (C-13); (xiv) `MacCatalogParityTests`: the four
+ids are mac's and their labels equal (P3); the `windows.graph.*`
+dispositions are not command ids.
+
+**C-16 — The matrix rows, the projection, the spec's amendments.**
+`parity_matrix.md`: `slate.graph.orphans`, `slate.graph.unresolved`,
+`slate.graph.mostLinked` move to `W6_2_STATUS` through
+W6_2_DELIVERED_COMMANDS (`generate-parity-matrix.py:656–675`);
+`slate.graph.whereAmI` stays pending with C-8's note under CD-Q2's
+default (delivered here under its alternative); `w_c_matrix.md` gains
+"Graph navigator, filter and Where-am-I (W6-2 PR C)" on the canvas
+navigator row's shape (`:48`) — the field (Edit), the count region
+(Text, its own stop), the panel (Group with a read-only Edit), Clear
+(Button), the Graph menu — with the evidence cell naming the journey and
+the axe label and the three screen-reader columns Pending; `chords.json`
+through the projection. The spec's stale lines are amended in place
+(CD-11): §PR C's Goal ("the mode switcher's commands" → the switcher
+stays A-11's, D wires it; no mode command exists on either host),
+Consumes (the three names of C-2), Builds (the Escape row, the count
+region, Clear, the preferences' store), Behaviour (Where-am-I's clause
+under CD-Q2's default), Evidence (the Where-am-I step moves to D under
+the default), §7's whereAmI row ("Lands C" → registered C, admitted D),
+§1's `GraphViewState` line (six fields, CD-Q1), and §5.3's matrix line
+(unchanged: thirteen command rows).
+
+### Decisions (PR C)
+
+- **CD-1 — Three lifetimes, one rule** (the design pass): the
+  navigator and the preferences are the workspace's, the token and its
+  receiver the document's, the field and the panel the surface's; a
+  preset is a view-state mutation and the shell's ordinary open with the
+  policy on the transition's token.
+- **CD-2 — The kind overlay is the sixth field of the one view state**
+  (C-4) — PENDING the owner's amendment of A-1 and spec R-B in place
+  (CD-Q1); the alternative recorded there.
+- **CD-3 — The preset's two rules move to core** (C-2), with its enum;
+  the surface rises to twenty-eight; the mac consumes in the same PR
+  (0b-14's, B-15's precedent). The outcome takes the count and the first
+  row, not the table.
+- **CD-4 — The preset's policy rides the token** (BD-10's principle for
+  the table): no pending-preset field on the document; the arm is the
+  workspace's and mutation-scoped (AD-12's discipline); a superseded
+  preset speaks nothing (CD-Q3's default; CR-1).
+- **CD-5 — The preset posts no `Opened`**: the mac's `openGraphPreset`
+  posts none (`:429–458`); the cause stays Activation and the headline
+  is the load's only line.
+- **CD-6 — The preset's landing seats the first row and writes the
+  key** when the shared key is not among the rows (C-3) — the one
+  publication kind exempt from A-7's "clear the currency without
+  writing", because the reader asked for the view.
+- **CD-7 — The needle's fetch is per keystroke, undebounced** (CD-Q4's
+  default; CR-2); the count is the relay's 200 ms class.
+- **CD-8 — Where-am-I is the diagram's readback; this PR builds the
+  seam, the row, the chord, the panel and the verb, admitted when the
+  seam answers** (CD-Q2's default; C-8). The alternative — a Table
+  readback over an amended 0a-2b — is the owner's to take.
+- **CD-9 — The Escape ladder is Windows-authored** (C-7; C-D3): the
+  canvas's rungs without the mode rung and without a cleared line.
+- **CD-10 — The count region shows only while the query narrows**
+  (C-5): the grid's summary region carries the unnarrowed counts, and a
+  Tab stop that reads "247 of 247 shown" on every graph is noise.
+- **CD-11 — The spec's stale or superseded lines are corrected in
+  place** (C-16; 0bD-12, AD-9's precedent), and the two PENDING
+  amendments (§1's view-state line, §PR C's Where-am-I lines) carry
+  "pending CD-Q1 / CD-Q2" until the owner answers.
+- **CD-12 — The verbosity re-labels what is on screen** (C-9): the row
+  Name is a label on Windows (A-6, B-8), so a change is visible at once;
+  the canvas's "next announcement" rule (C13) is not enough here.
+- **CD-13 — The config's I/O is the host's, everything else core's**
+  (0bD-3): the store decodes and encodes through the codec and adds
+  atomicity, serialisation, the debounce and the read-only gate — the
+  mac's four host rules, no fifth.
+- **CD-14 — The Graph menu is an enrichment** (C-12; C-D9): the presets
+  and Open Graph are menu-backed on Windows where the mac has palette
+  rows alone.
+
+### Recorded divergences (PR C)
+
+- **C-D1 — No mutation-navigation gate on a preset.** The mac refuses a
+  preset while a property edit is navigating
+  (`propertyEditNavigationDisabledReason`, `AppState+GraphTable.swift:
+  433–436`, with a spoken reason); Windows has no such gate on
+  `OpenGraph()` either (A-12), and the preset shares its admission.
+- **C-D2 — No chord reaches the filter field but the grid's own Ctrl+F**
+  (C-5): the mac's field is reached by Tab alone; Windows adds the
+  substrate's gesture from inside the grid (`ChordScope.Grid`, no new
+  row) and no `slate.graph.filter…` id.
+- **C-D3 — An Escape ladder on the graph** (C-7): the mac has none; the
+  rungs are the canvas's minus the mode rung, and the clear speaks the
+  count line on publish, not a cleared line.
+- **C-D4 — Where-am-I is DISABLED where the mac is silent** (C-8): in
+  Table mode the mac's menu item is enabled and routes to `.none`, a
+  no-op; Windows disables the row and the item and lets the chord fall
+  through.
+- **C-D5 — The palette matches labels alone** (`CommandPaletteViewModel.cs:
+  714–715`, the label's match spans), so P1-3's keywords "broken links"
+  and "hubs" reach nothing on Windows; the hints carry them and are
+  spoken as the row's accessibility hint. The mac lane's keyword
+  behaviour is its own.
+- **C-D6 — A persisted `diagram` mode seeds Table in this PR** (C-10);
+  PR D restores it. The file is not rewritten (the aggregate writes the
+  view state's Table only when a save is scheduled — a needle keystroke
+  under a persisted `diagram` would persist `table`; recorded, PR D
+  closes it by restoring the mode first).
+- **C-D7 — A needle under a transient preset persists the preset's
+  backend filter** (C-10), as the mac's aggregate does
+  (`graphConfigSaveAggregate` reads the live filter, `:63–67`); parity
+  with a quirk, recorded.
+- **C-D8 — A restored graph tab shows the persisted filter** (C-10);
+  the mac's restore shows the defaults until the next plain open.
+- **C-D9 — Menu items for Open Graph and the presets** (C-12); the mac
+  has palette rows alone for them.
+- **C-D10 — The count region and Clear** (C-5): the mac's filter bar has
+  neither (t0 §3's readability rule, the canvas's precedent).
+- **C-D11 — The preset's headline drops under a superseding silent
+  pair on both hosts** (CD-Q3's default) — parity; CR-1 names the race.
+
+### Accepted risks (PR C)
+
+- **CR-1 — A file change during a preset's fetch loses the headline**
+  (C-3; CD-Q3): the probe's superseding silent pair publishes and the
+  preset's token drops whole; the reader hears nothing for the verb.
+  The mac's own race (`:206–208`, `:235–243`, `:480–510`). The fact that
+  reproduces it is written so the risk is visible; the owner may take
+  CD-Q3's alternative.
+- **CR-2 — One `graph_table_rows` crossing per keystroke** (C-6;
+  CD-Q4): at 10k rows a fast typist issues a crossing per key; the
+  receiver publishes the last and the count speaks once; the task loop
+  measures the rows workload's median at 10k (A-15) and records it
+  beside this row.
+- **CR-3 — The mac migration of C-2 is unrun on this box** (0bR-1's
+  arbitration).
+- **CR-4 — The config writer's atomicity is `File.Move` on one
+  volume**; a `.slate` directory on a different volume from its temp
+  file is not a Windows vault shape.
+
+### Mac details recorded while reading (not this issue's to fix)
+
+- The pending preset is cleared by ANY publish, spoken only by an
+  audible one (`AppState+GraphTable.swift:235–243`): a silent refresh
+  landing first drops the headline (CR-1's race, on the mac too).
+- A restored graph tab mounts on the reset defaults, not the persisted
+  filter (`GraphTableView.swift:53–65`; `applyPersistedGraphFilter` runs
+  only in `activateGraphTab`, `:106–108`) — C-D8.
+- A needle typed under a transient preset persists the preset's backend
+  filter (`graphConfigSaveAggregate`, `AppState+GraphConfig.swift:
+  63–67`) — C-D7.
+- In Table mode the "Where Am I?" menu item is enabled and silent
+  (`whereAmIRouteTarget` → `.none`, `AppState+GraphDiagram.swift:
+  367–373`) — the never-silent rule, one surface over (C-D4).
+- The preset mapping and the headline rule live in Swift
+  (`AppState+GraphTable.swift:403–423`, `:465–475`) where 0b-7 recorded
+  them as core's design — C-2 moves them.
+- P1-3's "registry + palette + menu" for the presets shipped with no
+  menu item (`SlateMacApp.swift` names none).
+
+### Tests that pin PR C (revision 1's list; the task loop records what lands)
+
+- `graph_queries.rs`: `preset_query_is_the_mac_mapping`,
+  `preset_outcome_counts_or_names_row_zero`, the surface count at
+  twenty-eight; the FFI tripwire; the mac's GraphCommandsTests
+  through the calls.
+- GraphNavigatorTests (new): the one construction; each preset from a
+  note tab, from the graph tab effective, from the graph visible in the
+  other group — one load each, the query, the sort, no `Opened`, the
+  headline alone, the landing; the failing pair; the superseded pair
+  (CR-1); no replay; the transient writes; the arm's boundary; the
+  needle's token per keystroke, the burst, the equal needle, the raw
+  crossing; `ClearNameQuery`; the ladder's rungs; Where-am-I refused,
+  admitted with each witness, its panel text and one post; the chord
+  half's two chords and the fall-throughs.
+- GraphPreferencesTests (new): the default and loaded level, the setter,
+  m1, the live read, the re-label without a load, the save's aggregate
+  and triggers, the debounce, the generation gate, the read-only gate
+  after each decode failure, the fresh open's re-apply, the drain.
+- GraphConfigStoreTests (new; GraphConfigTests' Windows twins,
+  0b-14's host I/O facts): missing, unreadable, unparseable, newer,
+  round-trip with an unknown key preserved, the refused write over an
+  unreadable existing file, atomicity (the target never torn: a reader
+  mid-write sees the old or the new bytes).
+- `GraphDocumentTests`: the request carries `KindOnly`; `SetNameQuery`'s
+  token and count; the `Preset` policy's receiver arms; FilterCountText
+  per state.
+- `GraphTableTests`: the field, the region, Clear, the grid's Ctrl+F,
+  the re-label, the landing.
+- `ConnectionsLeafTests`: the depth seeded from the config and clamped;
+  `DepthChanged` fires on a change and not at a bound; the leaf's rows
+  re-named on a verbosity change.
+- `ChordTableTests`: the scrape, the shared-chord disposition, the four
+  rows, the three dispositions, the menu accelerator;
+  `W1QuickSwitcherAndChordTests` over the projected file.
+- The censuses of C-15, with a mutation for each shape they name.
+- The journey (C-14), run to its last step locally before every push.
+
 <!-- end of the graph contracts document -->
