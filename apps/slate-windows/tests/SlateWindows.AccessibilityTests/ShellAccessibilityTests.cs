@@ -7186,9 +7186,11 @@ public sealed class ShellAccessibilityTests
                 // judged: a fixed wait let a chord whose rows had not yet
                 // re-rendered on a loaded runner look unlanded, and the extra
                 // chord that followed undid a card (CI on 16b9fe0: ten chords
-                // back to two cards, the count read as a two-op verb).
+                // back to two cards, the count read as a two-op verb). The
+                // rows' dump alone is the witness: the two-card state is a
+                // change of the dump too (the codoki thread on 6a2e3f9).
                 _ = SpinWait.SpinUntil(
-                    () => BackToTwoCards() || RowsDump() != rowsBefore,
+                    () => RowsDump() != rowsBefore,
                     TimeSpan.FromSeconds(5));
                 Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             }
