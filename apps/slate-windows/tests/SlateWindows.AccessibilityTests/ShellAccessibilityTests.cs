@@ -7178,10 +7178,19 @@ public sealed class ShellAccessibilityTests
             int undos = 0;
             while (undos < 12 && !BackToTwoCards())
             {
+                string rowsBefore = RowsDump();
                 SeatTree();
                 Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_Z);
                 undos++;
-                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(600));
+                // Each chord's effect awaited, bounded, before the next is
+                // judged: a fixed wait let a chord whose rows had not yet
+                // re-rendered on a loaded runner look unlanded, and the extra
+                // chord that followed undid a card (CI on 16b9fe0: ten chords
+                // back to two cards, the count read as a two-op verb).
+                _ = SpinWait.SpinUntil(
+                    () => BackToTwoCards() || RowsDump() != rowsBefore,
+                    TimeSpan.FromSeconds(5));
+                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             }
             if (!SpinWait.SpinUntil(BackToTwoCards, TimeSpan.FromSeconds(10)))
             {
