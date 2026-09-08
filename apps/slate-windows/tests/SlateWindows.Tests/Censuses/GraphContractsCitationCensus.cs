@@ -96,11 +96,11 @@ public sealed class GraphContractsCitationCensus
                 // The navigator section: the design pass, seventeen contracts,
                 // the decisions, the divergences, the risks, the pins.
                 6_000,
-                // Revision 4 cites existing identifiers only through the
+                // Revision 5 cites existing identifiers only through the
                 // shell, its tests and the core and mac sources it names; C's
                 // own names are unbackticked until they exist. The floor sits
                 // one below the measured population and rises with the records.
-                116),
+                122),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
