@@ -7901,8 +7901,25 @@ written debounced by one serialised writer. PR D's diagram takes the
 navigator's readback and viewport seams; PR E's inspector takes the
 config's groups, display and forces.
 
-**This is revision 3 — a DESIGN PASS (protocol rule 4, reached
-through rule 5 at round 2).** Round 1 (IGM-1..28: eleven blockers,
+**This is revision 4 — the design pass corrected for round 3.** Round
+3 (IGO-1..31: nineteen blockers, ten majors, two minors) judged the
+four rules of revision 3 unsound — rule Q turned A-5's rows-only sort
+into a pair and gave two crossing counts, omitted PR E's `Filter` arm
+and a probe's and a rejection's terminal states; rule F lacked a
+quiescence test, a departure withdrawal and a failure arm and seated
+a stale host; rule W lacked a failure policy, an atomic admission and
+a linearised shutdown; the menu's container idiom cannot be built;
+the trace's "speaks nothing" was wrong for a same-backend preset —
+with most of the nineteen CREATED by revision 3's remedies: rule 5 for
+the SECOND time (rounds 2 and 3). Every finding is taken below (the
+third ledger), the four rules corrected term by term; round 4 decides
+whether rule 5 recurs a third time, at which point the B1/B2
+precedent freezes the text as corrected and carries the ledgers into
+the task loop — the owner may overrule. Revision 3's account of how
+the pass was reached stands below.
+
+**Revision 3 was a DESIGN PASS (protocol rule 4, reached through rule
+5 at round 2).** Round 1 (IGM-1..28: eleven blockers,
 seventeen majors) found revision 1's preset load outside rule L's one
 funnel, the needle's token displacing a pair in flight, a first-row
 landing over a focus route the shell does not have, a presenter with
@@ -7974,7 +7991,11 @@ in place):**
   (NoSelection, no zoom, Normal) on both lanes, `lib.rs`'s mirror, the
   mac's site passing `.some` — and a Table readback whose selection is
   the shared key's SNAPSHOT node rendered the diagram's way
-  (`references = in_links`, `embed = false`), landing in this PR.
+  (`references = in_links`, `embed = false`), answered only while the
+  publication is CURRENT (rule Q's Term Q7: an old node under new filter
+  prose is not a readback; the verb is unavailable while a request is
+  in flight) and pinned by 0a-6's eight witnesses plus the ninth
+  (IGO-29), landing in this PR.
   Recommended: the alternative, because it is what the spec's own text
   asks for and a pull surface on the table is worth the one witness;
   written as the default because 0a is frozen.
@@ -8007,7 +8028,11 @@ in place):**
   measured in the task loop (CR-2).** The alternative: a host debounce
   on the FETCH (the canvas's machine bounds a burst to two matches,
   `CanvasFilterMachine.cs:80–85`), which changes when the count and the
-  rows land relative to the keystroke and has no mac twin. Not
+  rows land relative to the keystroke and has no mac twin — and which
+  would need a SCHEDULED state in rule Q (a needle written, no token yet:
+  the publication not current, nothing in flight) with its own
+  currency, cancellation and focus rules (IGO-28); the section defines
+  none because the default issues the token at the keystroke. Not
   recommended; listed so the round does not have to raise it.
 
 ### What stands today (A, B1, B2 merged)
@@ -8160,10 +8185,17 @@ in place):**
   `:451` — and each `requestGraphTableRows` advances `graphTableSeq`
   (`:276`), so the preset's rows result fails `:292`,
   `receiveGraphTableRows` returns false, `published` is false and the
-  pending preset is cleared without its headline (`:235–237`): a preset
-  run from the active graph tab with a non-empty needle or a changed
-  kind speaks nothing. A mac defect the C-2 migration fixes on its
-  lane (a mac detail below).
+  pending preset is cleared without its headline (`:235–237`). What
+  the reader then hears depends on the backend filter (IGO-27): when
+  the preset CHANGED it (Orphans; Unresolved from the default) the
+  observer's rows-only result also drops at `:296–299` (the held filter
+  is the preset's, its request's the earlier query's — or the reverse)
+  and the preset speaks NOTHING; when it did not (MostLinked from the
+  default filter, a needle typed) the observer's result passes `:292`
+  and `:296`, publishes the rows and speaks the COUNT (`:343–347`) — the
+  headline replaced by "N of N shown". A mac defect the C-2 migration
+  fixes on its lane (a mac detail below); the mac facts assert exactly
+  one `GraphPreset`, no summary and no count.
 - **The failure arm (IGM-13).** `graphTablePendingPreset` is read and
   cleared only in the SUCCESS arm (`:235–236`); the failure arm
   (`:257–265`) leaves it set, so the next load — a retry, a probe —
@@ -8318,24 +8350,41 @@ surface's field, panel and state host).
   its mutation; AD-12's "only Open and Reopen are causes" stands — the
   cause under a preset is Activation, so no `GraphStatus{Opened}` (the
   mac's `openGraphPreset` posts none).
-- **Term P3 — the decision after the mutation is three-valued and
-  read, not inferred.** The navigator reads the boundary's report: the
-  arm CONSUMED → done; the arm cleared UNCONSUMED with the graph
-  EFFECTIVE now and the seated document live → route (b); the arm
-  cleared with the graph not effective (the open refused, a future
-  admission; the tab created inactive) → nothing. A retained document
-  elsewhere is never reached: route (b) addresses `_graphDocument`, the
-  seated one, under `GraphTabIsEffective()`.
+- **Term P3 — admission first; the decision after the mutation is
+  three-valued and read, not inferred; a refusal restores.** `RunPreset`
+  asks the open's admission BEFORE it writes anything — the workspace's
+  GraphOpenAdmissionReason seam (`Func<string?>`, null admits; the
+  `GraphCreateAdmissionReason` shape, `WorkspaceViewModel.Graph.cs:
+  63–65`), which `OpenGraph()` reads too and which Windows leaves null
+  today (C-D1) — and a refused preset writes no query and sets no arm
+  (IGO-22; the facts inject the refusal through the seam). Then the
+  navigator reads the boundary's report: the arm CONSUMED → done; the
+  arm cleared UNCONSUMED with the graph EFFECTIVE now and the seated
+  document live → route (b); the arm cleared with the graph not
+  effective (the mutation never made it so) → the query written at (ii)
+  is RESTORED from the record the navigator kept (the view state's three
+  fields before the preset), so an inactive tab cannot later load the
+  preset's query under a Summary policy. A retained document elsewhere
+  is never reached: route (b) addresses `_graphDocument`, the seated
+  one, under `GraphTabIsEffective()`.
 - **Term P4 — the token and the headline.** Policy `Preset` with the
   preset on the token, `DefaultSort`, `UserSort` false; the receiver
   speaks `GraphPreset{outcome}` in place of the summary and no count;
   `GridSorted` never for the default sort; a failure speaks the block and
-  forgets the preset; a supersession speaks nothing unless a needle
-  carries it (Term Q4).
-- **Term P5 — transient state, no landing.** `ApplyQuery(graph_preset_query)`
-  before the open, no save, no `CurrentConfig` write; A-7's re-seat on
-  publication, no selection of the preset's own (the mac's binding
-  mirrors the key).
+  forgets the preset; a SUPERSEDED preset token speaks NOTHING of its
+  own — the replacing token's line is Term Q4's (a needle inherits the
+  headline; a sort adopts with `GridSorted` and no count; a probe's pair
+  is silent — IGO-9).
+- **Term P5 — transient state, no selection, the opener's focus.**
+  `ApplyQuery(graph_preset_query)` before the open, no save, no
+  `CurrentConfig` write; A-7's re-seat on publication, no selection of
+  the preset's own (the mac's binding mirrors the key); the shell's open
+  raises its editor-focus request in EVERY case — `TryFocusGlobalGraph`
+  calls `RequestActiveEditorFocus` for an existing graph too
+  (`Layout.cs:205–219`) — so a preset lands the reader on the graph's
+  projection through rule F whether or not the graph was already
+  effective, where the mac's palette returns focus to the element it
+  took it from (C-D18; IGO-15).
 
 #### Rule Q — the request lineage, in eight terms
 
@@ -8345,9 +8394,16 @@ surface's field, panel and state host).
   A-2's "every input change advances the sequence and records the
   request", the mac's `issueGraphTableToken` (`:275–281`) — issued
   through ONE document entry, `Request(GraphRequest)`, where
-  `GraphRequest` is `Needle | Sort(sort) | Preset(preset)` (PR E adds
-  `Filter(filter)`), with A-5's shipped `SetSort` becoming
-  `Request(Sort)`; the probe's pair is the lifecycle's (`Probe`, A-3).
+  `GraphRequest` is `Needle | Sort(sort) | Preset(preset) |
+  Filter(filter)` (the fourth arm PR E invokes; every term below
+  decides it), with A-5's shipped `SetSort` becoming `Request(Sort)`;
+  the probe's pair is the lifecycle's (`Probe`, A-3). ADMISSION
+  (IGO-8): `Request` refuses — returns false and touches neither the
+  sort, the sequence nor the lineage — unless the document is live
+  (`!_retired`) AND seated (`_isSeated()`, the predicate `SelectRow`
+  already reads, `GraphDocumentViewModel.cs:237–251`), for every arm;
+  `Load` keeps its throw (its one caller checks) and `Probe` its retired
+  return.
   The census (C-15 iv) enumerates every load-starting entry
   TRANSITIVELY — `Load`, `Request`, `Probe` and any document member that
   reaches `StartWorkAlwaysAsync` — and names each entry's outside
@@ -8356,40 +8412,69 @@ surface's field, panel and state host).
   external sort handler; `Probe` ← `NotifyGraphOfVaultChange`.
 - **Term Q2 — the lineage record.** The document retains `_current`:
   the token in flight — kind, policy, preset, request (query and sort),
-  `UserSort`, `seq` — from `Load`/`Request`/`Probe` until its receiver
-  runs to an install or a failure, or a newer token replaces it;
+  `UserSort`, `seq` — set when a TOKEN is issued (`Load`, `Request`, and
+  the probe's silent pair when the probe issues one — a probe that finds
+  the generation unchanged issues nothing and sets nothing, A-3 as
+  frozen, IGO-5) and cleared at the token's TERMINAL state: its receiver
+  runs to an install, to a failure, or to a REJECTION (the current
+  token's envelope refused by A-2's (ii) — a query, sort or filter
+  mismatch, `:496–501` — which returns without a re-fetch and is
+  therefore terminal too, IGO-6), or a newer token replaces it;
   `_pairInFlight` is `_current is { Kind: Pair }` and the field goes;
-  IsRequestInFlight is `_current is not null`. Nothing else remembers a
-  policy or a preset.
-- **Term Q3 — the kind.** A request is ROWS ONLY iff a snapshot is held,
-  no pair is in flight, and the request's backend filter equals the held
-  snapshot's; otherwise a PAIR — so a request during a pair repeats no
-  crossing through the receiver's generation-mismatch re-fetch (`:515`),
-  and a request under LOADING or ERROR is one attempt.
-- **Term Q4 — the policy.** An activation's is its cause's (Term 6).
-  `Request(Needle)`: rows-only → Silent (the rows-only receiver speaks
-  the count); pair → the DISPLACED token's policy when `_current` is an
+  IsRequestInFlight is `_current is not null` and is false after every
+  terminal state. Nothing else remembers a policy or a preset.
+- **Term Q3 — the kind, per arm.** `Needle`: ROWS ONLY iff a snapshot is
+  held, no pair is in flight, and the request's backend filter equals
+  the held snapshot's; otherwise a PAIR (a needle during a pair repeats
+  no crossing through the receiver's re-fetch, and a needle under
+  LOADING or ERROR is one attempt). `Sort`: ROWS ONLY, ALWAYS — A-5 as
+  frozen ("issues a ROWS-ONLY token", `:425–431`); when the held
+  snapshot is absent or its filter differs, A-2's receiver arm issues
+  the silent pair for that request (`:515–521`), which carries the sort
+  (IGO-2). `Preset` and `Filter`: a PAIR, always — the backend filter
+  changed (the mac's `loadGraphTable`, `:392`, `:451`).
+- **Term Q4 — the policy and the lines, per arm.** An activation's is
+  its cause's (Term 6). `Request(Needle)`: rows-only → Silent, and the
+  rows-only receiver speaks the COUNT (`:551–560`, the mac's
+  `:343–347`); pair → the DISPLACED token's policy when `_current` is an
   audible pair (Summary, Preset with its preset, FilterCount), else
-  `FilterCount`. `Request(Sort)`: rows-only → Silent; pair →
-  `FilterCount` (the user's newer intent outranks a preset's headline;
-  the mac's sort-during-preset publishes a count). `Request(Preset)`:
-  `Preset`. The probe's and the re-fetch's: Silent (A-3, A-2 as frozen).
-  A PAIR under `FilterCount` speaks the count through the gated entry —
-  the mac's `.filterCount` arm (`:249–253`); `GraphAnnouncePolicy` gains
-  `Preset` and `FilterCount`.
+  `FilterCount`. `Request(Sort)`: rows-only, Silent — its LINES are
+  `GridSorted` on adoption (A-5, the surface's) THEN the coalesced count
+  (the rows-only receiver's, PR A's shipped path and the mac's
+  `:343–347`) and nothing else; A-5's "once" is `GridSorted`'s, and the
+  fact asserts the complete list (IGO-1); when the receiver's silent
+  re-fetch carries the sort (Term Q3), the adoption's `GridSorted`
+  speaks and no count does (the pair is Silent) — the sort-during-preset
+  sequence. `Request(Preset)`: `Preset`. `Request(Filter)`:
+  `FilterCount` — the mac's `setGraphTableFilter` → `loadGraphTable(
+  announce: .filterCount)` (`:382–397`): the overlay cleared
+  (`ApplyQuery` with a null overlay), a `Preset` policy in flight NOT
+  inherited (the mac drops the pending preset, `:388–389`), the pending
+  sort by Term Q5, a failure `GraphBlocked{LoadFailed}` (IGO-4). The
+  probe's and the re-fetch's: Silent (A-3, A-2 as frozen). A PAIR under
+  `FilterCount` speaks the count through the gated entry (the mac's
+  `:249–253`); `GraphAnnouncePolicy` gains `Preset` and `FilterCount`.
 - **Term Q5 — the pending sort survives every token until answered.**
   `_requestedSort` is written by `Request(Sort)` alone and cleared only
   by the publication of a token whose sort equals it (`AnsweredSortRequest`
   → `GridSorted` on adoption, A-5) or by that token's failure (A-2's
   rollback); every USER token (a needle, a preset's `DefaultSort` aside —
   P4 resets it) carries `_requestedSort ?? accepted` with `UserSort`
-  true iff it carries a pending sort or is a sort; the PROBE's pair and
-  the receiver's re-fetch carry the ACCEPTED sort and `UserSort` false
-  and leave `_requestedSort` standing (the silent pair stays silent, A-3
-  as frozen); when such a pair installs with `_requestedSort` standing,
-  the receiver RE-ISSUES it as `Request(Sort)` — one rows-only token,
-  `GridSorted` on its adoption — where the mac drops it (`:297`, `:301`;
-  C-D17).
+  true iff it carries a pending sort or is a sort; the PROBE's pair
+  carries the ACCEPTED sort and `UserSort` false and leaves
+  `_requestedSort` standing (the silent pair stays silent, A-3 as
+  frozen); the receiver's re-fetch carries ITS request's sort (A-2). A
+  FAILURE rolls the pending sort back only when the failing token is a
+  USER token (`UserSort` true — A-2's rollback, `:502`); a failing
+  silent pair leaves it standing (IGO-7). RE-ISSUE: when a token that
+  did not carry the pending sort INSTALLS with `_requestedSort`
+  standing, the receiver re-issues it as `Request(Sort)` — one rows-only
+  token, `GridSorted` on its adoption — AFTER A-3's high-water recovery
+  is satisfied: an install below the high-water mark issues the
+  high-water pair first and the sort is re-issued only when a pair at
+  or above the mark installs (IGO-20; the two-probe interleaving
+  pinned); the mac drops the sort on a generation mismatch (`:297`,
+  `:301`; C-D17).
 - **Term Q6 — the count's gate.** The filter class's stored gate is
   `!retired ∧ effective ∧ seq == token.Seq` — no newer token issued —
   so a count queued for query A drops when B is typed and a preset's
@@ -8402,41 +8487,63 @@ surface's field, panel and state host).
   nothing is in flight" — the count region (C-5) and the focus landing
   (Term F3) both read it.
 - **Term Q8 — the crossings.** Rows-only = one `graph_table_rows`; a
-  pair = `graph_snapshot` + `graph_table_rows`; a needle burst of N =
-  N tokens each of one crossing (a pair only for the first while a pair
-  was in flight), the last publishing (CR-2); the preset's = Term Q8 of
-  C-2.
+  pair = `graph_snapshot` + `graph_table_rows`. A needle burst of N with
+  a snapshot held and nothing in flight = N tokens of one crossing; a
+  burst while a PAIR is in flight = N pairs — every needle issued while
+  `_current` is a pair is itself a pair by Term Q3, so 2N crossings
+  until the first install (IGO-3; CR-2 says so) — the last publishing;
+  the preset's per C-2.
 
 #### Rule F — the focus landing, in six terms
 
-- **Term F1 — the record.** `GraphFocusRequest(owner: the tab, query:
-  the view state's at raise, seq: the document's at raise)`, held by the
-  document as `FocusRequest`, raised by `RequestFocusLanding(tab)` from
-  the shell's routes and by the presenter's RequestProjectionFocus;
-  superseded by reference identity when raised again (the canvas's
-  `CanvasFocusRequest`, `CanvasDocumentViewModel.cs:77`); read as
-  absent once the document is retired.
-- **Term F2 — the triggers.** The surface re-asks on `Loaded`,
-  `IsVisibleChanged`, `DataContextChanged`, each publication install,
-  the grid's container realisation, AND the `FocusRequest` property's
-  own change (the canvas's `:1175–1177`) — so a request raised with no
-  load to follow (Escape's rung 2, the panel's fallback, a reopen of a
-  READY graph) is delivered at once.
-- **Term F3 — currency.** A request is DELIVERABLE to a row or an empty
-  host only when the publication is CURRENT for it — its accepted query
-  equals the request's and nothing is in flight (Term Q7); an old READY
-  or an old EMPTY under a request whose query differs is not a landing.
-  Under LOADING — and under a stale publication with a request in flight
-  — the surface seats the STATE HOST PROVISIONALLY and does NOT complete
-  the request (the canvas keeps Loading pending, `:1122–1124`); the
-  install that makes the publication current delivers and completes.
-- **Term F4 — the arms.** READY and current → the grid's current row's
+- **Term F1 — the record.** `GraphFocusRequest(owner: the tab)`, held
+  by the document as `FocusRequest`, raised by `RequestFocusLanding(tab)`
+  from the shell's routes and by the presenter's RequestProjectionFocus;
+  superseded by REFERENCE IDENTITY when raised again — no query, no
+  sequence on the record (the canvas's `CanvasFocusRequest`,
+  `CanvasDocumentViewModel.cs:77`; revision 3's query and seq are gone,
+  IGO-12: a request is a RESTORATION onto whatever the lineage settles
+  to, not an instruction to find a query); read as absent once the
+  document is retired.
+- **Term F2 — the triggers, the owner, the departure.** The surface
+  re-asks on `Loaded`, `IsVisibleChanged`, `DataContextChanged`, each
+  publication install, every TERMINAL state of the lineage (an install,
+  a failure, a rejection — Term Q2), the grid's container realisation,
+  AND the `FocusRequest` property's own change (the canvas's
+  `:1175–1177`) — so a request raised with no load to follow is
+  delivered at once. It delivers only when the request's OWNER is its
+  own `DataContext` and it `IsVisible` (the canvas's `:1093–1097`), and
+  its group is the ACTIVE group (the graph tab EFFECTIVE) — a graph
+  visible in another pane never takes the keys (IGO-13). DEPARTURE: the
+  surface WITHDRAWS a pending request when the reader leaves of their
+  own accord — a pane change, a tab switch — and HOLDS it behind an
+  overlay, a menu or a deactivated window (the canvas's `Depart` and
+  `RestorationMustWait`, `CanvasSurfaceView.cs:761–818`, `:924–928`),
+  so a load finishing after the reader moved elsewhere seats nobody.
+- **Term F3 — quiescence.** A request is DELIVERABLE only when the
+  lineage is QUIESCENT — IsRequestInFlight is false (Term Q2): every
+  query change issues a token, so "nothing in flight" means the
+  publication answers the view state's query or the last attempt ended
+  terminally (a rows-only failure installs nothing and the reader's rows
+  are the ones shown — deliverable onto them; a pair failure installs
+  ERROR — deliverable onto its host; IGO-11). A request raised while a
+  token is in flight WAITS — never onto the old rows, never onto the old
+  EMPTY host (Escape's cleared query, C-7) — and lands at the lineage's
+  next terminal state on whatever is then shown (a request A, then
+  queries B and A: it lands when the last of them settles; the final
+  query B: it lands on B's rows — IGO-12). The PROVISIONAL seat: only
+  under LOADING with NO snapshot held (A-4's LOADING; a first or a retry
+  pair) the surface seats the state host and does NOT complete the
+  request (the canvas keeps Loading pending, `:1122–1124`); a held READY
+  or EMPTY publication during a pair keeps its surface and moves focus
+  nowhere (A-4: the grid stays; IGO-10).
+- **Term F4 — the arms.** Quiescent and READY → the grid's current row's
   cell, else the first row's, when its container exists (else wait for
-  realisation); EMPTY and ERROR and current → the state host, focusable,
-  a Group peer named by the state's accessible name (the leaf's
-  `ConnectionsAnchor`, `ConnectionsLeafView.cs:159–170`); completion on
-  the document (`CompleteFocus(request)`) only on a delivered current
-  landing.
+  realisation); quiescent and EMPTY or ERROR → the state host,
+  focusable, a Group peer named by the state's accessible name (the
+  leaf's `ConnectionsAnchor`, `ConnectionsLeafView.cs:159–170`);
+  completion on the document (`CompleteFocus(request)`) only on a
+  delivered quiescent landing.
 - **Term F5 — silence.** Delivery lands the reader and says nothing —
   the grid's re-seat under the syncing guard writes no key and posts no
   row move (the canvas's C12).
@@ -8456,44 +8563,71 @@ surface's field, panel and state host).
   store's comparison) — `C:\\Vault` and `c:\\vault\\` are one key; a
   junction or a substituted drive is a different key, the lifecycle's
   recorded direction (CR-6).
-- **Term W2 — one writer per process.** `Graph/GraphConfigWriter.cs`, a
-  static singleton (the mac's `GraphConfigWriter.shared`): per key, a
-  serial queue on the pool, a generation COUNTER, a NEWEST-WRITTEN
-  generation, and the newest ENQUEUED aggregate not yet written. Three
+- **Term W2 — one writer per process, its state per key.**
+  `Graph/GraphConfigWriter.cs`, a static singleton (the mac's
+  `GraphConfigWriter.shared`): per key, a serial queue on the pool and
+  FOUR facts under one lock — the generation COUNTER, the highest
+  ADMITTED generation, the OUTSTANDING admitted aggregates (admitted,
+  not yet attempted) and the LAST SUCCESSFUL write's generation. Three
   operations: `Reserve(key) → generation` (synchronous, monotonic, never
   reset in the process — the mac's `graphConfigSaveGen`, `:106–111`);
-  `Enqueue(key, aggregate, generation) → Task` (dropped before its write
-  when older than the newest written; serialised behind the key's
-  queue; the store's read-merge-write and `File.Move`; failures logged,
-  the task completing either way); `Newest(key) → aggregate?` (the
-  newest enqueued-not-yet-written, else null).
+  `Enqueue(key, aggregate, generation) → Task` — ADMISSION IS ATOMIC
+  under the lock: a generation at or below the highest admitted is
+  dropped at the call, never queued (IGO-21); an admitted aggregate joins
+  the outstanding set and the queue, and its write (the store's
+  read-merge-write and `File.Move`) removes it from the set whether it
+  succeeded or FAILED (a failure logged, the task completing either
+  way — the mac's actor marks its generation before the attempt and
+  swallows the failure, `GraphConfigStore.swift:139–159`); `Newest(key)
+  → aggregate?` — the highest-generation OUTSTANDING aggregate (admitted,
+  unattempted), else null: never a doomed enqueue, never a failed one.
 - **Term W3 — the schedule.** `ScheduleSave()` folds the aggregate from
   `CurrentConfig` and the live fields, RESERVES a generation at once,
   stores the pair as PENDING (replacing an older pending pair) and
   restarts the 400 ms timer (the mac's `:110–113`); the generation
   therefore follows EDIT order, never execution order (IGN-6).
-- **Term W4 — the hand-off.** The timer's elapse ENQUEUES the pending
-  pair directly into the writer — no scheduler body — and keeps the
-  returned task in the preferences' outstanding set;
-  `WhenWritesDrained()` is their `WhenAll`, added to the workspace's
-  drains (`ShutdownGraphDocument`'s, bounded at five seconds); a write
-  past the bound completes on the writer (CR-5).
-- **Term W5 — shutdown flushes.** The preferences' `Shutdown()` — first
-  in `ShutdownGraphDocument` — stops the timer synchronously and enqueues
-  a pending pair at once (the writer takes work regardless of any
-  scheduler, so nothing is refused, IGN-5); the drain then waits for it.
-  No timer outlives the workspace.
-- **Term W6 — the read serves the newest.** The preferences' constructor
-  read asks the writer first: `Newest(key)` non-null → that aggregate IS
-  the config (the file will hold it; a reopen during a straggling write
-  reads what the straggler writes, IGN-7); null → the store's file read
-  (Term W7's decode arms). The read never waits on the queue.
-- **Term W7 — `CurrentConfig` and the decode arms.** One mutable config
-  per workspace, the loaded one, updated atomically with each trigger's
-  field BEFORE the schedule (the mac's `:98`); the fresh open re-applies
-  it; the store's decode: missing → the default and writable;
-  unreadable, `Unparseable`, `NewerVersion` → the default, NOT writable,
-  the file untouched, logged.
+- **Term W4 — the hand-off, linearised.** The preferences' three
+  transitions — `ScheduleSave`, the timer's tick, `Shutdown` — all run
+  on the OWNER DISPATCHER (the timer is a `DispatcherTimer`; `Shutdown`
+  runs from the workspace's `Dispose` on the UI thread), so they are
+  serialised by construction and a state field decides them (IGO-19):
+  ACTIVE → the tick takes the pending pair (one, or none), ENQUEUES it
+  directly into the writer — no scheduler body — and adds the returned
+  task to the preferences' OUTSTANDING set before returning;
+  `WhenWritesDrained()` is that set's `WhenAll`, added to the
+  workspace's drains (`ShutdownGraphDocument`'s, bounded at five
+  seconds); a write past the bound completes on the writer (CR-5).
+- **Term W5 — shutdown flushes, once.** `Shutdown()` — first in
+  `ShutdownGraphDocument` — moves the state to SHUT: it stops the timer,
+  takes the pending pair if one stands and enqueues it, registering its
+  task in the outstanding set BEFORE it returns (the drain snapshots
+  after), and every later `ScheduleSave` is REFUSED and every later tick
+  finds no pair — each pending generation is transferred exactly once
+  (IGN-5, IGO-19). No timer outlives the workspace.
+- **Term W6 — the read serves the newest outstanding, else the file.**
+  The preferences' constructor read asks the writer first: `Newest(key)`
+  non-null → that aggregate IS the config (an admitted, unattempted
+  write; a reopen during a straggling write reads what the straggler
+  will write, IGN-7); null → the store's file read (Term W7's decode
+  arms) — after a FAILED write the read is the file's, and the failed
+  aggregate is LOST as the mac's best-effort actor loses it (IGO-18;
+  CR-7). The read never waits on the queue.
+- **Term W7 — `CurrentConfig` by field, and the decode arms.** One
+  mutable config per workspace, the loaded one; each trigger updates
+  ITS field and no other, atomically, BEFORE the schedule (the mac's
+  `:98`): `SetNameQuery` → `filters.nameQuery`; `SetVerbosityCommand` →
+  `verbosity`; the leaf's `DepthChanged` → `connectionsDepth`; the
+  preferences' `SetMode(mode)` → `mode` (built here, invoked by PR D's
+  switch — the mac's `setGraphMode`, `AppState+GraphConfig.swift:
+  193–196`; IGO-23); PR E's filter change → the three backend flags;
+  the aggregate handed to the writer IS `CurrentConfig` — the live view
+  state is NOT folded in, so a verbosity or depth change under a
+  transient preset persists the pre-preset filter and a persisted
+  `diagram` survives this PR's Table seed (IGO-24; C-D6 and C-D7
+  re-recorded). The fresh open re-applies `CurrentConfig.Filters`. The
+  store's decode: missing → the default and writable; unreadable,
+  `Unparseable`, `NewerVersion` → the default, NOT writable, the file
+  untouched, logged.
 
 ### The contracts (PR C)
 
@@ -8525,8 +8659,8 @@ surface does (`CanvasSurfaceView.cs:1035`, `:1058`); the template's
 `Model="{Binding Graph}"` stays its one binding. THE PRESENTER SEAM —
 IGraphSurfacePresenter: RequestProjectionFocus (Term F1's raise, never
 an immediate `Focus()`), FocusFilterField, DismissTransientRegion,
-ProjectionHasFocus, FilterFieldHasKeys, IsLive — implemented by
-`GraphSurfaceView`. ATTACHMENT on every `HandleKey` and on the
+ProjectionHasFocus, FilterRegionHasKeys (the field, the count region or
+Clear — IGO-14), IsLive — implemented by `GraphSurfaceView`. ATTACHMENT on every `HandleKey` and on the
 false→true edge of `IsKeyboardFocusWithin`, kept afterwards;
 DETACHMENT (IGN-12): on `Unloaded` — the route a CLOSE takes, since the
 tab's `Dispose` never clears `Graph` (`WorkspaceViewModel.cs:694–702`)
@@ -8595,8 +8729,11 @@ token; (ii) the FAILURE ARM (IGM-13) — `:257–265` clears
 and `testPresetOutcomesAreTyped` (`GraphCommandsTests.swift:56–77`,
 `:97–125`) assert through the calls; the same cases land as Rust facts
 (`preset_query_is_the_mac_mapping`, `preset_outcome_counts_or_names_row_zero`);
-three mac facts pin (i) and (ii) (`testPresetFromTheActiveTableWithANeedleAndAKindChangeSpeaksOnce`,
-`testPresetFromDiagramModeSpeaksOnce`, `testAFailedPresetLeavesNoPendingHeadline`).
+three mac facts pin (i) and (ii), each asserting the COMPLETE list —
+exactly one `GraphPreset`, no summary, no count (IGO-27)
+(`testPresetFromTheActiveTableWithANeedleAndAKindChangeSpeaksTheHeadlineAlone`,
+`testPresetFromDiagramModeSpeaksTheHeadlineAlone`,
+`testAFailedPresetLeavesNoPendingHeadline`).
 The spec's Consumes list gains the three names (CD-11). Pinned by
 facts: the Rust cases; the surface count exact; the mac lane; the
 Windows crossings per path (ThePresetsCrossingsAreOnePerInvocationAndOnePerPublication).
@@ -8611,10 +8748,13 @@ chordless and therefore `ChordScope.None` (B-14's shape, `ChordTable.cs:
 comparison), each resolved in `BuildResolvers()` to a workspace command
 — GraphOrphansCommand, GraphUnresolvedCommand, GraphMostLinkedCommand —
 whose body is the navigator's `RunPreset(GraphPreset.X)`; `CanExecute`
-always true. `RunPreset`, rule P: (i) the admission is `OpenGraph()`'s
-(`WorkspaceViewModel.cs:2020–2029`; the mac's
-`propertyEditNavigationDisabledReason` gate has no twin, C-D1); (ii)
-BEFORE the open and OUTSIDE any mutation, `ViewState.ApplyQuery(
+always true. `RunPreset`, rule P: (i) the admission is asked FIRST
+through the workspace's GraphOpenAdmissionReason seam (Term P3; null
+today — `OpenGraph()`, `WorkspaceViewModel.cs:2020–2029`, has no gate
+and the mac's `propertyEditNavigationDisabledReason` has no twin,
+C-D1) and a refusal ends the verb with nothing written; (ii) BEFORE the
+open and OUTSIDE any mutation, the navigator records the view state's
+three query fields and calls `ViewState.ApplyQuery(
 SlateUniffiMethods.GraphPresetQuery(preset))` (C-4; the argument bound
 to the crossing, C-15 v) — transient, no save, no `CurrentConfig` write
 (Term P5); (iii) the arm is set (Term P2); (iv) the open runs as
@@ -8630,8 +8770,9 @@ site, `Persistence.cs:172–177`, extended to return whether the arm was
 consumed); (vi) after the mutation, Term P3: consumed → done;
 unconsumed with `GraphTabIsEffective()` and the seated `_graphDocument`
 live → `document.Request(Preset(preset))` (Term Q1 — A-5's class, the
-mac's `:450–451`); otherwise nothing. ONE load per invocation from ONE
-of the two routes; the census (C-15 iv) walls both. THE TOKEN AND THE
+mac's `:450–451`); otherwise the recorded query is RESTORED through
+`ApplyQuery` and nothing loads (IGO-22). ONE load per invocation from
+ONE of the two routes; the census (C-15 iv) walls both. THE TOKEN AND THE
 LINE: Term P4 — the receiver (A-2's, `GraphDocumentViewModel.cs:
 472–562`) speaks `GraphPreset{outcome}` with `outcome =
 graph_preset_outcome(preset, rows.Count, rows.FirstOrDefault())`
@@ -8644,13 +8785,18 @@ no `GridSorted`; the mac arms `GridSorted` only for a grid sort,
 `GraphTableViewTests.swift:225–240`, asserts the accepted sort and the
 outcome and no line); a pair FAILING under `Preset` posts
 `GraphBlocked{LoadFailed}` and nothing remembers the preset; a
-superseded preset token speaks nothing (CD-Q3, CR-1) except that a
-NEEDLE typed during the pair carries the policy (Term Q4) and a SORT
-during it publishes a `FilterCount` pair with `GridSorted` on adoption;
-a later silent pair cannot replay the headline (Term Q2: nothing
-remembers it). NO LANDING (Term P5; C-D12): A-7's re-seat applies; the
-open's own focus request lands the surface through rule F; a preset
-from the graph already effective moves focus nowhere. The overlay
+superseded preset token speaks nothing of its own (CD-Q3, CR-1; Term
+P4): a NEEDLE typed during the pair carries the policy (Term Q4); a SORT
+during it is a rows-only token whose receiver, finding the held filter
+changed, issues A-2's silent re-fetch carrying the sort — adopted with
+`GridSorted` and no count and no headline (Terms Q3, Q4; the mac's
+sort-during-preset publishes the count instead, `:296–309` —
+recorded, C-D19); a later silent pair cannot replay the headline (Term
+Q2: nothing remembers it). NO SELECTION (Term P5; C-D12): A-7's re-seat
+applies; the open's own focus request lands the graph's projection
+through rule F in every case, the already-effective one included
+(`TryFocusGlobalGraph`'s unconditional request, `Layout.cs:217`;
+C-D18). The overlay
 CLEARS on a fresh open (C-10) and on PR E's manual filter change
 (`ApplyQuery` with a null overlay; a hand-off row), NOT on a needle
 keystroke (the mac's `GraphTableView.swift:177–184`). Pinned by facts,
@@ -8663,11 +8809,13 @@ the follow method issued nothing);
 APresetFromTheGraphVisibleInTheOtherGroupOntoReadyLoadsOnceThroughTheRequestEntry
 (the by-group transition consumed nothing, Term 4 as frozen);
 APresetFromTheGraphHiddenInTheOtherGroupLoadsOnceThroughTheFollowMethod;
-ARefusedOpenClearsTheArmAndLoadsNothing (the fact injects the refusal);
+ARefusedAdmissionWritesNothing (the seam refuses);
+AnOpenThatNeverMadeTheGraphEffectiveRestoresTheQueryAndLoadsNothing;
 TheArmSurvivesTheFunnelCallsThatSeeAnotherTab;
 EachOutcomeAndNoNotesToRankOnAnEmptyVault;
 AFailingPresetPairSpeaksTheBlockAndNoHeadline;
-ASortDuringThePresetsPairSpeaksTheCountAndGridSortedNotTheHeadline;
+ASortDuringThePresetsPairAdoptsWithGridSortedAndNoCountAndNoHeadline;
+APresetFromTheEffectiveGraphLandsTheProjection (C-D18);
 ANeedleDuringThePresetsPairCarriesTheHeadline;
 AProbeAfterTheHeadlineReplaysNothing;
 APresetOverAFolderSortResetsSilentlyWithNoGridSorted;
@@ -8713,8 +8861,11 @@ from `ViewState.NameQuery` when they differ (the canvas's `RenderFilter`
 shape, `CanvasSurfaceView.cs:1416–1428`); the COUNT REGION
 GraphFilterSummary — a focusable `TextBlock`, its own Tab stop,
 `AutomationId` GraphFilterSummary, `Name` = "Filter results: " + the
-document's FilterCountText (C-6) — VISIBLE exactly while the PUBLISHED
-query narrows — the document's `NeedleNarrows` over the publication's
+document's FilterCountText (C-6) — a label prefix over core's rendered
+string, the shape frozen A-7 ships for the grid's own region
+(`Summary: {audio_summary}`, `:524`; IGO-16 refuted on that precedent:
+the prefix is §W-C's label class, the count is the event's render) —
+VISIBLE exactly while the PUBLISHED query narrows — the document's `NeedleNarrows` over the publication's
 accepted needle, or its accepted `KindOnly` set — AND the publication is
 CURRENT (Term Q7); collapsed otherwise; and CLEAR — GraphClearFilter, a
 `Button` "Clear", `Name` "Clear filter", visible exactly while the RAW
@@ -8754,11 +8905,14 @@ entry refuses when retired; `Load`'s throw at `:393` is not reached).
 `ClearNameQuery()` is `SetNameQuery(string.Empty)`. THE TOKEN: Terms
 Q1–Q5 — rows-only under Term Q3's condition with Silent policy and the
 pending sort, else a pair carrying the displaced audible policy or
-`FilterCount`; one token per keystroke, one crossing each (Term Q8); a
-burst lands its last rows once and — when its lineage is rows-only or
-`FilterCount` — speaks one count, coalesced by the filter class (200 ms,
-latest wins; A-10) and gated on its token (Term Q6); a burst that
-inherited Summary or Preset speaks that line and no count (IGN-22). No
+`FilterCount`; one token per keystroke — one crossing each with a
+snapshot held and nothing in flight, two each while a pair is in flight
+(Term Q8, IGO-3); a burst lands its last rows once and — when its
+lineage is rows-only or `FilterCount` — speaks one count, coalesced by
+the filter class (200 ms, latest wins; A-10) and gated on its token
+(Term Q6); a burst that inherited Summary or Preset speaks that line
+and no count (IGN-22). A SORT's lines are `GridSorted` then the
+coalesced count and nothing else (Term Q4; IGO-1). No
 host debounce on the FETCH (CD-Q4, CR-2). A `KindOnly` change issues no
 token of its own (its writers are followed by a pair). THE COUNT: the
 rows-only receiver and a `FilterCount` pair speak `GraphFilterCount{rows.Count,
@@ -8773,8 +8927,14 @@ shown" with k the overlay's subset; no cleared line exists in the graph
 family and none is composed (R-C). Pinned by facts, under the pumped
 dispatcher (`GraphDocumentTests`): OneTokenPerKeystrokeAndTheBurstLandsTheLastOnce;
 ANeedleEqualToTheCurrentIssuesNothing;
-ANeedleDuringTheInitialPairIsAPairCarryingTheSummary (two crossings,
-not four; the summary spoken once, no count);
+ANeedleDuringTheInitialPairIsAPairCarryingTheSummary (two crossings
+for that needle; the summary spoken once, no count);
+ABurstDuringAPairCostsTwoCrossingsPerKeystroke;
+ARequestOnAnUnseatedOrRetiredDocumentIsRefusedWithoutMutation;
+ARejectedCurrentEnvelopeEndsTheLineage;
+AnUnchangedProbeSetsNoLineage; AFailingSilentPairLeavesThePendingSortStanding;
+TheHighWaterPairPrecedesTheReissuedSort;
+AFilterRequestIsAFilterCountPairDroppingTheOverlayAndAPresetInFlight;
 ANeedleDuringAPresetPairCarriesTheHeadline;
 ANeedleUnderErrorIsAPairSpeakingTheCount;
 ANeedleKeepsThePendingSortAndGridSortedSpeaksOnAdoption;
@@ -8783,7 +8943,8 @@ ASortDuringAPairIsAFilterCountPair;
 AQueuedCountIsDroppedByANewerToken; ACountQueuedBeforeAPresetIsDropped;
 TheRawNeedleCrossesUntrimmedAndCoreDecides;
 TheCountsTextEqualsTheRegions; TheRegionIsEmptyUnderLoadingAndError;
-ASortsCountStillSpeaks; ACountWhoseTabLeftEffectiveIsDroppedAtFire;
+ASortSpeaksGridSortedThenTheCoalescedCountAndNothingElse;
+ACountWhoseTabLeftEffectiveIsDroppedAtFire;
 AClearedNeedleUnderTheGhostOverlaySpeaksTheSubsetCount;
 SetNameQueryOnARetiredDocumentWritesTheStateAndIssuesNothing;
 TheLineageRecordIsTheTokenInFlightAndNothingElse (Term Q2).
@@ -8805,9 +8966,10 @@ needle is non-empty → `ClearNameQuery()` (C-6: a token; the count is the
 line, on publish) then RequestProjectionFocus — a Term F1 request
 carrying the CLEARED query, delivered by Term F3 only when the cleared
 publication is current (never onto the old EMPTY host or the old rows,
-IGN-10) — consumed; (2) the field or the summary holds the keys with no
-needle → RequestProjectionFocus (delivered at once by Term F2's
-request-change trigger, IGN-9) — consumed; (3) otherwise NOT consumed:
+IGN-10) — consumed; (2) the filter REGION — the field, the count region or Clear —
+holds the keys with no needle (the presenter's FilterRegionHasKeys,
+IGO-14) → RequestProjectionFocus (delivered at once by Term F2's
+request-change trigger when quiescent, IGN-9) — consumed; (3) otherwise NOT consumed:
 the press bubbles to the shell. Rung 1 speaks nothing of its own. The
 mac has no ladder on the graph (C-D3). The Escape row: a `Chord` entry
 `windows.graph.escapeLadder` in `ChordScope.Graph` with its reason (the
@@ -8846,8 +9008,11 @@ the mac's Table-mode ⌃⌘I is a silent no-op (C-D4). When admitted: ONE
 event from the seam → `WhereAmIText = GraphAnnouncer.RenderLabel(event)`
 (a bindable on the navigator, cleared on detach) AND the document's new
 seam `AnnounceWhereAmI(event)` → `AnnounceIfEffective` through the relay
-— one render, spoken and shown (the canvas's C11), the full row copy by
-construction (0a-6). The PANEL, in `GraphSurfaceView` below the
+— ONE EVENT, composed once, rendered twice by the same deterministic
+renderer (the panel's `RenderLabel` and the relay's `Emit`,
+`GraphAnnouncer.cs:87–91`, `:117–121`; IGO-31): the panel and the
+speech cannot drift because they render one value, not because the
+renderer ran once; the full row copy by construction (0a-6). The PANEL, in `GraphSurfaceView` below the
 projection: GraphWhereAmIPanel (a named group, "Where am I?"),
 GraphWhereAmIReadback (a read-only `TextBox`, `AcceptsReturn`,
 `LiveSetting = Off`; `Name` "Where am I?"), GraphWhereAmIClose (a
@@ -8864,7 +9029,10 @@ graph's diagram slice, W6-2 PR D"; the spec's acceptance line and §7's
 "Lands C" say so (CD-11). If the owner takes CD-Q2's alternative, the
 seam answers on the TABLE too, from the shared key's node in the held
 SNAPSHOT rendered the diagram's way, `NoSelection` with no key, no zoom
-clause — delivered here. Pinned by facts:
+clause — and ONLY while the lineage is quiescent (Term Q7/F3: with a
+request in flight the verb is unavailable, so an old node is never
+read under new filter prose), pinned by the nine witnesses (0a-6's
+eight and the amendment's ninth; IGO-29) — delivered here. Pinned by facts:
 TheRowItsScopeItsDivergenceAndTheSharedChordDisposition;
 WhereAmIIsRefusedWithANullSeamAndWithANullReturningSeam;
 InstallingTheSeamRaisesAvailabilityAndTheRowEnables;
@@ -8905,13 +9073,20 @@ Names on the leaf's `Verbosity` change without a load; an in-flight
 publication renders at its realisation with the level then. NOTHING is
 spoken for the change itself (the canvas's C13 reasoning). THE MENU
 (C-12): the `_Verbosity` submenu (`AutomationId` GraphVerbosityMenu)
-is BUILT FROM THE VECTOR — `ItemsSource` bound to `Levels`, each item a
-`CheckMenuItem` through an item container style: `Header` = the spec's
-`Title`, `CommandParameter` = its `Tag`, `IsChecked` = `IsSelected(spec)`
-(OneWay), `Command` = the setter, `AutomationId` = "GraphVerbosity." +
-tag — and the XAML carries NO literal level (0b-1; 0b-12); the census
-asserts the submenu declares no literal `CheckMenuItem` and a fact over
-the built menu asserts its items equal the vector in order. The three
+is BUILT FROM THE VECTOR in code — a WPF `MenuItem`'s `ItemsSource`
+generates plain `MenuItem` containers and no style can make them the
+shell's derived `CheckMenuItem` (`CheckMenuItem.cs:22`; IGO-17) — so
+the window's code-behind populates the submenu's `Items` once from the
+preferences' `Choices`: one GraphVerbosityChoice view model per spec
+(its `Title`, `Tag`, and an `IsSelected` property the preferences
+update on every level change) and one `CheckMenuItem` per choice —
+`Header` = `Title`, `CommandParameter` = `Tag`, `IsChecked` bound OneWay
+to `IsSelected`, `Command` = the setter, `AutomationId` =
+"GraphVerbosity." + tag — and the XAML declares the empty submenu and
+NO literal level (0b-1; 0b-12); the census asserts the submenu declares
+no `CheckMenuItem` in XAML and that the populating loop iterates
+`Choices`; a fact over the built menu asserts its items equal the
+vector in order and follow a level change. The three
 `Unreg` dispositions `windows.graph.setVerbosityTerse`,
 `windows.graph.setVerbosityStandard`, `windows.graph.setVerbosityVerbose`
 in `CommandSection.Graph` with a GraphVerbosityReason twin of the
@@ -8952,21 +9127,23 @@ bounded at `WorkspaceViewModel.cs:2300–2306`), Term W5's flush at
 `Shutdown()` (first in `ShutdownGraphDocument`; the timer stopped, a
 pending pair enqueued at once, no scheduler involved), Term W6's read
 (the writer's `Newest(key)`, else the store), Term W7's `CurrentConfig`.
-THE AGGREGATE at each schedule (the mac's `graphConfigSaveAggregate`,
-`:61–71`): `CurrentConfig` with `filters` = the view state's `Filter`
-and `NameQuery`, `connectionsDepth` = the leaf's `Depth`, `verbosity` =
-the preferences', `mode` = the view state's; `groups`, `display` and
-`forces` as held (PR E writes them); never `KindOnly`. THE TRIGGERS in
-this PR: the navigator's `SetNameQuery`, `SetVerbosityCommand`, the
-leaf's `SetDepth` when it changes the depth (a `DepthChanged` seam the
-workspace installs; the mac's `setConnectionsDepth`,
-`AppState+Connections.swift:169–175`) — and NOT a preset (Term P5). A
-needle typed under a transient preset persists the preset's backend
-filter with it (C-D7). THE SEED: the preferences read at the workspace's
+THE AGGREGATE at each schedule is `CurrentConfig` itself, each trigger
+having updated ITS field (Term W7): `SetNameQuery` → `filters.nameQuery`,
+`SetVerbosityCommand` → `verbosity`, the leaf's `SetDepth` when it
+changes the depth (a `DepthChanged` seam the workspace installs; the
+mac's `setConnectionsDepth`, `AppState+Connections.swift:169–175`) →
+`connectionsDepth`, the preferences' `SetMode(mode)` → `mode` (built
+here for PR D's switch, the mac's `setGraphMode`; IGO-23) — and NOT a
+preset (Term P5); `groups`, `display` and `forces` as held (PR E writes
+them); never `KindOnly`. The live view state is NOT folded in — the
+mac's aggregate reads its live filter (`:63–67`) and so persists a
+transient preset's backend filter on ANY later save; Windows persists
+only what a trigger changed (C-D7 re-recorded; IGO-24). THE SEED: the preferences read at the workspace's
 construction (the mac's eager load, `AppState.swift:9922`) and seed the
 view state through `ApplyQuery` with `CurrentConfig.Filters` and a null
-overlay, `Groups` = its groups, `Mode` = Table in THIS PR (C-D6); the
-leaf's constructor takes `initialDepth`, passed by `NewConnectionsLeaf`
+overlay, `Groups` = its groups, `Mode` = Table in THIS PR while `CurrentConfig`
+keeps the file's `diagram` unpersisted-over (C-D6); the leaf's
+constructor takes `initialDepth`, passed by `NewConnectionsLeaf`
 (`WorkspaceViewModel.Connections.cs:85–105`) as
 `GraphPreferences.CurrentConfig.ConnectionsDepth` — the argument bound to
 that member at the call site by the depth census's dataflow arm
@@ -8987,7 +9164,13 @@ AnUnreadableExistingFileRefusesTheWrite;
 TheWrittenBytesAreCoresCanonicalTextWithAnUnknownKeyPreserved;
 TheTargetIsNeverTorn; TwoSpellingsOfOneRootShareOneQueueAndOneGeneration
 (`C:\\Vault` and `c:\\vault\\`); TheGenerationIsReservedAtScheduleTime
-(an older hand-off released after a newer one is dropped);
+(an older hand-off released after a newer one is dropped at the call,
+never queued); NewestIsTheHighestOutstandingAndNeverAFailedOrDoomedOne;
+AFailedWriteIsLostAndTheReopenReadsTheFile;
+ATickAndAShutdownTransferOnePendingPairExactlyOnce;
+AScheduleAfterShutdownIsRefused;
+SetModeUpdatesCurrentConfigAndSchedules;
+AVerbosityChangeUnderAPresetPersistsThePrePresetFilter;
 AStragglerFromAClosedWorkspaceNeverOverwritesAReopenedWorkspacesWrite;
 AReopenDuringAStragglingWriteReadsTheStragglersAggregate (Term W6);
 TenSchedulesIn400msEnqueueOnceWithTheLastAggregate;
@@ -9109,10 +9292,13 @@ navigator posts nothing itself; (x) the delivery-evidence census and
 gains the row of C-16; (xii) `GraphQuerySurfaceCensus` (`:48–61`)
 asserts the EXACT count (twenty-eight), UNIQUE names, both new functions
 PRESENT and bound FREE; (xiii) the label theory (C-13); (xiv) the
-no-host-trim census (C-5); (xv) the writer census: exactly one
-GraphConfigWriter in the process (a static instance), `Reserve` called
-from the preferences' schedule alone, `Enqueue` from the timer's elapse
-and `Shutdown` alone, `Newest` from the constructor's read alone;
+no-host-trim census (C-5); (xv) the writer census, TRANSITIVE: exactly one GraphConfigWriter in
+the process (a static instance); `Reserve` called from the preferences'
+schedule alone, `Enqueue` from the timer's tick and `Shutdown` alone,
+`Newest` from the constructor's read alone; the store's `Write` reached
+from the writer's queue body alone, and `GraphConfigEncode` and
+`File.Move` reached under `Graph/` from the store's `Write` alone — a
+direct store write anywhere else fails it (IGO-25);
 (xvi) `MacCatalogParityTests`: the four ids are mac's and their labels
 equal (P3); the `windows.graph.*` dispositions are not command ids. Each
 census lands with the mutation it kills, named in the task-loop record.
@@ -9128,8 +9314,14 @@ read-only Edit), Clear (Button), the state host (Group), the Graph menu
 — with the evidence cell naming the journey and the axe label;
 `chords.json` through the projection. The spec's lines are amended in
 place (CD-11): §1's `GraphSurfaceView` and `GraphNavigator.cs` lines
-(revision 2's amendment; the navigator's map gains PR D's four viewport
-chords ONLY — the mode switch is A-11's control, IGN-20); §1 R-E's
+(revision 2's amendment, corrected again: the navigator's map gains PR
+D's four viewport chords ONLY — the mode switch is A-11's control, and
+the words "and the mode switch" leave the §1 line, IGN-20, IGO-26);
+§PR C's Tests line ("filter machine", the readback and the verbosity
+persistence under one class → the suites C-15 and the pins name:
+GraphNavigatorTests, GraphPreferencesTests, GraphConfigStoreTests,
+GraphConfigWriterTests, `GraphDocumentTests`, `GraphTableTests`;
+Where-am-I unavailable until D under CD-Q2's default — IGO-30); §1 R-E's
 counts ("the five chorded rows … the four routed chords" → five
 REGISTERED chorded command rows — `whereAmI` and D's four viewport rows
 — plus the non-command Escape disposition, the map's population two in
@@ -9212,7 +9404,21 @@ TheStateHostHasAGroupPeerNamedByTheState.
   current, provisional under LOADING, a window arm, a focusable state
   host.
 - **CD-17 — Rule 4 invoked at round 2** (rule 5 counting it double):
-  this revision is the design pass; the next round reviews the rules.
+  revision 3 was the design pass.
+- **CD-18 — Rule 5 the second time at round 3**: revision 4 corrects
+  every finding in the rules' terms; a third instance at round 4 freezes
+  the text as corrected under the B1/B2 precedent, the ledgers carried
+  into the task loop — the owner may overrule.
+- **CD-19 — A sort is always rows-only** (Term Q3, A-5 as frozen); a
+  needle during a pair is a pair; the count is the rows-only receiver's
+  and a `FilterCount` pair's, and a sort's lines are `GridSorted` then
+  the count — PR A's shipped path and the mac's.
+- **CD-20 — The focus landing is a restoration onto the quiescent
+  lineage** (Term F3): no query on the record, no seat on a stale host,
+  withdrawn when the reader departs.
+- **CD-21 — `CurrentConfig` is updated by field and IS the aggregate**
+  (Term W7): the live view state is never folded in; a failed write is
+  lost as the mac's is (CR-7).
 
 ### Recorded divergences (PR C)
 
@@ -9228,10 +9434,12 @@ TheStateHostHasAGroupPeerNamedByTheState.
   714–715`), so P1-3's keywords "broken links" and "hubs" reach nothing
   on Windows; the hints carry them.
 - **C-D6 — A persisted `diagram` mode seeds Table in this PR** (C-10);
-  PR D restores it; a needle keystroke under a persisted `diagram` would
-  persist `table` until then.
-- **C-D7 — A needle under a transient preset persists the preset's
-  backend filter** (C-10), as the mac's aggregate does (`:63–67`).
+  `CurrentConfig` keeps `diagram` and no trigger of this PR writes
+  `mode`, so the file keeps it; PR D restores it.
+- **C-D7 — A needle under a transient preset does NOT persist the
+  preset's backend filter** (Term W7): the mac's aggregate reads its live
+  filter (`:63–67`) and persists the transient filter on any later save;
+  Windows persists only the field a trigger changed.
 - **C-D8 — A restored graph tab shows the persisted filter** (C-10);
   the mac's restore shows the defaults until the next plain open.
 - **C-D9 — Menu items for Open Graph and the presets** (C-12).
@@ -9254,9 +9462,15 @@ TheStateHostHasAGroupPeerNamedByTheState.
 - **C-D16 — A Where-am-I panel on the graph** (C-8): the mac has one on
   the canvas alone.
 - **C-D17 — A pending user sort survives a silent pair** (Term Q5): the
-  receiver re-issues it after the probe's or the re-fetch's pair
-  installs; the mac drops it on a generation mismatch
-  (`AppState+GraphTable.swift:297`, `:301`).
+  receiver re-issues it after the probe's pair installs; the mac drops
+  it on a generation mismatch (`AppState+GraphTable.swift:297`, `:301`).
+- **C-D18 — A preset lands the reader on the graph's projection in
+  every case** (Term P5): the shell's open requests editor focus for an
+  existing graph too (`Layout.cs:217`); the mac's palette returns focus
+  where it took it.
+- **C-D19 — A sort during a preset's pair adopts with `GridSorted` and
+  no count** (Term Q4): the mac's rows-only result passes its checks and
+  speaks the count with the headline lost (`:296–309`, `:343–347`).
 
 ### Accepted risks (PR C)
 
@@ -9265,9 +9479,12 @@ TheStateHostHasAGroupPeerNamedByTheState.
   the preset's token drops whole. The mac's own race (`:206–208`,
   `:235–243`, `:480–510`). The fact that reproduces it is written so the
   risk is visible; the owner may take CD-Q3's alternative.
-- **CR-2 — One `graph_table_rows` crossing per keystroke** (Term Q8;
-  CD-Q4): the task loop measures the rows workload's median at 10k
-  (A-15) and records it beside this row.
+- **CR-2 — One `graph_table_rows` crossing per keystroke with a snapshot
+  held, and a PAIR per keystroke while a pair is in flight** (Term Q8;
+  CD-Q4): a burst typed during the initial load costs two crossings a
+  key until the first install; the task loop measures the rows and
+  snapshot workloads' medians at 10k (A-15) and records them beside this
+  row.
 - **CR-3 — The mac migration of C-2 is unrun on this box** (0bR-1's
   arbitration), its two defect fixes included.
 - **CR-4 — The config writer's atomicity is `File.Move` on one
@@ -9279,6 +9496,10 @@ TheStateHostHasAGroupPeerNamedByTheState.
   harmless to a reopened workspace; a process exit inside that window
   loses at most the last aggregate — the mac's best-effort actor has the
   same window.
+- **CR-7 — A failed write loses its aggregate** (Term W6): the writer
+  logs the failure and the next read is the file's — the mac's
+  best-effort actor (`GraphConfigStore.swift:148–159`); the read-only
+  gate from the READ is the protection, as there.
 - **CR-6 — A vault reached through a junction or a substituted drive
   is a different writer key** (Term W1): two workspaces on the two
   spellings could interleave writes to one file — the lifecycle's own
@@ -9294,9 +9515,12 @@ TheStateHostHasAGroupPeerNamedByTheState.
   too).
 - The Table view's two per-field observers re-issue tokens for the
   preset's own field writes and supersede the preset's pair (IGM-1,
-  IGN-4; `GraphTableView.swift:282–283`, `:276`, `:292`) — FIXED on the
-  mac lane by C-2's migration (one observer on the composed query, a
-  value rule).
+  IGN-4; `GraphTableView.swift:282–283`, `:276`, `:292`): the headline is
+  lost and, when the backend filter did not change, the COUNT speaks in
+  its place (IGO-27; `:296–309`, `:343–347`) — FIXED on the mac lane by
+  C-2's migration (one observer on the composed query, a value rule).
+- A sort during a preset's pair publishes the count and loses the
+  headline (`:296–309`) — C-D19.
 - The failure arm leaves the pending preset set (IGM-13; `:257–265`) —
   FIXED on the mac lane by C-2's migration.
 - A generation mismatch drops a pending user sort (`:297`, `:301`) —
@@ -9377,7 +9601,43 @@ TheStateHostHasAGroupPeerNamedByTheState.
 | IGN-23 | MINOR | taken — R-E's counts amended (C-16) |
 | IGN-24 | MINOR | taken — the tuple's comment (C-15 i) |
 
-### Tests that pin PR C (revision 3's list; the task loop records what lands)
+### Round 3 — thirty-one findings (IGO-1..31), dispositions; rule 5 the second time
+
+| Id | Severity | Disposition |
+|---|---|---|
+| IGO-1 | BLOCKER | REFUTED as a contradiction, TAKEN as a correction: the count on a rows-only publication is PR A's shipped receiver (`:551–560`) and the mac's (`:343–347`); A-5's "once" is `GridSorted`'s; Term Q4 now states a sort's complete list and the fact asserts it |
+| IGO-2 | BLOCKER (created by IGN-2's remedy) | taken — Term Q3: a sort is rows-only always (A-5); the receiver's silent re-fetch carries it |
+| IGO-3 | BLOCKER (created by IGN-2's remedy) | taken — Term Q8: 2N crossings during a pair, stated; CR-2 |
+| IGO-4 | BLOCKER | taken — Term Q1/Q3/Q4's `Filter` arm complete |
+| IGO-5 | BLOCKER (created by IGN-2/IGN-3) | taken — Term Q2: only an issued token sets the lineage; an unchanged probe sets nothing |
+| IGO-6 | BLOCKER (created by IGN-2) | taken — Term Q2: a rejection is terminal |
+| IGO-7 | BLOCKER (created by IGN-3) | taken — Term Q5: a user token's failure rolls back; a silent pair's leaves the sort standing; the re-issue after the next install |
+| IGO-8 | BLOCKER (created by IGM-19) | taken — Term Q1: live ∧ seated admission for every arm |
+| IGO-9 | BLOCKER | taken — Term P4 defers the replacing token's line to Q4; the sort-during-preset sequence stated (C-D19) |
+| IGO-10 | BLOCKER (created by IGN-10/11) | taken — Term F3: the provisional seat only under LOADING with no snapshot |
+| IGO-11 | BLOCKER (created by IGM-16/IGN-10) | taken — Term F3: quiescence, not query equality; failures are terminal and deliverable onto what is shown |
+| IGO-12 | BLOCKER (created by IGN-10) | taken — Term F1/F3: no query or seq on the record; a restoration onto the quiescent lineage |
+| IGO-13 | BLOCKER (created by IGM-5/IGN-9) | taken — Term F2: owner identity, `IsVisible`, the active group, the departure withdrawal |
+| IGO-14 | BLOCKER | taken — FilterRegionHasKeys (C-1, C-7) |
+| IGO-15 | BLOCKER (created by IGM-4) | taken — Term P5: the opener's request lands the projection in every case; C-D18 |
+| IGO-16 | BLOCKER | REFUTED — A-7's frozen `Summary: {audio_summary}` region is the same shape: a label prefix over core's render (C-5) |
+| IGO-17 | BLOCKER (created by IGM-9) | taken — the submenu populated in code from per-level choice view models (C-9) |
+| IGO-18 | BLOCKER (created by IGN-7) | taken — Term W2's four facts; Term W6's failure policy; CR-7 |
+| IGO-19 | BLOCKER (created by IGN-5) | taken — Terms W4/W5: the dispatcher-serialised state machine, one transfer |
+| IGO-20 | MAJOR (created by IGN-3) | taken — Term Q5: the high-water pair first |
+| IGO-21 | MAJOR (created by IGN-7) | taken — Term W2: atomic admission; `Newest` the highest outstanding |
+| IGO-22 | MAJOR | taken — Term P3: the admission seam first, the query restored on an ineffective open |
+| IGO-23 | MAJOR | taken — Term W7: `SetMode` |
+| IGO-24 | MAJOR | taken — Term W7: by field; C-D6, C-D7 re-recorded |
+| IGO-25 | MAJOR | taken — the transitive writer census (C-15 xv) |
+| IGO-26 | MAJOR (created by IGN-20) | taken — the §1 line's words removed (C-16) |
+| IGO-27 | MAJOR (reopens IGM-1/IGN-4) | taken — the trace corrected; the mac facts assert the complete list |
+| IGO-28 | MAJOR | taken — CD-Q4's alternative names the Scheduled state it would need |
+| IGO-29 | MAJOR | taken — CD-Q2's alternative: quiescence and the ninth witness (C-8) |
+| IGO-30 | MINOR | taken — the spec's Tests line (C-16) |
+| IGO-31 | MINOR | taken — "one event, rendered twice" (C-8) |
+
+### Tests that pin PR C (revision 4's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,
   `preset_outcome_counts_or_names_row_zero`, the surface count at

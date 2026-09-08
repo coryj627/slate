@@ -45,7 +45,8 @@ apps/slate-windows/src/SlateWindows/Graph/
                                       depth 1–3, re-root + back stack, ghost → create note
   GraphNavigator.cs            PR C   the command layer, one per WORKSPACE (§PR C C-1): the presets, Where-am-I, the
                                       needle's write and clear, the Escape ladder, the ChordScope.Graph map; PR D adds
-                                      the viewport verbs and the mode switch to the same map (amended, §PR C CD-11)
+                                      the four viewport verbs to the same map — the mode switch is A-11's control, not
+                                      a chord (amended, §PR C CD-11; corrected IGO-26)
   GraphDiagramView.cs          PR D   the visual projection (custom FrameworkElement + per-node peers, windowed;
                                       tier B summary above core's threshold), the layout session driver
   GraphInspectorView.xaml      PR E   filters / groups / display / forces (P2-4), sliders that announce once settled
@@ -203,7 +204,7 @@ Each PR section lists: **Goal · Consumes · Builds · Behavior pinned · Tests 
 
 **Behavior pinned.** Presets are parameterisations of the table (p1 §90): each sets the backend filter and sort and speaks its headline (`GraphPreset`), which SUPERSEDES the generic summary for that load — mac's rule (`AppState+GraphTable.swift:235–243` after PR 0b; `35_graph_contracts.md` AD-9 corrects the earlier `:195–199`), pinned; the filter count (`GraphFilterCount`) is coalesced with the fire-time gate; Where-am-I (`GraphWhereAmI`) reads the full row copy, the component, the zoom (when the diagram shows) and the active filters — always the full copy, the 0a-D1 correction — and renders in the panel — PENDING the owner's CD-Q2 (§PR C): under 0a-2b as frozen the readback is the DIAGRAM's, and this PR builds the row, the chord, the panel and the readback seam and admits the verb only when PR D's seam answers (the mac's route); the verbosity level persists in `.slate/graph.json` through core and is read at every announce; the Escape ladder (panel → filter → surface) as the canvas's.
 
-**Tests.** `GraphNavigatorTests` (presets, filter machine, Where-am-I readback equals the spoken string, verbosity persistence through the store with the m1 re-selection fact), `GraphConfigTests`' Windows twins; FlaUI `GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean` (axe `graph-navigator`).
+**Tests.** `GraphNavigatorTests` (the presets, the ladder, the chord half, the Where-am-I verb refused and admitted through its seam — the readback itself is PR D's under CD-Q2's default), `GraphDocumentTests` (the request lineage, the count), `GraphTableTests` (the field, the count region, Clear, the focus landing, the re-label), `GraphPreferencesTests` (verbosity with the m1 re-selection fact, `CurrentConfig`, the schedule and the flush), `GraphConfigStoreTests` and `GraphConfigWriterTests` (`GraphConfigTests`' Windows twins, the application writer); FlaUI `GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean` (axe `graph-navigator`) (amended, §PR C CD-11; IGO-30).
 
 **Evidence / acceptance.** The user filters by name, hears the count, jumps to orphans; asking Where am I and reading the panel is PR D's step under CD-Q2's default (this PR's journey asserts the disabled row and the chord's fall-through). Matrix rows: the three preset ids ✓, `slate.graph.whereAmI` pending until the graph's diagram slice (W6-2 PR D; CD-Q2's default); `w_c_matrix.md` "Graph navigator, filter and Where-am-I (W6-2 PR C)".
 
