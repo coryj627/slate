@@ -93,14 +93,14 @@ public sealed class GraphContractsCitationCensus
                 "C",
                 "## PR C — the navigator, the presets, the filter field, Where-am-I, verbosity, the config",
                 "<!-- end of the graph contracts document -->",
-                // The navigator section: the design pass, sixteen contracts,
+                // The navigator section: the design pass, seventeen contracts,
                 // the decisions, the divergences, the risks, the pins.
                 6_000,
-                // Revision 2 cites existing identifiers only through the
+                // Revision 3 cites existing identifiers only through the
                 // shell, its tests and the core and mac sources it names; C's
                 // own names are unbackticked until they exist. The floor sits
                 // one below the measured population and rises with the records.
-                111),
+                106),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
