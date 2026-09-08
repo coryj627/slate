@@ -203,7 +203,7 @@ except where "grouped" is written (0a-16).
 | `GraphPinned` | `pinned: bool` | `Pinned.` ‖ `Unpinned.` | | — |
 | `GraphZoom` | `fit: bool, percent: u32` | `Zoom ⟨percent⟩ percent.` ‖ `Fit graph. Zoom ⟨percent⟩ percent.` | | — |
 | `GraphMode` | `mode: GraphSurfaceMode` | `Table mode.` ‖ `Diagram mode.` | | — |
-| `GraphWhereAmI` | `selection: GraphWhereAmISelection, zoom_percent: u32, filter: GraphWhereAmIFilter, name_filter: Option<String>` | parts joined by `, ` then `.`: Node → the row copy at Standard grade, `component ⟨component⟩`; NoSelection → `No node selected`; then `zoom ⟨zoom_percent⟩ percent`; then Normal → `filters: ` + the active of `orphans only`, `attachments shown`, and `unresolved shown` ‖ `unresolved hidden` joined by `, `, UnresolvedOnly → `filters: unresolved shown`; then (when `name_filter` is Some and non-empty after trimming) `name filter “⟨trimmed needle⟩”`; then UnresolvedOnly → `unresolved only` | | — |
+| `GraphWhereAmI` | `selection: GraphWhereAmISelection, zoom_percent: Option<u32>, filter: GraphWhereAmIFilter, name_filter: Option<String>` — `zoom_percent` made optional by the owner's amendment of 2026-09-08 (W6-2 PR C, CD-24: the diagram's readback carries `Some`, the table's `None`) | parts joined by `, ` then `.`: Node → the row copy at Standard grade, `component ⟨component⟩`; NoSelection → `No node selected`; then (when `zoom_percent` is Some) `zoom ⟨zoom_percent⟩ percent`; then Normal → `filters: ` + the active of `orphans only`, `attachments shown`, and `unresolved shown` ‖ `unresolved hidden` joined by `, `, UnresolvedOnly → `filters: unresolved shown`; then (when `name_filter` is Some and non-empty after trimming) `name filter “⟨trimmed needle⟩”`; then UnresolvedOnly → `unresolved only` | | — |
 | `GraphTierEntered` | — | `Large graph: summary accessibility mode. Table mode has every node.` | | — |
 | `GraphTierSummary` | `count: u32` | `⟨count⟩ nodes — too many for per-node navigation. Switch to Table mode for the full, navigable list.` — LABEL; count bare | | — |
 | `GraphNeighborsContent` | `labels: Vec<String>` — the FULL ordered list of visible unique neighbours | `⟨the first GRAPH_NEIGHBOR_LABEL_CAP labels joined by ", "⟩` + (when more than the cap) ` and ⟨len − cap⟩ more`; empty labels → the empty string — LABEL (content title `Connects to`) | | — |
@@ -223,8 +223,8 @@ witness that violates one.
 | `GraphNeighborhoodCounts.depth` | 1..=3 — the session clamps before it exports |
 | `GraphFilterCount` | `shown ≤ total` — the needle narrows the fetched set |
 | `GraphForceValue.percent` | 0..=100 — a slider's value ×100, rounded |
-| `GraphZoom.percent`, `GraphWhereAmI.zoom_percent` | 10..=400 — the shared viewport clamps its scale to 0.1…4.0 (`CanvasRendererView.swift:12–13`) |
-| `GraphWhereAmI` | the selection is a DIAGRAM row (`references == in_links`, `embed == false`, the kind rules above); a Ghost only while ghosts are shown (Normal with `ghosts_shown`, or UnresolvedOnly), an Attachment only while attachments are shown, a Note only under Normal; under `orphans_only` the selection is a Note with `in_links == 0 && out_links == 0`; under a non-empty needle the selected label contains the trimmed needle under mac's predicate — case- AND diacritic-insensitive (`graphNameMatches`, `AppState+GraphConfig.swift:16–20`; core folds with NFD, drops combining marks, lowercases) |
+| `GraphZoom.percent`, `GraphWhereAmI.zoom_percent` (when present) | 10..=400 — the shared viewport clamps its scale to 0.1…4.0 (`CanvasRendererView.swift:12–13`); a `None` zoom is the table's readback (amended 2026-09-08, W6-2 PR C CD-24) |
+| `GraphWhereAmI` | the selection is a DIAGRAM row, or the table's snapshot node built the same way (amended 2026-09-08, W6-2 PR C CD-24) — `references == in_links`, `embed == false`, the kind rules above; a Ghost only while ghosts are shown (Normal with `ghosts_shown`, or UnresolvedOnly), an Attachment only while attachments are shown, a Note only under Normal; under `orphans_only` the selection is a Note with `in_links == 0 && out_links == 0`; under a non-empty needle the selected label contains the trimmed needle under mac's predicate — case- AND diacritic-insensitive (`graphNameMatches`, `AppState+GraphConfig.swift:16–20`; core folds with NFD, drops combining marks, lowercases) |
 | `GraphTierSummary.count` | above the tier-B threshold (1,500 as shipped, `GraphDiagramView.swift`; §2 row H moves the constant) |
 | `GraphNeighborsContent.labels` | one label per unique visible neighbour ID, in the host's traversal order — the TEXT may repeat (`a/Foo.md` and `b/Foo.md` both say `Foo`); the cap is core's |
 
@@ -312,7 +312,15 @@ constructor); NoSelection with a needle of U+00A0 U+2003 (trimmed
 empty → omitted); Normal with attachments shown and ghosts hidden with
 an Attachment (1 in, 0 out) selected; "Alpha" (3/1) with the needle
 U+2003`alpha`U+00A0 trimmed to `alpha`; and "Café" (2/4) under the
-needle `cafe`. Pinned by `graph_where_am_i_renders_every_state_exactly`,
+needle `cafe`. **Amended by the owner on 2026-09-08 (W6-2 PR C, CD-Q2's
+alternative — CD-24):** a NINTH witness — `NoSelection`, no zoom
+(`zoom_percent: None`), `Normal` with the default toggles (attachments
+hidden, ghosts shown, not orphans-only) and no needle, rendering `No
+node selected, filters: unresolved shown.` — is the TABLE's readback,
+reachable on both hosts (§PR C C-8); the three facts below assert
+nine, and "the host's reachable states" reads both hosts': a diagram
+state for the eight, the table's quiescent publication for the ninth.
+Pinned by `graph_where_am_i_renders_every_state_exactly`,
 `graph_where_am_i_witnesses_are_host_reachable` and
 `graph_witnesses_obey_the_payload_invariants`.
 
@@ -3112,7 +3120,13 @@ beside the relay, handed to the document at construction and to the
 Connections leaf, surviving the document's retirement (which no longer
 resets it) and dropped with the workspace; the census's wall widens to
 the workspace's graph partials and an instance census counts the one
-construction (§PR B2, B2-1). Attachment SEATS
+construction (§PR B2, B2-1). **Amended by the owner on 2026-09-08 (W6-2
+PR C, CD-Q1 — CD-23):** the view state has a SIXTH field, `KindOnly:
+GraphNodeKind?` (null) — the preset's kind overlay, core's `kind_only`,
+which no other field can express — written through `ApplyQuery` alone
+and never persisted; "five fields" reads six wherever this section
+says it, and the no-shadow census's name list gains `KindOnly` (§PR C
+C-4). Attachment SEATS
 and never starts: every tab of kind Graph attaches through
 `AttachTabDocumentsIfNeeded` (`WorkspaceViewModel.Bases.cs:1060–1079`)
 by a new arm beside the canvas's that creates the document on the first
@@ -3234,7 +3248,13 @@ SPEAK is decided after the fetch, on the dispatcher, from the
 effective-active level then (the mac's `:215`): a document whose tab
 closed during the fetch publishes nothing and announces nothing. The
 follow method's transitions, the sort and the probe share this ONE
-receiver. Pinned by facts, each under the pumped dispatcher context (the
+receiver. **Amended by the owner on 2026-09-08 (W6-2 PR C, CD-Q3's
+alternative — CD-25):** the silent pair the receiver issues at step
+(ii) inherits the dropped token's request whole — its policy, its
+preset, its sort and `UserSort` — under a fresh `seq` (§PR C rule Q,
+Term Q9), so a preset's or a needle's pair that straddled a rebuild
+speaks its line from the re-fetch over the newer generation; the pair
+is silent when the dropped token was. Pinned by facts, each under the pumped dispatcher context (the
 primitive's own facts: the compute never runs on the calling thread,
 the apply always runs on the context's thread, the drain returns only
 after the apply and after the work the apply enqueued — the fixed
@@ -3283,7 +3303,19 @@ and, when the next pair publishes with a generation below it, a silent
 pair follows. A silent pair announces nothing: no summary, no filter
 count, no status — the rows, the total and the summary region update
 under the reader. The probe is not debounced by the sidebar's 150 ms
-ticket (`:767–776`). Pinned by facts: a Slate write that changes the graph (a
+ticket (`:767–776`). **Amended by the owner on 2026-09-08 (W6-2 PR C,
+CD-Q3's alternative — CD-25):** the pair the probe issues while a token
+is IN FLIGHT supersedes it by INHERITING its request whole — the
+policy, the preset, the sort and `UserSort` — under a fresh `seq`, so
+the line the superseded token would have spoken (a summary, a
+headline, a count) is spoken by the replacing pair over the newer
+generation and is never lost to the refresh (§PR C rule Q, Term Q9;
+the leaf's B-D12 outcome); the pair is SILENT only when nothing is in
+flight or the token in flight is itself silent, and "a silent pair
+announces nothing" stands for the pair so issued. The mac's refresh
+supersedes and speaks nothing today (`:488–491`, `:235–243`) and is
+corrected on its lane in the same PR (§PR C C-2 (iv)). Pinned by
+facts: a Slate write that changes the graph (a
 save adding a link) reloads silently and the announcer records
 nothing; an external edit surfaces at the scan-finished arm and
 reloads; a save that does not change the generation issues no pair
@@ -7901,7 +7933,24 @@ written debounced by one serialised writer. PR D's diagram takes the
 navigator's readback and viewport seams; PR E's inspector takes the
 config's groups, display and forces.
 
-**This is revision 5 — FROZEN under the PR 0b precedent (protocol
+**This is revision 6 — the owner's answers to CD-Q1..CD-Q4, recorded
+in place on 2026-09-08; the freeze of revision 5 stands (CD-22).** The
+owner answered: CD-Q1 the default (A-1 and spec R-B amended in place —
+CD-23); CD-Q2 the ALTERNATIVE (0a-2b and 0a-6 amended in place: the
+zoom optional, a ninth witness, the readback on the table in this PR —
+CD-24); CD-Q3 the ALTERNATIVE (A-2 and A-3 amended in place: a
+replacing pair inherits the replaced request whole — rule Q's Term Q9;
+C-D11 and CR-1 withdrawn — CD-25); CD-Q4 the default (CD-26). The
+owner also asked whether the mac should change to keep parity under
+CD-Q1 and CD-Q2; the investigations are recorded under CD-23 (no mac
+change: the sixth field IS the mac's ownership) and CD-24 (yes: the
+mac's table chord is a silent no-op behind an always-enabled item, and
+its twin lands on the mac lane in this PR, separable to a follow-up
+issue by the owner's word). No term beyond what the answers require
+is changed; no round runs on this revision. Revision 5's account
+stands below.
+
+**Revision 5 was FROZEN under the PR 0b precedent (protocol
 rules 5 and 4), as B1 froze at revision 8 and B2 at revision 5.**
 Round 4 (IGP-1..25: eighteen blockers, six majors, one minor) found
 most of its blockers CREATED by revision 4's corrections — the third
@@ -7911,10 +7960,8 @@ corrected for every round-4 finding as its discharge (the fourth
 ledger says how; two are refuted with evidence), and the four ledgers
 IGM, IGN, IGO and IGP are carried as the ledger the task loop
 discharges by code, fact by fact — precedent applied; the owner may
-overrule. No round 5. The task loop does NOT start before the owner
-answers CD-Q1 (a frozen A-1 amendment C-4 depends on) and CD-Q2 (the
-shape of C-8); CD-Q3 and CD-Q4 stand at their defaults unless
-answered. Findings per round 28 / 24 / 31 / 25, blockers 11 / 11 / 19
+overrule. No round 5. The task loop did not start before the owner
+answered CD-Q1 and CD-Q2 (revision 6). Findings per round 28 / 24 / 31 / 25, blockers 11 / 11 / 19
 / 18 — the rounds did not fall, and each round's blockers were the
 previous corrections' consequences in the same four subsystems (the
 request lineage above all), which is the shape the precedent exists
@@ -7965,8 +8012,8 @@ frozen sections' shape wherever one exists and names the alternative
 beside it, so a round reviews the application of each default without
 the choice itself being a finding (the B2 precedent).
 
-**Owner decisions required before revision 2 (recorded here, answered
-in place):**
+**Owner decisions (recorded here at revision 1; answered in place by
+the owner on 2026-09-08 — revision 6):**
 
 - **CD-Q1 — Where does the preset's KIND OVERLAY live?** Core's
   `GraphVisibilityQuery` is three fields — the backend filter, the
@@ -7993,6 +8040,12 @@ in place):**
   seeded from the arm, with the restore and the close/reopen behaviour
   re-specified (IGP-17) — a second reason the default is the sixth
   field.
+  **Answered 2026-09-08: the default — A-1 and spec R-B amended in
+  place (CD-23). The owner asked whether the mac should change for
+  parity: no — the mac holds the overlay ON `AppState`
+  (`graphTableKindFilter`, `AppState.swift:3006`), the ownership the
+  workspace's view state mirrors (B2D-1), so the sixth field is the
+  mac's own shape; C-4 records the writers' correspondence.**
 - **CD-Q2 — Where-am-I on the TABLE.** Spec §PR C says the readback
   reads "the zoom (when the diagram shows)" and its acceptance line has
   the user "ask Where am I and read the panel" in this PR. The frozen
@@ -8024,6 +8077,15 @@ in place):**
   Recommended: the alternative, because it is what the spec's own text
   asks for and a pull surface on the table is worth the one witness;
   written as the default because 0a is frozen.
+  **Answered 2026-09-08: the ALTERNATIVE — 0a-2b and 0a-6 amended in
+  place; C-8 rewritten for the table's readback; the matrix row ✓ in
+  this PR (CD-24). The owner asked whether the mac should change too:
+  yes — the mac's Table-mode ⌃⌘I is a silent no-op behind an
+  always-enabled menu item (`whereAmIRouteTarget`, `:367–373`), the
+  class of defect 0a-D1 and C-2 correct on the mac lane, and 0a-6's
+  premise is that every witness is host-reachable; the mac's twin is
+  written into C-8 and lands in this PR, separable to a follow-up
+  issue by the owner's word.**
 - **CD-Q3 — A preset's headline under a superseding silent pair.** The
   mac clears its pending preset on ANY successful publish and speaks it
   only when the publishing load was audible and the tab active
@@ -8044,6 +8106,16 @@ in place):**
   frozen A-2 and A-3 and the mac's behaviour with it, and would rewrite
   Terms P4, Q4 and Q5, C-3, C-D11 and CR-1 together. Recommended: the alternative, for the same reason
   BD-10 took it for the leaf; written as parity because A is frozen.
+  **Answered 2026-09-08: the ALTERNATIVE, by INHERITANCE (Term Q9): a
+  pair that replaces a token in flight — the probe's superseding pair,
+  the receiver's re-fetch — carries the replaced token's request whole
+  (policy, preset, sort, `UserSort`) under a fresh `seq`; A-2 and A-3
+  amended in place; C-D11 and CR-1 withdrawn; the mac's twin in C-2
+  (iv) (CD-25). The leaf's own mechanism — DEFERRAL (rule C Term 4,
+  B-D12: the probe issues nothing while a load is in flight) — was
+  considered and not taken: it speaks the headline over the OLDER
+  generation and then refreshes the rows under it, and its mac twin is
+  the larger change; inheritance speaks it over the newer.**
 - **CD-Q4 — The needle's fetch cadence.** The mac issues a rows-only
   token on EVERY needle keystroke with no debounce
   (`GraphTableView.swift:282`; `requestGraphTableRows`,
@@ -8062,6 +8134,7 @@ in place):**
   currency, cancellation and focus rules (IGO-28); the section defines
   none because the default issues the token at the keystroke. Not
   recommended; listed so the round does not have to raise it.
+  **Answered 2026-09-08: the default (CD-26); CR-2 stands.**
 
 ### What stands today (A, B1, B2 merged)
 
@@ -8412,8 +8485,12 @@ surface's field, panel and state host).
   forgets the preset; a SUPERSEDED preset token speaks NOTHING of its
   own — the replacing token's line is Term Q4's (a needle's pair speaks
   the count — the mac's; a sort adopts with `GridSorted` and, when the
-  held snapshot is COMPATIBLE, the count — Term Q4's branch, IGP-5; a
-  probe's pair is silent — IGO-9).
+  held snapshot is COMPATIBLE, the count — Term Q4's branch, IGP-5) or
+  Term Q9's (a PROBE's pair, or the receiver's re-fetch, INHERITS the
+  preset's request whole — policy `Preset`, the preset, `DefaultSort`,
+  `UserSort` false — and its install speaks the headline over the NEWER
+  generation: CD-Q3's alternative, taken at revision 6; IGO-9's silent
+  probe superseded).
 - **Term P5 — transient state, no selection, the opener's focus.**
   `ApplyQuery(graph_preset_query)` before the open, no save, no
   `CurrentConfig` write; A-7's re-seat on publication, no selection of
@@ -8425,7 +8502,7 @@ surface's field, panel and state host).
   effective, where the mac's palette returns focus to the element it
   took it from (C-D18; IGO-15).
 
-#### Rule Q — the request lineage, in eight terms
+#### Rule Q — the request lineage, in nine terms
 
 - **Term Q1 — four token origins, one sequence, named entries.** Every
   token has one of FOUR origins (IGP-20): the ACTIVATION load — rule L's
@@ -8490,8 +8567,10 @@ surface's field, panel and state host).
   (IGP-8, IGP-16): the reader's own needle replaces it with the count on
   both hosts (the mac's needle during the initial pair supersedes the
   pair's token at `:292` and the count speaks, `:343–347`), and
-  revision 4's inheritance is withdrawn with C-D11's and CR-1's needle
-  clause. `Request(Sort)`: rows-only, Silent — its LINES are
+  revision 4's needle inheritance is withdrawn (the needle clause
+  survives in withdrawn C-D11 and CR-1); a REPLACING pair — the probe's,
+  the re-fetch — is Term Q9's, the opposite case: it is not the
+  reader's act. `Request(Sort)`: rows-only, Silent — its LINES are
   `GridSorted` on adoption (A-5, the surface's) THEN the coalesced count
   (the rows-only receiver's, PR A's shipped path and the mac's
   `:343–347`) and nothing else; A-5's "once" is `GridSorted`'s, and the
@@ -8510,7 +8589,9 @@ surface's field, panel and state host).
   (`ApplyQuery` with a null overlay), a `Preset` policy in flight NOT
   inherited (the mac drops the pending preset, `:388–389`), the pending
   sort by Term Q5, a failure `GraphBlocked{LoadFailed}` (IGO-4). The
-  probe's and the re-fetch's: Silent (A-3, A-2 as frozen). A PAIR under
+  probe's and the re-fetch's: Silent when they replace nothing or a
+  silent token; the replaced token's policy, preset and sort when they
+  replace one in flight (Term Q9; A-3 and A-2 as amended). A PAIR under
   `FilterCount` speaks the count through the gated entry (the mac's
   `:249–253`); `GraphAnnouncePolicy` gains `Preset` and `FilterCount`.
 - **Term Q5 — the pending sort: a transition table, not an "only".**
@@ -8529,16 +8610,19 @@ surface's field, panel and state host).
   `:399–400`, so sort B → leave the graph → return before B publishes
   cancelled B silently; now the activation's pair carries B and its
   install adopts it with `GridSorted` before the cause's line) and by the
-  receiver's re-fetch (ITS request's sort, A-2). It is NOT carried by the
-  PROBE's pair (the accepted sort, `UserSort` false — the silent pair
-  stays silent, A-3 as frozen). RE-ISSUE: when the probe's pair INSTALLS
-  with `_requestedSort` standing, the receiver re-issues it as
-  `Request(Sort)` — one rows-only token, `GridSorted` on its adoption —
-  AFTER A-3's high-water recovery is satisfied: an install below the
-  high-water mark issues the high-water pair first and the sort is
-  re-issued only when a pair at or above the mark installs (IGO-20; the
-  two-probe interleaving pinned); the mac drops the sort on a generation
-  mismatch (`:297`, `:301`; C-D17). THE COMBINED LINES (IGP-19): at an
+  receiver's re-fetch (ITS request's sort, A-2). It is carried by the PROBE's pair
+  and the re-fetch too, by inheritance (Term Q9): a pending sort stands
+  only while a token carrying it is in flight — set by an issue,
+  cleared by an install or a terminal failure — so a replacing pair
+  always finds the token it replaces carrying it, and no pair is ever
+  issued with a pending sort it does not carry; revision 5's RE-ISSUE
+  clause (the receiver re-issuing `Request(Sort)` after the probe's
+  install; IGO-20's two-probe interleaving) is withdrawn as
+  unreachable. A-3's high-water recovery stands on its own: the
+  high-water pair is issued at an INSTALL, when nothing is in flight,
+  and inherits nothing. The mac drops the sort on a generation mismatch
+  (`:297`, `:301`; C-D17 stands — the mac's twin in C-2 (iv) inherits
+  the announce and the pending preset, not the sort). THE COMBINED LINES (IGP-19): at an
   install that ADOPTS a carried sort, `GridSorted` (the surface's, raised
   synchronously from `PublicationInstalled`) PRECEDES the receiver's own
   line for the same install (the count — coalesced 200 ms; the summary,
@@ -8564,6 +8648,39 @@ surface's field, panel and state host).
   `_current` is a pair is itself a pair by Term Q3, so 2N crossings
   until the first install (IGO-3; CR-2 says so) — the last publishing;
   the preset's per C-2.
+- **Term Q9 — a replacing pair inherits the replaced request whole
+  (CD-Q3's alternative, taken by the owner on 2026-09-08; CD-25).** Two
+  pairs REPLACE a token in flight: the probe's superseding pair (A-3 as
+  amended) and the receiver's re-fetch at a straddled rebuild (A-2 (ii)
+  as amended). Each is issued with a fresh `seq` and the replaced
+  token's request — its query (the view state's, unchanged), its sort
+  and `UserSort`, its policy and its preset — so the line the replaced
+  token would have spoken is spoken by the replacing pair's install
+  over the NEWER generation: a Summary pair's summary, a preset's
+  headline (`graph_preset_outcome` over the newer rows — one outcome
+  call per successful publication of a current preset token, C-2's
+  count intact), a `FilterCount` pair's count; a replaced SILENT token
+  (the probe's own pair, a rows-only re-fetch) makes the replacing pair
+  silent, which is A-3's "a silent pair announces nothing" for the pair
+  so issued. The replacing pair is a PAIR always (the probe's and the
+  re-fetch's are), so a replaced rows-only Sort token (Silent, carrying
+  the pending sort) is replaced by a silent pair that adopts the sort
+  with `GridSorted` alone — Term Q4's re-fetch arm, unchanged. Nothing
+  is inherited ACROSS an install: a pair issued when nothing is in
+  flight — the high-water pair at an install, a probe over a quiescent
+  lineage — is silent (Term Q2: nothing remembers a spoken line). The
+  leaf's rule C Term 4 reaches the same outcome by DEFERRAL (B-D12);
+  the table keeps A-3's supersession because the replacing pair's
+  result is the newer generation's, which is what the headline should
+  name. The mac's replacing loads speak nothing today (`:488–491`
+  after `:235–243`; `:301–303`) and are corrected on the mac lane in
+  C-2 (iv). Pinned by facts (C-3, C-6):
+  AProbeDuringThePresetsPairSpeaksTheHeadlineOverTheNewerGeneration;
+  AProbeDuringTheActivationsPairSpeaksTheSummary;
+  AProbeDuringANeedlesPairSpeaksTheCount;
+  AProbeDuringASilentTokenIsSilent;
+  AStraddledPresetPairRefetchesAndSpeaksTheHeadline;
+  AProbeAfterTheHeadlineReplaysNothing.
 
 #### Rule F — the focus landing, in six terms
 
@@ -8758,10 +8875,11 @@ the reference only when it IS this surface (the canvas's `:1049–1057`);
 a replacement re-attaches when this surface held the keys or was the
 attached pane (`:1039–1058`). Every verb that moves focus asks `IsLive`
 first; `WhereAmIText` is cleared on detach. WHERE-AM-I'S AVAILABILITY
-(IGN-13): the navigator raises WhereAmIAvailabilityChanged when the
+(IGN-13): the navigator raises WhereAmIAvailabilityChanged when a
 readback seam is installed or removed and whenever its answerability
-changes (PR D's obligation on every Table↔Diagram transition, a
-hand-off row); the workspace's GraphWhereAmICommand raises
+changes — the document's lineage edges and its retirement for the
+table's (C-8), PR D's obligation on every Table↔Diagram transition
+for the diagram's, a hand-off row; the workspace's GraphWhereAmICommand raises
 `RaiseCanExecuteChanged` on it and the registrar's `RaiseCommandStates`
 (`SlateCommandRegistrar.cs:318–330`) runs, so the palette row and the
 menu item follow the seam. Pinned by facts (GraphNavigatorTests):
@@ -8777,8 +8895,8 @@ AVerbOnAStalePresenterMovesNothing;
 TheAvailabilitySeamRaisesCanExecuteChangedAndTheRegistrarsRefresh.
 
 **C-2 — Core gains the preset's two rules and its enum; the surface
-rises to twenty-eight; the mac consumes and its two preset defects are
-fixed on its lane.** The preset's MAPPING — Orphans = `{attachments
+rises to twenty-eight; the mac consumes and its preset and refresh
+defects are fixed on its lane.** The preset's MAPPING — Orphans = `{attachments
 off, ghosts off, orphans only}`, Unresolved = `{attachments off, ghosts
 on, orphans off}` with `kind_only = Ghost`, MostLinked = the default
 filter — and its HEADLINE — the published count for Orphans and
@@ -8818,7 +8936,16 @@ check (`:296–299`) issues `loadGraphTable(announce: .silent)` as the
 generation arm does (`:301–303`) instead of returning bare, so a needle
 or a sort typed during a backend-changing pair whose result lands first
 re-fetches under its own request and never leaves a snapshot with
-another request's rows (Term Q3's compatible-snapshot rule, ported). A
+another request's rows (Term Q3's compatible-snapshot rule, ported); (iv) the REPLACING LOADS
+(CD-Q3's alternative, Term Q9; CD-25) — the refresh's
+`loadGraphTable(announce: .silent)` (`:508`) and the two mismatch arms'
+(`:296–303`, as (iii) leaves them) pass the IN-FLIGHT load's announce
+through instead of `.silent` — a stored graphTableInFlightAnnounce, set
+at `loadGraphTable`'s start and cleared at its publish or failure,
+`.silent` when nothing is in flight — so the replacing load's publish
+speaks the headline (the pending preset is already kept until a
+publish, `:235–243`), the summary or the count in the replaced load's
+place, over the newer generation; the sort stays the mac's (C-D17). A
 needle typed during the mac's INITIAL pair supersedes the pair's token
 and the count speaks where the summary would have (`:292`, `:343–347`);
 Windows does the same by Term Q4 (a needle's pair is `FilterCount`,
@@ -8826,7 +8953,7 @@ never Summary) — parity, not a divergence (IGP-8). `testPresetFilterAndKindMap
 and `testPresetOutcomesAreTyped` (`GraphCommandsTests.swift:56–77`,
 `:97–125`) assert through the calls; the same cases land as Rust facts
 (`preset_query_is_the_mac_mapping`, `preset_outcome_counts_or_names_row_zero`);
-five mac facts pin (i), (ii) and (iii), each asserting the COMPLETE
+six mac facts pin (i) to (iv), each asserting the COMPLETE
 list — exactly one `GraphPreset`, no summary, no count for the presets;
 one snapshot-and-rows pair from one request for the mismatch arm in
 BOTH completion orders (IGO-27, IGP-7)
@@ -8834,7 +8961,8 @@ BOTH completion orders (IGO-27, IGP-7)
 `testPresetFromDiagramModeSpeaksTheHeadlineAlone`,
 `testAFailedPresetLeavesNoPendingHeadline`,
 `testANeedleDuringAnOrphansPairRefetchesUnderItsOwnRequest`,
-`testASortDuringAnOrphansPairRefetchesUnderItsOwnRequest`).
+`testASortDuringAnOrphansPairRefetchesUnderItsOwnRequest`,
+testAFileChangeDuringAPresetsFetchSpeaksTheHeadlineOverTheNewerGeneration).
 The spec's Consumes list gains the three names (CD-11). Pinned by
 facts: the Rust cases; the surface count exact; the mac lane; the
 Windows crossings per path (ThePresetsCrossingsAreOnePerInvocationAndOnePerPublication).
@@ -8886,17 +9014,21 @@ no `GridSorted`; the mac arms `GridSorted` only for a grid sort,
 `GraphTableViewTests.swift:225–240`, asserts the accepted sort and the
 outcome and no line); a pair FAILING under `Preset` posts
 `GraphBlocked{LoadFailed}` and nothing remembers the preset; a
-superseded preset token speaks nothing of its own (CD-Q3, CR-1; Term
-P4): a NEEDLE typed during the pair replaces the headline with the
-count (Term Q4, the mac's); a SORT during it is a rows-only token that
+superseded preset token speaks nothing of its own (Term P4): a NEEDLE
+typed during the pair replaces the headline with the count (Term Q4,
+the mac's); a PROBE's pair during it, or the re-fetch of a straddled
+pair, INHERITS the preset and speaks the headline over the newer
+generation (Term Q9; CD-Q3's alternative — CR-1 withdrawn); a SORT
+during it is a rows-only token that
 BRANCHES at receive time (Term Q4; IGP-5): over a COMPATIBLE held
 snapshot (MostLinked or Unresolved from the default filter) it installs
 with `GridSorted` then the count — the mac's `:296–309`, `:343–347`;
 over an absent, different or stale one (Orphans) the receiver's silent
 re-fetch carries it and adopts with `GridSorted` alone (the mac's
 bare return at `:296–299` lost the sort — C-2 (iii) fixes it; C-D19);
-a later silent pair cannot replay the headline (Term Q2: nothing
-remembers it). NO SELECTION (Term P5; C-D12): A-7's re-seat
+a silent pair issued AFTER the headline spoke cannot replay it (Term
+Q2: nothing remembers it; Term Q9 inherits only from a token in
+flight). NO SELECTION (Term P5; C-D12): A-7's re-seat
 applies; the open's own focus request lands the graph's projection
 through rule F in every case, the already-effective one included
 (`TryFocusGlobalGraph`'s unconditional request, `Layout.cs:217`;
@@ -8922,14 +9054,16 @@ ASortDuringACompatiblePresetPairAdoptsWithGridSortedThenTheCountAndNoHeadline;
 ASortDuringAnOrphansPairRefetchesAndAdoptsWithGridSortedAlone;
 APresetFromTheEffectiveGraphLandsTheProjection (C-D18);
 ANeedleDuringThePresetsPairSpeaksTheCountNotTheHeadline;
+AProbeDuringThePresetsPairSpeaksTheHeadlineOverTheNewerGeneration;
+AStraddledPresetPairRefetchesAndSpeaksTheHeadline;
 AProbeAfterTheHeadlineReplaysNothing;
 APresetOverAFolderSortResetsSilentlyWithNoGridSorted;
 ThePresetsPublicationReseatsTheKeyAndSelectsNothingElse;
 ANeedleTypedAfterwardsKeepsTheOverlay; TheTransientWritesScheduleNoSave.
 
 **C-4 — The kind overlay is the SIXTH field of the one view state, and
-the query is written as ONE record (CD-Q1, pending the owner's
-amendment of A-1 and spec R-B).** `GraphViewState` gains `KindOnly:
+the query is written as ONE record (CD-Q1 — A-1 and spec R-B amended
+in place by the owner on 2026-09-08, CD-23).** `GraphViewState` gains `KindOnly:
 GraphNodeKind?` (null), the preset's overlay and core's `kind_only`
 (`graph_queries.rs:228`), and one method `ApplyQuery(GraphVisibilityQuery)`
 that writes `Filter`, `NameQuery` and `KindOnly` from the record's three
@@ -8948,7 +9082,22 @@ shape, `GraphAnnouncerCensus.cs:449`). The no-shadow census's NAME list
 `KindOnly`; the TYPE rule stays. Never persisted: the config schema has
 no key for it and the aggregate (C-10) does not write it. Where-am-I's
 filter clause reads it (C-8), PR D's diagram reads it, and the
-retirement leaves it (B2-1's no-reset). Pinned by facts:
+retirement leaves it (B2-1's no-reset). THE MAC (CD-23's
+investigation): the overlay lives ON `AppState` — `graphTableKindFilter`,
+`AppState.swift:3006`, `@Published` beside the backend filter and the
+needle, composed into `graphVisibilityQuery` at `:3009–3012` — the
+ownership the workspace's view state mirrors (B2D-1), so the sixth
+field is the mac's shape and no mac change follows; its four writers
+correspond one to one — the preset (`:441`) to C-3 (ii), the manual
+toggle (`setGraphTableFilter`, `:388`) to PR E's fourth caller, the
+plain activation's `applyPersistedGraphFilter`
+(`AppState+GraphConfig.swift:83`) to the fresh open's re-apply (C-10),
+and `resetGraphTableState` (`:142`: vault open/close, the graph tab's
+close) to B2-1's no-reset — the last a difference of TIMING alone:
+nothing reads the field between the retirement and the fresh open's
+re-apply (the diagram is the document's projection, the leaf reads
+`SelectedKey`, Where-am-I is refused without a seated document), so
+no follow-up issue is filed. Pinned by facts:
 TheRequestCarriesTheOverlay; ApplyQueryWritesTheThreeFieldsFromOneRecord;
 the writers census (three callers now; a planted fourth fails).
 
@@ -9015,8 +9164,8 @@ snapshot held and nothing in flight, two each while a pair is in flight
 (Term Q8, IGO-3); a burst lands its last rows once and — when its
 lineage is rows-only or `FilterCount` — speaks one count, coalesced by
 the filter class (200 ms, latest wins; A-10) and gated on its token
-(Term Q6); a burst that inherited Summary or Preset speaks that line
-and no count (IGN-22). A SORT's lines are `GridSorted` then the
+(Term Q6); a burst inherits no line (Term Q4: a needle's pair is
+`FilterCount`; IGN-22, IGP-8). A SORT's lines are `GridSorted` then the
 coalesced count and nothing else (Term Q4; IGO-1). No
 host debounce on the FETCH (CD-Q4, CR-2). A `KindOnly` change issues no
 token of its own (its writers are followed by a pair). THE COUNT: the
@@ -9038,12 +9187,13 @@ ABurstDuringAPairCostsTwoCrossingsPerKeystroke;
 ARequestOnAnUnseatedOrRetiredDocumentIsRefusedWithoutMutation;
 ARejectedCurrentEnvelopeEndsTheLineage;
 AnUnchangedProbeSetsNoLineage; AFailingSilentPairRollsThePendingSortBack;
-TheHighWaterPairPrecedesTheReissuedSort;
+TheHighWaterPairInheritsNothing;
 AFilterRequestIsAFilterCountPairDroppingTheOverlayAndAPresetInFlight;
 ANeedleDuringAPresetPairSpeaksTheCount;
 ANeedleUnderErrorIsAPairSpeakingTheCount;
 ANeedleKeepsThePendingSortAndGridSortedSpeaksOnAdoption;
-AProbesPairLeavesThePendingSortStandingAndTheReceiverReissuesIt;
+AProbesPairInheritsThePendingSortAndAdoptsItWithGridSortedAlone;
+AProbesPairInheritsAFilterCountPairsCount;
 ASortDuringAPairOverACompatibleSnapshotInstallsWithGridSortedThenTheCount;
 ASortDuringAPairOverAStaleSnapshotRefetchesAndAdoptsWithGridSortedAlone;
 TheActivationCarriesThePendingSortAndAdoptsItBeforeTheSummary;
@@ -9096,8 +9246,11 @@ TheClearRungSeatsAfterTheClearedRowsLandAndNotOnTheOldEmptyHost;
 RungTwoSeatsAtOnceWithNoLoad.
 
 **C-8 — Where-am-I: the row, the shared chord, the verb admitted by
-the readback seam with its availability seam, the panel; the readback
-is the diagram's (CD-Q2, default); the panel is a Windows enrichment.**
+the active projection's readback seam with its availability seam, the
+panel; the readback answers on the TABLE in this PR and on the diagram
+in PR D (CD-Q2's alternative, taken by the owner on 2026-09-08 — 0a-2b
+and 0a-6 amended in place, CD-24); the panel is a Windows enrichment;
+the mac's table readback lands on its lane.**
 `GraphRows` gains `Ids.GraphWhereAmI = slate.graph.whereAmI` — "Graph:
 Where Am I?", the mac's hint (`SlateCommands.swift:1613–1618`), mac
 `⌃⌘I`, Windows `Ctrl+Alt+Shift+I`, `ChordScope.Graph`, `divergence:`
@@ -9107,16 +9260,32 @@ the Shift disambiguation (the canvas row's text, `ChordTable.cs:
 279–293`; canvas C16) with the reason "disjoint by DELIVERY: the canvas
 surface's and the graph surface's tunnelling handlers, never focused at
 once". The registrar resolves GraphWhereAmICommand → the navigator's
-`WhereAmI()`, whose ADMISSION is the readback SEAM —
-`Func<GraphA11yEvent.GraphWhereAmI?>` WhereAmIReadback, null until PR
-D's diagram installs it and null-returning while the diagram is not the
-active projection (the mac's `graphDiagramWhereAmIEvent`, `:285–286`;
-`graphDiagramZoomActive`, `:320–322`) — with `CanExecute` "the seam
-answers" re-evaluated through WhereAmIAvailabilityChanged (C-1;
-IGN-13); the chord arm returns false (unconsumed) when it does not
-answer — so in THIS PR the palette row and the menu item are DISABLED
-(AD-3's listed-and-disabled shape) and the chord falls through, where
-the mac's Table-mode ⌃⌘I is a silent no-op (C-D4). When admitted: ONE
+`WhereAmI()`, whose ADMISSION is the ACTIVE PROJECTION's readback SEAM
+— one `Func<GraphA11yEvent.GraphWhereAmI?>` per projection, chosen by
+the view state's `Mode`: the TABLE's, installed by the document at its
+seat and cleared at its retirement (this PR), and the DIAGRAM's, null
+until PR D's diagram installs it (the mac's `graphDiagramWhereAmIEvent`,
+`:285–286`) — with `CanExecute` "the seam answers" re-evaluated through
+WhereAmIAvailabilityChanged (C-1; IGN-13), which the document raises at
+EVERY lineage edge (an issue, an install, a terminal failure, a
+rejection) and at its retirement; the chord arm returns false
+(unconsumed) when the seam does not answer — the row and the menu item
+DISABLED (AD-3's listed-and-disabled shape) and the chord falling
+through only while no document is seated or the lineage is not
+quiescent. THE TABLE'S READBACK answers only while the lineage is
+QUIESCENT and the publication CURRENT (Term Q7: a READY record held,
+its query the view state's, nothing in flight — with a request in
+flight the verb is unavailable, so an old node is never read under new
+filter prose; IGO-29) and composes ONE `GraphWhereAmI`: `selection` =
+the shared key's node in the held SNAPSHOT (`Snapshot.Nodes` scanned by
+`StableKey` — spec R-A's no-index rule) rendered the diagram's way —
+`references = in_links`, `embed = false`, the node's `component` (the
+mac's `GraphDiagramModel.rowCopy`, `:98–109`) — and `NoSelection` when
+the key is null or absent from the snapshot; `zoom_percent` = None
+(0a-2b as amended: no zoom clause); the filter clause `UnresolvedOnly`
+when `KindOnly == Ghost`, else `Normal` from the view state's filter
+(the mac's clause, `AppState+GraphDiagram.swift:300–306`); `name_filter`
+= the view state's needle, trimmed by core (0a-6). When admitted: ONE
 event from the seam → `WhereAmIText = GraphAnnouncer.RenderLabel(event)`
 (a bindable on the navigator, cleared on detach) AND the document's new
 seam `AnnounceWhereAmI(event)` → `AnnounceIfEffective` through the relay
@@ -9135,20 +9304,52 @@ the keys and remembers the element the reader came from; Close and the
 Escape pre-emption restore focus to it only when the reader was INSIDE
 the panel, falling back to RequestProjectionFocus (Term F2 delivers at
 once) when it is gone. Not a `ModalSurface`. The mac has NO panel on the
-graph (C-D16). The row's matrix status stays PENDING with the note "the
-row, the chord, the panel and the seam; the readback admitted by the
-graph's diagram slice, W6-2 PR D"; the spec's acceptance line and §7's
-"Lands C" say so (CD-11). If the owner takes CD-Q2's alternative, the
-seam answers on the TABLE too, from the shared key's node in the held
-SNAPSHOT rendered the diagram's way, `NoSelection` with no key, no zoom
-clause — and ONLY while the lineage is quiescent (Term Q7/F3: with a
-request in flight the verb is unavailable, so an old node is never
-read under new filter prose), pinned by the nine witnesses (0a-6's
-eight and the amendment's ninth; IGO-29) — delivered here. Pinned by facts:
+graph (C-D16). The row's matrix status is ✓ in THIS PR (the table's readback; PR D
+adds the diagram's, with its zoom clause); the spec's acceptance line
+and §7's row say so (CD-11, CD-24). THE AMENDMENT (CD-24, the owner's,
+recorded in place under 0a-2b and 0a-6): `zoom_percent` becomes
+`Option<u32>` — the clause `zoom ⟨zoom_percent⟩ percent` rendered only
+when present, the invariant 10..=400 when present, the selection a
+diagram row OR the table's snapshot node rendered the diagram's way
+(one construction) — mirrored in the uniffi record
+(`crates/slate-uniffi/src/lib.rs:9573`, `:9622–9627`) and at the mac's
+diagram site, which passes `.some` (`AppState+GraphDiagram.swift:309`);
+0a-6's witnesses become NINE — the ninth `NoSelection`, no zoom,
+`Normal` with the default toggles and no needle, rendering "No node
+selected, filters: unresolved shown." — in core's corpus
+(`graph_corpus`, `a11y.rs:4948`) and the mac's corpus census
+(`A11yCorpusCensusTests.swift:563–570`), with
+`graph_where_am_i_renders_every_state_exactly` and
+`graph_where_am_i_witnesses_are_host_reachable` asserting nine. THE
+MAC'S TWIN, on its lane (CR-3; CD-24's investigation): the mac's
+Table-mode ⌃⌘I is a silent no-op behind an always-enabled menu item —
+`whereAmIRouteTarget` answers `.graph` only under
+`graphDiagramZoomActive` (`:367–373`, `:320–322`) — so
+`whereAmIRouteTarget` answers `.graph` for an active graph tab in
+EITHER mode (`graphTabActive`, `AppState.swift:3033`), and
+`graphDiagramWhereAmIEvent()` gains the table branch: with
+`graphDiagramModel` nil, the selection from `graphTableSnapshot`'s
+node at `graphSelectedNodeKey` (`nodes` scanned by `stableKey`, the
+row built as `rowCopy` builds it), `zoomPercent: nil`, the same filter
+clause — answered only while `graphTableLoading` is false and the rows
+shown were received under the newest request (a
+graphTablePublishedRequest recorded at `receiveGraphTableRows`'s
+publish, compared with `graphTableRequest` — the quiescence rule
+ported), a nil event leaving the chord a no-op as today; three mac
+facts (testWhereAmIRoutesToTheGraphInTableMode,
+testTheTableReadbackNamesTheSelectedSnapshotNodeWithoutAZoomClause,
+testTheTableReadbackIsUnavailableWhileALoadIsInFlight). The owner may
+move the mac's twin to a follow-up issue; until it lands the mac's
+corpus carries the ninth witness as Windows-reachable (a comment on
+the census's line). Pinned by facts:
 TheRowItsScopeItsDivergenceAndTheSharedChordDisposition;
-WhereAmIIsRefusedWithANullSeamAndWithANullReturningSeam;
-InstallingTheSeamRaisesAvailabilityAndTheRowEnables;
-WhereAmIWithEachWitnessRendersThePanelAndPostsOnce (0a-6's eight);
+WhereAmIIsRefusedWithNoSeatedDocumentAndWithANullReturningSeam;
+InstallingTheDiagramsSeamRaisesAvailabilityAndTheRowEnables;
+TheTableReadbackNamesTheSharedKeysSnapshotNodeWithNoZoomClause;
+TheTableReadbackReadsNoSelectionWithoutAKey;
+TheTableReadbackReadsUnresolvedOnlyUnderTheKindOverlay;
+TheTableReadbackIsRefusedWhileARequestIsInFlightAndAnswersAtInstall;
+WhereAmIWithEachWitnessRendersThePanelAndPostsOnce (0a-6's nine);
 ThePanelsFocusRulesInsideAndOutside; EscapeAheadOfALiveNeedle.
 **C-9 — Verbosity: the preferences object, the live read through one
 invalidation seam, the re-label, the pending navigation line dropped,
@@ -9350,7 +9551,7 @@ the registrar's for the same id (drift test 2). The mac has no graph
 menu items but the routed "Where Am I?" (`SlateMacApp.swift:597–600`);
 the Windows items are an enrichment (C-D9). Pinned by facts
 (`ChordTableTests`): TheGraphMenusIdsCommandsAndAccelerator;
-TheWhereAmIItemIsDisabledInThisPrAndEnablesWithTheSeam.
+TheWhereAmIItemFollowsTheSeamsAvailability.
 
 **C-13 — The label inventory, byte for byte, and the additions
 named.** A GraphPhrase static class under `Graph/` (the
@@ -9447,8 +9648,7 @@ census lands with the mutation it kills, named in the task-loop record.
 **C-16 — The matrix rows, the projection, the spec's amendments.**
 `parity_matrix.md`: the three preset ids move to `W6_2_STATUS` through
 W6_2_DELIVERED_COMMANDS (`generate-parity-matrix.py:656–675`);
-`slate.graph.whereAmI` stays pending with C-8's note under CD-Q2's
-default; `w_c_matrix.md` gains "Graph navigator, filter and Where-am-I
+`slate.graph.whereAmI` joins them (the table's readback, C-8; CD-24); `w_c_matrix.md` gains "Graph navigator, filter and Where-am-I
 (W6-2 PR C)" on the canvas navigator row's shape (`:48`) — the field
 (Edit), the count region (Text, its own stop), the panel (Group with a
 read-only Edit), Clear (Button), the state host (Group), the Graph menu
@@ -9462,7 +9662,7 @@ the words "and the mode switch" leave the §1 line, IGN-20, IGO-26);
 persistence under one class → the suites C-15 and the pins name:
 GraphNavigatorTests, GraphPreferencesTests, GraphConfigStoreTests,
 GraphConfigWriterTests, `GraphDocumentTests`, `GraphTableTests`;
-Where-am-I unavailable until D under CD-Q2's default — IGO-30); §1 R-E's
+the Where-am-I readback on the table — IGO-30 superseded by CD-24); §1 R-E's
 counts ("the five chorded rows … the four routed chords" → five
 REGISTERED chorded command rows — `whereAmI` and D's four viewport rows
 — plus the non-command Escape disposition, the map's population two in
@@ -9477,7 +9677,7 @@ seam, the `ChordScope.Graph` map, the focus landing of rule F" (IGN-18);
 refuse-clobber)" → PR E consumes PR C's writer and preferences and adds
 its triggers) and its Consumes (the document's `Request(Filter)` entry
 and `ApplyQuery` as PR E's named callers — IGP-22); §7's whereAmI row; §1's `GraphViewState` line (six fields,
-CD-Q1); §5.3's matrix line unchanged.
+CD-23); §5.3's matrix line unchanged.
 
 **C-17 — The focus landing is rule F.** The document's `FocusRequest`
 (Term F1), the surface's triggers (Term F2), currency and the
@@ -9504,11 +9704,11 @@ TheStateHostHasAGroupPeerNamedByTheState.
   preset, the request lineage, the focus landing and the writer are
   rules with terms, and the contracts cite the terms.
 - **CD-2 — The kind overlay is the sixth field of the one view state,
-  written through `ApplyQuery`** (C-4) — PENDING the owner's amendment
-  of A-1 and spec R-B in place (CD-Q1).
+  written through `ApplyQuery`** (C-4) — A-1 and spec R-B amended in
+  place by the owner on 2026-09-08 (CD-Q1; CD-23).
 - **CD-3 — The preset's two rules move to core** (C-2), with its enum;
-  the surface rises to twenty-eight; the mac consumes and its two preset
-  defects are fixed on its lane by a value rule, not a flag.
+  the surface rises to twenty-eight; the mac consumes and its preset
+  and refresh defects are fixed on its lane (C-2 (i)–(iv)).
 - **CD-4 — Rule L is untouched: the arm colours a load rule L already
   issues, and the rest is a request** (rule P): no new cause, no load
   without a transition, no load a transition Term 4 refuses; the
@@ -9517,11 +9717,12 @@ TheStateHostHasAGroupPeerNamedByTheState.
 - **CD-5 — The preset posts no `Opened`** (Term P2).
 - **CD-6 — The preset lands no selection** (Term P5; C-D12).
 - **CD-7 — The needle's fetch is per keystroke, undebounced** (CD-Q4's
-  default; CR-2); the count is the relay's 200 ms class, gated on its
+  default, confirmed by the owner on 2026-09-08 — CD-26; CR-2); the count is the relay's 200 ms class, gated on its
   token (Term Q6).
-- **CD-8 — Where-am-I is the diagram's readback; this PR builds the
-  seam, its availability seam, the row, the chord, the panel and the
-  verb** (CD-Q2's default; C-8).
+- **CD-8 — Where-am-I answers on the table in this PR and on the
+  diagram in PR D; this PR builds the seams, the row, the chord, the
+  panel, the verb and the mac's table twin** (CD-Q2's alternative,
+  taken by the owner on 2026-09-08; C-8, CD-24).
 - **CD-9 — The Escape ladder is Windows-authored** (C-7; C-D3, C-D13).
 - **CD-10 — The count region shows only while the shown client query
   narrows and is current** (C-5; Term Q7).
@@ -9541,7 +9742,7 @@ TheStateHostHasAGroupPeerNamedByTheState.
   during a pair is a `FilterCount` pair, a SORT is rows-only always and
   branches at receive time on the held snapshot's compatibility; the
   pending sort's transitions are Term Q5's table; every terminal failure
-  rolls it back; the probe's pair leaves it for the re-issue.
+  rolls it back; a replacing pair inherits it (Term Q9, revision 6).
 - **CD-16 — The graph tab gets the canvas's focus authority** (rule F):
   an addressed, deferred landing with NO query and NO sequence on the
   record (a census forbids them), delivered when the lineage is
@@ -9569,7 +9770,34 @@ TheStateHostHasAGroupPeerNamedByTheState.
   for the third time (rounds 2, 3, 4): the text corrected for every
   round-4 finding as the discharge, the four ledgers carried into the
   task loop, no round 5; the task loop waits for CD-Q1 and CD-Q2.
-  Precedent applied; the owner may overrule.
+  Precedent applied; the owner may overrule. The owner's answers of
+  2026-09-08 (revision 6) keep the freeze; no round runs on them.
+- **CD-23 — CD-Q1 answered: the default; A-1 and spec R-B amended in
+  place by the owner (2026-09-08).** The mac-parity investigation the
+  owner asked for: NO mac change and no follow-up issue — the mac holds
+  the overlay on `AppState` (`graphTableKindFilter`, `:3006`), which is
+  the ownership the workspace's view state mirrors, and its four
+  writers correspond to Windows's (C-4); the mac's close-time clear
+  against B2-1's no-reset is a difference of timing nothing observes.
+- **CD-24 — CD-Q2 answered: the ALTERNATIVE; 0a-2b and 0a-6 amended in
+  place by the owner (2026-09-08)** — the zoom optional, a ninth
+  witness, the table's readback in this PR (C-8), the matrix row ✓.
+  The mac-parity investigation: YES, the mac should change — its
+  Table-mode ⌃⌘I is a silent no-op behind an always-enabled menu item
+  (`whereAmIRouteTarget`, `AppState+GraphDiagram.swift:367–373`), a
+  defect of the class 0a-D1 and C-2 correct on the mac lane; 0a-6's
+  premise is that every witness is a state the host reaches, and the
+  mac's corpus census carries the ninth. RECOMMENDED and written: the
+  twin lands on the mac lane in THIS PR (the 0a-D1 / C-2 precedent — a
+  mac correction rides the PR that moves the shared rule; the swift CI
+  lane is the oracle, 0bR-1), separable to a follow-up issue by the
+  owner's word (C-8 says what that leaves).
+- **CD-25 — CD-Q3 answered: the ALTERNATIVE, by inheritance** (Term
+  Q9): A-2 and A-3 amended in place by the owner (2026-09-08); C-D11
+  and CR-1 withdrawn; the mac's twin in C-2 (iv); the leaf's deferral
+  (rule C Term 4, B-D12) considered and not taken — it names the older
+  generation's row and its mac twin is the larger change.
+- **CD-26 — CD-Q4 answered: the default** (CD-7; CR-2 stands).
 
 ### Recorded divergences (PR C)
 
@@ -9580,7 +9808,8 @@ TheStateHostHasAGroupPeerNamedByTheState.
 - **C-D2 — No chord reaches the filter field but the grid's own Ctrl+F**
   (C-5).
 - **C-D3 — An Escape ladder on the graph** (C-7): the mac has none.
-- **C-D4 — Where-am-I is DISABLED where the mac is silent** (C-8).
+- **C-D4 — withdrawn at revision 6** (CD-24): the readback answers on
+  the table on both hosts (C-8; the mac's twin on its lane).
 - **C-D5 — The palette matches labels alone** (`CommandPaletteViewModel.cs:
   714–715`), so P1-3's keywords "broken links" and "hubs" reach nothing
   on Windows; the hints carry them.
@@ -9596,9 +9825,10 @@ TheStateHostHasAGroupPeerNamedByTheState.
 - **C-D9 — Menu items for Open Graph and the presets** (C-12).
 - **C-D10 — The count region and Clear** (C-5): the mac's filter bar has
   neither.
-- **C-D11 — The preset's headline drops under a superseding silent
-  pair on both hosts** (CD-Q3's default; CR-1); a needle typed during
-  the pair replaces it with the count on both (Term Q4).
+- **C-D11 — withdrawn at revision 6** (CD-Q3's alternative; CD-25):
+  the headline survives a replacing pair on Windows by Term Q9 and on
+  the mac by C-2 (iv); a needle typed during the pair still replaces it
+  with the count on both (Term Q4) — the reader's own act, not a loss.
 - **C-D12 — No first-row landing after a preset** (Term P5): the mac's
   grid selects nothing of its own (`GraphTableView.swift:239–243`).
 - **C-D13 — The panel's Escape pre-emption reaches as far as the graph
@@ -9611,9 +9841,10 @@ TheStateHostHasAGroupPeerNamedByTheState.
   (`GraphTableView.swift:146`); PR D decides the Diagram header.
 - **C-D16 — A Where-am-I panel on the graph** (C-8): the mac has one on
   the canvas alone.
-- **C-D17 — A pending user sort survives a silent pair** (Term Q5): the
-  receiver re-issues it after the probe's pair installs; the mac drops
-  it on a generation mismatch (`AppState+GraphTable.swift:297`, `:301`).
+- **C-D17 — A pending user sort survives a replacing pair** (Terms Q5,
+  Q9): the replacing pair inherits and adopts it; the mac drops it on a
+  generation mismatch (`AppState+GraphTable.swift:297`, `:301`) — C-2
+  (iv) inherits the announce and the preset there, not the sort.
 - **C-D18 — A preset lands the reader on the graph's projection in
   every case** (Term P5): the shell's open requests editor focus for an
   existing graph too (`Layout.cs:217`); the mac's palette returns focus
@@ -9632,21 +9863,22 @@ TheStateHostHasAGroupPeerNamedByTheState.
 
 ### Accepted risks (PR C)
 
-- **CR-1 — A file change during a preset's fetch loses the headline**
-  (Term P4; CD-Q3): the probe's superseding silent pair publishes and
-  the preset's token drops whole — and so does a needle typed during it
-  (Term Q4: the count replaces the headline on both hosts). The mac's
-  own race (`:206–208`, `:235–243`, `:480–510`). The fact that
-  reproduces it is written so the risk is visible; the owner may take
-  CD-Q3's alternative, which inherits the whole audible request (IGP-16).
+- **CR-1 — withdrawn at revision 6** (CD-Q3's alternative; Term Q9;
+  CD-25): a file change during a preset's fetch no longer loses the
+  headline — the probe's replacing pair inherits the preset and speaks
+  it over the newer generation, on the mac by C-2 (iv); a needle typed
+  during the pair still replaces the headline with the count (Term
+  Q4), the reader's own act. The mac's race (`:206–208`, `:235–243`,
+  `:480–510`) is fixed on its lane.
 - **CR-2 — One `graph_table_rows` crossing per keystroke with a snapshot
   held, and a PAIR per keystroke while a pair is in flight** (Term Q8;
-  CD-Q4): a burst typed during the initial load costs two crossings a
+  CD-Q4, confirmed 2026-09-08 — CD-26): a burst typed during the initial load costs two crossings a
   key until the first install; the task loop measures the rows and
   snapshot workloads' medians at 10k (A-15) and records them beside this
   row.
-- **CR-3 — The mac migration of C-2 is unrun on this box** (0bR-1's
-  arbitration), its two defect fixes included.
+- **CR-3 — The mac migrations of C-2 and C-8 are unrun on this box**
+  (0bR-1's arbitration: the swift CI lane is the oracle), the four
+  fixes and the table readback included.
 - **CR-4 — The config writer's atomicity is `File.Move` on one
   volume**; a `.slate` directory on a different volume from its temp
   file is not a Windows vault shape.
@@ -9673,7 +9905,7 @@ TheStateHostHasAGroupPeerNamedByTheState.
 - The pending preset is cleared by ANY successful publish, spoken only
   by an audible one (`AppState+GraphTable.swift:235–243`): a silent
   refresh landing first drops the headline (CR-1's race, on the mac
-  too).
+  too) — FIXED on the mac lane by C-2's migration (iv) (CD-25).
 - The Table view's two per-field observers re-issue tokens for the
   preset's own field writes and supersede the preset's pair (IGM-1,
   IGN-4; `GraphTableView.swift:282–283`, `:276`, `:292`): the headline is
@@ -9687,7 +9919,7 @@ TheStateHostHasAGroupPeerNamedByTheState.
 - The failure arm leaves the pending preset set (IGM-13; `:257–265`) —
   FIXED on the mac lane by C-2's migration.
 - A generation mismatch drops a pending user sort (`:297`, `:301`) —
-  C-D17; Windows re-issues it.
+  C-D17; Windows inherits it (Term Q9).
 - A restored graph tab mounts on the reset defaults, not the persisted
   filter (`GraphTableView.swift:53–65`; `:106–108`) — C-D8.
 - A needle typed under a transient preset persists the preset's backend
@@ -9695,7 +9927,8 @@ TheStateHostHasAGroupPeerNamedByTheState.
   63–67`) — C-D7.
 - In Table mode the "Where Am I?" menu item is enabled and silent
   (`whereAmIRouteTarget` → `.none`, `AppState+GraphDiagram.swift:
-  367–373`) — C-D4.
+  367–373`) — FIXED on the mac lane by C-8's twin (CD-24; C-D4
+  withdrawn).
 - The preset mapping and the headline rule live in Swift
   (`AppState+GraphTable.swift:403–423`, `:465–475`) where 0b-7 recorded
   them as core's design — C-2 moves them.
@@ -9776,7 +10009,7 @@ TheStateHostHasAGroupPeerNamedByTheState.
 | IGO-6 | BLOCKER (created by IGN-2) | taken — Term Q2: a rejection is terminal |
 | IGO-7 | BLOCKER (created by IGN-3) | taken — Term Q5: a user token's failure rolls back; a silent pair's leaves the sort standing; the re-issue after the next install |
 | IGO-8 | BLOCKER (created by IGM-19) | taken — Term Q1: live ∧ seated admission for every arm |
-| IGO-9 | BLOCKER | taken — Term P4 defers the replacing token's line to Q4; the sort-during-preset sequence stated (C-D19) |
+| IGO-9 | BLOCKER | taken — Term P4 defers the replacing token's line to Q4; the sort-during-preset sequence stated (C-D19); at revision 6 the probe's pair inherits the preset (Term Q9, CD-25) |
 | IGO-10 | BLOCKER (created by IGN-10/11) | taken — Term F3: the provisional seat only under LOADING with no snapshot |
 | IGO-11 | BLOCKER (created by IGM-16/IGN-10) | taken — Term F3: quiescence, not query equality; failures are terminal and deliverable onto what is shown |
 | IGO-12 | BLOCKER (created by IGN-10) | taken — Term F1/F3: no query or seq on the record; a restoration onto the quiescent lineage |
@@ -9787,7 +10020,7 @@ TheStateHostHasAGroupPeerNamedByTheState.
 | IGO-17 | BLOCKER (created by IGM-9) | taken — the submenu populated in code from per-level choice view models (C-9) |
 | IGO-18 | BLOCKER (created by IGN-7) | taken — Term W2's four facts; Term W6's failure policy; CR-7 |
 | IGO-19 | BLOCKER (created by IGN-5) | taken — Terms W4/W5: the dispatcher-serialised state machine, one transfer |
-| IGO-20 | MAJOR (created by IGN-3) | taken — Term Q5: the high-water pair first |
+| IGO-20 | MAJOR (created by IGN-3) | taken — Term Q5: the high-water pair first; the re-issue withdrawn at revision 6 as unreachable under Term Q9 |
 | IGO-21 | MAJOR (created by IGN-7) | taken — Term W2: atomic admission; `Newest` the highest outstanding |
 | IGO-22 | MAJOR | taken — Term P3: the admission seam first, the query restored on an ineffective open |
 | IGO-23 | MAJOR | taken — Term W7: `SetMode` |
@@ -9796,8 +10029,8 @@ TheStateHostHasAGroupPeerNamedByTheState.
 | IGO-26 | MAJOR (created by IGN-20) | taken — the §1 line's words removed (C-16) |
 | IGO-27 | MAJOR (reopens IGM-1/IGN-4) | taken — the trace corrected; the mac facts assert the complete list |
 | IGO-28 | MAJOR | taken — CD-Q4's alternative names the Scheduled state it would need |
-| IGO-29 | MAJOR | taken — CD-Q2's alternative: quiescence and the ninth witness (C-8) |
-| IGO-30 | MINOR | taken — the spec's Tests line (C-16) |
+| IGO-29 | MAJOR | taken — CD-Q2's alternative: quiescence and the ninth witness (C-8); the owner took the alternative at revision 6 (CD-24) |
+| IGO-30 | MINOR | taken — the spec's Tests line (C-16); superseded at revision 6 — the readback answers on the table (CD-24) |
 | IGO-31 | MINOR | taken — "one event, rendered twice" (C-8) |
 
 ### Round 4 — twenty-five findings (IGP-1..25), dispositions; rule 5 the third time → THE FREEZE
@@ -9819,8 +10052,8 @@ TheStateHostHasAGroupPeerNamedByTheState.
 | IGP-13 | BLOCKER (created by IGO-24) | taken — Term W3: "and the live fields" deleted; an immutable snapshot of `CurrentConfig` alone |
 | IGP-14 | BLOCKER (created by IGO-24) | taken — `VisibilityQueryOf(GraphFilterConfig)`, one mapper, both call sites bound (C-10) |
 | IGP-15 | BLOCKER (created by IGO-17) | taken — the submenu rebuilt per observed workspace in `ObserveWorkspace` (C-9) |
-| IGP-16 | BLOCKER | taken — CD-Q3's alternative inherits the whole audible request (policy, preset, sort) |
-| IGP-17 | BLOCKER | taken — CD-Q1's alternative needs the arm to carry the full query and seed the new document; recorded |
+| IGP-16 | BLOCKER | taken — CD-Q3's alternative inherits the whole audible request (policy, preset, sort); the owner took it at revision 6 (Term Q9, CD-25) |
+| IGP-17 | BLOCKER | taken — CD-Q1's alternative needs the arm to carry the full query and seed the new document; recorded; the owner took the default at revision 6 (CD-23) |
 | IGP-18 | BLOCKER (created by IGO-12) | taken — C-7 and CD-16 reworded; a census forbids `Query`/`Seq` members on the record |
 | IGP-19 | MAJOR | taken — Term Q5's combined-lines rule: `GridSorted` precedes the receiver's line at every adopting install; the matrix's cells are C-6's facts |
 | IGP-20 | MAJOR | taken — Term Q1: four origins named |
@@ -9830,12 +10063,18 @@ TheStateHostHasAGroupPeerNamedByTheState.
 | IGP-24 | MAJOR (created by IGO-25) | taken — the write class closed across the shell (C-15 xv) |
 | IGP-25 | MINOR | taken — CR-5 per affected key |
 
-### Tests that pin PR C (revision 5's list; the task loop records what lands)
+### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,
   `preset_outcome_counts_or_names_row_zero`, the surface count at
   twenty-eight; the FFI tripwire; the mac's GraphCommandsTests through
-  the calls and its three new facts (C-2).
+  the calls and its six facts (C-2 (i)–(iv)).
+- `a11y.rs`: the ninth Where-am-I witness; the three Where-am-I facts
+  at nine; the uniffi mirror's optional zoom (C-8; 0a-2b and 0a-6 as
+  amended).
+- The mac lane (unrun here, CR-3): C-8's three facts — the route target
+  in Table mode, the table readback without a zoom clause, its
+  unavailability in flight — and the corpus census's ninth witness.
 - GraphNavigatorTests (new): the facts named under C-1, C-3, C-7, C-8
   and C-11.
 - GraphPreferencesTests, GraphConfigStoreTests, GraphConfigWriterTests
