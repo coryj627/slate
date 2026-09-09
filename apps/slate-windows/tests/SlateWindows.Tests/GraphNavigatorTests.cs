@@ -590,12 +590,15 @@ public sealed class GraphNavigatorTests
             using var host = new Host(vault.Root);
             (Key Key, ModifierKeys Modifiers)[] chords = [.. host.Navigator.ChordsForTests];
             Assert.Equal(chords.Length, chords.Distinct().Count());
+            // Ordered by BOTH components: two rows may one day share a Key
+            // with different modifiers, and a comparison keyed on Key alone
+            // would then rest on OrderBy's stability rather than on the set.
             Assert.Equal(
                 [
                     (Key.Escape, ModifierKeys.None),
                     (Key.I, ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift),
                 ],
-                chords.OrderBy(c => c.Key).ToArray());
+                chords.OrderBy(c => c.Key).ThenBy(c => c.Modifiers).ToArray());
         });
     }
 

@@ -521,6 +521,13 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             return null;
         }
         GraphPublication publication = Publication;
+        // The snapshot check is Term Q7's "a READY record HELD", not a null
+        // guard for the selection below: READY and EMPTY are reachable only
+        // through FromPair (a snapshot by signature) and WithRows (the held
+        // one, the receiver refusing a rows result with no snapshot), so a
+        // record in either state always carries it. Keeping the check states
+        // the term the readback answers under; it never short-circuits a
+        // state the rows could have answered from.
         if (publication.State is not (GraphLoadState.Ready or GraphLoadState.Empty)
             || publication.Snapshot is null
             || publication.Query != new GraphVisibilityQuery(ViewState.Filter, ViewState.NameQuery, ViewState.KindOnly))
