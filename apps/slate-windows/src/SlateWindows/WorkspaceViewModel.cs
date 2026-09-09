@@ -1611,6 +1611,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // handed to the graph document and the leaf, dropped with the
         // workspace — the instance census counts this one construction.
         _graphViewState = NewGraphViewState();
+        // W6-2 PR C (C-1): the ONE navigator, after the view state and
+        // before the first document and the leaf — the instance census
+        // counts this one construction.
+        _graphNavigator = NewGraphNavigator();
         Connections = NewConnectionsLeaf();
         SeedInitialConnectionsMount();
         // W4-7: the history document — note-scoped (fed by SyncPanels),

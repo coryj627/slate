@@ -86,6 +86,10 @@ internal sealed record GraphLoadEnvelope(
 
 /// <summary>What one installed publication answered — the surface's
 /// adoption announcement reads it (contract A-5).</summary>
+/// <summary>Rule F, Term F1 (W6-2 PR C, C-17): the landing's record — the
+/// tab it is addressed to and nothing else.</summary>
+internal sealed record GraphFocusRequest(object Owner);
+
 internal sealed record GraphPublicationInstall(
     GraphPublication Previous,
     GraphPublication Current,
@@ -133,7 +137,8 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         Func<GraphVerbosity> verbosity,
         SynchronizationContext? ownerContext = null,
         Func<int>? lifecycleGeneration = null,
-        Func<bool>? isSeated = null)
+        Func<bool>? isSeated = null,
+        GraphNavigator? navigator = null)
         : base(
             synchronousForTests: false,
             ownerContext
@@ -179,6 +184,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         // crossing anywhere would show here.
         ActionInventoryCrossings = CrossingsForTests["graph_row_actions"];
         ViewState = viewState;
+        Navigator = navigator;
         _publication = GraphPublication.Initial(
             new GraphVisibilityQuery(ViewState.Filter, ViewState.NameQuery, ViewState.KindOnly),
             DefaultSort);
@@ -316,6 +322,55 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
 
     /// <summary>Raised after every install, with what it answered.</summary>
     public event Action<GraphPublicationInstall>? PublicationInstalled;
+
+    /// <summary>The workspace's navigator (W6-2 PR C, C-1): the surface
+    /// reaches it through the document, as the canvas surface does; a
+    /// bare document in a fact has none.</summary>
+    internal GraphNavigator? Navigator { get; }
+
+    /// <summary>C-5: whether a needle NARROWS — core's trim, 0b-6's
+    /// predicate: an empty label matches a needle exactly when core's
+    /// trimmed needle is empty, so no host trim touches the needle.</summary>
+    public static bool NeedleNarrows(string needle)
+    {
+        ArgumentNullException.ThrowIfNull(needle);
+        return !SlateUniffiMethods.GraphLabelMatches(string.Empty, needle);
+    }
+
+    // --- Rule F, Term F1: the landing's record (contract C-17) -------------
+
+    private GraphFocusRequest? _focusRequest;
+
+    /// <summary>The pending landing — an addressed RESTORATION onto
+    /// whatever the lineage settles to, no query and no sequence on the
+    /// record; absent once the document is retired.</summary>
+    public GraphFocusRequest? FocusRequest
+    {
+        get => _retired ? null : _focusRequest;
+        private set => SetField(ref _focusRequest, value);
+    }
+
+    /// <summary>Raise the landing for a pane (the shell's routes, the
+    /// presenter's RequestProjectionFocus); a later request supersedes
+    /// by reference identity.</summary>
+    internal void RequestFocusLanding(object owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        if (!_retired)
+        {
+            FocusRequest = new GraphFocusRequest(owner);
+        }
+    }
+
+    /// <summary>Completion, only on a delivered quiescent landing (Term F4).</summary>
+    internal void CompleteFocus(GraphFocusRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (ReferenceEquals(_focusRequest, request))
+        {
+            FocusRequest = null;
+        }
+    }
 
     public bool IsRetired => _retired;
 
@@ -584,6 +639,16 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// replaced it.</summary>
     public bool IsRequestInFlight => _current is not null;
 
+    private void SetCurrent(GraphLoadToken? token)
+    {
+        bool was = _current is not null;
+        _current = token;
+        if (was != (token is not null))
+        {
+            OnPropertyChanged(nameof(IsRequestInFlight));
+        }
+    }
+
     internal GraphLoadToken? CurrentForTests => _current;
 
     /// <summary>Every token is issued here: the sequence advances, the
@@ -605,7 +670,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             RefreshFilterCountText();
         }
         var token = new GraphLoadToken(this, _session, _lifecycleGeneration(), request, _seq, kind, announce, preset, userSort);
-        _current = token;
+        SetCurrent(token);
         StartWorkAlwaysAsync(() => Fetch(token), Receive);
         return token;
     }
@@ -701,7 +766,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         {
             // The request goes with the lineage: a second envelope for a
             // token already terminal can never install.
-            _current = null;
+            SetCurrent(null);
             _request = null;
             _requestedSort = null;
             return;
@@ -711,7 +776,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             // Terminal: the pending sort rolled back for ANY token (Term
             // Q2, IGP-2); a preset on the token is forgotten with it (Term
             // P4); the block where the line would have been.
-            _current = null;
+            SetCurrent(null);
             _requestedSort = null;
             if (token.Kind == GraphLoadKind.Pair)
             {
@@ -755,7 +820,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         // answered when the token carried it (Term Q5 (a)).
         bool answeredSort = token.UserSort;
         _requestedSort = null;
-        _current = null;
+        SetCurrent(null);
         Publication = next;
         RefreshFilterCountText();
         if (token.Kind == GraphLoadKind.Pair)
@@ -962,7 +1027,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         _retired = true;
         _seq++;
         _request = null;
-        _current = null;
+        SetCurrent(null);
         Shutdown();
         // A-1 as amended (W6-2 PR B, BD-12): the relay is the workspace's;
         // retirement drops THIS document's pending classes — the mac's

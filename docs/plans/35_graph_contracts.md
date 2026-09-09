@@ -10310,6 +10310,158 @@ preset keeping a user sort; the count's gate ignoring the token; the
 region's text rendered under ERROR; the summary posted before
 `GridSorted`; the outcome crossed for a superseded token.
 
+**TGC-4 — T4: the navigator, the presets over rule P, the needle's write,
+the filter field, the count region and Clear, the Escape ladder, the
+chord scope's delivery and scrape (C-1, C-3, C-5, C-6's navigator side,
+C-7, C-11; rule P; rule F's Term F1).** THE NAVIGATOR:
+`Graph/GraphNavigator.cs` — one per workspace, constructed by
+NewGraphNavigator in the workspace's constructor after the relay and
+the view state and before the first document and the leaf; it holds the
+view state, the seated document, the workspace's open-admission seam
+(GraphOpenAdmissionReason, `Func<string?>`, null admits — Windows leaves
+it null, C-D1) and the preset funnel; the document exposes it as
+`Navigator` (handed in at construction) so the surface reaches it
+through `Model.Navigator`. The VERB half is `RunPreset`, `SetNameQuery`,
+`ClearNameQuery` and the grid gesture's FocusFilterField; the CHORD half
+is `Bind` — one three-argument `AddChord(Key.Escape, ModifierKeys.None,
+EscapeFromKey)` in this slice — and `HandleKey`, whose body is the null
+guard, one `AttachPresenter`, one `TryGetValue` and the handler's call
+(the canvas's four statements). The presenter seam IGraphSurfacePresenter
+— RequestProjectionFocus, FocusFilterField, DismissTransientRegion
+(false until C-8's panel), ProjectionHasFocus, FilterRegionHasKeys,
+IsLive — is implemented by `GraphSurfaceView`, attached on the false→true
+edge of `IsKeyboardFocusWithin` and on every chord, detached on
+`Unloaded` and in `OnModelChanged`'s old-model arm through
+`DetachPresenter(this)`, which clears only when the presenter IS this
+surface; a replacement re-attaches the pane that held the keys. RULE P:
+`RunPreset` asks the admission FIRST and a refusal writes nothing; then
+it records the three query fields, writes `ApplyQuery` with the
+GraphPresetQuery crossing's result DIRECTLY as the argument, and calls
+the workspace's OpenGraphForPreset — the ARM (`_graphPresetArm`, a
+cause-shaped field beside the cause) set, the open run as `OpenGraph`
+runs it WITHOUT the Open cause (no `Opened`, Term P2), and the report
+`GraphPresetOpenReport(ArmConsumed, GraphEffective)` returned. The
+follow method consumes the arm at the one transition Term 4 LOADS for —
+`Load(Pair, Preset, preset: arm)` — and a transition that does not load
+consumes nothing; the outermost boundary clears an unconsumed arm beside
+the cause. After the mutation the navigator reads the report: consumed
+→ done (route (a)); unconsumed with the graph effective and the seated
+document live → `Request(new GraphRequest.Preset(p))` (route (b), the
+mac's `:450–451`); otherwise the recorded query is RESTORED through
+`ApplyQuery` and nothing loads. The three commands — GraphOrphansCommand,
+GraphUnresolvedCommand, GraphMostLinkedCommand, always enabled — resolve
+through the registrar from the three chordless rows `slate.graph.orphans`,
+`slate.graph.unresolved`, `slate.graph.mostLinked` (the mac's labels and
+hints byte for byte; `MacCatalogParityTests` green). THE NEEDLE:
+`SetNameQuery(raw)` writes the raw text only when it differs, then asks
+the seated live document for `Request(Needle)`; with no document or a
+retired one the write happens and nothing is issued;
+`ClearNameQuery()` is `SetNameQuery("")` (the preferences' hook is
+T5's). THE SURFACE: the header gains, after the title, the FIELD
+(GraphFilterField, `Name` "Filter graph by note name", `HelpText`
+"Filter notes", `TextChanged` → the navigator under a syncing guard,
+re-rendered from `ViewState.NameQuery`), the COUNT REGION
+(GraphFilterSummary, focusable, its own stop, `Name` "Filter results: "
++ the document's FilterCountText, visible exactly while the PUBLISHED
+query narrows — `NeedleNarrows` is core's `GraphLabelMatches("", needle)`
+negated, or the accepted overlay set — AND the publication is current:
+its query the view state's, nothing in flight, READY or EMPTY) and CLEAR
+(GraphClearFilter, `Name` "Clear filter", visible while the RAW needle
+is non-empty, invoking `ClearNameQuery`); the tab indices order the
+field, the summary, Clear, the switcher (one stop), then the state host
+or the grid; the grid's `FilterRequested` routes through the navigator
+to the presenter's FocusFilterField. THE LADDER: `OnPreviewKeyDown`
+(tunnelling; `Key.System` unwrapped) hands every press to
+`Navigator.HandleKey` — the panel's rung 0 lands with C-8 — and
+`EscapeFromKey` runs rung 1 (a raw needle: `ClearNameQuery` then
+RequestProjectionFocus, consumed), rung 2 (the filter region holds the
+keys with no needle: RequestProjectionFocus, consumed) and rung 3 (not
+consumed; the press bubbles), each verb asking `IsLive` first; the
+Escape row `windows.graph.escapeLadder` is a `Chord` disposition in
+`ChordScope.Graph` with its reason (not a command id), and
+`ChordTableTests` drops the Graph entry from `ScopesWithoutAProductionScrape`
+and gains `GraphChords()`, the canvas scrape's shape over
+`GraphNavigator.Bind` — a list asserted duplicate-free, compared both
+ways; `chords.json` regenerated through the projection. RULE F, Term F1
+ONLY: the document holds `FocusRequest` (GraphFocusRequest(owner), no
+query, no sequence, absent once retired), raised by
+`RequestFocusLanding(owner)` and completed by `CompleteFocus(request)`;
+`IsRequestInFlight` raises `PropertyChanged` at every lineage edge; the
+surface delivers on the request's change, each publication change, each
+install and each lineage edge — only when the request is this pane's,
+the surface visible, the lineage QUIESCENT and the publication READY —
+onto the grid's current row, else the first, through the table view's
+new `FocusProjection` (the grid's silent `SelectRow(…, moveFocus:
+true)` under the syncing guard: no key written, no row move posted),
+realising the grid's containers first; the other arms (EMPTY and ERROR
+onto a focusable state host), the provisional seats, the departure and
+hold edges and the shell's route land with C-8 in T6. Facts
+(GraphNavigatorTests, a real workspace over the graph vault, eighteen):
+APresetFromANoteTabLoadsOnceThroughTheFollowMethodWithTheHeadlineAlone;
+APresetFromTheEffectiveGraphLoadsOnceThroughTheRequestEntry (the arm
+cleared, never leaked);
+APresetFromTheGraphVisibleInTheOtherGroupOntoReadyLoadsOnceThroughTheRequestEntry;
+APresetFromTheGraphHiddenInTheOtherGroupLoadsOnceThroughTheFollowMethod;
+APresetWithNoGraphTabOpensIt (no `Opened`, the cause Activation);
+ARefusedAdmissionWritesNothing;
+AnOpenThatNeverMadeTheGraphEffectiveRestoresTheQueryAndLoadsNothing (a
+navigator over a funnel that reports neither consumed nor effective);
+TheArmSurvivesTheFunnelCallsThatSeeAnotherTab (the arm observed standing
+at the first of `TryFocusGlobalGraph`'s assignments);
+ANeedleEqualToTheCurrentIssuesNothing;
+SetNameQueryWithNoDocumentWritesTheStateAndIssuesNothing;
+SetNameQueryOnARetiredDocumentWritesTheStateAndIssuesNothing;
+TheChordHalfConsumesExactlyTheTwoChordsAndNothingElse (Escape in this
+slice; every other key and every modified Escape falls through);
+EachRungWithTheArrangementThatReachesItAndTheOneThatFallsThrough;
+ThePressIsConsumedExactlyOnce; AVerbOnAStalePresenterMovesNothing (and
+the detach's reference rule); ADuplicateChordRegistrationThrows;
+EveryVerbResolvesThroughTheRegistrarWithNoWindow (the three rows'
+section, scope and chord, each command executed to its headline);
+ANeedleTypedAfterAPresetSpeaksTheCountThroughTheNavigator. Facts
+(`GraphTableTests`, a second partial file, the surface hosted in a
+hidden window where the keys must be real, ten):
+TheFieldsNameAndHelpTextAreTheMacs;
+TypingWritesTheStateAndTheFieldFollowsAProgrammaticNeedle;
+TheRegionShowsTheRenderedCountOnlyWhileNarrowingAndCurrent (a needle
+in flight, landed, whitespace only, the overlay, a stale publication
+under a changed needle); ClearIsVisibleForAnyRawNeedleAndClearsIt;
+TheGridsGestureFocusesTheField;
+TheTabOrderFromTheGridReachesTheSwitcherThenTheField (the indices and
+the switcher's one stop; the journey walks it, T8);
+TheDeliveryFromTheSurfaceWithEachChordAndTheExactModifier;
+RungTwoSeatsAtOnceWithNoLoad;
+TheClearRungSeatsAfterTheClearedRowsLandAndNotOnTheOldEmptyHost (the
+request waits for the clear's token, the reader stays in the field,
+then the cleared rows seat them); AClosedTabsSurfaceDetachesOnUnloaded;
+AReplacedModelDetachesAndReattachesThePaneThatHeldTheKeys. Deferred to
+their slices: AGraphChordWithANoteTabFocusedReachesNothing (the
+journey, T8); WhereAmIWithNoGraphTabIsRefused,
+TheAvailabilitySeamRaisesCanExecuteChangedAndTheRegistrarsRefresh,
+AnOpenPanelTakesEscapeAheadOfALiveNeedleWhileTheSurfaceHasTheKeys,
+EscapeOutsideTheGraphSubtreeLeavesAnOpenPanelAlone and
+APresetFromTheEffectiveGraphLandsTheProjection (C-8 and rule F, T6);
+ConstructedOnceInTheWorkspaceConstructor, TheHandleKeyBodyIsTheFourStatements,
+NoHostTrimTouchesTheNeedle and the writers census's preset-argument
+rule (the censuses, T7). Mutations, each restored byte for byte, each
+caught by the named fact: the arm not consumed at the load; the arm
+leaking past the boundary; route (b) skipped; the admission asked after
+the write; the restore skipped; the needle written when equal; rung 2
+without the region's condition; rung 1 without clearing; `HandleKey`
+without the attachment; a detach of any presenter; the region shown
+while a request is in flight; Clear hidden for a whitespace needle; the
+field's name drifting; the Escape chord missing from the map and the
+Escape row's scope drifting (the scrape, both directions); a preset's
+label drifting (the mac catalog parity); a preset command disabled.
+CI on T3's push (the Windows lane; the model job green) failed ONE
+census, ConnectionsLeafCensus.TheFilterCountIsEnqueuedThroughTheGatedEntryAndNowhereUngated:
+the document's RefreshFilterCountText renders the count through the
+relay's static RenderLabel (C-6) and the census bound that render as an
+ungated relay call; a render posts nothing, and the census now leaves
+the static RenderLabel out of the relay calls it classifies (landed
+ahead of T4 as its own commit). The local regression gate is CI's
+shape from here — the model family excluded, CI's own job runs it.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,

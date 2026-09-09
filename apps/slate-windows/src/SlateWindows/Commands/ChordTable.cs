@@ -289,6 +289,10 @@ internal static class ChordTable
         /// <summary>W6-2 PR B2 (B2-4): the Connections leaf's Back — the mac's
         /// panel key <c>⌘[</c>, a command on Windows (B2-D6).</summary>
         public const string GraphConnectionsBack = "slate.graph.connectionsBack";
+        // W6-2 PR C (C-3): the three presets, chordless — the mac's ids.
+        public const string GraphOrphans = "slate.graph.orphans";
+        public const string GraphUnresolved = "slate.graph.unresolved";
+        public const string GraphMostLinked = "slate.graph.mostLinked";
 
         // Canvas (W6-1 #745). Ids are byte-identical to mac's.
         public const string CanvasShowOutline = "slate.canvas.showOutline";
@@ -978,6 +982,27 @@ internal static class ChordTable
         Reg(Ids.GraphConnectionsBack, "Connections: Back", CommandSection.Graph,
             "Return the Connections leaf to the note it showed before the last Show connections.",
             "⌘[", "Ctrl+[", ChordScope.Connections),
+        // W6-2 PR C (C-3): the three presets — parameterisations of the
+        // table, chordless (ChordScope.None through Reg's rule), the labels
+        // and hints the mac's byte for byte (SlateCommands.swift:1537–1556;
+        // MacCatalogParityTests' P3 comparison); each resolves to a
+        // workspace command whose body is the navigator's RunPreset.
+        Reg(Ids.GraphOrphans, "Graph: Orphaned Notes", CommandSection.Graph,
+            "Open the graph filtered to orphans — notes with no links in or out."),
+        Reg(Ids.GraphUnresolved, "Graph: Unresolved Links", CommandSection.Graph,
+            "Open the graph filtered to unresolved targets — broken links."),
+        Reg(Ids.GraphMostLinked, "Graph: Most Linked Notes", CommandSection.Graph,
+            "Open the graph sorted by links in — the most-linked notes, the hubs."),
+        // W6-2 PR C (C-7): the Escape ladder — a Windows-authored
+        // disposition in the graph's scope, delivered by GraphSurfaceView's
+        // tunnelling handler through the navigator's map; not a command id
+        // and no mac twin (the mac has no ladder on the graph, C-D3).
+        Chord("windows.graph.escapeLadder", "Graph: Escape ladder", "Escape", ChordScope.Graph,
+            "W6-2 PR C, contract C-7: Escape on the graph surface clears a live needle "
+            + "and seats the reader on the projection, or leaves the filter region for "
+            + "the projection; with nothing to do it bubbles to the shell. Delivered by "
+            + "GraphNavigator.HandleKey from GraphSurfaceView.OnPreviewKeyDown; the mac "
+            + "has no ladder on the graph (C-D3)."),
     ];
 
     private static IEnumerable<ChordTableEntry> CanvasRows() =>

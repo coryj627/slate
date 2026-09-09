@@ -44,6 +44,10 @@ internal sealed class GraphTableView : UserControl
             ExternalSortHandler = OnExternalSort,
         };
         _grid.CurrentRowChanged += OnCurrentRowChanged;
+        // C-5: the grid's Ctrl+F reaches the field with no new row (C-D2)
+        // — the canvas table's line, routed through the navigator to the
+        // presenter that has the keys.
+        _grid.FilterRequested += () => Model?.Navigator?.FocusFilterField();
         Content = _grid;
     }
 
@@ -160,6 +164,34 @@ internal sealed class GraphTableView : UserControl
     /// <summary>Contract A-7: seat the grid on the row whose key equals
     /// the shared selection; with no visible row for it, clear the grid's
     /// currency WITHOUT writing the key.</summary>
+    /// <summary>Rule F, Terms F4 and F5: seat the reader on the grid's
+    /// current row — the shared key's, else the first — SILENTLY: the
+    /// syncing guard writes no key and the grid posts no row move. False
+    /// when no realised cell took the keys.</summary>
+    internal bool FocusProjection()
+    {
+        if (Model is not { } model)
+        {
+            return false;
+        }
+        bool wasSyncing = _syncingSelection;
+        _syncingSelection = true;
+        try
+        {
+            string? key = model.ViewState.SelectedKey;
+            if (key is not null
+                && _grid.SelectRow(row => string.Equals(((GraphTableRow)row).StableKey, key, StringComparison.Ordinal), moveFocus: true))
+            {
+                return true;
+            }
+            return _grid.SelectRow(_ => true, moveFocus: true);
+        }
+        finally
+        {
+            _syncingSelection = wasSyncing;
+        }
+    }
+
     private void Reseat(GraphDocumentViewModel model)
     {
         bool wasSyncing = _syncingSelection;

@@ -18,7 +18,7 @@ namespace SlateWindows.Tests;
 /// ItemStatus, the mode switcher from core's vector, and the 10k grid
 /// virtualised on the real substrate with the action inventory constant.
 /// </summary>
-public sealed class GraphTableTests
+public sealed partial class GraphTableTests
 {
     private sealed class Host : IDisposable
     {

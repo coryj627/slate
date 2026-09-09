@@ -1558,6 +1558,42 @@
       "registered": true
     },
     {
+      "id": "slate.graph.orphans",
+      "label": "Graph: Orphaned Notes",
+      "section": "Graph",
+      "hint": "Open the graph filtered to orphans — notes with no links in or out.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.unresolved",
+      "label": "Graph: Unresolved Links",
+      "section": "Graph",
+      "hint": "Open the graph filtered to unresolved targets — broken links.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.mostLinked",
+      "label": "Graph: Most Linked Notes",
+      "section": "Graph",
+      "hint": "Open the graph sorted by links in — the most-linked notes, the hubs.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.sidebar.open",
       "label": "Open",
       "section": "Sidebar",
@@ -3050,6 +3086,19 @@
       "scope": "None",
       "registered": false,
       "reason": "PR-4, the math-verbosity precedent: the three canvas verbosity levels are selected by one parameterized setter the Canvas menu binds with the level as its CommandParameter. Each level is a row so the catalog records the closed set, and none is registered because a palette row cannot supply the parameter. mac declares no SlateCommandID for these either."
+    },
+    {
+      "id": "windows.graph.escapeLadder",
+      "label": "Graph: Escape ladder",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Escape",
+      "windowsSpoken": "Escape",
+      "scope": "Graph",
+      "registered": false,
+      "reason": "W6-2 PR C, contract C-7: Escape on the graph surface clears a live needle and seats the reader on the projection, or leaves the filter region for the projection; with nothing to do it bubbles to the shell. Delivered by GraphNavigator.HandleKey from GraphSurfaceView.OnPreviewKeyDown; the mac has no ladder on the graph (C-D3)."
     },
     {
       "id": "windows.reading.nextH",

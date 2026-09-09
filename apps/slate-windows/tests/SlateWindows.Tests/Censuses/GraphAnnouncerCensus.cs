@@ -792,13 +792,20 @@ public sealed class GraphAnnouncerCensus
     {
         string[] allowedWriters =
         [
+            // C-6: the navigator is the ONE writer of the needle from the surface.
+            "Graph/GraphNavigator.cs:SetNameQuery:NameQuery",
             "Graph/GraphViewState.cs:ApplyQuery:Filter",
             "Graph/GraphViewState.cs:ApplyQuery:KindOnly",
             "Graph/GraphViewState.cs:ApplyQuery:NameQuery",
         ];
-        // ApplyQuery's callers in this PR: T4 adds the preset's write, T5
-        // the constructor's seed and the fresh open's re-apply.
-        string[] allowedCallers = [];
+        // ApplyQuery's callers in this PR: the preset's write and its
+        // restore, both in RunPreset (C-3 (ii), (vi)); T5 adds the
+        // constructor's seed and the fresh open's re-apply.
+        string[] allowedCallers =
+        [
+            "Graph/GraphNavigator.cs:RunPreset",
+            "Graph/GraphNavigator.cs:RunPreset",
+        ];
         string[] queryNames = ["Filter", "NameQuery", "KindOnly"];
         string[] backingFields = ["_filter", "_nameQuery", "_kindOnly"];
         var writers = new List<string>();
