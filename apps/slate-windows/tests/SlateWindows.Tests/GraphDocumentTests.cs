@@ -699,6 +699,74 @@ public sealed class GraphDocumentTests
         });
     }
 
+    // --- The kind overlay, the sixth field (W6-2 PR C, C-4; A-1 as amended) --
+
+    /// <summary>C-4: the request carries the view state's kind overlay as
+    /// it carries the filter and the needle — under Ghost the published
+    /// rows are ghosts alone, the snapshot keeps every node; under null
+    /// the notes return.</summary>
+    [Fact]
+    public void TheRequestCarriesTheOverlay()
+    {
+        using GraphVault vault = GraphVault.Copy("overlay");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphDocumentViewModel document = host.Document;
+            Assert.Contains(document.Publication.Rows, row => row.Kind == GraphNodeKind.Note);
+            int every = document.Publication.Rows.Count;
+
+            document.ViewState.ApplyQuery(new GraphVisibilityQuery(document.ViewState.Filter, string.Empty, GraphNodeKind.Ghost));
+            _ = document.Load(GraphLoadKind.RowsOnly, GraphAnnouncePolicy.Silent);
+            host.Settle();
+            Assert.NotEmpty(document.Publication.Rows);
+            Assert.All(document.Publication.Rows, row => Assert.Equal(GraphNodeKind.Ghost, row.Kind));
+            Assert.True(document.Publication.Rows.Count < every, "the overlay narrows the rows");
+            Assert.Equal(every, (int)document.Publication.Total);
+
+            document.ViewState.ApplyQuery(new GraphVisibilityQuery(document.ViewState.Filter, string.Empty, null));
+            _ = document.Load(GraphLoadKind.RowsOnly, GraphAnnouncePolicy.Silent);
+            host.Settle();
+            Assert.Equal(every, document.Publication.Rows.Count);
+            document.Retire();
+        });
+    }
+
+    /// <summary>C-4: <c>ApplyQuery</c> writes the three query fields from
+    /// one record and nothing else — the selection, the groups and the
+    /// mode stand — raising a change for each field it moves.</summary>
+    [Fact]
+    public void ApplyQueryWritesTheThreeFieldsFromOneRecord()
+    {
+        var state = new GraphViewState { SelectedKey = "p:hub.md", Mode = GraphSurfaceMode.Table };
+        var changed = new List<string>();
+        state.PropertyChanged += (_, e) => changed.Add(e.PropertyName ?? string.Empty);
+        var narrowed = new GraphFilter(IncludeAttachments: true, IncludeGhosts: true, OrphansOnly: false);
+
+        state.ApplyQuery(new GraphVisibilityQuery(narrowed, "café", GraphNodeKind.Ghost));
+
+        Assert.Equal(narrowed, state.Filter);
+        Assert.Equal("café", state.NameQuery);
+        Assert.Equal(GraphNodeKind.Ghost, state.KindOnly);
+        Assert.Equal("p:hub.md", state.SelectedKey);
+        Assert.Empty(state.Groups);
+        Assert.Equal(GraphSurfaceMode.Table, state.Mode);
+        Assert.Equal(["Filter", "NameQuery", "KindOnly"], changed);
+
+        // The same record again moves nothing.
+        changed.Clear();
+        state.ApplyQuery(new GraphVisibilityQuery(narrowed, "café", GraphNodeKind.Ghost));
+        Assert.Empty(changed);
+
+        // A null overlay clears it; the needle and the filter move with the record.
+        state.ApplyQuery(new GraphVisibilityQuery(GraphViewState.DefaultFilter(), string.Empty, null));
+        Assert.Null(state.KindOnly);
+        Assert.Equal(string.Empty, state.NameQuery);
+        Assert.Equal(GraphViewState.DefaultFilter(), state.Filter);
+    }
+
     // --- Actions and the create funnel (contract A-8) ----------------------
 
     [Fact]

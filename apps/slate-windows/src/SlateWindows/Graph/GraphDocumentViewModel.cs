@@ -398,8 +398,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
         _seq++;
         GraphTableSort requestedSort = sort ?? Publication.AcceptedSort;
+        // The request is the view state's three query fields as ONE record
+        // (C-4): the overlay rides the token as the filter and the needle do.
         var request = new GraphTableRequest(
-            new GraphVisibilityQuery(ViewState.Filter, ViewState.NameQuery, null),
+            new GraphVisibilityQuery(ViewState.Filter, ViewState.NameQuery, ViewState.KindOnly),
             requestedSort);
         _request = request;
         _requestedSort = requestedSort == Publication.AcceptedSort ? null : requestedSort;

@@ -7,9 +7,12 @@ namespace SlateWindows.Graph;
 
 /// <summary>
 /// W6-2 PR A (#746), contract A-1 / spec §1 R-B: the ONE view state of
-/// the graph — five fields, and nothing else. The selected node key (the
+/// the graph — six fields, and nothing else. The selected node key (the
 /// table's current row IS the selection), the backend filter, the name
-/// query, the groups and the mode. Owned by the DOCUMENT until the owner's
+/// query, the groups, the mode and — since the owner's amendment of A-1
+/// and R-B on 2026-09-08 (W6-2 PR C, CD-23; C-4) — the preset's kind
+/// overlay, core's <c>kind_only</c>, which no other field can express
+/// and which <see cref="ApplyQuery"/> alone writes. Owned by the DOCUMENT until the owner's
 /// amendment of A-1 and R-B on 2026-09-06 (W6-2 PR B2, B2D-1; B2-1): now
 /// the WORKSPACE's one instance, constructed beside the relay, handed to
 /// the graph document and the Connections leaf, surviving the document's
@@ -29,6 +32,7 @@ internal sealed class GraphViewState : BindableBase
     private string _nameQuery = string.Empty;
     private IReadOnlyList<GraphGroup> _groups = [];
     private GraphSurfaceMode _mode = GraphSurfaceMode.Table;
+    private GraphNodeKind? _kindOnly;
 
     /// <summary>Core's default filter (`GraphFilter::default()`,
     /// graph.rs): notes and unresolved targets in, attachments out,
@@ -88,5 +92,34 @@ internal sealed class GraphViewState : BindableBase
     {
         get => _mode;
         set => SetField(ref _mode, value);
+    }
+
+    /// <summary>The preset's kind overlay — core's <c>kind_only</c>
+    /// (graph_queries.rs), Ghost under the Unresolved preset and null
+    /// otherwise (W6-2 PR C, C-4; the sixth field, A-1 as amended by the
+    /// owner, CD-23). Cross-projection: the table's request, PR D's
+    /// diagram and Where-am-I's filter clause read it. Never persisted —
+    /// the config schema has no key for it (C-10). Written by
+    /// <see cref="ApplyQuery"/> alone (the writers census); the setter is
+    /// private so no shell site can write it by name.</summary>
+    public GraphNodeKind? KindOnly
+    {
+        get => _kindOnly;
+        private set => SetField(ref _kindOnly, value);
+    }
+
+    /// <summary>Write the query as ONE record (C-4): the backend filter,
+    /// the needle and the kind overlay from core's
+    /// <see cref="GraphVisibilityQuery"/> — the constructor's seed, the
+    /// preset's write and the fresh open's re-apply (C-10, C-3) and PR E's
+    /// manual filter change are its callers, walled by the census. The
+    /// selection, the groups and the mode are not the query's and are
+    /// left alone.</summary>
+    public void ApplyQuery(GraphVisibilityQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        Filter = query.Filter;
+        NameQuery = query.NameQuery;
+        KindOnly = query.KindOnly;
     }
 }

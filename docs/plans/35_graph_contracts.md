@@ -10154,6 +10154,44 @@ the table's witness (renders-exactly); the ninth witness dropped
 are the CI lane's to run; the dir-tree censuses fail on this box as
 before (CI-Windows is their oracle).
 
+**TGC-2 — T2: the view state's sixth field and `ApplyQuery` (C-4; A-1
+and spec R-B as amended by the owner, CD-23).** `GraphViewState` gains
+`KindOnly` — core's `kind_only`, null by default, its setter PRIVATE so
+no shell site can write it by name — and `ApplyQuery(GraphVisibilityQuery)`,
+which writes `Filter`, `NameQuery` and `KindOnly` from the one record and
+leaves the selection, the groups and the mode alone; the class's summary
+reads six fields. The document's `Load` builds the request as
+`new GraphVisibilityQuery(ViewState.Filter, ViewState.NameQuery,
+ViewState.KindOnly)` — the literal null at the former `:401` is gone, so
+the overlay rides the token as the filter and the needle do; the
+receiver's request-equality checks (A-2 (i)) cover it unchanged. Facts
+(`GraphDocumentTests`, a real session over the graph vault):
+TheRequestCarriesTheOverlay (under Ghost the published rows are ghosts
+alone and fewer than the total, which the snapshot keeps; under null the
+notes return); ApplyQueryWritesTheThreeFieldsFromOneRecord (the three
+fields move, `PropertyChanged` fires for each in order, the selection,
+the groups and the mode stand; the same record again moves nothing; a
+null overlay clears it). Censuses (`GraphAnnouncerCensus`):
+`NoMutableShadowOfTheViewStateExistsInTheShell`'s name list gains
+`KindOnly` (A-1 as amended); the new
+TheQueryFieldsAreWrittenByTheNamedOwnersAlone walks every bound
+assignment to the three query properties across the shell compilation
+and asserts the set — `ApplyQuery`'s three today; the navigator's
+`SetNameQuery` joins in T4 — the backing fields written by their setters
+alone (`ref` arguments included, IGK-19's rule), and `ApplyQuery`'s own
+callers as a set (empty in T2; the preset's write in T4, the seed and the
+fresh open's re-apply in T5, PR E's manual change by amendment — a
+planted fourth fails, IGN-16), method-group references included.
+Mutations, each restored byte for byte, each caught by the named fact:
+the request dropping the overlay (the request fact); `ApplyQuery`
+skipping the overlay (the record fact); a planted needle writer, a
+planted `ApplyQuery` caller and the overlay's backing field written from
+the mode's setter (the writers census); a mutable `KindOnly` property
+planted on the document (the no-shadow census). A lesson recorded for
+the loop: the Windows tree's C# files carry CRLF, so an edit script must
+replace on the file's own bytes — a normalising read rewrote a whole
+file's endings before the diff caught it.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,
