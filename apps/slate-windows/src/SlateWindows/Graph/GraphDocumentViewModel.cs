@@ -16,11 +16,40 @@ internal enum GraphLoadKind
 }
 
 /// <summary>What a load speaks when it publishes with the tab
-/// effective (rule L, Term 6): the snapshot summary, or nothing.</summary>
+/// effective (rule L, Term 6; rule Q, Term Q4): the snapshot summary,
+/// nothing, the preset's headline (rule P, Term P4), or the filter
+/// count (a needle's or a filter's pair — W6-2 PR C).</summary>
 internal enum GraphAnnouncePolicy
 {
     Summary,
     Silent,
+    Preset,
+    FilterCount,
+}
+
+/// <summary>A USER request's four arms (W6-2 PR C, rule Q Term Q1): the
+/// needle, the sort, the preset, the filter — every EXTERNAL query change
+/// reaches the document through <see cref="GraphDocumentViewModel.Request"/>
+/// and nothing else; the probe's and the receiver's tokens are the two
+/// internal origins.</summary>
+internal abstract record GraphRequest
+{
+    private GraphRequest()
+    {
+    }
+
+    /// <summary>The needle changed (the navigator's write, C-6).</summary>
+    public sealed record Needle() : GraphRequest;
+
+    /// <summary>The grid asked for a sort (A-5).</summary>
+    public sealed record Sort(GraphTableSort Requested) : GraphRequest;
+
+    /// <summary>A preset over the already-effective graph (rule P, Term P3).</summary>
+    public sealed record Preset(GraphPreset Chosen) : GraphRequest;
+
+    /// <summary>PR E's manual filter change, written through
+    /// <c>ApplyQuery</c> before the request (Term Q4).</summary>
+    public sealed record Filter(GraphFilter Backend) : GraphRequest;
 }
 
 /// <summary>The full request record a token carries (contract A-2).</summary>
@@ -36,7 +65,9 @@ internal sealed record GraphLoadToken(
     GraphTableRequest Request,
     ulong Seq,
     GraphLoadKind Kind,
-    GraphAnnouncePolicy Announce);
+    GraphAnnouncePolicy Announce,
+    GraphPreset? Preset = null,
+    bool UserSort = false);
 
 /// <summary>The worker ENVELOPE (contract A-2; the round-3 ledger's
 /// IGA-22, IGA-43): the inputs the body actually used beside its
@@ -85,7 +116,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     private GraphTableRequest? _request;
     private GraphTableSort? _requestedSort;
     private ulong _highWater;
-    private bool _pairInFlight;
+    // Rule Q, Term Q2: the lineage — the token in flight and nothing
+    // else remembers a policy or a preset.
+    private GraphLoadToken? _current;
+    private string _filterCountText = string.Empty;
     // Volatile (IPD-4): read from the pool by the always-async bodies and
     // by a fact's release barrier; written by Retire on the owner's thread.
     private volatile bool _retired;
@@ -145,7 +179,9 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         // crossing anywhere would show here.
         ActionInventoryCrossings = CrossingsForTests["graph_row_actions"];
         ViewState = viewState;
-        _publication = GraphPublication.Initial(ViewState.Filter, DefaultSort);
+        _publication = GraphPublication.Initial(
+            new GraphVisibilityQuery(ViewState.Filter, ViewState.NameQuery, ViewState.KindOnly),
+            DefaultSort);
     }
 
     // --- The fetched-once inventories (design B) ------------------------
@@ -327,6 +363,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         ["graph_table_rows"] = 0,
         ["graph_generation"] = 0,
         ["graph_row_actions"] = 0,
+        ["graph_preset_outcome"] = 0,
     };
 
     /// <summary>The per-kind action vector, fetched ONCE per kind at
@@ -377,61 +414,218 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
     }
 
-    /// <summary>The filter count's seam (0a-9, A-10 as amended): gated at
-    /// enqueue AND at fire by the same effective predicate.</summary>
-    private void AnnounceFilterCountIfEffective(GraphA11yEvent.GraphFilterCount @event)
+    /// <summary>The filter count's seam (0a-9, A-10 as amended; rule Q
+    /// Term Q6): gated at enqueue AND at fire by the effective predicate
+    /// and the token's currency — a count queued for one query drops when
+    /// another is typed, and a preset's pair drops a count queued before
+    /// it.</summary>
+    private void AnnounceFilterCountIfEffective(GraphA11yEvent.GraphFilterCount @event, GraphLoadToken token)
     {
         if (!_retired && _isEffectiveActive())
         {
-            _announcer.AnnounceGatedFilterCount(@event, () => !_retired && _isEffectiveActive());
+            _announcer.AnnounceGatedFilterCount(@event, () => !_retired && _isEffectiveActive() && _seq == token.Seq);
         }
+    }
+
+    /// <summary>C-6: the count region's text — the same GraphFilterCount
+    /// the relay speaks, rendered by the one renderer from the CURRENT
+    /// publication at each install; empty under LOADING and ERROR.</summary>
+    public string FilterCountText
+    {
+        get => _filterCountText;
+        private set => SetField(ref _filterCountText, value);
+    }
+
+    private void RefreshFilterCountText()
+    {
+        GraphPublication publication = Publication;
+        FilterCountText = publication.State is GraphLoadState.Ready or GraphLoadState.Empty
+            ? GraphAnnouncer.RenderLabel(CountOf(publication))
+            : string.Empty;
+    }
+
+    private static GraphA11yEvent.GraphFilterCount CountOf(GraphPublication publication) =>
+        new((uint)publication.Rows.Count, (uint)Math.Min(publication.Total, uint.MaxValue));
+
+    /// <summary>Rule P, Term P4: the headline from THE PUBLISHED RESULT —
+    /// core's rule (C-2), one crossing per successful publication of a
+    /// current preset token, none on a failure or a supersession.</summary>
+    private GraphPresetOutcome PresetOutcome(GraphPreset preset, GraphTableRows rows)
+    {
+        lock (CrossingsForTests)
+        {
+            CrossingsForTests["graph_preset_outcome"]++;
+        }
+        return SlateUniffiMethods.GraphPresetOutcome(preset, (ulong)rows.Rows.Length, rows.Rows.Length == 0 ? null : rows.Rows[0]);
     }
 
     // --- The load (contract A-2) ------------------------------------------
 
-    /// <summary>Issue a token and start the body (rule A).</summary>
-    public GraphLoadToken Load(GraphLoadKind kind, GraphAnnouncePolicy announce, GraphTableSort? sort = null)
+    /// <summary>Issue a token and start the body (rule A). The ACTIVATION's
+    /// entry — rule L's follow method, Term 1's one outside caller — and,
+    /// with <paramref name="preset"/>, the armed load of rule P (Term P1):
+    /// policy <see cref="GraphAnnouncePolicy.Preset"/> with the preset on
+    /// the token, the default sort, no user sort. Without an explicit sort
+    /// the pair CARRIES the pending sort (Term Q5): a sort requested and not
+    /// yet answered rides the activation and adopts at its install, with
+    /// <c>GridSorted</c> before the cause's line (IGP-4).</summary>
+    public GraphLoadToken Load(GraphLoadKind kind, GraphAnnouncePolicy announce, GraphTableSort? sort = null, GraphPreset? preset = null)
     {
         if (_retired)
         {
             throw new InvalidOperationException("the graph document is retired");
         }
+        GraphTableSort requested;
+        bool userSort;
+        if (preset is not null)
+        {
+            // Term P4: the preset's default sort replaces a pending sort
+            // silently (Term Q5 (d)) — no GridSorted for the default sort.
+            _requestedSort = null;
+            requested = DefaultSort;
+            userSort = false;
+        }
+        else if (sort is { } explicitSort)
+        {
+            _requestedSort = explicitSort == Publication.AcceptedSort ? null : explicitSort;
+            requested = explicitSort;
+            userSort = _requestedSort is not null;
+        }
+        else
+        {
+            requested = _requestedSort ?? Publication.AcceptedSort;
+            userSort = _requestedSort is not null;
+        }
+        return Issue(kind, announce, requested, userSort, preset);
+    }
+
+    /// <summary>Rule Q's ONE entry for a USER request (Term Q1): the needle,
+    /// the sort, the preset, the filter. ADMISSION first — false, and
+    /// nothing touched, unless the document is live and the workspace's
+    /// seated one (IGO-8). The kind is Term Q3's, the policy Term Q4's, the
+    /// pending sort's transitions Term Q5's.</summary>
+    public bool Request(GraphRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (_retired || !_isSeated())
+        {
+            return false;
+        }
+        GraphTableSort accepted = Publication.AcceptedSort;
+        switch (request)
+        {
+            case GraphRequest.Needle:
+                {
+                    // Term Q3: rows only iff a snapshot is held, no pair is in
+                    // flight and the backend filter is the held snapshot's;
+                    // otherwise a pair — under FilterCount, ALWAYS (Term Q4): the
+                    // reader's own needle replaces a displaced summary or
+                    // headline with the count, the mac's order (IGP-8).
+                    bool rowsOnly = Publication.HoldsSnapshot
+                        && _current is not { Kind: GraphLoadKind.Pair }
+                        && ViewState.Filter == Publication.Filter;
+                    _ = Issue(
+                        rowsOnly ? GraphLoadKind.RowsOnly : GraphLoadKind.Pair,
+                        rowsOnly ? GraphAnnouncePolicy.Silent : GraphAnnouncePolicy.FilterCount,
+                        _requestedSort ?? accepted,
+                        _requestedSort is not null,
+                        preset: null);
+                    return true;
+                }
+            case GraphRequest.Sort sortRequest:
+                {
+                    if (sortRequest.Requested == accepted)
+                    {
+                        // Term Q5 (c): the accepted sort asked back CANCELS the
+                        // pending one at issue with no line (A-5's shipped
+                        // guard); with nothing pending there is nothing to do.
+                        if (_requestedSort is null)
+                        {
+                            return false;
+                        }
+                        _requestedSort = null;
+                        _ = Issue(GraphLoadKind.RowsOnly, GraphAnnouncePolicy.Silent, accepted, userSort: false, preset: null);
+                        return true;
+                    }
+                    // A-5 as frozen: rows only, always; the receiver's re-fetch
+                    // carries the sort when the held snapshot is absent, differs
+                    // or is stale (Term Q3, IGO-2; Term Q9).
+                    _requestedSort = sortRequest.Requested;
+                    _ = Issue(GraphLoadKind.RowsOnly, GraphAnnouncePolicy.Silent, sortRequest.Requested, userSort: true, preset: null);
+                    return true;
+                }
+            case GraphRequest.Preset preset:
+                {
+                    // Rule P through the request entry (Term P3's already-
+                    // effective route, A-5's class): a pair under Preset with the
+                    // DEFAULT sort and no user sort — a pending sort replaced
+                    // silently (Term Q5 (d)), no GridSorted (Term P4).
+                    _requestedSort = null;
+                    _ = Issue(GraphLoadKind.Pair, GraphAnnouncePolicy.Preset, DefaultSort, userSort: false, preset.Chosen);
+                    return true;
+                }
+            case GraphRequest.Filter:
+                {
+                    // PR E's arm (Term Q4): a pair under FilterCount over the
+                    // query the caller wrote through ApplyQuery — the overlay
+                    // cleared there, a Preset policy in flight NOT inherited (the
+                    // mac drops the pending preset, `:388–389`) — carrying the
+                    // pending sort (Term Q5).
+                    _ = Issue(GraphLoadKind.Pair, GraphAnnouncePolicy.FilterCount, _requestedSort ?? accepted, _requestedSort is not null, preset: null);
+                    return true;
+                }
+            default:
+                throw new ArgumentOutOfRangeException(nameof(request), request, "an unknown request arm");
+        }
+    }
+
+    /// <summary>Term Q2's lineage: a token is in flight until its receiver
+    /// ran to an install, a failure or a rejection — or a newer token
+    /// replaced it.</summary>
+    public bool IsRequestInFlight => _current is not null;
+
+    internal GraphLoadToken? CurrentForTests => _current;
+
+    /// <summary>Every token is issued here: the sequence advances, the
+    /// request is the view state's three query fields as ONE record (C-4)
+    /// with the sort, LOADING shows when no snapshot is held, and the token
+    /// becomes the lineage (Term Q2).</summary>
+    private GraphLoadToken Issue(GraphLoadKind kind, GraphAnnouncePolicy announce, GraphTableSort sort, bool userSort, GraphPreset? preset)
+    {
         _seq++;
-        GraphTableSort requestedSort = sort ?? Publication.AcceptedSort;
-        // The request is the view state's three query fields as ONE record
-        // (C-4): the overlay rides the token as the filter and the needle do.
         var request = new GraphTableRequest(
             new GraphVisibilityQuery(ViewState.Filter, ViewState.NameQuery, ViewState.KindOnly),
-            requestedSort);
+            sort);
         _request = request;
-        _requestedSort = requestedSort == Publication.AcceptedSort ? null : requestedSort;
-        if (kind == GraphLoadKind.Pair)
+        if (kind == GraphLoadKind.Pair && !Publication.HoldsSnapshot && Publication.State != GraphLoadState.Loading)
         {
-            _pairInFlight = true;
-            if (!Publication.HoldsSnapshot && Publication.State != GraphLoadState.Loading)
-            {
-                // A retry after a failure shows LOADING, not the old
-                // grid (the mac's `:257–265`).
-                Publication = GraphPublication.Initial(request.Query.Filter, Publication.AcceptedSort);
-            }
+            // A retry after a failure shows LOADING, not the old grid (the
+            // mac's `:257–265`).
+            Publication = GraphPublication.Initial(request.Query, Publication.AcceptedSort);
+            RefreshFilterCountText();
         }
-        var token = new GraphLoadToken(this, _session, _lifecycleGeneration(), request, _seq, kind, announce);
+        var token = new GraphLoadToken(this, _session, _lifecycleGeneration(), request, _seq, kind, announce, preset, userSort);
+        _current = token;
         StartWorkAlwaysAsync(() => Fetch(token), Receive);
         return token;
     }
 
-    /// <summary>The grid's sort request (contract A-5): a rows-only token,
-    /// unless the sort equals the accepted one AND nothing is pending —
-    /// with a request pending, a request for the accepted sort
-    /// supersedes it (the mac's whole guard, `:360`).</summary>
-    public void SetSort(GraphTableSort sort)
-    {
-        if (sort == Publication.AcceptedSort && _requestedSort is null)
-        {
-            return;
-        }
-        _ = Load(GraphLoadKind.RowsOnly, GraphAnnouncePolicy.Silent, sort);
-    }
+    /// <summary>Rule Q, Term Q9: a pair that REPLACES a token in flight —
+    /// the probe's superseding pair, the receiver's re-fetch — inherits the
+    /// replaced request whole: its sort and user sort, its policy and its
+    /// preset, under a fresh sequence, so the line the replaced token would
+    /// have spoken is spoken over the newer generation. A replaced ROWS-ONLY
+    /// token would have spoken the count, so the replacing pair speaks it
+    /// (the rows-only receiver's line as a policy — the mac lane's C-2 (iv)
+    /// as landed in TGC-1), with <c>GridSorted</c> first when it carried the
+    /// pending sort.</summary>
+    private GraphLoadToken IssueReplacing(GraphLoadToken replaced) =>
+        Issue(
+            GraphLoadKind.Pair,
+            replaced.Kind == GraphLoadKind.RowsOnly ? GraphAnnouncePolicy.FilterCount : replaced.Announce,
+            replaced.Request.Sort,
+            replaced.UserSort,
+            replaced.Preset);
 
     private GraphLoadEnvelope Fetch(GraphLoadToken token)
     {
@@ -470,13 +664,20 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
     }
 
+    /// <summary>Test seam: an envelope handed to the receiver as the pool
+    /// would hand it — a rejected or straddled one built by a fact.</summary>
+    internal void ReceiveForTests(GraphLoadEnvelope envelope) => Receive(envelope);
+
     /// <summary>The receiver, at DISPATCH time on the owner context: the
-    /// four-step rule of contract A-2, the mac's `receiveGraphTableRows`.</summary>
+    /// four-step rule of contract A-2, the mac's `receiveGraphTableRows`,
+    /// with rule Q's terminal states (Term Q2), lines (Terms Q4, Q5, P4)
+    /// and replacing pairs (Term Q9).</summary>
     private void Receive(GraphLoadEnvelope envelope)
     {
         GraphLoadToken token = envelope.Token;
         // (i) the token is current in every field — the lifecycle
-        // generation included (IPA-6).
+        // generation included (IPA-6). A superseded token is not the
+        // lineage's: it changes nothing.
         if (!ReferenceEquals(token.Document, this)
             || _retired
             || !ReferenceEquals(token.Session, _session)
@@ -487,26 +688,35 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         {
             return;
         }
-        if (token.Kind == GraphLoadKind.Pair)
-        {
-            _pairInFlight = false;
-        }
+        // From here the token IS the lineage's (Term Q2): every exit below
+        // is one of its terminal states or its replacement.
         // (ii) the envelope answers THIS request, and its inputs agree
         // with each other — validated before EITHER arm (IPA-6): a
         // failure envelope whose filter is not its query's is as foreign
-        // as a success's.
+        // as a success's. A REJECTION is terminal (IGO-6): no re-fetch,
+        // the pending sort rolled back.
         if (envelope.Query != token.Request.Query
             || envelope.Sort != token.Request.Sort
             || envelope.Filter != envelope.Query.Filter)
         {
+            // The request goes with the lineage: a second envelope for a
+            // token already terminal can never install.
+            _current = null;
+            _request = null;
+            _requestedSort = null;
             return;
         }
         if (envelope.Failure is { } failure)
         {
+            // Terminal: the pending sort rolled back for ANY token (Term
+            // Q2, IGP-2); a preset on the token is forgotten with it (Term
+            // P4); the block where the line would have been.
+            _current = null;
             _requestedSort = null;
             if (token.Kind == GraphLoadKind.Pair)
             {
                 Publication = Publication.AsPairFailure(failure);
+                RefreshFilterCountText();
             }
             AnnounceIfEffective(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.LoadFailed(failure)));
             return;
@@ -519,11 +729,12 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             GraphSnapshot snapshot = envelope.Snapshot!;
             if (rows.Generation != snapshot.Generation)
             {
-                // The two crossings straddled a rebuild: drop, and read again.
-                _ = Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent, token.Request.Sort);
+                // The two crossings straddled a rebuild: drop, and read
+                // again as the token's own replacement (Term Q9).
+                _ = IssueReplacing(token);
                 return;
             }
-            next = GraphPublication.FromPair(snapshot, envelope.Filter, rows, token.Request.Sort);
+            next = GraphPublication.FromPair(snapshot, envelope.Query, rows, token.Request.Sort);
         }
         else
         {
@@ -531,15 +742,22 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                 || previous.Filter != envelope.Query.Filter
                 || rows.Generation != previous.Generation)
             {
-                _ = Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent, token.Request.Sort);
+                // The held snapshot is absent, another filter's or stale:
+                // the pair for THIS request, carrying its sort (Term Q3,
+                // IGO-2) and speaking its count (Term Q9).
+                _ = IssueReplacing(token);
                 return;
             }
-            next = previous.WithRows(rows, token.Request.Sort);
+            next = previous.WithRows(envelope.Query, rows, token.Request.Sort);
         }
-        // (iii) ONE swap, rows before state — the record carries both.
-        bool answeredSort = _requestedSort is not null;
+        // (iii) ONE swap, rows before state — the record carries both. The
+        // lineage ends at the install (Term Q2); the pending sort is
+        // answered when the token carried it (Term Q5 (a)).
+        bool answeredSort = token.UserSort;
         _requestedSort = null;
+        _current = null;
         Publication = next;
+        RefreshFilterCountText();
         if (token.Kind == GraphLoadKind.Pair)
         {
             // A NEW snapshot judges the key (the mac revalidates at the
@@ -548,17 +766,37 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             // judged — or never saw — the key.
             RevalidateSelection(next, envelope.SelectionGeneration);
         }
+        // The surface's GridSorted is raised synchronously from here, so it
+        // PRECEDES the receiver's own line for the same install (Term Q5's
+        // combined lines, IGP-19).
         PublicationInstalled?.Invoke(new GraphPublicationInstall(previous, next, answeredSort));
         if (token.Kind == GraphLoadKind.Pair)
         {
-            if (token.Announce == GraphAnnouncePolicy.Summary)
+            switch (token.Announce)
             {
-                AnnounceIfEffective(new GraphA11yEvent.GraphSnapshotSummary(next.Snapshot!.SummaryCounts));
+                case GraphAnnouncePolicy.Summary:
+                    AnnounceIfEffective(new GraphA11yEvent.GraphSnapshotSummary(next.Snapshot!.SummaryCounts));
+                    break;
+                case GraphAnnouncePolicy.Preset:
+                    // Term P4: the headline in place of the summary, no count.
+                    AnnounceIfEffective(new GraphA11yEvent.GraphPreset(PresetOutcome(token.Preset!.Value, rows)));
+                    break;
+                case GraphAnnouncePolicy.FilterCount:
+                    // A pair under FilterCount speaks the count through the
+                    // gated entry (the mac's `:249–253`).
+                    AnnounceFilterCountIfEffective(CountOf(next), token);
+                    break;
+                case GraphAnnouncePolicy.Silent:
+                default:
+                    break;
             }
             if (_highWater > next.Generation)
             {
+                // A-3's recovery: the high-water pair is issued at an
+                // INSTALL, when nothing is in flight, and inherits nothing
+                // (Term Q9).
                 _highWater = 0;
-                _ = Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent, token.Request.Sort);
+                _ = Issue(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent, next.AcceptedSort, userSort: false, preset: null);
             }
         }
         else
@@ -567,9 +805,9 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             // (`requestGraphTableRows`, `:343–347`), coalesced — through the
             // relay's GATED entry (A-10 as amended, W6-2 PR B): the
             // effective predicate is stored with the line and re-checked
-            // at fire, the mac's `graphTabActive` at `:150`.
-            AnnounceFilterCountIfEffective(new GraphA11yEvent.GraphFilterCount(
-                (uint)rows.Rows.Length, (uint)Math.Min(rows.Total, uint.MaxValue)));
+            // at fire, the mac's `graphTabActive` at `:150`, with the
+            // token's currency (Term Q6).
+            AnnounceFilterCountIfEffective(CountOf(next), token);
         }
     }
 
@@ -626,7 +864,13 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                 {
                     if (generation != held.Generation)
                     {
-                        _ = Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
+                        // A-3 as amended by the owner (rule Q, Term Q9): a
+                        // token in flight is superseded by a pair inheriting
+                        // its request whole; over a quiescent lineage the
+                        // pair is silent and carries the accepted sort.
+                        _ = _current is { } inFlight
+                            ? IssueReplacing(inFlight)
+                            : Issue(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent, held.AcceptedSort, userSort: false, preset: null);
                     }
                 }
                 else
@@ -718,6 +962,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         _retired = true;
         _seq++;
         _request = null;
+        _current = null;
         Shutdown();
         // A-1 as amended (W6-2 PR B, BD-12): the relay is the workspace's;
         // retirement drops THIS document's pending classes — the mac's

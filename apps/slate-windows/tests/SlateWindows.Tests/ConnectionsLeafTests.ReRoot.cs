@@ -781,7 +781,7 @@ public sealed partial class ConnectionsLeafTests
             // A sort over the held snapshot: rows only, the key untouched.
             GraphTableSort other = document.Publication.AcceptedSort with { Ascending = !document.Publication.AcceptedSort.Ascending };
             int pairsBefore = document.CrossingsForTests["graph_snapshot"];
-            document.SetSort(other);
+            _ = document.Request(new GraphRequest.Sort(other));
             SettleTheDocuments(host);
             Assert.Equal(other, document.Publication.AcceptedSort);
             Assert.Equal(held, document.Publication.Generation);

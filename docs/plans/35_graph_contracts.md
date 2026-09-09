@@ -10192,6 +10192,124 @@ the loop: the Windows tree's C# files carry CRLF, so an edit script must
 replace on the file's own bytes — a normalising read rewrote a whole
 file's endings before the diff caught it.
 
+**TGC-3 — T3: the request lineage in the document (rule Q, Terms Q1–Q9;
+rule P, Term P4; C-6's document side; C-3's document side).** THE
+ENTRY: `GraphRequest` is a closed record — `Needle`, `Sort(Requested)`,
+`Preset(Chosen)`, `Filter(Backend)` — and `Request(GraphRequest)` the
+document's ONE user entry (Term Q1): admission first, false and nothing
+touched unless the document is live and the workspace's seated one
+(IGO-8); A-5's `SetSort` is gone and the table view's external sort
+handler calls `Request(new GraphRequest.Sort(...))`. THE KIND AND THE
+POLICY (Terms Q3, Q4): a needle is rows only iff a snapshot is held, no
+PAIR is in flight and the backend filter is the held snapshot's — else a
+pair under `FilterCount`, always; a sort is rows only, always, Silent; a
+preset is a pair under `Preset` with the preset on the token, the
+default sort and no user sort; a filter is a pair under `FilterCount`
+over the query the caller wrote through `ApplyQuery`.
+`GraphAnnouncePolicy` gains `Preset` and `FilterCount`; `GraphLoadToken`
+gains `Preset` and `UserSort`. THE LINEAGE (Term Q2): `_current` is the
+token in flight — set at every issue through the one private `Issue`,
+cleared at an install, a failure or a rejection, replaced by a newer
+token — `_pairInFlight` is gone, `IsRequestInFlight` is `_current is not
+null`, and a fact walks the type by reflection to pin that no other
+field remembers a policy, a preset or a kind. A REJECTION (A-2 (ii) on
+the current token) is terminal: the lineage and the request go, the
+pending sort rolls back, nothing re-fetches — and a second envelope for
+that token can never install (the first run found the worker's real
+envelope landing after an injected rejection, so the rejection drops
+`_request` too). A FAILURE of any token rolls the pending sort back
+(IGP-2) and forgets the preset with the token (Term P4). THE PENDING SORT
+(Term Q5): set by `Request(Sort s)` with s ≠ accepted; cleared by the
+install of a token that carried it — `AnsweredSortRequest` is the token's
+`UserSort` — by any terminal failure or rejection, by the accepted sort
+asked back (cancelled at issue, a token without user sort, no line) and
+by a preset (the default sort, no user sort); carried by every user
+token and by the ACTIVATION: `Load` without an explicit sort now carries
+`_requestedSort ?? accepted` with user sort iff a sort is pending
+(IGP-4). `Load` takes an optional `preset` for rule P's armed load (T4
+passes it). THE REPLACING PAIRS (Term Q9): `IssueReplacing(token)` is the
+probe's superseding pair and the receiver's re-fetch at a straddled
+rebuild or over an absent, foreign or stale snapshot — the replaced
+token's sort, user sort, policy and preset under a fresh seq; the probe
+over a quiescent lineage issues a silent pair with the accepted sort, and
+the high-water pair at an install inherits nothing. ONE DEVIATION FROM
+THE LETTER, recorded for the round: a replaced ROWS-ONLY token (a needle
+with a snapshot held, a sort) would have spoken the count through the
+rows-only receiver, so its replacing pair takes `FilterCount` and speaks
+the count — with `GridSorted` first when it carried the pending sort —
+where Term Q4's IGP-5 branch and Term Q9 say "GridSorted alone" / "a
+silent pair"; the principle Term Q9 states ("the line the replaced token
+would have spoken is spoken by the replacing pair") and parity with the
+mac lane as landed in TGC-1 (C-2 (iv): a rows request's announce is the
+count) decide it, and the two facts are named for the behaviour
+(ASortDuringAPairOverAStaleSnapshotRefetchesAndAdoptsWithGridSortedThenTheCount,
+AProbesPairInheritsThePendingSortAndAdoptsItWithGridSortedThenTheCount).
+THE LINES at an install: `GridSorted` is the surface's, raised
+synchronously from `PublicationInstalled` before the receiver's own line
+(Term Q5's combined lines, IGP-19); a pair speaks the summary, the
+headline (`graph_preset_outcome` over the published rows, counted as a
+crossing — one per successful publication of a current preset token,
+none on a failure or a supersession) or the count, or nothing; a
+rows-only install speaks the count. THE COUNT'S GATE (Term Q6): the
+gated entry's predicate is `!retired ∧ effective ∧ seq == token.Seq`,
+so a count queued for one query drops at fire when another token was
+issued, and a preset's pair drops a count queued before it
+(`DroppedAtFireForTests`). THE PUBLICATION (Term Q7): `GraphPublication`
+carries the accepted `Query` beside the sort — `Filter` reads through
+it — and the document's FilterCountText is
+`GraphAnnouncer.RenderLabel(GraphFilterCount(rows, total))` from the
+current publication at each install, empty under LOADING and ERROR. A
+test seam `ReceiveForTests(envelope)` hands the receiver a fact's
+envelope (a rejected or straddled one). Facts (a second partial file of
+`GraphDocumentTests`, thirty-three, under the pumped dispatcher over
+the graph vault; a fetch PARKED in the worker holds a token in flight
+while the test thread pumps): OneTokenPerKeystrokeAndTheBurstLandsTheLastOnce;
+ANeedleDuringTheInitialPairIsAFilterCountPair;
+ABurstDuringAPairCostsTwoCrossingsPerKeystroke (2N crossings, CR-2);
+ARequestOnAnUnseatedOrRetiredDocumentIsRefusedWithoutMutation;
+ARejectedCurrentEnvelopeEndsTheLineage; AnUnchangedProbeSetsNoLineage;
+TheLineageRecordIsTheTokenInFlightAndNothingElse;
+AFilterRequestIsAFilterCountPairDroppingTheOverlayAndAPresetInFlight;
+ANeedleDuringAPresetPairSpeaksTheCount;
+ANeedleUnderErrorIsAPairSpeakingTheCount;
+ANeedleKeepsThePendingSortAndGridSortedSpeaksOnAdoption;
+ASortDuringAPairOverACompatibleSnapshotInstallsWithGridSortedThenTheCount;
+ASortDuringAPairOverAStaleSnapshotRefetchesAndAdoptsWithGridSortedThenTheCount;
+TheActivationCarriesThePendingSortAndAdoptsItBeforeTheSummary;
+RequestingTheAcceptedSortCancelsThePendingOneSilently;
+APresetReplacesThePendingSortSilently;
+APresetOverAFolderSortResetsSilentlyWithNoGridSorted;
+GridSortedPrecedesTheReceiversLineAtEveryAdoptingInstall;
+ASortSpeaksGridSortedThenTheCoalescedCountAndNothingElse;
+AQueuedCountIsDroppedByANewerToken; ACountQueuedBeforeAPresetIsDropped;
+ACountWhoseTabLeftEffectiveIsDroppedAtFire;
+TheRawNeedleCrossesUntrimmedAndCoreDecides;
+TheRegionIsEmptyUnderLoadingAndError;
+AClearedNeedleUnderTheGhostOverlaySpeaksTheSubsetCount;
+AProbeDuringThePresetsPairSpeaksTheHeadlineOverTheNewerGeneration;
+AProbeDuringTheActivationsPairSpeaksTheSummary;
+AProbeDuringANeedlesPairSpeaksTheCount;
+AProbeDuringASilentTokenIsSilent;
+AFailingSilentPairRollsThePendingSortBack (the probe's replacing pair
+failing); TheHighWaterPairInheritsNothing;
+AStraddledPresetPairRefetchesAndSpeaksTheHeadline;
+AProbeAfterTheHeadlineReplaysNothing;
+EachOutcomeAndNoNotesToRankOnAnEmptyVault;
+AFailingPresetPairSpeaksTheBlockAndNoHeadline;
+ThePresetsPublicationReseatsTheKeyAndSelectsNothingElse;
+ANeedleTypedAfterwardsKeepsTheOverlay. ANeedleEqualToTheCurrentIssuesNothing,
+SetNameQueryOnARetiredDocumentWritesTheStateAndIssuesNothing and
+TheCountsTextEqualsTheRegions are the navigator's and the surface's
+(T4). Mutations, each restored byte for byte, each caught by the named
+fact: a needle during a pair made rows-only; a needle's pair inheriting
+the displaced Summary; admission ignoring the seating; a rejection
+keeping the lineage; a failure keeping the pending sort; the replacing
+pair forgetting the preset, and dropping the sort; the probe
+superseding silently; the activation cancelling the pending sort; a
+preset keeping a user sort; the count's gate ignoring the token; the
+region's text rendered under ERROR; the summary posted before
+`GridSorted`; the outcome crossed for a superseded token.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,

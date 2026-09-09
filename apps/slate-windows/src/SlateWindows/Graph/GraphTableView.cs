@@ -205,7 +205,9 @@ internal sealed class GraphTableView : UserControl
         {
             return false;
         }
-        model.SetSort(new GraphTableSort(model.ColumnSpecs[columnIndex].Column, ascending));
+        // A-5's rows-only token through rule Q's one entry (Term Q1): the
+        // table view's external sort handler is Request's named caller.
+        _ = model.Request(new GraphRequest.Sort(new GraphTableSort(model.ColumnSpecs[columnIndex].Column, ascending)));
         return true;
     }
 

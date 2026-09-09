@@ -16,7 +16,7 @@ namespace SlateWindows.Tests;
 /// runs under the pumped dispatcher (AR-6): the graph document has no
 /// inline mode.
 /// </summary>
-public sealed class GraphDocumentTests
+public sealed partial class GraphDocumentTests
 {
     /// <summary>The graph vault of 0b-13, copied into a temp root.</summary>
     private sealed class GraphVault : IDisposable
@@ -400,8 +400,8 @@ public sealed class GraphDocumentTests
 
             // Two sort requests back to back: only the second's token is
             // current; the first's result drops at step (i).
-            document.SetSort(new GraphTableSort(GraphTableColumn.Note, true));
-            document.SetSort(new GraphTableSort(GraphTableColumn.Note, false));
+            _ = document.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, true)));
+            _ = document.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, false)));
             Assert.Equal(before + 2, document.SeqForTests);
             host.Settle();
 
@@ -435,15 +435,15 @@ public sealed class GraphDocumentTests
             GraphTableSort accepted = document.Publication.AcceptedSort;
 
             // The accepted sort again, nothing pending: a no-op.
-            document.SetSort(accepted);
+            _ = document.Request(new GraphRequest.Sort(accepted));
             Assert.Equal(1UL, document.SeqForTests);
 
             // A different sort: rows only.
-            document.SetSort(new GraphTableSort(GraphTableColumn.Note, true));
+            _ = document.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, true)));
             ulong pending = document.SeqForTests;
             // The accepted sort again WHILE pending: supersedes (the mac's
             // whole guard).
-            document.SetSort(accepted);
+            _ = document.Request(new GraphRequest.Sort(accepted));
             Assert.Equal(pending + 1, document.SeqForTests);
             host.Settle();
 
@@ -675,7 +675,7 @@ public sealed class GraphDocumentTests
             GraphTableRow chosen = document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note);
             document.ViewState.SelectedKey = chosen.StableKey;
 
-            document.SetSort(new GraphTableSort(GraphTableColumn.Note, false));
+            _ = document.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, false)));
             host.Settle();
             Assert.Equal(chosen.StableKey, document.ViewState.SelectedKey);
 
@@ -1423,7 +1423,7 @@ public sealed class GraphDocumentTests
             {
                 Assert.Equal("all", entry.GetProperty("query").GetString());
                 (GraphTableColumn column, bool ascending) = ParseSort(entry.GetProperty("sort").GetString()!);
-                document.SetSort(new GraphTableSort(column, ascending));
+                _ = document.Request(new GraphRequest.Sort(new GraphTableSort(column, ascending)));
                 host.Settle();
                 GraphPublication publication = document.Publication;
                 Assert.Equal(new GraphTableSort(column, ascending), publication.AcceptedSort);
