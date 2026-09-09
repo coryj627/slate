@@ -74,6 +74,18 @@ internal sealed record GraphLoadToken(
 /// results, because neither result carries its inputs — and the
 /// selection generation the worker OBSERVED immediately before its
 /// snapshot crossing (IPC-13), which the apply compares against.</summary>
+/// <summary>Term F3's terminal kinds (W6-2 PR C, C-17): the surface delivers
+/// on an INSTALL and a PAIR failure (Term F4's arms) and WITHDRAWS its
+/// pending request on a ROWS-ONLY failure or a REJECTION — the old
+/// publication stands and is not called current.</summary>
+internal enum GraphLineageEnd
+{
+    Install,
+    PairFailure,
+    RowsFailure,
+    Rejection,
+}
+
 internal sealed record GraphLoadEnvelope(
     GraphLoadToken Token,
     GraphFilter Filter,
@@ -375,7 +387,12 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         ArgumentNullException.ThrowIfNull(owner);
         if (!_retired)
         {
-            FocusRequest = new GraphFocusRequest(owner);
+            // By REFERENCE (Term F1): the record has value equality, so a second
+            // request for the same owner would read as no change through
+            // SetField — assigned and raised unconditionally, every raise is a
+            // new request and Term F2's own-change trigger fires (TGC-7).
+            _focusRequest = new GraphFocusRequest(owner);
+            OnPropertyChanged(nameof(FocusRequest));
         }
     }
 
@@ -390,6 +407,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     }
 
     public bool IsRetired => _retired;
+
+    /// <summary>The graph tab EFFECTIVE — its group the active group (Term
+    /// F2): a graph visible in another pane never takes the keys.</summary>
+    internal bool IsEffective => _isEffectiveActive();
 
     public ulong SeqForTests => _seq;
 
@@ -723,6 +744,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// replaced it.</summary>
     public bool IsRequestInFlight => _current is not null;
 
+    /// <summary>Every terminal state of the lineage, by kind (Term F3),
+    /// raised after the publication it ends on.</summary>
+    internal event Action<GraphLineageEnd>? LineageEnded;
+
     private void SetCurrent(GraphLoadToken? token)
     {
         bool was = _current is not null;
@@ -861,6 +886,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             _request = null;
             _requestedSort = null;
             Navigator?.NotifyWhereAmIAvailabilityChanged();
+            LineageEnded?.Invoke(GraphLineageEnd.Rejection);
             return;
         }
         if (envelope.Failure is { } failure)
@@ -877,6 +903,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             }
             Navigator?.NotifyWhereAmIAvailabilityChanged();
             AnnounceIfEffective(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.LoadFailed(failure)));
+            LineageEnded?.Invoke(token.Kind == GraphLoadKind.Pair ? GraphLineageEnd.PairFailure : GraphLineageEnd.RowsFailure);
             return;
         }
         GraphTableRows rows = envelope.Rows!;
@@ -931,6 +958,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         // PRECEDES the receiver's own line for the same install (Term Q5's
         // combined lines, IGP-19).
         PublicationInstalled?.Invoke(new GraphPublicationInstall(previous, next, answeredSort));
+        LineageEnded?.Invoke(GraphLineageEnd.Install);
         if (token.Kind == GraphLoadKind.Pair)
         {
             switch (token.Announce)

@@ -53,6 +53,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     private readonly StackPanel _switcher;
     private readonly List<RadioButton> _modeChoices = [];
     private readonly TextBlock _stateText;
+    private readonly GraphStateHost _stateHost;
     private readonly GraphTableView _table;
     private bool _synchronizingFilter;
     private bool _detached;
@@ -61,6 +62,10 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     private readonly Button _whereAmIClose;
     private IInputElement? _whereAmIReturnFocus;
     private GraphNavigator? _navigator;
+    private GraphFocusRequest? _deferredRestoration;
+    private bool _raisingRestoration;
+    private GraphFocusDeparture? _awayBecause;
+    private Window? _hostWindow;
 
     public GraphSurfaceView()
     {
@@ -136,6 +141,18 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         KeyboardNavigation.SetTabIndex(_stateText, 5);
         _stateText.SetResourceReference(TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
         AutomationProperties.SetAutomationId(_stateText, "GraphStateText");
+        // Term F4: the state HOST — a focusable Border with a Group peer named
+        // by A-4's accessible name, the landing under EMPTY and ERROR and the
+        // provisional seat under LOADING (the leaf's ConnectionsAnchor: a
+        // plain Border creates no peer).
+        _stateHost = new GraphStateHost
+        {
+            Child = _stateText,
+            Focusable = true,
+            Visibility = Visibility.Collapsed,
+        };
+        KeyboardNavigation.SetTabIndex(_stateHost, 5);
+        AutomationProperties.SetAutomationId(_stateHost, "GraphStateHost");
         _table = new GraphTableView { TabIndex = 5 };
 
         // C-8: the Where-am-I PANEL below the projection — the pull-based
@@ -195,9 +212,9 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
 
         var layout = new DockPanel();
         DockPanel.SetDock(header, Dock.Top);
-        DockPanel.SetDock(_stateText, Dock.Top);
+        DockPanel.SetDock(_stateHost, Dock.Top);
         layout.Children.Add(header);
-        layout.Children.Add(_stateText);
+        layout.Children.Add(_stateHost);
         DockPanel.SetDock(_whereAmIPanel, Dock.Bottom);
         layout.Children.Add(_whereAmIPanel);
         layout.Children.Add(_table);
@@ -211,14 +228,20 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             _detached = true;
             Model?.Navigator?.DetachPresenter(this);
             ObserveNavigator(null);
+            UnhookWindow();
         };
         Loaded += (_, _) =>
         {
             _detached = false;
             ObserveNavigator(Model?.Navigator);
+            HookWindow();
             TryDeliverFocus();
         };
-        IsVisibleChanged += (_, _) => TryDeliverFocus();
+        // Term F2's triggers: visibility (a false edge is a departure), the
+        // owner key changing under a shared document, the grid's containers.
+        IsVisibleChanged += OnIsVisibleChanged;
+        DataContextChanged += (_, _) => TryDeliverFocus();
+        _table.ContainersRealized += TryDeliverFocus;
     }
 
     public GraphDocumentViewModel? Model
@@ -230,6 +253,12 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     internal GraphTableView TableForTests => _table;
 
     internal TextBlock StateTextForTests => _stateText;
+
+    internal GraphStateHost StateHostForTests => _stateHost;
+
+    internal GraphFocusRequest? DeferredRestorationForTests => _deferredRestoration;
+
+    internal GraphFocusDeparture? AwayBecauseForTests => _awayBecause;
 
     internal IReadOnlyList<RadioButton> ModeChoicesForTests => _modeChoices;
 
@@ -252,7 +281,28 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
 
     // --- The presenter seam (contract C-1) ----------------------------------
 
-    public void RequestProjectionFocus() => Model?.RequestFocusLanding(Owner);
+    /// <summary>A RESTORATION (Term F3): the surface's own request for a reader
+    /// already here — remembered so a departure WITHDRAWS it and a hold keeps
+    /// it; the shell's landings are instructions and are never held.</summary>
+    public void RequestProjectionFocus()
+    {
+        if (Model is not { } model)
+        {
+            return;
+        }
+        // The raise re-asks synchronously (Term F2's own-change trigger), before
+        // the record can be remembered: the flag names it a restoration meanwhile.
+        _raisingRestoration = true;
+        try
+        {
+            model.RequestFocusLanding(Owner);
+        }
+        finally
+        {
+            _raisingRestoration = false;
+        }
+        _deferredRestoration = model.FocusRequest;
+    }
 
     public void FocusFilterField()
     {
@@ -274,7 +324,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         return true;
     }
 
-    public bool ProjectionHasFocus => _table.IsKeyboardFocusWithin || _stateText.IsKeyboardFocused;
+    public bool ProjectionHasFocus => _table.IsKeyboardFocusWithin || _stateHost.IsKeyboardFocused;
 
     public bool FilterRegionHasKeys =>
         _filterField.IsKeyboardFocusWithin || _filterSummary.IsKeyboardFocused || _clearFilter.IsKeyboardFocusWithin;
@@ -283,10 +333,17 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
 
     private void OnKeyboardFocusWithinChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        if (e.NewValue is true && Model is { } model)
+        if (e.NewValue is true)
         {
-            model.Navigator?.AttachPresenter(this);
+            Model?.Navigator?.AttachPresenter(this);
+            // The reader is BACK, whatever they were away in — the overlay
+            // closed, the menu closed, the window came forward: a hold ends
+            // and the landing is re-asked (Term F2's hold-ending edge).
+            _awayBecause = null;
+            TryDeliverFocus();
+            return;
         }
+        Depart(ClassifyFocusLoss());
     }
 
     // --- The Escape ladder and the chord scope (contracts C-7, C-11) -------
@@ -318,6 +375,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         {
             old.PropertyChanged -= view.OnModelPropertyChanged;
             old.PublicationInstalled -= view.OnPublicationInstalled;
+            old.LineageEnded -= view.OnLineageEnded;
             old.ViewState.PropertyChanged -= view.OnViewStateChanged;
             // The route a REPLACEMENT takes (IGN-12): detach only when the
             // presenter is this surface.
@@ -332,6 +390,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             // After the table's own rebind (it subscribed first): the
             // landing re-tries once the rows are bound (Term F2's install).
             model.PublicationInstalled += view.OnPublicationInstalled;
+            model.LineageEnded += view.OnLineageEnded;
             model.ViewState.PropertyChanged += view.OnViewStateChanged;
             view.BuildSwitcher(model);
             view.ApplyState(model.Publication);
@@ -409,9 +468,13 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         {
             RenderFilter(model);
         }
+        // Term F2's triggers here: the request's own change and each
+        // publication change. NOT the lineage edge: the document clears its
+        // token BEFORE it swaps the publication, so that edge would show a
+        // quiescent OLD record (an EMPTY host about to collapse) — the
+        // terminal kinds arrive through LineageEnded, after the swap.
         if (e.PropertyName is nameof(GraphDocumentViewModel.FocusRequest)
-            or nameof(GraphDocumentViewModel.Publication)
-            or nameof(GraphDocumentViewModel.IsRequestInFlight))
+            or nameof(GraphDocumentViewModel.Publication))
         {
             TryDeliverFocus();
         }
@@ -559,31 +622,207 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
 
     // --- Rule F, the landing (contract C-17; Term F1 here) -----------------
 
-    /// <summary>Deliver the pending landing when it is this pane's, the
-    /// lineage is quiescent and the publication READY — onto the grid's
-    /// current row, silently; the other arms and seats land with C-8.</summary>
+    // --- Rule F: the landing (contract C-17) ----------------------------------
+
+    /// <summary>Deliver the pending landing (Terms F2–F5): only when the
+    /// request is this pane's, the surface visible and the graph tab
+    /// EFFECTIVE; a held restoration waits; with a token in flight a SHELL
+    /// request takes a provisional seat (the state host under LOADING with
+    /// nothing held, the visible surface otherwise) and stays pending, a
+    /// presenter's takes none; quiescent, READY seats the grid's current row
+    /// (else the first) and EMPTY or ERROR the state host — silently — and
+    /// completes the request; a quiescent LOADING has nothing to land on.</summary>
     private void TryDeliverFocus()
     {
-        if (Model is not { } model || model.FocusRequest is not { } request)
+        if (Model is not { FocusRequest: { } request } model
+            || !ReferenceEquals(request.Owner, Owner)
+            || !IsVisible
+            || !model.IsEffective)
         {
             return;
         }
-        if (!ReferenceEquals(request.Owner, Owner) || !IsVisible || model.IsRequestInFlight)
+        bool restoration = _raisingRestoration || ReferenceEquals(_deferredRestoration, request);
+        if (restoration && RestorationMustWait())
         {
             return;
         }
-        if (model.Publication.State != GraphLoadState.Ready)
+        GraphPublication publication = model.Publication;
+        if (model.IsRequestInFlight)
         {
+            // Term F3's provisional seats, for a SHELL route's request alone —
+            // the reader must land somewhere; a presenter's reader is already
+            // in the surface. The request stays pending: the terminal
+            // delivery re-seats.
+            if (restoration)
+            {
+                return;
+            }
+            if (publication.State is GraphLoadState.Ready && publication.HoldsSnapshot)
+            {
+                _table.UpdateLayout();
+                _ = _table.FocusProjection();
+            }
+            else
+            {
+                _ = _stateHost.Focus();
+            }
             return;
         }
-        // The grid may have been collapsed under EMPTY or ERROR: realise its
-        // containers before the seat (Term F2's container realisation).
-        _table.UpdateLayout();
-        if (_table.FocusProjection())
+        bool delivered;
+        switch (publication.State)
+        {
+            case GraphLoadState.Ready:
+                // The grid may have been collapsed under EMPTY or ERROR: realise
+                // its containers before the seat (Term F2).
+                _table.UpdateLayout();
+                delivered = _table.FocusProjection();
+                break;
+            case GraphLoadState.Empty:
+            case GraphLoadState.Error:
+                delivered = _stateHost.Focus();
+                break;
+            default:
+                // Quiescent LOADING: nothing to land on; the transition's load
+                // will end in a terminal state that re-asks.
+                return;
+        }
+        if (delivered)
         {
             model.CompleteFocus(request);
+            if (restoration)
+            {
+                _deferredRestoration = null;
+            }
         }
     }
+
+    /// <summary>Term F3's three deliveries: an install and a pair failure
+    /// re-ask (the new publication, the ERROR host); a rows-only failure and
+    /// a rejection WITHDRAW the pending request — the old publication stands
+    /// and is not called current; the reader stays where the keys are.</summary>
+    private void OnLineageEnded(GraphLineageEnd end)
+    {
+        switch (end)
+        {
+            case GraphLineageEnd.Install:
+            case GraphLineageEnd.PairFailure:
+                TryDeliverFocus();
+                break;
+            default:
+                WithdrawPending();
+                break;
+        }
+    }
+
+    private void WithdrawPending()
+    {
+        if (Model is { FocusRequest: { } request } model && ReferenceEquals(request.Owner, Owner))
+        {
+            model.CompleteFocus(request);
+            if (ReferenceEquals(_deferredRestoration, request))
+            {
+                _deferredRestoration = null;
+            }
+        }
+    }
+
+    // --- Term F2: the departure and the hold (the canvas's Depart) -------------
+
+    private void HookWindow()
+    {
+        if (_hostWindow is null && Window.GetWindow(this) is { } window)
+        {
+            _hostWindow = window;
+            window.Deactivated += OnWindowDeactivated;
+            window.Activated += OnWindowActivated;
+        }
+    }
+
+    private void UnhookWindow()
+    {
+        if (_hostWindow is { } window)
+        {
+            window.Deactivated -= OnWindowDeactivated;
+            window.Activated -= OnWindowActivated;
+            _hostWindow = null;
+        }
+    }
+
+    private void OnWindowDeactivated(object? sender, EventArgs e) => Depart(GraphFocusDeparture.WindowDeactivated);
+
+    /// <summary>The window came forward without the keys landing here: the
+    /// hold on a deactivation ends and the landing is re-asked (IGP-9).</summary>
+    private void OnWindowActivated(object? sender, EventArgs e)
+    {
+        if (_awayBecause == GraphFocusDeparture.WindowDeactivated)
+        {
+            _awayBecause = null;
+        }
+        TryDeliverFocus();
+    }
+
+    private void OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is false)
+        {
+            // The tab body stopped being shown: a tab switch, or the close.
+            Depart(GraphFocusDeparture.TabSwitch);
+            return;
+        }
+        TryDeliverFocus();
+    }
+
+    /// <summary>Which departure a focus loss IS: a shell overlay or an open
+    /// menu is layered OVER the tab (the reader comes back); anything else
+    /// is the reader leaving for another pane.</summary>
+    private static GraphFocusDeparture ClassifyFocusLoss()
+    {
+        if (Canvas.CanvasSurfaceView.ShellOverlayIsOpen())
+        {
+            return GraphFocusDeparture.ModalOverlay;
+        }
+        return Canvas.CanvasSurfaceView.FocusIsInAMenu(Keyboard.FocusedElement)
+            ? GraphFocusDeparture.MenuOpen
+            : GraphFocusDeparture.PaneFocus;
+    }
+
+    /// <summary>The reader LEFT (a pane change, a tab switch): a restoration
+    /// this surface deferred for itself is WITHDRAWN, so a load finishing
+    /// afterwards seats nobody; behind an overlay, a menu or a deactivated
+    /// window the restoration is KEPT and HELD. A shell-raised landing is
+    /// untouched: an instruction to put the reader in this tab.</summary>
+    private void Depart(GraphFocusDeparture departure)
+    {
+        if (departure is GraphFocusDeparture.PaneFocus or GraphFocusDeparture.TabSwitch)
+        {
+            if (_deferredRestoration is { } deferred && Model is { } model)
+            {
+                model.CompleteFocus(deferred);
+                _deferredRestoration = null;
+                _awayBecause = null;
+            }
+            return;
+        }
+        if (_deferredRestoration is not null)
+        {
+            _awayBecause = departure;
+        }
+    }
+
+    /// <summary>Whether a deferred restoration must keep waiting — the reader
+    /// is not here to receive it: one edge (the departure not returned from)
+    /// and three levels (an overlay already open, a menu already down, the
+    /// keys already in another pane).</summary>
+    private bool RestorationMustWait() =>
+        _awayBecause is not null
+        || Canvas.CanvasSurfaceView.ShellOverlayIsOpen()
+        || Canvas.CanvasSurfaceView.FocusIsInAMenu(Keyboard.FocusedElement)
+        || KeysAreOutsideThisSurface();
+
+    private bool KeysAreOutsideThisSurface() =>
+        _hostWindow is { } window
+        && window.IsKeyboardFocusWithin
+        && !IsKeyboardFocusWithin;
 
     /// <summary>Contract A-4: LOADING, ERROR, EMPTY, READY in that
     /// precedence — the label visible, the accessible name the mac's.</summary>
@@ -603,6 +842,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
                 break;
             default:
                 _stateText.Visibility = Visibility.Collapsed;
+                _stateHost.Visibility = Visibility.Collapsed;
                 _table.Visibility = Visibility.Visible;
                 break;
         }
@@ -612,7 +852,49 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     {
         _stateText.Text = text;
         AutomationProperties.SetName(_stateText, accessibleName);
+        AutomationProperties.SetName(_stateHost, accessibleName);
         _stateText.Visibility = Visibility.Visible;
+        _stateHost.Visibility = Visibility.Visible;
         _table.Visibility = Visibility.Collapsed;
     }
+}
+
+/// <summary>Term F2's departures: two the reader LEAVES by (a restoration
+/// withdrawn) and three layered OVER the tab (a restoration held).</summary>
+internal enum GraphFocusDeparture
+{
+    PaneFocus,
+    TabSwitch,
+    ModalOverlay,
+    MenuOpen,
+    WindowDeactivated,
+}
+
+/// <summary>Term F4's state host: the landing under EMPTY and ERROR and the
+/// provisional seat under LOADING — focusable and, unlike the Border it is,
+/// projected to UI Automation as a Group with its id, the state's accessible
+/// name and its keyboard focus (the leaf's ConnectionsAnchor, IPC-1).</summary>
+internal sealed class GraphStateHost : Border
+{
+    protected override System.Windows.Automation.Peers.AutomationPeer OnCreateAutomationPeer() =>
+        new GraphStateHostAutomationPeer(this);
+}
+
+internal sealed class GraphStateHostAutomationPeer : System.Windows.Automation.Peers.FrameworkElementAutomationPeer
+{
+    public GraphStateHostAutomationPeer(GraphStateHost owner)
+        : base(owner)
+    {
+    }
+
+    protected override System.Windows.Automation.Peers.AutomationControlType GetAutomationControlTypeCore() =>
+        System.Windows.Automation.Peers.AutomationControlType.Group;
+
+    protected override string GetClassNameCore() => nameof(GraphStateHost);
+
+    protected override bool IsControlElementCore() => true;
+
+    protected override bool IsContentElementCore() => true;
+
+    protected override bool IsKeyboardFocusableCore() => Owner is UIElement { Focusable: true, IsEnabled: true, IsVisible: true };
 }

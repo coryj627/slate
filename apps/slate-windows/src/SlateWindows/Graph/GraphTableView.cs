@@ -59,6 +59,14 @@ internal sealed class GraphTableView : UserControl
 
     internal AccessibleDataGrid GridForTests => _grid;
 
+    /// <summary>Term F2's container realisation: the grid's own event,
+    /// forwarded so the surface can re-ask a landing once rows exist.</summary>
+    internal event Action? ContainersRealized
+    {
+        add => _grid.ContainersRealized += value;
+        remove => _grid.ContainersRealized -= value;
+    }
+
     private static void OnModelChanged(DependencyObject sender, DependencyPropertyChangedEventArgs e)
     {
         var view = (GraphTableView)sender;

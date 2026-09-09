@@ -10761,6 +10761,115 @@ item's command drifting; the submenu declaring a level; the population
 skipping the binding; the clear keeping the command; the shared pair
 not recorded.
 
+**TGC-7 — T7: the focus landing is rule F — the triggers, the owner and
+the effective rule, the departure and the hold, quiescence and the
+terminal deliveries, the provisional seats, the arms and the state host,
+silence, the shell's routes (C-17; rule F Terms F2–F6).** THE DOCUMENT:
+`GraphLineageEnd { Install, PairFailure, RowsFailure, Rejection }` and
+the event `LineageEnded`, raised at each terminal arm AFTER the
+publication it ends on (the install's after PublicationInstalled, the
+failure's after its GraphBlocked line, the rejection's in its arm);
+`IsEffective` (the graph tab EFFECTIVE, the workspace's predicate);
+`RequestFocusLanding` now assigns and raises UNCONDITIONALLY — a
+T4-era latent defect surfaced by the landing facts: `GraphFocusRequest`
+is a record with VALUE equality, so a second request for the SAME owner
+read as "no change" through `SetField`, raised nothing and never
+re-asked the surface (the shell's route after a pane change was
+swallowed); Term F1's "superseded by reference identity" now holds
+(ALaterRequestSupersedesAnEarlier pins the same-owner raise). THE TABLE
+VIEW forwards the grid's `ContainersRealized`. THE SURFACE: the state
+HOST — `GraphStateHost`, a focusable Border with a Group peer named by
+A-4's accessible name (the leaf's ConnectionsAnchor shape; AutomationId
+GraphStateHost, TabIndex 5), the TextBlock inside it — replaces the
+peerless TextBlock as the landing under EMPTY and ERROR and the
+provisional seat under LOADING; `ProjectionHasFocus` reads it. THE
+TRIGGERS (Term F2): Loaded (hooking the host window's Activated and
+Deactivated), IsVisibleChanged (a false edge is a departure),
+DataContextChanged, each publication change, each install, the grid's
+container realisation, the request's own change and — the terminal
+kinds — `LineageEnded`; NOT the `IsRequestInFlight` edge: the document
+clears its token BEFORE it swaps the publication, so that edge shows a
+quiescent OLD record (an EMPTY host about to collapse seated the reader
+and lost them to the window — caught by T4's Escape-seat fact and
+traced), and the terminal kinds arrive after the swap. THE OWNER AND
+THE EFFECTIVE RULE: delivery only when the request's owner is the
+surface's DataContext, the surface visible and the graph tab EFFECTIVE
+— a graph visible in another pane never takes the keys. THE
+RESTORATION: `RequestProjectionFocus` raises the document's request and
+remembers it as `_deferredRestoration` — behind a flag while the raise
+re-asks synchronously, so the own-change trigger already reads it as a
+restoration and takes no provisional seat. THE DEPARTURE (Term F2, the
+canvas's `Depart`): a focus loss is classified — a shell overlay
+(`CanvasSurfaceView.ShellOverlayIsOpen`, the window's one predicate) or
+an open menu (`FocusIsInAMenu`) is layered OVER the tab; anything else
+is the reader leaving for another pane — and a hidden tab body is a
+TabSwitch: PaneFocus and TabSwitch WITHDRAW the deferred restoration
+(completed without a seat, the hold cleared) and leave a shell-raised
+landing untouched (an instruction); ModalOverlay, MenuOpen and
+WindowDeactivated HOLD it (`_awayBecause`); every hold-ending edge
+re-asks — the keys returning to the surface (the hold cleared), the
+window's Activated (a deactivation's hold cleared), the shell's overlay
+dismissal through its route; `RestorationMustWait` is the one edge and
+three levels (an overlay already open, a menu already down, the keys
+already in another pane of this window). QUIESCENCE AND THE TERMINALS
+(Term F3): with a token in flight a SHELL request takes a PROVISIONAL
+seat — the visible surface's current row under a held READY snapshot,
+the state host otherwise (LOADING with nothing held, EMPTY, ERROR) — and
+stays pending; a presenter's restoration takes none; an INSTALL and a
+PAIR failure re-ask, a ROWS-ONLY failure and a REJECTION WITHDRAW the
+pending request — the old publication stands, the reader stays where
+the keys are. THE ARMS (Term F4): quiescent READY → the grid's current
+row (else the first) through `FocusProjection` after the containers are
+realised; EMPTY or ERROR → the state host; a quiescent LOADING has
+nothing to land on; completion only on a delivered quiescent landing
+(Term F5: silently — no line, the shared key untouched). THE SHELL
+(Term F6): `FocusEditorPane` gains the graph arm after the canvas arm
+(`activeTab.Graph.RequestFocusLanding(activeTab)`), posted through the
+window's FocusRequestArbiter as before; `RequestActiveEditorFocus`
+addresses a graph tab's document beside a canvas tab's. Facts
+(`GraphTableTests`, the surface in a hidden window with the graph tab
+as its DataContext, eighteen — GraphTableTests.Landing.cs):
+AFreshOpenLandsFocusOnTheGridsRow (the shell's route; the current
+row); ARequestRaisedWithNoLoadIsDeliveredAtOnce; DeliverySaysNothing;
+TheStateHostHasAGroupPeerNamedByTheState (EMPTY and ERROR);
+AnOpenUnderLoadingSeatsTheStateHostProvisionallyThenTheRowWhenCurrent
+(a bare document's first pair parked);
+AnOldReadyPublicationUnderAChangedQueryIsNotALanding;
+AnOldEmptyPublicationUnderAChangedQueryIsNotALanding;
+TheEscapeSeatWaitsForTheClearedRows (T4's fact by its C-17 name);
+ARejectionWithdrawsThePendingRequest;
+ARowsOnlyFailureWithdrawsAndAPairFailureLandsOnTheErrorHost;
+ALaterRequestSupersedesAnEarlier (a different owner; the same owner by
+reference); ARetiredDocumentsRequestReadsAbsent;
+APaneChangeWithdrawsThePresentersRestoration;
+AnOverlayHoldsTheRestorationAndTheReturnDelivers (the load ends behind
+the overlay: nobody seated; the return delivers);
+AShellLandingSurvivesADepartureAndLandsWhenTheLoadEnds;
+ATabSwitchWithdrawsTheRestoration;
+AGraphVisibleInAnotherPaneNeverTakesTheKeys (and the group made active,
+the shell's route lands it); APresetFromTheEffectiveGraphLandsTheProjection
+(route (b) then the palette's closing route; EMPTY over the fixture, the
+host). The window's graph arm itself has no fact without a MainWindow —
+the journey walks it (T9) and the census names it (T8). Mutations
+(twenty-one), each restored byte for byte, each caught by the named fact: the
+effective rule ignored; the hold ignored; a restoration taking a
+provisional seat; no provisional seat; a provisional seat completing
+the request; EMPTY landing nowhere; the first row instead of the
+current; a rejection delivering; the failure kinds not raised; the
+rejection not raised; a pane change holding; an overlay withdrawing; the
+return keeping the hold; the classifier ignoring the overlay; a
+departure withdrawing the shell's landing; a hidden tab holding; the
+layout not addressing the graph; the host not focusable; the host's
+peer not a Group; the host's name not the state's; a retired request
+reading present. Six earlier mutations whose anchors T6 and T7 moved
+(the overlay request, the rows-only needle, the rejection's lineage, the
+preset's sort, the GridSorted order, the detach) were re-anchored and
+re-run: all caught. Two T7 mutations first SURVIVED and the facts were
+strengthened: the fresh open now selects the second row before the
+shell's route (the current row, not the first) and the retired document's
+fact raises its request BEFORE the close (the getter's guard is what
+reads it absent).
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,

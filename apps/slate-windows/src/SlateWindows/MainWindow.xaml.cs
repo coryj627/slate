@@ -1667,6 +1667,14 @@ public partial class MainWindow : Window
             canvas.RequestFocusLanding(activeTab);
             return;
         }
+        // W6-2 PR C (rule F, Term F6): a graph tab's focus belongs to the graph
+        // surface, which seats the grid's row or the state host through the
+        // document's addressed landing — the canvas arm's shape.
+        if (activeTab is { IsGraph: true, Graph: { } graph })
+        {
+            graph.RequestFocusLanding(activeTab);
+            return;
+        }
         SlateTextEditor? editor = FindVisualDescendants<SlateTextEditor>(ContentPaneBorder)
             .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, activeTab));
         if (editor is { IsVisible: true, IsEnabled: true } && editor.FocusInputOwner())
