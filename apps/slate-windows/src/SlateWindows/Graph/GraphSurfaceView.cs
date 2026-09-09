@@ -31,20 +31,20 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             new PropertyMetadata(null, OnModelChanged));
 
     /// <summary>The mac's labels (contract A-4; view text, not templates).</summary>
-    internal const string LoadingText = "Loading graph…";
-    internal const string LoadingAccessibleName = "Loading graph.";
-    internal const string EmptyText = "No notes match the current filters.";
-    internal const string ErrorAccessiblePrefix = "Graph error: ";
+    internal const string LoadingText = GraphPhrase.LoadingText;
+    internal const string LoadingAccessibleName = GraphPhrase.LoadingAccessibleName;
+    internal const string EmptyText = GraphPhrase.EmptyText;
+    internal const string ErrorAccessiblePrefix = GraphPhrase.ErrorAccessiblePrefix;
 
     /// <summary>The field's accessibility label and hint — the mac's
     /// (`GraphTableView.swift:147–152`; WPF has no placeholder, so the
     /// placeholder's text is the hint, C-5).</summary>
-    internal const string FilterFieldName = "Filter graph by note name";
-    internal const string FilterFieldHint = "Filter notes";
-    internal const string FilterSummaryPrefix = "Filter results: ";
-    internal const string ClearFilterName = "Clear filter";
-    internal const string WhereAmIHeading = "Where am I?";
-    internal const string WhereAmICloseLabel = "Close";
+    internal const string FilterFieldName = GraphPhrase.FilterFieldName;
+    internal const string FilterFieldHint = GraphPhrase.FilterFieldHint;
+    internal const string FilterSummaryPrefix = GraphPhrase.FilterSummaryPrefix;
+    internal const string ClearFilterName = GraphPhrase.ClearFilterName;
+    internal const string WhereAmIHeading = GraphPhrase.WhereAmIHeading;
+    internal const string WhereAmICloseLabel = GraphPhrase.WhereAmICloseLabel;
 
     private readonly TextBlock _title;
     private readonly TextBox _filterField;
@@ -111,7 +111,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         // C-5: CLEAR — visible exactly while the RAW needle is non-empty.
         _clearFilter = new Button
         {
-            Content = "Clear",
+            Content = GraphPhrase.ClearLabel,
             Margin = new Thickness(0, 0, 12, 0),
             VerticalAlignment = VerticalAlignment.Center,
             Visibility = Visibility.Collapsed,

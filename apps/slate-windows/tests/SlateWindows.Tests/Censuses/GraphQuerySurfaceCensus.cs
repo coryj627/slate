@@ -50,8 +50,16 @@ public class GraphQuerySurfaceCensus
     {
         var surface = CoreSurface();
         // W6-2 PR A (A-5): `graph_table_default_sort` joined the surface;
-        // PR B (B-15): the leaf's filter and clamp — twenty-six.
-        Assert.True(surface.Count >= 26, $"the surface list holds {surface.Count} names");
+        // PR B (B-15): the leaf's filter and clamp — twenty-six; PR C (C-2,
+        // C-15 xii): the preset's query and outcome — twenty-EIGHT, exactly,
+        // the names unique, both new functions present and bound FREE.
+        Assert.Equal(28, surface.Count);
+        Assert.Equal(surface.Count, surface.Distinct(StringComparer.Ordinal).Count());
+        foreach (string added in new[] { "graph_preset_query", "graph_preset_outcome" })
+        {
+            Assert.Contains(added, surface);
+            Assert.NotNull(typeof(SlateUniffiMethods).GetMethod(PascalCase(added), BindingFlags.Public | BindingFlags.Static));
+        }
         foreach (string name in surface)
         {
             string method = PascalCase(name);

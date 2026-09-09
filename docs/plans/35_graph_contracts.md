@@ -10870,6 +10870,104 @@ shell's route (the current row, not the first) and the retired document's
 fact raises its request BEFORE the close (the getter's guard is what
 reads it absent).
 
+**TGC-8 — T8: the censuses, falsifiable and bound (C-15); the label
+inventory and its theory (C-13).** ONE NEW FILE,
+`Censuses/GraphNavigatorCensus.cs`, over the shell's compilation
+(`ShellCompilation`, B1's precedent), each fact naming the mutation it
+kills: (iii) THE INSTANCE CENSUS —
+ExactlyOneNavigatorAndOnePreferencesAreConstructedInTheWorkspaceConstructor:
+every creation of GraphNavigator and of GraphPreferencesViewModel bound
+across the shell is its workspace factory's, each factory invoked once
+from the workspace's constructor as the field's direct assignment
+outside any repeatable construct, no alias, no method-group reference;
+(iv) THE LOAD-STARTING CENSUS, TRANSITIVE and ROOTED —
+TheLoadStartingMembersAreTheClosedListAndTheirOutsideCallersTheNamedSets:
+the document's intra-type call graph is built from bound invocations and
+method-group references; the starters (the members invoking the
+scheduler's StartWorkAlwaysAsync) are `Issue` and `Probe`; the members
+from which a starter is reachable are EXACTLY the closed list — Issue,
+IssueReplacing, Load, Probe, Receive, ReceiveForTests, Request — and
+each entry's outside callers, bound, are the named sets: `Load` ←
+GraphFollowActiveTab alone; `Request` ← the navigator's RunPreset and
+SetNameQuery and the table view's OnExternalSort; `Probe` ←
+NotifyGraphOfVaultChange; the private arms and the test seam ← nobody;
+TheCrossingsAreRootedInFetchAndProbeAndNoSchedulerUnderGraphReachesALoad:
+every GraphSnapshot, GraphTableRows and GraphGeneration invocation on a
+session across the shell is the document's Fetch or Probe — plus the
+leaf's own generation probe, B2's, named — and every Task.Run,
+ThreadPool, Thread, BeginInvoke and InvokeAsync under `Graph/` is one of
+three named sites (the leaf view's two focus retries, the relay's
+marshalling), none reaching a load; (v) THE PRESET'S ARGUMENT —
+ThePresetsApplyQueryArgumentIsTheCrossingsInvocation: in RunPreset the
+two ApplyQuery arguments are, in order, the GraphPresetQuery crossing's
+invocation and the recorded local, and no ApplyQuery under the navigator
+takes an object creation (a literal record caught); (vi) THE WALL —
+TheHandleKeyBodyIsTheFourStatements: the null guard, one
+AttachPresenter, and the return of the map's TryGetValue joined to the
+handler's call, structurally, no branch — and the canvas navigator's
+statements normalise to the same three, so the twins cannot drift; (vii)
+THE MENU CENSUS —
+TheVerbositySubmenuIsBuiltFromTheVectorAndWiredPerWorkspace: the XAML's
+submenu has no child and no ItemsSource, Populate's one foreach iterates
+the preferences' `Choices` (bound), constructs the shell's
+CheckMenuItem, types no level title, and ObserveWorkspace invokes both
+WireWorkspaceGraph and UnwireWorkspaceGraph; (viii) THE DEPTH SEAM —
+TheDepthSeamHasOneInstaller: exactly one assignment to the leaf's
+`DepthChanged` in the shell, NewConnectionsLeaf's, and its handler calls
+the preferences' depth trigger; (ix) THE ANNOUNCEMENT BOUNDARY —
+TheAnnouncementBoundaryGainsWhereAmIAndTheNavigatorPostsNothing: the
+bound callers of AnnounceIfEffective are the receiver's three lines and
+AnnounceWhereAmI, whose one outside caller is the navigator's verb, and
+the navigator's only bound call on the relay type is the static
+RenderLabel; (xiv) THE NO-HOST-TRIM CENSUS — NoHostTrimTouchesTheNeedle:
+under `Graph/` the only Trim invocations are the leaf's path normaliser
+and the writer's key; (xv) THE WRITER CENSUS —
+TheWriterIsOneStaticAndItsOperationsHaveTheirNamedCallersAndTheWriteClassIsClosed:
+one GraphConfigWriter creation in the shell (`Shared`'s initializer),
+`Reserve` ← ScheduleSave alone, `Enqueue` ← TransferPending alone (←
+Tick and Shutdown), `Newest` ← the preferences' constructor alone, the
+store's `Write` ← the writer's queue body alone, the literal
+"graph.json" in the store's FileName alone, and every filesystem
+mutation API under `Graph/` (File.Move, Replace, WriteAllText,
+WriteAllBytes, Copy, Delete, AppendAllText, a FileStream or StreamWriter
+constructed) inside the store's Write — the two it uses; (xii) THE QUERY
+SURFACE — GraphQuerySurfaceCensus asserts the EXACT count (twenty-eight),
+unique names, and `graph_preset_query` and `graph_preset_outcome`
+present and bound FREE. C-13, THE LABEL INVENTORY: the new
+`Graph/GraphPhrase.cs` (the ConnectionsPhrase shape) holds the mac's
+strings — the field's Name and HelpText, the three presets' labels and
+hints, Where-am-I's label and hint — the canvas's mac strings REUSED
+("Where am I?", "Close", "Clear", "Clear filter") and the
+Windows-authored ("Filter results: ", the Graph and Verbosity menu
+headers, A-4's four state names); the surface's constants are the
+inventory's by alias, Clear's content is the inventory's, and the chord
+table's four graph rows take their labels and hints from it (the mac
+catalog parity unchanged, byte for byte); the theory
+EveryLabelIsTheInventorys pins each string, the surface's constants, the
+rows, the XAML headers (the accelerator underscore aside) and that no
+string literal under `Graph/` equals a core verbosity title. Already
+standing from earlier slices and re-verified: (i) the citation census's
+"C" tuple and floor (the land script), (ii) the no-shadow census's sixth
+name (T2), the writers census (T2, T5), the depth census's dataflow arm
+(T5), (vi)'s scrape and (x) the delivery-evidence census and chords.json
+through the projection (T4, T6), (xvi) the mac catalog parity; (xi) the
+matrix row lands with T9. Mutations (twenty), each restored byte for
+byte, each caught by the named fact: a second navigator; a second
+preferences object; a new load starter; a new outside caller of Load; a
+direct crossing; a scheduler under Graph reaching a load; the preset's
+argument a literal record; HandleKey gaining a branch; Populate iterating
+a projection; ObserveWorkspace not unwiring; a second depth installer;
+the navigator posting itself; a host trim; a second writer; a direct
+store write; a second file literal; an alternate write API; a label
+drifting; a typed level; the surface count drifting (core's list). Three
+earlier label mutations (the field's hint, the orphans label, the
+Where-am-I label) moved with the literals into GraphPhrase and were
+re-anchored and re-run: caught. Three census facts were corrected on
+their first run: the wall compares statements structurally (the
+normaliser strips spaces); the scheduler allow-list names the leaf
+view's constructor and the relay's Emit as they are; a conditional
+access's member binding is the invocation's callee, not a method group.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,

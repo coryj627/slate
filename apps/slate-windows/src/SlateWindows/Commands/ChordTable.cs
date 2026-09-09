@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Nodes;
+using SlateWindows.Graph;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Commands;
@@ -988,18 +989,16 @@ internal static class ChordTable
         // and hints the mac's byte for byte (SlateCommands.swift:1537–1556;
         // MacCatalogParityTests' P3 comparison); each resolves to a
         // workspace command whose body is the navigator's RunPreset.
-        Reg(Ids.GraphOrphans, "Graph: Orphaned Notes", CommandSection.Graph,
-            "Open the graph filtered to orphans — notes with no links in or out."),
-        Reg(Ids.GraphUnresolved, "Graph: Unresolved Links", CommandSection.Graph,
-            "Open the graph filtered to unresolved targets — broken links."),
-        Reg(Ids.GraphMostLinked, "Graph: Most Linked Notes", CommandSection.Graph,
-            "Open the graph sorted by links in — the most-linked notes, the hubs."),
+        // W6-2 PR C (C-13): the labels and hints are the inventory's (GraphPhrase).
+        Reg(Ids.GraphOrphans, GraphPhrase.OrphansLabel, CommandSection.Graph, GraphPhrase.OrphansHint),
+        Reg(Ids.GraphUnresolved, GraphPhrase.UnresolvedLabel, CommandSection.Graph, GraphPhrase.UnresolvedHint),
+        Reg(Ids.GraphMostLinked, GraphPhrase.MostLinkedLabel, CommandSection.Graph, GraphPhrase.MostLinkedHint),
         // W6-2 PR C (C-8): Where-am-I — the mac's label, hint and chord; the
         // Shift disambiguation the canvas row carries (D-2); ChordScope.Graph,
         // delivered by GraphSurfaceView's tunnelling handler and disjoint from
         // the canvas row by DELIVERY (SharedCommandChords records the pair).
-        Reg(Ids.GraphWhereAmI, "Graph: Where Am I?", CommandSection.Graph,
-            "Read the selected node's row copy, its component, the zoom level, and the active filters.",
+        Reg(Ids.GraphWhereAmI, GraphPhrase.WhereAmILabel, CommandSection.Graph,
+            GraphPhrase.WhereAmIHint,
             "⌃⌘I", "Ctrl+Alt+Shift+I", ChordScope.Graph,
             divergence: WhereAmIShiftDisambiguation),
         // W6-2 PR C (C-7): the Escape ladder — a Windows-authored
