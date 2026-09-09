@@ -11160,6 +11160,56 @@ pinned by the two Swift facts and arbitrated by CI's swift lane, not by
 a local sweep — this box has no Swift toolchain (CR-3). CI-shaped
 regression green.
 
+**TGC-11 — The codex post-implementation pass 2: PARTIAL (the account's
+quota ended it), its two observations dispositioned, the loop PAUSED not
+stopped.** Pass 2 ran on the CI-green head 0727ffc1 with pass 1's seven
+fixes in the tree, briefed to RE-VERIFY those fixes first and then review
+the branch again. It read the frozen text and the principal product code
+and named two issues before the account hit its usage limit mid-run
+(`ERROR: You've hit your usage limit … try again at Sep 14th, 2026`); it
+reached neither the censuses, the journey, the matrices, the focus
+lifecycle nor the mac facts, and it re-verified none of pass 1's fixes.
+Both observations were checked here against the code and the frozen text,
+and NEITHER is a defect. (a) "The task list still retains the final
+completed write" — true and BOUNDED AT ONE: IPG-5's prune runs on the
+hand-off, so at rest the set holds the last write's task until the next
+edit or the next drain, never a second. `CompletedWritesLeaveTheOutstandingSet`
+asserts exactly that (`TrackedWritesForTests <= 1` after five completed
+writes and again after a sixth): the growth IPG-5 named — one task per
+edit for the workspace's whole life — is what the prune removes, and a
+single retained handle is not the OUTSTANDING set drifting. (b)
+"Replacement of a rows-only request still changes its announcement policy
+contrary to frozen Q4/Q9" — true to the LETTER and already RECORDED: TGC-3
+records it as "ONE DEVIATION FROM THE LETTER … a replaced ROWS-ONLY token
+(a needle with a snapshot held, a sort) would have spoken the count
+through the rows-only receiver, so its replacing pair takes `FilterCount`
+and speaks the count — with `GridSorted` first when it carried the pending
+sort — where Term Q4's IGP-5 branch and Term Q9 say 'GridSorted alone' /
+'a silent pair'", decided by the principle Term Q9 itself states (the line
+the replaced token would have spoken is spoken by the replacing pair) and
+by parity with the mac lane as landed in TGC-1, with the two facts NAMED
+for the behaviour. A literal reading is not implementable as written
+either: every rows-only token is issued SILENT (Term Q4's needle arm as
+much as the sort's), so inheriting the policy verbatim would silence the
+NEEDLE's replacement too, which Term Q4 requires to speak the count
+"ALWAYS". The deviation stands for the owner's round; nothing changed
+here. The readback's change under IPG-3 was re-verified end to end after
+it landed: the three graph journeys pass locally again
+(GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean 19 s, the table's 9 s,
+the leaf's 25 s, each alone, NVDA stopped), the ghost readback still
+resolving through the shown rows. THE LOOP'S STATE, for the owner: pass 1
+returned seven findings (four blockers, three majors), every one verified
+and fixed in TGC-10, and CI is FULLY GREEN on that head — every workflow,
+every windows job including the app-model and shell-accessibility lanes,
+and the swift lane that arbitrates the mac half. The stop rule
+([[post-implementation-codex-loop]]: the gate met on a head AND two
+consecutive passes with no blocker) is therefore NOT yet met: pass 1 had
+blockers and pass 2 could not finish. The precedent is not being applied
+to stop early — the loop is paused on an external quota that resets
+2026-09-14, and a full pass 2 (the brief is `brief-gC-p2.md`) should run
+before the merge unless the owner decides the standing evidence is
+enough.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,
