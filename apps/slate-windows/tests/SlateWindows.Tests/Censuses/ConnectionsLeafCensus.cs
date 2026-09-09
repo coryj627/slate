@@ -588,8 +588,12 @@ public sealed class ConnectionsLeafCensus
                 // and the argument's TYPE is the filter-count event — a local
                 // alias carries the type the text hid; a relay call the
                 // compilation cannot bind is refused rather than trusted.
+                // W6-2 PR C (C-6): the relay's static RenderLabel RENDERS a count
+                // for the document's FilterCountText and posts nothing — a
+                // render is not an enqueue, so it is neither gated nor ungated.
                 IMethodSymbol[] relayMethods = [.. Candidates(model.GetSymbolInfo(call)).OfType<IMethodSymbol>()
-                    .Where(method => method.ContainingType.ToDisplayString() == "SlateWindows.Graph.GraphAnnouncer")];
+                    .Where(method => method.ContainingType.ToDisplayString() == "SlateWindows.Graph.GraphAnnouncer"
+                        && !(method.IsStatic && method.Name == "RenderLabel"))];
                 bool unboundRelayCall = relayMethods.Length == 0
                     && CalleeName(call).StartsWith("Announce", StringComparison.Ordinal)
                     && !Candidates(model.GetSymbolInfo(call)).Any();
