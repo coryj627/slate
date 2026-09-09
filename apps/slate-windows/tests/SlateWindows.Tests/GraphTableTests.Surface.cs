@@ -370,4 +370,203 @@ public sealed partial class GraphTableTests
             Assert.Null(navigator.PresenterForTests);
         });
     }
+
+    // --- Where-am-I: the panel, the pre-emption, the chord (contract C-8) -------
+
+    private static readonly GraphA11yEvent.GraphWhereAmI[] Witnesses =
+    [
+        new(new GraphWhereAmISelection.Node(new GraphRowCopy("Alone", GraphNodeKind.Note, 0, 0, 0, false), 2), 100, new GraphWhereAmIFilter.Normal(true, true, true), "alo"),
+        new(new GraphWhereAmISelection.Node(new GraphRowCopy("Missing Note", GraphNodeKind.Ghost, 2, 0, 2, false), 0), 250, new GraphWhereAmIFilter.UnresolvedOnly(), null),
+        new(new GraphWhereAmISelection.NoSelection(), 100, new GraphWhereAmIFilter.Normal(false, false, true), "\u00a0\u2003"),
+        new(new GraphWhereAmISelection.Node(new GraphRowCopy("Hub", GraphNodeKind.Note, 3, 1, 3, false), 1), 50, new GraphWhereAmIFilter.Normal(false, true, false), null),
+        new(new GraphWhereAmISelection.Node(new GraphRowCopy("Alpha", GraphNodeKind.Note, 1, 1, 1, false), 1), 100, new GraphWhereAmIFilter.Normal(false, false, false), "\u2003alpha\u00a0"),
+        new(new GraphWhereAmISelection.Node(new GraphRowCopy("Ghost", GraphNodeKind.Ghost, 1, 0, 1, false), 0), 100, new GraphWhereAmIFilter.UnresolvedOnly(), null),
+        new(new GraphWhereAmISelection.Node(new GraphRowCopy("Pic", GraphNodeKind.Attachment, 1, 0, 1, false), 1), 80, new GraphWhereAmIFilter.UnresolvedOnly(), null),
+        new(new GraphWhereAmISelection.Node(new GraphRowCopy("Caf\u00e9", GraphNodeKind.Note, 2, 2, 2, false), 3), 200, new GraphWhereAmIFilter.Normal(true, false, true), "cafe"),
+        new(new GraphWhereAmISelection.NoSelection(), null, new GraphWhereAmIFilter.Normal(false, false, true), null),
+    ];
+
+    private static string WhereAmIRender(GraphA11yEvent.GraphWhereAmI @event) =>
+        SlateUniffiMethods.A11yRender(new A11yEvent.Graph(@event)).Text;
+
+    /// <summary>0a-6's nine states through an injected seam: each renders
+    /// the panel's text and posts ONCE, the two the same string from one
+    /// event (IGO-31); the ninth carries no zoom clause.</summary>
+    [Fact]
+    public void WhereAmIWithEachWitnessRendersThePanelAndPostsOnce()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-where-am-i-witnesses");
+            GraphDocumentViewModel document = host.Open();
+            var view = new GraphSurfaceView { Model = document };
+            using HostedWindow window = HostInWindow(view);
+            GraphNavigator navigator = host.Workspace.GraphNavigator;
+            Assert.Equal(9, Witnesses.Length);
+            foreach (GraphA11yEvent.GraphWhereAmI witness in Witnesses)
+            {
+                navigator.InstallTableReadback(() => witness);
+                host.GraphLines.Clear();
+                Assert.True(navigator.WhereAmI());
+                string expected = WhereAmIRender(witness);
+                Assert.Equal(expected, view.WhereAmIReadbackForTests.Text);
+                Assert.Equal(Visibility.Visible, view.WhereAmIPanelForTests.Visibility);
+                Assert.Equal([expected], host.GraphLines);
+                Assert.Equal(witness.ZoomPercent is null, !expected.Contains("zoom", StringComparison.Ordinal));
+                navigator.CloseWhereAmI();
+                Assert.Equal(Visibility.Collapsed, view.WhereAmIPanelForTests.Visibility);
+                Assert.Equal(string.Empty, view.WhereAmIReadbackForTests.Text);
+            }
+            Assert.Equal("Where am I?", AutomationProperties.GetName(view.WhereAmIPanelForTests));
+            Assert.Equal("GraphWhereAmIPanel", AutomationProperties.GetAutomationId(view.WhereAmIPanelForTests));
+            Assert.Equal("GraphWhereAmIReadback", AutomationProperties.GetAutomationId(view.WhereAmIReadbackForTests));
+            Assert.Equal("Where am I?", AutomationProperties.GetName(view.WhereAmIReadbackForTests));
+            Assert.Equal(AutomationLiveSetting.Off, AutomationProperties.GetLiveSetting(view.WhereAmIReadbackForTests));
+            Assert.True(view.WhereAmIReadbackForTests.IsReadOnly);
+            Assert.Equal("GraphWhereAmIClose", AutomationProperties.GetAutomationId(view.WhereAmICloseForTests));
+            Assert.Equal("Close", view.WhereAmICloseForTests.Content);
+        });
+    }
+
+    /// <summary>The canvas's rules: opening focuses the readback only when the
+    /// surface has the keys and remembers where they came from; Close and
+    /// Escape restore focus there only when the reader was INSIDE the panel;
+    /// with the origin gone, the projection through rule F; a reader elsewhere
+    /// is not moved.</summary>
+    [Fact]
+    public void ThePanelsFocusRulesInsideAndOutside()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-where-am-i-focus");
+            GraphDocumentViewModel document = host.Open();
+            var view = new GraphSurfaceView { Model = document };
+            using HostedWindow window = HostInWindow(view);
+            GraphNavigator navigator = host.Workspace.GraphNavigator;
+            // (i) The keys OUTSIDE the surface: the panel opens, focus stays put.
+            Assert.False(view.IsKeyboardFocusWithin);
+            Assert.True(navigator.WhereAmI());
+            Assert.Equal(Visibility.Visible, view.WhereAmIPanelForTests.Visibility);
+            Assert.False(view.WhereAmIReadbackForTests.IsKeyboardFocused);
+            navigator.CloseWhereAmI();
+            // (ii) The keys in the FIELD: the panel opens into the readback and
+            // Close puts them back in the field.
+            Assert.True(view.FilterFieldForTests.Focus());
+            Assert.True(navigator.WhereAmI());
+            Assert.True(view.WhereAmIReadbackForTests.IsKeyboardFocused);
+            view.WhereAmICloseForTests.RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Assert.Equal(Visibility.Collapsed, view.WhereAmIPanelForTests.Visibility);
+            Assert.True(view.FilterFieldForTests.IsKeyboardFocused);
+            // (iii) Open from the field, the reader LEAVES the panel for the grid,
+            // then Close: they are not moved.
+            Assert.True(navigator.WhereAmI());
+            Assert.True(view.WhereAmIReadbackForTests.IsKeyboardFocused);
+            Assert.True(view.TableForTests.FocusProjection());
+            Assert.False(view.WhereAmIPanelForTests.IsKeyboardFocusWithin);
+            view.WhereAmICloseForTests.RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Assert.Equal(Visibility.Collapsed, view.WhereAmIPanelForTests.Visibility);
+            Assert.True(view.TableForTests.IsKeyboardFocusWithin);
+            // (iv) The origin gone: open from Clear (visible under a needle), the
+            // needle cleared meanwhile, Escape lands on the projection.
+            navigator.SetNameQuery("note");
+            host.Settle(document);
+            Assert.Equal(Visibility.Visible, view.ClearFilterForTests.Visibility);
+            Assert.True(view.ClearFilterForTests.Focus());
+            Assert.True(navigator.WhereAmI());
+            Assert.True(view.WhereAmIReadbackForTests.IsKeyboardFocused);
+            navigator.ClearNameQuery();
+            host.Settle(document);
+            Assert.Equal(Visibility.Collapsed, view.ClearFilterForTests.Visibility);
+            PressPreview(view.WhereAmIReadbackForTests, Key.Escape);
+            Assert.Equal(Visibility.Collapsed, view.WhereAmIPanelForTests.Visibility);
+            host.Settle(document);
+            view.UpdateLayout();
+            Assert.True(view.TableForTests.IsKeyboardFocusWithin);
+        });
+    }
+
+    /// <summary>Rung 0 ahead of rung 1: with the panel open and a live needle,
+    /// Escape closes the panel and leaves the needle; the next Escape clears
+    /// the needle (rung 1).</summary>
+    [Fact]
+    public void AnOpenPanelTakesEscapeAheadOfALiveNeedleWhileTheSurfaceHasTheKeys()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-escape-ahead");
+            GraphDocumentViewModel document = host.Open();
+            var view = new GraphSurfaceView { Model = document };
+            using HostedWindow window = HostInWindow(view);
+            GraphNavigator navigator = host.Workspace.GraphNavigator;
+            GraphViewState state = host.Workspace.GraphViewStateForTests;
+            navigator.SetNameQuery("note");
+            host.Settle(document);
+            Assert.True(view.FilterFieldForTests.Focus());
+            Assert.True(navigator.WhereAmI());
+            Assert.True(view.WhereAmIReadbackForTests.IsKeyboardFocused);
+            PressPreview(view.WhereAmIReadbackForTests, Key.Escape);
+            Assert.Equal(Visibility.Collapsed, view.WhereAmIPanelForTests.Visibility);
+            Assert.Equal("note", state.NameQuery);
+            Assert.True(view.FilterFieldForTests.IsKeyboardFocused);
+            PressPreview(view.FilterFieldForTests, Key.Escape);
+            Assert.Equal(string.Empty, state.NameQuery);
+        });
+    }
+
+    [Fact]
+    public void EscapeAheadOfALiveNeedle() =>
+        AnOpenPanelTakesEscapeAheadOfALiveNeedleWhileTheSurfaceHasTheKeys();
+
+    /// <summary>Escape pressed OUTSIDE the graph subtree never reaches the
+    /// surface's tunnelling handler: an open panel stays open.</summary>
+    [Fact]
+    public void EscapeOutsideTheGraphSubtreeLeavesAnOpenPanelAlone()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-escape-outside");
+            GraphDocumentViewModel document = host.Open();
+            var view = new GraphSurfaceView { Model = document };
+            var other = new TextBox();
+            var stack = new StackPanel();
+            stack.Children.Add(view);
+            stack.Children.Add(other);
+            using HostedWindow window = HostInWindow(stack);
+            GraphNavigator navigator = host.Workspace.GraphNavigator;
+            Assert.True(navigator.WhereAmI());
+            Assert.Equal(Visibility.Visible, view.WhereAmIPanelForTests.Visibility);
+            Assert.True(other.Focus());
+            PressPreview(other, Key.Escape);
+            Assert.Equal(Visibility.Visible, view.WhereAmIPanelForTests.Visibility);
+            Assert.NotNull(navigator.WhereAmIText);
+        });
+    }
+
+    /// <summary>The chord through the surface as the presenter (the tunnelling
+    /// handler reads the live modifiers, which a synthetic press cannot set;
+    /// the journey presses the real keys): Ctrl+Alt+Shift+I on the grid opens
+    /// the panel into the readback and posts once; the exact modifier —
+    /// Ctrl+Alt+I alone, the pane toggle's chord — is not the graph's.</summary>
+    [Fact]
+    public void TheWhereAmIChordThroughTheSurfacesPresenter()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-where-am-i-chord");
+            GraphDocumentViewModel document = host.Open();
+            var view = new GraphSurfaceView { Model = document };
+            using HostedWindow window = HostInWindow(view);
+            GraphNavigator navigator = host.Workspace.GraphNavigator;
+            Assert.True(view.TableForTests.FocusProjection());
+            host.GraphLines.Clear();
+            Assert.False(navigator.HandleKey(Key.I, ModifierKeys.Control | ModifierKeys.Alt, view));
+            Assert.Equal(Visibility.Collapsed, view.WhereAmIPanelForTests.Visibility);
+            Assert.True(navigator.HandleKey(Key.I, ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift, view));
+            Assert.Equal(Visibility.Visible, view.WhereAmIPanelForTests.Visibility);
+            Assert.True(view.WhereAmIReadbackForTests.IsKeyboardFocused);
+            Assert.Single(host.GraphLines);
+            Assert.Equal(host.GraphLines[0], view.WhereAmIReadbackForTests.Text);
+        });
+    }
+
 }

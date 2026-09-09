@@ -293,6 +293,7 @@ internal static class ChordTable
         public const string GraphOrphans = "slate.graph.orphans";
         public const string GraphUnresolved = "slate.graph.unresolved";
         public const string GraphMostLinked = "slate.graph.mostLinked";
+        public const string GraphWhereAmI = "slate.graph.whereAmI";
 
         // Canvas (W6-1 #745). Ids are byte-identical to mac's.
         public const string CanvasShowOutline = "slate.canvas.showOutline";
@@ -993,6 +994,14 @@ internal static class ChordTable
             "Open the graph filtered to unresolved targets — broken links."),
         Reg(Ids.GraphMostLinked, "Graph: Most Linked Notes", CommandSection.Graph,
             "Open the graph sorted by links in — the most-linked notes, the hubs."),
+        // W6-2 PR C (C-8): Where-am-I — the mac's label, hint and chord; the
+        // Shift disambiguation the canvas row carries (D-2); ChordScope.Graph,
+        // delivered by GraphSurfaceView's tunnelling handler and disjoint from
+        // the canvas row by DELIVERY (SharedCommandChords records the pair).
+        Reg(Ids.GraphWhereAmI, "Graph: Where Am I?", CommandSection.Graph,
+            "Read the selected node's row copy, its component, the zoom level, and the active filters.",
+            "⌃⌘I", "Ctrl+Alt+Shift+I", ChordScope.Graph,
+            divergence: WhereAmIShiftDisambiguation),
         // W6-2 PR C (C-7): the Escape ladder — a Windows-authored
         // disposition in the graph's scope, delivered by GraphSurfaceView's
         // tunnelling handler through the navigator's map; not a command id

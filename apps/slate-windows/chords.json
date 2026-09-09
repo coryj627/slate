@@ -1594,6 +1594,19 @@
       "registered": true
     },
     {
+      "id": "slate.graph.whereAmI",
+      "label": "Graph: Where Am I?",
+      "section": "Graph",
+      "hint": "Read the selected node's row copy, its component, the zoom level, and the active filters.",
+      "macChord": "⌃⌘I",
+      "mac": "Control Command I",
+      "windows": "Ctrl+Alt+Shift+I",
+      "windowsSpoken": "Control Alt Shift I",
+      "scope": "Graph",
+      "registered": true,
+      "divergence": "D-2: the rule predicts Ctrl+Alt+I, which slate.view.toggleRightPane holds at Global scope — live at the same moment as a focused canvas, so this is a collision and not a disjoint pair. Disambiguated with Shift per the G18 precedent."
+    },
+    {
       "id": "slate.sidebar.open",
       "label": "Open",
       "section": "Sidebar",

@@ -371,6 +371,7 @@ public partial class MainWindow : Window
             UnwireWorkspaceCitations(_observedWorkspace);
             UnwireWorkspaceBases(_observedWorkspace);
             UnwireWorkspaceTemplates(_observedWorkspace);
+            UnwireWorkspaceGraph(_observedWorkspace);
         }
 
         _observedWorkspace = workspace;
@@ -382,6 +383,7 @@ public partial class MainWindow : Window
             WireWorkspaceCitations(workspace);
             WireWorkspaceBases(workspace);
             WireWorkspaceTemplates(workspace);
+            WireWorkspaceGraph(workspace);
         }
     }
 

@@ -56,7 +56,7 @@ internal readonly record struct GraphPresetOpenReport(bool ArmConsumed, bool Gra
 /// half is <see cref="Bind"/> and <see cref="HandleKey"/>, the canvas
 /// navigator's four-statement body verbatim, walled by a census.
 /// </summary>
-internal sealed class GraphNavigator
+internal sealed class GraphNavigator : BindableBase
 {
     private readonly GraphViewState _viewState;
     private readonly GraphPreferencesViewModel _preferences;
@@ -65,6 +65,9 @@ internal sealed class GraphNavigator
     private readonly Func<GraphPreset, GraphPresetOpenReport> _openForPreset;
     private readonly Dictionary<(Key Key, ModifierKeys Modifiers), Func<bool>> _chords = [];
     private IGraphSurfacePresenter? _presenter;
+    private Func<GraphA11yEvent.GraphWhereAmI?>? _tableReadback;
+    private Func<GraphA11yEvent.GraphWhereAmI?>? _diagramReadback;
+    private string? _whereAmIText;
 
     /// <param name="viewState">The workspace's one view state (B2-1).</param>
     /// <param name="document">The seated document, or null while no graph tab exists.</param>
@@ -104,6 +107,12 @@ internal sealed class GraphNavigator
         // C-7: the Escape ladder's rungs, delivered from the surface's
         // tunnelling handler while the surface has the keys.
         AddChord(Key.Escape, ModifierKeys.None, EscapeFromKey);
+        // C-8: Where-am-I — the chord the canvas row shares, disjoint by
+        // DELIVERY (C-11); unconsumed while the seam does not answer.
+        AddChord(
+            Key.I,
+            ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift,
+            WhereAmIFromKey);
     }
 
     private void AddChord(Key key, ModifierKeys modifiers, Func<bool> handler) =>
@@ -135,6 +144,8 @@ internal sealed class GraphNavigator
         if (ReferenceEquals(_presenter, presenter))
         {
             _presenter = null;
+            // C-8: the panel's text goes with the pane that showed it.
+            WhereAmIText = null;
         }
     }
 
@@ -219,13 +230,19 @@ internal sealed class GraphNavigator
 
     // --- The Escape ladder (contract C-7) ------------------------------------
 
-    /// <summary>Rungs 1 and 2; rung 0 (an open panel) is the surface's own
-    /// pre-emption and rung 3 is the shell's — the press bubbles.</summary>
+    /// <summary>Rungs 0, 1 and 2; rung 3 is the shell's — the press bubbles.</summary>
     private bool EscapeFromKey()
     {
         if (_presenter is not { IsLive: true } presenter)
         {
             return false;
+        }
+        // Rung 0 (C-8): an open Where-am-I panel takes the press AHEAD of a
+        // live needle — the pane the reader is in dismisses it and re-seats
+        // by the panel's own rules.
+        if (presenter.DismissTransientRegion())
+        {
+            return true;
         }
         if (_viewState.NameQuery.Length > 0)
         {
@@ -245,4 +262,81 @@ internal sealed class GraphNavigator
         }
         return false;
     }
+    // --- Where-am-I (contract C-8) -------------------------------------------
+
+    /// <summary>The panel's text: the ONE event rendered by the relay's
+    /// renderer (IGO-31); null while no panel is open; cleared on detach.</summary>
+    public string? WhereAmIText
+    {
+        get => _whereAmIText;
+        private set => SetField(ref _whereAmIText, value);
+    }
+
+    /// <summary>Raised by the document at every lineage edge and at its
+    /// retirement, and here when a seam is installed or cleared: the
+    /// command's CanExecute re-evaluates (IGN-13).</summary>
+    internal event Action? WhereAmIAvailabilityChanged;
+
+    /// <summary>The TABLE's readback seam, installed by the document at its
+    /// seat and cleared (null) at its retirement.</summary>
+    internal void InstallTableReadback(Func<GraphA11yEvent.GraphWhereAmI?>? readback)
+    {
+        _tableReadback = readback;
+        WhereAmIAvailabilityChanged?.Invoke();
+    }
+
+    /// <summary>Clear the table's seam only when it is THIS one — a retired
+    /// document never clears its successor's.</summary>
+    internal void ClearTableReadback(Func<GraphA11yEvent.GraphWhereAmI?> readback)
+    {
+        ArgumentNullException.ThrowIfNull(readback);
+        if (ReferenceEquals(_tableReadback, readback))
+        {
+            InstallTableReadback(null);
+        }
+    }
+
+    /// <summary>The DIAGRAM's readback seam — null until PR D's diagram
+    /// installs it (the mac's graphDiagramWhereAmIEvent).</summary>
+    internal void InstallDiagramReadback(Func<GraphA11yEvent.GraphWhereAmI?>? readback)
+    {
+        _diagramReadback = readback;
+        WhereAmIAvailabilityChanged?.Invoke();
+    }
+
+    /// <summary>The document's lineage edges and its retirement re-evaluate
+    /// the availability through this.</summary>
+    internal void NotifyWhereAmIAvailabilityChanged() => WhereAmIAvailabilityChanged?.Invoke();
+
+    /// <summary>The ACTIVE projection's seam, chosen by the view state's Mode.</summary>
+    private Func<GraphA11yEvent.GraphWhereAmI?>? ActiveReadback =>
+        _viewState.Mode == GraphSurfaceMode.Diagram ? _diagramReadback : _tableReadback;
+
+    /// <summary>The admission: the active seam answers.</summary>
+    public bool CanWhereAmI => ActiveReadback?.Invoke() is not null;
+
+    /// <summary>The verb: ONE event from the seam, rendered for the panel and
+    /// announced through the document's seam — composed once, rendered
+    /// twice by one deterministic renderer (IGO-31). False when the seam
+    /// does not answer.</summary>
+    public bool WhereAmI()
+    {
+        if (ActiveReadback?.Invoke() is not { } @event)
+        {
+            return false;
+        }
+        WhereAmIText = GraphAnnouncer.RenderLabel(@event);
+        _document()?.AnnounceWhereAmI(@event);
+        return true;
+    }
+
+    /// <summary>The chord arm: unconsumed when the seam does not answer, so
+    /// the press falls through while no document is seated or the lineage
+    /// is not quiescent (C-8).</summary>
+    private bool WhereAmIFromKey() => WhereAmI();
+
+    /// <summary>The panel's Close and Escape's rung 0: the text cleared, every
+    /// pane's panel collapsing with it.</summary>
+    internal void CloseWhereAmI() => WhereAmIText = null;
+
 }

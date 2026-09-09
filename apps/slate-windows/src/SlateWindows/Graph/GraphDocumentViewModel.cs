@@ -114,6 +114,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     private readonly Func<bool> _isEffectiveActive;
     private readonly Func<GraphVerbosity> _verbosity;
     private readonly GraphPreferencesViewModel? _preferences;
+    private readonly Func<GraphA11yEvent.GraphWhereAmI?> _tableReadback;
     private readonly Func<int> _lifecycleGeneration;
     private readonly Func<bool> _isSeated;
     private readonly Dictionary<GraphNodeKind, IReadOnlyList<GraphRowActionSpec>> _actionsByKind;
@@ -199,6 +200,11 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         _publication = GraphPublication.Initial(
             new GraphVisibilityQuery(ViewState.Filter, ViewState.NameQuery, ViewState.KindOnly),
             DefaultSort);
+        // C-8: the TABLE's readback seam, installed at the seat and cleared
+        // at retirement — the navigator chooses the seam by the view state's
+        // Mode; a bare document (a fact's) has no navigator and no seam.
+        _tableReadback = TableWhereAmI;
+        navigator?.InstallTableReadback(_tableReadback);
     }
 
     // --- The fetched-once inventories (design B) ------------------------
@@ -473,6 +479,63 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
 
     // --- Announcements the workspace asks for (rule L, Term 6) -------------
 
+    // --- Where-am-I (contract C-8) -------------------------------------------
+
+    /// <summary>The TABLE's readback: answers only while the lineage is
+    /// QUIESCENT and the publication CURRENT — a READY or EMPTY record held
+    /// (EMPTY holds the snapshot too: the ninth witness's state), its query
+    /// the view state's, nothing in flight (Term Q7; IGO-29) — composing ONE
+    /// GraphWhereAmI: the shared key's node in the held SNAPSHOT (scanned by
+    /// StableKey — R-A's no-index rule) rendered the diagram's way — the
+    /// references its in-links, no embed, the node's component — else
+    /// NoSelection; NO zoom clause (0a-2b as amended); UnresolvedOnly under
+    /// the kind overlay, else Normal from the view state's filter; the raw
+    /// needle as the name filter (core trims, 0a-6).</summary>
+    internal GraphA11yEvent.GraphWhereAmI? TableWhereAmI()
+    {
+        // No retirement guard: the retirement CLEARS the seam, and that is
+        // what the no-tab fact pins (a retired document is never asked).
+        if (IsRequestInFlight)
+        {
+            return null;
+        }
+        GraphPublication publication = Publication;
+        if (publication.State is not (GraphLoadState.Ready or GraphLoadState.Empty)
+            || publication.Snapshot is not { } snapshot
+            || publication.Query != new GraphVisibilityQuery(ViewState.Filter, ViewState.NameQuery, ViewState.KindOnly))
+        {
+            return null;
+        }
+        GraphWhereAmISelection selection = new GraphWhereAmISelection.NoSelection();
+        if (ViewState.SelectedKey is { } key)
+        {
+            foreach (GraphNode node in snapshot.Nodes)
+            {
+                if (string.Equals(node.StableKey, key, StringComparison.Ordinal))
+                {
+                    selection = new GraphWhereAmISelection.Node(
+                        new GraphRowCopy(node.Label, node.Kind, node.InLinks, node.OutLinks, node.InLinks, false),
+                        node.Component);
+                    break;
+                }
+            }
+        }
+        GraphFilter backend = ViewState.Filter;
+        GraphWhereAmIFilter filter = ViewState.KindOnly == GraphNodeKind.Ghost
+            ? new GraphWhereAmIFilter.UnresolvedOnly()
+            : new GraphWhereAmIFilter.Normal(backend.OrphansOnly, backend.IncludeAttachments, backend.IncludeGhosts);
+        return new GraphA11yEvent.GraphWhereAmI(selection, null, filter, ViewState.NameQuery);
+    }
+
+    /// <summary>The announcement half of the verb (C-8): the ONE event,
+    /// through the relay while the graph is effective — the boundary the
+    /// announcement-seam census names.</summary>
+    internal void AnnounceWhereAmI(GraphA11yEvent.GraphWhereAmI @event)
+    {
+        ArgumentNullException.ThrowIfNull(@event);
+        AnnounceIfEffective(@event);
+    }
+
     /// <summary>A status the cause owes, posted through the relay.</summary>
     internal void AnnounceStatus(GraphStatusNote note)
     {
@@ -667,6 +730,13 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         if (was != (token is not null))
         {
             OnPropertyChanged(nameof(IsRequestInFlight));
+            // C-8: the readback's availability follows every lineage edge
+            // (IGN-13) — the ISSUE here; each terminal arm raises after its
+            // publication so the answer is over the installed record.
+            if (token is not null)
+            {
+                Navigator?.NotifyWhereAmIAvailabilityChanged();
+            }
         }
     }
 
@@ -790,6 +860,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             SetCurrent(null);
             _request = null;
             _requestedSort = null;
+            Navigator?.NotifyWhereAmIAvailabilityChanged();
             return;
         }
         if (envelope.Failure is { } failure)
@@ -804,6 +875,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                 Publication = Publication.AsPairFailure(failure);
                 RefreshFilterCountText();
             }
+            Navigator?.NotifyWhereAmIAvailabilityChanged();
             AnnounceIfEffective(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.LoadFailed(failure)));
             return;
         }
@@ -844,6 +916,9 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         SetCurrent(null);
         Publication = next;
         RefreshFilterCountText();
+        // C-8: the readback answers over the INSTALLED record — re-evaluated
+        // after the swap, not at the edge before it.
+        Navigator?.NotifyWhereAmIAvailabilityChanged();
         if (token.Kind == GraphLoadKind.Pair)
         {
             // A NEW snapshot judges the key (the mac revalidates at the
@@ -1049,6 +1124,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         _seq++;
         _request = null;
         SetCurrent(null);
+        // C-8: the table's seam cleared — Where-am-I is refused with no seated
+        // document — and the availability re-evaluated.
+        Navigator?.ClearTableReadback(_tableReadback);
+        Navigator?.NotifyWhereAmIAvailabilityChanged();
         if (_preferences is not null)
         {
             _preferences.PropertyChanged -= OnPreferencesChanged;

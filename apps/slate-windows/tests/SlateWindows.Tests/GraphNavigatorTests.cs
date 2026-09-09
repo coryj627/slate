@@ -119,11 +119,15 @@ public sealed class GraphNavigatorTests
 
         bool ISlateCommandHost.IsVaultOpen => true;
 
-        ICommand ISlateCommandHost.OpenVaultCommand => throw new NotSupportedException();
+        /// <summary>The registrar's enumerating refresh resolves every row
+        /// (C-8's availability fact): the shell verbs answer an inert command.</summary>
+        private static readonly RelayCommand Inert = new(_ => { }, _ => false);
 
-        ICommand ISlateCommandHost.CloseVaultCommand => throw new NotSupportedException();
+        ICommand ISlateCommandHost.OpenVaultCommand => Inert;
 
-        ICommand ISlateCommandHost.ToggleSearchCommand => throw new NotSupportedException();
+        ICommand ISlateCommandHost.CloseVaultCommand => Inert;
+
+        ICommand ISlateCommandHost.ToggleSearchCommand => Inert;
 
         public void Dispose()
         {
@@ -632,4 +636,311 @@ public sealed class GraphNavigatorTests
             Assert.Equal([Count(host.Document.Publication)], host.GraphLines);
         });
     }
+
+    // --- Where-am-I (contract C-8) -------------------------------------------
+
+    private static string WhereAmIRender(GraphA11yEvent.GraphWhereAmI @event) => Render(@event);
+
+    /// <summary>C-8: the row — the mac's label, hint and chord, ChordScope.Graph,
+    /// the Shift disambiguation, in the Graph section — and the shared chord's
+    /// disposition beside the canvas row (C-11).</summary>
+    [Fact]
+    public void TheRowItsScopeItsDivergenceAndTheSharedChordDisposition()
+    {
+        ChordTableEntry row = ChordTable.Entries.Single(r => r.Id == ChordTable.Ids.GraphWhereAmI);
+        Assert.Equal("slate.graph.whereAmI", row.Id);
+        Assert.Equal("Graph: Where Am I?", row.Label);
+        Assert.Equal(CommandSection.Graph, row.Section);
+        Assert.Equal("⌃⌘I", row.MacChord);
+        Assert.Equal("Ctrl+Alt+Shift+I", row.WindowsChord);
+        Assert.Equal(ChordScope.Graph, row.Scope);
+        Assert.True(row.IsRegistered);
+        Assert.Contains("Shift", row.Divergence, StringComparison.Ordinal);
+        ChordTableEntry canvas = ChordTable.Entries.Single(r => r.Id == ChordTable.Ids.CanvasWhereAmI);
+        Assert.Equal(canvas.WindowsChord, row.WindowsChord);
+        Assert.Equal(canvas.Divergence, row.Divergence);
+        Assert.NotEqual(canvas.Scope, row.Scope);
+    }
+
+    [Fact]
+    public void WhereAmIIsRefusedWithNoSeatedDocumentAndWithANullReturningSeam()
+    {
+        using GraphVault vault = GraphVault.Copy("where-am-i-refused");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            int raised = 0;
+            host.Navigator.WhereAmIAvailabilityChanged += () => raised++;
+            // No graph tab, no seam: refused, nothing rendered, nothing posted.
+            Assert.False(host.Navigator.CanWhereAmI);
+            Assert.False(host.Navigator.WhereAmI());
+            Assert.Null(host.Navigator.WhereAmIText);
+            Assert.Empty(host.GraphLines);
+            ICommand? command = SlateCommandRegistrar.Resolve(host, ChordTable.Ids.GraphWhereAmI);
+            Assert.NotNull(command);
+            Assert.False(command.CanExecute(null));
+            Assert.Equal(SlateCommandRegistrar.UnavailableReason, SlateCommandRegistrar.DisabledReason(host, ChordTable.Ids.GraphWhereAmI));
+            // A seam that answers null — the table's under a load in flight —
+            // refuses the same way; the chord falls through (unconsumed).
+            host.Workspace.OpenGraph();
+            Assert.True(host.Document.IsRequestInFlight);
+            Assert.False(host.Navigator.CanWhereAmI);
+            Assert.False(host.Navigator.WhereAmI());
+            var presenter = new FakePresenter();
+            Assert.False(host.Navigator.HandleKey(Key.I, ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift, presenter));
+            Assert.Null(host.Navigator.WhereAmIText);
+            Assert.True(raised >= 1, "the seat and the issue raised the availability");
+        });
+    }
+
+    [Fact]
+    public void InstallingTheDiagramsSeamRaisesAvailabilityAndTheRowEnables()
+    {
+        using GraphVault vault = GraphVault.Copy("where-am-i-diagram-seam");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            ICommand command = SlateCommandRegistrar.Resolve(host, ChordTable.Ids.GraphWhereAmI)!;
+            int canExecuteChanged = 0;
+            command.CanExecuteChanged += (_, _) => canExecuteChanged++;
+            int raised = 0;
+            host.Navigator.WhereAmIAvailabilityChanged += () => raised++;
+            host.Workspace.OpenGraph();
+            host.Settle();
+            Assert.True(command.CanExecute(null));
+            // Diagram mode with no diagram seam (PR D's): the verb is refused
+            // even though the table's seam would answer.
+            host.Workspace.GraphViewStateForTests.Mode = GraphSurfaceMode.Diagram;
+            Assert.False(host.Navigator.CanWhereAmI);
+            int before = canExecuteChanged;
+            var witness = new GraphA11yEvent.GraphWhereAmI(
+                new GraphWhereAmISelection.NoSelection(), 100, new GraphWhereAmIFilter.UnresolvedOnly(), null);
+            host.Navigator.InstallDiagramReadback(() => witness);
+            Assert.Equal(before + 1, canExecuteChanged);
+            Assert.True(raised >= 1);
+            Assert.True(command.CanExecute(null));
+            Assert.True(host.Navigator.WhereAmI());
+            Assert.Equal(WhereAmIRender(witness), host.Navigator.WhereAmIText);
+            host.Navigator.InstallDiagramReadback(null);
+            Assert.False(command.CanExecute(null));
+            host.Workspace.GraphViewStateForTests.Mode = GraphSurfaceMode.Table;
+            Assert.True(command.CanExecute(null));
+        });
+    }
+
+    [Fact]
+    public void TheTableReadbackNamesTheSharedKeysSnapshotNodeWithNoZoomClause()
+    {
+        using GraphVault vault = GraphVault.Copy("where-am-i-node");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphTableRow row = host.Document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note && r.LinksIn > 0);
+            Assert.True(host.Document.SelectRow(row.StableKey));
+            host.GraphLines.Clear();
+            GraphA11yEvent.GraphWhereAmI? @event = host.Document.TableWhereAmI();
+            Assert.NotNull(@event);
+            GraphNode node = host.Document.Publication.Snapshot!.Nodes.Single(n => n.StableKey == row.StableKey);
+            Assert.Equal(
+                new GraphWhereAmISelection.Node(
+                    new GraphRowCopy(node.Label, node.Kind, node.InLinks, node.OutLinks, node.InLinks, false), node.Component),
+                @event.Selection);
+            Assert.Null(@event.ZoomPercent);
+            Assert.Equal(new GraphWhereAmIFilter.Normal(false, false, true), @event.Filter);
+            Assert.Equal(string.Empty, @event.NameFilter);
+            // The verb: the panel's text and ONE post render the one event.
+            Assert.True(host.Navigator.WhereAmI());
+            Assert.Equal(WhereAmIRender(@event), host.Navigator.WhereAmIText);
+            Assert.Equal([WhereAmIRender(@event)], host.GraphLines);
+            Assert.DoesNotContain("zoom", host.Navigator.WhereAmIText, StringComparison.Ordinal);
+            Assert.Contains("component", host.Navigator.WhereAmIText, StringComparison.Ordinal);
+            // The needle rides along as the name filter, trimmed by core.
+            host.Navigator.SetNameQuery("  " + row.Label + "  ");
+            host.Settle();
+            Assert.Equal("  " + row.Label + "  ", host.Document.TableWhereAmI()!.NameFilter);
+            host.GraphLines.Clear();
+            Assert.True(host.Navigator.WhereAmI());
+            Assert.Contains(row.Label, host.GraphLines.Single(), StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void TheTableReadbackReadsNoSelectionWithoutAKey()
+    {
+        using GraphVault vault = GraphVault.Copy("where-am-i-no-key");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            host.Workspace.GraphViewStateForTests.SelectedKey = null;
+            GraphA11yEvent.GraphWhereAmI? @event = host.Document.TableWhereAmI();
+            Assert.NotNull(@event);
+            Assert.Equal(new GraphWhereAmISelection.NoSelection(), @event.Selection);
+            Assert.Null(@event.ZoomPercent);
+            // A key absent from the snapshot reads the same.
+            host.Workspace.GraphViewStateForTests.SelectedKey = "p:nowhere.md";
+            Assert.Equal(new GraphWhereAmISelection.NoSelection(), host.Document.TableWhereAmI()!.Selection);
+            Assert.True(host.Navigator.WhereAmI());
+            Assert.StartsWith("No node selected", host.Navigator.WhereAmIText, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void TheTableReadbackReadsUnresolvedOnlyUnderTheKindOverlay()
+    {
+        using GraphVault vault = GraphVault.Copy("where-am-i-unresolved");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Navigator.RunPreset(GraphPreset.Unresolved);
+            host.Settle();
+            Assert.Equal(GraphNodeKind.Ghost, host.Document.Publication.Query.KindOnly);
+            GraphA11yEvent.GraphWhereAmI? @event = host.Document.TableWhereAmI();
+            Assert.NotNull(@event);
+            Assert.Equal(new GraphWhereAmIFilter.UnresolvedOnly(), @event.Filter);
+            host.GraphLines.Clear();
+            Assert.True(host.Navigator.WhereAmI());
+            Assert.Contains("unresolved", host.GraphLines.Single(), StringComparison.Ordinal);
+            // The orphans preset: Normal with its backend flags.
+            host.Navigator.RunPreset(GraphPreset.Orphans);
+            host.Settle();
+            GraphFilter backend = host.Workspace.GraphViewStateForTests.Filter;
+            Assert.Equal(
+                new GraphWhereAmIFilter.Normal(backend.OrphansOnly, backend.IncludeAttachments, backend.IncludeGhosts),
+                host.Document.TableWhereAmI()!.Filter);
+            Assert.True(backend.OrphansOnly);
+        });
+    }
+
+    [Fact]
+    public void TheTableReadbackIsRefusedWhileARequestIsInFlightAndAnswersAtInstall()
+    {
+        using GraphVault vault = GraphVault.Copy("where-am-i-in-flight");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            ICommand command = SlateCommandRegistrar.Resolve(host, ChordTable.Ids.GraphWhereAmI)!;
+            int canExecuteChanged = 0;
+            command.CanExecuteChanged += (_, _) => canExecuteChanged++;
+            Assert.NotNull(host.Document.TableWhereAmI());
+            // A needle in flight: refused — an old node is never read under new
+            // filter prose (IGO-29) — and the command re-evaluated at the issue.
+            host.Navigator.SetNameQuery("hub");
+            Assert.True(host.Document.IsRequestInFlight);
+            Assert.Null(host.Document.TableWhereAmI());
+            Assert.False(command.CanExecute(null));
+            Assert.Equal(1, canExecuteChanged);
+            Assert.False(host.Navigator.WhereAmI());
+            // The install: answers again, with the new needle, re-evaluated once more.
+            host.Settle();
+            Assert.False(host.Document.IsRequestInFlight);
+            Assert.Equal("hub", host.Document.TableWhereAmI()!.NameFilter);
+            Assert.True(command.CanExecute(null));
+            Assert.Equal(2, canExecuteChanged);
+            // A stale publication under a changed view state is not current
+            // either: the state written by hand with no request issued.
+            host.Workspace.GraphViewStateForTests.NameQuery = "elsewhere";
+            Assert.Null(host.Document.TableWhereAmI());
+            host.Workspace.GraphViewStateForTests.NameQuery = "hub";
+            Assert.NotNull(host.Document.TableWhereAmI());
+            // A SORT in flight keeps the query: only quiescence refuses (Term Q7's
+            // "nothing in flight" arm on its own) — the rows land, it answers.
+            using var reached = new ManualResetEventSlim(false);
+            using var release = new ManualResetEventSlim(false);
+            host.Document.FetchGateForTests = () =>
+            {
+                reached.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+            };
+            Assert.True(host.Document.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, true))));
+            Assert.True(reached.Wait(TimeSpan.FromSeconds(10)));
+            Assert.True(host.Document.IsRequestInFlight);
+            Assert.Null(host.Document.TableWhereAmI());
+            Assert.False(command.CanExecute(null));
+            release.Set();
+            host.Settle();
+            Assert.NotNull(host.Document.TableWhereAmI());
+            Assert.True(command.CanExecute(null));
+        });
+    }
+
+    [Fact]
+    public void WhereAmIWithNoGraphTabIsRefused()
+    {
+        using GraphVault vault = GraphVault.Copy("where-am-i-no-tab");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            ICommand command = SlateCommandRegistrar.Resolve(host, ChordTable.Ids.GraphWhereAmI)!;
+            Assert.False(command.CanExecute(null));
+            command.Execute(null);
+            Assert.Null(host.Navigator.WhereAmIText);
+            Assert.Empty(host.GraphLines);
+            Assert.Null(host.Workspace.GraphDocument);
+            // After a close, the retired document's seam is gone: refused again.
+            host.Workspace.OpenGraph();
+            host.Settle();
+            Assert.True(command.CanExecute(null));
+            host.Workspace.CloseActiveTabCommand.Execute(null);
+            host.Settle();
+            Assert.False(command.CanExecute(null));
+            Assert.False(host.Navigator.WhereAmI());
+        });
+    }
+
+    [Fact]
+    public void TheAvailabilitySeamRaisesCanExecuteChangedAndTheRegistrarsRefresh()
+    {
+        using GraphVault vault = GraphVault.Copy("where-am-i-availability");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            ICommand command = SlateCommandRegistrar.Resolve(host, ChordTable.Ids.GraphWhereAmI)!;
+            Assert.Same(command, SlateCommandRegistrar.Resolve(host, ChordTable.Ids.GraphWhereAmI));
+            var edges = new List<bool>();
+            command.CanExecuteChanged += (_, _) => edges.Add(command.CanExecute(null));
+            // The seat (false: in flight), the install (true).
+            host.Workspace.OpenGraph();
+            host.Settle();
+            Assert.Contains(true, edges);
+            Assert.True(edges[^1]);
+            int count = edges.Count;
+            // The registrar's enumerating refresh reaches this command too.
+            SlateCommandRegistrar.RaiseCommandStates(host);
+            Assert.Equal(count + 1, edges.Count);
+            // The retirement: false.
+            host.Workspace.CloseActiveTabCommand.Execute(null);
+            host.Settle();
+            Assert.False(edges[^1]);
+        });
+    }
+
+
+    /// <summary>C-8: the panel's text is cleared with the pane that showed it —
+    /// a detach of THAT presenter; a detach of another leaves it.</summary>
+    [Fact]
+    public void ADetachClearsThePanelsTextForThePaneThatShowedIt()
+    {
+        using GraphVault vault = GraphVault.Copy("where-am-i-detach");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            var presenter = new FakePresenter();
+            var other = new FakePresenter();
+            Assert.True(host.Navigator.HandleKey(Key.I, ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift, presenter));
+            Assert.NotNull(host.Navigator.WhereAmIText);
+            host.Navigator.DetachPresenter(other);
+            Assert.NotNull(host.Navigator.WhereAmIText);
+            host.Navigator.DetachPresenter(presenter);
+            Assert.Null(host.Navigator.WhereAmIText);
+        });
+    }
+
 }

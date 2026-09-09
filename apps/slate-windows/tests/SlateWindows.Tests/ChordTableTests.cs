@@ -184,6 +184,9 @@ public sealed class ChordTableTests
                 "slate.canvas.whereAmI",
                 "slate.file.cancelImport",
                 "slate.file.rename",
+                // W6-2 PR C (C-8): the graph's Where-am-I shares the canvas
+                // row's Shift disambiguation (D-2).
+                "slate.graph.whereAmI",
                 "slate.sidebar.openShortcut1",
                 "slate.sidebar.openShortcut2",
                 "slate.sidebar.openShortcut3",
@@ -292,6 +295,12 @@ public sealed class ChordTableTests
                 + "Escape and the canvas ladder never sees it. With no import the "
                 + "global arm does nothing and the ladder consumes one rung "
                 + "(contract C6).",
+            // W6-2 PR C (C-8, C-11): the two Where-am-I rows share the chord and
+            // are disjoint by DELIVERY — the canvas surface's and the graph
+            // surface's tunnelling handlers, never focused at once.
+            ["slate.canvas.whereAmI | slate.graph.whereAmI"] =
+                "Ctrl+Alt+Shift+I. Disjoint by DELIVERY: the canvas surface's and the "
+                + "graph surface's tunnelling handlers, never focused at once.",
         };
 
     [Fact]

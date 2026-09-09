@@ -10619,6 +10619,148 @@ retired leaf pinned beside the retired document. The leaf view's first
 re-label was a `Render()` on the level change, which rebuilds only for
 a NEW publication and so re-named nothing — `RelabelRows` replaced it.
 
+**TGC-6 — T6: Where-am-I on the table — the row, the shared chord, the
+verb admitted by the active projection's readback seam with its
+availability, the panel, the Escape pre-emption — and the Graph menu
+with its Verbosity submenu built from core's vector (C-8, C-12; C-9's
+menu half; C-11's shared-chord disposition).** THE ROW:
+`Ids.GraphWhereAmI = slate.graph.whereAmI` — "Graph: Where Am I?", the
+mac's hint byte for byte, mac `⌃⌘I`, Windows `Ctrl+Alt+Shift+I`,
+`ChordScope.Graph`, `divergence:` the canvas row's Shift disambiguation
+(D-2) and the id listed in the recorded-divergence set; the pair
+(`slate.canvas.whereAmI`, `slate.graph.whereAmI`) joins
+SharedCommandChords with the reason "disjoint by DELIVERY: the canvas
+surface's and the graph surface's tunnelling handlers, never focused at
+once"; the registrar resolves GraphWhereAmICommand; `chords.json`
+regenerated through the projection. THE SEAMS: the navigator holds one
+`Func<GraphA11yEvent.GraphWhereAmI?>` per projection — the TABLE's,
+installed by the document at its seat (the constructor's last
+statement, the delegate cached so the retirement's `ClearTableReadback`
+clears by reference and never a successor's) and cleared at its
+retirement (the retirement guard inside the composer is gone: the clear
+is load-bearing, the no-tab fact pins it); the DIAGRAM's, null until PR
+D installs it through `InstallDiagramReadback` — and chooses the ACTIVE
+one by the view state's `Mode`. `CanWhereAmI` is "the active seam
+answers"; the workspace's GraphWhereAmICommand (a RelayCommand whose
+CanExecute is that admission) subscribes to the navigator's
+`WhereAmIAvailabilityChanged`, which the document raises through
+`NotifyWhereAmIAvailabilityChanged` at every lineage edge — the ISSUE
+from `SetCurrent`, the INSTALL and the PAIR FAILURE after their
+publication swap (so the answer is over the installed record, not the
+edge before it), the REJECTION in its arm — and at its retirement, and
+the navigator raises at every install or clear of a seam; the
+registrar's enumerating refresh reaches the same instance (the resolver
+returns the workspace's one command). THE TABLE'S READBACK
+(`GraphDocumentViewModel.TableWhereAmI`): answers only while the lineage
+is quiescent (`IsRequestInFlight` false) and the publication CURRENT —
+a READY or EMPTY record held, its query equal to the view state's,
+nothing in flight — composing ONE `GraphWhereAmI`: the shared key's node
+in the held snapshot (`Snapshot.Nodes` scanned by `StableKey`, no index)
+rendered the diagram's way (`GraphRowCopy(label, kind, inLinks,
+outLinks, references: inLinks, embed: false)`, the node's component),
+NoSelection when the key is null or absent; `ZoomPercent` null;
+`UnresolvedOnly` under `KindOnly == Ghost`, else `Normal` from the view
+state's filter; the raw needle as the name filter (core trims). A
+DEVIATION recorded: C-8's text says "a READY record held"; EMPTY is
+admitted too, because an EMPTY publication holds the snapshot and its
+query and is exactly the ninth witness's state ("No node selected,
+filters: unresolved shown." under the unresolved preset with no match)
+— the mac's guard (`graphTableSnapshot != nil`) admits it likewise; the
+round reviews it. THE VERB: `WhereAmI()` takes ONE event from the
+active seam, sets `WhereAmIText = GraphAnnouncer.RenderLabel(event)`
+(the navigator is now a BindableBase; the text is cleared on
+`DetachPresenter` of the pane that showed it and by `CloseWhereAmI`)
+and calls the document's new `AnnounceWhereAmI(event)` →
+`AnnounceIfEffective` — one event, rendered twice by the one renderer;
+false, and the chord arm UNCONSUMED, when the seam does not answer. THE
+CHORD: `AddChord(Key.I, Control | Alt | Shift, WhereAmIFromKey)` in
+`Bind`, scraped by ChordTableTests both ways. THE PANEL, in
+`GraphSurfaceView` below the projection (the canvas's construction):
+GraphWhereAmIPanel (an AutomationNamedGroupPanel, "Where am I?"),
+GraphWhereAmIReadback (a read-only `TextBox`, `AcceptsReturn`,
+`LiveSetting = Off`, `Name` "Where am I?"), GraphWhereAmIClose ("Close");
+the surface observes the workspace navigator's `WhereAmIText` (one
+subscription, swapped with the model, dropped on Unloaded and re-taken
+on Loaded) and renders as the canvas does — on OPENING only the pane
+with the keys takes focus into the readback and remembers where they
+came from; `CloseWhereAmI` clears the text on the navigator (every
+pane's panel collapses) and restores focus to that element only when
+the reader was INSIDE the panel, falling back to RequestProjectionFocus
+(rule F delivers at once when quiescent); a reader elsewhere is not
+moved. `DismissTransientRegion` closes an open panel and reports it —
+Escape's RUNG 0 in the navigator's ladder, ahead of the needle's rung
+1 — so an open panel takes Escape ahead of a live needle while the
+surface has the keys, and Escape outside the graph subtree never
+reaches the tunnelling handler and leaves the panel alone. THE MENU
+(C-12): `MainWindow.xaml` gains the top-level `_Graph` menu (GraphMenu)
+after Canvas — Open Graph (GraphOpenTabMenuItem → OpenGraphCommand;
+chordless, no accelerator), a separator, the three presets
+(GraphOrphansMenuItem, GraphUnresolvedMenuItem, GraphMostLinkedMenuItem),
+Where Am I? (GraphWhereAmIMenuItem, `InputGestureText="{cmd:ChordText
+slate.graph.whereAmI}"`, GraphWhereAmICommand — disabled while the seam
+does not answer), a separator, and the `_Verbosity` submenu
+(`x:Name` GraphVerbosityMenuItem, GraphVerbosityMenu) declared EMPTY;
+the new `Graph/GraphVerbosityMenu.cs` builds it — `Populate(submenu,
+preferences)` iterates `Choices` and adds one CheckMenuItem per choice
+(Header = Title, CommandParameter = Tag, IsCheckable, Command = the
+setter, IsChecked bound OneWay to the choice's IsSelected, AutomationId
+"GraphVerbosity." + tag); `Clear(submenu)` clears every binding and
+command — and the new partial `MainWindow.Graph.cs` calls them from
+ObserveWorkspace's wire and unwire, so the submenu is rebuilt for EVERY
+observed workspace and unwired from the old (IGP-15). Facts
+(GraphNavigatorTests, ten):
+TheRowItsScopeItsDivergenceAndTheSharedChordDisposition;
+WhereAmIIsRefusedWithNoSeatedDocumentAndWithANullReturningSeam;
+InstallingTheDiagramsSeamRaisesAvailabilityAndTheRowEnables;
+TheTableReadbackNamesTheSharedKeysSnapshotNodeWithNoZoomClause;
+TheTableReadbackReadsNoSelectionWithoutAKey;
+TheTableReadbackReadsUnresolvedOnlyUnderTheKindOverlay;
+TheTableReadbackIsRefusedWhileARequestIsInFlightAndAnswersAtInstall (a
+stale publication under a hand-written view state is not current
+either); WhereAmIWithNoGraphTabIsRefused (and after the close);
+TheAvailabilitySeamRaisesCanExecuteChangedAndTheRegistrarsRefresh;
+ADetachClearsThePanelsTextForThePaneThatShowedIt. Facts
+(`GraphTableTests`, the surface in a hidden window, five):
+WhereAmIWithEachWitnessRendersThePanelAndPostsOnce (0a-6's nine through
+an injected seam — the panel's text and the one post the same string;
+the ninth with no zoom clause; the panel's names, id, LiveSetting Off,
+read-only); ThePanelsFocusRulesInsideAndOutside (the keys outside — no
+focus taken; from the field — into the readback and back on Close; the
+reader who left the panel — not moved; the origin gone — Escape lands
+on the projection); AnOpenPanelTakesEscapeAheadOfALiveNeedleWhileTheSurfaceHasTheKeys
+(and its alias EscapeAheadOfALiveNeedle);
+EscapeOutsideTheGraphSubtreeLeavesAnOpenPanelAlone;
+TheWhereAmIChordThroughTheSurfacesPresenter (the tunnelling handler
+reads the live modifiers a synthetic press cannot set; the journey
+presses the real keys). Facts (GraphMenuTests, new, five):
+TheGraphMenusIdsCommandsAndAccelerator (the XAML scraped: the six
+items' ids, headers, commands and the one accelerator, the two
+separators, every command the registrar's for the same id);
+TheSubmenuDeclaresNoLiteralLevel; TheBuiltMenuEqualsTheVectorInOrder
+(the check follows a level change; a click is the setter; a
+re-selection re-asserts); TheMenuFollowsAVaultSwitchAndRetainsNoOldWorkspace
+(two vaults, two levels; the old items' bindings and commands cleared);
+TheWhereAmIItemFollowsTheSeamsAvailability (no tab, in flight, landed, a
+needle in flight, the close). `ChordTableTests`: the shared pair
+recorded; the divergence set gains the id; the Graph scrape sees the
+second chord. Deferred: APresetFromTheEffectiveGraphLandsTheProjection
+(rule F, T7); the ObserveWorkspace wiring and the menu census, the
+announcement-seam census's AnnounceWhereAmI, the instance census (C-15,
+T8). Mutations (thirty-one), each restored byte for byte, each caught by the
+named fact: the seam not installed, and not cleared at retirement; the
+readback answering in flight, ignoring currency, carrying a zoom,
+reading embeds as references, selecting by label, losing the unresolved
+clause; the issue not raising, the install not raising; the verb posting
+nothing, and answering a silent seam; the active seam ignoring the mode;
+the diagram install not raising; a detach keeping the text; rung 0 after
+the needle; the command always enabled, and not subscribed; the
+dismissal reporting nothing; Close moving an outside reader; opening
+stealing the keys; the live region on; the panel's name drifting; the
+row's label and scope drifting; the chord missing from the map; a menu
+item's command drifting; the submenu declaring a level; the population
+skipping the binding; the clear keeping the command; the shared pair
+not recorded.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,

@@ -43,6 +43,8 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     internal const string FilterFieldHint = "Filter notes";
     internal const string FilterSummaryPrefix = "Filter results: ";
     internal const string ClearFilterName = "Clear filter";
+    internal const string WhereAmIHeading = "Where am I?";
+    internal const string WhereAmICloseLabel = "Close";
 
     private readonly TextBlock _title;
     private readonly TextBox _filterField;
@@ -54,6 +56,11 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     private readonly GraphTableView _table;
     private bool _synchronizingFilter;
     private bool _detached;
+    private readonly AutomationNamedGroupPanel _whereAmIPanel;
+    private readonly TextBox _whereAmIReadback;
+    private readonly Button _whereAmIClose;
+    private IInputElement? _whereAmIReturnFocus;
+    private GraphNavigator? _navigator;
 
     public GraphSurfaceView()
     {
@@ -131,6 +138,46 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         AutomationProperties.SetAutomationId(_stateText, "GraphStateText");
         _table = new GraphTableView { TabIndex = 5 };
 
+        // C-8: the Where-am-I PANEL below the projection — the pull-based
+        // twin of the announcement (the canvas's construction): a read-only
+        // readback with LiveSetting Off (the announcement speaks; a live
+        // region would say it twice) and Close. Not a ModalSurface.
+        _whereAmIReadback = new TextBox
+        {
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            MaxHeight = 120,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        AutomationProperties.SetAutomationId(_whereAmIReadback, "GraphWhereAmIReadback");
+        AutomationProperties.SetName(_whereAmIReadback, WhereAmIHeading);
+        AutomationProperties.SetLiveSetting(_whereAmIReadback, AutomationLiveSetting.Off);
+        var whereAmIHeading = new TextBlock
+        {
+            Text = WhereAmIHeading,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 4),
+        };
+        _whereAmIClose = new Button
+        {
+            Content = WhereAmICloseLabel,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 4, 0, 0),
+        };
+        AutomationProperties.SetAutomationId(_whereAmIClose, "GraphWhereAmIClose");
+        _whereAmIClose.Click += (_, _) => CloseWhereAmI();
+        _whereAmIPanel = new AutomationNamedGroupPanel
+        {
+            Margin = new Thickness(12, 4, 12, 8),
+            Visibility = Visibility.Collapsed,
+        };
+        _whereAmIPanel.Children.Add(whereAmIHeading);
+        _whereAmIPanel.Children.Add(_whereAmIReadback);
+        _whereAmIPanel.Children.Add(_whereAmIClose);
+        AutomationProperties.SetAutomationId(_whereAmIPanel, "GraphWhereAmIPanel");
+        AutomationProperties.SetName(_whereAmIPanel, WhereAmIHeading);
+
         var filterRegion = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -151,6 +198,8 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         DockPanel.SetDock(_stateText, Dock.Top);
         layout.Children.Add(header);
         layout.Children.Add(_stateText);
+        DockPanel.SetDock(_whereAmIPanel, Dock.Bottom);
+        layout.Children.Add(_whereAmIPanel);
         layout.Children.Add(_table);
         Content = layout;
 
@@ -161,10 +210,12 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         {
             _detached = true;
             Model?.Navigator?.DetachPresenter(this);
+            ObserveNavigator(null);
         };
         Loaded += (_, _) =>
         {
             _detached = false;
+            ObserveNavigator(Model?.Navigator);
             TryDeliverFocus();
         };
         IsVisibleChanged += (_, _) => TryDeliverFocus();
@@ -188,6 +239,12 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
 
     internal Button ClearFilterForTests => _clearFilter;
 
+    internal FrameworkElement WhereAmIPanelForTests => _whereAmIPanel;
+
+    internal TextBox WhereAmIReadbackForTests => _whereAmIReadback;
+
+    internal Button WhereAmICloseForTests => _whereAmIClose;
+
     /// <summary>The pane's identity — the tab this surface shows — which
     /// rule F's request is addressed to (Term F1); a bare surface in a
     /// fact is its own owner.</summary>
@@ -205,8 +262,17 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         }
     }
 
-    /// <summary>The Where-am-I panel's dismissal lands with C-8.</summary>
-    public bool DismissTransientRegion() => false;
+    /// <summary>Escape's rung 0 (C-8): an open Where-am-I panel is dismissed
+    /// and the reader re-seated by the panel's rules; false with none open.</summary>
+    public bool DismissTransientRegion()
+    {
+        if (_whereAmIPanel.Visibility != Visibility.Visible)
+        {
+            return false;
+        }
+        CloseWhereAmI();
+        return true;
+    }
 
     public bool ProjectionHasFocus => _table.IsKeyboardFocusWithin || _stateText.IsKeyboardFocused;
 
@@ -258,6 +324,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             wasTheAttachedPane = ReferenceEquals(old.Navigator?.PresenterForTests, view);
             old.Navigator?.DetachPresenter(view);
         }
+        view.ObserveNavigator((e.NewValue as GraphDocumentViewModel)?.Navigator);
         view._table.Model = e.NewValue as GraphDocumentViewModel;
         if (e.NewValue is GraphDocumentViewModel model)
         {
@@ -351,6 +418,81 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     }
 
     private void OnPublicationInstalled(GraphPublicationInstall install) => TryDeliverFocus();
+
+    // --- The Where-am-I panel (contract C-8) -----------------------------------
+
+    /// <summary>The navigator's WhereAmIText drives the panel: one
+    /// subscription per navigator, swapped with the model and dropped on
+    /// Unloaded.</summary>
+    private void ObserveNavigator(GraphNavigator? navigator)
+    {
+        if (ReferenceEquals(_navigator, navigator))
+        {
+            return;
+        }
+        if (_navigator is not null)
+        {
+            _navigator.PropertyChanged -= OnNavigatorPropertyChanged;
+        }
+        _navigator = navigator;
+        if (navigator is not null)
+        {
+            navigator.PropertyChanged += OnNavigatorPropertyChanged;
+        }
+        RenderWhereAmI();
+    }
+
+    private void OnNavigatorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(GraphNavigator.WhereAmIText))
+        {
+            RenderWhereAmI();
+        }
+    }
+
+    /// <summary>The canvas's RenderWhereAmI: the text shown; on OPENING only
+    /// the pane the reader is in takes focus into the readback, remembering
+    /// where they came from so Close and Escape can put them back.</summary>
+    private void RenderWhereAmI()
+    {
+        if (_navigator?.WhereAmIText is not { Length: > 0 } text)
+        {
+            _whereAmIPanel.Visibility = Visibility.Collapsed;
+            _whereAmIReadback.Text = string.Empty;
+            return;
+        }
+        bool opening = _whereAmIPanel.Visibility != Visibility.Visible;
+        _whereAmIReadback.Text = text;
+        _whereAmIPanel.Visibility = Visibility.Visible;
+        if (!opening || !IsKeyboardFocusWithin)
+        {
+            return;
+        }
+        _whereAmIReturnFocus = Keyboard.FocusedElement;
+        UpdateLayout();
+        _ = _whereAmIReadback.Focus();
+    }
+
+    /// <summary>The canvas's CloseWhereAmI: the text cleared on the navigator
+    /// (every pane's panel collapses); the reader restored to the element
+    /// they came from only when they were INSIDE the panel — else through
+    /// rule F's landing — and a reader elsewhere is not moved.</summary>
+    private void CloseWhereAmI()
+    {
+        bool readerWasInside = _whereAmIPanel.IsKeyboardFocusWithin;
+        _navigator?.CloseWhereAmI();
+        IInputElement? restore = _whereAmIReturnFocus;
+        _whereAmIReturnFocus = null;
+        if (!readerWasInside)
+        {
+            return;
+        }
+        if (restore is UIElement { IsVisible: true, IsEnabled: true } element && element.Focus())
+        {
+            return;
+        }
+        RequestProjectionFocus();
+    }
 
     // --- The filter region (contracts C-5, C-6) -----------------------------
 

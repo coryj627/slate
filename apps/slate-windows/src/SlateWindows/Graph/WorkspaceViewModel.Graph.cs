@@ -198,6 +198,22 @@ internal sealed partial class WorkspaceViewModel
     public System.Windows.Input.ICommand GraphMostLinkedCommand =>
         _graphMostLinkedCommand ??= new RelayCommand(_ => _graphNavigator.RunPreset(GraphPreset.MostLinked), _ => true);
 
+    private RelayCommand? _graphWhereAmICommand;
+
+    /// <summary>`slate.graph.whereAmI` (C-8): the navigator's verb, enabled
+    /// exactly while the active projection's readback seam answers; the
+    /// navigator's WhereAmIAvailabilityChanged re-evaluates it (IGN-13) —
+    /// the row and the menu item listed-and-disabled otherwise (AD-3).</summary>
+    public System.Windows.Input.ICommand GraphWhereAmICommand =>
+        _graphWhereAmICommand ??= NewGraphWhereAmICommand();
+
+    private RelayCommand NewGraphWhereAmICommand()
+    {
+        var command = new RelayCommand(_ => _graphNavigator.WhereAmI(), _ => _graphNavigator.CanWhereAmI);
+        _graphNavigator.WhereAmIAvailabilityChanged += command.RaiseCanExecuteChanged;
+        return command;
+    }
+
     private GraphDocumentViewModel NewGraphDocument()
     {
         GraphDocumentViewModel? created = null;
