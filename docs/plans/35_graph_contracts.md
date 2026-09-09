@@ -10063,6 +10063,97 @@ TheStateHostHasAGroupPeerNamedByTheState.
 | IGP-24 | MAJOR (created by IGO-25) | taken — the write class closed across the shell (C-15 xv) |
 | IGP-25 | MINOR | taken — CR-5 per affected key |
 
+### Task loop — records (PR C)
+
+**TGC-1 — T1: core's preset rules, the optional zoom and the ninth
+witness, the uniffi mirror, the mac lane of C-2 (i)–(iv) and C-8's twin
+(C-2; 0a-2b and 0a-6 as amended by the owner, CD-24; Term Q9's mac side,
+CD-25).** CORE: `graph_queries.rs` gains `GraphPreset` (`Orphans`,
+`Unresolved`, `MostLinked`), `preset_query` — attachments off in every
+arm, the needle empty, the kind overlay Ghost for Unresolved alone — and
+`preset_outcome` (the published count for Orphans and Unresolved, row
+zero's label and in-links for MostLinked, `NoNotesToRank` when there is
+none); GRAPH_QUERY_SURFACE names `graph_preset_query` and
+`graph_preset_outcome` and `graph_query_surface_names_pub_fns` pins
+twenty-eight. `a11y.rs`: `GraphWhereAmI.zoom_percent` is `Option<u32>`,
+the clause rendered only when present; the ninth witness — `NoSelection`,
+no zoom, `Normal` with the default toggles, no needle — joins
+`graph_corpus` after "Café", rendering "No node selected, filters:
+unresolved shown."; `graph_where_am_i_renders_every_state_exactly` lists
+nine strings, `graph_where_am_i_witnesses_are_host_reachable` counts
+nine, the payload invariants apply the clamp when the zoom is present,
+the count slots push the zoom slot when present, the Debug census and
+the golden table carry the ninth, and the pinned matrix size moves from
+seventy-three to seventy-four; the committed fixture
+`tests/fixtures/a11y/corpus.json` is regenerated (the eight identities
+read `Some(n)`, the ninth added). UNIFFI: the `GraphPreset` mirror with
+its FFI → core conversion, `graph_preset_query` (built field by field,
+`graph_connections_filter`'s shape) and `graph_preset_outcome` (an FFI →
+core `GraphTableRow` conversion and a core → FFI `GraphPresetOutcome`
+conversion added for it), `zoom_percent: Option<u32>` in the event
+mirror; `the_ffi_mirror_exports_every_graph_query` at twenty-eight or
+more; both host corpus mirrors list the ninth witness, so the two
+mirror tripwires are green. WINDOWS: `A11yCorpusCensus` lists the ninth
+(`ZoomPercent: null`); the bindings regenerated — `uint? ZoomPercent`,
+and `SlateUniffiMethods.GraphPresetQuery` and `GraphPresetOutcome` exist
+for T2 and T3. THE MAC (unrun on this box, CR-3 — the swift CI lane is
+the oracle): the local `GraphPreset` enum is deleted in favour of the
+generated one; `openGraphPreset` writes core's query field by field into
+the three live fields; `graphPresetEvent` delegates to
+`graphPresetOutcome` (one crossing per successful publication of a
+current preset token); (i) the table view's two per-field observers
+become ONE `.onChange(of: appState.graphVisibilityQuery)` calling the
+new `requestGraphTableRowsIfQueryChanged()` — the value rule
+`graphTableRequest?.query != graphVisibilityQuery`; (ii) the pair's
+failure arm clears `graphTablePendingPreset`; (iii) the held-filter
+mismatch arm of `receiveGraphTableRows` calls `loadGraphTable(announce:
+sort:)` under the result's own request — the sort included, so
+`loadGraphTable` gains a `sort` parameter — instead of returning bare;
+(iv) `graphTableInFlightAnnounce` is set at every pair's start and at
+every rows request's issue (`.filterCount`), cleared when the current
+token completes, and passed through by the generation refresh and both
+mismatch arms; `graphTablePublishedRequest` is recorded at each publish;
+C-8's twin: `whereAmIRouteTarget` answers `.graph` for `graphTabActive`
+in either mode, and `graphDiagramWhereAmIEvent()` gains the table branch
+— nil unless the snapshot is held, no load is in flight and the shown
+rows are the newest request's; the selection the shared key's row among
+the SHOWN rows rendered the diagram's way; `zoomPercent: nil`; the
+diagram's branch passes its zoom as `Some`. Three details the code
+records beyond the contract's words, for the round: the mac's table
+readback reads the SHOWN ROWS rather than the snapshot's nodes (a shown
+row obeys the query by construction, so 0a-2b's invariants hold without
+a second visibility predicate; T6's Windows readback should do the same
+and C-8's "the shared key's node in the held SNAPSHOT" reads through the
+rows); a rows request clears the pending preset AT ISSUE (Term Q4's
+order — a needle or a sort during a preset's pair replaces the headline
+with the count — was kept by the superseded pair's continuation, which
+(iii)'s re-fetch now drops); and the publish gate takes the token, with
+a rows-request twin, so a test holds ONE load. Facts (GraphTabRoutingTests,
+a real session): testPresetFromTheActiveTableWithANeedleAndAKindChangeSpeaksTheHeadlineAlone;
+testPresetFromDiagramModeSpeaksTheHeadlineAlone;
+testAFailedPresetLeavesNoPendingHeadline (a load-failure seam);
+testANeedleDuringAnOrphansPairRefetchesUnderItsOwnRequest and
+testASortDuringAnOrphansPairRefetchesUnderItsOwnRequest (BOTH completion
+orders, the held token chosen by its seq);
+testAFileChangeDuringAPresetsFetchSpeaksTheHeadlineOverTheNewerGeneration
+(the refresh over a held pair speaks "0 orphaned notes." once, no
+summary); testWhereAmIRoutesToTheGraphInTableMode;
+testTheTableReadbackNamesTheSelectedSnapshotNodeWithoutAZoomClause (the
+row, no zoom clause; no key → NoSelection; the ghost overlay → "No node
+selected, filters: unresolved shown, unresolved only.");
+testTheTableReadbackIsUnavailableWhileALoadIsInFlight (a held pair, then
+a rows request); `testPresetFilterAndKindMapping` asserts through the
+crossing. Mutations, each restored byte for byte, each caught by the
+named fact: Unresolved without its kind overlay, Orphans showing ghosts
+and a preset keeping a needle (the mapping fact); MostLinked naming
+nobody and Orphans counting row zero (the outcome fact); the surface
+forgetting the outcome (the surface count); the zoom clause rendered for
+the table's witness (renders-exactly); the ninth witness dropped
+(host-reachable); the FFI export attribute dropped from
+`graph_preset_outcome` (the mirror tripwire). The mac lane's mutations
+are the CI lane's to run; the dir-tree censuses fail on this box as
+before (CI-Windows is their oracle).
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,

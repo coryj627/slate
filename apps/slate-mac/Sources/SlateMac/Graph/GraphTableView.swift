@@ -279,8 +279,15 @@ struct GraphTableView: View {
         }
         // A needle or kind change is a token change (design A): core
         // re-answers the rows, and the count is announced when they publish.
-        .onChange(of: appState.graphTableTextFilter) { _, _ in appState.requestGraphTableRows() }
-        .onChange(of: appState.graphTableKindFilter) { _, _ in appState.requestGraphTableRows() }
+        // ONE observer on the composed query with a VALUE rule (W6-2 PR C,
+        // contracts doc §PR C C-2 (i)): two per-field observers re-issued
+        // tokens for a preset's own writes and superseded its pair — the
+        // headline lost, a count in its place. The preset's token already
+        // carries the query it wrote, so the render pass after the writes
+        // issues nothing; a needle typed later differs and issues its own.
+        .onChange(of: appState.graphVisibilityQuery) { _, _ in
+            appState.requestGraphTableRowsIfQueryChanged()
+        }
         // A generation bump can reassign backend node ids, so any stale
         // selection must be re-validated against the fresh row set (our
         // id is the stable path/ghost key) and dropped if gone (finding 3).

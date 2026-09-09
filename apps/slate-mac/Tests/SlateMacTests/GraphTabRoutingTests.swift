@@ -456,6 +456,328 @@ final class GraphTabRoutingTests: XCTestCase {
         XCTAssertEqual(state.connectionsEffectivePath, "b.md")
     }
 
+    // MARK: - W6-2 PR C: the mac lane of C-2 (i)–(iv) and C-8 (contracts doc §PR C)
+
+    /// A one-shot hold at a publish gate (CloseSaveAuthoringRaceTests'
+    /// shape): `suspend()` parks the caller until `release()`.
+    private actor AsyncGate {
+        private var entered = false
+        private var released = false
+        private var entranceWaiters: [CheckedContinuation<Void, Never>] = []
+        private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+        func suspend() async {
+            guard !released else { return }
+            entered = true
+            for waiter in entranceWaiters { waiter.resume() }
+            entranceWaiters = []
+            await withCheckedContinuation { releaseWaiter = $0 }
+        }
+
+        func waitUntilEntered() async {
+            guard !entered else { return }
+            await withCheckedContinuation { entranceWaiters.append($0) }
+        }
+
+        func release() {
+            released = true
+            releaseWaiter?.resume()
+            releaseWaiter = nil
+        }
+    }
+
+    /// A graph tab open and quiescent: the snapshot held, no load in
+    /// flight, the shown rows the newest request's.
+    private func openQuiescentGraph(_ state: AppState) async throws {
+        state.openGraphTab()
+        try await pollUntil {
+            state.graphTableSnapshot != nil && !state.graphTableLoading
+                && state.graphTablePublishedRequest == state.graphTableRequest
+        }
+    }
+
+    /// C-2 (i): after a preset's own field writes the ONE composed-query
+    /// observer issues nothing (a value rule: the token in flight already
+    /// carries the query it wrote), so the pair publishes the headline —
+    /// exactly one line, no summary, no count — from a table that had a
+    /// needle and a kind overlay before it.
+    func testPresetFromTheActiveTableWithANeedleAndAKindChangeSpeaksTheHeadlineAlone() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        // A needle and a kind overlay typed on the live table, each a token
+        // the observer issues because the query differs from the request's.
+        state.graphTableTextFilter = "a"
+        state.requestGraphTableRowsIfQueryChanged()
+        state.graphTableKindFilter = .ghost
+        state.requestGraphTableRowsIfQueryChanged()
+        try await pollUntil { state.graphTablePublishedRequest == state.graphTableRequest }
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+
+        state.openGraphPreset(.mostLinked)
+        let seqAfterPreset = state.graphTableSeq
+        // The render pass after the preset's writes: the observer sees the
+        // query the token already carries and issues nothing.
+        state.requestGraphTableRowsIfQueryChanged()
+        XCTAssertEqual(state.graphTableSeq, seqAfterPreset, "the value rule: no token for the preset's own writes")
+        try await pollUntil { !state.graphTableLoading && state.graphTablePendingPreset == nil }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(posts.count, 1, "the headline alone: \(posts)")
+        XCTAssertTrue(posts.first?.hasPrefix("Most linked:") == true, "\(posts)")
+    }
+
+    /// C-2 (i) from Diagram mode: no table observer is mounted and the
+    /// preset's pair still publishes the headline alone.
+    func testPresetFromDiagramModeSpeaksTheHeadlineAlone() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        state.setGraphMode(.diagram)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        state.openGraphPreset(.orphans)
+        state.requestGraphTableRowsIfQueryChanged()
+        try await pollUntil { !state.graphTableLoading && state.graphTablePendingPreset == nil }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(posts, ["0 orphaned notes."], "the headline alone")
+    }
+
+    /// C-2 (ii): a failed pair speaks the block and forgets the preset —
+    /// nothing remembers a headline a later refresh could replay.
+    func testAFailedPresetLeavesNoPendingHeadline() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        state.graphTableLoadFailureForTests = .Io(message: "disk gone")
+        state.openGraphPreset(.orphans)
+        XCTAssertNotNil(state.graphTablePendingPreset, "armed for the pair")
+        try await pollUntil { !state.graphTableLoading }
+        state.graphTableLoadFailureForTests = nil
+        XCTAssertNil(state.graphTablePendingPreset, "the failure arm forgets the preset")
+        XCTAssertNil(state.graphTableInFlightAnnounce, "nothing in flight")
+        XCTAssertNotNil(state.graphTableError)
+        // A silent refresh after the failure replays nothing.
+        state.loadGraphTable(announce: .silent)
+        try await pollUntil { !state.graphTableLoading && state.graphTableSnapshot != nil }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(posts.count, 1, "the block alone, no headline: \(posts)")
+        XCTAssertTrue(posts.first?.hasPrefix("Couldn't load the graph") == true, "\(posts)")
+    }
+
+    /// C-2 (iii)/(iv): a needle typed during a backend-changing pair, in
+    /// BOTH completion orders, ends with one snapshot under the preset's
+    /// filter, the rows under the needle's request, the count spoken once
+    /// and no headline (rule Q, Term Q4) — never a snapshot with another
+    /// request's rows. Rows first: the mismatch arm re-fetches under the
+    /// needle's request with its announce. Pair first: the pair's rows drop
+    /// at the seq guard and the needle's publish over the fresh snapshot.
+    func testANeedleDuringAnOrphansPairRefetchesUnderItsOwnRequest() async throws {
+        for pairFirst in [false, true] {
+            let state = try await makeAppState()
+            try await openQuiescentGraph(state)
+            var posts: [String] = []
+            state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+            let gate = AsyncGate()
+            state.openGraphPreset(.orphans)
+            let presetSeq = state.graphTableSeq
+            state.graphTableTextFilter = "a"
+            state.requestGraphTableRowsIfQueryChanged()
+            let needleSeq = state.graphTableSeq
+            XCTAssertNotEqual(needleSeq, presetSeq, "the needle issued its token")
+            let needle = try XCTUnwrap(state.graphTableRequest)
+            XCTAssertTrue(needle.query.filter.orphansOnly)
+            XCTAssertEqual(needle.query.nameQuery, "a")
+            XCTAssertNil(state.graphTablePendingPreset, "the needle replaced the headline (Term Q4)")
+            if pairFirst {
+                state.graphTableRowsPublishGate = { token in
+                    if token.seq == needleSeq { await gate.suspend() }
+                }
+            } else {
+                state.graphTablePublishGate = { token in
+                    if token.seq == presetSeq { await gate.suspend() }
+                }
+            }
+            await gate.waitUntilEntered()
+            if pairFirst {
+                // The pair published its snapshot; its rows dropped at the seq guard.
+                try await pollUntil { state.graphTableSnapshotFilter?.orphansOnly == true && !state.graphTableLoading }
+                XCTAssertNotEqual(state.graphTablePublishedRequest, state.graphTableRequest, "pair first: the needle's rows are still held")
+            } else {
+                // The rows landed under the old snapshot and re-fetched under their own request.
+                try await pollUntil { state.graphTablePublishedRequest?.query.nameQuery == "a" }
+            }
+            await gate.release()
+            try await pollUntil { !state.graphTableLoading && state.graphTablePublishedRequest == state.graphTableRequest }
+            state.graphTablePublishGate = nil
+            state.graphTableRowsPublishGate = nil
+            state.graphAnnouncer.flushForTests()
+            let order = pairFirst ? "pair first" : "rows first"
+            XCTAssertEqual(state.graphTableSnapshotFilter?.orphansOnly, true, order)
+            XCTAssertEqual(state.graphTablePublishedRequest?.query.nameQuery, "a", "\(order): the rows are the needle's request's")
+            XCTAssertEqual(state.graphTablePublishedRequest?.query.filter.orphansOnly, true, order)
+            XCTAssertNil(state.graphTablePendingPreset, order)
+            XCTAssertNil(state.graphTableInFlightAnnounce, "\(order): nothing in flight")
+            XCTAssertEqual(posts.filter { $0.contains("shown") }.count, 1, "\(order): the count once: \(posts)")
+            XCTAssertFalse(posts.contains { $0.contains("orphaned") }, "\(order): no headline: \(posts)")
+        }
+    }
+
+    /// C-2 (iii): a sort typed during a backend-changing pair, in BOTH
+    /// completion orders, ends adopted — the re-fetch carries the sort as
+    /// the request's own — with the count once and no headline.
+    func testASortDuringAnOrphansPairRefetchesUnderItsOwnRequest() async throws {
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        for pairFirst in [false, true] {
+            let state = try await makeAppState()
+            try await openQuiescentGraph(state)
+            var posts: [String] = []
+            state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+            let gate = AsyncGate()
+            state.openGraphPreset(.orphans)
+            let presetSeq = state.graphTableSeq
+            state.requestGraphTableRows(sort: byNote)
+            let sortSeq = state.graphTableSeq
+            XCTAssertEqual(state.graphTableRequestedSort, byNote)
+            if pairFirst {
+                state.graphTableRowsPublishGate = { token in
+                    if token.seq == sortSeq { await gate.suspend() }
+                }
+            } else {
+                state.graphTablePublishGate = { token in
+                    if token.seq == presetSeq { await gate.suspend() }
+                }
+            }
+            await gate.waitUntilEntered()
+            if pairFirst {
+                try await pollUntil { state.graphTableSnapshotFilter?.orphansOnly == true && !state.graphTableLoading }
+            } else {
+                try await pollUntil { state.graphTablePublishedRequest?.sort == byNote }
+            }
+            await gate.release()
+            try await pollUntil { !state.graphTableLoading && state.graphTablePublishedRequest == state.graphTableRequest }
+            state.graphTablePublishGate = nil
+            state.graphTableRowsPublishGate = nil
+            state.graphAnnouncer.flushForTests()
+            let order = pairFirst ? "pair first" : "rows first"
+            XCTAssertEqual(state.graphTableSort, byNote, "\(order): the sort adopted under its own request")
+            XCTAssertNil(state.graphTableRequestedSort, order)
+            XCTAssertEqual(state.graphTableSnapshotFilter?.orphansOnly, true, order)
+            XCTAssertNil(state.graphTablePendingPreset, order)
+            XCTAssertEqual(posts.filter { $0.contains("shown") }.count, 1, "\(order): the count once: \(posts)")
+            XCTAssertFalse(posts.contains { $0.contains("orphaned") }, "\(order): no headline: \(posts)")
+        }
+    }
+
+    /// C-2 (iv): the generation refresh that supersedes a preset's pair in
+    /// flight inherits its announce and the pending preset, so the headline
+    /// is spoken once over the newer generation — CR-1's race, closed.
+    func testAFileChangeDuringAPresetsFetchSpeaksTheHeadlineOverTheNewerGeneration() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        let gate = AsyncGate()
+        state.openGraphPreset(.orphans)
+        let presetSeq = state.graphTableSeq
+        state.graphTablePublishGate = { token in
+            if token.seq == presetSeq { await gate.suspend() }
+        }
+        await gate.waitUntilEntered()
+        XCTAssertEqual(state.graphTableInFlightAnnounce, .summary, "the preset's pair is in flight")
+        // The probe finds a newer graph while the pair is held: the seen
+        // mark is an older generation's, as after a file change.
+        state.graphTableSeenGraphGeneration = state.graphTableSeenGraphGeneration &+ 1
+        state.refreshGraphTableIfGraphChanged()
+        try await pollUntil {
+            state.graphTableSeq > presetSeq && !state.graphTableLoading && state.graphTablePendingPreset == nil
+        }
+        await gate.release()
+        try await pollUntil { !state.graphTableLoading }
+        state.graphTablePublishGate = nil
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(posts, ["0 orphaned notes."], "the replacing load spoke the headline once, no summary")
+        XCTAssertNil(state.graphTableInFlightAnnounce)
+    }
+
+    /// C-8: ⌃⌘I routes to the graph in Table mode too — the table's
+    /// readback answers where the always-enabled item was a silent no-op.
+    func testWhereAmIRoutesToTheGraphInTableMode() async throws {
+        let state = try await makeAppState()
+        XCTAssertEqual(state.whereAmIRouteTarget, .none, "no surface")
+        try await openQuiescentGraph(state)
+        XCTAssertNil(state.graphDiagramModel, "Table mode: no diagram model")
+        XCTAssertFalse(state.graphDiagramZoomActive)
+        XCTAssertEqual(state.whereAmIRouteTarget, .graph, "the table's readback answers (contracts doc §PR C, C-8)")
+        XCTAssertNotNil(state.graphDiagramWhereAmIEvent())
+    }
+
+    /// C-8: the table's readback names the shared key's shown row the
+    /// diagram's way, with no zoom clause; no key reads NoSelection; the
+    /// kind overlay reads as the closed Unresolved arm.
+    func testTheTableReadbackNamesTheSelectedSnapshotNodeWithoutAZoomClause() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        let a = try XCTUnwrap(state.graphTableRows.first { $0.label == "a" })
+        let defaults = GraphWhereAmIFilter.normal(orphansOnly: false, attachmentsShown: false, ghostsShown: true)
+        state.graphSelectedNodeKey = nil
+        let none = try XCTUnwrap(state.graphDiagramWhereAmIEvent())
+        XCTAssertEqual(
+            none, .graphWhereAmI(selection: .noSelection, zoomPercent: nil, filter: defaults, nameFilter: ""))
+        XCTAssertEqual(a11yRender(event: .graph(event: none)).text, "No node selected, filters: unresolved shown.")
+
+        state.graphSelectedNodeKey = a.stableKey
+        let event = try XCTUnwrap(state.graphDiagramWhereAmIEvent())
+        XCTAssertEqual(
+            event,
+            .graphWhereAmI(
+                selection: .node(
+                    row: GraphRowCopy(
+                        label: "a", kind: .note, inLinks: a.linksIn, outLinks: a.linksOut,
+                        references: a.linksIn, embed: false),
+                    component: a.component),
+                zoomPercent: nil, filter: defaults, nameFilter: ""))
+        let text = a11yRender(event: .graph(event: event)).text
+        XCTAssertTrue(text.hasPrefix("a, "), text)
+        XCTAssertFalse(text.contains("zoom"), "no zoom clause on the table: \(text)")
+
+        // The kind overlay: the shown rows are ghosts alone, so the note's
+        // key reads NoSelection under the closed Unresolved arm.
+        state.graphTableKindFilter = .ghost
+        state.requestGraphTableRowsIfQueryChanged()
+        try await pollUntil { state.graphTablePublishedRequest == state.graphTableRequest }
+        let ghosts = try XCTUnwrap(state.graphDiagramWhereAmIEvent())
+        XCTAssertEqual(
+            a11yRender(event: .graph(event: ghosts)).text,
+            "No node selected, filters: unresolved shown, unresolved only.")
+    }
+
+    /// C-8: the table's readback is refused while a pair or a rows request
+    /// is in flight (rule Q, Term Q7) and answers again at the install.
+    func testTheTableReadbackIsUnavailableWhileALoadIsInFlight() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        XCTAssertNotNil(state.graphDiagramWhereAmIEvent(), "quiescent: answers")
+        let gate = AsyncGate()
+        state.loadGraphTable(announce: .silent)
+        let seq = state.graphTableSeq
+        state.graphTablePublishGate = { token in
+            if token.seq == seq { await gate.suspend() }
+        }
+        XCTAssertNil(state.graphDiagramWhereAmIEvent(), "a pair in flight: refused")
+        await gate.waitUntilEntered()
+        XCTAssertNil(state.graphDiagramWhereAmIEvent(), "still in flight at the gate")
+        await gate.release()
+        try await pollUntil { !state.graphTableLoading && state.graphTablePublishedRequest == state.graphTableRequest }
+        state.graphTablePublishGate = nil
+        XCTAssertNotNil(state.graphDiagramWhereAmIEvent(), "answers again at the install")
+
+        state.graphTableTextFilter = "zzz"
+        state.requestGraphTableRowsIfQueryChanged()
+        XCTAssertNil(state.graphDiagramWhereAmIEvent(), "a rows request in flight: the shown rows are not the newest request's")
+        try await pollUntil { state.graphTablePublishedRequest == state.graphTableRequest }
+        XCTAssertNotNil(state.graphDiagramWhereAmIEvent())
+    }
+
     private func pollUntil(
         timeout: TimeInterval = 5, _ condition: @MainActor () -> Bool
     ) async throws {

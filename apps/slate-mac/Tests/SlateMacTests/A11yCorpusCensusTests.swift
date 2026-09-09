@@ -568,6 +568,8 @@ final class A11yCorpusCensusTests: XCTestCase {
             .graph(event: .graphWhereAmI(selection: .node(row: GraphRowCopy(label: "Draft", kind: .ghost, inLinks: 0, outLinks: 0, references: 0, embed: false), component: 1), zoomPercent: 100, filter: .unresolvedOnly, nameFilter: nil)),
             .graph(event: .graphWhereAmI(selection: .node(row: GraphRowCopy(label: "Todo", kind: .ghost, inLinks: 1, outLinks: 0, references: 1, embed: false), component: 3), zoomPercent: 80, filter: .unresolvedOnly, nameFilter: nil)),
             .graph(event: .graphWhereAmI(selection: .node(row: GraphRowCopy(label: "Café", kind: .note, inLinks: 2, outLinks: 4, references: 2, embed: false), component: 5), zoomPercent: 200, filter: .normal(orphansOnly: false, attachmentsShown: false, ghostsShown: true), nameFilter: "cafe")),
+            // The table's readback (W6-2 PR C, 0a-6 as amended — CD-24): no zoom clause.
+            .graph(event: .graphWhereAmI(selection: .noSelection, zoomPercent: nil, filter: .normal(orphansOnly: false, attachmentsShown: false, ghostsShown: true), nameFilter: nil)),
             .graph(event: .graphTierEntered),
             .graph(event: .graphTierSummary(count: 2000)),
             .graph(event: .graphTierSummary(count: 1501)),

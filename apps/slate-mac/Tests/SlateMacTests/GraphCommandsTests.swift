@@ -52,25 +52,31 @@ final class GraphCommandsTests: XCTestCase {
         }
     }
 
-    /// Preset → backend `GraphFilter` + client kind filter (P1-3 table).
+    /// Preset → backend `GraphFilter` + client kind filter (P1-3 table) —
+    /// core's rule since W6-2 PR C (contracts doc §PR C, C-2), asserted
+    /// through the crossing; the same cases are a Rust fact.
     func testPresetFilterAndKindMapping() {
+        let orphans = graphPresetQuery(preset: .orphans)
         XCTAssertEqual(
-            AppState.graphPresetFilter(.orphans),
+            orphans.filter,
             GraphFilter(includeAttachments: false, includeGhosts: false, orphansOnly: true))
-        XCTAssertNil(AppState.graphPresetKind(.orphans))
+        XCTAssertNil(orphans.kindOnly)
+        XCTAssertEqual(orphans.nameQuery, "", "a preset clears the needle")
 
+        let unresolved = graphPresetQuery(preset: .unresolved)
         XCTAssertEqual(
-            AppState.graphPresetFilter(.unresolved),
+            unresolved.filter,
             GraphFilter(includeAttachments: false, includeGhosts: true, orphansOnly: false))
-        XCTAssertEqual(AppState.graphPresetKind(.unresolved), .ghost, "unresolved shows only ghosts")
+        XCTAssertEqual(unresolved.kindOnly, .ghost, "unresolved shows only ghosts")
 
         // Most-linked is the DEFAULT view: ghosts visible, attachments
         // off, no orphans-only, no kind narrowing (the hubs surface via
         // the grid's default Links-in-desc sort, not a filter).
+        let mostLinked = graphPresetQuery(preset: .mostLinked)
         XCTAssertEqual(
-            AppState.graphPresetFilter(.mostLinked),
+            mostLinked.filter,
             GraphFilter(includeAttachments: false, includeGhosts: true, orphansOnly: false))
-        XCTAssertNil(AppState.graphPresetKind(.mostLinked))
+        XCTAssertNil(mostLinked.kindOnly)
     }
 
     private func node(

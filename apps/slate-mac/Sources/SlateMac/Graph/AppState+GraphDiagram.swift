@@ -281,22 +281,53 @@ extension AppState {
     /// The ⌃⌘I readback as data — the selection clause, the zoom, the
     /// backend filter flags, the client-side needle (core trims it and
     /// omits an empty one) and the Unresolved-preset kind. Pure +
-    /// testable; nil when no diagram.
+    /// testable. The DIAGRAM's while a model is live; otherwise the TABLE's
+    /// (W6-2 PR C, contracts doc §PR C C-8; 0a-2b as amended — the zoom
+    /// clause is the diagram's alone): the shared key's row among the
+    /// SHOWN rows, rendered the diagram's way, answered only while the
+    /// publication is CURRENT — no load in flight and the shown rows
+    /// received under the newest request — so an old node is never read
+    /// under new filter prose (rule Q, Term Q7); nil otherwise, and the
+    /// chord stays a no-op.
     func graphDiagramWhereAmIEvent() -> GraphA11yEvent? {
-        guard let model = graphDiagramModel else { return nil }
         let selection: GraphWhereAmISelection
-        if let sel = model.selection, let node = model.node(sel), let row = model.rowCopy(sel) {
-            // The component is the topology entry's (0b-6b) when the diagram
-            // has accepted one; the model's metadata before the first epoch.
-            let component = graphDiagramTopology?.nodes.first { $0.id == sel }?.component ?? node.component
-            selection = .node(row: row, component: component)
+        let backend: GraphFilter
+        let zoomPercent: UInt32?
+        if let model = graphDiagramModel {
+            if let sel = model.selection, let node = model.node(sel), let row = model.rowCopy(sel) {
+                // The component is the topology entry's (0b-6b) when the diagram
+                // has accepted one; the model's metadata before the first epoch.
+                let component = graphDiagramTopology?.nodes.first { $0.id == sel }?.component ?? node.component
+                selection = .node(row: row, component: component)
+            } else {
+                selection = .noSelection
+            }
+            backend = model.filter
+            zoomPercent = UInt32(max(0, model.viewport.zoomPercent))
         } else {
-            selection = .noSelection
+            guard graphTableSnapshot != nil, !graphTableLoading,
+                graphTablePublishedRequest == graphTableRequest
+            else { return nil }
+            if let key = graphSelectedNodeKey,
+                let row = graphTableRows.first(where: { $0.stableKey == key })
+            {
+                // A SHOWN row obeys the query by construction (0a-2b's
+                // payload invariants); the copy as `GraphDiagramModel.rowCopy`
+                // builds it — the references are the in-links, never an embed.
+                selection = .node(
+                    row: GraphRowCopy(
+                        label: row.label, kind: row.kind, inLinks: row.linksIn,
+                        outLinks: row.linksOut, references: row.linksIn, embed: false),
+                    component: row.component)
+            } else {
+                selection = .noSelection
+            }
+            backend = graphTableSnapshotFilter ?? graphTableFilter
+            zoomPercent = nil
         }
         // The filter clause is the closed set of reachable states
         // (contracts doc design B(i)): the unresolved preset is ONE arm
         // whose backend flags are implied; otherwise the three toggles.
-        let backend = model.filter
         let filter: GraphWhereAmIFilter =
             graphTableKindFilter == .ghost
             ? .unresolvedOnly
@@ -306,7 +337,7 @@ extension AppState {
                 ghostsShown: backend.includeGhosts)
         return .graphWhereAmI(
             selection: selection,
-            zoomPercent: UInt32(max(0, model.viewport.zoomPercent)),
+            zoomPercent: zoomPercent,
             filter: filter,
             nameFilter: graphTableTextFilter)
     }
@@ -363,11 +394,13 @@ extension AppState {
     /// diagram's readback was unreachable by keyboard. Priority mirrors
     /// `zoomRouteTarget` (canvas → graph), extended with bases; there is no
     /// editor "Where am I?", so a non-surface context is a no-op. Extracted
-    /// so the priority is unit-testable and the one menu item routes.
+    /// so the priority is unit-testable and the one menu item routes. The
+    /// graph answers in EITHER mode since W6-2 PR C (contracts doc §PR C,
+    /// C-8): Table mode was a silent no-op behind the always-enabled item.
     enum WhereAmIRouteTarget { case canvas, graph, bases, none }
     var whereAmIRouteTarget: WhereAmIRouteTarget {
         if activeCanvasDocument != nil { return .canvas }
-        if graphDiagramZoomActive { return .graph }
+        if graphTabActive { return .graph }
         if activeBaseDocument != nil { return .bases }
         return .none
     }

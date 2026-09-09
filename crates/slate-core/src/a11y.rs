@@ -3174,9 +3174,12 @@ pub enum GraphA11yEvent {
     /// ends) and only when non-empty after trimming. The selection's
     /// kind obeys the host's visibility invariant (a Ghost only while
     /// ghosts are shown, an Attachment only while attachments are).
+    /// `zoom_percent` is the DIAGRAM's clause and `None` the TABLE's
+    /// readback, which has no viewport (W6-2 PR C, 0a-2b as amended by
+    /// the owner — CD-24): the clause renders only when present.
     GraphWhereAmI {
         selection: GraphWhereAmISelection,
-        zoom_percent: u32,
+        zoom_percent: Option<u32>,
         filter: GraphWhereAmIFilter,
         name_filter: Option<String>,
     },
@@ -3305,7 +3308,9 @@ impl GraphA11yEvent {
                         parts.push("No node selected".to_owned());
                     }
                 }
-                parts.push(format!("zoom {zoom_percent} percent"));
+                if let Some(zoom_percent) = zoom_percent {
+                    parts.push(format!("zoom {zoom_percent} percent"));
+                }
                 match filter {
                     GraphWhereAmIFilter::Normal {
                         orphans_only,
@@ -5139,7 +5144,7 @@ fn graph_corpus() -> Vec<GraphA11yEvent> {
                 row: row("Alone", Note, 0, 0, 0, false),
                 component: 2,
             },
-            zoom_percent: 100,
+            zoom_percent: Some(100),
             filter: GraphWhereAmIFilter::Normal {
                 orphans_only: true,
                 attachments_shown: true,
@@ -5152,13 +5157,13 @@ fn graph_corpus() -> Vec<GraphA11yEvent> {
                 row: row("Missing Note", Ghost, 2, 0, 2, false),
                 component: 0,
             },
-            zoom_percent: 250,
+            zoom_percent: Some(250),
             filter: GraphWhereAmIFilter::UnresolvedOnly,
             name_filter: None,
         },
         GraphWhereAmI {
             selection: GraphWhereAmISelection::NoSelection,
-            zoom_percent: 100,
+            zoom_percent: Some(100),
             filter: GraphWhereAmIFilter::Normal {
                 orphans_only: false,
                 attachments_shown: false,
@@ -5171,7 +5176,7 @@ fn graph_corpus() -> Vec<GraphA11yEvent> {
                 row: row("diagram.png", Attachment, 1, 0, 1, false),
                 component: 7,
             },
-            zoom_percent: 50,
+            zoom_percent: Some(50),
             filter: GraphWhereAmIFilter::Normal {
                 orphans_only: false,
                 attachments_shown: true,
@@ -5184,7 +5189,7 @@ fn graph_corpus() -> Vec<GraphA11yEvent> {
                 row: row("Alpha", Note, 3, 1, 3, false),
                 component: 2,
             },
-            zoom_percent: 100,
+            zoom_percent: Some(100),
             filter: GraphWhereAmIFilter::Normal {
                 orphans_only: false,
                 attachments_shown: false,
@@ -5197,7 +5202,7 @@ fn graph_corpus() -> Vec<GraphA11yEvent> {
                 row: row("Draft", Ghost, 0, 0, 0, false),
                 component: 1,
             },
-            zoom_percent: 100,
+            zoom_percent: Some(100),
             filter: GraphWhereAmIFilter::UnresolvedOnly,
             name_filter: None,
         },
@@ -5206,7 +5211,7 @@ fn graph_corpus() -> Vec<GraphA11yEvent> {
                 row: row("Todo", Ghost, 1, 0, 1, false),
                 component: 3,
             },
-            zoom_percent: 80,
+            zoom_percent: Some(80),
             filter: GraphWhereAmIFilter::UnresolvedOnly,
             name_filter: None,
         },
@@ -5215,13 +5220,26 @@ fn graph_corpus() -> Vec<GraphA11yEvent> {
                 row: row("Café", Note, 2, 4, 2, false),
                 component: 5,
             },
-            zoom_percent: 200,
+            zoom_percent: Some(200),
             filter: GraphWhereAmIFilter::Normal {
                 orphans_only: false,
                 attachments_shown: false,
                 ghosts_shown: true,
             },
             name_filter: Some("cafe".into()),
+        },
+        // The ninth witness (W6-2 PR C, 0a-6 as amended — CD-24): the
+        // TABLE's readback — no selection, no zoom clause, the default
+        // toggles, no needle.
+        GraphWhereAmI {
+            selection: GraphWhereAmISelection::NoSelection,
+            zoom_percent: None,
+            filter: GraphWhereAmIFilter::Normal {
+                orphans_only: false,
+                attachments_shown: false,
+                ghosts_shown: true,
+            },
+            name_filter: None,
         },
         GraphTierEntered,
         GraphTierSummary { count: 2000 },
@@ -6087,6 +6105,8 @@ mod tests {
                 Medium,
                 "Café, 2 links in, 4 links out, component 5, zoom 200 percent, filters: unresolved shown, name filter “cafe”.",
             ),
+            // The table's readback (W6-2 PR C, 0a-6 as amended): no zoom clause.
+            (Medium, "No node selected, filters: unresolved shown."),
             (
                 Medium,
                 "Large graph: summary accessibility mode. Table mode has every node.",
@@ -6783,6 +6803,7 @@ mod tests {
                 "Draft, unresolved, 0 references, component 1, zoom 100 percent, filters: unresolved shown, unresolved only.".to_owned(),
                 "Todo, unresolved, 1 references, component 3, zoom 80 percent, filters: unresolved shown, unresolved only.".to_owned(),
                 "Café, 2 links in, 4 links out, component 5, zoom 200 percent, filters: unresolved shown, name filter \u{201C}cafe\u{201D}.".to_owned(),
+                "No node selected, filters: unresolved shown.".to_owned(),
             ]
         );
     }
@@ -6904,10 +6925,14 @@ mod tests {
                     filter,
                     name_filter,
                 } => {
-                    assert!(
-                        ZOOM_PERCENT.contains(zoom_percent),
-                        "the viewport's clamp: {event:?}"
-                    );
+                    // The diagram's clause obeys the clamp; the table's
+                    // readback carries none (0a-2b as amended, CD-24).
+                    if let Some(zoom_percent) = zoom_percent {
+                        assert!(
+                            ZOOM_PERCENT.contains(zoom_percent),
+                            "the viewport's clamp: {event:?}"
+                        );
+                    }
                     if let GraphWhereAmISelection::Node { row, .. } = selection {
                         // The selection is a DIAGRAM row.
                         row_copy_is_constructible(row, true, &event);
@@ -6986,7 +7011,8 @@ mod tests {
             };
             assert!(reachable, "unreachable Where-am-I witness: {event:?}");
         }
-        assert_eq!(seen, 8, "the matrix carries eight Where-am-I witnesses");
+        // Eight diagram states and the table's readback (0a-6 as amended).
+        assert_eq!(seen, 9, "the matrix carries nine Where-am-I witnesses");
     }
 
     /// 0a-8: exactly the blocked family is High; every other graph event,
@@ -7172,11 +7198,13 @@ mod tests {
                     }
                     GraphWhereAmISelection::NoSelection => Vec::new(),
                 };
-                slots.push(slot(
-                    "GraphWhereAmI.zoom_percent",
-                    u64::from(*zoom_percent),
-                    None,
-                ));
+                if let Some(zoom_percent) = zoom_percent {
+                    slots.push(slot(
+                        "GraphWhereAmI.zoom_percent",
+                        u64::from(*zoom_percent),
+                        None,
+                    ));
+                }
                 slots
             }
             GraphTierSummary { count } => {
@@ -7381,8 +7409,8 @@ mod tests {
     fn the_graph_family_witness_count_is_pinned() {
         assert_eq!(
             graph_corpus().len(),
-            73,
-            "the graph witness matrix has 73 ordered entries"
+            74,
+            "the graph witness matrix has 74 ordered entries (the ninth Where-am-I witness, W6-2 PR C)"
         );
     }
 
@@ -7444,14 +7472,15 @@ mod tests {
             "GraphZoom { fit: true, percent: 63 }",
             "GraphMode { mode: Table }",
             "GraphMode { mode: Diagram }",
-            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Alone\", kind: Note, in_links: 0, out_links: 0, references: 0, embed: false }, component: 2 }, zoom_percent: 100, filter: Normal { orphans_only: true, attachments_shown: true, ghosts_shown: true }, name_filter: Some(\"alo\") }",
-            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Missing Note\", kind: Ghost, in_links: 2, out_links: 0, references: 2, embed: false }, component: 0 }, zoom_percent: 250, filter: UnresolvedOnly, name_filter: None }",
-            "GraphWhereAmI { selection: NoSelection, zoom_percent: 100, filter: Normal { orphans_only: false, attachments_shown: false, ghosts_shown: true }, name_filter: Some(\"\\u{a0}\\u{2003}\") }",
-            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"diagram.png\", kind: Attachment, in_links: 1, out_links: 0, references: 1, embed: false }, component: 7 }, zoom_percent: 50, filter: Normal { orphans_only: false, attachments_shown: true, ghosts_shown: false }, name_filter: None }",
-            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Alpha\", kind: Note, in_links: 3, out_links: 1, references: 3, embed: false }, component: 2 }, zoom_percent: 100, filter: Normal { orphans_only: false, attachments_shown: false, ghosts_shown: true }, name_filter: Some(\"\\u{2003}alpha\\u{a0}\") }",
-            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Draft\", kind: Ghost, in_links: 0, out_links: 0, references: 0, embed: false }, component: 1 }, zoom_percent: 100, filter: UnresolvedOnly, name_filter: None }",
-            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Todo\", kind: Ghost, in_links: 1, out_links: 0, references: 1, embed: false }, component: 3 }, zoom_percent: 80, filter: UnresolvedOnly, name_filter: None }",
-            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Café\", kind: Note, in_links: 2, out_links: 4, references: 2, embed: false }, component: 5 }, zoom_percent: 200, filter: Normal { orphans_only: false, attachments_shown: false, ghosts_shown: true }, name_filter: Some(\"cafe\") }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Alone\", kind: Note, in_links: 0, out_links: 0, references: 0, embed: false }, component: 2 }, zoom_percent: Some(100), filter: Normal { orphans_only: true, attachments_shown: true, ghosts_shown: true }, name_filter: Some(\"alo\") }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Missing Note\", kind: Ghost, in_links: 2, out_links: 0, references: 2, embed: false }, component: 0 }, zoom_percent: Some(250), filter: UnresolvedOnly, name_filter: None }",
+            "GraphWhereAmI { selection: NoSelection, zoom_percent: Some(100), filter: Normal { orphans_only: false, attachments_shown: false, ghosts_shown: true }, name_filter: Some(\"\\u{a0}\\u{2003}\") }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"diagram.png\", kind: Attachment, in_links: 1, out_links: 0, references: 1, embed: false }, component: 7 }, zoom_percent: Some(50), filter: Normal { orphans_only: false, attachments_shown: true, ghosts_shown: false }, name_filter: None }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Alpha\", kind: Note, in_links: 3, out_links: 1, references: 3, embed: false }, component: 2 }, zoom_percent: Some(100), filter: Normal { orphans_only: false, attachments_shown: false, ghosts_shown: true }, name_filter: Some(\"\\u{2003}alpha\\u{a0}\") }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Draft\", kind: Ghost, in_links: 0, out_links: 0, references: 0, embed: false }, component: 1 }, zoom_percent: Some(100), filter: UnresolvedOnly, name_filter: None }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Todo\", kind: Ghost, in_links: 1, out_links: 0, references: 1, embed: false }, component: 3 }, zoom_percent: Some(80), filter: UnresolvedOnly, name_filter: None }",
+            "GraphWhereAmI { selection: Node { row: GraphRowCopy { label: \"Café\", kind: Note, in_links: 2, out_links: 4, references: 2, embed: false }, component: 5 }, zoom_percent: Some(200), filter: Normal { orphans_only: false, attachments_shown: false, ghosts_shown: true }, name_filter: Some(\"cafe\") }",
+            "GraphWhereAmI { selection: NoSelection, zoom_percent: None, filter: Normal { orphans_only: false, attachments_shown: false, ghosts_shown: true }, name_filter: None }",
             "GraphTierEntered",
             "GraphTierSummary { count: 2000 }",
             "GraphTierSummary { count: 1501 }",

@@ -3022,12 +3022,30 @@ final class AppState: ObservableObject {
     /// the fresh snapshot publishes so the count/hub is spoken from real
     /// data, not the stale pre-fetch snapshot (P1-3 #556).
     var graphTablePendingPreset: GraphPreset?
+    /// The announce of the load or rows request in flight — inherited by
+    /// a REPLACING load (W6-2 PR C, contracts doc §PR C C-2 (iv); rule
+    /// Q, Term Q9): the generation refresh and the mismatch re-fetches
+    /// speak what the load they replace would have — a headline, a
+    /// summary, a count — over the newer generation. Nil at rest.
+    var graphTableInFlightAnnounce: GraphTableLoadAnnounce?
+    /// The request the shown rows were received under (W6-2 PR C, C-8):
+    /// the table's Where-am-I answers only while it equals the newest
+    /// request and no load is in flight — the publication is CURRENT.
+    var graphTablePublishedRequest: GraphTableRequest?
+    /// Test seam (W6-2 PR C, C-2 (ii)): a pair whose fetch fails with this
+    /// error instead of crossing, so the failure arm is pinned on a real
+    /// session. Nil in production.
+    var graphTableLoadFailureForTests: VaultError?
     @Published var graphTableLoading: Bool = false
     @Published var graphTableError: String?
     var graphTableLoadSeq: UInt64 = 0
     var graphTableSeenGraphGeneration: UInt64 = 0
-    /// Race-test seam (post-compute, pre-guard); nil in production.
-    var graphTablePublishGate: (() async -> Void)?
+    /// Race-test seams (post-compute, pre-guard), handed the token whose
+    /// result is about to publish so a test can hold ONE load: the pair's
+    /// and the rows request's (W6-2 PR C, C-2 (iii)'s completion orders).
+    /// Nil in production.
+    var graphTablePublishGate: ((GraphTableToken) async -> Void)?
+    var graphTableRowsPublishGate: ((GraphTableToken) async -> Void)?
     /// True when the active tab is the graph tab (gates the
     /// generation-driven table refresh's announcements).
     var graphTabActive: Bool {
