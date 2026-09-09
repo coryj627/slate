@@ -250,6 +250,12 @@ internal sealed class GraphPreferencesViewModel : BindableBase
         if (_pending is { } pair)
         {
             _pending = null;
+            // Term W4's set is the OUTSTANDING writes. Pruning only in the
+            // drain left one completed task per edit for the workspace's
+            // whole life, and the seam below counted incomplete tasks only,
+            // so nothing said so (IPG-5). Both transitions run on the owner
+            // dispatcher, so this prune is serialised with the adds.
+            _ = _outstanding.RemoveAll(task => task.IsCompleted);
             _outstanding.Add(_writer.Enqueue(_key, pair.Aggregate, pair.Generation));
         }
     }
@@ -287,6 +293,10 @@ internal sealed class GraphPreferencesViewModel : BindableBase
     internal GraphConfig? PendingAggregateForTests => _pending?.Aggregate;
 
     internal int OutstandingForTests => _outstanding.Count(task => !task.IsCompleted);
+
+    /// <summary>Every task the set still holds, complete or not — the
+    /// count IPG-5's growth shows up in.</summary>
+    internal int TrackedWritesForTests => _outstanding.Count;
 
     internal bool IsShutForTests => _state == SaveState.Shut;
 

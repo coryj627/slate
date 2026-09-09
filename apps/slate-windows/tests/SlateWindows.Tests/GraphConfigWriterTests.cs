@@ -33,6 +33,27 @@ public sealed class GraphConfigWriterTests : IDisposable
         }
     }
 
+    /// <summary>Term W1 (IPG-2): the key is the lifecycle's identity — a
+    /// trailing separator trimmed, a DRIVE ROOT left rooted. A bare TrimEnd
+    /// turned "C:\" into the drive-relative "C:", and the store then wrote
+    /// beside the process's current directory instead of the vault.</summary>
+    [Fact]
+    public void TheKeyTrimsATrailingSeparatorAndLeavesARootRooted()
+    {
+        string root = Path.GetPathRoot(Path.GetFullPath(_root))!;
+        string key = GraphConfigWriter.KeyOf(root);
+        Assert.True(Path.IsPathFullyQualified(key), $"the root's key '{key}' is not fully qualified");
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(root, ".slate", GraphConfigStore.FileName)),
+            Path.GetFullPath(Path.Combine(key, ".slate", GraphConfigStore.FileName)));
+        // Every other path loses its trailing separator, and the pair the
+        // lifecycle calls one vault is one key.
+        Assert.Equal(_root, GraphConfigWriter.KeyOf(_root + Path.DirectorySeparatorChar));
+        Assert.Equal(
+            GraphConfigWriter.KeyOf(_root).ToUpperInvariant(),
+            GraphConfigWriter.KeyOf(_root.ToUpperInvariant()));
+    }
+
     private static GraphConfig WithDepth(uint depth) => SlateUniffiMethods.GraphConfigDefault() with { ConnectionsDepth = depth };
 
     private GraphConfig OnDisk() => new GraphConfigStore(_root).Read().Config;

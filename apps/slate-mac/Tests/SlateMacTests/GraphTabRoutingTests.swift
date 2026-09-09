@@ -564,6 +564,81 @@ final class GraphTabRoutingTests: XCTestCase {
         XCTAssertTrue(posts.first?.hasPrefix("Couldn't load the graph") == true, "\(posts)")
     }
 
+    /// IPG-1 (rule Q, Term Q2): a superseded PAIR's failure belongs to
+    /// nobody. The pair's own guard is the LOAD sequence, which a rows
+    /// request does not advance, so a failing pair released after a newer
+    /// needle published used to wipe the snapshot, install its error over
+    /// the rows on screen, spend the newer lineage's in-flight announce and
+    /// speak a block for a request nobody made. The Windows twin returns at
+    /// the same guard (`GraphDocumentViewModel.Receive`).
+    func testASupersededPairsFailureLeavesTheNewerRowsAlone() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        let gate = AsyncGate()
+        // A: a pair that will fail, parked before it publishes.
+        state.graphTableLoadFailureForTests = .Io(message: "disk gone")
+        state.graphTablePublishGate = { _ in await gate.suspend() }
+        state.loadGraphTable(announce: .summary)
+        let pairSeq = state.graphTableSeq
+        state.graphTableLoadFailureForTests = nil
+        await gate.waitUntilEntered()
+        // B: a needle, issued and published while A waits.
+        state.graphTablePublishGate = nil
+        state.graphTableTextFilter = "a"
+        state.requestGraphTableRowsIfQueryChanged()
+        XCTAssertNotEqual(state.graphTableSeq, pairSeq, "the needle issued its own token")
+        try await pollUntil { state.graphTablePublishedRequest?.query.nameQuery == "a" }
+        let published = try XCTUnwrap(state.graphTablePublishedRequest)
+        let heldRows = state.graphTableRows.count
+        // A is released: it is not the lineage's any more.
+        await gate.release()
+        try await pollUntil { !state.graphTableLoading }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertNil(state.graphTableError, "the stale pair installed its error")
+        XCTAssertNotNil(state.graphTableSnapshot, "the stale pair wiped the snapshot")
+        XCTAssertEqual(state.graphTablePublishedRequest, published, "the needle's publication stands")
+        XCTAssertEqual(state.graphTableRows.count, heldRows, "the needle's rows stand")
+        XCTAssertFalse(
+            posts.contains { $0.hasPrefix("Couldn't load the graph") },
+            "a superseded pair spoke its failure: \(posts)")
+    }
+
+    /// IPG-4 (rule Q, Term Q2): the same for a superseded ROWS failure. The
+    /// rollback was already guarded, so it changed no state — and announced
+    /// a load failure for a request the newer token had replaced. The
+    /// success arm next to it speaks only what published.
+    func testASupersededRowsFailureSaysNothing() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        let gate = AsyncGate()
+        // A: a rows request that will fail, parked before it publishes.
+        state.graphTableRowsFailureForTests = .Io(message: "disk gone")
+        state.graphTableTextFilter = "a"
+        state.graphTableRowsPublishGate = { _ in await gate.suspend() }
+        state.requestGraphTableRowsIfQueryChanged()
+        let failingSeq = state.graphTableSeq
+        state.graphTableRowsFailureForTests = nil
+        await gate.waitUntilEntered()
+        // B: a second needle, issued behind it.
+        state.graphTableRowsPublishGate = nil
+        state.graphTableTextFilter = "ab"
+        state.requestGraphTableRowsIfQueryChanged()
+        XCTAssertNotEqual(state.graphTableSeq, failingSeq, "the second needle issued its own token")
+        try await pollUntil { state.graphTablePublishedRequest?.query.nameQuery == "ab" }
+        await gate.release()
+        try await pollUntil { state.graphTablePublishedRequest == state.graphTableRequest }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertNil(state.graphTableError)
+        XCTAssertEqual(state.graphTablePublishedRequest?.query.nameQuery, "ab")
+        XCTAssertFalse(
+            posts.contains { $0.hasPrefix("Couldn't load the graph") },
+            "a superseded rows failure spoke: \(posts)")
+    }
+
     /// C-2 (iii)/(iv): a needle typed during a backend-changing pair, in
     /// BOTH completion orders, ends with one snapshot under the preset's
     /// filter, the rows under the needle's request, the count spoken once

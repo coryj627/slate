@@ -3036,6 +3036,11 @@ final class AppState: ObservableObject {
     /// error instead of crossing, so the failure arm is pinned on a real
     /// session. Nil in production.
     var graphTableLoadFailureForTests: VaultError?
+
+    /// Test seam (W6-2 PR C, IPG-4): the ROWS request's twin of the pair's
+    /// injected failure, so a superseded rows failure is pinned on a real
+    /// session. Nil in production.
+    var graphTableRowsFailureForTests: VaultError?
     @Published var graphTableLoading: Bool = false
     @Published var graphTableError: String?
     var graphTableLoadSeq: UInt64 = 0

@@ -50,7 +50,14 @@ internal sealed class GraphConfigWriter
     public static string KeyOf(string vaultRoot)
     {
         ArgumentNullException.ThrowIfNull(vaultRoot);
-        return Path.GetFullPath(vaultRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        // The lifecycle's own primitive, which Term W1 cites
+        // (`VaultLifecycleViewModel.cs:82-91`, `SyncAnnounceKey`): a bare
+        // TrimEnd turns a DRIVE ROOT into a drive-RELATIVE path — `C:\`
+        // became `C:`, and the store then wrote `C:.slate\graph.json`
+        // under the process's current directory on that drive, leaving the
+        // vault's own config untouched (IPG-2). TrimEndingDirectorySeparator
+        // leaves a root alone and trims every other trailing separator.
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(vaultRoot));
     }
 
     /// <summary>The store a key's writes go to — the key is a full path;

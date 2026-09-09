@@ -403,6 +403,106 @@ public sealed class GraphNavigatorCensus
             statements.Select(s => CSharpSource.Normalize(s)));
     }
 
+    /// <summary>C-1, C-15 (vi) — the registration half of the wall (IPG-6):
+    /// <c>AddChord</c> is invoked from <c>Bind</c> alone, its body is the
+    /// map's THROWING <c>Add</c>, and nothing else writes <c>_chords</c> —
+    /// no indexer assignment anywhere in the type. Without this, replacing
+    /// <c>_chords.Add(...)</c> with <c>_chords[...] = ...</c> silently
+    /// accepted a duplicate registration, and the fact that claimed to
+    /// forbid it was asserting `Dictionary.Add` on a dictionary of its own.
+    /// </summary>
+    [Fact]
+    public void TheChordMapHasOneWriterAndAThrowingAdd()
+    {
+        (string Relative, CSharpSource Source) file = ShellCompilation.Sources.Single(s => s.Relative == "Graph/GraphNavigator.cs");
+        SemanticModel model = ShellCompilation.ModelFor(file.Source);
+
+        // (a) AddChord's callers, bound, are Bind's alone — across the SHELL,
+        // so a second registrar anywhere is a failure, method groups included.
+        var callers = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel each = ShellCompilation.ModelFor(source);
+            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (Candidates(each.GetSymbolInfo(call)).Any(s => IsMethodOf(s, TheNavigatorType, "AddChord")))
+                {
+                    callers.Add($"{relative}:{OwnerOf(call)}");
+                }
+            }
+            foreach (ExpressionSyntax reference in source.Root.DescendantNodes().OfType<ExpressionSyntax>().Where(GraphAnnouncerCensus.IsAMethodGroupReference))
+            {
+                if (Candidates(each.GetSymbolInfo(reference)).Any(s => IsMethodOf(s, TheNavigatorType, "AddChord")))
+                {
+                    callers.Add($"{relative}:{OwnerOf(reference)} (a method group)");
+                }
+            }
+        }
+        Assert.Equal(
+            ["Graph/GraphNavigator.cs:Bind", "Graph/GraphNavigator.cs:Bind"],
+            callers.OrderBy(c => c, StringComparer.Ordinal));
+
+        // (b) AddChord's body IS the map's Add — the throwing one, by name.
+        MethodDeclarationSyntax addChord = file.Source.Method("AddChord");
+        InvocationExpressionSyntax body = Assert.IsType<InvocationExpressionSyntax>(
+            addChord.ExpressionBody?.Expression
+            ?? ((ExpressionStatementSyntax)addChord.Body!.Statements.Single()).Expression);
+        MemberAccessExpressionSyntax target = Assert.IsType<MemberAccessExpressionSyntax>(body.Expression);
+        Assert.Equal("Add", target.Name.Identifier.ValueText);
+        Assert.Equal("_chords", CSharpSource.Normalize(target.Expression));
+
+        // (c) NOTHING else writes the map: no indexer assignment to _chords,
+        // and every other invocation on it is a read (TryGetValue, Keys).
+        foreach (AssignmentExpressionSyntax assignment in file.Source.Root.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+        {
+            Assert.False(
+                assignment.Left is ElementAccessExpressionSyntax element
+                    && CSharpSource.Normalize(element.Expression) == "_chords",
+                $"{OwnerOf(assignment)} writes the map through its indexer, which accepts a duplicate");
+        }
+        string[] mutators = [.. file.Source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(call => call.Expression is MemberAccessExpressionSyntax access
+                && CSharpSource.Normalize(access.Expression) == "_chords")
+            .Select(call => ((MemberAccessExpressionSyntax)call.Expression).Name.Identifier.ValueText)
+            .Where(name => name is not ("TryGetValue" or "ContainsKey"))];
+        Assert.Equal(["Add"], mutators);
+    }
+
+    /// <summary>Rule F, Term F4 — the window arm's subscription (IPG-7): the
+    /// hold on a deactivated window ends on the window's <c>Activated</c>,
+    /// which only exists if it is subscribed. Both edges are hooked in
+    /// <c>HookWindow</c> and detached in <c>UnhookWindow</c>, symmetrically:
+    /// deleting the <c>Activated</c> line leaves a restoration stranded
+    /// whenever the load finishes while the window is away, and no
+    /// behavioural fact could reach it without an OS activation.</summary>
+    [Fact]
+    public void TheWindowsBothEdgesAreHookedAndUnhookedTogether()
+    {
+        (string Relative, CSharpSource Source) file = ShellCompilation.Sources.Single(s => s.Relative == "Graph/GraphSurfaceView.cs");
+        var edges = new List<string>();
+        foreach (AssignmentExpressionSyntax assignment in file.Source.Root.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+        {
+            if (assignment.Left is not MemberAccessExpressionSyntax access
+                || access.Name.Identifier.ValueText is not ("Activated" or "Deactivated"))
+            {
+                continue;
+            }
+            string sign = assignment.OperatorToken.ValueText;
+            if (sign is "+=" or "-=")
+            {
+                edges.Add($"{OwnerOf(assignment)}:{sign}{access.Name.Identifier.ValueText}");
+            }
+        }
+        Assert.Equal(
+            [
+                "HookWindow:+=Activated",
+                "HookWindow:+=Deactivated",
+                "UnhookWindow:-=Activated",
+                "UnhookWindow:-=Deactivated",
+            ],
+            edges.OrderBy(e => e, StringComparer.Ordinal));
+    }
+
     // --- (vii) the menu census --------------------------------------------------
 
     /// <summary>C-9, C-12, C-15 (vii): the XAML declares the Verbosity submenu
@@ -503,9 +603,11 @@ public sealed class GraphNavigatorCensus
     // --- (xiv) the no-host-trim census -------------------------------------------
 
     /// <summary>C-5, C-15 (xiv): no host trim touches the needle — under Graph/
-    /// the only Trim* invocations are the leaf's path normaliser and the
-    /// writer's key; the navigator, the surface, the document and the view
-    /// state trim nothing.</summary>
+    /// the ONE Trim* invocation is the leaf's path normaliser; the navigator,
+    /// the surface, the document and the view state trim nothing. The writer's
+    /// key trimmed here too until IPG-2: a bare TrimEnd made a drive root
+    /// drive-RELATIVE, and the key is now Path.TrimEndingDirectorySeparator —
+    /// the lifecycle's own primitive, which is not a string trim at all.</summary>
     [Fact]
     public void NoHostTrimTouchesTheNeedle()
     {
@@ -524,7 +626,7 @@ public sealed class GraphNavigatorCensus
                 }
             }
         }
-        Assert.Equal(["Graph/ConnectionsLeafViewModel.cs:Normalize", "Graph/GraphConfigWriter.cs:KeyOf"], trims.Order(StringComparer.Ordinal));
+        Assert.Equal(["Graph/ConnectionsLeafViewModel.cs:Normalize"], trims.Order(StringComparer.Ordinal));
     }
 
     // --- (xv) the writer census ------------------------------------------------------

@@ -11074,6 +11074,92 @@ the matrix row losing its axe label and its `GraphRow` source (the two
 evidence-census facts); the model's admission dropped (32 of 32 cells
 diverge under the narrowed run). CI-shaped regression green.
 
+**TGC-10 — The codex post-implementation pass 1 (IPG-1..7): four
+blockers and three majors, each verified, each discharged.** The pass
+(xhigh, over the whole 64-file diff against main, on the CI-GREEN head
+f2342507) returned seven findings; every one was reproduced against the
+code and the frozen text before it was fixed, and none was refuted.
+(IPG-1, BLOCKER, rule Q Term Q2) A SUPERSEDED PAIR'S FAILURE OUTLIVED
+ITS TOKEN on the mac: the pair's continuation guards `graphTableLoadSeq`,
+which a ROWS request does not advance, so a failing pair released after
+a newer needle had published wiped the snapshot, installed its error over
+the rows on screen, spent the newer lineage's in-flight announce (C-2
+(iv)'s field, this PR's) and spoke a block for a request nobody made —
+while the Windows twin returns at exactly that guard
+(`GraphDocumentViewModel.Receive`, the seq AND the request). The failure
+arm is now the current token's alone; the load indicator above it stays
+the pair's own. (IPG-4, BLOCKER, the same term) The ROWS failure arm
+next door: its rollback was guarded so it changed no state, and then it
+announced the failure unconditionally — the success arm beside it speaks
+only what published. Both are now guarded, and the rows path gains the
+pair's twin of the injected-failure seam so a superseded rows failure is
+pinned on a real session. Facts:
+testASupersededPairsFailureLeavesTheNewerRowsAlone and
+testASupersededRowsFailureSaysNothing (GraphTabRoutingTests; CI's swift
+lane is the oracle, CR-3). (IPG-2, BLOCKER, rule W Term W1) THE WRITER'S
+KEY TURNED A DRIVE ROOT INTO A DRIVE-RELATIVE PATH: `KeyOf` trimmed with
+a bare `TrimEnd`, so `C:\` became `C:` and the store wrote
+`C:.slate\graph.json` beside the process's current directory on that
+drive — the vault's own config untouched, another directory's written —
+though Term W1 cites the lifecycle's identity, which uses
+`Path.TrimEndingDirectorySeparator` (a root is left rooted). The key is
+now that primitive over `GetFullPath`; the no-trim census (C-15 xiv) drops
+the writer's entry with it, since the key is no longer a string trim at
+all. Fact: TheKeyTrimsATrailingSeparatorAndLeavesARootRooted. (IPG-3,
+BLOCKER, C-8) THE READBACK NAMED A ROW THE TABLE DOES NOT SHOW: it
+searched the held snapshot's NODES, but A-7 deliberately KEEPS the shared
+key when a needle or the kind overlay merely hides its row, so
+Where-am-I answered "Node Alpha …" under filter prose that made Alpha
+unreachable. TGC-1 had already recorded the resolution — the mac's twin
+reads the SHOWN ROWS (`AppState+GraphDiagram.swift:311–320`), a shown row
+obeying the query by construction, and "T6's Windows readback should do
+the same" — and T6 did not. The readback now resolves the key among
+`publication.Rows` and builds the copy from the row (the component the
+row's). Fact:
+TheTableReadbackReadsNoSelectionWhenAnOverlayHidesTheSelectedRow, both
+overlays. (IPG-5, MAJOR, Term W4) THE OUTSTANDING SET WAS NOT
+OUTSTANDING: every completed write task stayed in it until a drain, so a
+long session grew it by one per edit, and the seam counted only
+incomplete tasks, which is why nothing said so. The hand-off prunes now
+(both transitions are the owner dispatcher's, so the prune is serialised
+with the adds) and `TrackedWritesForTests` exposes the total. Fact:
+CompletedWritesLeaveTheOutstandingSet. (IPG-6, MAJOR, C-1, C-15 (vi))
+THE CHORD MAP'S WALL WAS HALF THERE: the census pinned `HandleKey`'s
+body, and the fact that claimed to forbid a duplicate registration built
+a `Dictionary` of its own and asserted that `Dictionary.Add` throws —
+true of .NET, silent about this type. Replacing `_chords.Add(...)` with
+an indexer assignment would have survived both. The census now pins all
+three constraints (AddChord's bound callers are Bind's alone across the
+shell, method groups included; AddChord's body IS the map's `Add`; no
+indexer assignment and no other mutating call on `_chords`), and the
+fact reads the registration off THIS navigator through a residue seam.
+Facts: TheChordMapHasOneWriterAndAThrowingAdd,
+TheNavigatorRegistersTheScopesChordsOnceEach. (IPG-7, MAJOR, rule F
+Term F4) THE HOLD-ENDING MATRIX WAS NOT PINNED: rule F names three holds
+— an overlay, a MENU, a deactivated window with its `Activated` re-ask —
+and only the overlay had a fact, so deleting the window's `Activated`
+subscription, or the menu arm of `ClassifyFocusLoss`, would have survived
+T7's sweep. The menu arm now has a behavioural fact on the canvas's
+arrangement (the menu a child of THIS window; production's own
+`FocusIsInAMenu` decides whether the desktop allowed it, and the refusal
+path still asserts that the row the fact built is one production calls a
+menu); the window arm has a structural census — both edges hooked in
+`HookWindow` and detached in `UnhookWindow` — because no in-process fact
+can raise an OS activation. Facts:
+AMenuHoldsTheRestorationAndTheReturnDelivers,
+TheWindowsBothEdgesAreHookedAndUnhookedTogether. The pass ALSO verified
+the three findings TGC-9 left for the owner and re-ledgered none; it
+found IPG-3 distinct from TGC-9 (i) (a shown row with no key against a
+key whose row is not shown), which is right. Mutations (six in the
+runner), each restored byte for byte, each caught by the named fact: the
+key's bare trim; the readback reading the snapshot; the prune removed;
+the map's indexer; the window's `Activated` unhooked; the menu
+classified as a pane change (which also proves the menu fact exercised
+the menu rather than taking its refusal path). The mac's two guards are
+pinned by the two Swift facts and arbitrated by CI's swift lane, not by
+a local sweep — this box has no Swift toolchain (CR-3). CI-shaped
+regression green.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,

@@ -477,6 +477,75 @@ public sealed partial class GraphTableTests
         });
     }
 
+    /// <summary>Rule F, Term F4 (IPG-7): a MENU is a hold, not a departure.
+    /// The landing facts covered the overlay alone, so the menu arm of
+    /// <c>ClassifyFocusLoss</c> and of <c>RestorationMustWait</c> was
+    /// asserted nowhere. The menu is a child of THIS window — that is what a
+    /// WPF menu is; hosting one in a second window makes the OS deactivate
+    /// this one and the arrangement would be about the window arm instead
+    /// (the canvas's note, `CanvasNavigatorTests.cs:1112-1120`).</summary>
+    [Fact]
+    public void AMenuHoldsTheRestorationAndTheReturnDelivers()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-landing-menu");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            var row = new MenuItem { Header = new TextBox { Text = "Graph", Width = 80 } };
+            var menu = new Menu();
+            System.Windows.Input.FocusManager.SetIsFocusScope(menu, false);
+            menu.Items.Add(row);
+            var stack = new StackPanel();
+            stack.Children.Add(view);
+            stack.Children.Add(menu);
+            using HostedWindow window = HostInWindow(stack);
+            host.Workspace.GraphNavigator.SetNameQuery("note");
+            host.Settle(document);
+            Assert.True(view.FilterFieldForTests.Focus());
+            using var park = new ParkedFetch(document, 1);
+            // Rung 1: the clear's token in flight, the restoration deferred.
+            PressPreview(view.FilterFieldForTests, Key.Escape);
+            park.WaitReached();
+            GraphFocusRequest pending = document.FocusRequest!;
+            Assert.Same(pending, view.DeferredRestorationForTests);
+
+            // The keys go into the menu — production's own walk decides
+            // whether they did, so the fact cannot disagree with the code
+            // it tests.
+            var target = (TextBox)row.Header;
+            bool took = target.Focus();
+            window.UpdateLayout();
+            bool inAMenu = Canvas.CanvasSurfaceView.FocusIsInAMenu(Keyboard.FocusedElement);
+            if (!took || !inAMenu)
+            {
+                // The desktop refused to open a menu. Assert the refusal
+                // rather than waving it through: if the keys DID land on the
+                // row this fact built, production must agree it is in a menu.
+                Assert.False(
+                    ReferenceEquals(target, Keyboard.FocusedElement) && !inAMenu,
+                    "the keys landed on the menu row this fact built and production says it is not a menu");
+                return;
+            }
+
+            // HELD, not withdrawn: the request stands and the reason is the menu.
+            Assert.Same(pending, document.FocusRequest);
+            Assert.Equal(GraphFocusDeparture.MenuOpen, view.AwayBecauseForTests);
+            // The load finishes behind the menu: still held, nobody seated.
+            park.Release();
+            host.Settle(document);
+            window.UpdateLayout();
+            Assert.Same(pending, document.FocusRequest);
+            Assert.False(GridHasTheKeys(view));
+            // The menu closes and the keys return to the surface: delivered.
+            _ = view.FilterFieldForTests.Focus();
+            window.UpdateLayout();
+            Assert.Null(document.FocusRequest);
+            Assert.Null(view.AwayBecauseForTests);
+            Assert.True(GridHasTheKeys(view));
+        });
+    }
+
     [Fact]
     public void AnOverlayHoldsTheRestorationAndTheReturnDelivers()
     {

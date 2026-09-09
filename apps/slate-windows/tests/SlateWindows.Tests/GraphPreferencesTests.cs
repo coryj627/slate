@@ -323,6 +323,39 @@ public sealed class GraphPreferencesTests : IDisposable
 
     // --- Terms W3–W5: the schedule, the hand-off, the flush -----------------
 
+    /// <summary>Term W4 (IPG-5): the set holds the OUTSTANDING writes. It
+    /// used to keep every completed task until the drain, so a long session
+    /// grew it by one per edit and only the shutdown path ever pruned.</summary>
+    [Fact]
+    public void CompletedWritesLeaveTheOutstandingSet()
+    {
+        PumpedDispatcher.Run(() =>
+        {
+            var writer = new GraphConfigWriter();
+            var preferences = new GraphPreferencesViewModel(_root, writer);
+            for (int edit = 0; edit < 5; edit++)
+            {
+                preferences.SetConnectionsDepth((uint)(edit % 3) + 1);
+                preferences.FireTickForTests();
+                Drain(preferences);
+            }
+            // Five writes ran; the set holds at most the last, never five.
+            Assert.Equal(0, preferences.OutstandingForTests);
+            Assert.True(
+                preferences.TrackedWritesForTests <= 1,
+                $"the set kept {preferences.TrackedWritesForTests} completed writes");
+            // And the prune happens on the HAND-OFF, not only in the drain:
+            // a sixth edit whose task is still tracked does not carry the five.
+            preferences.SetConnectionsDepth(3);
+            preferences.FireTickForTests();
+            Assert.True(
+                preferences.TrackedWritesForTests <= 1,
+                $"the hand-off did not prune: {preferences.TrackedWritesForTests}");
+            Drain(preferences);
+            preferences.Shutdown();
+        });
+    }
+
     [Fact]
     public void TenSchedulesIn400msEnqueueOnceWithTheLastAggregate()
     {

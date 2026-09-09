@@ -522,7 +522,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
         GraphPublication publication = Publication;
         if (publication.State is not (GraphLoadState.Ready or GraphLoadState.Empty)
-            || publication.Snapshot is not { } snapshot
+            || publication.Snapshot is null
             || publication.Query != new GraphVisibilityQuery(ViewState.Filter, ViewState.NameQuery, ViewState.KindOnly))
         {
             return null;
@@ -530,13 +530,21 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         GraphWhereAmISelection selection = new GraphWhereAmISelection.NoSelection();
         if (ViewState.SelectedKey is { } key)
         {
-            foreach (GraphNode node in snapshot.Nodes)
+            // The SHOWN rows, not the snapshot's nodes — the mac's twin
+            // (`AppState+GraphDiagram.swift:311-320`) and TGC-1's recorded
+            // reading of C-8: a shown row obeys the query by construction,
+            // so 0a-2b's invariants hold without a second visibility
+            // predicate. A-7 KEEPS the shared key when an overlay merely
+            // hides its row, so reading the snapshot answered `Node Alpha`
+            // over a table that does not show Alpha (IPG-3); the reader is
+            // told `No node selected` instead.
+            foreach (GraphTableRow row in publication.Rows)
             {
-                if (string.Equals(node.StableKey, key, StringComparison.Ordinal))
+                if (string.Equals(row.StableKey, key, StringComparison.Ordinal))
                 {
                     selection = new GraphWhereAmISelection.Node(
-                        new GraphRowCopy(node.Label, node.Kind, node.InLinks, node.OutLinks, node.InLinks, false),
-                        node.Component);
+                        new GraphRowCopy(row.Label, row.Kind, row.LinksIn, row.LinksOut, row.LinksIn, false),
+                        row.Component);
                     break;
                 }
             }

@@ -575,14 +575,28 @@ public sealed class GraphNavigatorTests
         });
     }
 
+    /// <summary>C-1's map, read off the NAVIGATOR (IPG-6): Bind registered
+    /// exactly the scope's two chords, each once. The fact this replaces
+    /// asserted that `Dictionary.Add` throws on a dictionary of its own,
+    /// which is true of .NET and says nothing about this type; the
+    /// registration's shape — one writer, the throwing Add — is the
+    /// census's (TheChordMapHasOneWriterAndAThrowingAdd).</summary>
     [Fact]
-    public void ADuplicateChordRegistrationThrows()
+    public void TheNavigatorRegistersTheScopesChordsOnceEach()
     {
-        // The map's Add throws on a duplicate key (C-1's wall): the
-        // registration is a dictionary whose Add is the only writer.
-        var chords = new Dictionary<(Key Key, ModifierKeys Modifiers), Func<bool>>();
-        chords.Add((Key.Escape, ModifierKeys.None), () => true);
-        Assert.Throws<ArgumentException>(() => chords.Add((Key.Escape, ModifierKeys.None), () => false));
+        using GraphVault vault = GraphVault.Copy("chord-map");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            (Key Key, ModifierKeys Modifiers)[] chords = [.. host.Navigator.ChordsForTests];
+            Assert.Equal(chords.Length, chords.Distinct().Count());
+            Assert.Equal(
+                [
+                    (Key.Escape, ModifierKeys.None),
+                    (Key.I, ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift),
+                ],
+                chords.OrderBy(c => c.Key).ToArray());
+        });
     }
 
     // --- The registrar (rule R-E; contract C-3) ------------------------------
@@ -812,6 +826,50 @@ public sealed class GraphNavigatorTests
                 new GraphWhereAmIFilter.Normal(backend.OrphansOnly, backend.IncludeAttachments, backend.IncludeGhosts),
                 host.Document.TableWhereAmI()!.Filter);
             Assert.True(backend.OrphansOnly);
+        });
+    }
+
+    /// <summary>C-8 as TGC-1 records it (IPG-3): the readback resolves the
+    /// shared key among the SHOWN rows, never the snapshot's nodes. A-7 keeps
+    /// the key when an overlay hides its row, so the snapshot still holds the
+    /// node — and the reader was told they were on a row the table does not
+    /// show, under filter prose that made it unreachable.</summary>
+    [Fact]
+    public void TheTableReadbackReadsNoSelectionWhenAnOverlayHidesTheSelectedRow()
+    {
+        using GraphVault vault = GraphVault.Copy("where-am-i-hidden");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            GraphTableRow note = host.Document.Publication.Rows.First(r => r.Kind == GraphNodeKind.Note);
+            Assert.True(host.Document.SelectRow(note.StableKey));
+            Assert.IsType<GraphWhereAmISelection.Node>(host.Document.TableWhereAmI()!.Selection);
+
+            // (a) the NEEDLE hides it: a needle no label carries.
+            host.Navigator.SetNameQuery("zzz-no-label-carries-this");
+            host.Settle();
+            Assert.DoesNotContain(host.Document.Publication.Rows, r => r.StableKey == note.StableKey);
+            // The key SURVIVES (A-7: the snapshot still holds the node) —
+            // the readback answers on the rows anyway.
+            Assert.Equal(note.StableKey, host.Workspace.GraphViewStateForTests.SelectedKey);
+            Assert.NotNull(host.Document.Publication.Snapshot);
+            Assert.Contains(host.Document.Publication.Snapshot!.Nodes, n => n.StableKey == note.StableKey);
+            Assert.Equal(new GraphWhereAmISelection.NoSelection(), host.Document.TableWhereAmI()!.Selection);
+            host.GraphLines.Clear();
+            Assert.True(host.Navigator.WhereAmI());
+            Assert.StartsWith("No node selected", host.GraphLines.Single(), StringComparison.Ordinal);
+
+            // (b) the KIND overlay hides it: the unresolved preset over a note.
+            host.Navigator.ClearNameQuery();
+            host.Settle();
+            Assert.IsType<GraphWhereAmISelection.Node>(host.Document.TableWhereAmI()!.Selection);
+            host.Navigator.RunPreset(GraphPreset.Unresolved);
+            host.Settle();
+            Assert.Equal(note.StableKey, host.Workspace.GraphViewStateForTests.SelectedKey);
+            Assert.DoesNotContain(host.Document.Publication.Rows, r => r.StableKey == note.StableKey);
+            Assert.Equal(new GraphWhereAmISelection.NoSelection(), host.Document.TableWhereAmI()!.Selection);
         });
     }
 

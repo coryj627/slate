@@ -261,6 +261,18 @@ extension AppState {
                     break
                 }
             case .failure(let error):
+                // The failure arm is the CURRENT token's alone (rule Q,
+                // Term Q2; the Windows twin returns at the same guard,
+                // `GraphDocumentViewModel.Receive`). The pair's guard above
+                // is the LOAD sequence, which a rows request does not
+                // advance, so a superseded pair's failure used to wipe the
+                // snapshot, install its error over rows that had already
+                // published, spend the newer lineage's in-flight announce
+                // and speak a block for a request nobody made (IPG-1). The
+                // load indicator above is this pair's own and stays.
+                guard token.seq == self.graphTableSeq,
+                    token.request == self.graphTableRequest
+                else { return }
                 self.graphTableError = self.humanReadable(error)
                 self.graphTableSnapshot = nil
                 self.failGraphTableRows(token: token)
@@ -365,9 +377,11 @@ extension AppState {
             failGraphTableRows(token: token)
             return
         }
+        let injectedRowsFailure = graphTableRowsFailureForTests
         Task { [weak self] in
             let result: Result<GraphTableRows, VaultError> =
                 await Task.detached(priority: .userInitiated) {
+                    if let injectedRowsFailure { return .failure(injectedRowsFailure) }
                     do {
                         return .success(
                             try session.graphTableRows(
@@ -391,8 +405,15 @@ extension AppState {
                         gate: { [weak self] in self?.graphTabActive == true })
                 }
             case .failure(let error):
+                // As the pair's: a superseded rows failure changed no state
+                // (the rollback is guarded) but still spoke a load failure
+                // for a request the newer token had replaced (IPG-4). The
+                // success arm above already speaks only what published.
                 self.failGraphTableRows(token: token)
-                if token.seq == self.graphTableSeq { self.graphTableInFlightAnnounce = nil }
+                guard token.seq == self.graphTableSeq,
+                    token.request == self.graphTableRequest
+                else { return }
+                self.graphTableInFlightAnnounce = nil
                 if self.graphTabActive {
                     self.graphAnnouncer.announce(
                         .graphBlocked(reason: .loadFailed(message: self.humanReadable(error))))

@@ -118,6 +118,11 @@ internal sealed class GraphNavigator : BindableBase
     private void AddChord(Key key, ModifierKeys modifiers, Func<bool> handler) =>
         _chords.Add((key, modifiers), handler);
 
+    /// <summary>The registered chords (C-1's map): the residue the wall's
+    /// fact reads, so the registration is asserted on THIS navigator and
+    /// not on a dictionary of the test's own (IPG-6).</summary>
+    internal IReadOnlyCollection<(Key Key, ModifierKeys Modifiers)> ChordsForTests => _chords.Keys;
+
     /// <summary>The chord half's one entry (C-1): the null guard, the
     /// attachment, the lookup, the handler — and no branch.</summary>
     internal bool HandleKey(Key key, ModifierKeys modifiers, IGraphSurfacePresenter presenter)
