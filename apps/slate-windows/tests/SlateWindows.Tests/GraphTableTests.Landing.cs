@@ -7,6 +7,7 @@ using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Input;
 using SlateWindows.Graph;
+using SlateWindows.Grids;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -88,6 +89,38 @@ public sealed partial class GraphTableTests
             Assert.True(GridHasTheKeys(view));
             Assert.Same(second, view.TableForTests.GridForTests.Grid.CurrentItem);
             Assert.Equal(lines, host.GraphLines.Count);
+        });
+    }
+
+    [Fact]
+    public void ARePublicationUnderNoSharedKeyKeepsTheLandedRowCurrentAndEnterOpensIt()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-landing-republish");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(view);
+            host.Workspace.RequestActiveEditorFocus();
+            window.UpdateLayout();
+            Assert.True(GridHasTheKeys(view));
+            // The landing seated the first row silently: no shared key.
+            Assert.Null(document.ViewState.SelectedKey);
+            AccessibleDataGrid grid = view.TableForTests.GridForTests;
+            GraphTableRow landed = Assert.IsType<GraphTableRow>(grid.Grid.CurrentCell.Item);
+            // The journey's sort: a rows-only re-publication under the same
+            // null key. The wrapper restores the reader's row by identity and
+            // the re-seat leaves it — the row stays CURRENT, so Enter opens it
+            // (A-9) instead of acting on nothing.
+            Assert.True(document.Request(new GraphRequest.Sort(new GraphTableSort(GraphTableColumn.Note, true))));
+            host.Settle(document);
+            window.UpdateLayout();
+            Assert.Null(document.ViewState.SelectedKey);
+            GraphTableRow current = Assert.IsType<GraphTableRow>(grid.Grid.CurrentCell.Item);
+            Assert.Equal(landed.StableKey, current.StableKey);
+            Assert.Contains(document.Publication.Rows, row => ReferenceEquals(row, current));
+            Assert.True(grid.ActivateCurrentRow(modified: false));
+            Assert.Equal(current.Path, host.Workspace.ActiveGroup.ActiveTab!.Path);
         });
     }
 

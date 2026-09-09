@@ -10968,6 +10968,112 @@ normaliser strips spaces); the scheduler allow-list names the leaf
 view's constructor and the relay's Emit as they are; a conditional
 access's member binding is the invocation's callee, not a method group.
 
+**TGC-9 — T9: the journey (C-14); the matrix rows, the evidence and
+the spec (C-16); two CI regressions of the pushed slices root-caused
+and fixed.** THE JOURNEY GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean
+(ShellAccessibilityTests, beside the table's and the leaf's): the
+fixture is four notes and TWO unresolved targets; the expected strings
+are core's renders over the same vault, read BEFORE the app opens it —
+the fresh open's query is the default config's filters through the
+preferences' one mapper (C-10), mirrored field for field — the needle's
+count, the ghost count, the ghost's kind cell, the first row's Name at
+Standard and at Terse. Open Graph through the palette → focus on the
+grid's row (Term F6's arm); Shift+Tab → the switcher's checked Table
+choice (the switcher panel has no peer — the choice is what UIA
+reports); Shift+Tab → the field, its Name and HelpText the mac's;
+"Alph" → one row, the region's Name "Filter results: " + core's render;
+Escape → the field empties, the rows return to core's count (five: the
+ghost shows under core's default), the reader seated on a row after the
+cleared rows land, the region collapsed; Orphaned Notes → Solo alone,
+the region collapsed (the backend alone narrows); Unresolved Links → the
+ghost rows, the region reading the ghost count, every ItemStatus
+"Unresolved"; Where Am I? in the palette ENABLED while the table is
+quiescent (C-14's "disabled" predates CD-24; the spec's Evidence line
+governs); Down to the second ghost — rule F's seat writes no key (Term
+F5), so the reader's own move writes the key the readback reads;
+Ctrl+Alt+Shift+I → the panel, Name "Where am I?", the readback carrying
+"component" and no "zoom", the panel holding the keys; Escape (rung 0)
+→ the panel closes, the keys return to the grid; Orphaned Notes → Solo;
+Verbosity → terse → the row's Name the bare label; standard → the full
+copy; axe `graph-navigator`. Passed locally in 18 s (the table's in 9 s,
+the leaf's in 24 s, each alone, NVDA stopped). THE JOURNEY'S FINDINGS,
+two of them product defects: (1) C-5's Tab order was DECLARED, not
+traversed — the surface's Local scope flattened the grid wrapper's own
+indices (the grid 0, the summary 1) into the header's order, so
+Shift+Tab from the switcher reached the grid's summary and never the
+field; `GraphTableView` is now a Local scope of its own with the
+DataGrid a Local unit inside it (WPF's DataGrid is a Continue container:
+without a mode its cells flatten at the default index BEHIND the
+summary), and TheTabOrderFromTheGridReachesTheSwitcherThenTheField now
+TRAVERSES in a hosted window — Previous twice to the choice and the
+field, Next back to the grid's cell. (2) The first readback read "No
+node selected" under a focused ghost row — the same defect as the CI
+regression (b) below. (3) The cleared grid's count is core's, not a
+literal. THE TWO CI REGRESSIONS, found while reading the T6–T8 pushes:
+(a) the app-model job red since T6 — 32 of 544 cells of
+TheModelOfRuleDDerivesEveryReRootAndBackAcrossEveryState, every one
+"ReRoot from the Table to a Attachment": T5's seed (C-10) makes the
+fresh open RE-APPLY the vault's config filters and core's default hides
+attachments, so the model's view-state write in ArrangeReRoot was
+overridden and the table held no attachment row; the model now admits
+attachments through `graph.json` BEFORE the host reads it
+(AdmitAttachments, core's encoder; the direct write removed); the
+narrowed run (SLATE_MODEL_ONLY) passes in 8 s. (b) the shell
+accessibility gate red since T7 — the table journey's "Enter on Alpha
+did not replace the graph tab": traced with temporary file traces to the
+grid's `CurrentCell.Item` being NULL under a focused cell at Enter.
+Every re-publication under no shared key — rule F's silent seat writes
+none — ran the view's Reseat, which CLEARED the grid's currency for a
+null key right after the wrapper had restored the reader's row by
+identity; at T6 the IsRequestInFlight edge's re-seat (the finding T7
+fixed) masked it. Reseat now keeps the wrapper's currency under a null
+key and clears only a DROPPED row's stale cell — whose old column object
+indexes at -1 on the next seat, the landing fact
+AnOldEmptyPublicationUnderAChangedQueryIsNotALanding catching the first
+cut. New facts:
+ARePublicationUnderNoSharedKeyKeepsTheLandedRowCurrentAndEnterOpensIt
+(GraphTableTests.Landing) and
+TheTableReadbackReadsASelectedGhostUnderTheUnresolvedPreset
+(GraphNavigatorTests, the diagnosis of the journey's empty readback).
+C-16: `parity_matrix.md`'s four rows carry a PR C status of their own
+through W6_2_PR_C_DELIVERED_COMMANDS — IPA-13's rule per slice; C-16's
+"move to W6_2_STATUS" would have claimed PR A's date — pinned by
+GraphNavigatorCensus.TheParityMatrixCarriesTheFourRowsAtThePrCStatus;
+`chords.json`'s `deliveryEvidence` maps the four ids to `graph` and the
+group gains the navigator's, the preferences', the surface's and the
+Where-am-I command's implementation anchors and the three test anchors
+(the projection untouched: `deliveryEvidence` is hand-kept, B2's
+precedent); `w_c_matrix.md`'s row "Graph navigator, filter and
+Where-am-I (W6-2 PR C)" on the canvas navigator row's shape, and
+WcMatrixGraphEvidenceCensus's third manifest entry (nine ids, five
+control types, four patterns, five name sources with `GraphRow` for the
+row's Name at the level in force, eight evidence names in the census-path
+style, the axe label). The spec's amendments were already in place at
+revision 6 (§1's three lines, R-E's counts, §PR C's six lines, §PR D's
+and §PR E's Consumes and Builds, §7's row); one line corrected in place
+(CD-11): §PR C's Evidence — the journey asserts the readback and the
+palette's enabled state, the in-flight fall-through is pinned in-process
+(a FlaUI journey cannot hold a load open). FINDINGS FOR THE OWNER, not
+fixed here: (i) under rule F's silent seat with no shared key, a ONE-ROW
+result (a preset's lone orphan) has no keyboard route to a selection —
+Where-am-I reads "No node selected" over the row the reader sits on
+(Term F5 as frozen; the mac clears its selection the same way, but its
+table has no current-without-selected row); (ii) the switcher panel
+GraphSurfaceSwitcher (PR A) has no automation peer, so the matrix's
+"Group for the mode switcher" names an element UIA never reports; (iii)
+the wrapper's `SelectRow` seats through `CurrentCell.Column`, and its
+own restore leaves a dropped row's stale cell in place — guarded in the
+graph view, not in the wrapper. Mutations (nine in the runner, one by
+hand), each restored byte for byte, each caught by the named fact: the
+table's scope dropped and the grid's unit dropped (the traversal); the
+re-seat clearing under a null key (the Enter fact); the re-seat keeping a
+dropped row's stale cell (the old-EMPTY landing fact); the readback
+skipping a ghost; the matrix row's status drifting to pending; the
+evidence map dropping whereAmI (EveryImplementedCommandMapsToACommandGroup);
+the matrix row losing its axe label and its `GraphRow` source (the two
+evidence-census facts); the model's admission dropped (32 of 32 cells
+diverge under the narrowed run). CI-shaped regression green.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,

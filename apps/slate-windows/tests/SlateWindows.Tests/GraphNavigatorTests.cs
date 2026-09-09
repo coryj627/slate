@@ -816,6 +816,39 @@ public sealed class GraphNavigatorTests
     }
 
     [Fact]
+    public void TheTableReadbackReadsASelectedGhostUnderTheUnresolvedPreset()
+    {
+        using GraphVault vault = GraphVault.Copy("where-am-i-ghost");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.OpenGraph();
+            host.Settle();
+            host.Navigator.RunPreset(GraphPreset.Unresolved);
+            host.Settle();
+            GraphPublication publication = host.Document.Publication;
+            Assert.Equal(GraphLoadState.Ready, publication.State);
+            Assert.NotEmpty(publication.Rows);
+            // The grid's current row under the preset is a ghost; the
+            // document's guarded selection admits it (the snapshot under the
+            // preset's backend filter holds the ghost node), and the readback
+            // reads it as a Node with its component — never "No node selected".
+            GraphTableRow ghost = publication.Rows[0];
+            Assert.Equal(GraphNodeKind.Ghost, ghost.Kind);
+            Assert.True(host.Document.SelectRow(ghost.StableKey));
+            GraphA11yEvent.GraphWhereAmI? @event = host.Document.TableWhereAmI();
+            Assert.NotNull(@event);
+            var node = Assert.IsType<GraphWhereAmISelection.Node>(@event.Selection);
+            Assert.Equal(GraphNodeKind.Ghost, node.Row.Kind);
+            Assert.Equal(ghost.Label, node.Row.Label);
+            host.GraphLines.Clear();
+            Assert.True(host.Navigator.WhereAmI());
+            Assert.Contains("component", host.GraphLines.Single(), StringComparison.Ordinal);
+            Assert.StartsWith(host.Navigator.WhereAmIText, host.GraphLines.Single(), StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
     public void TheTableReadbackIsRefusedWhileARequestIsInFlightAndAnswersAtInstall()
     {
         using GraphVault vault = GraphVault.Copy("where-am-i-in-flight");

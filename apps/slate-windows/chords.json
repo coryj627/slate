@@ -2593,14 +2593,21 @@
           "apps/slate-windows/src/SlateWindows/Graph/GraphTableView.cs#GraphTableView",
           "apps/slate-windows/src/SlateWindows/Graph/ConnectionsLeafViewModel.cs#ConnectionsLeafViewModel",
           "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Connections.cs#ShowConnections",
-          "apps/slate-windows/src/SlateWindows/Graph/ConnectionsLeafView.cs#ConnectionsLeafView"
+          "apps/slate-windows/src/SlateWindows/Graph/ConnectionsLeafView.cs#ConnectionsLeafView",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphNavigator.cs#GraphNavigator",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphPreferencesViewModel.cs#GraphPreferencesViewModel",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphSurfaceView.cs#GraphSurfaceView",
+          "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphWhereAmICommand"
         ],
         "tests": [
           "apps/slate-windows/tests/SlateWindows.Tests/GraphDocumentTests.cs#GraphDocumentTests",
           "apps/slate-windows/tests/SlateWindows.Tests/GraphTableTests.cs#GraphTableTests",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_TableSortSelectionAndActivation_AreClean",
           "apps/slate-windows/tests/SlateWindows.Tests/ConnectionsLeafTests.cs#ConnectionsLeafTests",
-          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphConnections_LeafWalkDepthAndReRoot_AreClean"
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphConnections_LeafWalkDepthAndReRoot_AreClean",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphNavigatorTests.cs#GraphNavigatorTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphPreferencesTests.cs#GraphPreferencesTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean"
         ]
       }
     },
@@ -2775,7 +2782,11 @@
       "slate.graph.showConnections": "graph",
       "slate.graph.connectionsDeeper": "graph",
       "slate.graph.connectionsShallower": "graph",
-      "slate.graph.connectionsBack": "graph"
+      "slate.graph.connectionsBack": "graph",
+      "slate.graph.orphans": "graph",
+      "slate.graph.unresolved": "graph",
+      "slate.graph.mostLinked": "graph",
+      "slate.graph.whereAmI": "graph"
     },
     "issues": {
       "#720": "vault",

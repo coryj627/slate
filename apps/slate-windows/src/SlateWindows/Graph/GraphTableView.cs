@@ -3,6 +3,7 @@
 
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using SlateWindows.Grids;
 using uniffi.slate_uniffi;
 
@@ -49,6 +50,20 @@ internal sealed class GraphTableView : UserControl
         // presenter that has the keys.
         _grid.FilterRequested += () => Model?.Navigator?.FocusFilterField();
         Content = _grid;
+        // C-5's Tab order: the surface scopes its header's indices LOCALLY
+        // and the wrapper numbers its own two stops 0 (the grid) and 1 (the
+        // summary) — so this view is a local scope of its own, ONE unit at
+        // the surface's index 5. Without it the wrapper's 0 and 1 flatten
+        // into the surface's order, and Shift+Tab from the switcher reached
+        // the grid's summary, never the field (the journey's finding, TGC-9).
+        KeyboardNavigation.SetTabNavigation(this, KeyboardNavigationMode.Local);
+        // And the grid is ONE unit inside that scope, at the wrapper's index
+        // 0 ahead of its summary's 1: WPF's DataGrid is a Continue container,
+        // so without a mode of its own its cells flatten into the scope at
+        // the default index — behind the summary — and Shift+Tab from the
+        // first cell reached the summary, not the switcher. Local keeps Tab
+        // moving cell to cell inside the grid and leaves it at the edges.
+        KeyboardNavigation.SetTabNavigation(_grid.Grid, KeyboardNavigationMode.Local);
     }
 
     public GraphDocumentViewModel? Model
@@ -220,9 +235,24 @@ internal sealed class GraphTableView : UserControl
         try
         {
             string? key = model.ViewState.SelectedKey;
-            bool seated = key is not null
-                && _grid.SelectRow(row => string.Equals(((GraphTableRow)row).StableKey, key, StringComparison.Ordinal));
-            if (!seated)
+            if (key is null)
+            {
+                // No shared key: rule F's silent seat wrote none (Term F5) and
+                // the wrapper's rebind restored the reader's row by identity.
+                // Clearing the currency here stranded the reader on a cell
+                // that was no longer current — Enter refused, the readback
+                // empty — every time the table re-published under no key
+                // (the table journey's finding, TGC-9). A row the republish
+                // dropped is the one currency to clear: the wrapper leaves a
+                // gone row's stale cell in place, and its old column object
+                // would index at -1 on the next seat.
+                if (_grid.Grid.CurrentCell.Item is { } item && !_grid.Grid.Items.Contains(item))
+                {
+                    _grid.Grid.CurrentCell = new System.Windows.Controls.DataGridCellInfo();
+                }
+                return;
+            }
+            if (!_grid.SelectRow(row => string.Equals(((GraphTableRow)row).StableKey, key, StringComparison.Ordinal)))
             {
                 // No visible row carries the key: clear the grid's currency
                 // WITHOUT writing the key (contract A-7).

@@ -646,4 +646,29 @@ public sealed class GraphNavigatorCensus
                 literal => literal.IsKind(SyntaxKind.StringLiteralExpression) && titles.Contains(literal.Token.ValueText));
         }
     }
+    // --- C-16: the parity matrix rows ---------------------------------------------
+
+    /// <summary>C-16: the three preset ids and Where-am-I carry the PR C
+    /// status in the generated parity matrix (the generator's own string,
+    /// read from its source), and the w_c_matrix carries the row.</summary>
+    [Fact]
+    public void TheParityMatrixCarriesTheFourRowsAtThePrCStatus()
+    {
+        string repo = SourceText.RepoRoot();
+        string script = File.ReadAllText(Path.Combine(repo, "scripts", "generate-parity-matrix.py"));
+        var status = System.Text.RegularExpressions.Regex.Match(
+            script, "W6_2_PR_C_STATUS = \\(\\s*\"([^\"]+)\"\\s*\"([^\"]+)\"\\s*\\)");
+        Assert.True(status.Success, "the generator's W6_2_PR_C_STATUS is not in its two-string shape");
+        string expected = status.Groups[1].Value + status.Groups[2].Value;
+        string matrix = File.ReadAllText(Path.Combine(repo, "docs", "plans", "18_windows_port", "parity_matrix.md"));
+        foreach (string id in new[] { ChordTable.Ids.GraphOrphans, ChordTable.Ids.GraphUnresolved, ChordTable.Ids.GraphMostLinked, ChordTable.Ids.GraphWhereAmI })
+        {
+            string? row = matrix.Split('\n').FirstOrDefault(line => line.StartsWith("| `" + id + "`", StringComparison.Ordinal));
+            Assert.True(row is not null, $"{id} has no parity row");
+            Assert.EndsWith("| " + expected + " |", row.TrimEnd(), StringComparison.Ordinal);
+        }
+        string wc = File.ReadAllText(Path.Combine(repo, "docs", "plans", "18_windows_port", "w_c_matrix.md"));
+        Assert.Contains("| Graph navigator, filter and Where-am-I (W6-2 PR C) |", wc, StringComparison.Ordinal);
+    }
+
 }

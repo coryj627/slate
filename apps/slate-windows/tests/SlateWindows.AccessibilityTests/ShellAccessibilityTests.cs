@@ -8442,6 +8442,370 @@ public sealed class ShellAccessibilityTests
     }
 
     /// <summary>
+    /// W6-2 PR C (#746), contract C-14 (§W-C): the navigator journey — open
+    /// the graph through the palette and assert FOCUS landed on the grid's
+    /// row (rule F, Term F6's arm); Shift+Tab twice to the filter field (the
+    /// switcher between) and read its Name and HelpText; type a needle that
+    /// matches one note, wait for the grid to narrow, read the count region's
+    /// Name (core's render behind the label prefix); Escape → the field
+    /// empties, the region collapses, focus lands on a grid row after the
+    /// cleared rows land; the Orphaned Notes preset → the orphan subset with
+    /// the region collapsed (the backend filter alone narrows); the
+    /// Unresolved Links preset → the region reads the ghost count against the
+    /// backend total and every row's ItemStatus is the ghost's kind cell;
+    /// Where Am I? enabled in the palette while the table is quiescent
+    /// (CD-24: the table's readback lands in this PR) and Ctrl+Alt+Shift+I on
+    /// the grid opening the panel with the readback the announcement shares;
+    /// the Graph menu's Verbosity → Terse → the focused row's Name the bare
+    /// label, → Standard → the full copy; axe with the scan id
+    /// `graph-navigator`.
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-graph-navigator-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Navigator Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(Path.Combine(vaultRoot, "Alpha.md"), "# Alpha\n\nLinks to [[Beta]] and [[Gamma]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Beta.md"), "# Beta\n\nLinks to [[Alpha]] and [[Other Missing]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Gamma.md"), "# Gamma\n\nLinks to [[Alpha]] and [[Missing Note]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Solo.md"), "# Solo\n\nNo links at all.\n");
+
+        // The expected strings are core's renders over the same vault, read
+        // BEFORE the app opens it (no second session while the app runs).
+        string needleCount;
+        string ghostCount;
+        int allRows;
+        int ghostRows;
+        string ghostStatus;
+        string standardFirstName;
+        string terseFirstName;
+        using (uniffi.slate_uniffi.VaultSession session = uniffi.slate_uniffi.VaultSession.OpenFilesystem(vaultRoot))
+        {
+            using var cancel = new uniffi.slate_uniffi.CancelToken();
+            session.ScanInitial(cancel);
+            uniffi.slate_uniffi.GraphTableSort sort = uniffi.slate_uniffi.SlateUniffiMethods.GraphTableDefaultSort();
+            // The fresh open's query is the default config's filters through
+            // the preferences' one mapper (C-10) — mirrored here field for field.
+            uniffi.slate_uniffi.GraphFilterConfig defaults =
+                uniffi.slate_uniffi.SlateUniffiMethods.GraphConfigDefault().Filters;
+            var plain = new uniffi.slate_uniffi.GraphVisibilityQuery(
+                new uniffi.slate_uniffi.GraphFilter(defaults.IncludeAttachments, defaults.IncludeGhosts, defaults.OrphansOnly),
+                string.Empty, null);
+            uniffi.slate_uniffi.GraphTableRows all = session.GraphTableRows(plain, sort);
+            // Core's default filters show ghosts: the four notes AND the one
+            // unresolved target are the cleared grid's rows.
+            allRows = all.Rows.Length;
+            uniffi.slate_uniffi.GraphTableRows narrowed = session.GraphTableRows(plain with { NameQuery = "Alph" }, sort);
+            needleCount = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphFilterCount(
+                (uint)narrowed.Rows.Length, (uint)narrowed.Total));
+            uniffi.slate_uniffi.GraphTableRows ghosts = session.GraphTableRows(
+                uniffi.slate_uniffi.SlateUniffiMethods.GraphPresetQuery(uniffi.slate_uniffi.GraphPreset.Unresolved), sort);
+            ghostRows = ghosts.Rows.Length;
+            ghostCount = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphFilterCount(
+                (uint)ghosts.Rows.Length, (uint)ghosts.Total));
+            int kind = Array.FindIndex(
+                uniffi.slate_uniffi.SlateUniffiMethods.GraphTableColumns(),
+                column => column.Column == uniffi.slate_uniffi.GraphTableColumn.Kind);
+            ghostStatus = ghosts.Rows[0].Cells[kind];
+            // The default sort is links-in descending: Alpha (two in-links) is
+            // the first row; its Name at Standard is P1's copy, at Terse the
+            // bare label.
+            uniffi.slate_uniffi.GraphTableRow first = all.Rows[0];
+            var copy = new uniffi.slate_uniffi.GraphRowCopy(
+                first.Label, first.Kind, first.LinksIn, first.LinksOut,
+                first.Kind == uniffi.slate_uniffi.GraphNodeKind.Ghost ? first.LinksIn + first.EmbedsIn : 0, false);
+            standardFirstName = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphRow(uniffi.slate_uniffi.GraphVerbosity.Standard, copy));
+            terseFirstName = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphRow(uniffi.slate_uniffi.GraphVerbosity.Terse, copy));
+            Assert.Equal(first.Label, terseFirstName);
+        }
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-graph-navigator-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "Graph navigator"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+            WaitForVaultOpen(window);
+
+            // Rule F, Term F6: the palette's close routes to the graph arm and
+            // the landing seats the grid's row.
+            RunPaletteCommand(window, automation, "Open Graph");
+            AutomationElement grid = WaitForElement(window, "GraphTableGrid", TimeSpan.FromSeconds(20));
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphTableGrid"), TimeSpan.FromSeconds(10)),
+                $"the open did not land focus on the grid's row; focus is {DescribeFocusedElement(automation)}");
+
+            // C-5's order with nothing narrowing: Shift+Tab to the switcher
+            // (one stop — the checked Table choice; the switcher panel itself
+            // has no peer, so the choice is what UIA reports), Shift+Tab again
+            // to the field.
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.TAB);
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphMode.table"), TimeSpan.FromSeconds(10)),
+                $"Shift+Tab from the grid did not reach the switcher; focus is {DescribeFocusedElement(automation)}");
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.TAB);
+            AutomationElement field = WaitForElement(window, "GraphFilterField", TimeSpan.FromSeconds(10));
+            AssertEventuallyFocused(field, $"Shift+Tab from the switcher did not reach the filter field; focus is {DescribeFocusedElement(automation)}.");
+            Assert.Equal("Filter graph by note name", field.Properties.Name.Value);
+            Assert.Equal("Filter notes", field.Properties.HelpText.Value);
+
+            // A needle matching one note: the grid narrows, the region reads
+            // core's count behind the label prefix.
+            Keyboard.Type("Alph");
+            Assert.True(
+                SpinWait.SpinUntil(() => RowCount(grid) == 1, TimeSpan.FromSeconds(10)),
+                $"the needle did not narrow the grid to one row; it reads {RowCount(grid)}");
+            AutomationElement summary = WaitForElement(window, "GraphFilterSummary", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(() => summary.Properties.Name.ValueOrDefault == "Filter results: " + needleCount, TimeSpan.FromSeconds(10)),
+                $"the count region reads '{summary.Properties.Name.ValueOrDefault}', not '{"Filter results: " + needleCount}'");
+
+            // Escape (rung 1): the field empties, the region collapses, and the
+            // landing waits for the cleared rows (Term F3) before seating a row.
+            PressKey(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(() => field.Patterns.Value.Pattern.Value.ValueOrDefault == string.Empty, TimeSpan.FromSeconds(10)),
+                "Escape did not clear the needle");
+            Assert.True(
+                SpinWait.SpinUntil(() => RowCount(grid) == allRows, TimeSpan.FromSeconds(10)),
+                $"the cleared rows never landed; the grid reads {RowCount(grid)}, not {allRows}");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphTableGrid"), TimeSpan.FromSeconds(10)),
+                $"Escape did not seat the reader on the cleared rows; focus is {DescribeFocusedElement(automation)}");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is null
+                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")).Properties.IsOffscreen.ValueOrDefault,
+                    TimeSpan.FromSeconds(10)),
+                "the count region did not collapse when nothing narrows");
+
+            // The Orphaned Notes preset (route (b)): the orphan subset, the region
+            // collapsed — the backend filter alone narrows, one outcome.
+            RunPaletteCommand(window, automation, "Graph: Orphaned Notes");
+            Assert.True(
+                SpinWait.SpinUntil(() => RowCount(grid) == 1 && TypeColumn(grid)[0].Contains("Solo", StringComparison.Ordinal), TimeSpan.FromSeconds(10)),
+                $"the orphans preset did not narrow the grid to Solo; it reads [{string.Join(", ", TypeColumn(grid))}]");
+            Assert.True(
+                window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is null
+                    || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")).Properties.IsOffscreen.ValueOrDefault,
+                "the count region showed under a backend-only narrowing");
+
+            // The Unresolved Links preset: the region reads the ghost count
+            // against the backend total; every row's ItemStatus is the ghost's kind.
+            RunPaletteCommand(window, automation, "Graph: Unresolved Links");
+            Assert.True(
+                SpinWait.SpinUntil(() => RowCount(grid) == ghostRows, TimeSpan.FromSeconds(10)),
+                $"the unresolved preset did not show {ghostRows} ghost rows; the grid reads {RowCount(grid)}");
+            summary = WaitForElement(window, "GraphFilterSummary", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(() => summary.Properties.Name.ValueOrDefault == "Filter results: " + ghostCount, TimeSpan.FromSeconds(10)),
+                $"the count region reads '{summary.Properties.Name.ValueOrDefault}', not '{"Filter results: " + ghostCount}'");
+            AutomationElement ghostCell = WaitForCellStartingWith(grid, "Note: ");
+            Assert.Equal(ghostStatus, ghostCell.Parent.Properties.ItemStatus.Value);
+
+            // Where Am I? (C-8, CD-24): enabled in the palette while the table is
+            // quiescent; the chord on the grid opens the panel with the readback.
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+            AutomationElement search = WaitForElement(window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
+            search.Patterns.Value.Pattern.SetValue("Graph: Where Am I?");
+            AutomationElement results = WaitForElement(window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
+            AutomationElement? whereAmIRow = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            whereAmIRow = results
+                                .FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                                .FirstOrDefault(item => item.Name.StartsWith("Graph: Where Am I?", StringComparison.Ordinal));
+                            return whereAmIRow is not null;
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the palette never listed Graph: Where Am I?");
+            Assert.True(whereAmIRow!.Properties.IsEnabled.Value, "Where Am I? must be enabled while the table is quiescent");
+            PressKey(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(() => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("CommandPaletteSearch")) is null, TimeSpan.FromSeconds(10)),
+                "the palette did not close");
+            ReassertForegroundForAChord(window);
+            // The preset's landing seated the FIRST ghost silently (rule F,
+            // Term F4: the seat writes no key) — the shared key was cleared
+            // when the orphans snapshot dropped Alpha. The reader's own move
+            // to the second ghost writes the key the readback reads.
+            ghostCell = WaitForCellStartingWith(grid, "Note: ");
+            ghostCell.Focus();
+            AssertEventuallyFocused(ghostCell, "the ghost cell never took focus");
+            PressKey(VirtualKeyShort.DOWN);
+            Assert.True(
+                SpinWait.SpinUntil(() => !ghostCell.Properties.HasKeyboardFocus.ValueOrDefault && FocusIsInside(automation, "GraphTableGrid"), TimeSpan.FromSeconds(10)),
+                $"Down did not move the reader to the second ghost; focus is {DescribeFocusedElement(automation)}");
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_I);
+            AutomationElement readback = WaitForElement(window, "GraphWhereAmIReadback", TimeSpan.FromSeconds(10));
+            Assert.Equal("Where am I?", readback.Properties.Name.Value);
+            string readbackText = readback.Patterns.Value.Pattern.Value.Value;
+            Assert.Contains("component", readbackText, StringComparison.Ordinal);
+            Assert.DoesNotContain("zoom", readbackText, StringComparison.Ordinal);
+            AssertEventuallyFocused(readback, "the panel did not take the keys from the grid");
+            // Escape's rung 0: the panel closes and the reader returns to the row.
+            PressKey(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is null
+                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")).Properties.IsOffscreen.ValueOrDefault,
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not close the panel");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphTableGrid"), TimeSpan.FromSeconds(10)),
+                $"the panel's close did not return the keys to the grid; focus is {DescribeFocusedElement(automation)}");
+
+            // Back to the plain table for the level walk: the Orphaned Notes
+            // preset again narrows to Solo; the level walk reads whatever row
+            // is first, so clear the presets through the field's needle route
+            // is not needed — the graph menu's items act on the current rows.
+            RunPaletteCommand(window, automation, "Graph: Orphaned Notes");
+            Assert.True(SpinWait.SpinUntil(() => RowCount(grid) == 1, TimeSpan.FromSeconds(10)), "the orphans preset did not narrow the grid");
+
+            // C-9, C-12: the Graph menu's Verbosity submenu, built from core's
+            // vector — Terse re-names the rows to the bare label, Standard to
+            // the full copy. Through UIA's menu patterns.
+            ReassertForegroundForAChord(window);
+            AutomationElement soloCell = WaitForCellStartingWith(grid, "Note: Solo");
+            soloCell.Focus();
+            AssertEventuallyFocused(soloCell, "the Solo cell never took focus");
+            SelectGraphVerbosity(window, automation, "terse");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => WaitForCellStartingWith(grid, "Note: Solo").Parent.Properties.Name.ValueOrDefault == "Solo",
+                    TimeSpan.FromSeconds(10)),
+                $"Terse did not re-name the row to the bare label; it reads '{WaitForCellStartingWith(grid, "Note: Solo").Parent.Properties.Name.ValueOrDefault}'");
+            SelectGraphVerbosity(window, automation, "standard");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => WaitForCellStartingWith(grid, "Note: Solo").Parent.Properties.Name.ValueOrDefault?.StartsWith("Solo, ", StringComparison.Ordinal) == true,
+                    TimeSpan.FromSeconds(10)),
+                $"Standard did not re-name the row to the full copy; it reads '{WaitForCellStartingWith(grid, "Note: Solo").Parent.Properties.Name.ValueOrDefault}'");
+            _ = standardFirstName;
+
+            AssertAxeClean(process, "graph-navigator");
+        }
+        finally
+        {
+            if (process is { HasExited: false })
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(5000);
+            }
+            process?.Dispose();
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>Whether the focused element is the named element or inside it.</summary>
+    private static bool FocusIsInside(UIA3Automation automation, string automationId)
+    {
+        try
+        {
+            AutomationElement? focused = automation.FocusedElement();
+            for (AutomationElement? node = focused; node is not null; node = node.Parent)
+            {
+                if (node.Properties.AutomationId.ValueOrDefault == automationId)
+                {
+                    return true;
+                }
+                if (node.Properties.ControlType.ValueOrDefault == ControlType.Window)
+                {
+                    return false;
+                }
+            }
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+        }
+        return false;
+    }
+
+    private static int RowCount(AutomationElement grid)
+    {
+        try
+        {
+            return grid.Patterns.Grid.Pattern.RowCount.Value;
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            return -1;
+        }
+    }
+
+    /// <summary>The Graph menu's Verbosity item for a core tag, through UIA's
+    /// ExpandCollapse on the menus and Toggle on the check item (C-9's
+    /// CheckMenuItem peer).</summary>
+    private static void SelectGraphVerbosity(Window window, UIA3Automation automation, string tag)
+    {
+        AutomationElement menu = WaitForElement(window, "GraphMenu", TimeSpan.FromSeconds(10));
+        menu.Patterns.ExpandCollapse.Pattern.Expand();
+        AutomationElement submenu = WaitForElement(window, "GraphVerbosityMenu", TimeSpan.FromSeconds(10));
+        submenu.Patterns.ExpandCollapse.Pattern.Expand();
+        AutomationElement item = WaitForElement(window, "GraphVerbosity." + tag, TimeSpan.FromSeconds(10));
+        if (item.Patterns.Toggle.IsSupported)
+        {
+            item.Patterns.Toggle.Pattern.Toggle();
+        }
+        else
+        {
+            item.Patterns.Invoke.Pattern.Invoke();
+        }
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
+        if (window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphVerbosity." + tag)) is { } stillOpen
+            && !stillOpen.Properties.IsOffscreen.ValueOrDefault)
+        {
+            PressKey(VirtualKeyShort.ESCAPE);
+            PressKey(VirtualKeyShort.ESCAPE);
+        }
+    }
+
+    /// <summary>
     /// W6-2 PR B, slice B1 (#746), contract B-18 (§W-C): the Connections leaf
     /// journey — open a note through the graph table (PR A's proven route),
     /// Show Connections through the palette, assert the heading, the tree

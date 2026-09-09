@@ -214,7 +214,7 @@ public sealed partial class GraphTableTests
         {
             using var host = new Host(4, "graph-tab-order");
             GraphDocumentViewModel document = host.Open();
-            var view = new GraphSurfaceView { Model = document };
+            GraphSurfaceView view = SurfaceFor(host, document);
             // The order is the header's tab indices — the field, the summary
             // (when visible), Clear (when visible), the switcher as ONE stop,
             // then the state host or the grid — so from a row with nothing
@@ -230,6 +230,27 @@ public sealed partial class GraphTableTests
             Assert.Equal(5, KeyboardNavigation.GetTabIndex(view.StateTextForTests));
             Assert.Equal(KeyboardNavigationMode.Local, KeyboardNavigation.GetTabNavigation(view));
             Assert.True(KeyboardNavigation.GetIsTabStop(view.FilterSummaryForTests));
+            // The table is a LOCAL scope of its own: the wrapper numbers its
+            // grid 0 and its summary 1, and without the scope those flatten
+            // into the surface's order ahead of the field (TGC-9).
+            Assert.Equal(KeyboardNavigationMode.Local, KeyboardNavigation.GetTabNavigation(view.TableForTests));
+            // The order TRAVERSED, not only declared: hosted, landed on a
+            // row, Shift+Tab's traversal reaches the switcher's checked choice
+            // and then the field — never the grid's own summary.
+            using HostedWindow window = HostInWindow(view);
+            document.RequestFocusLanding(GraphTabOf(host));
+            window.UpdateLayout();
+            Assert.True(GridHasTheKeys(view));
+            var previous = new TraversalRequest(FocusNavigationDirection.Previous);
+            Assert.True(((UIElement)Keyboard.FocusedElement).MoveFocus(previous));
+            Assert.Same(view.ModeChoicesForTests[0], Keyboard.FocusedElement);
+            Assert.True(view.ModeChoicesForTests[0].MoveFocus(previous));
+            Assert.Same(view.FilterFieldForTests, Keyboard.FocusedElement);
+            // And forward from the switcher: the grid's cell, not the summary.
+            var next = new TraversalRequest(FocusNavigationDirection.Next);
+            Assert.True(view.ModeChoicesForTests[0].Focus());
+            Assert.True(view.ModeChoicesForTests[0].MoveFocus(next));
+            Assert.True(GridHasTheKeys(view));
         });
     }
 
