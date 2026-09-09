@@ -352,6 +352,7 @@ public sealed class GraphNavigatorTests
             // report; here the seam refuses AFTER the write.
             var navigator = new GraphNavigator(
                 state,
+                host.Workspace.GraphPreferences,
                 () => host.Workspace.GraphDocument,
                 () => null,
                 _ => new GraphPresetOpenReport(ArmConsumed: false, GraphEffective: false));

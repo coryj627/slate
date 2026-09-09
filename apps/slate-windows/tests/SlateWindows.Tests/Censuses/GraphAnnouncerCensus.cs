@@ -803,8 +803,11 @@ public sealed class GraphAnnouncerCensus
         // constructor's seed and the fresh open's re-apply.
         string[] allowedCallers =
         [
+            // C-10: the fresh open's re-apply and the constructor's seed.
+            "Graph/WorkspaceViewModel.Graph.cs:AttachGraphDocumentTo",
             "Graph/GraphNavigator.cs:RunPreset",
             "Graph/GraphNavigator.cs:RunPreset",
+            "WorkspaceViewModel.cs:<ctor>",
         ];
         string[] queryNames = ["Filter", "NameQuery", "KindOnly"];
         string[] backingFields = ["_filter", "_nameQuery", "_kindOnly"];

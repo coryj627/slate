@@ -113,6 +113,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     private readonly GraphAnnouncer _announcer;
     private readonly Func<bool> _isEffectiveActive;
     private readonly Func<GraphVerbosity> _verbosity;
+    private readonly GraphPreferencesViewModel? _preferences;
     private readonly Func<int> _lifecycleGeneration;
     private readonly Func<bool> _isSeated;
     private readonly Dictionary<GraphNodeKind, IReadOnlyList<GraphRowActionSpec>> _actionsByKind;
@@ -138,7 +139,8 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         SynchronizationContext? ownerContext = null,
         Func<int>? lifecycleGeneration = null,
         Func<bool>? isSeated = null,
-        GraphNavigator? navigator = null)
+        GraphNavigator? navigator = null,
+        GraphPreferencesViewModel? preferences = null)
         : base(
             synchronousForTests: false,
             ownerContext
@@ -163,7 +165,16 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         _session = session;
         _announcer = announcer;
         _isEffectiveActive = isEffectiveActive;
-        _verbosity = verbosity;
+        // C-9: the level is read LIVE from the workspace's preferences at
+        // every render, and a change is forwarded as this document's own
+        // Verbosity change (the table view re-labels on it); a bare
+        // document in a fact reads its own function.
+        _preferences = preferences;
+        _verbosity = preferences is null ? verbosity : () => preferences.Verbosity;
+        if (preferences is not null)
+        {
+            preferences.PropertyChanged += OnPreferencesChanged;
+        }
         // Rule A (IPA-6): the lifecycle's generation, read when a body is
         // started and again at dispatch; a host without a lifecycle (a
         // fact's bare document, the runner) reads a constant.
@@ -380,9 +391,19 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
 
     public ulong HighWaterForTests => _highWater;
 
-    /// <summary>The verbosity the row copy is rendered at (AD-6:
-    /// Standard until PR C).</summary>
+    /// <summary>The verbosity the row copy is rendered at — the
+    /// preferences' live level (C-9; AD-6 until PR C).</summary>
     public GraphVerbosity Verbosity => _verbosity();
+
+    private void OnPreferencesChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        // No retirement guard here: the retirement UNSUBSCRIBES, and that
+        // is the fact a retired document forwards nothing pins.
+        if (e.PropertyName == nameof(GraphPreferencesViewModel.Verbosity))
+        {
+            OnPropertyChanged(nameof(Verbosity));
+        }
+    }
 
     // --- Seams the workspace wires (contracts A-8, A-9) --------------------
 
@@ -1028,6 +1049,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         _seq++;
         _request = null;
         SetCurrent(null);
+        if (_preferences is not null)
+        {
+            _preferences.PropertyChanged -= OnPreferencesChanged;
+        }
         Shutdown();
         // A-1 as amended (W6-2 PR B, BD-12): the relay is the workspace's;
         // retirement drops THIS document's pending classes — the mac's

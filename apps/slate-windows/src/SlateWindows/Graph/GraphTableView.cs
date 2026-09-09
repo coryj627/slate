@@ -65,11 +65,13 @@ internal sealed class GraphTableView : UserControl
         if (e.OldValue is GraphDocumentViewModel old)
         {
             old.PublicationInstalled -= view.OnPublicationInstalled;
+            old.PropertyChanged -= view.OnModelPropertyChanged;
             old.ViewState.PropertyChanged -= view.OnViewStateChanged;
         }
         if (e.NewValue is GraphDocumentViewModel model)
         {
             model.PublicationInstalled += view.OnPublicationInstalled;
+            model.PropertyChanged += view.OnModelPropertyChanged;
             model.ViewState.PropertyChanged += view.OnViewStateChanged;
             view._grid.Announce = model.GridRelaySeam;
             view.Rebind(model, model.Publication);
@@ -101,6 +103,17 @@ internal sealed class GraphTableView : UserControl
             int index = model.CellIndexOf(install.Current.AcceptedSort.Column);
             model.RelayGridEvent(new A11yEvent.GridSorted(
                 model.ColumnSpecs[index].Header, install.Current.AcceptedSort.Ascending));
+        }
+    }
+
+    /// <summary>C-9's RE-LABEL: a verbosity change re-binds the current
+    /// publication under the syncing guard — the rows' Names at the new
+    /// level, no load, no post.</summary>
+    private void OnModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(GraphDocumentViewModel.Verbosity) && Model is { } model)
+        {
+            Rebind(model, model.Publication);
         }
     }
 

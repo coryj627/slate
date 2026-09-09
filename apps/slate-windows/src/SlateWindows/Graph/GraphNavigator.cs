@@ -59,6 +59,7 @@ internal readonly record struct GraphPresetOpenReport(bool ArmConsumed, bool Gra
 internal sealed class GraphNavigator
 {
     private readonly GraphViewState _viewState;
+    private readonly GraphPreferencesViewModel _preferences;
     private readonly Func<GraphDocumentViewModel?> _document;
     private readonly Func<string?> _openAdmissionReason;
     private readonly Func<GraphPreset, GraphPresetOpenReport> _openForPreset;
@@ -73,15 +74,18 @@ internal sealed class GraphNavigator
     /// sets the arm, runs the open's mutation, reports the boundary's verdict.</param>
     internal GraphNavigator(
         GraphViewState viewState,
+        GraphPreferencesViewModel preferences,
         Func<GraphDocumentViewModel?> document,
         Func<string?> openAdmissionReason,
         Func<GraphPreset, GraphPresetOpenReport> openForPreset)
     {
         ArgumentNullException.ThrowIfNull(viewState);
+        ArgumentNullException.ThrowIfNull(preferences);
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(openAdmissionReason);
         ArgumentNullException.ThrowIfNull(openForPreset);
         _viewState = viewState;
+        _preferences = preferences;
         _document = document;
         _openAdmissionReason = openAdmissionReason;
         _openForPreset = openForPreset;
@@ -192,6 +196,9 @@ internal sealed class GraphNavigator
             return;
         }
         _viewState.NameQuery = raw;
+        // Term W7: the needle's field updated and the save scheduled
+        // (C-6), whether or not a document is seated.
+        _preferences.SetNameQuery(raw);
         if (_document() is { IsRetired: false } document)
         {
             _ = document.Request(new GraphRequest.Needle());

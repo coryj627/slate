@@ -109,6 +109,7 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     private readonly GraphViewState _viewState;
     private readonly Func<bool> _isActive;
     private readonly Func<GraphVerbosity> _verbosity;
+    private readonly GraphPreferencesViewModel? _preferences;
     private readonly Func<int> _lifecycleGeneration;
     private readonly GraphFilter _filter;
     private readonly Dictionary<GraphNodeKind, IReadOnlyList<GraphRowActionSpec>> _actionsByKind;
@@ -142,7 +143,9 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         Func<bool> isActive,
         Func<GraphVerbosity> verbosity,
         SynchronizationContext? ownerContext = null,
-        Func<int>? lifecycleGeneration = null)
+        Func<int>? lifecycleGeneration = null,
+        GraphPreferencesViewModel? preferences = null,
+        uint initialDepth = 0)
         : base(
             synchronousForTests: false,
             ownerContext
@@ -163,7 +166,14 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         // pop write its selected key (Term 15); nothing else here reads it.
         _viewState = viewState;
         _isActive = isActive;
-        _verbosity = verbosity;
+        // C-9: the level read live from the preferences, its change
+        // forwarded as the leaf's own (the view re-names its rows on it).
+        _preferences = preferences;
+        _verbosity = preferences is null ? verbosity : () => preferences.Verbosity;
+        if (preferences is not null)
+        {
+            preferences.PropertyChanged += OnPreferencesChanged;
+        }
         _lifecycleGeneration = lifecycleGeneration ?? (static () => 0);
         // Design B / B-15: the fixed local filter is core's, fetched ONCE.
         CountCrossing("graph_connections_filter");
@@ -174,10 +184,11 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
             [GraphNodeKind.Attachment] = FetchRowActions(GraphNodeKind.Attachment),
             [GraphNodeKind.Ghost] = FetchRowActions(GraphNodeKind.Ghost),
         };
-        // B-5: the first depth REQUEST is core's own minimum, read through
-        // the process-wide accessor, clamped through core like every
-        // other — the leaf never writes a literal into the depth (B-19 v).
-        SetDepth(GraphCoreConstants.Once.ConnectionsDepthMin);
+        // B-5 / C-10: the first depth REQUEST is the PERSISTED depth the
+        // workspace passes from the preferences (a bare leaf's zero is
+        // below core's floor), clamped through core like every other —
+        // the leaf never writes a literal into the depth (B-19 v).
+        SetDepth(initialDepth);
     }
 
     // --- The fetched-once inventories --------------------------------------
@@ -278,6 +289,20 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
     public int LoadsIssuedForTests { get; private set; }
 
     public GraphVerbosity Verbosity => _verbosity();
+
+    /// <summary>C-10: installed by the workspace — the depth's persisted
+    /// twin, updated on every change through core's clamp.</summary>
+    internal Action<uint>? DepthChanged { get; set; }
+
+    private void OnPreferencesChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        // No retirement guard here: the retirement UNSUBSCRIBES (the fact
+        // a retired leaf forwards nothing pins that).
+        if (e.PropertyName == nameof(GraphPreferencesViewModel.Verbosity))
+        {
+            OnPropertyChanged(nameof(Verbosity));
+        }
+    }
 
     /// <summary>The residue the seam census names: the one member that
     /// hands out the relay, for the facts.</summary>
@@ -707,6 +732,9 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         }
         _depth = clamped;
         OnPropertyChanged(nameof(Depth));
+        // C-10 (Term W7): the workspace's seam updates the preferences'
+        // connectionsDepth and schedules the save (B-D4, BD-6 close).
+        DepthChanged?.Invoke(clamped);
         if (_root is not null)
         {
             _ = Load(GraphAnnouncePolicy.Summary);
@@ -1101,6 +1129,10 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         _seq++;
         _inFlight = false;
         _request = null;
+        if (_preferences is not null)
+        {
+            _preferences.PropertyChanged -= OnPreferencesChanged;
+        }
         _announcer.DropAllPending();
         Shutdown();
         Install(ConnectionsPublication.NoNote);

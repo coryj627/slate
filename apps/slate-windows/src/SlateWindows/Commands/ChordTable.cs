@@ -1003,7 +1003,26 @@ internal static class ChordTable
             + "the projection; with nothing to do it bubbles to the shell. Delivered by "
             + "GraphNavigator.HandleKey from GraphSurfaceView.OnPreviewKeyDown; the mac "
             + "has no ladder on the graph (C-D3)."),
+        // W6-2 PR C (C-9): the three verbosity levels, one disposition each
+        // — the canvas's twin (PR-4's math-verbosity reason): selected by
+        // one parameterised setter the Graph menu binds with the tag as
+        // its CommandParameter; unregistered because a palette row cannot
+        // supply the parameter; the mac declares no ids for them either.
+        Unreg("windows.graph.setVerbosityTerse", "Graph Verbosity: Terse",
+            CommandSection.Graph, GraphVerbosityReason),
+        Unreg("windows.graph.setVerbosityStandard", "Graph Verbosity: Standard",
+            CommandSection.Graph, GraphVerbosityReason),
+        Unreg("windows.graph.setVerbosityVerbose", "Graph Verbosity: Verbose",
+            CommandSection.Graph, GraphVerbosityReason),
     ];
+
+    private const string GraphVerbosityReason =
+        "W6-2 PR C (C-9), the canvas's PR-4 precedent: the three graph verbosity "
+        + "levels — core's vector, persisted in the vault's graph.json (0b-12) — are "
+        + "selected by one parameterized setter the Graph menu binds with the level's "
+        + "tag as its CommandParameter. Each level is a row so the catalog records the "
+        + "closed set, and none is registered because a palette row cannot supply the "
+        + "parameter. mac declares no SlateCommandID for these either.";
 
     private static IEnumerable<ChordTableEntry> CanvasRows() =>
     [

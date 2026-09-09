@@ -846,4 +846,45 @@ public sealed class ConnectionsLeafViewTests
             }
         });
     }
+
+    /// <summary>W6-2 PR C (C-9): a verbosity change re-names the leaf's
+    /// RETAINED rows at the new level — the copy to the bare label — with
+    /// no load, no new publication and nothing spoken.</summary>
+    [Fact]
+    public void ALeafRowsNameChangesWithNoLoad()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("relabel");
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                GraphConnectionRow core = host.Leaf.Publication.Tree!.Outgoing.First(r => r.Level == 1);
+                ConnectionsRowViewModel before = view.RootsForTests[1].Children.First(r => r.Id == core.Id);
+                Assert.Equal(host.Leaf.RowName(core), before.Name);
+                Assert.NotEqual(core.Label, before.Name);
+                int loads = host.Leaf.LoadsIssuedForTests;
+                ulong seq = host.Leaf.SeqForTests;
+                int lines = host.RelayLines.Count;
+
+                host.Workspace.GraphPreferences.SetVerbosityCommand.Execute("terse");
+                PumpedDispatcher.Drain();
+
+                ConnectionsRowViewModel after = view.RootsForTests[1].Children.First(r => r.Id == core.Id);
+                Assert.Equal(core.Label, after.Name);
+                Assert.Equal(host.Leaf.RowName(core), after.Name);
+                Assert.Equal(loads, host.Leaf.LoadsIssuedForTests);
+                Assert.Equal(seq, host.Leaf.SeqForTests);
+                Assert.Equal(lines, host.RelayLines.Count);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
 }

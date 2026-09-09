@@ -753,7 +753,10 @@ public sealed class ConnectionsLeafCensus
         Assert.True(offenders.Count == 0, "the depth is reached other than by a bound call: " + string.Join("; ", offenders));
         string[] allowed =
         [
-            "Graph/ConnectionsLeafViewModel.cs:<ctor>(GraphCoreConstants.Once.ConnectionsDepthMin)",
+            // W6-2 PR C (C-10): the constructor's producer is the PERSISTED
+            // depth the workspace passes from the preferences; a bare leaf's
+            // zero is below core's floor and clamps to it.
+            "Graph/ConnectionsLeafViewModel.cs:<ctor>(initialDepth)",
             // Normalised text carries no spaces.
             "Graph/ConnectionsLeafViewModel.cs:Deeper(_depth+1)",
             "Graph/ConnectionsLeafViewModel.cs:Shallower(_depth-1)",

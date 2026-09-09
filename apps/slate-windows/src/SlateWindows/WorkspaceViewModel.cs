@@ -9,6 +9,7 @@ using System.Text;
 using System.Windows.Input;
 using System.Windows.Threading;
 using ICSharpCode.AvalonEdit.Document;
+using SlateWindows.Graph;
 using SlateWindows.Reading;
 using uniffi.slate_uniffi;
 
@@ -1611,9 +1612,16 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // handed to the graph document and the leaf, dropped with the
         // workspace — the instance census counts this one construction.
         _graphViewState = NewGraphViewState();
-        // W6-2 PR C (C-1): the ONE navigator, after the view state and
-        // before the first document and the leaf — the instance census
-        // counts this one construction.
+        // W6-2 PR C (C-9, C-10): the ONE preferences object, read at
+        // construction (the mac's eager load), seeding the view state through
+        // the one mapper; a level change drops the relay's pending row line.
+        _graphPreferences = NewGraphPreferences();
+        _graphPreferences.VerbosityChanged += () => _graphRelay.DropPendingNavigation();
+        _graphViewState.ApplyQuery(GraphPreferencesViewModel.VisibilityQueryOf(_graphPreferences.CurrentConfig.Filters));
+        _graphViewState.Groups = _graphPreferences.CurrentConfig.Groups;
+        // W6-2 PR C (C-1): the ONE navigator, after the view state and the
+        // preferences and before the first document and the leaf — the
+        // instance census counts this one construction.
         _graphNavigator = NewGraphNavigator();
         Connections = NewConnectionsLeaf();
         SeedInitialConnectionsMount();

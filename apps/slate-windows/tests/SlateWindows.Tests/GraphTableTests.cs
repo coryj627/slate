@@ -472,4 +472,42 @@ public sealed partial class GraphTableTests
         }
         return null;
     }
+
+    /// <summary>W6-2 PR C (C-9): a verbosity change re-binds the current
+    /// publication under the syncing guard — a realised row's UIA Name
+    /// moves from the corpus copy to the bare label — with no load, the
+    /// same publication, and nothing posted.</summary>
+    [Fact]
+    public void ARealisedRowsNameChangesFromTheCopyToTheBareLabelWithNoLoadAndNoPost()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "graph-relabel");
+            GraphDocumentViewModel document = host.Open();
+            var view = new GraphTableView { Model = document };
+            using HostedWindow window = HostInWindow(view);
+            view.GridForTests.Grid.UpdateLayout();
+            GraphTableRow first = document.Publication.Rows[0];
+            var realized = (DataGridRow?)view.GridForTests.Grid.ItemContainerGenerator.ContainerFromItem(first);
+            Assert.NotNull(realized);
+            string copy = SlateUniffiMethods.A11yRender(
+                new A11yEvent.Graph(new GraphA11yEvent.GraphRow(GraphVerbosity.Standard, document.RowCopy(first)))).Text;
+            Assert.Equal(copy, AutomationProperties.GetName(realized));
+            Assert.NotEqual(first.Label, copy);
+            ulong seq = document.SeqForTests;
+            int lines = host.GraphLines.Count;
+            GraphPublication publication = document.Publication;
+
+            host.Workspace.GraphPreferences.SetVerbosityCommand.Execute("terse");
+            view.GridForTests.Grid.UpdateLayout();
+
+            var relabelled = (DataGridRow?)view.GridForTests.Grid.ItemContainerGenerator.ContainerFromItem(first);
+            Assert.NotNull(relabelled);
+            Assert.Equal(first.Label, AutomationProperties.GetName(relabelled));
+            Assert.Same(publication, document.Publication);
+            Assert.Equal(seq, document.SeqForTests);
+            Assert.Equal(lines, host.GraphLines.Count);
+        });
+    }
+
 }

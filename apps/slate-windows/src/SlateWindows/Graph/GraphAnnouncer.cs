@@ -198,6 +198,19 @@ internal sealed class GraphAnnouncer
         }
     }
 
+    /// <summary>W6-2 PR C (C-9; IGN-17, IGP-21): the NAVIGATION class
+    /// dropped alone — the relay renders at enqueue and holds the line for
+    /// its window, so a row line queued before a verbosity change would
+    /// speak at the old level; the workspace calls this on the change.
+    /// The class enum stays private.</summary>
+    internal void DropPendingNavigation()
+    {
+        if (_pending.TryGetValue(EventClass.Navigation, out PendingLine? line))
+        {
+            _ = line.Take();
+        }
+    }
+
     /// <summary>Test hook: emit every pending debounced line NOW (the
     /// mac <c>flushForTests</c> twin).</summary>
     internal void FlushForTests()

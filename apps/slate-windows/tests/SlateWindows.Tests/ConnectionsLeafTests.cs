@@ -812,4 +812,69 @@ public sealed partial class ConnectionsLeafTests
             Assert.Equal(1, host.Leaf.CrossingsForTests["graph_generation"]);
         });
     }
+
+    /// <summary>W6-2 PR C (C-10): the constructor's first depth request is
+    /// the PERSISTED depth the workspace passes, clamped through core like
+    /// every other write (B-19 v) — a persisted 3 is 3, a 99 the ceiling,
+    /// a bare leaf's 0 the floor — and it issues no load.</summary>
+    [Fact]
+    public void TheInitialDepthIsSeededFromTheConfigAndClampedThroughCore()
+    {
+        using GraphVault vault = GraphVault.Copy("seeded-depth");
+        PumpedDispatcher.Run(() =>
+        {
+            using VaultSession session = VaultSession.OpenFilesystem(vault.Root);
+            using (var cancel = new CancelToken())
+            {
+                session.ScanInitial(cancel);
+            }
+            var announcer = new GraphAnnouncer(_ => { });
+            foreach ((uint initial, uint expected) in new[] { (3u, 3u), (99u, 3u), (0u, 1u), (2u, 2u) })
+            {
+                var leaf = new ConnectionsLeafViewModel(
+                    session, announcer, new GraphViewState(), () => true, () => GraphVerbosity.Standard, initialDepth: initial);
+                Assert.Equal(expected, leaf.Depth);
+                Assert.Equal(1, leaf.CrossingsForTests["graph_clamp_connections_depth"]);
+                Assert.Equal(0, leaf.LoadsIssuedForTests);
+                leaf.Retire();
+            }
+            var bare = new ConnectionsLeafViewModel(session, announcer, new GraphViewState(), () => true, () => GraphVerbosity.Standard);
+            Assert.Equal(GraphCoreConstants.Once.ConnectionsDepthMin, bare.Depth);
+            bare.Retire();
+        });
+    }
+
+    /// <summary>W6-2 PR C (C-10, Term W7): the DepthChanged seam the
+    /// workspace installs fires with the CLAMPED value on every change of
+    /// the depth and never on a no-op — a bound, an equal request, a
+    /// retired leaf.</summary>
+    [Fact]
+    public void DepthChangedFiresWithTheClampedValueAndNotOnANoOp()
+    {
+        using GraphVault vault = GraphVault.Copy("depth-changed");
+        PumpedDispatcher.Run(() =>
+        {
+            using VaultSession session = VaultSession.OpenFilesystem(vault.Root);
+            using (var cancel = new CancelToken())
+            {
+                session.ScanInitial(cancel);
+            }
+            var leaf = new ConnectionsLeafViewModel(
+                session, new GraphAnnouncer(_ => { }), new GraphViewState(), () => true, () => GraphVerbosity.Standard, initialDepth: 1);
+            var seen = new List<uint>();
+            leaf.DepthChanged = depth => seen.Add(depth);
+            leaf.SetDepth(99);
+            leaf.SetDepth(3);
+            leaf.Deeper();
+            leaf.SetDepth(0);
+            leaf.Shallower();
+            leaf.Deeper();
+            Assert.Equal([3u, 1u, 2u], seen);
+            leaf.Retire();
+            leaf.SetDepth(3);
+            leaf.Deeper();
+            Assert.Equal([3u, 1u, 2u], seen);
+        });
+    }
+
 }

@@ -10462,6 +10462,163 @@ the static RenderLabel out of the relay calls it classifies (landed
 ahead of T4 as its own commit). The local regression gate is CI's
 shape from here — the model family excluded, CI's own job runs it.
 
+**TGC-5 — T5: rule W's store, writer and preferences; the live level
+and its re-labels; the persisted depth; the fresh open's re-apply; the
+three dispositions (C-9 minus the menu, C-10; rule W Terms W1–W7).**
+THE STORE: `Graph/GraphConfigStore.cs` is the host I/O and nothing
+else — READ through Term W7's decode arms (missing → the default and
+writable; unreadable, `Unparseable`, `NewerVersion` → the default, NOT
+writable, the file untouched, the reason logged) and WRITE as the
+mac's: the existing text read THROWING (an unreadable file refuses the
+write rather than clobbering it; a test seam stands in for the read so
+a fact can make it fail on a replaceable file), `GraphConfigEncode(
+config, existing)` — core's merge, unknown keys preserved, the bytes
+canonical — to a temporary beside the target and one `File.Move` over
+it, `.slate` created when missing; `graph.json` appears in the store's
+path builder alone. THE WRITER: `Graph/GraphConfigWriter.cs`, one
+static `Shared` per process, keyed by Term W1's identity
+(`Path.GetFullPath`, the separator trimmed, OrdinalIgnoreCase); per key
+the four facts under one lock — the counter, the highest admitted
+generation, the outstanding aggregates (admitted, unattempted) and the
+last successful write — and the three operations: `Reserve` (monotonic,
+never reset), `Enqueue` (admission ATOMIC: a generation at or below the
+highest admitted is dropped at the call; an admitted aggregate joins the
+set and a serial queue on the pool, and its write removes it whether it
+succeeded or failed — a failure logged with the vault path, the task
+completing either way) and `Newest` (the highest outstanding, else
+null). THE PREFERENCES: `Graph/GraphPreferencesViewModel.cs`, one per
+workspace, constructed by NewGraphPreferences in the workspace's
+constructor after the view state and before the navigator and the
+leaf; its read asks the writer's `Newest(key)` first (Term W6) and the
+store's file otherwise; it holds `CurrentConfig` (Term W7, updated BY
+FIELD by each trigger before the schedule — `SetNameQuery` →
+`filters.nameQuery`, `SetVerbosityCommand` → `verbosity`, the leaf's
+`DepthChanged` → `connectionsDepth`, `SetMode` → `mode`, built for PR
+D's switch; the live view state is never folded in) and its writable
+flag; exposes `Verbosity`, `Levels` (core's vector, fetched once per
+process), `Choices` (one GraphVerbosityChoice per spec, `IsSelected`
+updated on every change, re-asserted on a re-selection — m1's rule,
+nothing stored, nothing raised), `IsSelected(spec)` and the one
+parameterised `SetVerbosityCommand` whose parameter is a TAG matched
+ordinally against the vector (an unknown tag, a wrong case, a null, an
+enum: ignored); and runs the schedule (Term W3: the aggregate IS
+`CurrentConfig`, a generation RESERVED at once, the pair pending —
+replacing an older one — and the 400 ms `DispatcherTimer` restarted),
+the hand-off (Term W4: the tick enqueues the pending pair directly into
+the writer and tracks the task; `WhenWritesDrained()` is the tracked
+set's `WhenAll`, added to `ShutdownGraphDocument`'s bounded drains) and
+the flush (Term W5: `Shutdown()` — first in ShutdownGraphDocument —
+moves the state to SHUT, stops the timer, enqueues a pending pair once,
+and refuses every later schedule; no timer outlives the workspace). THE
+ONE MAPPER `VisibilityQueryOf(GraphFilterConfig)` carries the persisted
+record's four fields onto core's query with no overlay; the
+constructor's SEED writes the view state through it (`Groups` from the
+config; `Mode` stays Table while `CurrentConfig` keeps the file's
+`diagram`, C-D6) and the FRESH OPEN — `AttachGraphDocumentTo` creating
+the document with the preset arm NOT set — re-applies the latest saved
+filter through it before the transition's load; with the arm set the
+preset's write stands, and an activation preserves the view. THE LIVE
+LEVEL: the document and the leaf take the preferences at construction
+(the two `GraphVerbosity.Standard` literals go), read `Verbosity` at
+every render, subscribe to the preferences' `PropertyChanged` and
+forward a change as their OWN `Verbosity` change, unsubscribing at
+retirement; the table view's new OnModelPropertyChanged re-binds the
+current publication under the syncing guard on it (the rows' Names at
+the new level; no load, no post) and the leaf view re-names its
+RETAINED rows in place on the leaf's (`RelabelRows` over the occurrence
+index: the row view model's `Name` now notifies and the UIA Name binding
+follows; no rebuild — the view rebuilds only for a new publication — so
+the selection, the expansion and the keys are untouched); the WORKSPACE drops the relay's pending
+NAVIGATION class on a change through the new semantic
+`GraphAnnouncer.DropPendingNavigation()` (the class enum stays
+private). THE DEPTH: the leaf's constructor takes `initialDepth`, its
+first request (a bare leaf's zero clamps to core's floor), passed by
+NewConnectionsLeaf as `GraphPreferences.CurrentConfig.ConnectionsDepth`
+— the depth census's producer entry re-pointed to
+`<ctor>(initialDepth)` — and the `DepthChanged` seam the workspace
+installs updates the config through core's clamp on every change
+(never a no-op, never a retired leaf). THE DISPOSITIONS: three `Unreg`
+rows `windows.graph.setVerbosityTerse/Standard/Verbose` in
+`CommandSection.Graph` with a GraphVerbosityReason twin of the canvas's
+(not command ids); `chords.json` regenerated through the projection —
+the three rows, unregistered, chordless. The writers census's `ApplyQuery` callers gain the
+constructor's seed and the fresh open's re-apply. Facts
+(GraphConfigStoreTests, five): AMissingFileReadsTheDefaultAndWrites;
+EachDecodeFailureReadsTheDefaultReadOnlyAndRefusesEveryLaterSave;
+AnUnreadableExistingFileRefusesTheWrite (a file held with no sharing,
+then the read seam throwing on a replaceable file);
+TheWrittenBytesAreCoresCanonicalTextWithAnUnknownKeyPreserved;
+TheTargetIsNeverTorn. Facts (GraphConfigWriterTests, seven):
+TwoSpellingsOfOneRootShareOneQueueAndOneGeneration;
+TheGenerationIsReservedAtScheduleTime;
+NewestIsTheHighestOutstandingAndNeverAFailedOrDoomedOne;
+AReopenDuringAnExecutingWriteReadsItsAggregate;
+AReopenDuringAStragglingWriteReadsTheStragglersAggregate;
+AFailedWriteIsLostAndTheReopenReadsTheFile;
+AStragglerFromAClosedWorkspaceNeverOverwritesAReopenedWorkspacesWrite.
+Facts (GraphPreferencesTests, twenty-five — the workspace-level ones over
+the graph vault): TheDefaultAndTheLoadedLevel;
+TheSetterAcceptsTheVectorsTagsAndIgnoresAnUnknownOne;
+ReselectingTheLevelReassertsAndStoresNothing;
+ALevelChangeSchedulesASaveCarryingIt;
+TheDispositionsArePresentUnregisteredAndTagTrue; TheAggregatesFields;
+CurrentConfigIsUpdatedBeforeEverySchedule;
+SetModeUpdatesCurrentConfigAndSchedules;
+TenSchedulesIn400msEnqueueOnceWithTheLastAggregate;
+TheTimerFiresTheTickAfterTheWindow;
+ATickAndAShutdownTransferOnePendingPairExactlyOnce;
+AScheduleAfterShutdownIsRefused;
+AnEditWithin400msOfCloseIsEnqueuedAndDrained;
+TheDrainWaitsForAnOutstandingWrite; NoTimerRetainsADisposedWorkspace;
+TheSeedOfEachViewStateFieldAndTheLeafsDepth (a persisted 3; a persisted
+99 → 3); ADiagramModeSeedsTable;
+APersistedDepthReachesTheLeafBeforeAnyGraphTabExists;
+TheDocumentAndTheLeafReadTheLevelLiveAndForwardItsChange (the relay's
+queued row line dropped, the gated count kept; a retired document
+forwards nothing);
+TheFreshOpenReappliesTheLatestSavedFilterAfterAPreset;
+NoReapplyWithTheArmSetOrOnAnActivation;
+EachTriggerSchedulesAndAPresetDoesNot;
+AVerbosityChangeUnderAPresetPersistsThePrePresetFilter;
+TheAggregateIsCurrentConfigAlone;
+TheOldWorkspacesFlushPrecedesTheNewWorkspacesRead. Facts in the
+existing files (five): `GraphAnnouncerTests`.AQueuedRowLineIsDroppedByALevelChange;
+`ConnectionsLeafTests`.TheInitialDepthIsSeededFromTheConfigAndClampedThroughCore
+and DepthChangedFiresWithTheClampedValueAndNotOnANoOp;
+`ConnectionsLeafViewTests`.ALeafRowsNameChangesWithNoLoad;
+`GraphTableTests`.ARealisedRowsNameChangesFromTheCopyToTheBareLabelWithNoLoadAndNoPost.
+Deferred to their slices: the menu's three facts (C-12, T6); the
+instance census, the writer census and the `DepthChanged` seam's
+one-installer census (C-15, T7). Mutations (thirty-seven), each restored
+byte for byte, each caught by the named fact: the seed skipped; the
+mode seeded from the file; a live-field fold; the navigation class not
+dropped, and every class dropped; the re-apply skipped, and the arm
+ignored; the flush not called at shutdown; a preset folding the live
+needle; the needle not persisted; the depth seam not installed, and
+firing the request instead of the clamp; the initial depth ignored;
+the document's level snapshotted, not forwarded, and forwarded past
+retirement; the leaf not forwarding, and forwarding past retirement;
+the leaf view and the table view ignoring the level; the navigation drop
+dropping every class; a schedule re-using its generation; the shutdown
+dropping the pending pair; a schedule accepted after shutdown, and over
+a read-only config; a re-selection storing; an unknown tag accepted;
+the read ignoring the outstanding aggregate; a trigger scheduling
+before its field; admission by the written generation; a failed write
+staying outstanding; a case-sensitive key; an unreadable file treated
+as missing; unknown keys lost; a decode failure writable; a
+disposition's section and tag drifting. Written and REMOVED: "a
+re-apply on every attach" — the attach funnel's graph arm runs only
+when a graph tab is created, the singleton allows one and the close
+nulls the document, so the document is null at every attach and the
+mutation is the same program (recorded here rather than pinned). Two
+mutations first SURVIVED and the code moved: the forwarders' retirement
+guards (`!_retired`) made the unsubscription at retirement redundant,
+so a retired document forwarding "nothing" was the guard's doing —
+the guards are gone and the unsubscription is load-bearing, with the
+retired leaf pinned beside the retired document. The leaf view's first
+re-label was a `Render()` on the level change, which rebuilds only for
+a NEW publication and so re-named nothing — `RelabelRows` replaced it.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,
