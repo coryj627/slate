@@ -11520,7 +11520,12 @@ held, a pair is in flight, or the held snapshot's backend filter is not
 this query's. A needle typed during the first pair, or after a pair
 failure cleared the snapshot, published rows with no authority behind
 them — and, after a failure, under an error the rows arm never clears.
-The kind is Term Q3's now, the Windows shape. (IPG-32, BLOCKER, Q1 and
+CORRECTED BY TGC-17, and this sentence with it: the kind was made Term
+Q3's and the change was REVERTED — Term Q3 is the WINDOWS document's
+rule, the mac's is C-2 (iii)'s rows-only with the receiver's re-fetch,
+and the pair-first fact TGC-1 landed hung on a rows gate no rows request
+would reach. What stands is the reachable half: a current rows publish
+now answers the error a failed pair installed. (IPG-32, BLOCKER, Q1 and
 C-8, mac) A DIAGRAM-MODE EDIT ISSUED NO TABLE TOKEN: the ONE composed-
 query observer lived inside `GraphTableView`, which exists only in Table
 mode, while the inspector's field writes the needle in EITHER mode — so
@@ -11554,6 +11559,45 @@ SwiftUI modifier — and is recorded as read, not run. CI-shaped
 regression 2457 of 2458, the one failure an unrelated reading test
 losing a clipboard race (CLIPBRD_E_CANT_OPEN), green alone; the model
 family 3/3 and the three journeys re-run.
+
+**TGC-17 — IPG-31 corrected after CI: the mac's kind rule is C-2 (iii)'s,
+not Term Q3's; the reachable half kept.** TGC-16 landed IPG-31 as codex
+framed it — the mac's `requestGraphTableRowsIfQueryChanged` choosing a
+PAIR whenever no snapshot is held, a pair is in flight or the filter is
+incompatible, the Windows shape. THE SWIFT LANE THEN RAN FOR FIVE HOURS
+AND WAS KILLED. The cause was that change, not a flake:
+testANeedleDuringAnOrphansPairRefetchesUnderItsOwnRequest parks the ROWS
+publish gate for the needle it types during the preset's pair and awaits
+its entry, and a needle that now issues a PAIR never reaches that gate —
+the fact waited for ever. That fact is not incidental: it PINS the mac's
+landed design, and the design is the contract's. Term Q3 is the WINDOWS
+document's kind rule (rule Q is the document's lineage); the mac's rule
+is C-2 (iii) — rows only, with the receiver's mismatch arms re-fetching
+UNDER THEIR OWN REQUEST when the authority cannot hold the result, which
+is precisely the case the fact drives. The issue-side change is
+REVERTED, and TGC-16's sentence claiming otherwise is corrected in
+place. WHAT STANDS is the finding's reachable half, narrowed to what
+this PR may change: a needle typed after a pair FAILURE published its
+rows underneath the error the failure installed, because the rows arm
+never cleared `graphTableError` — so the reader kept a failure view over
+a successful current request. A current rows publish answers the error
+now. Pinned by testANeedleAfterAFailedPairClearsTheErrorItPublishesUnder.
+A DIVERGENCE IS RECORDED rather than closed: Windows REFUSES a rows-only
+result with no held snapshot and re-fetches (A-2's rows-only arm — the
+publication carries the snapshot, so "holds it" is a question it can
+answer), while the mac's receiver ADMITS it. Aligning them means
+refusing in `receiveGraphTableRows`, and PR A's frozen token facts
+(GraphTableViewTests: the sort's acceptance, the superseded token, the
+two-needle answers) drive that receiver on a BARE `AppState` with no
+snapshot and require it to publish — so the alignment would rewrite
+frozen text and is the owner's call. PROCESS, recorded because it cost
+five hours of CI: a mac change cannot be run on this box, so before
+pushing one, every frozen fact that touches the changed member is read
+and simulated. The two other mac changes of TGC-16 were checked that way
+after the fact — `setGraphTableSort` is driven by no fact but this
+round's own, and no mac test mounts the views the observer moved
+between — and the Swift lane is GREEN on the correction (e505ac72), the
+first run to verify TGC-16's mac half at all.
 
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
