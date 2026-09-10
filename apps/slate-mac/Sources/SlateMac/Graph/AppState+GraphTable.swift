@@ -354,6 +354,16 @@ extension AppState {
         // (W6-2 PR C, C-8: the table's Where-am-I reads it).
         graphTablePublishedRequest = token.request
         graphTableAnsweredSeq = token.seq
+        // A CURRENT result answers the error a failed pair installed
+        // (IPG-31's reachable half): the rows arm never cleared it, so a
+        // needle typed after a failure published its rows UNDER the old
+        // error and the reader kept the failure view over a successful
+        // request. Recorded divergence: Windows REFUSES rows with no held
+        // snapshot and re-fetches (A-2's rows-only arm), while the mac's
+        // receiver admits them — PR A's frozen token facts drive it on a
+        // bare state and require that admission, so the two hosts differ
+        // here until the owner says otherwise.
+        graphTableError = nil
         return true
     }
 
@@ -375,21 +385,15 @@ extension AppState {
     /// flight and issues its token.
     func requestGraphTableRowsIfQueryChanged() {
         guard graphTableRequest?.query != graphVisibilityQuery else { return }
-        // Term Q3 (IPG-31): ROWS ONLY only over an authority this request can
-        // land on — a snapshot HELD, no pair in flight, and its backend filter
-        // the one this query asks for. Otherwise a PAIR under FilterCount,
-        // carrying the pending sort. The mac took the rows-only path always,
-        // so a needle typed during the first pair, or after a pair failure
-        // cleared the snapshot, published rows with no authority behind them
-        // — and, after a failure, under an error the rows arm never clears.
-        let compatible =
-            graphTableSnapshot != nil && !graphTableLoading
-            && graphTableSnapshotFilter == graphVisibilityQuery.filter
-        if compatible {
-            requestGraphTableRows()
-        } else {
-            loadGraphTable(announce: .filterCount, sort: graphTableRequestedSort ?? graphTableSort)
-        }
+        // ROWS ONLY, always — the mac's kind rule is C-2 (iii)'s, not the
+        // Windows document's Term Q3 (IPG-31, refuted at the ISSUE): the
+        // receiver's mismatch arms re-fetch under this request when the
+        // authority cannot hold it, which is exactly what "a needle typed
+        // during a backend-changing pair" is pinned to do
+        // (testANeedleDuringAnOrphansPairRefetchesUnderItsOwnRequest). Making
+        // the issue choose a pair instead left that fact waiting on a rows
+        // gate no rows request would ever reach, and the suite hung.
+        requestGraphTableRows()
     }
 
     /// The grid asked for a sort, or an input changed under the accepted

@@ -698,12 +698,13 @@ final class GraphTabRoutingTests: XCTestCase {
             "a superseded pair installed after the newer request FAILED")
     }
 
-    /// IPG-31 (rule Q, Term Q3): a needle is ROWS ONLY only over an
-    /// authority it can land on. After a pair FAILS the snapshot is gone, so
-    /// the next needle must be a PAIR — the mac issued rows only always, and
-    /// those rows published with no snapshot behind them, under an error the
-    /// rows arm never clears.
-    func testANeedleWithNoSnapshotIssuesAPairAndRestoresTheAuthority() async throws {
+    /// IPG-31's reachable half: a CURRENT rows publish answers the error a
+    /// failed pair installed. The mac issues rows only for every needle —
+    /// that is C-2 (iii)'s landed design, and the ISSUE-side kind rule codex
+    /// asked for is the Windows document's Term Q3, not the mac's — but the
+    /// rows arm never cleared `graphTableError`, so a needle typed after a
+    /// failure published its rows underneath the failure view.
+    func testANeedleAfterAFailedPairClearsTheErrorItPublishesUnder() async throws {
         let state = try await makeAppState()
         try await openQuiescentGraph(state)
         state.graphTableLoadFailureForTests = .Io(message: "disk gone")
@@ -715,11 +716,12 @@ final class GraphTabRoutingTests: XCTestCase {
 
         state.graphTableTextFilter = "a"
         state.requestGraphTableRowsIfQueryChanged()
-        XCTAssertTrue(state.graphTableLoading, "a needle with no snapshot must issue a PAIR")
-        try await pollUntil { !state.graphTableLoading }
-        XCTAssertNotNil(state.graphTableSnapshot, "the pair restored the authority")
-        XCTAssertNil(state.graphTableError, "a successful pair clears the error")
-        XCTAssertEqual(state.graphTablePublishedRequest, state.graphTableRequest)
+        try await pollUntil { state.graphTablePublishedRequest == state.graphTableRequest }
+        // The needle's rows are current, and they ANSWER the error the failed
+        // pair installed — it used to stand over them, so the reader kept a
+        // failure view over a successful request.
+        XCTAssertNil(state.graphTableError, "a current rows publish left the old error standing")
+        XCTAssertEqual(state.graphTableRequest?.query.nameQuery, "a")
     }
 
     /// IPG-33 (rule Q, Term Q5 (c)): asking for the ACCEPTED sort back while
