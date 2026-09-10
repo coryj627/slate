@@ -11147,7 +11147,7 @@ menu); the window arm has a structural census — both edges hooked in
 `HookWindow` and detached in `UnhookWindow` — because no in-process fact
 can raise an OS activation. Facts:
 AMenuHoldsTheRestorationAndTheReturnDelivers,
-TheWindowsBothEdgesAreHookedAndUnhookedTogether. The pass ALSO verified
+TheWindowsThreeFocusEdgesAreHookedAndUnhookedTogether. The pass ALSO verified
 the three findings TGC-9 left for the owner and re-ledgered none; it
 found IPG-3 distinct from TGC-9 (i) (a shown row with no key against a
 key whose row is not shown), which is right. Mutations (six in the
@@ -11297,6 +11297,69 @@ type and to require no temporary file, which kills it. The mac's two
 fixes are pinned by two new Swift facts and arbitrated by CI's swift
 lane, not by a local sweep (CR-3). CI-shaped regression green; the
 model family and the three journeys re-run before the push.
+
+**TGC-13 — The codex post-implementation pass 3: three findings
+(IPG-15..17), none of them new — each is an EARLIER FIX INCOMPLETE.**
+The pass ran on the CI-green, codoki-approved head 7885dbdd and
+re-verified both earlier passes: IPG-1..6, IPG-8, IPG-10, IPG-13 and
+IPG-14 complete; IPG-9 and IPG-12 incomplete (below); IPG-7's and
+IPG-11's production corrections present with their behavioural proof
+weak (below). Counts across the loop: 7 findings with 4 blockers, then
+7 with 6, then 3 with 2 — the first pass where nothing new was found.
+(IPG-16, BLOCKER, IPG-12 INCOMPLETE) A MODEL REPLACEMENT WHILE
+UNLOADED RE-SUBSCRIBED: `Unloaded` dropped the observers, but
+`OnModelChanged` re-took them unconditionally, so an off-tree
+data-context or template swap re-installed exactly what the unload had
+just removed — and the new document then retained the invisible surface
+and table for its life, one more per swap. Both views now refuse to
+subscribe while out of the tree (`Loaded` attaches whatever the model
+is then), and both hold the model they actually OBSERVE rather than a
+flag, so a replacement detaches the old one by name and an unload after
+a replacement asks for none. The fact walks the whole route: unload,
+replace to null and back while out, publish, reload — observing false
+throughout, true exactly once at the end, and the grid re-bound from
+the record as it is then. (IPG-17, MAJOR, the PROOF for IPG-7 and
+IPG-11) THE MENU FACTS CAN PASS WITHOUT TESTING A MENU: both take the
+canvas's refusal path when the desktop will not put the keys in a menu
+(`CanvasNavigatorTests.cs:4161–4207`'s shape, kept deliberately — a
+desktop that refuses menus must still assert something true rather than
+skip), so on such a machine removing the menu hold or the window's
+focus edge would leave them green; and the structural census, despite
+its name, enumerated only `Activated` and `Deactivated`. The census now
+requires all THREE edges hooked in `HookWindow` and detached in
+`UnhookWindow` — the deterministic proof, since no in-process fact can
+raise an OS activation and none can force a desktop to open a menu —
+and it is renamed for what it checks
+(TheWindowsThreeFocusEdgesAreHookedAndUnhookedTogether; TGC-12's
+citation of the old name is corrected in place). The behavioural facts
+keep the canvas's refusal shape: on THIS box the sweep proves they run
+(the menu-hold and the focus-edge mutations are caught through them and
+through the census). (IPG-15, BLOCKER as reported — RECORDED FOR THE
+OWNER, NOT FIXED) A FAILED SUPERSEDING ROWS REQUEST LEAVES A MIXED MAC
+PUBLICATION: with the pair-first order C-2 (iii) requires, a superseded
+pair installs its snapshot while the newer rows are unanswered; if
+those rows then FAIL, the failure arm rolls back the pending sort and
+the announce but not the snapshot, so the table shows the OLD rows under
+the NEW authority, `graphTablePublishedRequest` stays behind the
+request, and the advanced seen mark can suppress the probe's repair.
+The finding is real and reachable (a superseded pair plus an I/O
+failure). It is recorded rather than fixed because its correction as
+proposed — stage the snapshot and install it atomically with the rows —
+is the WINDOWS shape, which frozen A-2 already prescribes for Windows
+("its `seq` and request equal the document's current ones — else drop";
+ONE immutable record in ONE swap) and explicitly records as NOT the
+mac's ("a replacement is never validated against the authority it
+replaces — the mac installs the candidate at `:219–222` before
+`:226`"). Making the mac atomic would rewrite that recorded shape and
+would contradict C-2 (iii)'s pair-first order and the fact TGC-1 landed
+for it; the narrower alternatives (re-fetch on the failure; hold the
+seen mark back) each buy the repair with a new rule no term states — a
+re-fetch loop on a persistent failure, or a generation the probe
+re-reads forever. The owner's call, with the mac's split publication as
+the thing under review. Mutations (three), each restored byte for byte,
+each caught: the surface subscribing off-tree; the table subscribing
+off-tree; the window's focus edge unhooked (caught by the census now,
+not only by a desktop that opens menus). CI-shaped regression green.
 
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 

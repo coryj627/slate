@@ -66,7 +66,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     private bool _raisingRestoration;
     private GraphFocusDeparture? _awayBecause;
     private Window? _hostWindow;
-    private bool _observing;
+    private GraphDocumentViewModel? _observed;
 
     public GraphSurfaceView()
     {
@@ -427,11 +427,17 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     /// double the work the model-changed route already does (codoki).</summary>
     private void ObserveModel(GraphDocumentViewModel? model)
     {
-        if (model is null || _observing)
+        // Nothing subscribes while the element is OUT of the tree: a model
+        // replacement off-tree re-installed the observers Unloaded had just
+        // dropped, and the view was retained by the new document for its
+        // whole life (IPG-16). Loaded attaches whatever the model is then.
+        if (model is null || _detached || ReferenceEquals(_observed, model))
         {
             return;
         }
-        _observing = true;
+        // The model REPLACED another while loaded: the old one goes first.
+        StopObservingModel();
+        _observed = model;
         model.PropertyChanged += OnModelPropertyChanged;
         // After the table's own rebind (it subscribed first): the landing
         // re-tries once the rows are bound (Term F2's install).
@@ -442,19 +448,22 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
 
     private void StopObservingModel(GraphDocumentViewModel? model = null)
     {
-        GraphDocumentViewModel? observed = model ?? Model;
-        if (observed is null || !_observing)
+        // The model actually OBSERVED, not whichever one the property holds
+        // now: a replacement asks for the old one by name, and an unload
+        // after one asks for none (IPG-16).
+        GraphDocumentViewModel? observed = model ?? _observed;
+        if (observed is null || !ReferenceEquals(observed, _observed))
         {
             return;
         }
-        _observing = false;
+        _observed = null;
         observed.PropertyChanged -= OnModelPropertyChanged;
         observed.PublicationInstalled -= OnPublicationInstalled;
         observed.LineageEnded -= OnLineageEnded;
         observed.ViewState.PropertyChanged -= OnViewStateChanged;
     }
 
-    internal bool ObservingForTests => _observing;
+    internal bool ObservingForTests => _observed is not null;
 
     /// <summary>Contract A-11: the mode switcher's items are core's vector
     /// in order; only Table is selectable in PR A.</summary>

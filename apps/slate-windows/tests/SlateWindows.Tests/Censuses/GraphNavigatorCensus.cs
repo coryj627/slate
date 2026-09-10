@@ -468,22 +468,24 @@ public sealed class GraphNavigatorCensus
         Assert.Equal(["Add"], mutators);
     }
 
-    /// <summary>Rule F, Term F4 — the window arm's subscription (IPG-7): the
-    /// hold on a deactivated window ends on the window's <c>Activated</c>,
-    /// which only exists if it is subscribed. Both edges are hooked in
-    /// <c>HookWindow</c> and detached in <c>UnhookWindow</c>, symmetrically:
-    /// deleting the <c>Activated</c> line leaves a restoration stranded
-    /// whenever the load finishes while the window is away, and no
-    /// behavioural fact could reach it without an OS activation.</summary>
+    /// <summary>Rule F, Term F2 — the window's THREE hold-ending edges
+    /// (IPG-7, IPG-11, IPG-17): the hold on a deactivated window ends on
+    /// <c>Activated</c>, and a hold that ends with the keys landing
+    /// elsewhere ends on <c>GotKeyboardFocus</c> — each only exists if it is
+    /// subscribed. All three are hooked in <c>HookWindow</c> and detached in
+    /// <c>UnhookWindow</c>, symmetrically. This is the deterministic proof:
+    /// no in-process fact can raise an OS activation, and the behavioural
+    /// menu facts depend on a desktop that will open one, so deleting an
+    /// edge must fail HERE, on every machine.</summary>
     [Fact]
-    public void TheWindowsBothEdgesAreHookedAndUnhookedTogether()
+    public void TheWindowsThreeFocusEdgesAreHookedAndUnhookedTogether()
     {
         (string Relative, CSharpSource Source) file = ShellCompilation.Sources.Single(s => s.Relative == "Graph/GraphSurfaceView.cs");
         var edges = new List<string>();
         foreach (AssignmentExpressionSyntax assignment in file.Source.Root.DescendantNodes().OfType<AssignmentExpressionSyntax>())
         {
             if (assignment.Left is not MemberAccessExpressionSyntax access
-                || access.Name.Identifier.ValueText is not ("Activated" or "Deactivated"))
+                || access.Name.Identifier.ValueText is not ("Activated" or "Deactivated" or "GotKeyboardFocus"))
             {
                 continue;
             }
@@ -497,8 +499,10 @@ public sealed class GraphNavigatorCensus
             [
                 "HookWindow:+=Activated",
                 "HookWindow:+=Deactivated",
+                "HookWindow:+=GotKeyboardFocus",
                 "UnhookWindow:-=Activated",
                 "UnhookWindow:-=Deactivated",
+                "UnhookWindow:-=GotKeyboardFocus",
             ],
             edges.OrderBy(e => e, StringComparer.Ordinal));
     }

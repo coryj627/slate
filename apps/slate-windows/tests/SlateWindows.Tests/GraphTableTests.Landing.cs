@@ -644,8 +644,22 @@ public sealed partial class GraphTableTests
             window.UpdateLayout();
             Assert.Equal(rowsWhileOut, view.TableForTests.GridForTests.Grid.Items.Count);
 
-            // Back in the tree: observing again, and re-bound from the record
-            // as it is NOW rather than as it was when it left.
+            // A model REPLACEMENT while out of the tree subscribes to
+            // nothing (IPG-16): the route an off-tree template or
+            // data-context swap takes, which Unloaded cannot see coming.
+            view.Model = null;
+            view.TableForTests.Model = null;
+            Assert.False(view.ObservingForTests);
+            Assert.False(view.TableForTests.ObservingForTests);
+            view.Model = document;
+            Assert.False(view.ObservingForTests, "an off-tree replacement re-subscribed the surface");
+            Assert.False(view.TableForTests.ObservingForTests, "an off-tree replacement re-subscribed the table");
+            Assert.True(document.Request(new GraphRequest.Needle()));
+            host.Settle(document);
+            Assert.False(view.ObservingForTests);
+
+            // Back in the tree: observing again — ONCE — and re-bound from
+            // the record as it is NOW rather than as it was when it left.
             stack.Children.Add(view);
             window.UpdateLayout();
             PumpLoadedState();

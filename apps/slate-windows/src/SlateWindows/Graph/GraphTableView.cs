@@ -33,7 +33,8 @@ internal sealed class GraphTableView : UserControl
 
     private readonly AccessibleDataGrid _grid;
     private bool _syncingSelection;
-    private bool _observing;
+    private GraphDocumentViewModel? _observed;
+    private bool _detached;
 
     public GraphTableView()
     {
@@ -55,8 +56,16 @@ internal sealed class GraphTableView : UserControl
         // back in the tree, re-observed and re-bound from the record as it
         // is now (a reparented template keeps the same Model, so the
         // property-changed route never fires for it).
-        Unloaded += (_, _) => StopObservingModel();
-        Loaded += (_, _) => ObserveModel(Model);
+        Unloaded += (_, _) =>
+        {
+            _detached = true;
+            StopObservingModel();
+        };
+        Loaded += (_, _) =>
+        {
+            _detached = false;
+            ObserveModel(Model);
+        };
         // C-5's Tab order: the surface scopes its header's indices LOCALLY
         // and the wrapper numbers its own two stops 0 (the grid) and 1 (the
         // summary) — so this view is a local scope of its own, ONE unit at
@@ -274,11 +283,14 @@ internal sealed class GraphTableView : UserControl
     /// nobody can see, one more of them per split collapse.</summary>
     private void ObserveModel(GraphDocumentViewModel? model)
     {
-        if (model is null || _observing)
+        // Out of the tree, nothing subscribes — a replacement off-tree used
+        // to re-install what Unloaded had dropped (IPG-16).
+        if (model is null || _detached || ReferenceEquals(_observed, model))
         {
             return;
         }
-        _observing = true;
+        StopObservingModel();
+        _observed = model;
         model.PublicationInstalled += OnPublicationInstalled;
         model.PropertyChanged += OnModelPropertyChanged;
         model.ViewState.PropertyChanged += OnViewStateChanged;
@@ -288,18 +300,18 @@ internal sealed class GraphTableView : UserControl
 
     private void StopObservingModel(GraphDocumentViewModel? model = null)
     {
-        GraphDocumentViewModel? observed = model ?? Model;
-        if (observed is null || !_observing)
+        GraphDocumentViewModel? observed = model ?? _observed;
+        if (observed is null || !ReferenceEquals(observed, _observed))
         {
             return;
         }
-        _observing = false;
+        _observed = null;
         observed.PublicationInstalled -= OnPublicationInstalled;
         observed.PropertyChanged -= OnModelPropertyChanged;
         observed.ViewState.PropertyChanged -= OnViewStateChanged;
     }
 
-    internal bool ObservingForTests => _observing;
+    internal bool ObservingForTests => _observed is not null;
 
     private void OnCurrentRowChanged(object? row)
     {
