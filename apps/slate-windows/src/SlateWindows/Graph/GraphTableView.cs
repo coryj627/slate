@@ -33,6 +33,7 @@ internal sealed class GraphTableView : UserControl
 
     private readonly AccessibleDataGrid _grid;
     private bool _syncingSelection;
+    private bool _observing;
 
     public GraphTableView()
     {
@@ -50,6 +51,12 @@ internal sealed class GraphTableView : UserControl
         // presenter that has the keys.
         _grid.FilterRequested += () => Model?.Navigator?.FocusFilterField();
         Content = _grid;
+        // IPG-12: out of the tree, out of the document's subscriber list;
+        // back in the tree, re-observed and re-bound from the record as it
+        // is now (a reparented template keeps the same Model, so the
+        // property-changed route never fires for it).
+        Unloaded += (_, _) => StopObservingModel();
+        Loaded += (_, _) => ObserveModel(Model);
         // C-5's Tab order: the surface scopes its header's indices LOCALLY
         // and the wrapper numbers its own two stops 0 (the grid) and 1 (the
         // summary) — so this view is a local scope of its own, ONE unit at
@@ -87,17 +94,11 @@ internal sealed class GraphTableView : UserControl
         var view = (GraphTableView)sender;
         if (e.OldValue is GraphDocumentViewModel old)
         {
-            old.PublicationInstalled -= view.OnPublicationInstalled;
-            old.PropertyChanged -= view.OnModelPropertyChanged;
-            old.ViewState.PropertyChanged -= view.OnViewStateChanged;
+            view.StopObservingModel(old);
         }
         if (e.NewValue is GraphDocumentViewModel model)
         {
-            model.PublicationInstalled += view.OnPublicationInstalled;
-            model.PropertyChanged += view.OnModelPropertyChanged;
-            model.ViewState.PropertyChanged += view.OnViewStateChanged;
-            view._grid.Announce = model.GridRelaySeam;
-            view.Rebind(model, model.Publication);
+            view.ObserveModel(model);
         }
         else
         {
@@ -264,6 +265,41 @@ internal sealed class GraphTableView : UserControl
             _syncingSelection = wasSyncing;
         }
     }
+
+    /// <summary>The three subscriptions this view holds on the document and
+    /// the workspace's view state, in ONE place (IPG-12): taken with a model
+    /// and on load, dropped on a replacement and on UNLOAD — the document
+    /// and the view state outlive the element, so a table left subscribed
+    /// after it leaves the tree renders every later publication into a grid
+    /// nobody can see, one more of them per split collapse.</summary>
+    private void ObserveModel(GraphDocumentViewModel? model)
+    {
+        if (model is null || _observing)
+        {
+            return;
+        }
+        _observing = true;
+        model.PublicationInstalled += OnPublicationInstalled;
+        model.PropertyChanged += OnModelPropertyChanged;
+        model.ViewState.PropertyChanged += OnViewStateChanged;
+        _grid.Announce = model.GridRelaySeam;
+        Rebind(model, model.Publication);
+    }
+
+    private void StopObservingModel(GraphDocumentViewModel? model = null)
+    {
+        GraphDocumentViewModel? observed = model ?? Model;
+        if (observed is null || !_observing)
+        {
+            return;
+        }
+        _observing = false;
+        observed.PublicationInstalled -= OnPublicationInstalled;
+        observed.PropertyChanged -= OnModelPropertyChanged;
+        observed.ViewState.PropertyChanged -= OnViewStateChanged;
+    }
+
+    internal bool ObservingForTests => _observing;
 
     private void OnCurrentRowChanged(object? row)
     {

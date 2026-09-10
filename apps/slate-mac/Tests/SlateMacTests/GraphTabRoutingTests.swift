@@ -639,6 +639,88 @@ final class GraphTabRoutingTests: XCTestCase {
             "a superseded rows failure spoke: \(posts)")
     }
 
+    /// IPG-9 (rule Q, Terms Q2/Q7; C-2 (iii)): a pair superseded by a ROWS
+    /// request may still install its snapshot while those rows are UNANSWERED
+    /// — that is the pair-first order C-2 relies on — but never once they
+    /// have published. Installing then attaches a newer snapshot, and its
+    /// seen generation, to rows fetched at an older one: the two disagree,
+    /// the published request still reads current, and the generation probe
+    /// finds nothing to repair because the seen mark moved.
+    func testASupersededPairDoesNotAttachItsSnapshotToAnAnsweredRequest() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        let held = try XCTUnwrap(state.graphTableSnapshot)
+        let gate = AsyncGate()
+        // P: a same-filter refresh, parked BEFORE it crosses.
+        state.graphTablePairPreFetchGate = { _ in await gate.suspend() }
+        state.loadGraphTable(announce: .silent)
+        let pairSeq = state.graphTableSeq
+        await gate.waitUntilEntered()
+        state.graphTablePairPreFetchGate = nil
+        // R: a needle over the held snapshot, published while P waits.
+        state.graphTableTextFilter = "a"
+        state.requestGraphTableRowsIfQueryChanged()
+        XCTAssertNotEqual(state.graphTableSeq, pairSeq, "the needle issued its own token")
+        try await pollUntil { state.graphTablePublishedRequest?.query.nameQuery == "a" }
+        let answered = try XCTUnwrap(state.graphTablePublishedRequest)
+        let rows = state.graphTableRows.count
+        // The vault moves on, so P's snapshot would be NEWER than R's rows.
+        try await bumpTheVault(state)
+        await gate.release()
+        try await pollUntil { !state.graphTableLoading }
+        XCTAssertEqual(
+            state.graphTableSnapshot?.generation, held.generation,
+            "the superseded pair installed its snapshot over answered rows")
+        XCTAssertEqual(
+            state.graphTableSeenGraphGeneration, held.generation,
+            "the superseded pair moved the seen mark, so the probe has nothing to repair")
+        XCTAssertEqual(state.graphTablePublishedRequest, answered, "R's publication stands")
+        XCTAssertEqual(state.graphTableRows.count, rows, "R's rows stand")
+        XCTAssertNil(state.graphTableError)
+    }
+
+    /// IPG-10 (rule Q, Term Q6; C-6): the count's stored gate is the tab's
+    /// liveness AND the token's currency, re-checked at FIRE. A count queued
+    /// for A used to speak after B had become current, which a slow B makes
+    /// reachable — the Windows twin has the complete predicate.
+    func testACountQueuedForASupersededTokenNeverFires() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        // A: a needle whose rows publish and queue their count.
+        state.graphTableTextFilter = "a"
+        state.requestGraphTableRowsIfQueryChanged()
+        try await pollUntil { state.graphTablePublishedRequest?.query.nameQuery == "a" }
+        // B: a second needle, parked before it publishes, so A's queued line
+        // is flushed while B is the current token.
+        let gate = AsyncGate()
+        state.graphTableRowsPublishGate = { _ in await gate.suspend() }
+        state.graphTableTextFilter = "ab"
+        state.requestGraphTableRowsIfQueryChanged()
+        await gate.waitUntilEntered()
+        state.graphAnnouncer.flushForTests()
+        XCTAssertFalse(
+            posts.contains { $0.contains("shown") },
+            "a count queued for a superseded token fired: \(posts)")
+        await gate.release()
+        state.graphTableRowsPublishGate = nil
+        try await pollUntil { state.graphTablePublishedRequest == state.graphTableRequest }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(
+            posts.filter { $0.contains("shown") }.count, 1,
+            "B's own count is the one line: \(posts)")
+    }
+
+    /// The vault gains a note and is rescanned: the graph generation moves.
+    private func bumpTheVault(_ state: AppState) async throws {
+        let vault = try XCTUnwrap(state.currentVaultURL)
+        try Data("a note that moved the generation\n".utf8)
+            .write(to: vault.appendingPathComponent("bump-\(UUID().uuidString).md"))
+        let session = try XCTUnwrap(state.currentSession)
+        try session.scanInitial(cancel: CancelToken())
+    }
+
     /// C-2 (iii)/(iv): a needle typed during a backend-changing pair, in
     /// BOTH completion orders, ends with one snapshot under the preset's
     /// filter, the rows under the needle's request, the count spoken once

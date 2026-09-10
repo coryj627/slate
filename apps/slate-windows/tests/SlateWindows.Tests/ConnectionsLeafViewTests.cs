@@ -870,10 +870,21 @@ public sealed class ConnectionsLeafViewTests
                 ulong seq = host.Leaf.SeqForTests;
                 int lines = host.RelayLines.Count;
 
+                // IPG-13: the row's VISIBLE text binds to Display, which
+                // derives from Name — WPF cannot infer that, so a re-label
+                // that raises Name alone moves the automation peer and
+                // leaves the text on screen at the old level.
+                var raised = new List<string>();
+                before.PropertyChanged += (_, e) => raised.Add(e.PropertyName!);
+
                 host.Workspace.GraphPreferences.SetVerbosityCommand.Execute("terse");
                 PumpedDispatcher.Drain();
 
                 ConnectionsRowViewModel after = view.RootsForTests[1].Children.First(r => r.Id == core.Id);
+                Assert.Same(before, after);
+                Assert.Contains(nameof(ConnectionsRowViewModel.Name), raised);
+                Assert.Contains(nameof(ConnectionsRowViewModel.Display), raised);
+                Assert.Equal(after.Name, after.Display);
                 Assert.Equal(core.Label, after.Name);
                 Assert.Equal(host.Leaf.RowName(core), after.Name);
                 Assert.Equal(loads, host.Leaf.LoadsIssuedForTests);

@@ -64,6 +64,13 @@ public sealed partial class GraphTableTests
     private static GraphSurfaceView SurfaceFor(Host host, GraphDocumentViewModel document) =>
         new() { Model = document, DataContext = GraphTabOf(host) };
 
+    /// <summary>WPF raises Loaded and Unloaded through a dispatcher
+    /// operation at Loaded priority, so a layout pass alone does not deliver
+    /// them: flush that queue before reading what they did.</summary>
+    private static void PumpLoadedState() =>
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+            () => { }, System.Windows.Threading.DispatcherPriority.Loaded);
+
     private static bool GridHasTheKeys(GraphSurfaceView view) => view.TableForTests.GridForTests.Grid.IsKeyboardFocusWithin;
 
     // --- The arms (Term F4) and the at-once delivery (Term F2) -------------------
@@ -543,6 +550,108 @@ public sealed partial class GraphTableTests
             Assert.Null(document.FocusRequest);
             Assert.Null(view.AwayBecauseForTests);
             Assert.True(GridHasTheKeys(view));
+        });
+    }
+
+    /// <summary>Rule F, Term F2 (IPG-11): a hold ends the OTHER way too —
+    /// the reader closes the menu by choosing another pane. The graph's own
+    /// focus was already false and the window never deactivated, so without
+    /// the window's GotKeyboardFocus edge nothing observed it: the
+    /// restoration stood, and a later activation seated the graph, taking
+    /// the keys from the pane the reader had chosen.</summary>
+    [Fact]
+    public void AMenuThatEndsInAnotherPaneWithdrawsTheRestoration()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-landing-menu-elsewhere");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            var row = new MenuItem { Header = new TextBox { Text = "Graph", Width = 80 } };
+            var menu = new Menu();
+            System.Windows.Input.FocusManager.SetIsFocusScope(menu, false);
+            menu.Items.Add(row);
+            var elsewhere = new TextBox { Width = 80 };
+            var stack = new StackPanel();
+            stack.Children.Add(view);
+            stack.Children.Add(menu);
+            stack.Children.Add(elsewhere);
+            using HostedWindow window = HostInWindow(stack);
+            host.Workspace.GraphNavigator.SetNameQuery("note");
+            host.Settle(document);
+            Assert.True(view.FilterFieldForTests.Focus());
+            using var park = new ParkedFetch(document, 1);
+            PressPreview(view.FilterFieldForTests, Key.Escape);
+            park.WaitReached();
+            GraphFocusRequest pending = document.FocusRequest!;
+
+            var target = (TextBox)row.Header;
+            bool took = target.Focus();
+            window.UpdateLayout();
+            bool inAMenu = Canvas.CanvasSurfaceView.FocusIsInAMenu(Keyboard.FocusedElement);
+            if (!took || !inAMenu)
+            {
+                Assert.False(
+                    ReferenceEquals(target, Keyboard.FocusedElement) && !inAMenu,
+                    "the keys landed on the menu row this fact built and production says it is not a menu");
+                return;
+            }
+            Assert.Same(pending, document.FocusRequest);
+            Assert.Equal(GraphFocusDeparture.MenuOpen, view.AwayBecauseForTests);
+            // The load finishes behind the menu, and the menu then ends by
+            // the reader moving to ANOTHER PANE.
+            park.Release();
+            host.Settle(document);
+            window.UpdateLayout();
+            Assert.True(elsewhere.Focus());
+            window.UpdateLayout();
+            Assert.Null(document.FocusRequest);
+            Assert.Null(view.DeferredRestorationForTests);
+            Assert.False(GridHasTheKeys(view));
+            Assert.True(elsewhere.IsKeyboardFocused);
+        });
+    }
+
+    /// <summary>IPG-12: the document and the WORKSPACE-scoped view state
+    /// outlive a surface. A view left subscribed after it leaves the tree is
+    /// reachable for the workspace's life and renders every later
+    /// publication, and a split collapse that re-realises the template adds
+    /// one more of them each time.</summary>
+    [Fact]
+    public void AnUnloadedSurfaceObservesNothingAndAReloadObservesAgain()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-unload-observers");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            var stack = new StackPanel();
+            stack.Children.Add(view);
+            using HostedWindow window = HostInWindow(stack);
+            Assert.True(view.ObservingForTests);
+            Assert.True(view.TableForTests.ObservingForTests);
+
+            // Out of the tree, with the MODEL UNCHANGED — the route a split
+            // collapse takes, which the model-changed handler never sees.
+            stack.Children.Remove(view);
+            window.UpdateLayout();
+            PumpLoadedState();
+            Assert.False(view.ObservingForTests);
+            Assert.False(view.TableForTests.ObservingForTests);
+            int rowsWhileOut = view.TableForTests.GridForTests.Grid.Items.Count;
+            Assert.True(document.Request(new GraphRequest.Needle()));
+            host.Settle(document);
+            window.UpdateLayout();
+            Assert.Equal(rowsWhileOut, view.TableForTests.GridForTests.Grid.Items.Count);
+
+            // Back in the tree: observing again, and re-bound from the record
+            // as it is NOW rather than as it was when it left.
+            stack.Children.Add(view);
+            window.UpdateLayout();
+            PumpLoadedState();
+            Assert.True(view.ObservingForTests);
+            Assert.True(view.TableForTests.ObservingForTests);
+            Assert.Equal(document.Publication.Rows.Count, view.TableForTests.GridForTests.Grid.Items.Count);
         });
     }
 

@@ -2031,6 +2031,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public void OpenGraph()
     {
+        // Rule P, Term P3: the SAME admission the preset funnel asks, read
+        // BEFORE anything is written — "which OpenGraph() reads too". A
+        // refusal writes no cause, opens no tab and starts no load. Windows
+        // leaves the seam null today (C-D1), so this admits in production
+        // and the facts inject a refusal through it (IPG-14).
+        if (GraphOpenAdmissionReason?.Invoke() is not null)
+        {
+            return;
+        }
         // W6-2 PR A (rule L, Term 5): the explicit Open sets its cause
         // before the mutation; the follow method consumes it at the
         // graph's transition, the boundary clears what was not consumed.

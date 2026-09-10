@@ -50,14 +50,20 @@ internal sealed class GraphConfigStore
     /// <summary>Term W7's decode arms; the file is never rewritten on a read.</summary>
     public GraphConfigLoad Read()
     {
-        if (!File.Exists(_path))
-        {
-            return new GraphConfigLoad(SlateUniffiMethods.GraphConfigDefault(), Writable: true, Failure: null);
-        }
         string text;
         try
         {
             text = File.ReadAllText(_path);
+        }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // MISSING is the read's own answer, never `File.Exists`: that
+            // probe answers false for a file it cannot stat — a denied ACL,
+            // a device error — and Term W7's unreadable arm would then be
+            // read as the missing one, handing back a WRITABLE default whose
+            // save overwrites a config nobody could read (IPG-8).
+            _ = exception;
+            return new GraphConfigLoad(SlateUniffiMethods.GraphConfigDefault(), Writable: true, Failure: null);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -90,11 +96,19 @@ internal sealed class GraphConfigStore
             Directory.CreateDirectory(directory);
         }
         string? existing = null;
-        if (File.Exists(_path))
+        try
         {
             // THROWING (the mac's finding 2): a file that exists but cannot
-            // be read must not be treated like a missing one and overwritten.
+            // be read must not be treated like a missing one and overwritten
+            // — so the ABSENCE is the read's own answer here too, and every
+            // other failure propagates and refuses the write (IPG-8). An
+            // `File.Exists` gate let a denied ACL through as "absent" and
+            // then clobbered the file it had never read.
             existing = ReadExistingForTests is { } read ? read(_path) : File.ReadAllText(_path);
+        }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            _ = exception;
         }
         string text = SlateUniffiMethods.GraphConfigEncode(config, existing);
         string temporary = $"{_path}.{Guid.NewGuid():N}.tmp";

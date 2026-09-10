@@ -66,6 +66,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     private bool _raisingRestoration;
     private GraphFocusDeparture? _awayBecause;
     private Window? _hostWindow;
+    private bool _observing;
 
     public GraphSurfaceView()
     {
@@ -229,10 +230,19 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             Model?.Navigator?.DetachPresenter(this);
             ObserveNavigator(null);
             UnhookWindow();
+            // The document and the WORKSPACE-scoped view state outlive this
+            // element: a surface left subscribed after it leaves the tree is
+            // reachable for the workspace's whole life, and a split collapse
+            // that re-realises the template adds another one every time —
+            // each stale grid rendering every later publication (IPG-12).
+            StopObservingModel();
         };
         Loaded += (_, _) =>
         {
             _detached = false;
+            // Re-observe what Unloaded dropped, and re-render from the record
+            // as it is NOW: nothing reached this view while it was out.
+            ObserveModel(Model);
             ObserveNavigator(Model?.Navigator);
             HookWindow();
             TryDeliverFocus();
@@ -373,10 +383,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         bool wasTheAttachedPane = false;
         if (e.OldValue is GraphDocumentViewModel old)
         {
-            old.PropertyChanged -= view.OnModelPropertyChanged;
-            old.PublicationInstalled -= view.OnPublicationInstalled;
-            old.LineageEnded -= view.OnLineageEnded;
-            old.ViewState.PropertyChanged -= view.OnViewStateChanged;
+            view.StopObservingModel(old);
             // The route a REPLACEMENT takes (IGN-12): detach only when the
             // presenter is this surface.
             wasTheAttachedPane = ReferenceEquals(old.Navigator?.PresenterForTests, view);
@@ -386,12 +393,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         view._table.Model = e.NewValue as GraphDocumentViewModel;
         if (e.NewValue is GraphDocumentViewModel model)
         {
-            model.PropertyChanged += view.OnModelPropertyChanged;
-            // After the table's own rebind (it subscribed first): the
-            // landing re-tries once the rows are bound (Term F2's install).
-            model.PublicationInstalled += view.OnPublicationInstalled;
-            model.LineageEnded += view.OnLineageEnded;
-            model.ViewState.PropertyChanged += view.OnViewStateChanged;
+            view.ObserveModel(model);
             view.BuildSwitcher(model);
             view.ApplyState(model.Publication);
             view.RenderFilter(model);
@@ -408,6 +410,44 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             view.RenderFilterEmpty();
         }
     }
+
+    /// <summary>The four subscriptions this surface holds on the document
+    /// and the workspace's view state, in ONE place (IPG-12): taken when a
+    /// model arrives and when the element is loaded, dropped when it is
+    /// replaced and when the element leaves the tree. Idempotent — a load
+    /// under a model that never left re-asks for nothing.</summary>
+    private void ObserveModel(GraphDocumentViewModel? model)
+    {
+        if (model is null || _observing)
+        {
+            return;
+        }
+        _observing = true;
+        model.PropertyChanged += OnModelPropertyChanged;
+        // After the table's own rebind (it subscribed first): the landing
+        // re-tries once the rows are bound (Term F2's install).
+        model.PublicationInstalled += OnPublicationInstalled;
+        model.LineageEnded += OnLineageEnded;
+        model.ViewState.PropertyChanged += OnViewStateChanged;
+        ApplyState(model.Publication);
+        RenderFilter(model);
+    }
+
+    private void StopObservingModel(GraphDocumentViewModel? model = null)
+    {
+        GraphDocumentViewModel? observed = model ?? Model;
+        if (observed is null || !_observing)
+        {
+            return;
+        }
+        _observing = false;
+        observed.PropertyChanged -= OnModelPropertyChanged;
+        observed.PublicationInstalled -= OnPublicationInstalled;
+        observed.LineageEnded -= OnLineageEnded;
+        observed.ViewState.PropertyChanged -= OnViewStateChanged;
+    }
+
+    internal bool ObservingForTests => _observing;
 
     /// <summary>Contract A-11: the mode switcher's items are core's vector
     /// in order; only Table is selectable in PR A.</summary>
@@ -735,6 +775,14 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             _hostWindow = window;
             window.Deactivated += OnWindowDeactivated;
             window.Activated += OnWindowActivated;
+            // The third hold-ending edge (Term F2, IPG-11): the keys landing
+            // anywhere in this window. Without it a menu or overlay hold that
+            // ended by the reader choosing ANOTHER PANE was never observed —
+            // the graph's own focus was already false and the window never
+            // deactivated — so the restoration stood until some later
+            // activation delivered it, stealing the keys from the pane the
+            // reader had chosen. The canvas's `:875-903`.
+            window.GotKeyboardFocus += OnHostFocusMoved;
         }
     }
 
@@ -744,6 +792,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         {
             window.Deactivated -= OnWindowDeactivated;
             window.Activated -= OnWindowActivated;
+            window.GotKeyboardFocus -= OnHostFocusMoved;
             _hostWindow = null;
         }
     }
@@ -759,6 +808,33 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             _awayBecause = null;
         }
         TryDeliverFocus();
+    }
+
+    /// <summary>The keys landed somewhere in this window (Term F2's third
+    /// hold-ending edge): with a restoration held and the overlay and the
+    /// menu gone, focus outside this surface is the reader CHOOSING another
+    /// pane — the classifier withdraws it, exactly as a direct pane change
+    /// would (the canvas's <c>OnHostFocusMoved</c>).</summary>
+    private void OnHostFocusMoved(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        ArgumentNullException.ThrowIfNull(e);
+        if (_deferredRestoration is null)
+        {
+            return;
+        }
+        if (Canvas.CanvasSurfaceView.ShellOverlayIsOpen()
+            || Canvas.CanvasSurfaceView.FocusIsInAMenu(e.NewFocus))
+        {
+            // Still layered OVER the tab: the hold stands.
+            return;
+        }
+        if (IsKeyboardFocusWithin)
+        {
+            // Back here: the delivery is TryDeliverFocus's, through the
+            // keyboard-focus-within edge that already re-asks.
+            return;
+        }
+        Depart(GraphFocusDeparture.PaneFocus);
     }
 
     private void OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)

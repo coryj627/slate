@@ -51,6 +51,39 @@ public sealed class GraphConfigStoreTests : IDisposable
 
     private string ConfigPath => Path.Combine(_root, ".slate", GraphConfigStore.FileName);
 
+    /// <summary>Term W7 (IPG-8): a file that EXISTS but cannot be read is
+    /// the UNREADABLE arm — the default, NOT writable, untouched — and the
+    /// classification is the read's own answer, never an existence probe.
+    /// `File.Exists` answers false for a path it cannot stat, and the store
+    /// then handed back a WRITABLE default whose save overwrote a config it
+    /// had never read. A directory at the file's path is that shape exactly:
+    /// the probe says false, the read throws.</summary>
+    [Fact]
+    public void AnUnreadableFileIsNotTheMissingArmAndIsNeverOverwritten()
+    {
+        string path = Path.Combine(_root, ".slate", GraphConfigStore.FileName);
+        Directory.CreateDirectory(path);
+        Assert.False(File.Exists(path), "the probe must say false for this arrangement to be the one IPG-8 names");
+        var store = new GraphConfigStore(_root);
+
+        GraphConfigLoad load = store.Read();
+        Assert.False(load.Writable, "an unreadable config must not be writable");
+        Assert.NotNull(load.Failure);
+        Assert.Equal(SlateUniffiMethods.GraphConfigDefault(), load.Config);
+
+        // And the write REFUSES at the READ — before it encodes anything or
+        // touches the disk. The refusal must be the read's own failure, not
+        // a later collision: an existence-probe gate reaches the atomic
+        // replace, which fails too, but only after writing a temporary file
+        // it then leaves behind.
+        UnauthorizedAccessException refusal = Assert.Throws<UnauthorizedAccessException>(
+            () => store.Write(SlateUniffiMethods.GraphConfigDefault() with { ConnectionsDepth = 3 }));
+        Assert.Contains(GraphConfigStore.FileName, refusal.Message, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(path), "the write destroyed the target it could not read");
+        Assert.Empty(Directory.EnumerateFileSystemEntries(path));
+        Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(path)!, "*.tmp"));
+    }
+
     [Fact]
     public void AMissingFileReadsTheDefaultAndWrites()
     {

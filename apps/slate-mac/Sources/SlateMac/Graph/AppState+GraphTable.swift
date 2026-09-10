@@ -185,6 +185,8 @@ extension AppState {
         let injectedFailure = graphTableLoadFailureForTests
 
         Task { [weak self] in
+            // The pre-crossing seam (IPG-9), the publish gate's twin.
+            if let gate = self?.graphTablePairPreFetchGate { await gate(token) }
             // The snapshot (the summary, the selection's held generation)
             // and the rows core orders for the token's request (0b-7).
             let result: Result<(GraphSnapshot, GraphTableRows), VaultError> =
@@ -216,6 +218,21 @@ extension AppState {
             let speak = announce != .silent && self.graphTabActive
             switch result {
             case .success(let (snap, rows)):
+                // (IPG-9) A pair superseded by a ROWS request may still
+                // install its snapshot — that is C-2 (iii)'s pair-first
+                // order, where the newer rows have NOT published yet and
+                // will land on this fresher authority. Once the newer
+                // request HAS published, installing here attaches a new
+                // snapshot, and its seen generation, to rows fetched at an
+                // older one: the two disagree, `graphTablePublishedRequest`
+                // still reads current, and the generation probe finds
+                // nothing to repair because the seen mark moved. Drop the
+                // superseded result whole and leave the repair to the probe.
+                let superseded =
+                    token.seq != self.graphTableSeq || token.request != self.graphTableRequest
+                if superseded, self.graphTablePublishedRequest == self.graphTableRequest {
+                    return
+                }
                 // The snapshot and the filter it was fetched under publish
                 // together — the authority's identity (design A).
                 self.graphTableSnapshot = snap
@@ -254,9 +271,14 @@ extension AppState {
                         .graphSnapshotSummary(counts: snap.summaryCounts))
                 case .filterCount:
                     // The count is the rows result's (design B): one path.
+                    // Term Q6's gate is the tab's liveness AND the token's
+                    // currency: a count queued for A must not fire after B
+                    // is current, which a slow B made reachable (IPG-10).
                     self.graphAnnouncer.announceFilterCount(
                         shown: UInt32(rows.rows.count), total: UInt32(rows.total),
-                        gate: { [weak self] in self?.graphTabActive == true })
+                        gate: { [weak self] in
+                            self?.graphTabActive == true && self?.graphTableSeq == token.seq
+                        })
                 case .silent:
                     break
                 }
@@ -400,9 +422,13 @@ extension AppState {
                 let published = self.receiveGraphTableRows(token: token, result: rows)
                 if self.graphTableSeq == token.seq { self.graphTableInFlightAnnounce = nil }
                 if published, self.graphTabActive {
+                    // Term Q6 (IPG-10): the tab's liveness AND this token's
+                    // currency, re-checked at fire — the pair's twin above.
                     self.graphAnnouncer.announceFilterCount(
                         shown: UInt32(rows.rows.count), total: UInt32(rows.total),
-                        gate: { [weak self] in self?.graphTabActive == true })
+                        gate: { [weak self] in
+                            self?.graphTabActive == true && self?.graphTableSeq == token.seq
+                        })
                 }
             case .failure(let error):
                 // As the pair's: a superseded rows failure changed no state

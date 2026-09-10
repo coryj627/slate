@@ -89,7 +89,17 @@ internal sealed class ConnectionsRowViewModel : BindableBase
     public string Name
     {
         get => _name;
-        internal set => SetField(ref _name, value);
+        internal set
+        {
+            if (SetField(ref _name, value))
+            {
+                // The visible TextBlock binds to Display, which DERIVES from
+                // Name; WPF cannot know that, so C-9's re-label reached the
+                // automation peer and left the row's text as it was until the
+                // next rebind (IPG-13, created by TGC-5's relabel).
+                OnPropertyChanged(nameof(Display));
+            }
+        }
     }
 
     public string Status { get; }

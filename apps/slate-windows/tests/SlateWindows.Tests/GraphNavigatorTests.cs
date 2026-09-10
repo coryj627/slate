@@ -837,6 +837,31 @@ public sealed class GraphNavigatorTests
     /// the key when an overlay hides its row, so the snapshot still holds the
     /// node — and the reader was told they were on a row the table does not
     /// show, under filter prose that made it unreachable.</summary>
+    /// <summary>Rule P, Term P3 (IPG-14): the admission seam is the one
+    /// "which OpenGraph() reads too". The preset funnel asked it and the
+    /// plain open did not, so a refused navigation still opened the tab and
+    /// started its load.</summary>
+    [Fact]
+    public void TheRefusedAdmissionStopsThePlainOpenAsWellAsThePreset()
+    {
+        using GraphVault vault = GraphVault.Copy("open-admission");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.Workspace.GraphOpenAdmissionReason = () => "navigation unavailable";
+            host.Workspace.OpenGraph();
+            host.Settle();
+            Assert.Null(host.Workspace.GraphDocument);
+            Assert.DoesNotContain(host.Workspace.Groups.SelectMany(g => g.Tabs), tab => tab.IsGraph);
+            Assert.Empty(host.GraphLines);
+            // Admitted again, the same command opens.
+            host.Workspace.GraphOpenAdmissionReason = null;
+            host.Workspace.OpenGraph();
+            host.Settle();
+            Assert.NotNull(host.Workspace.GraphDocument);
+        });
+    }
+
     [Fact]
     public void TheTableReadbackReadsNoSelectionWhenAnOverlayHidesTheSelectedRow()
     {

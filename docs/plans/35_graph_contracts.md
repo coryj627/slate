@@ -11210,6 +11210,94 @@ to stop early — the loop is paused on an external quota that resets
 before the merge unless the owner decides the standing evidence is
 enough.
 
+**TGC-12 — The codex post-implementation pass 2, run to completion:
+six blockers and one major (IPG-8..14), each verified, each
+discharged.** The pass (xhigh, over the whole diff at the CI-green,
+codoki-approved head 33b13adf) first RE-VERIFIED pass 1's seven fixes
+and found every one present and none of them causative; it then
+returned seven new findings. Every one was reproduced against the code
+and the frozen text before it was fixed; none was refuted. (IPG-8,
+BLOCKER, rule W Term W7) AN UNREADABLE CONFIG COULD BE CLASSIFIED AS
+MISSING AND THEN OVERWRITTEN: both the read and the write asked
+`File.Exists` first, and that probe answers FALSE for a path it cannot
+stat — a denied ACL, a device error — so Term W7's unreadable arm was
+read as the missing one, handing back a WRITABLE default whose save
+then encoded without the existing document and replaced a file nobody
+had read (the write's own comment, "a file that exists but cannot be
+read must not be treated like a missing one and overwritten", was
+guarded by exactly the probe that cannot tell them apart). Both paths
+now classify by the READ: FileNotFoundException and
+DirectoryNotFoundException are the missing arm, every other
+`IOException` or UnauthorizedAccessException is unreadable — the read
+refusing to be writable, the write refusing to run. The fact arranges
+the shape without an ACL: a DIRECTORY at the file's path, where the
+probe says false and the read throws; it asserts the refusal is the
+READ's (an UnauthorizedAccessException naming the file) and that no
+temporary file is left behind, which is what separates refusing before
+the encode from failing at the atomic replace. (IPG-9, BLOCKER, Terms
+Q2/Q7, C-2 (iii)) A SUPERSEDED PAIR'S SUCCESS COULD ATTACH A NEW
+SNAPSHOT TO OLDER ROWS on the mac: the pair's outer guard is the LOAD
+sequence, which a rows request does not advance, so a pair superseded
+by a needle still installed its snapshot AND its seen generation while
+the needle's rows — fetched at the older generation — stayed current;
+the two then disagreed, `graphTablePublishedRequest` still read
+current, and the generation probe found nothing to repair because the
+seen mark had moved. The install is kept for C-2 (iii)'s pair-first
+order — the newer rows UNANSWERED, landing on the fresher authority —
+and dropped whole once the newer request has published. Pinned by a new
+pre-crossing seam (the publish gate's twin) so a fact can move the
+vault on while the pair is still to fetch. (IPG-10, BLOCKER, Term Q6,
+C-6) THE MAC'S COUNT COULD SPEAK FOR A SUPERSEDED TOKEN: both count
+sites stored a fire-time gate of `graphTabActive` alone, where Term Q6
+is the tab's liveness AND the token's currency — a count queued for A
+fired after B became current whenever B was slow. Both gates now carry
+the token, as the Windows twin already did. (IPG-11, BLOCKER, Term F2;
+IPG-7's remedy INCOMPLETE, not causative) A MENU HOLD THAT ENDED IN
+ANOTHER PANE LEFT THE RESTORATION ALIVE: rule F names three
+hold-ending edges, and the surface had two — the window's `Activated`
+and the keys returning here. When the reader closed the menu by
+choosing another pane, the graph's own focus was already false and the
+window never deactivated, so nothing observed it: `_awayBecause`,
+`_deferredRestoration` and the document's request all stood, and a
+later activation seated the graph, taking the keys from the pane the
+reader had chosen. The surface now subscribes the host window's
+GotKeyboardFocus (the canvas's `:875–903`) and withdraws through the
+one classifier when the holds are gone and the keys are outside. T10's
+menu fact covered menu → graph; the new fact covers menu → elsewhere.
+(IPG-12, BLOCKER, a lifecycle leak) UNLOADED VIEWS STAYED SUBSCRIBED:
+`Unloaded` dropped the presenter and the window hooks but left the
+surface's four subscriptions and the table's three installed on the
+document and on the WORKSPACE-scoped view state, both of which outlive
+the element. A split collapse that reparents the pane re-realises the
+template with the SAME model — a route the model-changed handler never
+sees — so every collapse added another live observer, and each stale
+grid re-rendered every later publication. Both views now hold their
+subscriptions in one place, taken with a model and on Loaded, dropped
+on a replacement and on Unloaded, re-binding from the record as it is
+on the way back in. (IPG-13, BLOCKER, C-9/CD-12, CREATED BY TGC-5's
+relabel) THE VERBOSITY RE-LABEL NEVER REACHED THE VISIBLE ROW: the
+Connections row's text binds to `Display`, which derives from `Name`,
+and WPF cannot infer that dependency — so the automation peer changed
+and the words on screen kept the old level's sentence until something
+rebuilt the tree. The setter now raises both, and the shipped fact
+asserts the pair of notifications on the retained row. (IPG-14, MAJOR,
+rule P Term P3) THE PLAIN OPEN BYPASSED THE ADMISSION SEAM that Term P3
+gives it — "which `OpenGraph()` reads too": the preset funnel asked it
+and the plain open did not, so a refused navigation still set the
+cause, opened the tab and started the load. Windows leaves the seam
+null today (C-D1), which is why this is a MAJOR and not a blocker.
+Mutations (seven in the runner), each restored byte for byte, each
+caught by the named fact: the read trusting the probe; the write
+trusting the probe; the window's focus edge unhooked; the surface
+staying subscribed; the table staying subscribed; the re-label missing
+the text; the plain open skipping the admission. The write mutation
+SURVIVED its first run — the arrangement throws either way, at the read
+or at the replace — and the fact was tightened to name the refusal's
+type and to require no temporary file, which kills it. The mac's two
+fixes are pinned by two new Swift facts and arbitrated by CI's swift
+lane, not by a local sweep (CR-3). CI-shaped regression green; the
+model family and the three journeys re-run before the push.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,
