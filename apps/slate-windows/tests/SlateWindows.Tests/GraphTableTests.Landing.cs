@@ -655,6 +655,20 @@ public sealed partial class GraphTableTests
             // A model REPLACEMENT while out of the tree subscribes to
             // nothing (IPG-16): the route an off-tree template or
             // data-context swap takes, which Unloaded cannot see coming.
+            // A DIRECT A → B swap, no intervening null: the grid must drop
+            // A's rows and its bound record, or the retired document stays
+            // reachable through every closure the binding captured — cells,
+            // names, actions, activation (IPG-34).
+            using var other = new Host(4, "graph-unload-other");
+            GraphDocumentViewModel b = other.Open();
+            Assert.NotSame(document, b);
+            Assert.NotEmpty(view.TableForTests.GridForTests.Grid.Items);
+            view.Model = b;
+            Assert.False(view.ObservingForTests, "an off-tree replacement re-subscribed the surface");
+            Assert.False(view.TableForTests.ObservingForTests, "an off-tree replacement re-subscribed the table");
+            Assert.Empty(view.TableForTests.GridForTests.Grid.Items);
+            Assert.Null(view.TableForTests.BoundPublication);
+
             view.Model = null;
             view.TableForTests.Model = null;
             Assert.False(view.ObservingForTests);

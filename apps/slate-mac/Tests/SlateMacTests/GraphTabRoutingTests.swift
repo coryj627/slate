@@ -698,6 +698,77 @@ final class GraphTabRoutingTests: XCTestCase {
             "a superseded pair installed after the newer request FAILED")
     }
 
+    /// IPG-31 (rule Q, Term Q3): a needle is ROWS ONLY only over an
+    /// authority it can land on. After a pair FAILS the snapshot is gone, so
+    /// the next needle must be a PAIR — the mac issued rows only always, and
+    /// those rows published with no snapshot behind them, under an error the
+    /// rows arm never clears.
+    func testANeedleWithNoSnapshotIssuesAPairAndRestoresTheAuthority() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        state.graphTableLoadFailureForTests = .Io(message: "disk gone")
+        state.loadGraphTable(announce: .summary)
+        try await pollUntil { !state.graphTableLoading }
+        state.graphTableLoadFailureForTests = nil
+        XCTAssertNil(state.graphTableSnapshot, "the failed pair cleared the authority")
+        XCTAssertNotNil(state.graphTableError)
+
+        state.graphTableTextFilter = "a"
+        state.requestGraphTableRowsIfQueryChanged()
+        XCTAssertTrue(state.graphTableLoading, "a needle with no snapshot must issue a PAIR")
+        try await pollUntil { !state.graphTableLoading }
+        XCTAssertNotNil(state.graphTableSnapshot, "the pair restored the authority")
+        XCTAssertNil(state.graphTableError, "a successful pair clears the error")
+        XCTAssertEqual(state.graphTablePublishedRequest, state.graphTableRequest)
+    }
+
+    /// IPG-33 (rule Q, Term Q5 (c)): asking for the ACCEPTED sort back while
+    /// another is pending cancels it "at issue with no line". The rows path
+    /// speaks its count on every publish, so the cancellation spoke one too.
+    func testCancellingAPendingSortSaysNothing() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        let accepted = state.graphTableSort
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        XCTAssertNotEqual(byNote, accepted)
+        let gate = AsyncGate()
+        state.graphTableRowsPublishGate = { _ in await gate.suspend() }
+        state.setGraphTableSort(byNote)
+        await gate.waitUntilEntered()
+        XCTAssertEqual(state.graphTableRequestedSort, byNote, "B is pending")
+        // A asked for again: B is cancelled at issue.
+        state.graphTableRowsPublishGate = nil
+        state.setGraphTableSort(accepted)
+        XCTAssertNil(state.graphTableRequestedSort, "the pending sort was cancelled")
+        await gate.release()
+        try await pollUntil { state.graphTablePublishedRequest == state.graphTableRequest }
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(state.graphTableSort, accepted)
+        XCTAssertFalse(
+            posts.contains { $0.contains("shown") },
+            "the cancellation spoke a count: \(posts)")
+    }
+
+    /// IPG-32 (C-8): the table readback answers only while the shown rows
+    /// are the LIVE query's. The published request can equal the current one
+    /// while both trail the view state — an edit made in Diagram mode used to
+    /// leave exactly that state — and the readback then described the old
+    /// rows under the new filter prose.
+    func testTheTableReadbackIsUnavailableWhileTheLiveQueryHasMovedOn() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        XCTAssertNotNil(state.graphDiagramWhereAmIEvent(), "quiescent, the readback answers")
+        // The live query moves WITHOUT a token — the shape a Diagram-mode
+        // edit left behind before the observer moved to the container.
+        state.graphTableTextFilter = "zz-nothing-issued"
+        XCTAssertNotEqual(state.graphTableRequest?.query, state.graphVisibilityQuery)
+        XCTAssertNil(
+            state.graphDiagramWhereAmIEvent(),
+            "the readback answered over rows the live query no longer asks for")
+    }
+
     /// IPG-20 (rule P Term P4, rule Q Term Q9; C-2 (iv)): only the token
     /// that is STILL CURRENT consumes the pending preset. A receiver that
     /// re-fetched under its own request returns `published == false` and the

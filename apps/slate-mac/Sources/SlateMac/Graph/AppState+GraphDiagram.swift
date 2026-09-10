@@ -306,7 +306,12 @@ extension AppState {
             zoomPercent = UInt32(max(0, model.viewport.zoomPercent))
         } else {
             guard graphTableSnapshot != nil, !graphTableLoading,
-                graphTablePublishedRequest == graphTableRequest
+                graphTablePublishedRequest == graphTableRequest,
+                // …and the request the rows answer IS the live query (C-8,
+                // IPG-32): the published request can equal the current one
+                // while both trail the view state, and the readback would
+                // then describe old rows under new filter prose.
+                graphTableRequest?.query == graphVisibilityQuery
             else { return nil }
             if let key = graphSelectedNodeKey,
                 let row = graphTableRows.first(where: { $0.stableKey == key })

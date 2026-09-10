@@ -699,9 +699,16 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                     bool rowsOnly = Publication.HoldsSnapshot
                         && _current is not { Kind: GraphLoadKind.Pair }
                         && ViewState.Filter == Publication.Filter;
+                    // FilterCount either way (Term Q4's "ALWAYS"): the
+                    // POLICY is what the install speaks, for a rows-only
+                    // token as much as for a pair (IPG-33). It used to be
+                    // Silent here and the rows-only install spoke the count
+                    // regardless, which made the policy a lie and left Term
+                    // Q5 (c)'s cancellation — the one rows-only token that
+                    // must say NOTHING — speaking too.
                     _ = Issue(
                         rowsOnly ? GraphLoadKind.RowsOnly : GraphLoadKind.Pair,
-                        rowsOnly ? GraphAnnouncePolicy.Silent : GraphAnnouncePolicy.FilterCount,
+                        GraphAnnouncePolicy.FilterCount,
                         _requestedSort ?? accepted,
                         _requestedSort is not null,
                         preset: null);
@@ -726,7 +733,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                     // carries the sort when the held snapshot is absent, differs
                     // or is stale (Term Q3, IGO-2; Term Q9).
                     _requestedSort = sortRequest.Requested;
-                    _ = Issue(GraphLoadKind.RowsOnly, GraphAnnouncePolicy.Silent, sortRequest.Requested, userSort: true, preset: null);
+                    // Term Q5's combined lines (IGP-19): the adoption's
+                    // GridSorted precedes the receiver's own count, so the
+                    // token carries FilterCount and the install speaks it.
+                    _ = Issue(GraphLoadKind.RowsOnly, GraphAnnouncePolicy.FilterCount, sortRequest.Requested, userSort: true, preset: null);
                     return true;
                 }
             case GraphRequest.Preset preset:
@@ -810,15 +820,17 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// the probe's superseding pair, the receiver's re-fetch — inherits the
     /// replaced request whole: its sort and user sort, its policy and its
     /// preset, under a fresh sequence, so the line the replaced token would
-    /// have spoken is spoken over the newer generation. A replaced ROWS-ONLY
-    /// token would have spoken the count, so the replacing pair speaks it
-    /// (the rows-only receiver's line as a policy — the mac lane's C-2 (iv)
-    /// as landed in TGC-1), with <c>GridSorted</c> first when it carried the
-    /// pending sort.</summary>
+    /// have spoken is spoken over the newer generation — the POLICY, verbatim.
+    /// TGC-3 recorded a deviation here: every replaced rows-only token was
+    /// promoted to <c>FilterCount</c>, because the rows-only install spoke the
+    /// count whatever its policy said. IPG-33 made the policy true, so the
+    /// promotion is gone and the letter of Terms Q4 and Q9 stands: a needle's
+    /// or a sort's replacement speaks the count, and Term Q5 (c)'s
+    /// cancellation stays silent through its replacement too.</summary>
     private GraphLoadToken IssueReplacing(GraphLoadToken replaced) =>
         Issue(
             GraphLoadKind.Pair,
-            replaced.Kind == GraphLoadKind.RowsOnly ? GraphAnnouncePolicy.FilterCount : replaced.Announce,
+            replaced.Announce,
             replaced.Request.Sort,
             replaced.UserSort,
             replaced.Preset);
@@ -1017,8 +1029,14 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             // relay's GATED entry (A-10 as amended, W6-2 PR B): the
             // effective predicate is stored with the line and re-checked
             // at fire, the mac's `graphTabActive` at `:150`, with the
-            // token's currency (Term Q6).
-            AnnounceFilterCountIfEffective(CountOf(next), token);
+            // token's currency (Term Q6). BY THE TOKEN'S POLICY (IPG-33):
+            // every rows-only token that speaks carries FilterCount, and
+            // Term Q5 (c)'s cancellation carries Silent because it must say
+            // nothing — an unconditional count here spoke for it too.
+            if (token.Announce == GraphAnnouncePolicy.FilterCount)
+            {
+                AnnounceFilterCountIfEffective(CountOf(next), token);
+            }
         }
     }
 

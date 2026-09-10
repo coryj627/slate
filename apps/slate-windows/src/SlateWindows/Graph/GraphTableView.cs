@@ -115,6 +115,15 @@ internal sealed class GraphTableView : UserControl
         if (e.NewValue is GraphDocumentViewModel model)
         {
             view.ObserveModel(model);
+            if (view._observed is null)
+            {
+                // The model was REPLACED while this view is out of the tree,
+                // so ObserveModel took nothing (IPG-16) — and the grid would
+                // keep the OLD document's rows, its bound record and every
+                // closure that captured it: cells, names, actions, activation
+                // (IPG-34). Drop them; Loaded binds whatever the model is then.
+                view.ClearBinding();
+            }
         }
         else
         {
@@ -123,8 +132,7 @@ internal sealed class GraphTableView : UserControl
             // old document beside going silent — a retired document must
             // not stay reachable through a bound grid (codoki on
             // 1de19b4; the null arm IPA-1 made reachable).
-            view._grid.Announce = _ => { };
-            view._grid.Bind([], [], summary: string.Empty, accessibilityLabel: GridLabel);
+            view.ClearBinding();
         }
     }
 
@@ -304,6 +312,16 @@ internal sealed class GraphTableView : UserControl
         model.ViewState.PropertyChanged += OnViewStateChanged;
         _grid.Announce = model.GridRelaySeam;
         Rebind(model, model.Publication);
+    }
+
+    /// <summary>Drop everything the grid holds on a document: the rows, the
+    /// bound record and the delegates that captured it (IPG-34). The null
+    /// arm's teardown, reachable from the detached replacement too.</summary>
+    private void ClearBinding()
+    {
+        _grid.Announce = _ => { };
+        _grid.Bind([], [], summary: string.Empty, accessibilityLabel: GridLabel);
+        BoundPublication = null;
     }
 
     private void StopObservingModel(GraphDocumentViewModel? model = null)

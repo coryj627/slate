@@ -11491,6 +11491,70 @@ token installing again — CAUGHT; the two retired above, recorded.
 CI-shaped regression green at 2458; the model family and the three
 journeys re-run before the push.
 
+**TGC-16 — The codex post-implementation pass 6: four findings
+(IPG-31..34), all BLOCKERS, and one of them a fact that ASSERTED a
+contract violation.** Counts: 7 findings with 4 blockers, 7 with 6, 3
+with 2, 10 with 3, 3 with 2, now 4 with 4. (IPG-33, BLOCKER, Term
+Q5 (c), BOTH HOSTS) CANCELLING A PENDING SORT SPOKE THE COUNT: the term
+says the accepted sort asked back "cancels the pending one at issue WITH
+NO LINE", and Windows duly issued that token `Silent` — but the
+rows-only INSTALL announced the count unconditionally, whatever policy
+its token carried, so the policy described nothing and the cancellation
+spoke. The fact named for the rule,
+RequestingTheAcceptedSortCancelsThePendingOneSilently, ASSERTED the
+count: it codified the violation its own name denies. Every rows-only
+token now carries the line its install will speak — FilterCount for the
+needle (Term Q4's "ALWAYS") and for the sort (Term Q5's combined lines,
+GridSorted then the count), Silent for the cancellation alone — and the
+install speaks BY THAT POLICY. The fact asserts no line. THIS ALSO
+RETIRES TGC-3's RECORDED DEVIATION: `IssueReplacing` promoted every
+replaced rows-only token to FilterCount precisely because the receiver
+spoke regardless; it inherits the policy verbatim now, and the letter of
+Terms Q4 and Q9 stands — a cancellation stays silent through its
+replacement too. The mac's twin: `setGraphTableSort` recognises the
+cancellation and issues it silent, and the rows publish honours it.
+(IPG-31, BLOCKER, Term Q3, mac) THE MAC ISSUED ROWS-ONLY WITHOUT
+AUTHORITY: `requestGraphTableRowsIfQueryChanged` always took the
+rows-only path, where Term Q3 requires a PAIR whenever no snapshot is
+held, a pair is in flight, or the held snapshot's backend filter is not
+this query's. A needle typed during the first pair, or after a pair
+failure cleared the snapshot, published rows with no authority behind
+them — and, after a failure, under an error the rows arm never clears.
+The kind is Term Q3's now, the Windows shape. (IPG-32, BLOCKER, Q1 and
+C-8, mac) A DIAGRAM-MODE EDIT ISSUED NO TABLE TOKEN: the ONE composed-
+query observer lived inside `GraphTableView`, which exists only in Table
+mode, while the inspector's field writes the needle in EITHER mode — so
+an edit made in Diagram issued nothing, and the reader who switched back
+saw the previous rows with Where-am-I describing them under the new
+filter prose. The observer is the always-mounted container's now, and
+the table readback additionally requires the published request's query
+to BE the live one. (IPG-34, BLOCKER, CREATED BY IPG-16) A DIRECT
+OFF-TREE REPLACEMENT RETAINED THE OLD DOCUMENT: IPG-16 made
+`ObserveModel` return while detached, and the table's model-changed
+route then did nothing at all — so the grid kept the OLD document's
+rows, its bound record and every closure that captured it (cells, names,
+actions, activation). The route clears the binding when it takes no
+subscription; `Loaded` binds whatever the model is then. TWO PROCESS
+NOTES. FIRST, my own fix for IPG-34 regressed seven facts on its first
+run: the new branch landed BEFORE the existing `else`, so every normal
+bind was cleared a moment after it filled — caught by running the
+families, fixed by restructuring the handler. SECOND, the IPG-34
+mutation SURVIVED its first sweep: the fact reached the new branch only
+through a null and back, where the null arm had already cleared the
+grid, so nothing was observable. It now performs a DIRECT A → B swap
+with a second workspace's document and asserts the grid dropped A's rows
+and its bound record — and the mutation is caught. Mutations (two
+Windows): the rows-only install speaking regardless of policy — CAUGHT;
+the detached replacement keeping the grid — CAUGHT after the fact was
+rebuilt to reach it. The three mac fixes are pinned by three new Swift
+facts (the pair for an authority-less needle, the silent cancellation,
+the readback under a moved live query) and arbitrated by CI's swift
+lane; the observer's PLACEMENT is structural — no unit test can fire a
+SwiftUI modifier — and is recorded as read, not run. CI-shaped
+regression 2457 of 2458, the one failure an unrelated reading test
+losing a clipboard race (CLIPBRD_E_CANT_OPEN), green alone; the model
+family 3/3 and the three journeys re-run.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,

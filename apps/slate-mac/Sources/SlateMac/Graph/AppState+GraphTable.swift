@@ -375,13 +375,29 @@ extension AppState {
     /// flight and issues its token.
     func requestGraphTableRowsIfQueryChanged() {
         guard graphTableRequest?.query != graphVisibilityQuery else { return }
-        requestGraphTableRows()
+        // Term Q3 (IPG-31): ROWS ONLY only over an authority this request can
+        // land on — a snapshot HELD, no pair in flight, and its backend filter
+        // the one this query asks for. Otherwise a PAIR under FilterCount,
+        // carrying the pending sort. The mac took the rows-only path always,
+        // so a needle typed during the first pair, or after a pair failure
+        // cleared the snapshot, published rows with no authority behind them
+        // — and, after a failure, under an error the rows arm never clears.
+        let compatible =
+            graphTableSnapshot != nil && !graphTableLoading
+            && graphTableSnapshotFilter == graphVisibilityQuery.filter
+        if compatible {
+            requestGraphTableRows()
+        } else {
+            loadGraphTable(announce: .filterCount, sort: graphTableRequestedSort ?? graphTableSort)
+        }
     }
 
     /// The grid asked for a sort, or an input changed under the accepted
     /// sort: issue a token and query the rows; the receiver publishes rows
     /// and the accepted sort together or drops the result.
-    func requestGraphTableRows(sort: GraphTableSort? = nil) {
+    func requestGraphTableRows(
+        sort: GraphTableSort? = nil, announce: GraphTableLoadAnnounce = .filterCount
+    ) {
         let token = issueGraphTableToken(sort: sort ?? graphTableSort)
         // A needle or a sort typed during a preset's pair replaces its
         // headline with the count (rule Q, Term Q4 — the order the pair's
@@ -389,7 +405,7 @@ extension AppState {
         // continuation, C-2 (iii)); the rows request's own announce is the
         // count a replacing load inherits (C-2 (iv)).
         graphTablePendingPreset = nil
-        graphTableInFlightAnnounce = .filterCount
+        graphTableInFlightAnnounce = announce
         guard let session = currentSession else {
             failGraphTableRows(token: token)
             return
@@ -416,9 +432,11 @@ extension AppState {
             case .success(let rows):
                 let published = self.receiveGraphTableRows(token: token, result: rows)
                 if self.graphTableSeq == token.seq { self.graphTableInFlightAnnounce = nil }
-                if published, self.graphTabActive {
+                if published, announce != .silent, self.graphTabActive {
                     // Term Q6 (IPG-10): the tab's liveness AND this token's
                     // currency, re-checked at fire — the pair's twin above.
+                    // `announce` is the token's own disposition: Term Q5 (c)'s
+                    // cancellation publishes and says NOTHING (IPG-33).
                     self.graphAnnouncer.announceFilterCount(
                         shown: UInt32(rows.rows.count), total: UInt32(rows.total),
                         gate: { [weak self] in
@@ -446,7 +464,12 @@ extension AppState {
     /// The grid's sort request (0b-14): a token change like any other.
     func setGraphTableSort(_ sort: GraphTableSort) {
         guard sort != graphTableSort || graphTableRequestedSort != nil else { return }
-        requestGraphTableRows(sort: sort)
+        // Term Q5 (c) (IPG-33): asking for the ACCEPTED sort back cancels the
+        // pending one "at issue with no line". The rows path speaks its count
+        // on every publish, so the cancellation spoke one too; it is issued
+        // SILENT and the publish honours that.
+        let cancelling = sort == graphTableSort && graphTableRequestedSort != nil
+        requestGraphTableRows(sort: sort, announce: cancelling ? .silent : .filterCount)
     }
 
     /// Drop the shared cross-projection selection if the node it names is

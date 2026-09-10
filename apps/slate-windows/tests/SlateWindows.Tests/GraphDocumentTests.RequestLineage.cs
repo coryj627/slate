@@ -135,7 +135,12 @@ public sealed partial class GraphDocumentTests
                 document.ViewState.NameQuery = needle;
                 Assert.True(document.Request(new GraphRequest.Needle()));
                 Assert.Equal(GraphLoadKind.RowsOnly, document.CurrentForTests!.Kind);
-                Assert.Equal(GraphAnnouncePolicy.Silent, document.CurrentForTests!.Announce);
+                // FilterCount, because that is the line this token's install
+                // will speak (Term Q4's "ALWAYS"). It read Silent until
+                // IPG-33, while the rows-only install spoke the count anyway —
+                // a policy that described nothing, and one that let Term
+                // Q5 (c)'s cancellation speak.
+                Assert.Equal(GraphAnnouncePolicy.FilterCount, document.CurrentForTests!.Announce);
             }
             Assert.Equal(seq + 3, document.SeqForTests);
             Assert.True(document.IsRequestInFlight);
@@ -554,7 +559,12 @@ public sealed partial class GraphDocumentTests
             host.Settle();
             Flush(document);
             Assert.Equal(accepted, document.Publication.AcceptedSort);
-            Assert.Equal([Count(document.Publication)], host.GraphLines);
+            // Term Q5 (c): "the pending one is CANCELLED at issue WITH NO
+            // LINE". The count used to be spoken here — the rows-only install
+            // announced whatever the token's policy said — and this fact
+            // asserted it, codifying the violation its own name denies
+            // (IPG-33).
+            Assert.Empty(host.GraphLines);
         });
     }
 
