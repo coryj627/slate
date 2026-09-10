@@ -353,6 +353,7 @@ extension AppState {
         // The publication is CURRENT while this equals the newest request
         // (W6-2 PR C, C-8: the table's Where-am-I reads it).
         graphTablePublishedRequest = token.request
+        graphTableAnsweredSeq = token.seq
         return true
     }
 
@@ -360,6 +361,10 @@ extension AppState {
     func failGraphTableRows(token: GraphTableToken) {
         guard token.seq == graphTableSeq else { return }
         graphTableRequestedSort = nil
+        // Terminal (Term Q2): the request is ANSWERED, badly. A pair that
+        // arrives afterwards is not entitled to install over what stands
+        // (IPG-29) — failing is not the same as still being in flight.
+        graphTableAnsweredSeq = token.seq
     }
 
     /// (i) The table's ONE observer on the composed query (contracts doc
@@ -601,7 +606,13 @@ extension AppState {
     /// before it can arrive.
     func pairResultInstalls(token: GraphTableToken) -> Bool {
         let superseded = token.seq != graphTableSeq || token.request != graphTableRequest
-        return !superseded || graphTablePublishedRequest != graphTableRequest
+        // PENDING means neither published NOR failed (IPG-29): a failed rows
+        // request leaves `graphTablePublishedRequest` behind the current one
+        // for ever, which read as "still unanswered" and let a superseded
+        // pair install its snapshot, its filter and its seen generation over
+        // the rows the failure had left standing.
+        let newerIsPending = graphTableAnsweredSeq != graphTableSeq
+        return !superseded || newerIsPending
     }
 
     /// Whether a generation-refresh that has finished probing should

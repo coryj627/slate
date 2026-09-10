@@ -880,7 +880,14 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             || token.LifecycleGeneration != _lifecycleGeneration()
             || token.Seq != _seq
             || _request is null
-            || token.Request != _request)
+            || token.Request != _request
+            // Term Q2: `_current` IS the lineage's one token in flight, and
+            // every terminal arm clears it — so a SECOND envelope for a token
+            // that already installed, failed or was rejected is not the
+            // lineage's either. Without this the fields above still matched
+            // it, and a duplicate completion would publish and speak twice,
+            // or replace a terminal failure with a success (IPG-30).
+            || !ReferenceEquals(_current, token))
         {
             return;
         }

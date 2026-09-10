@@ -92,6 +92,13 @@ internal sealed class GraphTableView : UserControl
 
     /// <summary>Term F2's container realisation: the grid's own event,
     /// forwarded so the surface can re-ask a landing once rows exist.</summary>
+    /// <summary>The publication whose rows the grid is BOUND to (IPG-28).
+    /// The landing reads it instead of trusting that this view's install
+    /// handler ran before the surface's: after an unload, WPF raises the
+    /// PARENT's Loaded first, so the surface re-subscribes before this view
+    /// does and the order the initial bind guarantees is reversed.</summary>
+    internal GraphPublication? BoundPublication { get; private set; }
+
     internal event Action? ContainersRealized
     {
         add => _grid.ContainersRealized += value;
@@ -205,6 +212,7 @@ internal sealed class GraphTableView : UserControl
         {
             _syncingSelection = false;
         }
+        BoundPublication = publication;
     }
 
     /// <summary>Contract A-7: seat the grid on the row whose key equals

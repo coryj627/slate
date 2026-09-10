@@ -677,6 +677,25 @@ final class GraphTabRoutingTests: XCTestCase {
         XCTAssertFalse(
             state.pairResultInstalls(token: stale),
             "a superseded pair installed over an answered request")
+
+        // ANSWERED covers a FAILURE too (IPG-29): a rows request that failed
+        // never publishes, so `graphTablePublishedRequest` stays behind the
+        // current request for ever — which read as "still pending" and let a
+        // superseded pair install its authority over the rows the failure had
+        // left standing.
+        let answeredAfterSuccess = state.graphTableAnsweredSeq
+        state.graphTableRowsFailureForTests = .Io(message: "disk gone")
+        state.graphTableTextFilter = "ab"
+        state.requestGraphTableRowsIfQueryChanged()
+        try await pollUntil { state.graphTableAnsweredSeq != answeredAfterSuccess }
+        state.graphTableRowsFailureForTests = nil
+        XCTAssertNotEqual(
+            state.graphTablePublishedRequest, state.graphTableRequest,
+            "the failed request never published, which is the trap")
+        XCTAssertEqual(state.graphTableAnsweredSeq, state.graphTableSeq, "the failure answered it")
+        XCTAssertFalse(
+            state.pairResultInstalls(token: stale),
+            "a superseded pair installed after the newer request FAILED")
     }
 
     /// IPG-20 (rule P Term P4, rule Q Term Q9; C-2 (iv)): only the token

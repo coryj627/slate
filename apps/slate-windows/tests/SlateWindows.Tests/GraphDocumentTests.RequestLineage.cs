@@ -1026,6 +1026,48 @@ public sealed partial class GraphDocumentTests
         });
     }
 
+    /// <summary>Rule Q, Term Q2 (IPG-30): `_current` IS the lineage's one
+    /// token, and every terminal arm clears it — so a SECOND envelope for a
+    /// token that already installed is not the lineage's. The other fields
+    /// still match it (the document, the session, the seq, the request), so
+    /// without the identity check a duplicate completion published and spoke
+    /// twice, and one arriving after a failure replaced the error.</summary>
+    [Fact]
+    public void ASecondEnvelopeForATerminalTokenChangesNothing()
+    {
+        using GraphVault vault = GraphVault.Copy("terminal-token");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            GraphDocumentViewModel document = Quiescent(host);
+            // A load whose token the fact holds, driven to its INSTALL.
+            using var park = new Park(document, 1);
+            Assert.True(document.Request(new GraphRequest.Needle()));
+            GraphLoadToken installed = document.CurrentForTests!;
+            park.WaitReached();
+            park.Release();
+            Drain(document);
+            Assert.Null(document.CurrentForTests);
+            GraphPublication published = document.Publication;
+            host.GraphLines.Clear();
+            int installs = 0;
+            document.PublicationInstalled += _ => installs++;
+
+            // The worker's envelope, delivered a SECOND time.
+            GraphSnapshot snapshot = host.Session.GraphSnapshot(installed.Request.Query.Filter);
+            GraphTableRows rows = host.Session.GraphTableRows(installed.Request.Query, installed.Request.Sort);
+            document.ReceiveForTests(new GraphLoadEnvelope(
+                installed, installed.Request.Query.Filter, installed.Request.Query,
+                installed.Request.Sort, snapshot, rows, null, document.ViewState.SelectionGeneration));
+
+            Assert.Same(published, document.Publication);
+            Assert.Equal(0, installs);
+            Assert.Empty(host.GraphLines);
+            Assert.False(document.IsRequestInFlight);
+            document.Retire();
+        });
+    }
+
     [Fact]
     public void AStraddledPresetPairRefetchesAndSpeaksTheHeadline()
     {

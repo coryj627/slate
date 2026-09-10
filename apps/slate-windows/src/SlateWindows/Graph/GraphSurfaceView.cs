@@ -258,6 +258,11 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         // owner key changing under a shared document, the grid's containers.
         IsVisibleChanged += OnIsVisibleChanged;
         DataContextChanged += (_, _) => TryDeliverFocus();
+        // The grid's containers (Term F2) — and, since IPG-28, the edge that
+        // re-asks after the table has bound: the surface may reach the install
+        // FIRST after a reload, because WPF raises the parent's Loaded before
+        // the child's, so the guard in the READY arm sends it away and this
+        // edge brings it back once the rows are actually there.
         _table.ContainersRealized += TryDeliverFocus;
     }
 
@@ -742,6 +747,14 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         switch (publication.State)
         {
             case GraphLoadState.Ready:
+                if (!ReferenceEquals(_table.BoundPublication, publication))
+                {
+                    // The grid still holds the PREVIOUS record: seating now
+                    // would land the reader on a row this publication may not
+                    // contain and complete the request against it (IPG-19,
+                    // IPG-28). The table's bind edge re-asks.
+                    return;
+                }
                 // The grid may have been collapsed under EMPTY or ERROR: realise
                 // its containers before the seat (Term F2).
                 _table.UpdateLayout();

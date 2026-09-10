@@ -731,6 +731,59 @@ public sealed partial class GraphTableTests
         });
     }
 
+    /// <summary>Rule F, Terms F2/F4 (IPG-28): IPG-19's landing must not
+    /// depend on the two views' subscription ORDER. The initial bind gives
+    /// the table the document first, but after an unload WPF raises the
+    /// PARENT's Loaded first, so the surface re-subscribes ahead of the
+    /// table and the install reaches it while the grid still holds the old
+    /// rows. The landing reads the table's own bound record instead.</summary>
+    [Fact]
+    public void ALandingAfterAReloadStillWaitsForTheInstalledRows()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-landing-reload");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            var stack = new StackPanel();
+            stack.Children.Add(view);
+            using HostedWindow window = HostInWindow(stack);
+            host.Workspace.GraphNavigator.SetNameQuery("note1");
+            host.Settle(document);
+            window.UpdateLayout();
+
+            // OUT and back IN: the surface now subscribes before the table.
+            stack.Children.Remove(view);
+            window.UpdateLayout();
+            PumpLoadedState();
+            stack.Children.Add(view);
+            window.UpdateLayout();
+            PumpLoadedState();
+
+            host.Workspace.RequestActiveEditorFocus();
+            window.UpdateLayout();
+            Assert.True(GridHasTheKeys(view));
+            GraphTableRow seated = Assert.IsType<GraphTableRow>(
+                view.TableForTests.GridForTests.Grid.CurrentCell.Item);
+            Assert.Contains("note1", seated.Label, StringComparison.Ordinal);
+
+            using var park = new ParkedFetch(document, 1);
+            host.Workspace.GraphNavigator.SetNameQuery("note2");
+            park.WaitReached();
+            document.RequestFocusLanding(GraphTabOf(host));
+            park.Release();
+            host.Settle(document);
+            window.UpdateLayout();
+
+            Assert.Null(document.FocusRequest);
+            Assert.DoesNotContain(document.Publication.Rows, row => ReferenceEquals(row, seated));
+            GraphTableRow landed = Assert.IsType<GraphTableRow>(
+                view.TableForTests.GridForTests.Grid.CurrentCell.Item);
+            Assert.Contains(document.Publication.Rows, row => ReferenceEquals(row, landed));
+            Assert.True(GridHasTheKeys(view));
+        });
+    }
+
     [Fact]
     public void AnOverlayHoldsTheRestorationAndTheReturnDelivers()
     {

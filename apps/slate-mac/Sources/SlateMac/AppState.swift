@@ -3045,6 +3045,13 @@ final class AppState: ObservableObject {
     @Published var graphTableError: String?
     var graphTableLoadSeq: UInt64 = 0
     var graphTableSeenGraphGeneration: UInt64 = 0
+
+    /// The seq of the last token to reach a TERMINAL state — published or
+    /// failed (W6-2 PR C, IPG-29). `graphTablePublishedRequest` cannot
+    /// answer that question: a request that FAILED never publishes, so it
+    /// stayed indistinguishable from one still in flight and a superseded
+    /// pair could install its authority after it.
+    var graphTableAnsweredSeq: UInt64 = 0
     /// Race-test seams (post-compute, pre-guard), handed the token whose
     /// result is about to publish so a test can hold ONE load: the pair's
     /// and the rows request's (W6-2 PR C, C-2 (iii)'s completion orders).

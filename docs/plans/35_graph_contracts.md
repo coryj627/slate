@@ -11437,6 +11437,60 @@ re-subscribing off-tree; and the earlier sweeps re-run clean.
 CI-shaped regression green at 2456; the model family and the three
 journeys re-run before the push.
 
+**TGC-15 — The codex post-implementation pass 5: three findings
+(IPG-28..30), and both blockers are pass 4's and pass 2's own fixes left
+open.** Counts across the loop: 7 findings with 4 blockers, 7 with 6, 3
+with 2, 10 with 3, now 3 with 2. Pass 5 found NO defect that an earlier
+pass had not touched. (IPG-28, BLOCKER, Terms F2/F4; IPG-19 INCOMPLETE,
+created by IPG-12's lifecycle) THE LANDING DEPENDED ON SUBSCRIPTION
+ORDER: IPG-19 moved delivery to `PublicationInstalled` because the
+table, having been given the model first, rebinds before the surface's
+handler runs. That order holds for the INITIAL bind and is REVERSED
+after an unload — WPF raises the parent's `Loaded` before the child's,
+so the surface re-subscribes ahead of the table and the install reaches
+it while the grid still holds the previous rows. The order dependency
+is gone: the table records the publication its grid is BOUND to, and
+the landing's READY arm returns unless that record IS the one being
+delivered; the grid's containers edge, already subscribed for Term F2,
+brings the landing back once the rows are there. Pinned by
+ALandingAfterAReloadStillWaitsForTheInstalledRows — out of the tree and
+back, then the disjoint-needle landing, with the seated row asserted
+reference-identical to a row of the installed publication. (IPG-29,
+BLOCKER, Terms Q2/Q7; IPG-9 INCOMPLETE) A FAILED NEWER REQUEST READ AS
+"STILL PENDING": `pairResultInstalls` asked whether the newer request
+had PUBLISHED, and a request that FAILS never publishes — so
+`graphTablePublishedRequest` stayed behind the current request for ever
+and a superseded pair could still install its snapshot, its filter and
+its seen generation over the rows the failure had left standing. The
+mac now records the seq of the last token to reach a TERMINAL state,
+published or failed (`graphTableAnsweredSeq`), and the predicate asks
+whether the newer request is genuinely PENDING. The unit fact gains the
+failure case, driven through the injected rows-failure seam. (IPG-30,
+MAJOR, Term Q2) THE WINDOWS RECEIVER DID NOT REQUIRE THE TOKEN TO STILL
+BE THE LINEAGE'S: it checked the document, the session, the lifecycle
+generation, the seq and the request, but not that `_current` IS this
+token — and every terminal arm clears `_current` while leaving
+`_request`, so a SECOND envelope for a token that had already installed
+passed the gate: a duplicate completion would publish and speak twice,
+and one arriving after a failure would replace the error. The gate now
+requires reference identity; `_request` keeps its lifetime, because it
+is the lineage's request for the currency comparisons and clearing it
+early would make those read as foreign. Pinned by
+ASecondEnvelopeForATerminalTokenChangesNothing. TWO OF THIS ROUND'S OWN
+LINES PROVED UNFALSIFIABLE and were removed rather than kept: the
+table's PublicationBound event, because the containers edge already
+re-asks after a bind (its mutation SURVIVED, which is how it was
+found); and IPG-19's trigger removal, which IPG-28's guard SUBSUMES —
+restoring the property-change trigger is now unobservable, so that
+mutation is retired and the guard's own mutation
+(c-p5-landing-trusts-the-install-order) is what proves the rule. The
+trigger set stays as IPG-19 left it because it says what the code
+means; the record is what says the guard is the load-bearing half.
+Mutations: the landing trusting the install order — CAUGHT; a terminal
+token installing again — CAUGHT; the two retired above, recorded.
+CI-shaped regression green at 2458; the model family and the three
+journeys re-run before the push.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,
