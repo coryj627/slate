@@ -243,6 +243,13 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             // Re-observe what Unloaded dropped, and re-render from the record
             // as it is NOW: nothing reached this view while it was out.
             ObserveModel(Model);
+            if (Model is { } model)
+            {
+                // Nothing reached this view while it was out of the tree:
+                // re-render from the record as it is NOW.
+                ApplyState(model.Publication);
+                RenderFilter(model);
+            }
             ObserveNavigator(Model?.Navigator);
             HookWindow();
             TryDeliverFocus();
@@ -415,7 +422,9 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     /// and the workspace's view state, in ONE place (IPG-12): taken when a
     /// model arrives and when the element is loaded, dropped when it is
     /// replaced and when the element leaves the tree. Idempotent — a load
-    /// under a model that never left re-asks for nothing.</summary>
+    /// under a model that never left re-asks for nothing. SUBSCRIPTION only:
+    /// each caller renders in its own order afterwards, so this cannot
+    /// double the work the model-changed route already does (codoki).</summary>
     private void ObserveModel(GraphDocumentViewModel? model)
     {
         if (model is null || _observing)
@@ -429,8 +438,6 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         model.PublicationInstalled += OnPublicationInstalled;
         model.LineageEnded += OnLineageEnded;
         model.ViewState.PropertyChanged += OnViewStateChanged;
-        ApplyState(model.Publication);
-        RenderFilter(model);
     }
 
     private void StopObservingModel(GraphDocumentViewModel? model = null)

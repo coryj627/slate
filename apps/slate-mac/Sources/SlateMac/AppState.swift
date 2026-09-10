@@ -3050,12 +3050,6 @@ final class AppState: ObservableObject {
     /// and the rows request's (W6-2 PR C, C-2 (iii)'s completion orders).
     /// Nil in production.
     var graphTablePublishGate: ((GraphTableToken) async -> Void)?
-
-    /// Test seam (W6-2 PR C, IPG-9): the pair parked BEFORE it crosses,
-    /// so a fact can move the vault on while the pair is still to fetch —
-    /// the interleaving that attaches a newer snapshot to older rows.
-    /// Nil in production.
-    var graphTablePairPreFetchGate: ((GraphTableToken) async -> Void)?
     var graphTableRowsPublishGate: ((GraphTableToken) async -> Void)?
     /// True when the active tab is the graph tab (gates the
     /// generation-driven table refresh's announcements).

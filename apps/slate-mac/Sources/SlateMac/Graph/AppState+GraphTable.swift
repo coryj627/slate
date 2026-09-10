@@ -185,8 +185,6 @@ extension AppState {
         let injectedFailure = graphTableLoadFailureForTests
 
         Task { [weak self] in
-            // The pre-crossing seam (IPG-9), the publish gate's twin.
-            if let gate = self?.graphTablePairPreFetchGate { await gate(token) }
             // The snapshot (the summary, the selection's held generation)
             // and the rows core orders for the token's request (0b-7).
             let result: Result<(GraphSnapshot, GraphTableRows), VaultError> =
@@ -218,21 +216,11 @@ extension AppState {
             let speak = announce != .silent && self.graphTabActive
             switch result {
             case .success(let (snap, rows)):
-                // (IPG-9) A pair superseded by a ROWS request may still
-                // install its snapshot — that is C-2 (iii)'s pair-first
-                // order, where the newer rows have NOT published yet and
-                // will land on this fresher authority. Once the newer
-                // request HAS published, installing here attaches a new
-                // snapshot, and its seen generation, to rows fetched at an
-                // older one: the two disagree, `graphTablePublishedRequest`
-                // still reads current, and the generation probe finds
-                // nothing to repair because the seen mark moved. Drop the
-                // superseded result whole and leave the repair to the probe.
-                let superseded =
-                    token.seq != self.graphTableSeq || token.request != self.graphTableRequest
-                if superseded, self.graphTablePublishedRequest == self.graphTableRequest {
-                    return
-                }
+                // (IPG-9) The pair's outer guard is the LOAD sequence,
+                // which a rows request does not advance, so a superseded
+                // pair still arrives here; whether it may install is the
+                // rule below.
+                guard self.pairResultInstalls(token: token) else { return }
                 // The snapshot and the filter it was fetched under publish
                 // together — the authority's identity (design A).
                 self.graphTableSnapshot = snap
@@ -580,6 +568,24 @@ extension AppState {
             // spoken over the NEWER generation, never lost to the refresh.
             self.loadGraphTable(announce: self.graphTableInFlightAnnounce ?? .silent)
         }
+    }
+
+    /// Whether a PAIR result may install its snapshot (rule Q, Terms Q2 and
+    /// Q7; C-2 (iii)). A pair superseded by a ROWS request may install while
+    /// those rows are UNANSWERED — the pair-first order C-2 (iii) relies on,
+    /// where they will land on this fresher authority — and never once they
+    /// have published: installing then attaches a newer snapshot, and its
+    /// seen generation, to rows fetched at an older one, so the two disagree,
+    /// the published request still reads current, and the generation probe
+    /// finds nothing to repair because the seen mark moved (IPG-9). Extracted
+    /// so the rule is unit-testable without racing the async task, as
+    /// `shouldRefreshGraphTable` is: arranging it end to end needs the vault
+    /// to move while the pair is still to fetch, and a vault that moves wakes
+    /// the event listener's own refresh, whose load supersedes the pair
+    /// before it can arrive.
+    func pairResultInstalls(token: GraphTableToken) -> Bool {
+        let superseded = token.seq != graphTableSeq || token.request != graphTableRequest
+        return !superseded || graphTablePublishedRequest != graphTableRequest
     }
 
     /// Whether a generation-refresh that has finished probing should

@@ -640,43 +640,43 @@ final class GraphTabRoutingTests: XCTestCase {
     }
 
     /// IPG-9 (rule Q, Terms Q2/Q7; C-2 (iii)): a pair superseded by a ROWS
-    /// request may still install its snapshot while those rows are UNANSWERED
-    /// — that is the pair-first order C-2 relies on — but never once they
-    /// have published. Installing then attaches a newer snapshot, and its
-    /// seen generation, to rows fetched at an older one: the two disagree,
-    /// the published request still reads current, and the generation probe
-    /// finds nothing to repair because the seen mark moved.
-    func testASupersededPairDoesNotAttachItsSnapshotToAnAnsweredRequest() async throws {
+    /// request installs its snapshot only while those rows are UNANSWERED.
+    /// The rule is read off `pairResultInstalls` rather than driven end to
+    /// end: the interleaving needs the vault to move while the pair is still
+    /// to fetch, and a moving vault wakes the event listener's own refresh,
+    /// whose load supersedes the pair before it can arrive — the same reason
+    /// `shouldRefreshGraphTable` is extracted.
+    func testASupersededPairInstallsOnlyWhileTheNewerRequestIsUnanswered() async throws {
         let state = try await makeAppState()
         try await openQuiescentGraph(state)
-        let held = try XCTUnwrap(state.graphTableSnapshot)
+        let answered = try XCTUnwrap(state.graphTableRequest)
+        // The CURRENT token installs, as every quiescent publication does.
+        XCTAssertTrue(
+            state.pairResultInstalls(
+                token: GraphTableToken(request: answered, seq: state.graphTableSeq)))
+        let stale = GraphTableToken(request: answered, seq: state.graphTableSeq)
+
+        // A needle issued and PARKED: the newer request is unanswered, so the
+        // superseded pair may still install — C-2 (iii)'s pair-first order.
         let gate = AsyncGate()
-        // P: a same-filter refresh, parked BEFORE it crosses.
-        state.graphTablePairPreFetchGate = { _ in await gate.suspend() }
-        state.loadGraphTable(announce: .silent)
-        let pairSeq = state.graphTableSeq
-        await gate.waitUntilEntered()
-        state.graphTablePairPreFetchGate = nil
-        // R: a needle over the held snapshot, published while P waits.
+        state.graphTableRowsPublishGate = { _ in await gate.suspend() }
         state.graphTableTextFilter = "a"
         state.requestGraphTableRowsIfQueryChanged()
-        XCTAssertNotEqual(state.graphTableSeq, pairSeq, "the needle issued its own token")
-        try await pollUntil { state.graphTablePublishedRequest?.query.nameQuery == "a" }
-        let answered = try XCTUnwrap(state.graphTablePublishedRequest)
-        let rows = state.graphTableRows.count
-        // The vault moves on, so P's snapshot would be NEWER than R's rows.
-        try await bumpTheVault(state)
+        await gate.waitUntilEntered()
+        XCTAssertNotEqual(stale.seq, state.graphTableSeq, "the needle issued its own token")
+        XCTAssertNotEqual(
+            state.graphTablePublishedRequest, state.graphTableRequest,
+            "the needle has not published while it is parked")
+        XCTAssertTrue(state.pairResultInstalls(token: stale), "pair-first must still install")
+
+        // Released and published: the same superseded pair now installs
+        // nothing, so the seen mark stays where the probe can repair from.
         await gate.release()
-        try await pollUntil { !state.graphTableLoading }
-        XCTAssertEqual(
-            state.graphTableSnapshot?.generation, held.generation,
-            "the superseded pair installed its snapshot over answered rows")
-        XCTAssertEqual(
-            state.graphTableSeenGraphGeneration, held.generation,
-            "the superseded pair moved the seen mark, so the probe has nothing to repair")
-        XCTAssertEqual(state.graphTablePublishedRequest, answered, "R's publication stands")
-        XCTAssertEqual(state.graphTableRows.count, rows, "R's rows stand")
-        XCTAssertNil(state.graphTableError)
+        state.graphTableRowsPublishGate = nil
+        try await pollUntil { state.graphTablePublishedRequest == state.graphTableRequest }
+        XCTAssertFalse(
+            state.pairResultInstalls(token: stale),
+            "a superseded pair installed over an answered request")
     }
 
     /// IPG-10 (rule Q, Term Q6; C-6): the count's stored gate is the tab's
@@ -710,15 +710,6 @@ final class GraphTabRoutingTests: XCTestCase {
         XCTAssertEqual(
             posts.filter { $0.contains("shown") }.count, 1,
             "B's own count is the one line: \(posts)")
-    }
-
-    /// The vault gains a note and is rescanned: the graph generation moves.
-    private func bumpTheVault(_ state: AppState) async throws {
-        let vault = try XCTUnwrap(state.currentVaultURL)
-        try Data("a note that moved the generation\n".utf8)
-            .write(to: vault.appendingPathComponent("bump-\(UUID().uuidString).md"))
-        let session = try XCTUnwrap(state.currentSession)
-        try session.scanInitial(cancel: CancelToken())
     }
 
     /// C-2 (iii)/(iv): a needle typed during a backend-changing pair, in
