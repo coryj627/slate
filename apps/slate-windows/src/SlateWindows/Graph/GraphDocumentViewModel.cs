@@ -988,6 +988,21 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             // judged — or never saw — the key.
             RevalidateSelection(next, envelope.SelectionGeneration);
         }
+        if (token.Kind == GraphLoadKind.Pair && _highWater > next.Generation)
+        {
+            // A-3's recovery, issued BEFORE the install is raised (IPG-37):
+            // this publication is KNOWN to be intermediate — the vault moved
+            // on while it was in flight — and a landing delivered against it
+            // completes on rows the recovery is about to replace. Issued
+            // first, the lineage is in flight when the surface hears the
+            // install, so the landing waits for the record the reader will
+            // actually end on. Term Q9's "inherits nothing" stands: the
+            // recovery is silent, and this install's own line is spoken
+            // below — the count's Term Q6 gate drops it either way, since a
+            // newer token is what the gate asks about.
+            _highWater = 0;
+            _ = Issue(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent, next.AcceptedSort, userSort: false, preset: null);
+        }
         // The surface's GridSorted is raised synchronously from here, so it
         // PRECEDES the receiver's own line for the same install (Term Q5's
         // combined lines, IGP-19).
@@ -1012,14 +1027,6 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                 case GraphAnnouncePolicy.Silent:
                 default:
                     break;
-            }
-            if (_highWater > next.Generation)
-            {
-                // A-3's recovery: the high-water pair is issued at an
-                // INSTALL, when nothing is in flight, and inherits nothing
-                // (Term Q9).
-                _highWater = 0;
-                _ = Issue(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent, next.AcceptedSort, userSort: false, preset: null);
             }
         }
         else

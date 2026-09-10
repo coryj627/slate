@@ -1004,6 +1004,45 @@ public sealed partial class GraphDocumentTests
         });
     }
 
+    /// <summary>Rule F, Terms F1/F3/F4 (IPG-37): a publication KNOWN to be
+    /// intermediate must not look quiescent. A-3's high-water recovery is
+    /// issued when the vault moved on while a pair was in flight, and it was
+    /// issued AFTER the install was raised — so every observer of that
+    /// install saw a lineage with nothing in flight, and the surface seated
+    /// the reader and COMPLETED the focus request against rows the recovery
+    /// was about to replace. The recovery is issued first now, so the
+    /// install carries its own successor.</summary>
+    [Fact]
+    public void TheHighWaterRecoveryIsInFlightWhenItsIntermediateInstallIsRaised()
+    {
+        using GraphVault vault = GraphVault.Copy("high-water-install");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            var lines = new List<string>();
+            GraphDocumentViewModel document = BareQuiescent(host, lines, load: false);
+            using var park = new Park(document, 1);
+            _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Summary);
+            park.WaitReached();
+            _ = host.Session.CreateExclusive("iota.md", "# Iota\n\n[[hub]]\n");
+            document.Probe();
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => document.HighWaterForTests > 0),
+                "the probe never kept the high-water mark");
+            var inFlightAtInstall = new List<bool>();
+            document.PublicationInstalled += _ => inFlightAtInstall.Add(document.IsRequestInFlight);
+            park.Release();
+            Drain(document);
+            // Two installs: the intermediate one, raised with its recovery
+            // already in flight, and the recovery's own, quiescent.
+            Assert.Equal([true, false], inFlightAtInstall);
+            Assert.Equal(0UL, document.HighWaterForTests);
+            Assert.Contains(document.Publication.Rows, row => row.Path == "iota.md");
+            Assert.False(document.IsRequestInFlight);
+            document.Retire();
+        });
+    }
+
     [Fact]
     public void TheHighWaterPairInheritsNothing()
     {

@@ -8581,9 +8581,16 @@ public sealed class ShellAccessibilityTests
             // the landing seats the grid's row.
             RunPaletteCommand(window, automation, "Open Graph");
             AutomationElement grid = WaitForElement(window, "GraphTableGrid", TimeSpan.FromSeconds(20));
+            // A realised ROW's cell, not merely "inside the grid" (IPG-41):
+            // the helper answers true for the grid ROOT, which is where focus
+            // lands when no cell takes it — the very failure Term F4's
+            // container-realisation clause exists for.
             Assert.True(
-                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphTableGrid"), TimeSpan.FromSeconds(10)),
-                $"the open did not land focus on the grid's row; focus is {DescribeFocusedElement(automation)}");
+                SpinWait.SpinUntil(
+                    () => FocusIsInside(automation, "GraphTableGrid")
+                        && automation.FocusedElement().Properties.ClassName.ValueOrDefault == "DataGridCell",
+                    TimeSpan.FromSeconds(10)),
+                $"the open did not land focus on a realised row cell; focus is {DescribeFocusedElement(automation)}");
 
             // C-5's order with nothing narrowing: Shift+Tab to the switcher
             // (one stop — the checked Table choice; the switcher panel itself

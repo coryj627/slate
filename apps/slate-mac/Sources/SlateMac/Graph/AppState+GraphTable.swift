@@ -364,12 +364,27 @@ extension AppState {
         // bare state and require that admission, so the two hosts differ
         // here until the owner says otherwise.
         graphTableError = nil
+        if graphTableSnapshot == nil {
+            // Rows are current with NO authority behind them — the state a
+            // pair failure leaves, which the receiver admits because PR A's
+            // token facts require it. Clearing the error made that state
+            // VISIBLE, and a visible table whose Where-am-I can never answer
+            // is worse than the error it replaced (IPG-36, created by
+            // TGC-17): ask for the authority back, silently. `loadGraphTable`
+            // no-ops without a session, so the bare-state token facts are
+            // untouched.
+            loadGraphTable(announce: .silent, sort: token.request.sort)
+        }
         return true
     }
 
     /// A failed query rolls the request back to the accepted state.
     func failGraphTableRows(token: GraphTableToken) {
-        guard token.seq == graphTableSeq else { return }
+        // The FULL currency, not the sequence alone (IPG-38): a token whose
+        // sequence matches but whose request does not is not the lineage's,
+        // and it used to clear the pending sort and mark the sequence
+        // answered before the caller's own guard could turn it away.
+        guard token.seq == graphTableSeq, token.request == graphTableRequest else { return }
         graphTableRequestedSort = nil
         // Terminal (Term Q2): the request is ANSWERED, badly. A pair that
         // arrives afterwards is not entitled to install over what stands

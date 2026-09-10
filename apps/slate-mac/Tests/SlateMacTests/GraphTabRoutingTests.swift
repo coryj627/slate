@@ -722,6 +722,34 @@ final class GraphTabRoutingTests: XCTestCase {
         // failure view over a successful request.
         XCTAssertNil(state.graphTableError, "a current rows publish left the old error standing")
         XCTAssertEqual(state.graphTableRequest?.query.nameQuery, "a")
+        // …and the authority comes BACK (IPG-36, created by TGC-17): a
+        // visible table whose Where-am-I can never answer is worse than the
+        // error it replaced, so the publish asks for a snapshot silently.
+        try await pollUntil { state.graphTableSnapshot != nil && !state.graphTableLoading }
+        XCTAssertNotNil(
+            state.graphDiagramWhereAmIEvent(),
+            "the rows published with no authority and none was asked for")
+    }
+
+    /// IPG-38 (rule Q, Term Q2): the rows ROLLBACK belongs to the current
+    /// token in EVERY field. It guarded the sequence alone, so a token whose
+    /// sequence matched but whose request did not cleared the pending sort
+    /// and marked the sequence answered before the caller could turn it away.
+    func testAForeignRequestAtTheCurrentSequenceRollsBackNothing() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        let byNote = GraphTableSort(column: .note, ascending: true)
+        state.graphTableRequestedSort = byNote
+        let answered = state.graphTableAnsweredSeq
+        let current = try XCTUnwrap(state.graphTableRequest)
+        let foreign = GraphTableRequest(
+            query: GraphVisibilityQuery(
+                filter: current.query.filter, nameQuery: "not-this-one", kindOnly: nil),
+            sort: current.sort)
+        state.failGraphTableRows(
+            token: GraphTableToken(request: foreign, seq: state.graphTableSeq))
+        XCTAssertEqual(state.graphTableRequestedSort, byNote, "a foreign request rolled the sort back")
+        XCTAssertEqual(state.graphTableAnsweredSeq, answered, "a foreign request answered the sequence")
     }
 
     /// IPG-33 (rule Q, Term Q5 (c)): asking for the ACCEPTED sort back while

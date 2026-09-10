@@ -54,6 +54,25 @@ public sealed class GraphConfigWriterTests : IDisposable
             GraphConfigWriter.KeyOf(_root.ToUpperInvariant()));
     }
 
+    /// <summary>Rule W, Term W6 (IPG-35): a FAILED write leaves nothing
+    /// outstanding, so the newest aggregate is never a failed one and the
+    /// next read is the file's. The outcome and the removal now happen under
+    /// ONE lock; between the two locks they used to take, `Newest` could hand
+    /// a reopening workspace the aggregate whose write had just failed.
+    /// (The interval itself is not observable in process — this asserts the
+    /// post-condition the merge guarantees.)</summary>
+    [Fact]
+    public void AFailedWriteLeavesNothingOutstandingForTheNextReader()
+    {
+        var writer = new GraphConfigWriter();
+        writer.StoreFor = _ => new GraphConfigStore(_root);
+        writer.WriteGateForTests = (_, _) => throw new IOException("the disk went away");
+        ulong generation = writer.Reserve(_root);
+        Assert.True(writer.Enqueue(_root, WithDepth(3), generation).Wait(TimeSpan.FromSeconds(10)));
+        Assert.Equal(1, writer.FailedForTests);
+        Assert.Null(writer.Newest(_root));
+    }
+
     private static GraphConfig WithDepth(uint depth) => SlateUniffiMethods.GraphConfigDefault() with { ConnectionsDepth = depth };
 
     private GraphConfig OnDisk() => new GraphConfigStore(_root).Read().Config;

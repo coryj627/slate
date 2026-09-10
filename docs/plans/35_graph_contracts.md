@@ -11599,6 +11599,82 @@ round's own, and no mac test mounts the views the observer moved
 between — and the Swift lane is GREEN on the correction (e505ac72), the
 first run to verify TGC-16's mac half at all.
 
+**TGC-18 — The codex post-implementation pass 7: eight findings
+(IPG-35..42), three blockers; six fixed, two recorded. THE LOOP STOPS
+HERE, and the reason is recorded rather than the precedent claimed.**
+Counts across seven passes: 7 findings with 4 blockers, 7 with 6, 3 with
+2, 10 with 3, 3 with 2, 4 with 4, now 8 with 3. (IPG-37, BLOCKER, Terms
+F1/F3/F4) A LANDING COMPLETED ON A PUBLICATION KNOWN TO BE
+INTERMEDIATE: A-3's high-water recovery — the pair issued when the vault
+moved on while a load was in flight — was issued AFTER the install was
+raised, so every observer of that install saw a lineage with nothing in
+flight; the surface seated the reader and COMPLETED the request against
+rows the recovery was about to replace. The recovery is issued FIRST
+now, so the install carries its own successor and the landing waits for
+the record the reader ends on. Term Q9's "the high-water pair inherits
+nothing" stands — it is silent — and this install's own line is
+unaffected: a queued count was already dropped by Term Q6's gate the
+moment a newer token existed, whichever side of the raise it was issued
+on. Pinned by
+TheHighWaterRecoveryIsInFlightWhenItsIntermediateInstallIsRaised, which
+reads `IsRequestInFlight` INSIDE the install handler and requires
+`[true, false]` across the two installs. (IPG-35, BLOCKER, Terms
+W2/W6) A FAILED WRITE'S AGGREGATE STAYED OBSERVABLE: the failure's
+bookkeeping and the aggregate's removal from `Outstanding` took two
+different locks, and between them `Newest` could hand a reopening
+workspace the aggregate whose write had just FAILED — where Term W6 says
+the newest OUTSTANDING one, never a failed one, and after a failure the
+file. One lock now covers the outcome and the removal, on both arms. The
+fact asserts the post-condition; the INTERVAL itself is not observable
+in process, and that is recorded rather than dressed up as a proof.
+(IPG-36, BLOCKER, C-8, CREATED BY TGC-17) A VISIBLE TABLE WHOSE
+WHERE-AM-I COULD NEVER ANSWER: TGC-17 made a current rows publish clear
+the error a failed pair had installed — and so made VISIBLE a table with
+rows and no authority behind them, whose readback (Term Q7) can never
+answer. The publish now asks for the authority back, silently;
+`loadGraphTable` no-ops without a session, so PR A's bare-state token
+facts are untouched. (IPG-38, MAJOR, DESCENDS FROM IPG-4) The mac's rows
+ROLLBACK guarded the sequence alone, so a token whose sequence matched
+but whose request did not cleared the pending sort and marked the
+sequence answered before the caller's guard could turn it away; it takes
+the full currency now. (IPG-39, MAJOR, DESCENDS FROM IPG-17) The
+three-edge census recorded the method, the sign and the EVENT — not the
+handler — so `Activated += OnWindowDeactivated`, symmetrically detached,
+held all six strings while leaving a restoration held exactly where it
+should be delivered; the handler is part of each entry now, and the
+cross-wiring mutation is caught. (IPG-41, MAJOR) The journey said it
+asserted focus "on the grid's row" and asked only whether focus was
+INSIDE the grid, which is true of the grid ROOT — where focus lands when
+no cell takes it, the failure Term F4's realisation clause exists for.
+It requires the focused element to be a realised cell; the first
+attempt named the wrong control type (the substrate's cells are Custom,
+not DataItem) and the journey said so on its first run. TWO ARE
+RECORDED, NOT FIXED. (IPG-40) The writer census skips every source
+outside `Graph/`, so the alternate-API mutation C-15 (xv) names — a
+second writer in `MainWindow` — is not killed by it; widening the scan
+to the whole shell is a census rewrite whose blast radius is the other
+PRs' code, and it is the owner's call. (IPG-42) The matrix evidence
+census resolves a name with a text regex over `void`/`Task` methods and
+accepts an axe scan through raw string containment, so a name that is
+not an executed fact can satisfy it; binding it semantically is the same
+kind of rewrite. THE STOP, and why it is not the recorded precedent:
+[[post-implementation-codex-loop]] stops on TWO CONSECUTIVE
+NO-BLOCKER passes, and seven passes have never produced ONE. What the
+counts show instead is a loop that is no longer finding the
+implementation's defects but its own repairs': IPG-16 → IPG-18 and
+IPG-34; IPG-19 → IPG-28; IPG-9 → IPG-15 and IPG-29; IPG-31 → IPG-36.
+Three of pass 7's eight descend from earlier IPGs by codex's own
+ledger. The gate meanwhile has been GREEN on every landed head — all
+five workflows, the 32-minute model job and the shell accessibility
+gate among them — and codoki has auto-approved each. The loop is
+stopped on that evidence, with the residue named above and in TGC-17
+put to the owner as a ledger on the PR rather than carried further. The
+owner may overrule and run pass 8. Mutations (three), each restored
+byte for byte, each caught: the failed write staying outstanding; the
+high-water recovery issued after the install; the census ignoring the
+handler. CI-shaped regression green at 2460; the model family and the
+three journeys re-run.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,

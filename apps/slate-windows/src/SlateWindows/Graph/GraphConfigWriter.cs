@@ -132,7 +132,13 @@ internal sealed class GraphConfigWriter
             StoreFor(key).Write(aggregate);
             lock (_lock)
             {
+                // The outcome and the aggregate's REMOVAL under one lock
+                // (IPG-35): they used to be two, and between them `Newest`
+                // could hand a reopening workspace the aggregate whose write
+                // had just FAILED — where Term W6 says the newest OUTSTANDING
+                // one, never a failed one, and after a failure the file.
                 state.LastWritten = generation;
+                _ = state.Outstanding.Remove(generation);
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or GraphConfigException)
@@ -144,12 +150,6 @@ internal sealed class GraphConfigWriter
             lock (_lock)
             {
                 FailedForTests++;
-            }
-        }
-        finally
-        {
-            lock (_lock)
-            {
                 _ = state.Outstanding.Remove(generation);
             }
         }

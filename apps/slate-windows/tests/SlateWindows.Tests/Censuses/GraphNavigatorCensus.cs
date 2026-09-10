@@ -492,17 +492,23 @@ public sealed class GraphNavigatorCensus
             string sign = assignment.OperatorToken.ValueText;
             if (sign is "+=" or "-=")
             {
-                edges.Add($"{OwnerOf(assignment)}:{sign}{access.Name.Identifier.ValueText}");
+                // The HANDLER too (IPG-39): the six strings held while the
+                // product cross-wired `Activated += OnWindowDeactivated`,
+                // which leaves a restoration held exactly where it should be
+                // delivered.
+                edges.Add(
+                    $"{OwnerOf(assignment)}:{sign}{access.Name.Identifier.ValueText}"
+                    + $"={CSharpSource.Normalize(assignment.Right)}");
             }
         }
         Assert.Equal(
             [
-                "HookWindow:+=Activated",
-                "HookWindow:+=Deactivated",
-                "HookWindow:+=GotKeyboardFocus",
-                "UnhookWindow:-=Activated",
-                "UnhookWindow:-=Deactivated",
-                "UnhookWindow:-=GotKeyboardFocus",
+                "HookWindow:+=Activated=OnWindowActivated",
+                "HookWindow:+=Deactivated=OnWindowDeactivated",
+                "HookWindow:+=GotKeyboardFocus=OnHostFocusMoved",
+                "UnhookWindow:-=Activated=OnWindowActivated",
+                "UnhookWindow:-=Deactivated=OnWindowDeactivated",
+                "UnhookWindow:-=GotKeyboardFocus=OnHostFocusMoved",
             ],
             edges.OrderBy(e => e, StringComparer.Ordinal));
     }
