@@ -11361,6 +11361,82 @@ each caught: the surface subscribing off-tree; the table subscribing
 off-tree; the window's focus edge unhooked (caught by the census now,
 not only by a desktop that opens menus). CI-shaped regression green.
 
+**TGC-14 — The codex post-implementation pass 4: ten findings
+(IPG-18..27), three of them BLOCKERS and two of those defects the
+earlier passes' own fixes left open.** The loop is NOT converging on
+counts: 7 findings with 4 blockers, then 7 with 6, then 3 with 2, now
+10 with 3 — and pass 4 found fresh product defects, not only unfinished
+proof. (IPG-19, BLOCKER, Terms F2/F4/F5, C-17) THE LANDING COMPLETED
+AGAINST THE PREVIOUS GRID: the document raises the publication's
+PROPERTY change before it raises `PublicationInstalled`, and the table
+binds the new rows on the INSTALL — so a surface that delivered on the
+property change seated the reader in the grid as it was BEFORE this
+publication and completed the request there; the re-bind then dropped
+that row whenever the new result excludes it, leaving nobody on a
+current row. The trigger set is now the REQUEST's own change and the
+install alone (the install's handler runs after the table's re-bind
+because the table subscribed first; the terminal kinds still arrive
+through LineageEnded). Pinned by
+ALandingWaitsForTheInstalledRowsRatherThanThePreviousGrid: seated on a
+row a DISJOINT needle excludes, the landing raised while that fetch is
+parked, and the seated row asserted REFERENCE-IDENTICAL to a row of the
+installed publication. The first mutation for this fix SURVIVED against
+the strengthened old-READY fact (IPG-22's ask) — under a needle that
+keeps the rows, the re-bind's identity restore lands the reader on a
+new row object either way — so the dedicated arrangement above is what
+kills it. (IPG-18, BLOCKER as reported; the reachable half FIXED, the
+rest RECORDED) AN OFF-TREE MODEL REPLACEMENT STILL RE-SUBSCRIBED THE
+NAVIGATOR: IPG-16 gated the document and view-state observers and left
+`ObserveNavigator` unconditional, so the replacement re-took the one
+subscription that retains the surface as a PRESENTER. It is gated now,
+and the unload fact asserts it across the whole route. The rest of
+IPG-18 — that `_detached` starts FALSE, so a view bound before its
+first `Loaded` subscribes — is RECORDED, not taken: production always
+mounts what the template realises, while dozens of facts construct a
+surface with a model and never host it, and they assert live rendering
+that only a subscription delivers. TGC-12's and TGC-13's wording
+("nothing subscribes while out of the tree") over-claimed; the rule is
+that nothing subscribes once it has LEFT the tree, and this record is
+the correction. (IPG-20, BLOCKER, Term P4, Term Q9, C-2 (iv)) A
+STRADDLED MAC PRESET PAIR CONSUMED ITS HEADLINE BEFORE THE REPLACEMENT
+PUBLISHED: the continuation cleared `graphTablePendingPreset`
+unconditionally, but the receiver's mismatch arms return
+`published == false` after issuing a replacement that INHERITS the
+request — so the headline was erased before the replacement could speak
+it, and a preset whose two crossings straddled a rebuild spoke the
+generic summary. Only the token that is still CURRENT consumes it now
+(`pairConsumesThePendingPreset`), which also leaves the superseded case
+where Term Q4 already put it: `requestGraphTableRows` clears the
+pending preset at the newer request's issue. Extracted and unit-tested
+for the reason `pairResultInstalls` is — the interleaving needs ONE
+pair's two crossings to straddle a rebuild. (IPG-21, IPG-22, IPG-23,
+MAJORS, the PROOFS) The unload fact now asserts the navigator arm as
+well as the two document arms, across the off-tree replacement and the
+reload; the old-READY landing fact requires its seated row to belong to
+the INSTALLED publication; the mac's preset rule has the fact above.
+(IPG-24, IPG-25, MAJORS, THE JOURNEY'S ORACLES) The Where-am-I step
+asserted only that the readback CONTAINED "component", which the wrong
+ghost, the wrong degrees and the wrong component all pass; it now
+compares the readback to core's exact `GraphWhereAmI` render for the
+second ghost, built before the app opens. The level walk asserted a
+`"Solo, "` PREFIX while discarding the Standard oracle it had computed
+for Alpha; it now compares Solo's row Name to core's Standard render
+for Solo, and Alpha's pair is asserted to differ so the Terse step
+means something. (IPG-26, MINOR) `w_c_matrix.md` still described the
+readback as the shared key's SNAPSHOT NODE; it reads the shown rows
+since TGC-10's IPG-3, and the cell says so. (IPG-27, MINOR, RECORDED)
+`git diff --check origin/main...HEAD` exits non-zero: 666 complaints,
+every one inside `repomix-output.xml`, the generated pack this branch
+regenerates for reviewers. The pack embeds the tree's own text, so the
+whitespace is the sources'; stripping it would make the snapshot a
+lie about what it packs. No gate enforces the check (CI is green), so
+it is recorded rather than papered over. Mutations (three), each
+restored byte for byte, each caught: the landing on the property
+change (after the fact was rebuilt to reach it); the navigator
+re-subscribing off-tree; and the earlier sweeps re-run clean.
+CI-shaped regression green at 2456; the model family and the three
+journeys re-run before the push.
+
 ### Tests that pin PR C (revision 6's list; the task loop records what lands)
 
 - `graph_queries.rs`: `preset_query_is_the_mac_mapping`,

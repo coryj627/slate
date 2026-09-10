@@ -679,6 +679,30 @@ final class GraphTabRoutingTests: XCTestCase {
             "a superseded pair installed over an answered request")
     }
 
+    /// IPG-20 (rule P Term P4, rule Q Term Q9; C-2 (iv)): only the token
+    /// that is STILL CURRENT consumes the pending preset. A receiver that
+    /// re-fetched under its own request returns `published == false` and the
+    /// replacement it issued is the one that speaks the headline — clearing
+    /// on that path erased the headline first, so a straddled preset pair
+    /// spoke the generic summary. Read off the predicate for the reason
+    /// `pairResultInstalls` is: the interleaving needs the two crossings of
+    /// ONE pair to straddle a rebuild.
+    func testOnlyTheCurrentTokenConsumesThePendingPreset() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        let current = try XCTUnwrap(state.graphTableRequest)
+        let token = GraphTableToken(request: current, seq: state.graphTableSeq)
+        XCTAssertTrue(state.pairConsumesThePendingPreset(token: token))
+        // A replacement issued under its own request advances the sequence,
+        // and the headline belongs to it now.
+        state.graphTableTextFilter = "a"
+        state.requestGraphTableRowsIfQueryChanged()
+        XCTAssertNotEqual(state.graphTableSeq, token.seq, "the replacement issued its own token")
+        XCTAssertFalse(
+            state.pairConsumesThePendingPreset(token: token),
+            "a superseded continuation consumed a headline it no longer owns")
+    }
+
     /// IPG-10 (rule Q, Term Q6; C-6): the count's stored gate is the tab's
     /// liveness AND the token's currency, re-checked at FIRE. A count queued
     /// for A used to speak after B had become current, which a slow B makes

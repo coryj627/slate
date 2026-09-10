@@ -267,6 +267,14 @@ public sealed partial class GraphTableTests
             Assert.Equal("note", document.Publication.Query.NameQuery);
             Assert.Null(document.FocusRequest);
             Assert.True(GridHasTheKeys(view));
+            // The row the reader is ON must belong to the publication that
+            // INSTALLED, not to the one the grid held when the request was
+            // raised: delivering on the publication's property change seated
+            // the reader in the previous grid and completed the request there,
+            // and the re-bind then dropped that row (IPG-19/IPG-22).
+            Assert.Contains(
+                document.Publication.Rows,
+                row => ReferenceEquals(row, view.TableForTests.GridForTests.Grid.CurrentCell.Item));
         });
     }
 
@@ -654,6 +662,10 @@ public sealed partial class GraphTableTests
             view.Model = document;
             Assert.False(view.ObservingForTests, "an off-tree replacement re-subscribed the surface");
             Assert.False(view.TableForTests.ObservingForTests, "an off-tree replacement re-subscribed the table");
+            // The navigator is the THIRD subscription the replacement could
+            // re-take, and it is the one that retains the surface as a
+            // presenter (IPG-21).
+            Assert.False(view.ObservingNavigatorForTests, "an off-tree replacement re-subscribed the navigator");
             Assert.True(document.Request(new GraphRequest.Needle()));
             host.Settle(document);
             Assert.False(view.ObservingForTests);
@@ -665,7 +677,57 @@ public sealed partial class GraphTableTests
             PumpLoadedState();
             Assert.True(view.ObservingForTests);
             Assert.True(view.TableForTests.ObservingForTests);
+            Assert.True(view.ObservingNavigatorForTests, "the reload did not re-observe the navigator");
             Assert.Equal(document.Publication.Rows.Count, view.TableForTests.GridForTests.Grid.Items.Count);
+        });
+    }
+
+    /// <summary>Rule F, Terms F2/F4 (IPG-19): the landing waits for the
+    /// INSTALLED rows. The document raises the publication's property change
+    /// BEFORE it raises the install, and the table binds the new rows on the
+    /// install — so delivering on the property change seated the reader in
+    /// the grid as it was BEFORE this publication and completed the request
+    /// there; the re-bind then dropped that row whenever the new result
+    /// excludes it, leaving nobody on a current row.</summary>
+    [Fact]
+    public void ALandingWaitsForTheInstalledRowsRatherThanThePreviousGrid()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "graph-landing-installed");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(view);
+            // Seated on the one row a DISJOINT needle will exclude.
+            host.Workspace.GraphNavigator.SetNameQuery("note1");
+            host.Settle(document);
+            window.UpdateLayout();
+            host.Workspace.RequestActiveEditorFocus();
+            window.UpdateLayout();
+            Assert.True(GridHasTheKeys(view));
+            GraphTableRow seated = Assert.IsType<GraphTableRow>(
+                view.TableForTests.GridForTests.Grid.CurrentCell.Item);
+            Assert.Contains("note1", seated.Label, StringComparison.Ordinal);
+
+            // A needle whose result shares no row with the one on screen, its
+            // fetch parked, and the shell's landing raised while it is in
+            // flight.
+            using var park = new ParkedFetch(document, 1);
+            host.Workspace.GraphNavigator.SetNameQuery("note2");
+            park.WaitReached();
+            document.RequestFocusLanding(GraphTabOf(host));
+            Assert.NotNull(document.FocusRequest);
+            park.Release();
+            host.Settle(document);
+            window.UpdateLayout();
+
+            Assert.Null(document.FocusRequest);
+            Assert.DoesNotContain(document.Publication.Rows, row => ReferenceEquals(row, seated));
+            Assert.Contains(document.Publication.Rows, row => row.Label.Contains("note2", StringComparison.Ordinal));
+            GraphTableRow landed = Assert.IsType<GraphTableRow>(
+                view.TableForTests.GridForTests.Grid.CurrentCell.Item);
+            Assert.Contains(document.Publication.Rows, row => ReferenceEquals(row, landed));
+            Assert.True(GridHasTheKeys(view));
         });
     }
 

@@ -396,7 +396,11 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             wasTheAttachedPane = ReferenceEquals(old.Navigator?.PresenterForTests, view);
             old.Navigator?.DetachPresenter(view);
         }
-        view.ObserveNavigator((e.NewValue as GraphDocumentViewModel)?.Navigator);
+        // Out of the tree this observes NOTHING (IPG-18): a model
+        // replacement off-tree re-subscribed the navigator that Unloaded
+        // had just dropped, and the new navigator then retained the
+        // invisible surface. Loaded re-observes whatever the model is then.
+        view.ObserveNavigator(view._detached ? null : (e.NewValue as GraphDocumentViewModel)?.Navigator);
         view._table.Model = e.NewValue as GraphDocumentViewModel;
         if (e.NewValue is GraphDocumentViewModel model)
         {
@@ -465,6 +469,10 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
 
     internal bool ObservingForTests => _observed is not null;
 
+    /// <summary>Whether the navigator's own observation stands (IPG-21):
+    /// the third subscription an off-tree replacement could re-take.</summary>
+    internal bool ObservingNavigatorForTests => _navigator is not null;
+
     /// <summary>Contract A-11: the mode switcher's items are core's vector
     /// in order; only Table is selectable in PR A.</summary>
     private void BuildSwitcher(GraphDocumentViewModel model)
@@ -524,13 +532,19 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         {
             RenderFilter(model);
         }
-        // Term F2's triggers here: the request's own change and each
-        // publication change. NOT the lineage edge: the document clears its
-        // token BEFORE it swaps the publication, so that edge would show a
-        // quiescent OLD record (an EMPTY host about to collapse) — the
-        // terminal kinds arrive through LineageEnded, after the swap.
-        if (e.PropertyName is nameof(GraphDocumentViewModel.FocusRequest)
-            or nameof(GraphDocumentViewModel.Publication))
+        // Term F2's trigger here is the REQUEST's own change — a request
+        // raised with no load to follow is delivered at once. NOT the
+        // publication's property change: the document raises that BEFORE it
+        // raises PublicationInstalled, and the table binds the new rows on
+        // the INSTALL, so delivering here seated the reader in the grid as it
+        // was BEFORE this publication and completed the request against it —
+        // then the re-bind dropped that row if the new result excludes it,
+        // leaving nobody on a current row (IPG-19). The install's own trigger
+        // below runs after the table's re-bind, because the table subscribed
+        // first. NOT the lineage edge either: the document clears its token
+        // BEFORE the swap, so that edge would show a quiescent OLD record —
+        // the terminal kinds arrive through LineageEnded, after it.
+        if (e.PropertyName is nameof(GraphDocumentViewModel.FocusRequest))
         {
             TryDeliverFocus();
         }

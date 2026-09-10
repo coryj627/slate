@@ -8483,6 +8483,8 @@ public sealed class ShellAccessibilityTests
         string ghostStatus;
         string standardFirstName;
         string terseFirstName;
+        string soloStandardName;
+        string secondGhostReadback;
         using (uniffi.slate_uniffi.VaultSession session = uniffi.slate_uniffi.VaultSession.OpenFilesystem(vaultRoot))
         {
             using var cancel = new uniffi.slate_uniffi.CancelToken();
@@ -8521,6 +8523,29 @@ public sealed class ShellAccessibilityTests
             standardFirstName = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphRow(uniffi.slate_uniffi.GraphVerbosity.Standard, copy));
             terseFirstName = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphRow(uniffi.slate_uniffi.GraphVerbosity.Terse, copy));
             Assert.Equal(first.Label, terseFirstName);
+            // The Standard oracle for the row the LEVEL WALK actually reads —
+            // Solo, the orphans preset's one row (IPG-25: the walk asserted a
+            // prefix and discarded the oracle it had computed for Alpha).
+            uniffi.slate_uniffi.GraphTableRow solo = session.GraphTableRows(
+                uniffi.slate_uniffi.SlateUniffiMethods.GraphPresetQuery(uniffi.slate_uniffi.GraphPreset.Orphans), sort).Rows[0];
+            soloStandardName = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphRow(
+                uniffi.slate_uniffi.GraphVerbosity.Standard,
+                new uniffi.slate_uniffi.GraphRowCopy(
+                    solo.Label, solo.Kind, solo.LinksIn, solo.LinksOut,
+                    solo.Kind == uniffi.slate_uniffi.GraphNodeKind.Ghost ? solo.LinksIn + solo.EmbedsIn : 0, false)));
+            // The readback the reader hears on the SECOND ghost (IPG-24: the
+            // journey asserted only that the text carried "component", which
+            // the first ghost, a wrong component or wrong degrees all pass).
+            uniffi.slate_uniffi.GraphTableRow secondGhost = ghosts.Rows[1];
+            secondGhostReadback = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphWhereAmI(
+                new uniffi.slate_uniffi.GraphWhereAmISelection.Node(
+                    new uniffi.slate_uniffi.GraphRowCopy(
+                        secondGhost.Label, secondGhost.Kind, secondGhost.LinksIn, secondGhost.LinksOut,
+                        secondGhost.LinksIn, false),
+                    secondGhost.Component),
+                null,
+                new uniffi.slate_uniffi.GraphWhereAmIFilter.UnresolvedOnly(),
+                string.Empty));
         }
 
         Process? process = null;
@@ -8676,7 +8701,11 @@ public sealed class ShellAccessibilityTests
             AutomationElement readback = WaitForElement(window, "GraphWhereAmIReadback", TimeSpan.FromSeconds(10));
             Assert.Equal("Where am I?", readback.Properties.Name.Value);
             string readbackText = readback.Patterns.Value.Pattern.Value.Value;
-            Assert.Contains("component", readbackText, StringComparison.Ordinal);
+            // Core's render for the row the reader is ON, exactly — the label,
+            // the degrees, the component and the filter prose (IPG-24). The
+            // table's readback carries no zoom clause (CD-24), which the
+            // oracle's `null` says and this re-states for the reader.
+            Assert.Equal(secondGhostReadback, readbackText);
             Assert.DoesNotContain("zoom", readbackText, StringComparison.Ordinal);
             AssertEventuallyFocused(readback, "the panel did not take the keys from the grid");
             // Escape's rung 0: the panel closes and the reader returns to the row.
@@ -8714,10 +8743,12 @@ public sealed class ShellAccessibilityTests
             SelectGraphVerbosity(window, automation, "standard");
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => WaitForCellStartingWith(grid, "Note: Solo").Parent.Properties.Name.ValueOrDefault?.StartsWith("Solo, ", StringComparison.Ordinal) == true,
+                    () => WaitForCellStartingWith(grid, "Note: Solo").Parent.Properties.Name.ValueOrDefault == soloStandardName,
                     TimeSpan.FromSeconds(10)),
-                $"Standard did not re-name the row to the full copy; it reads '{WaitForCellStartingWith(grid, "Note: Solo").Parent.Properties.Name.ValueOrDefault}'");
-            _ = standardFirstName;
+                $"Standard did not re-name the row to core's copy '{soloStandardName}'; it reads '{WaitForCellStartingWith(grid, "Note: Solo").Parent.Properties.Name.ValueOrDefault}'");
+            // Alpha's pair proves the two levels differ at all, which is what
+            // makes the Terse assertion above a real one.
+            Assert.NotEqual(standardFirstName, terseFirstName);
 
             AssertAxeClean(process, "graph-navigator");
         }

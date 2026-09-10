@@ -244,7 +244,9 @@ extension AppState {
                 // its headline; clear it unconditionally so a later refresh
                 // can't replay a stale preset announcement (P1-3 #556).
                 let preset = self.graphTablePendingPreset
-                self.graphTablePendingPreset = nil
+                if self.pairConsumesThePendingPreset(token: token) {
+                    self.graphTablePendingPreset = nil
+                }
                 guard speak, published else { return }
                 if let preset {
                     // The headline is THIS result's (design A): row zero under
@@ -568,6 +570,20 @@ extension AppState {
             // spoken over the NEWER generation, never lost to the refresh.
             self.loadGraphTable(announce: self.graphTableInFlightAnnounce ?? .silent)
         }
+    }
+
+    /// Whether this pair's continuation CONSUMES the pending preset (rule P,
+    /// Term P4; C-2 (iv)). Only the token that is STILL CURRENT does. The
+    /// receiver's mismatch arms re-fetch under their own request and return
+    /// `published == false`, and the replacement they issue is the one that
+    /// will speak the headline (Term Q9's inheritance) — clearing here erased
+    /// it first, so a straddled preset pair spoke the generic summary instead
+    /// (IPG-20). A token superseded by a rows request cleared nothing here
+    /// either: `requestGraphTableRows` already dropped the pending preset at
+    /// its own issue (Term Q4), which is what keeps a stale headline from
+    /// replaying.
+    func pairConsumesThePendingPreset(token: GraphTableToken) -> Bool {
+        graphTableSeq == token.seq
     }
 
     /// Whether a PAIR result may install its snapshot (rule Q, Terms Q2 and
