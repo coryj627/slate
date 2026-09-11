@@ -153,6 +153,22 @@ internal sealed class GraphConfigWriter
                 _ = state.Outstanding.Remove(generation);
             }
         }
+        catch
+        {
+            // ANY other exception — the filter above names three, and a
+            // SecurityException or an ObjectDisposedException is neither —
+            // still leaves nothing outstanding. The `finally` this replaced
+            // guaranteed that unconditionally, and dropping it traded
+            // IPG-35's interval for a generation stuck in `Outstanding` for
+            // the process's life, which is the same misreport for longer
+            // (codoki on 4a00a3c5). It propagates as it always did: only the
+            // three named failures are best-effort.
+            lock (_lock)
+            {
+                _ = state.Outstanding.Remove(generation);
+            }
+            throw;
+        }
     }
 
     private VaultState StateOf(string key)

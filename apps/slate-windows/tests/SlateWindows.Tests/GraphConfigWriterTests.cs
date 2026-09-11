@@ -73,6 +73,28 @@ public sealed class GraphConfigWriterTests : IDisposable
         Assert.Null(writer.Newest(_root));
     }
 
+    /// <summary>Term W6, the other half of IPG-35: an exception the
+    /// best-effort filter does NOT name still leaves nothing outstanding.
+    /// Moving the removal into the two outcome locks dropped the `finally`
+    /// that used to guarantee it, so an unexpected failure stuck the
+    /// generation in `Outstanding` for the writer's life and `Newest` went
+    /// on offering it (codoki's review of 4a00a3c5).</summary>
+    [Fact]
+    public void AnUnexpectedWriteFailureAlsoLeavesNothingOutstanding()
+    {
+        var writer = new GraphConfigWriter();
+        writer.StoreFor = _ => new GraphConfigStore(_root);
+        writer.WriteGateForTests = (_, _) => throw new InvalidOperationException("not one of the three");
+        ulong generation = writer.Reserve(_root);
+        Task write = writer.Enqueue(_root, WithDepth(3), generation);
+        // It propagates, as an unnamed failure always did — only the three
+        // the filter names are swallowed.
+        AggregateException faulted = Assert.Throws<AggregateException>(() => write.Wait(TimeSpan.FromSeconds(10)));
+        Assert.IsType<InvalidOperationException>(faulted.InnerException);
+        Assert.Equal(0, writer.FailedForTests);
+        Assert.Null(writer.Newest(_root));
+    }
+
     private static GraphConfig WithDepth(uint depth) => SlateUniffiMethods.GraphConfigDefault() with { ConnectionsDepth = depth };
 
     private GraphConfig OnDisk() => new GraphConfigStore(_root).Read().Config;
