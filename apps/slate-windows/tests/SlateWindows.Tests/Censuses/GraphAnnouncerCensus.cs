@@ -717,9 +717,10 @@ public sealed class GraphAnnouncerCensus
     }
 
     /// <summary>Contract A-1 / spec R-B, as amended for W6-2 PR B2 (B2-1,
-    /// IGK-19): no type in the WHOLE shell compilation, outside the one
+    /// IGK-19) and for W6-2 PR C (the sixth name, <c>KindOnly</c> — C-4,
+    /// CD-23): no type in the WHOLE shell compilation, outside the one
     /// <c>GraphViewState</c>, declares a MUTABLE field or property of the
-    /// view state's five names OR of its value TYPES — the filter, the
+    /// view state's six names OR of its value TYPES — the filter, the
     /// surface mode, the groups' list — whatever the member is called; the
     /// immutable request, token, envelope and publication records carry
     /// copies by design, exempt by their declared kinds (init-only or
@@ -727,7 +728,7 @@ public sealed class GraphAnnouncerCensus
     [Fact]
     public void NoMutableShadowOfTheViewStateExistsInTheShell()
     {
-        string[] names = ["SelectedKey", "Filter", "NameQuery", "Groups", "Mode"];
+        string[] names = ["SelectedKey", "Filter", "NameQuery", "Groups", "Mode", "KindOnly"];
         string[] types = ["uniffi.slate_uniffi.GraphFilter", "uniffi.slate_uniffi.GraphSurfaceMode"];
         var offenders = new List<string>();
         foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
@@ -773,6 +774,92 @@ public sealed class GraphAnnouncerCensus
             }
         }
         Assert.True(offenders.Count == 0, "a mutable shadow of the view state exists in the shell: " + string.Join(", ", offenders));
+    }
+
+    /// <summary>W6-2 PR C, C-4 / A-1 as amended (CD-23): the view state's
+    /// three QUERY fields — the filter, the needle, the kind overlay — are
+    /// written by the named owners alone, bound, across the whole shell
+    /// compilation: <c>ApplyQuery</c> writes all three from one record;
+    /// the navigator's <c>SetNameQuery</c> writes the needle (C-6, T4);
+    /// nobody else writes the overlay. The backing fields are written by
+    /// their setters alone (IGK-19's rule), and <c>ApplyQuery</c>'s own
+    /// callers are the named set — the constructor's seed and the fresh
+    /// open's re-apply (C-10, T5), the preset's write (C-3, T4), PR E's
+    /// manual filter change by amendment — asserted as a set so a planted
+    /// fourth caller fails (IGN-16).</summary>
+    [Fact]
+    public void TheQueryFieldsAreWrittenByTheNamedOwnersAlone()
+    {
+        string[] allowedWriters =
+        [
+            // C-6: the navigator is the ONE writer of the needle from the surface.
+            "Graph/GraphNavigator.cs:SetNameQuery:NameQuery",
+            "Graph/GraphViewState.cs:ApplyQuery:Filter",
+            "Graph/GraphViewState.cs:ApplyQuery:KindOnly",
+            "Graph/GraphViewState.cs:ApplyQuery:NameQuery",
+        ];
+        // ApplyQuery's callers in this PR: the preset's write and its
+        // restore, both in RunPreset (C-3 (ii), (vi)); T5 adds the
+        // constructor's seed and the fresh open's re-apply.
+        string[] allowedCallers =
+        [
+            // C-10: the fresh open's re-apply and the constructor's seed.
+            "Graph/WorkspaceViewModel.Graph.cs:AttachGraphDocumentTo",
+            "Graph/GraphNavigator.cs:RunPreset",
+            "Graph/GraphNavigator.cs:RunPreset",
+            "WorkspaceViewModel.cs:<ctor>",
+        ];
+        string[] queryNames = ["Filter", "NameQuery", "KindOnly"];
+        string[] backingFields = ["_filter", "_nameQuery", "_kindOnly"];
+        var writers = new List<string>();
+        var callers = new List<string>();
+        var fieldWriters = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (AssignmentExpressionSyntax assignment in source.Root.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                ISymbol? target = model.GetSymbolInfo(assignment.Left).Symbol;
+                if (target is IPropertySymbol property && queryNames.Contains(property.Name, StringComparer.Ordinal) && property.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    writers.Add($"{relative}:{OwnerOf(assignment)}:{property.Name}");
+                }
+                if (target is IFieldSymbol field && backingFields.Contains(field.Name, StringComparer.Ordinal) && field.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    fieldWriters.Add($"{relative}:{OwnerOf(assignment)}:{field.Name}");
+                }
+            }
+            foreach (ArgumentSyntax argument in source.Root.DescendantNodes().OfType<ArgumentSyntax>())
+            {
+                if (argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword)
+                    && model.GetSymbolInfo(argument.Expression).Symbol is IFieldSymbol field
+                    && backingFields.Contains(field.Name, StringComparer.Ordinal)
+                    && field.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    fieldWriters.Add($"{relative}:{OwnerOf(argument)}:{field.Name}");
+                }
+            }
+            foreach (InvocationExpressionSyntax invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (model.GetSymbolInfo(invocation).Symbol is IMethodSymbol { Name: "ApplyQuery" } method && method.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    callers.Add($"{relative}:{OwnerOf(invocation)}");
+                }
+            }
+            foreach (ExpressionSyntax reference in source.Root.DescendantNodes().OfType<ExpressionSyntax>().Where(IsAMethodGroupReference))
+            {
+                if (model.GetSymbolInfo(reference).Symbol is IMethodSymbol { Name: "ApplyQuery" } method && method.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    callers.Add($"{relative}:{OwnerOf(reference)} (method group)");
+                }
+            }
+        }
+        Assert.Equal(allowedWriters.OrderBy(w => w, StringComparer.Ordinal), writers.OrderBy(w => w, StringComparer.Ordinal));
+        Assert.Equal(allowedCallers.OrderBy(w => w, StringComparer.Ordinal), callers.OrderBy(w => w, StringComparer.Ordinal));
+        // The setters alone: `SetField(ref _x, value)` inside each property.
+        Assert.Equal(
+            ["Graph/GraphViewState.cs:Filter:_filter", "Graph/GraphViewState.cs:KindOnly:_kindOnly", "Graph/GraphViewState.cs:NameQuery:_nameQuery"],
+            fieldWriters.OrderBy(w => w, StringComparer.Ordinal));
     }
 
     /// <summary>The filter, the mode, or a list of the config's groups.</summary>

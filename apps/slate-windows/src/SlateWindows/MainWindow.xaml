@@ -530,6 +530,37 @@
                               CommandParameter="verbose" />
                 </MenuItem>
             </MenuItem>
+            <!-- W6-2 PR C (#746, contract C-12): the Graph menu — Open Graph,
+                 the three presets (chordless; the palette rows' twins), Where
+                 Am I? (the shared chord, advertised from the table) and the
+                 Verbosity submenu BUILT FROM CORE'S VECTOR in code-behind
+                 (MainWindow.Graph.cs): the XAML declares the empty submenu and
+                 no literal level (0b-1, 0b-12). Mac has no graph menu items
+                 but the routed Where Am I? (C-D9). -->
+            <MenuItem Header="_Graph"
+                      AutomationProperties.AutomationId="GraphMenu">
+                <MenuItem Header="_Open Graph"
+                          AutomationProperties.AutomationId="GraphOpenTabMenuItem"
+                          Command="{Binding Workspace.OpenGraphCommand}" />
+                <Separator />
+                <MenuItem Header="Orphaned _Notes"
+                          AutomationProperties.AutomationId="GraphOrphansMenuItem"
+                          Command="{Binding Workspace.GraphOrphansCommand}" />
+                <MenuItem Header="_Unresolved Links"
+                          AutomationProperties.AutomationId="GraphUnresolvedMenuItem"
+                          Command="{Binding Workspace.GraphUnresolvedCommand}" />
+                <MenuItem Header="_Most Linked Notes"
+                          AutomationProperties.AutomationId="GraphMostLinkedMenuItem"
+                          Command="{Binding Workspace.GraphMostLinkedCommand}" />
+                <MenuItem Header="_Where Am I?"
+                          AutomationProperties.AutomationId="GraphWhereAmIMenuItem"
+                          InputGestureText="{cmd:ChordText slate.graph.whereAmI}"
+                          Command="{Binding Workspace.GraphWhereAmICommand}" />
+                <Separator />
+                <MenuItem x:Name="GraphVerbosityMenuItem"
+                          Header="_Verbosity"
+                          AutomationProperties.AutomationId="GraphVerbosityMenu" />
+            </MenuItem>
             <MenuItem Header="_Files">
                 <MenuItem Header="_Open" Command="{Binding FileSidebar.OpenCurrentCommand}" />
                 <MenuItem Header="Open in New _Tab" Command="{Binding FileSidebar.OpenNewTabCommand}" />

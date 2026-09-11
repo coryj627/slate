@@ -194,4 +194,43 @@ public sealed class GraphAnnouncerTests
             Assert.Equal(0, announcer.RefusedAfterShutdownForTests);
         });
     }
+
+    /// <summary>W6-2 PR C (C-9; IGN-17, IGP-21): the relay renders at
+    /// enqueue and holds the navigation line for its window, so a row line
+    /// queued before a verbosity change would speak at the OLD level — the
+    /// workspace drops the NAVIGATION class alone on the change; the other
+    /// classes stand, the relay stays live, and the next row focus speaks
+    /// at the new level.</summary>
+    [Fact]
+    public void AQueuedRowLineIsDroppedByALevelChange()
+    {
+        PumpedDispatcher.Run(() =>
+        {
+            var posted = new List<string>();
+            var announcer = new GraphAnnouncer(line => posted.Add(line.Text), TimeSpan.FromSeconds(60));
+            announcer.Announce(new GraphA11yEvent.GraphRow(GraphVerbosity.Standard, Row("Alpha")));
+            announcer.AnnounceGatedFilterCount(new GraphA11yEvent.GraphFilterCount(3, 10), () => true);
+            Assert.Equal(2, announcer.PendingForTests);
+
+            announcer.DropPendingNavigation();
+
+            Assert.Equal(1, announcer.PendingForTests);
+            Assert.False(announcer.IsRetired);
+            announcer.FlushForTests();
+            Assert.Equal([Render(new GraphA11yEvent.GraphFilterCount(3, 10))], posted);
+            announcer.Announce(new GraphA11yEvent.GraphRow(GraphVerbosity.Terse, Row("Alpha")));
+            announcer.FlushForTests();
+            Assert.Equal(
+                [
+                    Render(new GraphA11yEvent.GraphFilterCount(3, 10)),
+                    Render(new GraphA11yEvent.GraphRow(GraphVerbosity.Terse, Row("Alpha"))),
+                ],
+                posted);
+            // With nothing pending, the drop is a no-op.
+            announcer.DropPendingNavigation();
+            Assert.Equal(0, announcer.PendingForTests);
+            Assert.Equal(0, announcer.RefusedAfterShutdownForTests);
+        });
+    }
+
 }

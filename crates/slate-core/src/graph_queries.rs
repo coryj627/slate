@@ -23,7 +23,7 @@
 
 use std::cmp::Ordering;
 
-use crate::a11y::GRAPH_NEIGHBOR_LABEL_CAP;
+use crate::a11y::{GRAPH_NEIGHBOR_LABEL_CAP, GraphPresetOutcome};
 use crate::graph::{
     EdgeKind, GraphFilter, GraphNeighborhood, GraphNode, GraphSnapshot, NodeKey, NodeKind,
     ghost_key,
@@ -61,6 +61,11 @@ pub const GRAPH_QUERY_SURFACE: &[&str] = &[
     // clamp, so no host transcribes either.
     "graph_connections_filter",
     "graph_clamp_connections_depth",
+    // W6-2 PR C (C-2): the presets' two rules — the query a preset
+    // writes and the headline it speaks — so neither host re-derives
+    // them (spec R-D).
+    "graph_preset_query",
+    "graph_preset_outcome",
 ];
 
 // ---------------------------------------------------------------------------
@@ -136,6 +141,71 @@ pub fn connections_filter() -> GraphFilter {
 /// `clamp_depth` exported so no host reimplements the window.
 pub fn clamp_connections_depth(depth: u32) -> u32 {
     clamp_depth(depth)
+}
+
+// ---------------------------------------------------------------------------
+// W6-2 PR C (C-2) — the presets: the query they write, the headline they speak
+
+/// A graph-table preset (P1-3 #556): a named parameterisation of the
+/// table — a backend filter, a kind overlay and a spoken headline — not
+/// a new surface. The mac's Swift `GraphPreset` (`AppState+GraphTable.swift:9–18`)
+/// is generated from this enum since W6-2 PR C (contracts doc §PR C,
+/// C-2; 0a-18's precedent for the mode enum).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphPreset {
+    /// Notes with no links in or out — `GraphFilter::orphans_only`.
+    Orphans,
+    /// Unresolved link targets only — ghosts visible, kind-filtered to
+    /// Ghost (the backend filter cannot drop notes).
+    Unresolved,
+    /// The default view sorted Links-in descending: the hubs surface
+    /// through the default sort, and the headline names row zero.
+    MostLinked,
+}
+
+/// The visibility query a preset writes (C-2): the mac's
+/// `graphPresetFilter` and `graphPresetKind` (`AppState+GraphTable.swift:
+/// 403–423`) as ONE record — attachments off in every arm, the needle
+/// empty, the kind overlay Ghost for Unresolved alone (the record
+/// `GraphFilter` cannot express, 0b-2).
+pub fn preset_query(preset: GraphPreset) -> GraphVisibilityQuery {
+    let (include_ghosts, orphans_only, kind_only) = match preset {
+        GraphPreset::Orphans => (false, true, None),
+        GraphPreset::Unresolved => (true, false, Some(NodeKind::Ghost)),
+        GraphPreset::MostLinked => (true, false, None),
+    };
+    GraphVisibilityQuery {
+        filter: GraphFilter {
+            include_attachments: false,
+            include_ghosts,
+            orphans_only,
+        },
+        name_query: String::new(),
+        kind_only,
+    }
+}
+
+/// The headline a preset speaks from THE PUBLISHED RESULT (C-2; the
+/// mac's `graphPresetEvent`, `:465–475`; design A): Orphans and
+/// Unresolved carry the published count — the rows core returned for
+/// the preset's query, the kind overlay included — and MostLinked names
+/// row zero under the default sort, `NoNotesToRank` when there is none.
+pub fn preset_outcome(
+    preset: GraphPreset,
+    shown: u64,
+    first: Option<&GraphTableRow>,
+) -> GraphPresetOutcome {
+    match preset {
+        GraphPreset::Orphans => GraphPresetOutcome::Orphans { count: shown },
+        GraphPreset::Unresolved => GraphPresetOutcome::Unresolved { count: shown },
+        GraphPreset::MostLinked => match first {
+            Some(row) => GraphPresetOutcome::MostLinked {
+                label: row.label.clone(),
+                in_links: row.links_in,
+            },
+            None => GraphPresetOutcome::NoNotesToRank,
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2423,8 +2493,9 @@ mod tests {
                 "{name} names no pub fn in graph_queries, graph_config or the session"
             );
         }
-        // W6-2 PR A (A-5): twenty-four; PR B (B-15): twenty-six.
-        assert_eq!(GRAPH_QUERY_SURFACE.len(), 26);
+        // W6-2 PR A (A-5): twenty-four; PR B (B-15): twenty-six; PR C
+        // (C-2): twenty-eight.
+        assert_eq!(GRAPH_QUERY_SURFACE.len(), 28);
     }
 
     // --- W6-2 PR A, A-5 / AD-1: the default sort is fetched ------------------
@@ -2467,5 +2538,100 @@ mod tests {
         assert_eq!(clamp_connections_depth(99), CONNECTIONS_DEPTH_MAX);
         assert_eq!(clamp_connections_depth(2), clamp_depth(2));
         assert!(GRAPH_QUERY_SURFACE.contains(&"graph_clamp_connections_depth"));
+    }
+
+    // --- W6-2 PR C, C-2: the presets' two rules are core's ------------------
+
+    /// The mac's `testPresetFilterAndKindMapping` as a Rust fact: the
+    /// three arms' backend filters, the kind overlay for Unresolved
+    /// alone, the needle empty in every arm.
+    #[test]
+    fn preset_query_is_the_mac_mapping() {
+        let orphans = preset_query(GraphPreset::Orphans);
+        assert_eq!(
+            orphans.filter,
+            GraphFilter {
+                include_attachments: false,
+                include_ghosts: false,
+                orphans_only: true,
+            }
+        );
+        assert_eq!(orphans.kind_only, None);
+
+        let unresolved = preset_query(GraphPreset::Unresolved);
+        assert_eq!(
+            unresolved.filter,
+            GraphFilter {
+                include_attachments: false,
+                include_ghosts: true,
+                orphans_only: false,
+            }
+        );
+        assert_eq!(
+            unresolved.kind_only,
+            Some(NodeKind::Ghost),
+            "unresolved shows only ghosts"
+        );
+
+        // Most-linked is the DEFAULT view: the hubs surface through the
+        // grid's default Links-in-descending sort, not a filter.
+        let most_linked = preset_query(GraphPreset::MostLinked);
+        assert_eq!(most_linked.filter, GraphFilter::default());
+        assert_eq!(most_linked.kind_only, None);
+
+        for preset in [
+            GraphPreset::Orphans,
+            GraphPreset::Unresolved,
+            GraphPreset::MostLinked,
+        ] {
+            assert!(
+                preset_query(preset).name_query.is_empty(),
+                "a preset clears the needle: {preset:?}"
+            );
+        }
+        assert!(GRAPH_QUERY_SURFACE.contains(&"graph_preset_query"));
+    }
+
+    /// The mac's `testPresetOutcomesAreTyped` as a Rust fact: the count
+    /// for Orphans and Unresolved, row zero for MostLinked, the empty
+    /// case.
+    #[test]
+    fn preset_outcome_counts_or_names_row_zero() {
+        let row = |label: &str, links_in: u32| GraphTableRow {
+            stable_key: format!("p:{label}.md"),
+            node_id: 1,
+            label: label.to_owned(),
+            path: Some(format!("{label}.md")),
+            kind: NodeKind::Note,
+            cells: Vec::new(),
+            links_in,
+            links_out: 0,
+            embeds_in: 0,
+            embeds_out: 0,
+            component: 0,
+            modified_ms: None,
+        };
+        assert_eq!(
+            preset_outcome(GraphPreset::Orphans, 3, Some(&row("a", 0))),
+            GraphPresetOutcome::Orphans { count: 3 },
+            "the published count, whatever row zero is"
+        );
+        assert_eq!(
+            preset_outcome(GraphPreset::Unresolved, 2, None),
+            GraphPresetOutcome::Unresolved { count: 2 }
+        );
+        assert_eq!(
+            preset_outcome(GraphPreset::MostLinked, 3, Some(&row("hub", 9))),
+            GraphPresetOutcome::MostLinked {
+                label: "hub".to_owned(),
+                in_links: 9,
+            },
+            "row zero of the published result under the default sort"
+        );
+        assert_eq!(
+            preset_outcome(GraphPreset::MostLinked, 0, None),
+            GraphPresetOutcome::NoNotesToRank
+        );
+        assert!(GRAPH_QUERY_SURFACE.contains(&"graph_preset_outcome"));
     }
 }

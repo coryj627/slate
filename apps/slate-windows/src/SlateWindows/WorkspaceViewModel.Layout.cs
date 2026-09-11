@@ -738,6 +738,8 @@ internal sealed partial class WorkspaceViewModel
         // all of them.
         WorkspaceTabViewModel? active = ActiveGroup.ActiveTab;
         active?.Canvas?.RequestFocusLanding(active);
+        // W6-2 PR C (rule F, Term F6): a graph tab's document, addressed the same way.
+        active?.Graph?.RequestFocusLanding(active);
         EditorPaneFocusRequested?.Invoke(this, ActiveGroup);
     }
 

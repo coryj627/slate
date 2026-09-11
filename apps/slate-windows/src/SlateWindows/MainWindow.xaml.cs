@@ -371,6 +371,7 @@ public partial class MainWindow : Window
             UnwireWorkspaceCitations(_observedWorkspace);
             UnwireWorkspaceBases(_observedWorkspace);
             UnwireWorkspaceTemplates(_observedWorkspace);
+            UnwireWorkspaceGraph(_observedWorkspace);
         }
 
         _observedWorkspace = workspace;
@@ -382,6 +383,7 @@ public partial class MainWindow : Window
             WireWorkspaceCitations(workspace);
             WireWorkspaceBases(workspace);
             WireWorkspaceTemplates(workspace);
+            WireWorkspaceGraph(workspace);
         }
     }
 
@@ -1663,6 +1665,14 @@ public partial class MainWindow : Window
         if (activeTab is { IsCanvas: true, Canvas: { } canvas })
         {
             canvas.RequestFocusLanding(activeTab);
+            return;
+        }
+        // W6-2 PR C (rule F, Term F6): a graph tab's focus belongs to the graph
+        // surface, which seats the grid's row or the state host through the
+        // document's addressed landing — the canvas arm's shape.
+        if (activeTab is { IsGraph: true, Graph: { } graph })
+        {
+            graph.RequestFocusLanding(activeTab);
             return;
         }
         SlateTextEditor? editor = FindVisualDescendants<SlateTextEditor>(ContentPaneBorder)

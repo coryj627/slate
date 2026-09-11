@@ -588,8 +588,12 @@ public sealed class ConnectionsLeafCensus
                 // and the argument's TYPE is the filter-count event — a local
                 // alias carries the type the text hid; a relay call the
                 // compilation cannot bind is refused rather than trusted.
+                // W6-2 PR C (C-6): the relay's static RenderLabel RENDERS a count
+                // for the document's FilterCountText and posts nothing — a
+                // render is not an enqueue, so it is neither gated nor ungated.
                 IMethodSymbol[] relayMethods = [.. Candidates(model.GetSymbolInfo(call)).OfType<IMethodSymbol>()
-                    .Where(method => method.ContainingType.ToDisplayString() == "SlateWindows.Graph.GraphAnnouncer")];
+                    .Where(method => method.ContainingType.ToDisplayString() == "SlateWindows.Graph.GraphAnnouncer"
+                        && !(method.IsStatic && method.Name == "RenderLabel"))];
                 bool unboundRelayCall = relayMethods.Length == 0
                     && CalleeName(call).StartsWith("Announce", StringComparison.Ordinal)
                     && !Candidates(model.GetSymbolInfo(call)).Any();
@@ -749,7 +753,10 @@ public sealed class ConnectionsLeafCensus
         Assert.True(offenders.Count == 0, "the depth is reached other than by a bound call: " + string.Join("; ", offenders));
         string[] allowed =
         [
-            "Graph/ConnectionsLeafViewModel.cs:<ctor>(GraphCoreConstants.Once.ConnectionsDepthMin)",
+            // W6-2 PR C (C-10): the constructor's producer is the PERSISTED
+            // depth the workspace passes from the preferences; a bare leaf's
+            // zero is below core's floor and clamps to it.
+            "Graph/ConnectionsLeafViewModel.cs:<ctor>(initialDepth)",
             // Normalised text carries no spaces.
             "Graph/ConnectionsLeafViewModel.cs:Deeper(_depth+1)",
             "Graph/ConnectionsLeafViewModel.cs:Shallower(_depth-1)",

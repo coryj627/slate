@@ -1558,6 +1558,55 @@
       "registered": true
     },
     {
+      "id": "slate.graph.orphans",
+      "label": "Graph: Orphaned Notes",
+      "section": "Graph",
+      "hint": "Open the graph filtered to orphans — notes with no links in or out.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.unresolved",
+      "label": "Graph: Unresolved Links",
+      "section": "Graph",
+      "hint": "Open the graph filtered to unresolved targets — broken links.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.mostLinked",
+      "label": "Graph: Most Linked Notes",
+      "section": "Graph",
+      "hint": "Open the graph sorted by links in — the most-linked notes, the hubs.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.whereAmI",
+      "label": "Graph: Where Am I?",
+      "section": "Graph",
+      "hint": "Read the selected node's row copy, its component, the zoom level, and the active filters.",
+      "macChord": "⌃⌘I",
+      "mac": "Control Command I",
+      "windows": "Ctrl+Alt+Shift+I",
+      "windowsSpoken": "Control Alt Shift I",
+      "scope": "Graph",
+      "registered": true,
+      "divergence": "D-2: the rule predicts Ctrl+Alt+I, which slate.view.toggleRightPane holds at Global scope — live at the same moment as a focused canvas, so this is a collision and not a disjoint pair. Disambiguated with Shift per the G18 precedent."
+    },
+    {
       "id": "slate.sidebar.open",
       "label": "Open",
       "section": "Sidebar",
@@ -2544,14 +2593,21 @@
           "apps/slate-windows/src/SlateWindows/Graph/GraphTableView.cs#GraphTableView",
           "apps/slate-windows/src/SlateWindows/Graph/ConnectionsLeafViewModel.cs#ConnectionsLeafViewModel",
           "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Connections.cs#ShowConnections",
-          "apps/slate-windows/src/SlateWindows/Graph/ConnectionsLeafView.cs#ConnectionsLeafView"
+          "apps/slate-windows/src/SlateWindows/Graph/ConnectionsLeafView.cs#ConnectionsLeafView",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphNavigator.cs#GraphNavigator",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphPreferencesViewModel.cs#GraphPreferencesViewModel",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphSurfaceView.cs#GraphSurfaceView",
+          "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphWhereAmICommand"
         ],
         "tests": [
           "apps/slate-windows/tests/SlateWindows.Tests/GraphDocumentTests.cs#GraphDocumentTests",
           "apps/slate-windows/tests/SlateWindows.Tests/GraphTableTests.cs#GraphTableTests",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_TableSortSelectionAndActivation_AreClean",
           "apps/slate-windows/tests/SlateWindows.Tests/ConnectionsLeafTests.cs#ConnectionsLeafTests",
-          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphConnections_LeafWalkDepthAndReRoot_AreClean"
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphConnections_LeafWalkDepthAndReRoot_AreClean",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphNavigatorTests.cs#GraphNavigatorTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphPreferencesTests.cs#GraphPreferencesTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean"
         ]
       }
     },
@@ -2726,7 +2782,11 @@
       "slate.graph.showConnections": "graph",
       "slate.graph.connectionsDeeper": "graph",
       "slate.graph.connectionsShallower": "graph",
-      "slate.graph.connectionsBack": "graph"
+      "slate.graph.connectionsBack": "graph",
+      "slate.graph.orphans": "graph",
+      "slate.graph.unresolved": "graph",
+      "slate.graph.mostLinked": "graph",
+      "slate.graph.whereAmI": "graph"
     },
     "issues": {
       "#720": "vault",
@@ -3050,6 +3110,58 @@
       "scope": "None",
       "registered": false,
       "reason": "PR-4, the math-verbosity precedent: the three canvas verbosity levels are selected by one parameterized setter the Canvas menu binds with the level as its CommandParameter. Each level is a row so the catalog records the closed set, and none is registered because a palette row cannot supply the parameter. mac declares no SlateCommandID for these either."
+    },
+    {
+      "id": "windows.graph.escapeLadder",
+      "label": "Graph: Escape ladder",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Escape",
+      "windowsSpoken": "Escape",
+      "scope": "Graph",
+      "registered": false,
+      "reason": "W6-2 PR C, contract C-7: Escape on the graph surface clears a live needle and seats the reader on the projection, or leaves the filter region for the projection; with nothing to do it bubbles to the shell. Delivered by GraphNavigator.HandleKey from GraphSurfaceView.OnPreviewKeyDown; the mac has no ladder on the graph (C-D3)."
+    },
+    {
+      "id": "windows.graph.setVerbosityTerse",
+      "label": "Graph Verbosity: Terse",
+      "section": "Graph",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": false,
+      "reason": "W6-2 PR C (C-9), the canvas's PR-4 precedent: the three graph verbosity levels — core's vector, persisted in the vault's graph.json (0b-12) — are selected by one parameterized setter the Graph menu binds with the level's tag as its CommandParameter. Each level is a row so the catalog records the closed set, and none is registered because a palette row cannot supply the parameter. mac declares no SlateCommandID for these either."
+    },
+    {
+      "id": "windows.graph.setVerbosityStandard",
+      "label": "Graph Verbosity: Standard",
+      "section": "Graph",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": false,
+      "reason": "W6-2 PR C (C-9), the canvas's PR-4 precedent: the three graph verbosity levels — core's vector, persisted in the vault's graph.json (0b-12) — are selected by one parameterized setter the Graph menu binds with the level's tag as its CommandParameter. Each level is a row so the catalog records the closed set, and none is registered because a palette row cannot supply the parameter. mac declares no SlateCommandID for these either."
+    },
+    {
+      "id": "windows.graph.setVerbosityVerbose",
+      "label": "Graph Verbosity: Verbose",
+      "section": "Graph",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": false,
+      "reason": "W6-2 PR C (C-9), the canvas's PR-4 precedent: the three graph verbosity levels — core's vector, persisted in the vault's graph.json (0b-12) — are selected by one parameterized setter the Graph menu binds with the level's tag as its CommandParameter. Each level is a row so the catalog records the closed set, and none is registered because a palette row cannot supply the parameter. mac declares no SlateCommandID for these either."
     },
     {
       "id": "windows.reading.nextH",

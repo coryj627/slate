@@ -658,6 +658,22 @@ W6_2_STATUS = (
     "interactive CI + human AT pending"
 )
 
+# W6-2 PR C (#746, contracts C-3, C-8, C-16): the navigator's rows carry
+# the date THEIR gates went green (IPA-13's rule, per slice): the three
+# presets, chordless, executable through the palette and the Graph menu;
+# Where Am I? with the table's readback (CD-24), Ctrl+Alt+Shift+I.
+W6_2_PR_C_STATUS = (
+    "implemented; local gates green 2026-09-09; "
+    "interactive CI + human AT pending"
+)
+
+W6_2_PR_C_DELIVERED_COMMANDS = {
+    "slate.graph.orphans",
+    "slate.graph.unresolved",
+    "slate.graph.mostLinked",
+    "slate.graph.whereAmI",
+}
+
 W6_2_DELIVERED_COMMANDS = {
     # W6-2 PR A (#746, contract A-12): the graph tab's one chordless row,
     # executable through the palette and the registrar; B–E add the leaf's,
@@ -875,7 +891,8 @@ def load_delivery_evidence(
         if issue.startswith(("#720", "#721", "#722", "#723", "#724", "#725"))
     } | W3_DELIVERED_COMMANDS | W4_DELIVERED_COMMANDS | W5_2_DELIVERED_COMMANDS \
         | W5_3_DELIVERED_COMMANDS | W5_4_DELIVERED_COMMANDS | W6_1_DELIVERED_COMMANDS \
-        | W6_2_DELIVERED_COMMANDS
+        | W6_2_DELIVERED_COMMANDS \
+        | W6_2_PR_C_DELIVERED_COMMANDS
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
         missing = sorted(delivered_commands - mapped_commands)
@@ -947,6 +964,8 @@ def command_delivery_status(
         return W5_4_STATUS
     if command_id in W6_1_DELIVERED_COMMANDS:
         return W6_1_STATUS
+    if command_id in W6_2_PR_C_DELIVERED_COMMANDS:
+        return W6_2_PR_C_STATUS
     if command_id in W6_2_DELIVERED_COMMANDS:
         return W6_2_STATUS
     return (

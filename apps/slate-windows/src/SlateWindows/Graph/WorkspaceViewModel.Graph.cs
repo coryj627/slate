@@ -41,6 +41,35 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>The workspace's one view state (B2-1).</summary>
     private readonly GraphViewState _graphViewState;
 
+    /// <summary>The workspace's one preferences object (W6-2 PR C, C-9,
+    /// C-10; rule W): assigned once in the constructor by
+    /// <see cref="NewGraphPreferences"/>, after the view state and before
+    /// the navigator and the leaf.</summary>
+    private readonly GraphPreferencesViewModel _graphPreferences;
+
+    internal GraphPreferencesViewModel GraphPreferences => _graphPreferences;
+
+    /// <summary>The workspace's one navigator (W6-2 PR C, C-1): assigned
+    /// once in the constructor by <see cref="NewGraphNavigator"/>, after
+    /// the view state and before the first document.</summary>
+    private readonly GraphNavigator _graphNavigator;
+
+    internal GraphNavigator GraphNavigator => _graphNavigator;
+
+    /// <summary>The open's admission (rule P, Term P3): null admits.
+    /// Windows has no navigation gate today (C-D1); the facts inject a
+    /// refusal through it.</summary>
+    public Func<string?>? GraphOpenAdmissionReason { get; set; }
+
+    /// <summary>The preset ARM (Term P2): a cause-shaped field, set by the
+    /// funnel before the open's mutation, consumed by the follow method at
+    /// the one transition it loads for, cleared by the outermost boundary
+    /// when unconsumed. Not a cause: AD-12's two causes stand.</summary>
+    private GraphPreset? _graphPresetArm;
+    private bool _graphArmConsumed;
+
+    internal GraphPreset? GraphPresetArmForTests => _graphPresetArm;
+
     internal GraphViewState GraphViewStateForTests => _graphViewState;
 
     /// <summary>The workspace's one relay, for the facts that queue a
@@ -89,7 +118,18 @@ internal sealed partial class WorkspaceViewModel
     /// L's follow method starts the load when the tab is effective.</summary>
     private void AttachGraphDocumentTo(WorkspaceTabViewModel tab)
     {
-        _graphDocument ??= NewGraphDocument();
+        if (_graphDocument is null)
+        {
+            _graphDocument = NewGraphDocument();
+            // C-10: a FRESH open re-applies the latest saved filter BEFORE
+            // the transition's load (the mac's applyPersistedGraphFilter
+            // under its guards) — unless the preset ARM is set, when the
+            // preset's write stands; an activation preserves the view.
+            if (_graphPresetArm is null)
+            {
+                _graphViewState.ApplyQuery(GraphPreferencesViewModel.VisibilityQueryOf(_graphPreferences.CurrentConfig.Filters));
+            }
+        }
         tab.AttachGraphDocument(_graphDocument);
     }
 
@@ -109,6 +149,71 @@ internal sealed partial class WorkspaceViewModel
     /// the workspace. The instance census counts the factory's one call.</summary>
     private GraphViewState NewGraphViewState() => new GraphViewState();
 
+    /// <summary>The workspace's ONE preferences object (C-9, C-10): the
+    /// config read at construction (the writer's newest outstanding
+    /// aggregate, else the file) over the application writer; the instance
+    /// census counts this factory's one call.</summary>
+    private GraphPreferencesViewModel NewGraphPreferences() => new GraphPreferencesViewModel(_vaultRoot);
+
+    /// <summary>The workspace's ONE navigator (C-1): the view state, the
+    /// seated document, the admission seam and the preset funnel; the
+    /// instance census counts this factory's one call.</summary>
+    private GraphNavigator NewGraphNavigator() =>
+        new GraphNavigator(
+            _graphViewState,
+            _graphPreferences,
+            () => _graphDocument,
+            () => GraphOpenAdmissionReason?.Invoke(),
+            OpenGraphForPreset);
+
+    /// <summary>The preset funnel (C-3 (iii)–(v); rule P): the arm set, the
+    /// open run as <see cref="OpenGraph"/> runs it — WITHOUT the Open
+    /// cause (CD-5; Term P2) — and the boundary's verdict returned: whether
+    /// the follow method consumed the arm, and whether the graph is
+    /// effective now.</summary>
+    private GraphPresetOpenReport OpenGraphForPreset(GraphPreset preset)
+    {
+        _graphPresetArm = preset;
+        _graphArmConsumed = false;
+        RunWorkspaceMutation(() => OpenItem(
+            new WorkspaceItemState(WorkspaceItemKind.Graph, "graph:singleton"),
+            WorkspaceOpenTarget.NewTab));
+        return new GraphPresetOpenReport(_graphArmConsumed, GraphTabIsEffective());
+    }
+
+    private RelayCommand? _graphOrphansCommand;
+    private RelayCommand? _graphUnresolvedCommand;
+    private RelayCommand? _graphMostLinkedCommand;
+
+    /// <summary>`slate.graph.orphans` (C-3): the navigator's preset verb;
+    /// always enabled — the admission is the verb's own (Term P3).</summary>
+    public System.Windows.Input.ICommand GraphOrphansCommand =>
+        _graphOrphansCommand ??= new RelayCommand(_ => _graphNavigator.RunPreset(GraphPreset.Orphans), _ => true);
+
+    /// <summary>`slate.graph.unresolved` (C-3).</summary>
+    public System.Windows.Input.ICommand GraphUnresolvedCommand =>
+        _graphUnresolvedCommand ??= new RelayCommand(_ => _graphNavigator.RunPreset(GraphPreset.Unresolved), _ => true);
+
+    /// <summary>`slate.graph.mostLinked` (C-3).</summary>
+    public System.Windows.Input.ICommand GraphMostLinkedCommand =>
+        _graphMostLinkedCommand ??= new RelayCommand(_ => _graphNavigator.RunPreset(GraphPreset.MostLinked), _ => true);
+
+    private RelayCommand? _graphWhereAmICommand;
+
+    /// <summary>`slate.graph.whereAmI` (C-8): the navigator's verb, enabled
+    /// exactly while the active projection's readback seam answers; the
+    /// navigator's WhereAmIAvailabilityChanged re-evaluates it (IGN-13) —
+    /// the row and the menu item listed-and-disabled otherwise (AD-3).</summary>
+    public System.Windows.Input.ICommand GraphWhereAmICommand =>
+        _graphWhereAmICommand ??= NewGraphWhereAmICommand();
+
+    private RelayCommand NewGraphWhereAmICommand()
+    {
+        var command = new RelayCommand(_ => _graphNavigator.WhereAmI(), _ => _graphNavigator.CanWhereAmI);
+        _graphNavigator.WhereAmIAvailabilityChanged += command.RaiseCanExecuteChanged;
+        return command;
+    }
+
     private GraphDocumentViewModel NewGraphDocument()
     {
         GraphDocumentViewModel? created = null;
@@ -117,11 +222,16 @@ internal sealed partial class WorkspaceViewModel
             _graphRelay,
             _graphViewState,
             isEffectiveActive: () => GraphTabIsEffective(),
-            verbosity: () => GraphVerbosity.Standard,
+            verbosity: () => _graphPreferences.Verbosity,
             lifecycleGeneration: () => LifecycleGeneration(),
             // SEATED (Term 15): the document the funnel holds now — a
             // retired or superseded document's selection is refused.
-            isSeated: () => created is not null && ReferenceEquals(_graphDocument, created));
+            isSeated: () => created is not null && ReferenceEquals(_graphDocument, created),
+            // C-1: the route — the surface reaches the navigator through
+            // the document, as the canvas surface does.
+            navigator: _graphNavigator,
+            // C-9: the live level and its change.
+            preferences: _graphPreferences);
         created = document;
         document.OpenRowFromSurface = (row, target) => OpenGraphRowFromSurface(row.Path!, target);
         document.ShowConnectionsFromSurface = row => ReRootGraphRowFromSurface(row);
@@ -225,15 +335,34 @@ internal sealed partial class WorkspaceViewModel
         if (load)
         {
             GraphLoadsForTests++;
-            _ = _graphDocument.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Summary);
+            // Rule P, Term P1 (a): the arm COLOURS the query-change load at
+            // the one transition Term 4 loads for — policy Preset, the
+            // preset on the token, the default sort — and is consumed; a
+            // transition that does not load consumes nothing.
+            GraphPreset? arm = _graphPresetArm;
+            if (arm is not null)
+            {
+                _graphPresetArm = null;
+                _graphArmConsumed = true;
+            }
+            _ = _graphDocument.Load(
+                GraphLoadKind.Pair,
+                arm is null ? GraphAnnouncePolicy.Summary : GraphAnnouncePolicy.Preset,
+                preset: arm);
         }
     }
 
     private bool _graphWasVisible;
 
     /// <summary>The outermost-mutation boundary (Term 5): a cause the
-    /// graph's transition did not consume is cleared here.</summary>
-    private void ClearGraphCauseAtMutationBoundary() => _graphCause = GraphActivationCause.Activation;
+    /// graph's transition did not consume is cleared here — and the preset
+    /// ARM with it (Term P2), its consumption already reported to the
+    /// funnel that set it.</summary>
+    private void ClearGraphCauseAtMutationBoundary()
+    {
+        _graphCause = GraphActivationCause.Activation;
+        _graphPresetArm = null;
+    }
 
     /// <summary>The tab-set boundary (contract A-1): the last graph tab
     /// closed retires the document — seq advanced, shutdown, the announcer
@@ -257,6 +386,10 @@ internal sealed partial class WorkspaceViewModel
     /// bounded pre-session drain, beside the canvas documents.</summary>
     private void ShutdownGraphDocument(List<Task> drains)
     {
+        // Rule W, Term W5: the preferences flush FIRST — a pending pair
+        // enqueued at once, its task in the drains (Term W4's bound).
+        _graphPreferences.Shutdown();
+        drains.Add(_graphPreferences.WhenWritesDrained());
         if (_graphDocument is { } document)
         {
             _graphDocument = null;

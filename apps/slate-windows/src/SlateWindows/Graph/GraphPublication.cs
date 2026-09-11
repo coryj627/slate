@@ -36,7 +36,7 @@ internal sealed class GraphPublication
 {
     private GraphPublication(
         GraphSnapshot? snapshot,
-        GraphFilter filter,
+        GraphVisibilityQuery query,
         ulong generation,
         IReadOnlyList<GraphTableRow> rows,
         ulong total,
@@ -46,7 +46,7 @@ internal sealed class GraphPublication
         string? error)
     {
         Snapshot = snapshot;
-        Filter = filter;
+        Query = query;
         Generation = generation;
         Rows = rows;
         Total = total;
@@ -59,8 +59,14 @@ internal sealed class GraphPublication
     /// <summary>The authority's snapshot; null under LOADING and ERROR.</summary>
     public GraphSnapshot? Snapshot { get; }
 
-    /// <summary>The filter the snapshot was fetched under.</summary>
-    public GraphFilter Filter { get; }
+    /// <summary>The accepted QUERY the rows answer — the filter, the
+    /// needle, the kind overlay (W6-2 PR C, rule Q Term Q7): the surface
+    /// reads CURRENT as "the publication's query equals the view state's
+    /// and nothing is in flight".</summary>
+    public GraphVisibilityQuery Query { get; }
+
+    /// <summary>The filter the snapshot was fetched under — the query's.</summary>
+    public GraphFilter Filter => Query.Filter;
 
     /// <summary>The snapshot's generation; 0 when none is held.</summary>
     public ulong Generation { get; }
@@ -106,18 +112,18 @@ internal sealed class GraphPublication
 
     /// <summary>The document's starting record: no snapshot, LOADING
     /// (nothing has been asked for yet; the first pair keeps it there).</summary>
-    public static GraphPublication Initial(GraphFilter filter, GraphTableSort defaultSort) =>
-        new(null, filter, 0, [], 0, defaultSort, string.Empty, GraphLoadState.Loading, null);
+    public static GraphPublication Initial(GraphVisibilityQuery query, GraphTableSort defaultSort) =>
+        new(null, query, 0, [], 0, defaultSort, string.Empty, GraphLoadState.Loading, null);
 
     /// <summary>A PAIR result replacing the authority (rule A).</summary>
     public static GraphPublication FromPair(
         GraphSnapshot snapshot,
-        GraphFilter filter,
+        GraphVisibilityQuery query,
         GraphTableRows rows,
         GraphTableSort acceptedSort) =>
         new(
             snapshot,
-            filter,
+            query,
             snapshot.Generation,
             rows.Rows,
             rows.Total,
@@ -127,10 +133,10 @@ internal sealed class GraphPublication
             null);
 
     /// <summary>A ROWS-ONLY result over the held authority (rule A).</summary>
-    public GraphPublication WithRows(GraphTableRows rows, GraphTableSort acceptedSort) =>
+    public GraphPublication WithRows(GraphVisibilityQuery query, GraphTableRows rows, GraphTableSort acceptedSort) =>
         new(
             Snapshot,
-            Filter,
+            query,
             Generation,
             rows.Rows,
             rows.Total,
@@ -142,5 +148,5 @@ internal sealed class GraphPublication
     /// <summary>A PAIR failure: the snapshot dropped, the rows kept
     /// hidden, ERROR with the message (contract A-2's first failure arm).</summary>
     public GraphPublication AsPairFailure(string message) =>
-        new(null, Filter, 0, Rows, Total, AcceptedSort, Summary, GraphLoadState.Error, message);
+        new(null, Query, 0, Rows, Total, AcceptedSort, Summary, GraphLoadState.Error, message);
 }

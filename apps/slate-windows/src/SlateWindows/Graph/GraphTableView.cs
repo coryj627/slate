@@ -3,6 +3,7 @@
 
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using SlateWindows.Grids;
 using uniffi.slate_uniffi;
 
@@ -32,6 +33,8 @@ internal sealed class GraphTableView : UserControl
 
     private readonly AccessibleDataGrid _grid;
     private bool _syncingSelection;
+    private GraphDocumentViewModel? _observed;
+    private bool _detached;
 
     public GraphTableView()
     {
@@ -44,7 +47,39 @@ internal sealed class GraphTableView : UserControl
             ExternalSortHandler = OnExternalSort,
         };
         _grid.CurrentRowChanged += OnCurrentRowChanged;
+        // C-5: the grid's Ctrl+F reaches the field with no new row (C-D2)
+        // — the canvas table's line, routed through the navigator to the
+        // presenter that has the keys.
+        _grid.FilterRequested += () => Model?.Navigator?.FocusFilterField();
         Content = _grid;
+        // IPG-12: out of the tree, out of the document's subscriber list;
+        // back in the tree, re-observed and re-bound from the record as it
+        // is now (a reparented template keeps the same Model, so the
+        // property-changed route never fires for it).
+        Unloaded += (_, _) =>
+        {
+            _detached = true;
+            StopObservingModel();
+        };
+        Loaded += (_, _) =>
+        {
+            _detached = false;
+            ObserveModel(Model);
+        };
+        // C-5's Tab order: the surface scopes its header's indices LOCALLY
+        // and the wrapper numbers its own two stops 0 (the grid) and 1 (the
+        // summary) — so this view is a local scope of its own, ONE unit at
+        // the surface's index 5. Without it the wrapper's 0 and 1 flatten
+        // into the surface's order, and Shift+Tab from the switcher reached
+        // the grid's summary, never the field (the journey's finding, TGC-9).
+        KeyboardNavigation.SetTabNavigation(this, KeyboardNavigationMode.Local);
+        // And the grid is ONE unit inside that scope, at the wrapper's index
+        // 0 ahead of its summary's 1: WPF's DataGrid is a Continue container,
+        // so without a mode of its own its cells flatten into the scope at
+        // the default index — behind the summary — and Shift+Tab from the
+        // first cell reached the summary, not the switcher. Local keeps Tab
+        // moving cell to cell inside the grid and leaves it at the edges.
+        KeyboardNavigation.SetTabNavigation(_grid.Grid, KeyboardNavigationMode.Local);
     }
 
     public GraphDocumentViewModel? Model
@@ -55,20 +90,40 @@ internal sealed class GraphTableView : UserControl
 
     internal AccessibleDataGrid GridForTests => _grid;
 
+    /// <summary>Term F2's container realisation: the grid's own event,
+    /// forwarded so the surface can re-ask a landing once rows exist.</summary>
+    /// <summary>The publication whose rows the grid is BOUND to (IPG-28).
+    /// The landing reads it instead of trusting that this view's install
+    /// handler ran before the surface's: after an unload, WPF raises the
+    /// PARENT's Loaded first, so the surface re-subscribes before this view
+    /// does and the order the initial bind guarantees is reversed.</summary>
+    internal GraphPublication? BoundPublication { get; private set; }
+
+    internal event Action? ContainersRealized
+    {
+        add => _grid.ContainersRealized += value;
+        remove => _grid.ContainersRealized -= value;
+    }
+
     private static void OnModelChanged(DependencyObject sender, DependencyPropertyChangedEventArgs e)
     {
         var view = (GraphTableView)sender;
         if (e.OldValue is GraphDocumentViewModel old)
         {
-            old.PublicationInstalled -= view.OnPublicationInstalled;
-            old.ViewState.PropertyChanged -= view.OnViewStateChanged;
+            view.StopObservingModel(old);
         }
         if (e.NewValue is GraphDocumentViewModel model)
         {
-            model.PublicationInstalled += view.OnPublicationInstalled;
-            model.ViewState.PropertyChanged += view.OnViewStateChanged;
-            view._grid.Announce = model.GridRelaySeam;
-            view.Rebind(model, model.Publication);
+            view.ObserveModel(model);
+            if (view._observed is null)
+            {
+                // The model was REPLACED while this view is out of the tree,
+                // so ObserveModel took nothing (IPG-16) — and the grid would
+                // keep the OLD document's rows, its bound record and every
+                // closure that captured it: cells, names, actions, activation
+                // (IPG-34). Drop them; Loaded binds whatever the model is then.
+                view.ClearBinding();
+            }
         }
         else
         {
@@ -77,8 +132,7 @@ internal sealed class GraphTableView : UserControl
             // old document beside going silent — a retired document must
             // not stay reachable through a bound grid (codoki on
             // 1de19b4; the null arm IPA-1 made reachable).
-            view._grid.Announce = _ => { };
-            view._grid.Bind([], [], summary: string.Empty, accessibilityLabel: GridLabel);
+            view.ClearBinding();
         }
     }
 
@@ -97,6 +151,17 @@ internal sealed class GraphTableView : UserControl
             int index = model.CellIndexOf(install.Current.AcceptedSort.Column);
             model.RelayGridEvent(new A11yEvent.GridSorted(
                 model.ColumnSpecs[index].Header, install.Current.AcceptedSort.Ascending));
+        }
+    }
+
+    /// <summary>C-9's RE-LABEL: a verbosity change re-binds the current
+    /// publication under the syncing guard — the rows' Names at the new
+    /// level, no load, no post.</summary>
+    private void OnModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(GraphDocumentViewModel.Verbosity) && Model is { } model)
+        {
+            Rebind(model, model.Publication);
         }
     }
 
@@ -155,11 +220,40 @@ internal sealed class GraphTableView : UserControl
         {
             _syncingSelection = false;
         }
+        BoundPublication = publication;
     }
 
     /// <summary>Contract A-7: seat the grid on the row whose key equals
     /// the shared selection; with no visible row for it, clear the grid's
     /// currency WITHOUT writing the key.</summary>
+    /// <summary>Rule F, Terms F4 and F5: seat the reader on the grid's
+    /// current row — the shared key's, else the first — SILENTLY: the
+    /// syncing guard writes no key and the grid posts no row move. False
+    /// when no realised cell took the keys.</summary>
+    internal bool FocusProjection()
+    {
+        if (Model is not { } model)
+        {
+            return false;
+        }
+        bool wasSyncing = _syncingSelection;
+        _syncingSelection = true;
+        try
+        {
+            string? key = model.ViewState.SelectedKey;
+            if (key is not null
+                && _grid.SelectRow(row => string.Equals(((GraphTableRow)row).StableKey, key, StringComparison.Ordinal), moveFocus: true))
+            {
+                return true;
+            }
+            return _grid.SelectRow(_ => true, moveFocus: true);
+        }
+        finally
+        {
+            _syncingSelection = wasSyncing;
+        }
+    }
+
     private void Reseat(GraphDocumentViewModel model)
     {
         bool wasSyncing = _syncingSelection;
@@ -167,9 +261,24 @@ internal sealed class GraphTableView : UserControl
         try
         {
             string? key = model.ViewState.SelectedKey;
-            bool seated = key is not null
-                && _grid.SelectRow(row => string.Equals(((GraphTableRow)row).StableKey, key, StringComparison.Ordinal));
-            if (!seated)
+            if (key is null)
+            {
+                // No shared key: rule F's silent seat wrote none (Term F5) and
+                // the wrapper's rebind restored the reader's row by identity.
+                // Clearing the currency here stranded the reader on a cell
+                // that was no longer current — Enter refused, the readback
+                // empty — every time the table re-published under no key
+                // (the table journey's finding, TGC-9). A row the republish
+                // dropped is the one currency to clear: the wrapper leaves a
+                // gone row's stale cell in place, and its old column object
+                // would index at -1 on the next seat.
+                if (_grid.Grid.CurrentCell.Item is { } item && !_grid.Grid.Items.Contains(item))
+                {
+                    _grid.Grid.CurrentCell = new System.Windows.Controls.DataGridCellInfo();
+                }
+                return;
+            }
+            if (!_grid.SelectRow(row => string.Equals(((GraphTableRow)row).StableKey, key, StringComparison.Ordinal)))
             {
                 // No visible row carries the key: clear the grid's currency
                 // WITHOUT writing the key (contract A-7).
@@ -181,6 +290,54 @@ internal sealed class GraphTableView : UserControl
             _syncingSelection = wasSyncing;
         }
     }
+
+    /// <summary>The three subscriptions this view holds on the document and
+    /// the workspace's view state, in ONE place (IPG-12): taken with a model
+    /// and on load, dropped on a replacement and on UNLOAD — the document
+    /// and the view state outlive the element, so a table left subscribed
+    /// after it leaves the tree renders every later publication into a grid
+    /// nobody can see, one more of them per split collapse.</summary>
+    private void ObserveModel(GraphDocumentViewModel? model)
+    {
+        // Out of the tree, nothing subscribes — a replacement off-tree used
+        // to re-install what Unloaded had dropped (IPG-16).
+        if (model is null || _detached || ReferenceEquals(_observed, model))
+        {
+            return;
+        }
+        StopObservingModel();
+        _observed = model;
+        model.PublicationInstalled += OnPublicationInstalled;
+        model.PropertyChanged += OnModelPropertyChanged;
+        model.ViewState.PropertyChanged += OnViewStateChanged;
+        _grid.Announce = model.GridRelaySeam;
+        Rebind(model, model.Publication);
+    }
+
+    /// <summary>Drop everything the grid holds on a document: the rows, the
+    /// bound record and the delegates that captured it (IPG-34). The null
+    /// arm's teardown, reachable from the detached replacement too.</summary>
+    private void ClearBinding()
+    {
+        _grid.Announce = _ => { };
+        _grid.Bind([], [], summary: string.Empty, accessibilityLabel: GridLabel);
+        BoundPublication = null;
+    }
+
+    private void StopObservingModel(GraphDocumentViewModel? model = null)
+    {
+        GraphDocumentViewModel? observed = model ?? _observed;
+        if (observed is null || !ReferenceEquals(observed, _observed))
+        {
+            return;
+        }
+        _observed = null;
+        observed.PublicationInstalled -= OnPublicationInstalled;
+        observed.PropertyChanged -= OnModelPropertyChanged;
+        observed.ViewState.PropertyChanged -= OnViewStateChanged;
+    }
+
+    internal bool ObservingForTests => _observed is not null;
 
     private void OnCurrentRowChanged(object? row)
     {
@@ -205,7 +362,9 @@ internal sealed class GraphTableView : UserControl
         {
             return false;
         }
-        model.SetSort(new GraphTableSort(model.ColumnSpecs[columnIndex].Column, ascending));
+        // A-5's rows-only token through rule Q's one entry (Term Q1): the
+        // table view's external sort handler is Request's named caller.
+        _ = model.Request(new GraphRequest.Sort(new GraphTableSort(model.ColumnSpecs[columnIndex].Column, ascending)));
         return true;
     }
 

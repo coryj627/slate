@@ -161,3 +161,14 @@ apps/slate-mac/Sources/slate_uniffiFFI/slate_uniffiFFI.h
 
 # Local convenience symlink to the latest built app bundle (AT testing)
 /slate-mac-*.app
+
+# The repomix pack is a GENERATED snapshot of the whole tree — regenerate
+# it whenever you want to reason over the codebase, but do not commit it.
+# Each regeneration rewrites all 35+ MB, and seven of them on one branch
+# put ~504k added and ~489k deleted lines in a single file into a
+# 13,500-line pull request. GitHub then refused to diff the PR at all
+# ("Sorry, this diff is taking too long to generate", `code:
+# not_available`), which left the Codoki review hanging on seven
+# consecutive heads and timed out the code-scanning check. Keeping it out
+# of git costs nothing: it is derived from the tree it packs.
+repomix-output.*

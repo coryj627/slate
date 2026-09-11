@@ -556,6 +556,8 @@ public sealed class A11yCorpusCensus
         new A11yEvent.Graph(Event: new GraphA11yEvent.GraphWhereAmI(Selection: new GraphWhereAmISelection.Node(Row: new GraphRowCopy(Label: "Draft", Kind: GraphNodeKind.Ghost, InLinks: 0, OutLinks: 0, References: 0, Embed: false), Component: 1), ZoomPercent: 100, Filter: new GraphWhereAmIFilter.UnresolvedOnly(), NameFilter: null)),
         new A11yEvent.Graph(Event: new GraphA11yEvent.GraphWhereAmI(Selection: new GraphWhereAmISelection.Node(Row: new GraphRowCopy(Label: "Todo", Kind: GraphNodeKind.Ghost, InLinks: 1, OutLinks: 0, References: 1, Embed: false), Component: 3), ZoomPercent: 80, Filter: new GraphWhereAmIFilter.UnresolvedOnly(), NameFilter: null)),
         new A11yEvent.Graph(Event: new GraphA11yEvent.GraphWhereAmI(Selection: new GraphWhereAmISelection.Node(Row: new GraphRowCopy(Label: "Café", Kind: GraphNodeKind.Note, InLinks: 2, OutLinks: 4, References: 2, Embed: false), Component: 5), ZoomPercent: 200, Filter: new GraphWhereAmIFilter.Normal(OrphansOnly: false, AttachmentsShown: false, GhostsShown: true), NameFilter: "cafe")),
+        // The table's readback (W6-2 PR C, 0a-6 as amended — CD-24): no zoom clause.
+        new A11yEvent.Graph(Event: new GraphA11yEvent.GraphWhereAmI(Selection: new GraphWhereAmISelection.NoSelection(), ZoomPercent: null, Filter: new GraphWhereAmIFilter.Normal(OrphansOnly: false, AttachmentsShown: false, GhostsShown: true), NameFilter: null)),
         new A11yEvent.Graph(Event: new GraphA11yEvent.GraphTierEntered()),
         new A11yEvent.Graph(Event: new GraphA11yEvent.GraphTierSummary(Count: 2000)),
         new A11yEvent.Graph(Event: new GraphA11yEvent.GraphTierSummary(Count: 1501)),

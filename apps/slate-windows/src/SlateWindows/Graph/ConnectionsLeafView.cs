@@ -29,11 +29,12 @@ internal sealed class ConnectionsRowViewModel : BindableBase
 {
     private bool _isExpanded;
     private bool _isSelected;
+    private string _name;
 
     private ConnectionsRowViewModel(string id, string name, string status, string hint, bool isGroup, bool isEmptyMarker)
     {
         Id = id;
-        Name = name;
+        _name = name;
         Status = status;
         Hint = hint;
         IsGroup = isGroup;
@@ -83,7 +84,23 @@ internal sealed class ConnectionsRowViewModel : BindableBase
 
     public bool IsEmptyMarker { get; }
 
-    public string Name { get; }
+    /// <summary>The row's UIA Name: core's row copy at the level in force,
+    /// re-rendered in place on a verbosity change (C-9's re-label).</summary>
+    public string Name
+    {
+        get => _name;
+        internal set
+        {
+            if (SetField(ref _name, value))
+            {
+                // The visible TextBlock binds to Display, which DERIVES from
+                // Name; WPF cannot know that, so C-9's re-label reached the
+                // automation peer and left the row's text as it was until the
+                // next rebind (IPG-13, created by TGC-5's relabel).
+                OnPropertyChanged(nameof(Display));
+            }
+        }
+    }
 
     public string Status { get; }
 
@@ -434,10 +451,31 @@ internal sealed class ConnectionsLeafView : UserControl
             case nameof(ConnectionsLeafViewModel.IsStale):
                 Render();
                 break;
+            case nameof(ConnectionsLeafViewModel.Verbosity):
+                if (Model is { } relabelModel)
+                {
+                    RelabelRows(relabelModel);
+                }
+                break;
         }
     }
 
     private void OnPublicationInstalled(ConnectionsPublicationInstall install) => Render();
+
+    /// <summary>C-9's re-label: the RETAINED rows' Names rendered again at
+    /// the new level, in place — no rebuild, no load, the selection, the
+    /// expansion and the keys untouched; the group and empty rows carry
+    /// no level.</summary>
+    private void RelabelRows(ConnectionsLeafViewModel model)
+    {
+        foreach (ConnectionsRowViewModel row in _byOccurrence.Values)
+        {
+            if (row.Row is { } core)
+            {
+                row.Name = model.RowName(core);
+            }
+        }
+    }
 
     private void ClearViewState()
     {

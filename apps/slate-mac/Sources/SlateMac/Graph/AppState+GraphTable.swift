@@ -3,19 +3,9 @@
 
 import Foundation
 
-/// A graph-table preset (P1-3 #556) — a named parameterization of the
-/// table (backend filter + client kind filter + a spoken headline), not
-/// a new surface. "One model, thin projections."
-enum GraphPreset {
-    /// Notes with no links in or out — `GraphFilter.orphansOnly`.
-    case orphans
-    /// Unresolved link targets only — ghosts visible, kind-filtered to
-    /// `.ghost` (the backend filter can't drop notes).
-    case unresolved
-    /// The default view (ghosts visible), sorted Links-in desc — the
-    /// grid's default sort surfaces hubs; the announcement names the top.
-    case mostLinked
-}
+// `GraphPreset` is core's enum since W6-2 PR C (contracts doc §PR C, C-2):
+// the generated Swift type replaces the local one — 0a-18's precedent for
+// the mode enum — and the mapping and the headline are core's rules.
 
 /// A table request: the complete input core answers (W6-2 PR 0b,
 /// design A) — the visibility query and the sort.
@@ -141,6 +131,8 @@ extension AppState {
         graphTableTextFilter = ""
         graphTableKindFilter = nil
         graphTablePendingPreset = nil
+        graphTableInFlightAnnounce = nil
+        graphTablePublishedRequest = nil
         // Drop the shared cross-projection selection (P2-5 #561) so a key
         // from the closing vault / prior graph tab can't bleed into the next.
         graphSelectedNodeKey = nil
@@ -166,7 +158,11 @@ extension AppState {
     /// filter. Compute-then-publish with the O-5 guards; the announcement
     /// (if any) is decided AFTER the fresh snapshot publishes and is
     /// gated on a live, on-screen graph tab.
-    func loadGraphTable(announce: GraphTableLoadAnnounce = .summary) {
+    ///
+    /// `sort` is the request's sort when a REPLACING load re-fetches under
+    /// its own request (W6-2 PR C, C-2 (iii)); otherwise the accepted sort,
+    /// or the default under a pending preset (design A).
+    func loadGraphTable(announce: GraphTableLoadAnnounce = .summary, sort: GraphTableSort? = nil) {
         guard let session = currentSession else {
             graphTableSnapshot = nil
             graphTableError = nil
@@ -179,15 +175,21 @@ extension AppState {
         // A preset is a request like any other (design A): it sets the
         // DEFAULT sort in the same token as its filter, kind and needle.
         let token = issueGraphTableToken(
-            sort: graphTablePendingPreset != nil
-                ? graphTableDefaultSort() : graphTableSort)
+            sort: sort
+                ?? (graphTablePendingPreset != nil
+                    ? graphTableDefaultSort() : graphTableSort))
         graphTableLoading = true
+        // (iv) The announce a replacing load inherits while this one is in
+        // flight (contracts doc §PR C C-2 (iv); rule Q, Term Q9).
+        graphTableInFlightAnnounce = announce
+        let injectedFailure = graphTableLoadFailureForTests
 
         Task { [weak self] in
             // The snapshot (the summary, the selection's held generation)
             // and the rows core orders for the token's request (0b-7).
             let result: Result<(GraphSnapshot, GraphTableRows), VaultError> =
                 await Task.detached(priority: .userInitiated) {
+                    if let injectedFailure { return .failure(injectedFailure) }
                     do {
                         let snap = try session.graphSnapshot(filter: filter)
                         let rows = try session.graphTableRows(
@@ -200,7 +202,7 @@ extension AppState {
                     }
                 }.value
 
-            if let gate = self?.graphTablePublishGate { await gate() }
+            if let gate = self?.graphTablePublishGate { await gate(token) }
 
             guard let self else { return }
             guard !Task.isCancelled, self.currentSession === session,
@@ -214,6 +216,11 @@ extension AppState {
             let speak = announce != .silent && self.graphTabActive
             switch result {
             case .success(let (snap, rows)):
+                // (IPG-9) The pair's outer guard is the LOAD sequence,
+                // which a rows request does not advance, so a superseded
+                // pair still arrives here; whether it may install is the
+                // rule below.
+                guard self.pairResultInstalls(token: token) else { return }
                 // The snapshot and the filter it was fetched under publish
                 // together — the authority's identity (design A).
                 self.graphTableSnapshot = snap
@@ -224,6 +231,10 @@ extension AppState {
                 // token that no longer matches drops the rows and keeps the
                 // snapshot; the reissue is the newer token's load.
                 let published = self.receiveGraphTableRows(token: token, result: rows)
+                // (iv) This token published or dropped as the current one: the
+                // in-flight announce is spent — unless the receiver issued a
+                // replacing load, which recorded its own.
+                if self.graphTableSeq == token.seq { self.graphTableInFlightAnnounce = nil }
                 // Drop a shared selection whose node is gone from the fresh
                 // snapshot — at the PUBLISH point, so it fires even while the
                 // Table view isn't mounted (e.g. a delete during Diagram
@@ -233,7 +244,9 @@ extension AppState {
                 // its headline; clear it unconditionally so a later refresh
                 // can't replay a stale preset announcement (P1-3 #556).
                 let preset = self.graphTablePendingPreset
-                self.graphTablePendingPreset = nil
+                if self.pairConsumesThePendingPreset(token: token) {
+                    self.graphTablePendingPreset = nil
+                }
                 guard speak, published else { return }
                 if let preset {
                     // The headline is THIS result's (design A): row zero under
@@ -248,16 +261,38 @@ extension AppState {
                         .graphSnapshotSummary(counts: snap.summaryCounts))
                 case .filterCount:
                     // The count is the rows result's (design B): one path.
+                    // Term Q6's gate is the tab's liveness AND the token's
+                    // currency: a count queued for A must not fire after B
+                    // is current, which a slow B made reachable (IPG-10).
                     self.graphAnnouncer.announceFilterCount(
                         shown: UInt32(rows.rows.count), total: UInt32(rows.total),
-                        gate: { [weak self] in self?.graphTabActive == true })
+                        gate: { [weak self] in
+                            self?.graphTabActive == true && self?.graphTableSeq == token.seq
+                        })
                 case .silent:
                     break
                 }
             case .failure(let error):
+                // The failure arm is the CURRENT token's alone (rule Q,
+                // Term Q2; the Windows twin returns at the same guard,
+                // `GraphDocumentViewModel.Receive`). The pair's guard above
+                // is the LOAD sequence, which a rows request does not
+                // advance, so a superseded pair's failure used to wipe the
+                // snapshot, install its error over rows that had already
+                // published, spend the newer lineage's in-flight announce
+                // and speak a block for a request nobody made (IPG-1). The
+                // load indicator above is this pair's own and stays.
+                guard token.seq == self.graphTableSeq,
+                    token.request == self.graphTableRequest
+                else { return }
                 self.graphTableError = self.humanReadable(error)
                 self.graphTableSnapshot = nil
                 self.failGraphTableRows(token: token)
+                // (ii) A failed pair forgets the preset as the success arm
+                // does (contracts doc §PR C C-2 (ii); rule P, Term P4):
+                // nothing remembers a headline a later refresh could replay.
+                self.graphTablePendingPreset = nil
+                self.graphTableInFlightAnnounce = nil
                 if speak {
                     self.graphAnnouncer.announce(
                         .graphBlocked(reason: .loadFailed(message: self.humanReadable(error))))
@@ -294,39 +329,111 @@ extension AppState {
         // was fetched under AND its generation. Filter-B rows never land
         // on a filter-A snapshot; a generation mismatch re-fetches.
         if let held = graphTableSnapshotFilter, held != token.request.query.filter {
-            graphTableRequestedSort = nil
+            // (iii) A result under another backend filter re-fetches UNDER
+            // ITS OWN REQUEST — sort included — instead of returning bare,
+            // so a needle or a sort typed during a backend-changing pair
+            // whose result lands first never leaves a snapshot with another
+            // request's rows (contracts doc §PR C C-2 (iii); rule Q, Term
+            // Q3's compatible-snapshot rule). The announce is the replaced
+            // token's (iv).
+            loadGraphTable(announce: graphTableInFlightAnnounce ?? .silent, sort: token.request.sort)
             return false
         }
         if let snap = graphTableSnapshot, snap.generation != result.generation {
+            // The generation arm keeps the mac's sort rule (contracts doc
+            // §PR C, C-D17) and inherits the announce (C-2 (iv)).
             graphTableRequestedSort = nil
-            loadGraphTable(announce: .silent)
+            loadGraphTable(announce: graphTableInFlightAnnounce ?? .silent)
             return false
         }
         graphTableRows = result.rows
         graphTableTotal = result.total
         graphTableSort = token.request.sort
         graphTableRequestedSort = nil
+        // The publication is CURRENT while this equals the newest request
+        // (W6-2 PR C, C-8: the table's Where-am-I reads it).
+        graphTablePublishedRequest = token.request
+        graphTableAnsweredSeq = token.seq
+        // A CURRENT result answers the error a failed pair installed
+        // (IPG-31's reachable half): the rows arm never cleared it, so a
+        // needle typed after a failure published its rows UNDER the old
+        // error and the reader kept the failure view over a successful
+        // request. Recorded divergence: Windows REFUSES rows with no held
+        // snapshot and re-fetches (A-2's rows-only arm), while the mac's
+        // receiver admits them — PR A's frozen token facts drive it on a
+        // bare state and require that admission, so the two hosts differ
+        // here until the owner says otherwise.
+        graphTableError = nil
+        if graphTableSnapshot == nil {
+            // Rows are current with NO authority behind them — the state a
+            // pair failure leaves, which the receiver admits because PR A's
+            // token facts require it. Clearing the error made that state
+            // VISIBLE, and a visible table whose Where-am-I can never answer
+            // is worse than the error it replaced (IPG-36, created by
+            // TGC-17): ask for the authority back, silently. `loadGraphTable`
+            // no-ops without a session, so the bare-state token facts are
+            // untouched.
+            loadGraphTable(announce: .silent, sort: token.request.sort)
+        }
         return true
     }
 
     /// A failed query rolls the request back to the accepted state.
     func failGraphTableRows(token: GraphTableToken) {
-        guard token.seq == graphTableSeq else { return }
+        // The FULL currency, not the sequence alone (IPG-38): a token whose
+        // sequence matches but whose request does not is not the lineage's,
+        // and it used to clear the pending sort and mark the sequence
+        // answered before the caller's own guard could turn it away.
+        guard token.seq == graphTableSeq, token.request == graphTableRequest else { return }
         graphTableRequestedSort = nil
+        // Terminal (Term Q2): the request is ANSWERED, badly. A pair that
+        // arrives afterwards is not entitled to install over what stands
+        // (IPG-29) — failing is not the same as still being in flight.
+        graphTableAnsweredSeq = token.seq
+    }
+
+    /// (i) The table's ONE observer on the composed query (contracts doc
+    /// §PR C C-2 (i)): a VALUE rule, not a flag — the preset's token
+    /// already carries the query it wrote, so the render pass after its
+    /// field writes issues nothing whatever fields changed and in whatever
+    /// order, while a needle typed later differs from the request in
+    /// flight and issues its token.
+    func requestGraphTableRowsIfQueryChanged() {
+        guard graphTableRequest?.query != graphVisibilityQuery else { return }
+        // ROWS ONLY, always — the mac's kind rule is C-2 (iii)'s, not the
+        // Windows document's Term Q3 (IPG-31, refuted at the ISSUE): the
+        // receiver's mismatch arms re-fetch under this request when the
+        // authority cannot hold it, which is exactly what "a needle typed
+        // during a backend-changing pair" is pinned to do
+        // (testANeedleDuringAnOrphansPairRefetchesUnderItsOwnRequest). Making
+        // the issue choose a pair instead left that fact waiting on a rows
+        // gate no rows request would ever reach, and the suite hung.
+        requestGraphTableRows()
     }
 
     /// The grid asked for a sort, or an input changed under the accepted
     /// sort: issue a token and query the rows; the receiver publishes rows
     /// and the accepted sort together or drops the result.
-    func requestGraphTableRows(sort: GraphTableSort? = nil) {
+    func requestGraphTableRows(
+        sort: GraphTableSort? = nil, announce: GraphTableLoadAnnounce = .filterCount
+    ) {
         let token = issueGraphTableToken(sort: sort ?? graphTableSort)
+        // A needle or a sort typed during a preset's pair replaces its
+        // headline with the count (rule Q, Term Q4 — the order the pair's
+        // continuation kept, now kept when a re-fetch drops that
+        // continuation, C-2 (iii)); the rows request's own announce is the
+        // count a replacing load inherits (C-2 (iv)).
+        graphTablePendingPreset = nil
+        graphTableInFlightAnnounce = announce
         guard let session = currentSession else {
             failGraphTableRows(token: token)
             return
         }
+        let injectedRowsFailure = graphTableRowsFailureForTests
         Task { [weak self] in
             let result: Result<GraphTableRows, VaultError> =
                 await Task.detached(priority: .userInitiated) {
+                    if let injectedRowsFailure { return .failure(injectedRowsFailure) }
                     do {
                         return .success(
                             try session.graphTableRows(
@@ -337,16 +444,34 @@ extension AppState {
                         return .failure(.Io(message: error.localizedDescription))
                     }
                 }.value
+            // The rows result's race-test seam, the pair's twin.
+            if let gate = self?.graphTableRowsPublishGate { await gate(token) }
             guard let self, self.currentSession === session else { return }
             switch result {
             case .success(let rows):
-                if self.receiveGraphTableRows(token: token, result: rows), self.graphTabActive {
+                let published = self.receiveGraphTableRows(token: token, result: rows)
+                if self.graphTableSeq == token.seq { self.graphTableInFlightAnnounce = nil }
+                if published, announce != .silent, self.graphTabActive {
+                    // Term Q6 (IPG-10): the tab's liveness AND this token's
+                    // currency, re-checked at fire — the pair's twin above.
+                    // `announce` is the token's own disposition: Term Q5 (c)'s
+                    // cancellation publishes and says NOTHING (IPG-33).
                     self.graphAnnouncer.announceFilterCount(
                         shown: UInt32(rows.rows.count), total: UInt32(rows.total),
-                        gate: { [weak self] in self?.graphTabActive == true })
+                        gate: { [weak self] in
+                            self?.graphTabActive == true && self?.graphTableSeq == token.seq
+                        })
                 }
             case .failure(let error):
+                // As the pair's: a superseded rows failure changed no state
+                // (the rollback is guarded) but still spoke a load failure
+                // for a request the newer token had replaced (IPG-4). The
+                // success arm above already speaks only what published.
                 self.failGraphTableRows(token: token)
+                guard token.seq == self.graphTableSeq,
+                    token.request == self.graphTableRequest
+                else { return }
+                self.graphTableInFlightAnnounce = nil
                 if self.graphTabActive {
                     self.graphAnnouncer.announce(
                         .graphBlocked(reason: .loadFailed(message: self.humanReadable(error))))
@@ -358,7 +483,12 @@ extension AppState {
     /// The grid's sort request (0b-14): a token change like any other.
     func setGraphTableSort(_ sort: GraphTableSort) {
         guard sort != graphTableSort || graphTableRequestedSort != nil else { return }
-        requestGraphTableRows(sort: sort)
+        // Term Q5 (c) (IPG-33): asking for the ACCEPTED sort back cancels the
+        // pending one "at issue with no line". The rows path speaks its count
+        // on every publish, so the cancellation spoke one too; it is issued
+        // SILENT and the publish honours that.
+        let cancelling = sort == graphTableSort && graphTableRequestedSort != nil
+        requestGraphTableRows(sort: sort, announce: cancelling ? .silent : .filterCount)
     }
 
     /// Drop the shared cross-projection selection if the node it names is
@@ -396,31 +526,8 @@ extension AppState {
         scheduleGraphConfigSave()
     }
 
-    // MARK: - Presets (P1-3 #556)
-
-    /// The backend `GraphFilter` a preset applies. Pure — `nonisolated`
-    /// so tests can assert the mapping off the main actor.
-    nonisolated static func graphPresetFilter(_ preset: GraphPreset) -> GraphFilter {
-        switch preset {
-        case .orphans:
-            // Orphans-only; ghosts/attachments off (an orphan is a note
-            // with no links either way).
-            return GraphFilter(includeAttachments: false, includeGhosts: false, orphansOnly: true)
-        case .unresolved:
-            // Ghosts visible; the `.ghost` kind filter drops notes.
-            return GraphFilter(includeAttachments: false, includeGhosts: true, orphansOnly: false)
-        case .mostLinked:
-            // The default view — hubs surface via the default Links-in
-            // descending sort.
-            return GraphFilter(includeAttachments: false, includeGhosts: true, orphansOnly: false)
-        }
-    }
-
-    /// The client-side kind filter a preset applies (`.ghost` only for
-    /// unresolved; the others show all kinds). Pure — `nonisolated`.
-    nonisolated static func graphPresetKind(_ preset: GraphPreset) -> GraphNodeKind? {
-        preset == .unresolved ? .ghost : nil
-    }
+    // MARK: - Presets (P1-3 #556; the mapping and the headline are core's
+    // rules since W6-2 PR C — `graph_preset_query`, `graph_preset_outcome`)
 
     /// Open/activate the Graph tab parameterized to a preset (P1-3 #556).
     /// The filter/kind are set BEFORE the tab's load so the first fetch is
@@ -437,9 +544,12 @@ extension AppState {
         if advancesSidebarSelectionRevision {
             recordExplicitSidebarNavigationIntent()
         }
-        graphTableTextFilter = ""
-        graphTableKindFilter = Self.graphPresetKind(preset)
-        graphTableFilter = Self.graphPresetFilter(preset)
+        // The query is core's rule (W6-2 PR C, C-2): ONE record, written
+        // field by field into the live state both projections read.
+        let query = graphPresetQuery(preset: preset)
+        graphTableTextFilter = query.nameQuery
+        graphTableKindFilter = query.kindOnly
+        graphTableFilter = query.filter
         graphTablePendingPreset = preset
         // Load EXACTLY once (round 3 finding 1): activating an off-screen
         // graph tab already runs `loadGraphTable` (via `activateGraphTab`)
@@ -463,15 +573,11 @@ extension AppState {
     /// the preset's query, kind overlay included — and most-linked names
     /// row zero under the default sort the preset requested.
     func graphPresetEvent(_ preset: GraphPreset, rows: GraphTableRows) -> GraphA11yEvent {
-        switch preset {
-        case .orphans:
-            return .graphPreset(outcome: .orphans(count: UInt64(rows.rows.count)))
-        case .unresolved:
-            return .graphPreset(outcome: .unresolved(count: UInt64(rows.rows.count)))
-        case .mostLinked:
-            guard let top = rows.rows.first else { return .graphPreset(outcome: .noNotesToRank) }
-            return .graphPreset(outcome: .mostLinked(label: top.label, inLinks: top.linksIn))
-        }
+        // The rule is core's (W6-2 PR C, C-2): one crossing per successful
+        // publication of a current preset token.
+        .graphPreset(
+            outcome: graphPresetOutcome(
+                preset: preset, shown: UInt64(rows.rows.count), first: rows.rows.first))
     }
 
     /// Re-probe `graph_generation()` after a `VaultEventListener` event
@@ -505,8 +611,50 @@ extension AppState {
             guard self.shouldRefreshGraphTable(
                 probedGeneration: generation, scheduledEpoch: scheduledEpoch)
             else { return }
-            self.loadGraphTable(announce: .silent)
+            // (iv) The replacing load inherits the announce of the load it
+            // supersedes (contracts doc §PR C C-2 (iv); rule Q, Term Q9): a
+            // preset's headline, an open's summary or a needle's count is
+            // spoken over the NEWER generation, never lost to the refresh.
+            self.loadGraphTable(announce: self.graphTableInFlightAnnounce ?? .silent)
         }
+    }
+
+    /// Whether this pair's continuation CONSUMES the pending preset (rule P,
+    /// Term P4; C-2 (iv)). Only the token that is STILL CURRENT does. The
+    /// receiver's mismatch arms re-fetch under their own request and return
+    /// `published == false`, and the replacement they issue is the one that
+    /// will speak the headline (Term Q9's inheritance) — clearing here erased
+    /// it first, so a straddled preset pair spoke the generic summary instead
+    /// (IPG-20). A token superseded by a rows request cleared nothing here
+    /// either: `requestGraphTableRows` already dropped the pending preset at
+    /// its own issue (Term Q4), which is what keeps a stale headline from
+    /// replaying.
+    func pairConsumesThePendingPreset(token: GraphTableToken) -> Bool {
+        graphTableSeq == token.seq
+    }
+
+    /// Whether a PAIR result may install its snapshot (rule Q, Terms Q2 and
+    /// Q7; C-2 (iii)). A pair superseded by a ROWS request may install while
+    /// those rows are UNANSWERED — the pair-first order C-2 (iii) relies on,
+    /// where they will land on this fresher authority — and never once they
+    /// have published: installing then attaches a newer snapshot, and its
+    /// seen generation, to rows fetched at an older one, so the two disagree,
+    /// the published request still reads current, and the generation probe
+    /// finds nothing to repair because the seen mark moved (IPG-9). Extracted
+    /// so the rule is unit-testable without racing the async task, as
+    /// `shouldRefreshGraphTable` is: arranging it end to end needs the vault
+    /// to move while the pair is still to fetch, and a vault that moves wakes
+    /// the event listener's own refresh, whose load supersedes the pair
+    /// before it can arrive.
+    func pairResultInstalls(token: GraphTableToken) -> Bool {
+        let superseded = token.seq != graphTableSeq || token.request != graphTableRequest
+        // PENDING means neither published NOR failed (IPG-29): a failed rows
+        // request leaves `graphTablePublishedRequest` behind the current one
+        // for ever, which read as "still unanswered" and let a superseded
+        // pair install its snapshot, its filter and its seen generation over
+        // the rows the failure had left standing.
+        let newerIsPending = graphTableAnsweredSeq != graphTableSeq
+        return !superseded || newerIsPending
     }
 
     /// Whether a generation-refresh that has finished probing should

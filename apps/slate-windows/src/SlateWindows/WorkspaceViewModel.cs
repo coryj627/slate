@@ -9,6 +9,7 @@ using System.Text;
 using System.Windows.Input;
 using System.Windows.Threading;
 using ICSharpCode.AvalonEdit.Document;
+using SlateWindows.Graph;
 using SlateWindows.Reading;
 using uniffi.slate_uniffi;
 
@@ -1611,6 +1612,17 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // handed to the graph document and the leaf, dropped with the
         // workspace — the instance census counts this one construction.
         _graphViewState = NewGraphViewState();
+        // W6-2 PR C (C-9, C-10): the ONE preferences object, read at
+        // construction (the mac's eager load), seeding the view state through
+        // the one mapper; a level change drops the relay's pending row line.
+        _graphPreferences = NewGraphPreferences();
+        _graphPreferences.VerbosityChanged += () => _graphRelay.DropPendingNavigation();
+        _graphViewState.ApplyQuery(GraphPreferencesViewModel.VisibilityQueryOf(_graphPreferences.CurrentConfig.Filters));
+        _graphViewState.Groups = _graphPreferences.CurrentConfig.Groups;
+        // W6-2 PR C (C-1): the ONE navigator, after the view state and the
+        // preferences and before the first document and the leaf — the
+        // instance census counts this one construction.
+        _graphNavigator = NewGraphNavigator();
         Connections = NewConnectionsLeaf();
         SeedInitialConnectionsMount();
         // W4-7: the history document — note-scoped (fed by SyncPanels),
@@ -2019,6 +2031,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public void OpenGraph()
     {
+        // Rule P, Term P3: the SAME admission the preset funnel asks, read
+        // BEFORE anything is written — "which OpenGraph() reads too". A
+        // refusal writes no cause, opens no tab and starts no load. Windows
+        // leaves the seam null today (C-D1), so this admits in production
+        // and the facts inject a refusal through it (IPG-14).
+        if (GraphOpenAdmissionReason?.Invoke() is not null)
+        {
+            return;
+        }
         // W6-2 PR A (rule L, Term 5): the explicit Open sets its cause
         // before the mutation; the follow method consumes it at the
         // graph's transition, the boundary clears what was not consumed.

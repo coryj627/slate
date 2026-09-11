@@ -184,6 +184,9 @@ public sealed class ChordTableTests
                 "slate.canvas.whereAmI",
                 "slate.file.cancelImport",
                 "slate.file.rename",
+                // W6-2 PR C (C-8): the graph's Where-am-I shares the canvas
+                // row's Shift disambiguation (D-2).
+                "slate.graph.whereAmI",
                 "slate.sidebar.openShortcut1",
                 "slate.sidebar.openShortcut2",
                 "slate.sidebar.openShortcut3",
@@ -292,6 +295,12 @@ public sealed class ChordTableTests
                 + "Escape and the canvas ladder never sees it. With no import the "
                 + "global arm does nothing and the ladder consumes one rung "
                 + "(contract C6).",
+            // W6-2 PR C (C-8, C-11): the two Where-am-I rows share the chord and
+            // are disjoint by DELIVERY — the canvas surface's and the graph
+            // surface's tunnelling handlers, never focused at once.
+            ["slate.canvas.whereAmI | slate.graph.whereAmI"] =
+                "Ctrl+Alt+Shift+I. Disjoint by DELIVERY: the canvas surface's and the "
+                + "graph surface's tunnelling handlers, never focused at once.",
         };
 
     [Fact]
@@ -736,7 +745,50 @@ public sealed class ChordTableTests
             [ChordScope.Editor] = EditorChords(),
             [ChordScope.Canvas] = CanvasChords(),
             [ChordScope.Connections] = ConnectionsChords(),
+            [ChordScope.Graph] = GraphChords(),
         };
+
+    /// <summary>W6-2 PR C (C-11): the graph navigator's map, scraped from
+    /// <c>GraphNavigator.Bind</c>'s three-argument <c>AddChord</c> calls as a
+    /// LIST asserted duplicate-free — the canvas scrape's shape — and
+    /// compared both ways against the table's Graph-scoped rows: Escape in
+    /// this slice, Ctrl+Alt+Shift+I with Where-am-I, PR D's four viewport
+    /// chords by the same mechanism.</summary>
+    private static HashSet<string> GraphChords()
+    {
+        MethodDeclarationSyntax bind =
+            CSharpSource.Load("Graph", "GraphNavigator.cs").Method("Bind");
+        var listed = new List<string>();
+        foreach (InvocationExpressionSyntax call in bind.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation => invocation.Expression is IdentifierNameSyntax
+            {
+                Identifier.ValueText: "AddChord",
+            })
+            .Where(invocation => invocation.ArgumentList.Arguments.Count == 3))
+        {
+            Assert.True(
+                call.ArgumentList.Arguments[0].Expression
+                    is MemberAccessExpressionSyntax key
+                && CSharpSource.Normalize(key.Expression) == "Key",
+                $"graph chord `{call}` does not name its key as `Key.X`; the "
+                + "scrape reads that form and would silently skip this one.");
+            var keyAccess = (MemberAccessExpressionSyntax)
+                call.ArgumentList.Arguments[0].Expression;
+            string modifiers = CSharpSource
+                .Normalize(call.ArgumentList.Arguments[1].Expression)
+                .Replace("ModifierKeys.", string.Empty, System.StringComparison.Ordinal);
+            listed.Add(Canonical(
+                modifiers == "None" ? null : modifiers.Replace("|", "+"),
+                keyAccess.Name.Identifier.ValueText));
+        }
+        Assert.Equal(listed.Distinct(System.StringComparer.Ordinal).Count(), listed.Count);
+        Assert.True(
+            listed.Count >= 1,
+            "no graph chord was scraped from GraphNavigator.Bind; the scrape is "
+            + "reading less than the truth.");
+        return listed.ToHashSet(System.StringComparer.Ordinal);
+    }
 
     /// <summary>The Connections leaf's own key route (W6-2 PR B2, B2-4):
     /// the one chord its body delivers, read from <c>IsTheBackChord</c>'s
@@ -790,9 +842,6 @@ public sealed class ChordTableTests
             [ChordScope.None] = "no chord to deliver.",
             [ChordScope.Global] = "checked in both directions below, against "
                 + "MainWindow.xaml's KeyBindings plus the imperative allow-list.",
-            [ChordScope.Graph] = "declared by W6-2 PR A (contract A-12) for PR C's "
-                + "chorded rows; no graph chord is delivered yet, so there is "
-                + "nothing to scrape — PR C replaces this entry with its scrape.",
         };
 
     /// <summary>

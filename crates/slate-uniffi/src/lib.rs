@@ -3642,6 +3642,59 @@ impl From<GraphVisibilityQuery> for core::graph_queries::GraphVisibilityQuery {
     }
 }
 
+/// FFI mirror of [`core::graph_queries::GraphPreset`] (W6-2 PR C, C-2):
+/// the mac's Swift enum is generated from this one (0a-18's precedent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum GraphPreset {
+    Orphans,
+    Unresolved,
+    MostLinked,
+}
+
+impl From<GraphPreset> for core::graph_queries::GraphPreset {
+    fn from(p: GraphPreset) -> Self {
+        use GraphPreset as F;
+        use core::graph_queries::GraphPreset as C;
+        match p {
+            F::Orphans => C::Orphans,
+            F::Unresolved => C::Unresolved,
+            F::MostLinked => C::MostLinked,
+        }
+    }
+}
+
+/// The visibility query a preset writes (W6-2 PR C, C-2): the mac's two
+/// Swift rules as one core call. Built field by field — the query
+/// mirror converts FFI → core only (`graph_connections_filter`'s shape).
+#[uniffi::export]
+pub fn graph_preset_query(preset: GraphPreset) -> GraphVisibilityQuery {
+    let query = core::graph_queries::preset_query(preset.into());
+    GraphVisibilityQuery {
+        filter: GraphFilter {
+            include_attachments: query.filter.include_attachments,
+            include_ghosts: query.filter.include_ghosts,
+            orphans_only: query.filter.orphans_only,
+        },
+        name_query: query.name_query,
+        kind_only: query.kind_only.map(Into::into),
+    }
+}
+
+/// The headline a preset speaks from the published result (W6-2 PR C,
+/// C-2): the count for Orphans and Unresolved, row zero for MostLinked,
+/// `NoNotesToRank` when there is none. Called once per successful
+/// publication of a current preset token — never on a failure or a
+/// supersession (C-2's crossing counts).
+#[uniffi::export]
+pub fn graph_preset_outcome(
+    preset: GraphPreset,
+    shown: u64,
+    first: Option<GraphTableRow>,
+) -> GraphPresetOutcome {
+    let first = first.map(core::graph_queries::GraphTableRow::from);
+    core::graph_queries::preset_outcome(preset.into(), shown, first.as_ref()).into()
+}
+
 /// FFI mirror of [`core::graph_queries::GraphVisibility`] (0b-6, 0b-2b).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct GraphVisibility {
@@ -3981,6 +4034,27 @@ pub struct GraphTableRow {
     pub embeds_out: u32,
     pub component: u32,
     pub modified_ms: Option<i64>,
+}
+
+/// FFI → core for the row a host hands back (W6-2 PR C, C-2:
+/// `graph_preset_outcome` takes the published row zero).
+impl From<GraphTableRow> for core::graph_queries::GraphTableRow {
+    fn from(r: GraphTableRow) -> Self {
+        core::graph_queries::GraphTableRow {
+            stable_key: r.stable_key,
+            node_id: r.node_id,
+            label: r.label,
+            path: r.path,
+            kind: r.kind.into(),
+            cells: r.cells,
+            links_in: r.links_in,
+            links_out: r.links_out,
+            embeds_in: r.embeds_in,
+            embeds_out: r.embeds_out,
+            component: r.component,
+            modified_ms: r.modified_ms,
+        }
+    }
 }
 
 impl From<core::graph_queries::GraphTableRow> for GraphTableRow {
@@ -9381,6 +9455,20 @@ impl From<GraphPresetOutcome> for core::a11y::GraphPresetOutcome {
     }
 }
 
+/// Core → FFI for the outcome `graph_preset_outcome` answers (W6-2 PR C).
+impl From<core::a11y::GraphPresetOutcome> for GraphPresetOutcome {
+    fn from(o: core::a11y::GraphPresetOutcome) -> Self {
+        use GraphPresetOutcome as F;
+        use core::a11y::GraphPresetOutcome as C;
+        match o {
+            C::Orphans { count } => F::Orphans { count },
+            C::Unresolved { count } => F::Unresolved { count },
+            C::MostLinked { label, in_links } => F::MostLinked { label, in_links },
+            C::NoNotesToRank => F::NoNotesToRank,
+        }
+    }
+}
+
 /// FFI mirror of [`core::a11y::GraphForceControl`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum GraphForceControl {
@@ -9570,7 +9658,9 @@ pub enum GraphA11yEvent {
     },
     GraphWhereAmI {
         selection: GraphWhereAmISelection,
-        zoom_percent: u32,
+        /// The diagram's clause; `None` is the table's readback (W6-2
+        /// PR C, 0a-2b as amended — CD-24).
+        zoom_percent: Option<u32>,
         filter: GraphWhereAmIFilter,
         name_filter: Option<String>,
     },
@@ -13478,9 +13568,10 @@ mod tests {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mirror = std::fs::read_to_string(manifest.join("src/lib.rs")).expect("mirror source");
         let surface = core::graph_queries::GRAPH_QUERY_SURFACE;
-        // W6-2 PR A: twenty-four; PR B (B-15): twenty-six.
+        // W6-2 PR A: twenty-four; PR B (B-15): twenty-six; PR C (C-2):
+        // twenty-eight.
         assert!(
-            surface.len() >= 26,
+            surface.len() >= 28,
             "the surface list shrank to {}",
             surface.len()
         );

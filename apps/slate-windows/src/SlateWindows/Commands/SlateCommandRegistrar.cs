@@ -503,6 +503,14 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.GraphConnectionsDeeper] = host => host.Workspace?.ConnectionsDeeperCommand,
             [ChordTable.Ids.GraphConnectionsShallower] = host => host.Workspace?.ConnectionsShallowerCommand,
             [ChordTable.Ids.GraphConnectionsBack] = host => host.Workspace?.ConnectionsBackCommand,
+            // Graph (W6-2 #746, PR C, contract C-3): the three presets, chordless,
+            // each the navigator's RunPreset through a workspace command.
+            [ChordTable.Ids.GraphOrphans] = host => host.Workspace?.GraphOrphansCommand,
+            [ChordTable.Ids.GraphUnresolved] = host => host.Workspace?.GraphUnresolvedCommand,
+            [ChordTable.Ids.GraphMostLinked] = host => host.Workspace?.GraphMostLinkedCommand,
+            // C-8: Where-am-I — the navigator's verb; CanExecute is "the active
+            // projection's readback seam answers", re-evaluated on its change.
+            [ChordTable.Ids.GraphWhereAmI] = host => host.Workspace?.GraphWhereAmICommand,
 
             // Canvas navigator, filter, Where-am-I and modes (W6-1 PR C,
             // contract C1). Every movement row stays enabled on a canvas

@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Nodes;
+using SlateWindows.Graph;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Commands;
@@ -289,6 +290,11 @@ internal static class ChordTable
         /// <summary>W6-2 PR B2 (B2-4): the Connections leaf's Back — the mac's
         /// panel key <c>⌘[</c>, a command on Windows (B2-D6).</summary>
         public const string GraphConnectionsBack = "slate.graph.connectionsBack";
+        // W6-2 PR C (C-3): the three presets, chordless — the mac's ids.
+        public const string GraphOrphans = "slate.graph.orphans";
+        public const string GraphUnresolved = "slate.graph.unresolved";
+        public const string GraphMostLinked = "slate.graph.mostLinked";
+        public const string GraphWhereAmI = "slate.graph.whereAmI";
 
         // Canvas (W6-1 #745). Ids are byte-identical to mac's.
         public const string CanvasShowOutline = "slate.canvas.showOutline";
@@ -978,7 +984,53 @@ internal static class ChordTable
         Reg(Ids.GraphConnectionsBack, "Connections: Back", CommandSection.Graph,
             "Return the Connections leaf to the note it showed before the last Show connections.",
             "⌘[", "Ctrl+[", ChordScope.Connections),
+        // W6-2 PR C (C-3): the three presets — parameterisations of the
+        // table, chordless (ChordScope.None through Reg's rule), the labels
+        // and hints the mac's byte for byte (SlateCommands.swift:1537–1556;
+        // MacCatalogParityTests' P3 comparison); each resolves to a
+        // workspace command whose body is the navigator's RunPreset.
+        // W6-2 PR C (C-13): the labels and hints are the inventory's (GraphPhrase).
+        Reg(Ids.GraphOrphans, GraphPhrase.OrphansLabel, CommandSection.Graph, GraphPhrase.OrphansHint),
+        Reg(Ids.GraphUnresolved, GraphPhrase.UnresolvedLabel, CommandSection.Graph, GraphPhrase.UnresolvedHint),
+        Reg(Ids.GraphMostLinked, GraphPhrase.MostLinkedLabel, CommandSection.Graph, GraphPhrase.MostLinkedHint),
+        // W6-2 PR C (C-8): Where-am-I — the mac's label, hint and chord; the
+        // Shift disambiguation the canvas row carries (D-2); ChordScope.Graph,
+        // delivered by GraphSurfaceView's tunnelling handler and disjoint from
+        // the canvas row by DELIVERY (SharedCommandChords records the pair).
+        Reg(Ids.GraphWhereAmI, GraphPhrase.WhereAmILabel, CommandSection.Graph,
+            GraphPhrase.WhereAmIHint,
+            "⌃⌘I", "Ctrl+Alt+Shift+I", ChordScope.Graph,
+            divergence: WhereAmIShiftDisambiguation),
+        // W6-2 PR C (C-7): the Escape ladder — a Windows-authored
+        // disposition in the graph's scope, delivered by GraphSurfaceView's
+        // tunnelling handler through the navigator's map; not a command id
+        // and no mac twin (the mac has no ladder on the graph, C-D3).
+        Chord("windows.graph.escapeLadder", "Graph: Escape ladder", "Escape", ChordScope.Graph,
+            "W6-2 PR C, contract C-7: Escape on the graph surface clears a live needle "
+            + "and seats the reader on the projection, or leaves the filter region for "
+            + "the projection; with nothing to do it bubbles to the shell. Delivered by "
+            + "GraphNavigator.HandleKey from GraphSurfaceView.OnPreviewKeyDown; the mac "
+            + "has no ladder on the graph (C-D3)."),
+        // W6-2 PR C (C-9): the three verbosity levels, one disposition each
+        // — the canvas's twin (PR-4's math-verbosity reason): selected by
+        // one parameterised setter the Graph menu binds with the tag as
+        // its CommandParameter; unregistered because a palette row cannot
+        // supply the parameter; the mac declares no ids for them either.
+        Unreg("windows.graph.setVerbosityTerse", "Graph Verbosity: Terse",
+            CommandSection.Graph, GraphVerbosityReason),
+        Unreg("windows.graph.setVerbosityStandard", "Graph Verbosity: Standard",
+            CommandSection.Graph, GraphVerbosityReason),
+        Unreg("windows.graph.setVerbosityVerbose", "Graph Verbosity: Verbose",
+            CommandSection.Graph, GraphVerbosityReason),
     ];
+
+    private const string GraphVerbosityReason =
+        "W6-2 PR C (C-9), the canvas's PR-4 precedent: the three graph verbosity "
+        + "levels — core's vector, persisted in the vault's graph.json (0b-12) — are "
+        + "selected by one parameterized setter the Graph menu binds with the level's "
+        + "tag as its CommandParameter. Each level is a row so the catalog records the "
+        + "closed set, and none is registered because a palette row cannot supply the "
+        + "parameter. mac declares no SlateCommandID for these either.";
 
     private static IEnumerable<ChordTableEntry> CanvasRows() =>
     [

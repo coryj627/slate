@@ -90,8 +90,14 @@ internal sealed partial class WorkspaceViewModel
             _graphRelay,
             _graphViewState,
             isActive: () => ConnectionsLeafIsActive(),
-            verbosity: () => GraphVerbosity.Standard,
-            lifecycleGeneration: () => LifecycleGeneration());
+            verbosity: () => _graphPreferences.Verbosity,
+            lifecycleGeneration: () => LifecycleGeneration(),
+            // C-9, C-10: the live level, and the persisted depth as the
+            // first request (the dataflow census binds this argument).
+            preferences: _graphPreferences,
+            initialDepth: _graphPreferences.CurrentConfig.ConnectionsDepth);
+        // C-10 (Term W7): a depth change updates its field and schedules.
+        leaf.DepthChanged = depth => _graphPreferences.SetConnectionsDepth(depth);
         leaf.OpenRowFromSurface = (path, target) => OpenConnectionsRowFromSurface(path, target);
         leaf.ShowConnectionsFromRow = path => ReRootConnectionsOn(path);
         // The view's key owner reads the result to fall through (B2-4).

@@ -299,13 +299,21 @@ public sealed partial class ConnectionsLeafTests
     /// entrance's surface — the graph tab beside a note with the filter
     /// admitting attachments for that target; the base tabs — and the
     /// canvas or base the funnel is aimed at; the dirty tab for a gate.</summary>
+    /// <summary>The vault's graph.json with attachments admitted (core's
+    /// default hides them): the preferences read it at the workspace's
+    /// construction and the open re-applies its filters (C-10).</summary>
+    private static void AdmitAttachments(string vaultRoot)
+    {
+        GraphConfig config = SlateUniffiMethods.GraphConfigDefault();
+        config = config with { Filters = config.Filters with { IncludeAttachments = true } };
+        string path = Path.Combine(vaultRoot, ".slate", GraphConfigStore.FileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, SlateUniffiMethods.GraphConfigEncode(config, null));
+    }
+
     private static void ArrangeReRoot(Host host, ReRootCell cell, Fixture fixture, GateSeam gate)
     {
         Cell modeCell = ModeCellOf(cell);
-        if (cell.Entrance == Entrance.Table && cell.Target == Target.Attachment)
-        {
-            host.Workspace.GraphViewStateForTests.Filter = new GraphFilter(IncludeAttachments: true, IncludeGhosts: true, OrphansOnly: false);
-        }
         if (cell.Target is Target.Canvas or Target.Base || cell.Entrance == Entrance.Bases)
         {
             File.WriteAllText(Path.Combine(host.Root, Board), "{\"nodes\":[],\"edges\":[]}\n");
@@ -541,6 +549,15 @@ public sealed partial class ConnectionsLeafTests
                     continue;
                 }
                 using GraphVault vault = GraphVault.Copy($"reroot-{driven}");
+                if (cell.Entrance == Entrance.Table && cell.Target == Target.Attachment)
+                {
+                    // W6-2 PR C (C-10): the graph's fresh open re-applies the
+                    // vault's config filters, so the attachment is admitted by
+                    // graph.json BEFORE the host reads it — a view-state write
+                    // in the arrangement was overridden by the open (the T6
+                    // push's app-model failure, TGC-9).
+                    AdmitAttachments(vault.Root);
+                }
                 fixture ??= FixtureOf();
                 var gate = new GateSeam();
                 using Host host = ReRootHost(vault.Root, gate);

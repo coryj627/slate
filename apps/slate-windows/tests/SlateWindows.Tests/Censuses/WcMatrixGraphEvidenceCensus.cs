@@ -46,6 +46,15 @@ public sealed class WcMatrixGraphEvidenceCensus
             ["GraphRow", "GraphNeighborhoodSummary", "ConnectionsPhrase"],
             ["ConnectionsLeafTests", "ConnectionsLeafViewTests", "GraphConnections_LeafWalkDepthAndReRoot_AreClean", "TheLeafsTreeIsTheSessionsRecordFieldByFieldForEveryPinnedPair"],
             ["graph-connections"]),
+        // W6-2 PR C (C-16): the navigator, the filter, Where-am-I, the menu.
+        new(
+            "Graph navigator, filter and Where-am-I (W6-2 PR C)",
+            ["GraphFilterField", "GraphFilterSummary", "GraphClearFilter", "GraphWhereAmIPanel", "GraphWhereAmIReadback", "GraphWhereAmIClose", "GraphStateHost", "GraphMenu", "GraphVerbosityMenu"],
+            ["Edit", "Text", "Button", "Group", "MenuItem"],
+            ["Value", "Invoke", "Toggle", "ExpandCollapse"],
+            ["GraphPhrase", "GraphFilterCount", "GraphWhereAmI", "GraphRow", "graph_verbosities"],
+            ["GraphNavigatorTests", "GraphTableTests", "GraphMenuTests", "GraphPreferencesTests", "GraphConfigStoreTests", "GraphConfigWriterTests", "Censuses/GraphNavigatorCensus", "GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean"],
+            ["graph-navigator"]),
     ];
 
     private sealed record Row(string Title, string[] Cells);
