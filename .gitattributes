@@ -25,17 +25,3 @@ demo-vault/.obsidian/themes/** binary
 demo-vault/attachments/*.mp3 binary
 demo-vault/attachments/*.pdf binary
 demo-vault/attachments/*.png binary
-
-# The repomix pack is a GENERATED snapshot of the whole tree, so every
-# regeneration rewrites all 35+ MB of it. On W6-2 PR C that put roughly a
-# million changed lines in ONE file into a 13,500-line pull request, and
-# GitHub stopped diffing the PR at all: the API answered `files=0 +0 -0`,
-# the Codoki review never completed on seven consecutive heads, and the
-# code-scanning check timed out waiting for an analysis of a diff nobody
-# could compute. Marking it generated and non-diffable keeps the snapshot
-# committed — reviewers and the repomix tools still read it — while
-# leaving it out of the diff that tooling has to chew through.
-#
-# `-diff` is what does the work; `linguist-generated` collapses it in the
-# web UI and keeps it out of language stats.
-repomix-output.xml -diff linguist-generated=true
