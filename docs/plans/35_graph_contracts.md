@@ -11054,7 +11054,8 @@ and §PR E's Consumes and Builds, §7's row); one line corrected in place
 (CD-11): §PR C's Evidence — the journey asserts the readback and the
 palette's enabled state, the in-flight fall-through is pinned in-process
 (a FlaUI journey cannot hold a load open). FINDINGS FOR THE OWNER, not
-fixed here: (i) under rule F's silent seat with no shared key, a ONE-ROW
+fixed here (filed 2026-09-11 as #1193, #1194 and #1195 in that
+order): (i) under rule F's silent seat with no shared key, a ONE-ROW
 result (a preset's lone orphan) has no keyboard route to a selection —
 Where-am-I reads "No node selected" over the row the reader sits on
 (Term F5 as frozen; the mac clears its selection the same way, but its
@@ -11356,7 +11357,7 @@ for it; the narrower alternatives (re-fetch on the failure; hold the
 seen mark back) each buy the repair with a new rule no term states — a
 re-fetch loop on a persistent failure, or a generation the probe
 re-reads forever. The owner's call, with the mac's split publication as
-the thing under review. Mutations (three), each restored byte for byte,
+the thing under review — filed 2026-09-11 as #1189. Mutations (three), each restored byte for byte,
 each caught: the surface subscribing off-tree; the table subscribing
 off-tree; the window's focus edge unhooked (caught by the census now,
 not only by a desktop that opens menus). CI-shaped regression green.
@@ -11590,7 +11591,7 @@ refusing in `receiveGraphTableRows`, and PR A's frozen token facts
 (GraphTableViewTests: the sort's acceptance, the superseded token, the
 two-needle answers) drive that receiver on a BARE `AppState` with no
 snapshot and require it to publish — so the alignment would rewrite
-frozen text and is the owner's call. PROCESS, recorded because it cost
+frozen text and is the owner's call — filed 2026-09-11 as #1190. PROCESS, recorded because it cost
 five hours of CI: a mac change cannot be run on this box, so before
 pushing one, every frozen fact that touches the changed member is read
 and simulated. The two other mac changes of TGC-16 were checked that way
@@ -11653,11 +11654,11 @@ RECORDED, NOT FIXED. (IPG-40) The writer census skips every source
 outside `Graph/`, so the alternate-API mutation C-15 (xv) names — a
 second writer in `MainWindow` — is not killed by it; widening the scan
 to the whole shell is a census rewrite whose blast radius is the other
-PRs' code, and it is the owner's call. (IPG-42) The matrix evidence
+PRs' code, and it is the owner's call — filed 2026-09-11 as #1191. (IPG-42) The matrix evidence
 census resolves a name with a text regex over `void`/`Task` methods and
 accepts an axe scan through raw string containment, so a name that is
 not an executed fact can satisfy it; binding it semantically is the same
-kind of rewrite. THE STOP, and why it is not the recorded precedent:
+kind of rewrite — filed 2026-09-11 as #1192. THE STOP, and why it is not the recorded precedent:
 [[post-implementation-codex-loop]] stops on TWO CONSECUTIVE
 NO-BLOCKER passes, and seven passes have never produced ONE. What the
 counts show instead is a loop that is no longer finding the
