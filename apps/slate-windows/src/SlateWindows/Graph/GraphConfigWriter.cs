@@ -1,8 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Diagnostics;
 using System.IO;
+using System.Text;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Graph;
@@ -141,12 +141,12 @@ internal sealed class GraphConfigWriter
                 _ = state.Outstanding.Remove(generation);
             }
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or GraphConfigException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or DecoderFallbackException or GraphConfigException)
         {
             // Best-effort persistence (the mac's actor): the failure is
-            // logged with the full vault path, never propagated; the
-            // aggregate is lost and the next read is the file's (CR-7).
-            Trace.TraceWarning("Failed to persist graph.json for vault '{0}': {1}", key, exception.Message);
+            // logged through the privacy-safe host sink, never propagated;
+            // the aggregate is lost and the next read is the file's (CR-7).
+            HostLog.Write(HostDiagnosticEvent.GraphConfigPersistFailed, exception);
             lock (_lock)
             {
                 FailedForTests++;
@@ -155,14 +155,14 @@ internal sealed class GraphConfigWriter
         }
         catch
         {
-            // ANY other exception — the filter above names three, and a
-            // SecurityException or an ObjectDisposedException is neither —
-            // still leaves nothing outstanding. The `finally` this replaced
+            // ANY other exception — such as SecurityException or
+            // ObjectDisposedException — still leaves nothing outstanding.
+            // The `finally` this replaced
             // guaranteed that unconditionally, and dropping it traded
             // IPG-35's interval for a generation stuck in `Outstanding` for
             // the process's life, which is the same misreport for longer
             // (codoki on 4a00a3c5). It propagates as it always did: only the
-            // three named failures are best-effort.
+            // named failures are best-effort.
             lock (_lock)
             {
                 _ = state.Outstanding.Remove(generation);

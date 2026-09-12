@@ -9432,7 +9432,12 @@ persists.** `Graph/GraphConfigStore.cs` is the host I/O 0bD-3 leaves to
 the host — the mac's `GraphConfigStore.swift` twin — and nothing else:
 READ (Term W7's decode arms; the store's `:27–48`, the mac's
 `applyGraphConfigLoadFailure`, `AppState+GraphConfig.swift:51–57`);
-WRITE — read the existing text THROWING (the mac's `:66–78`),
+Windows decodes strict UTF-8, accepting an optional UTF-8 BOM; malformed
+bytes make the load read-only and remain untouched. Read, decode and
+persist failures use the privacy-safe `HostLog` event/type sink, without
+vault paths or exception messages (post-PR-1188 review correction).
+WRITE — read the existing text THROWING, with the same strict decoder
+(the mac's `:66–78`),
 `GraphConfigEncode(config, existing)` (core's merge; a refusal logged,
 never thrown past the writer), the bytes to a temporary file beside
 the target and `File.Move(temp, target, overwrite: true)` (the mac's
