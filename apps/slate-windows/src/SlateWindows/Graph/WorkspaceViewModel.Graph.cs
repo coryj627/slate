@@ -201,7 +201,7 @@ internal sealed partial class WorkspaceViewModel
     private RelayCommand? _graphWhereAmICommand;
 
     /// <summary>`slate.graph.whereAmI` (C-8): the navigator's verb, enabled
-    /// exactly while the active projection's readback seam answers; the
+    /// exactly while the effective graph's active projection answers; the
     /// navigator's WhereAmIAvailabilityChanged re-evaluates it (IGN-13) —
     /// the row and the menu item listed-and-disabled otherwise (AD-3).</summary>
     public System.Windows.Input.ICommand GraphWhereAmICommand =>
@@ -299,6 +299,12 @@ internal sealed partial class WorkspaceViewModel
         _graphWasEffective = effective is not null;
         _graphEffectiveTab = effective;
         _graphWasVisible = isVisible;
+        if (wasEffective != _graphWasEffective)
+        {
+            // Pane activation can change admission without a load: a ready
+            // graph remains visible while another pane receives the keys.
+            _graphNavigator.NotifyWhereAmIAvailabilityChanged();
+        }
         if (effective is null || _graphDocument is null || _graphDocument.IsRetired)
         {
             return;

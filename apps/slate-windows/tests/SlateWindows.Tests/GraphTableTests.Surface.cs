@@ -3,6 +3,7 @@
 
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Input;
 using SlateWindows.Graph;
@@ -62,6 +63,63 @@ public sealed partial class GraphTableTests
     private static string Count(GraphPublication publication) =>
         SlateUniffiMethods.A11yRender(new A11yEvent.Graph(
             new GraphA11yEvent.GraphFilterCount((uint)publication.Rows.Count, (uint)publication.Total))).Text;
+
+    [Fact]
+    public void TheSurfaceSwitcherIsANamedAutomationGroupContainingItsModes()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(1, "graph-switcher-group");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView view = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(view);
+            AutomationPeer surface = UIElementAutomationPeer.CreatePeerForElement(view)!;
+            AutomationPeer group = Assert.Single(surface.GetChildren() ?? [],
+                peer => peer.GetAutomationId() == "GraphSurfaceSwitcher");
+            Assert.Equal(AutomationControlType.Group, group.GetAutomationControlType());
+            Assert.Equal("Graph surface", group.GetName());
+            Assert.True(group.IsControlElement());
+            Assert.True(group.IsContentElement());
+            List<AutomationPeer> modes = group.GetChildren() ?? [];
+            Assert.Equal(document.SurfaceModes.Select(mode => "GraphMode." + mode.Tag),
+                modes.Select(peer => peer.GetAutomationId()));
+            Assert.All(modes, peer => Assert.Equal(AutomationControlType.RadioButton, peer.GetAutomationControlType()));
+        });
+    }
+
+    [Theory]
+    [InlineData(Key.Right)]
+    [InlineData(Key.Tab)]
+    public void ACellNavigationKeySelectsTheOnlyRowAfterASilentLanding(Key key)
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(1, "graph-one-row-keyboard-selection");
+            GraphDocumentViewModel document = host.Open();
+            GraphTableRow row = Assert.Single(document.Publication.Rows);
+            GraphSurfaceView view = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(view);
+            host.Workspace.RequestActiveEditorFocus();
+            window.UpdateLayout();
+            Assert.True(GridHasTheKeys(view));
+            Assert.Null(document.ViewState.SelectedKey);
+            DataGrid grid = view.TableForTests.GridForTests.Grid;
+            DataGridColumn initialColumn = grid.CurrentCell.Column;
+            UIElement focused = Assert.IsAssignableFrom<UIElement>(Keyboard.FocusedElement);
+            // Use WPF's bubbling key route, where DataGrid handles cell
+            // navigation. No selection method or current-cell assignment.
+            focused.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice,
+                PresentationSource.FromVisual(focused)!, 0, key)
+            {
+                RoutedEvent = Keyboard.KeyDownEvent,
+            });
+            window.UpdateLayout();
+            Assert.NotSame(initialColumn, grid.CurrentCell.Column);
+            Assert.Same(row, grid.CurrentCell.Item);
+            Assert.Equal(row.StableKey, document.ViewState.SelectedKey);
+            Assert.IsType<GraphWhereAmISelection.Node>(document.TableWhereAmI()!.Selection);
+        });
+    }
 
     [Fact]
     public void TheFieldsNameAndHelpTextAreTheMacs()
