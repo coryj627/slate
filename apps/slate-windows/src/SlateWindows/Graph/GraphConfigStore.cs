@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Diagnostics;
 using System.IO;
 using System.Text;
 using uniffi.slate_uniffi;
@@ -18,8 +17,8 @@ internal sealed record GraphConfigLoad(GraphConfig Config, bool Writable, string
 /// — the mac's <c>GraphConfigStore.swift</c> twin — and nothing else.
 /// READ: a missing file is the default and writable; an unreadable,
 /// unparseable or newer-version file is the default, NOT writable, the
-/// file untouched, the reason logged (Term W7). WRITE: the existing text
-/// read THROWING (an unreadable file refuses the write rather than
+/// file untouched, a privacy-safe diagnostic logged (Term W7). WRITE:
+/// the existing text read THROWING (an unreadable file refuses the write rather than
 /// clobbering it), core's merge through <c>graph_config_encode</c> (an
 /// unparseable existing file never clobbered, a newer version never
 /// downgraded, unknown keys preserved, the bytes canonical — 0b-12), the
@@ -32,6 +31,9 @@ internal sealed class GraphConfigStore
 {
     /// <summary>The file's name, in the one place it appears (C-15 xv).</summary>
     internal const string FileName = "graph.json";
+
+    private static readonly UTF8Encoding StrictUtf8 =
+        new(encoderShouldEmitUTF8Identifier: true, throwOnInvalidBytes: true);
 
     private readonly string _path;
 
@@ -53,7 +55,7 @@ internal sealed class GraphConfigStore
         string text;
         try
         {
-            text = File.ReadAllText(_path);
+            text = ReadText();
         }
         catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -65,10 +67,10 @@ internal sealed class GraphConfigStore
             _ = exception;
             return new GraphConfigLoad(SlateUniffiMethods.GraphConfigDefault(), Writable: true, Failure: null);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or DecoderFallbackException)
         {
             string reason = $"{FileName} is unreadable: {exception.Message}";
-            Trace.TraceWarning("graph config at '{0}' read as the default, read-only: {1}", _path, reason);
+            HostLog.Write(HostDiagnosticEvent.GraphConfigReadFailed, exception);
             return new GraphConfigLoad(SlateUniffiMethods.GraphConfigDefault(), Writable: false, Failure: reason);
         }
         try
@@ -78,7 +80,7 @@ internal sealed class GraphConfigStore
         catch (GraphConfigException exception)
         {
             string reason = Reason(exception);
-            Trace.TraceWarning("graph config at '{0}' read as the default, read-only: {1}", _path, reason);
+            HostLog.Write(HostDiagnosticEvent.GraphConfigDecodeFailed, exception);
             return new GraphConfigLoad(SlateUniffiMethods.GraphConfigDefault(), Writable: false, Failure: reason);
         }
     }
@@ -104,7 +106,7 @@ internal sealed class GraphConfigStore
             // other failure propagates and refuses the write (IPG-8). An
             // `File.Exists` gate let a denied ACL through as "absent" and
             // then clobbered the file it had never read.
-            existing = ReadExistingForTests is { } read ? read(_path) : File.ReadAllText(_path);
+            existing = ReadExistingForTests is { } read ? read(_path) : ReadText();
         }
         catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -121,6 +123,15 @@ internal sealed class GraphConfigStore
         {
             SafeFile.TryDelete(temporary);
         }
+    }
+
+    private string ReadText()
+    {
+        // Consume an optional UTF-8 preamble while retaining the throwing
+        // decoder. BOM autodetection can replace it with a lenient decoder,
+        // silently repairing bytes that a later save would overwrite.
+        using var reader = new StreamReader(_path, StrictUtf8, detectEncodingFromByteOrderMarks: false);
+        return reader.ReadToEnd();
     }
 
     /// <summary>The host-facing reason for each core refusal (the mac's
