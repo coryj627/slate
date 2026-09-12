@@ -73,6 +73,70 @@ public sealed class GraphConfigWriterTests : IDisposable
         Assert.Null(writer.Newest(_root));
     }
 
+    [Fact]
+    public void WriteFailuresReachTheHostLogWithoutPrivateDetails()
+    {
+        var writer = new GraphConfigWriter
+        {
+            WriteGateForTests = (_, _) => throw new IOException($"Cannot write {_root}: private-config-detail"),
+        };
+        using var output = new StringWriter();
+        TextWriter original = Console.Error;
+        try
+        {
+            Console.SetError(output);
+            Assert.True(writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            Console.SetError(original);
+        }
+
+        string logged = output.ToString();
+        Assert.Equal($"SlateWindows.GraphConfigPersistFailed (IOException){Environment.NewLine}", logged);
+        Assert.DoesNotContain(_root, logged, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-config-detail", logged, StringComparison.Ordinal);
+        Assert.Equal(1, writer.FailedForTests);
+        Assert.Null(writer.Newest(_root));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InvalidUtf8RefusesTheWriteAndLeavesTheQueueUsable(bool withBom)
+    {
+        var store = new GraphConfigStore(_root);
+        store.Write(WithDepth(1));
+        // The file can become malformed after writable preferences were
+        // loaded, so the write must independently refuse it.
+        byte[] original = GraphConfigs.InvalidUtf8(withBom);
+        File.WriteAllBytes(store.FilePath, original);
+        var writer = new GraphConfigWriter();
+        using var output = new StringWriter();
+        TextWriter originalError = Console.Error;
+        try
+        {
+            Console.SetError(output);
+            Assert.True(writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        Assert.Equal(original, File.ReadAllBytes(store.FilePath));
+        Assert.Equal(1, writer.FailedForTests);
+        Assert.Null(writer.Newest(_root));
+        Assert.Equal(0UL, writer.StateForTests(_root).LastWritten);
+        Assert.Equal($"SlateWindows.GraphConfigPersistFailed (DecoderFallbackException){Environment.NewLine}", output.ToString());
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(store.FilePath)!, "*.tmp"));
+
+        File.WriteAllText(store.FilePath, SlateUniffiMethods.GraphConfigEncode(WithDepth(1), null));
+        Assert.True(writer.Enqueue(_root, WithDepth(2), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+        Assert.Equal(2u, OnDisk().ConnectionsDepth);
+        Assert.Equal(2UL, writer.StateForTests(_root).LastWritten);
+    }
+
     /// <summary>Term W6, the other half of IPG-35: an exception the
     /// best-effort filter does NOT name still leaves nothing outstanding.
     /// Moving the removal into the two outcome locks dropped the `finally`
@@ -84,10 +148,10 @@ public sealed class GraphConfigWriterTests : IDisposable
     {
         var writer = new GraphConfigWriter();
         writer.StoreFor = _ => new GraphConfigStore(_root);
-        writer.WriteGateForTests = (_, _) => throw new InvalidOperationException("not one of the three");
+        writer.WriteGateForTests = (_, _) => throw new InvalidOperationException("not a best-effort failure");
         ulong generation = writer.Reserve(_root);
         Task write = writer.Enqueue(_root, WithDepth(3), generation);
-        // It propagates, as an unnamed failure always did — only the three
+        // It propagates, as an unnamed failure always did — only the
         // the filter names are swallowed.
         AggregateException faulted = Assert.Throws<AggregateException>(() => write.Wait(TimeSpan.FromSeconds(10)));
         Assert.IsType<InvalidOperationException>(faulted.InnerException);
