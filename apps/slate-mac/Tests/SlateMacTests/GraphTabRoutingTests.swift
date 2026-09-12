@@ -714,6 +714,8 @@ final class GraphTabRoutingTests: XCTestCase {
         XCTAssertNil(state.graphTableSnapshot, "the failed pair cleared the authority")
         XCTAssertNotNil(state.graphTableError)
 
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
         state.graphTableTextFilter = "a"
         state.requestGraphTableRowsIfQueryChanged()
         try await pollUntil { state.graphTablePublishedRequest == state.graphTableRequest }
@@ -724,11 +726,18 @@ final class GraphTabRoutingTests: XCTestCase {
         XCTAssertEqual(state.graphTableRequest?.query.nameQuery, "a")
         // …and the authority comes BACK (IPG-36, created by TGC-17): a
         // visible table whose Where-am-I can never answer is worse than the
-        // error it replaced, so the publish asks for a snapshot silently.
+        // error it replaced, so the publish asks for a snapshot and carries
+        // the needle's count to that final publication.
         try await pollUntil { state.graphTableSnapshot != nil && !state.graphTableLoading }
         XCTAssertNotNil(
             state.graphDiagramWhereAmIEvent(),
             "the rows published with no authority and none was asked for")
+        state.graphAnnouncer.flushForTests()
+        let expected = a11yRender(
+            event: .graph(
+                event: .graphFilterCount(
+                    shown: UInt32(state.graphTableRows.count), total: UInt32(state.graphTableTotal))))
+        XCTAssertEqual(posts, [expected.text], "recovery speaks the current count exactly once")
     }
 
     /// IPG-38 (rule Q, Term Q2): the rows ROLLBACK belongs to the current
@@ -772,10 +781,13 @@ final class GraphTabRoutingTests: XCTestCase {
         state.graphTableRowsPublishGate = nil
         state.setGraphTableSort(accepted)
         XCTAssertNil(state.graphTableRequestedSort, "the pending sort was cancelled")
+        XCTAssertEqual(state.graphTablePublishedRequest, state.graphTableRequest)
+        XCTAssertNil(state.graphDiagramWhereAmIEvent(), "the cancellation request is still in flight")
         await gate.release()
-        try await pollUntil { state.graphTablePublishedRequest == state.graphTableRequest }
+        try await pollUntil { state.graphTableAnsweredSeq == state.graphTableSeq }
         state.graphAnnouncer.flushForTests()
         XCTAssertEqual(state.graphTableSort, accepted)
+        XCTAssertNotNil(state.graphDiagramWhereAmIEvent(), "readback resumes when cancellation publishes")
         XCTAssertFalse(
             posts.contains { $0.contains("shown") },
             "the cancellation spoke a count: \(posts)")
@@ -1068,6 +1080,51 @@ final class GraphTabRoutingTests: XCTestCase {
         XCTAssertNil(state.graphDiagramWhereAmIEvent(), "a rows request in flight: the shown rows are not the newest request's")
         try await pollUntil { state.graphTablePublishedRequest == state.graphTableRequest }
         XCTAssertNotNil(state.graphDiagramWhereAmIEvent())
+    }
+
+    func testTheTableReadbackWaitsWhenTheNeedleReturnsToItsAcceptedValue() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        let acceptedNeedle = state.graphTableTextFilter
+        let gate = AsyncGate()
+        state.graphTableRowsPublishGate = { token in
+            if token.request.query.nameQuery == acceptedNeedle { await gate.suspend() }
+        }
+        state.graphTableTextFilter = "zzz"
+        state.requestGraphTableRowsIfQueryChanged()
+        // Clear before the changed needle publishes: the newest request has
+        // the same values as the accepted one, but has not answered yet.
+        state.graphTableTextFilter = acceptedNeedle
+        state.requestGraphTableRowsIfQueryChanged()
+        await gate.waitUntilEntered()
+        XCTAssertFalse(state.graphTableLoading, "a rows request does not set the pair's loading flag")
+        XCTAssertEqual(state.graphTablePublishedRequest, state.graphTableRequest)
+        XCTAssertNil(state.graphDiagramWhereAmIEvent(), "matching values do not establish quiescence")
+
+        await gate.release()
+        state.graphTableRowsPublishGate = nil
+        try await pollUntil { state.graphTableAnsweredSeq == state.graphTableSeq }
+        XCTAssertNotNil(state.graphDiagramWhereAmIEvent())
+    }
+
+    func testAnUnavailableDiagramDoesNotReadTheCachedTable() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        state.graphSelectedNodeKey = try XCTUnwrap(state.graphTableRows.first).stableKey
+        XCTAssertNotNil(state.graphDiagramWhereAmIEvent(), "the cached table can answer")
+
+        state.setGraphMode(.diagram)
+        state.graphDiagramLoading = true
+        XCTAssertNil(state.graphDiagramModel)
+        XCTAssertNil(state.graphDiagramWhereAmIEvent(), "a diagram awaiting its model has no readback")
+
+        state.graphDiagramLoading = false
+        state.graphDiagramError = "Unable to load graph"
+        XCTAssertNil(state.graphDiagramWhereAmIEvent(), "a failed diagram must not read the table's selection")
+
+        state.setGraphMode(.table)
+        state.resetGraphDiagramState()
+        XCTAssertNotNil(state.graphDiagramWhereAmIEvent(), "switching to the table restores its readback")
     }
 
     private func pollUntil(
