@@ -1013,6 +1013,76 @@ public sealed class GraphNavigatorTests
     }
 
     [Fact]
+    public void WhereAmIIsUnavailableWhileTheGraphIsBehindANote()
+    {
+        using GraphVault vault = GraphVault.Copy("where-am-i-hidden-tab");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            ICommand command = SlateCommandRegistrar.Resolve(host, ChordTable.Ids.GraphWhereAmI)!;
+            var availability = new List<bool>();
+            command.CanExecuteChanged += (_, _) => availability.Add(command.CanExecute(null));
+            host.GraphOpenBehindANote();
+
+            Assert.NotNull(host.Document.TableWhereAmI());
+            Assert.False(command.CanExecute(null));
+            Assert.False(availability[^1]);
+            command.Execute(null);
+            Assert.False(host.Navigator.WhereAmI());
+            Assert.Null(host.Navigator.WhereAmIText);
+            Assert.Empty(host.GraphLines);
+
+            host.Workspace.ActiveGroup.ActiveTab = host.GraphTab;
+            host.Settle();
+            Assert.True(command.CanExecute(null));
+            Assert.True(availability[^1]);
+            Assert.True(host.Navigator.WhereAmI());
+            Assert.NotNull(host.Navigator.WhereAmIText);
+        });
+    }
+
+    [Fact]
+    public void WhereAmIAvailabilityFollowsTheActivePaneWithoutReloading()
+    {
+        using GraphVault vault = GraphVault.Copy("where-am-i-inactive-pane");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.GraphOpenBehindANote();
+            host.Workspace.SplitRightCommand.Execute(null);
+            WorkspaceGroupViewModel other = host.Workspace.ActiveGroup;
+            host.Workspace.OpenGraph();
+            host.Settle();
+            WorkspaceGroupViewModel graphGroup = host.Workspace.ActiveGroup;
+            ICommand command = SlateCommandRegistrar.Resolve(host, ChordTable.Ids.GraphWhereAmI)!;
+            var availability = new List<bool>();
+            command.CanExecuteChanged += (_, _) => availability.Add(command.CanExecute(null));
+            GraphPublication held = host.Document.Publication;
+            ulong seq = host.Document.SeqForTests;
+            host.GraphLines.Clear();
+
+            host.Workspace.SelectGroupFromKeyboardFocus(other);
+            Assert.True(host.Workspace.GraphTabIsVisible());
+            Assert.False(command.CanExecute(null));
+            Assert.False(availability[^1]);
+            command.Execute(null);
+            Assert.False(host.Navigator.WhereAmI());
+            Assert.Null(host.Navigator.WhereAmIText);
+            Assert.Empty(host.GraphLines);
+
+            host.Workspace.SelectGroupFromKeyboardFocus(graphGroup);
+            Assert.True(command.CanExecute(null));
+            Assert.True(availability[^1]);
+            Assert.Same(held, host.Document.Publication);
+            Assert.Equal(seq, host.Document.SeqForTests);
+            Assert.False(host.Document.IsRequestInFlight);
+            Assert.True(host.Navigator.WhereAmI());
+            Assert.NotNull(host.Navigator.WhereAmIText);
+            Assert.Single(host.GraphLines);
+        });
+    }
+
+    [Fact]
     public void TheAvailabilitySeamRaisesCanExecuteChangedAndTheRegistrarsRefresh()
     {
         using GraphVault vault = GraphVault.Copy("where-am-i-availability");
