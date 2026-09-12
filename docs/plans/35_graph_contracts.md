@@ -9260,18 +9260,21 @@ the Shift disambiguation (the canvas row's text, `ChordTable.cs:
 279–293`; canvas C16) with the reason "disjoint by DELIVERY: the canvas
 surface's and the graph surface's tunnelling handlers, never focused at
 once". The registrar resolves GraphWhereAmICommand → the navigator's
-`WhereAmI()`, whose ADMISSION is the ACTIVE PROJECTION's readback SEAM
+`WhereAmI()`, whose ADMISSION requires a live EFFECTIVE graph document
+and the ACTIVE PROJECTION's readback SEAM
 — one `Func<GraphA11yEvent.GraphWhereAmI?>` per projection, chosen by
 the view state's `Mode`: the TABLE's, installed by the document at its
 seat and cleared at its retirement (this PR), and the DIAGRAM's, null
 until PR D's diagram installs it (the mac's `graphDiagramWhereAmIEvent`,
-`:285–286`) — with `CanExecute` "the seam answers" re-evaluated through
+`:285–286`) — with `CanExecute` "the graph is effective and the seam
+answers" re-evaluated through
 WhereAmIAvailabilityChanged (C-1; IGN-13), which the document raises at
 EVERY lineage edge (an issue, an install, a terminal failure, a
-rejection) and at its retirement; the chord arm returns false
+rejection) and at its retirement, and the workspace raises when graph
+effectiveness changes (including a pane switch without a load); the chord arm returns false
 (unconsumed) when the seam does not answer — the row and the menu item
 DISABLED (AD-3's listed-and-disabled shape) and the chord falling
-through only while no document is seated or the lineage is not
+through while no effective document is seated or the lineage is not
 quiescent. THE TABLE'S READBACK answers only while the lineage is
 QUIESCENT and the publication CURRENT (Term Q7: a READY record held,
 its query the view state's, nothing in flight — with a request in

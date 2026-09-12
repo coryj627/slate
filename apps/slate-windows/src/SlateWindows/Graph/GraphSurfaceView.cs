@@ -50,7 +50,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     private readonly TextBox _filterField;
     private readonly TextBlock _filterSummary;
     private readonly Button _clearFilter;
-    private readonly StackPanel _switcher;
+    private readonly AutomationNamedGroupPanel _switcher;
     private readonly List<RadioButton> _modeChoices = [];
     private readonly TextBlock _stateText;
     private readonly GraphStateHost _stateHost;
@@ -122,7 +122,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         AutomationProperties.SetName(_clearFilter, ClearFilterName);
         _clearFilter.Click += (_, _) => Model?.Navigator?.ClearNameQuery();
 
-        _switcher = new StackPanel
+        _switcher = new AutomationNamedGroupPanel
         {
             Orientation = Orientation.Horizontal,
             Margin = new Thickness(12, 4, 12, 4),

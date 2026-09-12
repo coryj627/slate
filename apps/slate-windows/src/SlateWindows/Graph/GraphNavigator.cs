@@ -278,8 +278,9 @@ internal sealed class GraphNavigator : BindableBase
     }
 
     /// <summary>Raised by the document at every lineage edge and at its
-    /// retirement, and here when a seam is installed or cleared: the
-    /// command's CanExecute re-evaluates (IGN-13).</summary>
+    /// retirement, by the workspace when the effective tab changes, and
+    /// here when a seam is installed or cleared: the command's CanExecute
+    /// re-evaluates (IGN-13).</summary>
     internal event Action? WhereAmIAvailabilityChanged;
 
     /// <summary>The TABLE's readback seam, installed by the document at its
@@ -317,8 +318,15 @@ internal sealed class GraphNavigator : BindableBase
     private Func<GraphA11yEvent.GraphWhereAmI?>? ActiveReadback =>
         _viewState.Mode == GraphSurfaceMode.Diagram ? _diagramReadback : _tableReadback;
 
-    /// <summary>The admission: the active seam answers.</summary>
-    public bool CanWhereAmI => ActiveReadback?.Invoke() is not null;
+    /// <summary>The effective graph's active projection must answer. A
+    /// graph retained behind another tab or in an inactive pane cannot
+    /// provide the current location.</summary>
+    private GraphA11yEvent.GraphWhereAmI? ReadWhereAmI() =>
+        _document() is { IsRetired: false, IsEffective: true }
+            ? ActiveReadback?.Invoke()
+            : null;
+
+    public bool CanWhereAmI => ReadWhereAmI() is not null;
 
     /// <summary>The verb: ONE event from the seam, rendered for the panel and
     /// announced through the document's seam — composed once, rendered
@@ -326,7 +334,7 @@ internal sealed class GraphNavigator : BindableBase
     /// does not answer.</summary>
     public bool WhereAmI()
     {
-        if (ActiveReadback?.Invoke() is not { } @event)
+        if (ReadWhereAmI() is not { } @event)
         {
             return false;
         }
@@ -335,9 +343,9 @@ internal sealed class GraphNavigator : BindableBase
         return true;
     }
 
-    /// <summary>The chord arm: unconsumed when the seam does not answer, so
-    /// the press falls through while no document is seated or the lineage
-    /// is not quiescent (C-8).</summary>
+    /// <summary>The chord arm: unconsumed when the effective document's
+    /// seam does not answer, so the press falls through while the graph
+    /// is inactive or the lineage is not quiescent (C-8).</summary>
     private bool WhereAmIFromKey() => WhereAmI();
 
     /// <summary>The panel's Close and Escape's rung 0: the text cleared, every
