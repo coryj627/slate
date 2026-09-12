@@ -36,6 +36,7 @@ struct PropertyEditorRowIdentity: Hashable {
 /// draft state and calls `setProperty` / `deleteProperty`.
 struct PropertyEditorRow: View {
     let property: Property
+    private var propertyLabel: String { propertyKeyLabel(identity: property.keyIdentity) }
     let path: String
     let vaultRoot: URL?
     let owner: NoteAuthoringOwner
@@ -105,7 +106,7 @@ struct PropertyEditorRow: View {
         // ring room to coexist under macOS "Increase contrast"
         // without visually fusing into one fuzzy focus indicator.
         VStack(alignment: .leading, spacing: 4) {
-            Text(property.key)
+            Text(propertyLabel)
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(.primary)
                 .accessibilityHidden(true)
@@ -142,12 +143,12 @@ struct PropertyEditorRow: View {
                             in: RoundedRectangle(
                                 cornerRadius: Tokens.Radius.small))
                         .accessibilityLabel(
-                            "Uncommitted draft for \(property.key). \(draft.recoveryText)")
+                            "Uncommitted draft for \(propertyLabel). \(draft.recoveryText)")
                     Button("Copy Property Draft") {
                         copyPropertyDraft()
                     }
                     .accessibilityHint(
-                        "Copies the uncommitted value for \(property.key).")
+                        "Copies the uncommitted value for \(propertyLabel).")
                 }
                 .accessibilityElement(children: .contain)
             }
@@ -162,7 +163,7 @@ struct PropertyEditorRow: View {
         .accessibilityElement(children: .contain)
         .accessibilityFocused($deleteDialogFocusReturn, equals: .row)
         .confirmationDialog(
-            "Delete property `\(property.key)`?",
+            "Delete property `\(propertyLabel)`?",
             isPresented: $pendingDelete,
             titleVisibility: .visible
         ) {
@@ -173,36 +174,36 @@ struct PropertyEditorRow: View {
             }
             Button("Delete", role: .destructive) {
                 appState.deleteProperty(
-                    path: path, key: property.key, owner: owner)
+                    path: path, key: property.keyIdentity, owner: owner)
                 deleteDialogFocusReturn = .row
             }
             .disabled(deleteDisabledReason != nil)
         } message: {
-            Text("This removes the `\(property.key)` key from the note's frontmatter.")
+            Text("This removes the `\(propertyLabel)` key from the note's frontmatter.")
         }
         // Reset draft when the property updates from disk (e.g.
         // after a successful commit or external reload).
         .onChange(of: property) { _, newValue in
             let refreshed = PropertyEditDraft.from(property: newValue)
             let resetRevision = appState.propertyDraftResetRevision(
-                path: path, key: property.key)
+                path: path, key: property.keyIdentity)
             let reset = resetRevision > lastHandledResetRevision
             if reset { lastHandledResetRevision = resetRevision }
             let preserved = appState.preservedPropertyDraft(
-                path: path, key: property.key)
+                path: path, key: property.keyIdentity)
             let localWasDirty = draft != committedBaseline
             committedBaseline = refreshed
             if reset || (!localWasDirty && preserved == nil) || draft == refreshed {
                 draft = refreshed
                 appState.clearPreservedPropertyDraft(
-                    path: path, key: property.key, owner: owner)
+                    path: path, key: property.keyIdentity, owner: owner)
             } else {
                 if let preserved { draft = preserved }
                 appState.preservePropertyDraft(
                     draft,
                     baseline: refreshed,
                     path: path,
-                    key: property.key,
+                    key: property.keyIdentity,
                     owner: owner)
             }
             inputValidationError = nil
@@ -212,14 +213,14 @@ struct PropertyEditorRow: View {
                 newDraft,
                 baseline: committedBaseline,
                 path: path,
-                key: property.key,
+                key: property.keyIdentity,
                 owner: owner)
         }
         .onAppear {
             lastHandledResetRevision = appState.propertyDraftResetRevision(
-                path: path, key: property.key)
+                path: path, key: property.keyIdentity)
             if let preserved = appState.preservedPropertyDraft(
-                path: path, key: property.key)
+                path: path, key: property.keyIdentity)
             {
                 draft = preserved
             }
@@ -434,7 +435,7 @@ struct PropertyEditorRow: View {
                 bumpInteger(by: -1)
             }
             .labelsHidden()
-            .accessibilityLabel("Step \(property.key)")
+            .accessibilityLabel("Step \(propertyLabel)")
         }
     }
 
@@ -460,7 +461,7 @@ struct PropertyEditorRow: View {
                 bumpFloat(by: -1)
             }
             .labelsHidden()
-            .accessibilityLabel("Step \(property.key)")
+            .accessibilityLabel("Step \(propertyLabel)")
         }
     }
 
@@ -506,7 +507,7 @@ struct PropertyEditorRow: View {
             Button("Pick…") {
                 pickVaultFile()
             }
-            .accessibilityLabel("Pick… vault file for \(property.key)")
+            .accessibilityLabel("Pick… vault file for \(propertyLabel)")
         }
     }
 
@@ -528,21 +529,21 @@ struct PropertyEditorRow: View {
                         )
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel(
-                            "Property \(property.key), item \(idx + 1) of \(items.count)"
+                            "Property \(propertyLabel), item \(idx + 1) of \(items.count)"
                         )
                         Button("Remove") {
                             var copy = items
                             copy.remove(at: idx)
                             setDraftIfAdmitted(.list(copy))
                         }
-                        .accessibilityLabel("Remove item \(idx + 1) from \(property.key)")
+                        .accessibilityLabel("Remove item \(idx + 1) from \(propertyLabel)")
                     }
                 }
                 Button("Add item") {
                     items.append("")
                     setDraftIfAdmitted(.list(items))
                 }
-                .accessibilityLabel("Add item to \(property.key)")
+                .accessibilityLabel("Add item to \(propertyLabel)")
             }
         }
         .accessibilityElement(children: .contain)
@@ -567,21 +568,21 @@ struct PropertyEditorRow: View {
                         )
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel(
-                            "Property \(property.key), tag \(idx + 1) of \(tags.count)"
+                            "Property \(propertyLabel), tag \(idx + 1) of \(tags.count)"
                         )
                         Button("Remove") {
                             var copy = tags
                             copy.remove(at: idx)
                             setDraftIfAdmitted(.tagList(copy))
                         }
-                        .accessibilityLabel("Remove tag \(idx + 1) from \(property.key)")
+                        .accessibilityLabel("Remove tag \(idx + 1) from \(propertyLabel)")
                     }
                 }
                 Button("Add tag") {
                     tags.append("")
                     setDraftIfAdmitted(.tagList(tags))
                 }
-                .accessibilityLabel("Add tag to \(property.key)")
+                .accessibilityLabel("Add tag to \(propertyLabel)")
             }
         }
         .accessibilityElement(children: .contain)
@@ -610,30 +611,30 @@ struct PropertyEditorRow: View {
                 .disabled(
                     !hasUnsavedChanges || appState.isEditingProperty
                         || authoringDisabledReason != nil)
-                .accessibilityLabel("Save changes to \(property.key)")
+                .accessibilityLabel("Save changes to \(propertyLabel)")
                 .accessibilityHint(
-                    authoringDisabledReason ?? "Save changes to \(property.key).")
-                .help(authoringDisabledReason ?? "Save changes to \(property.key)")
+                    authoringDisabledReason ?? "Save changes to \(propertyLabel).")
+                .help(authoringDisabledReason ?? "Save changes to \(propertyLabel)")
             if hasUnsavedChanges {
                 Button("Revert") { revertDraft() }
                     .disabled(draftDiscardDisabledReason != nil)
-                    .accessibilityLabel("Revert changes to \(property.key)")
+                    .accessibilityLabel("Revert changes to \(propertyLabel)")
                     .accessibilityHint(
                         draftDiscardDisabledReason
-                            ?? "Restores the last committed value for \(property.key).")
+                            ?? "Restores the last committed value for \(propertyLabel).")
                     .help(
                         draftDiscardDisabledReason
-                            ?? "Revert \(property.key) to its last committed value")
+                            ?? "Revert \(propertyLabel) to its last committed value")
             }
             Button("Delete", role: .destructive) {
                 pendingDelete = true
             }
             .disabled(deleteDisabledReason != nil)
             .keyboardShortcut(.delete, modifiers: .command)
-            .accessibilityLabel("Delete property \(property.key)")
+            .accessibilityLabel("Delete property \(propertyLabel)")
             .accessibilityHint(
-                deleteDisabledReason ?? "Delete property \(property.key).")
-            .help(deleteDisabledReason ?? "Delete property \(property.key)")
+                deleteDisabledReason ?? "Delete property \(propertyLabel).")
+            .help(deleteDisabledReason ?? "Delete property \(propertyLabel)")
         }
     }
 
@@ -646,7 +647,7 @@ struct PropertyEditorRow: View {
 
     private var isCommittedPendingVerification: Bool {
         appState.propertyDraftIsCommittedPendingVerification(
-            path: path, key: property.key, draft: draft)
+            path: path, key: property.keyIdentity, draft: draft)
     }
 
     private var authoringDisabledReason: String? {
@@ -661,7 +662,7 @@ struct PropertyEditorRow: View {
 
     private var draftDiscardDisabledReason: String? {
         appState.propertyRowDraftDiscardDisabledReason(
-            path: path, key: property.key, draft: draft)
+            path: path, key: property.keyIdentity, draft: draft)
     }
 
     /// Reject a callback that was queued before the disabled state reached the
@@ -693,7 +694,7 @@ struct PropertyEditorRow: View {
         case .success(let value):
             if appState.setProperty(
                 path: path,
-                key: property.key,
+                key: property.keyIdentity,
                 value: value,
                 submittedDraft: currentDraft,
                 owner: owner) == nil,
@@ -718,17 +719,17 @@ struct PropertyEditorRow: View {
             return
         }
         draft = appState.propertyDraftRevertTarget(
-            path: path, key: property.key, fallback: committedBaseline)
+            path: path, key: property.keyIdentity, fallback: committedBaseline)
         pendingRecommitDraft = nil
         inputValidationError = nil
         appState.clearPreservedPropertyDraft(
-            path: path, key: property.key, owner: owner)
-        appState.postMutationAnnouncement("Reverted changes to \(property.key).")
+            path: path, key: property.keyIdentity, owner: owner)
+        appState.postMutationAnnouncement("Reverted changes to \(propertyLabel).")
     }
 
     private func applyRequestedDraftReset() {
         let revision = appState.propertyDraftResetRevision(
-            path: path, key: property.key)
+            path: path, key: property.keyIdentity)
         guard revision > lastHandledResetRevision else { return }
         lastHandledResetRevision = revision
         let refreshed = PropertyEditDraft.from(property: property)
@@ -737,7 +738,7 @@ struct PropertyEditorRow: View {
         pendingRecommitDraft = nil
         inputValidationError = nil
         appState.clearPreservedPropertyDraft(
-            path: path, key: property.key, owner: owner)
+            path: path, key: property.keyIdentity, owner: owner)
     }
 
     private func bumpInteger(by delta: Int64) {
@@ -790,7 +791,7 @@ struct PropertyEditorRow: View {
         case "tag_list": "tag list"
         default: property.kind
         }
-        return "Property \(property.key), \(typeWord), editable"
+        return "Property \(propertyLabel), \(typeWord), editable"
     }
 }
 

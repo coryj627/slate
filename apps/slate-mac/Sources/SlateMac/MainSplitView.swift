@@ -701,7 +701,7 @@ struct MainSplitView: View {
         } else {
             question = name
                 + " was modified outside the editor while you were editing the `"
-                + conflict.key
+                + propertyKeyLabel(identity: conflict.key)
                 + "` property. Choose how to resolve."
         }
         guard let reason = appState.propertyEditConflictKeepMineDisabledReason else {

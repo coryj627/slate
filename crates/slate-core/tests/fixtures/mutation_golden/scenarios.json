@@ -161,6 +161,104 @@
         { "op": "moveFile", "path": "a.md", "newParent": "sub" },
         { "op": "checkpoint", "label": "terminal" }
       ]
+    },
+    {
+      "name": "typed_property_keys",
+      "seed": [
+        {
+          "path": "typed.md",
+          "content": "---\n1: old\n\"1\": twin\ntrue: old\n\"true\": twin\nnull: old\n\"null\": twin\n1.5: old\n\"1.5\": twin\n---\nBody\r\nunchanged\n"
+        },
+        {
+          "path": "bystander.md",
+          "content": "Untouched\r\n"
+        }
+      ],
+      "untouched": [
+        "bystander.md"
+      ],
+      "assertEqual": [
+        [
+          "edited",
+          "preview"
+        ]
+      ],
+      "ops": [
+        {
+          "op": "checkpoint",
+          "label": "initial"
+        },
+        {
+          "op": "setProperty",
+          "path": "typed.md",
+          "name": "1 (integer key)",
+          "value": "edited"
+        },
+        {
+          "op": "setProperty",
+          "path": "typed.md",
+          "name": "true (boolean key)",
+          "value": "edited"
+        },
+        {
+          "op": "setProperty",
+          "path": "typed.md",
+          "name": "null (null key)",
+          "value": "edited"
+        },
+        {
+          "op": "setProperty",
+          "path": "typed.md",
+          "name": "1.5 (number key)",
+          "value": "edited"
+        },
+        {
+          "op": "checkpoint",
+          "label": "edited"
+        },
+        {
+          "op": "previewPropertyRename",
+          "path": "typed.md",
+          "name": "1 (integer key)",
+          "newName": "renamed"
+        },
+        {
+          "op": "checkpoint",
+          "label": "preview"
+        },
+        {
+          "op": "renameProperty",
+          "path": "typed.md",
+          "name": "1 (integer key)",
+          "newName": "renamed"
+        },
+        {
+          "op": "checkpoint",
+          "label": "renamed"
+        },
+        {
+          "op": "reopen"
+        },
+        {
+          "op": "deleteProperty",
+          "path": "typed.md",
+          "name": "true (boolean key)"
+        },
+        {
+          "op": "deleteProperty",
+          "path": "typed.md",
+          "name": "null (null key)"
+        },
+        {
+          "op": "deleteProperty",
+          "path": "typed.md",
+          "name": "1.5 (number key)"
+        },
+        {
+          "op": "checkpoint",
+          "label": "terminal"
+        }
+      ]
     }
   ]
 }

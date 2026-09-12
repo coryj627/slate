@@ -1133,10 +1133,12 @@ fn census_temporal_operators_vs_reference() {
                     let payload = crate::oplog::encode_edit_batch(&ops);
                     let annotations: Vec<crate::oplog::OpAnnotation> = match rng.below(3) {
                         0 => vec![crate::oplog::OpAnnotation::SetProperty {
+                            key_identity: None,
                             key: keys[rng.below(keys.len() as u64) as usize].to_string(),
                             value_json: "1".into(),
                         }],
                         1 => vec![crate::oplog::OpAnnotation::RemoveProperty {
+                            key_identity: None,
                             key: keys[rng.below(keys.len() as u64) as usize].to_string(),
                         }],
                         _ => Vec::new(),
@@ -1297,7 +1299,7 @@ fn census_temporal_operators_vs_reference() {
                     crate::oplog::OpAnnotation::SetProperty { key, .. } => {
                         rows.push((entry.timestamp_ms, 2, Some(key), None));
                     }
-                    crate::oplog::OpAnnotation::RemoveProperty { key } => {
+                    crate::oplog::OpAnnotation::RemoveProperty { key, .. } => {
                         rows.push((entry.timestamp_ms, 3, Some(key), None));
                     }
                     crate::oplog::OpAnnotation::FrontmatterReplace => {
@@ -2478,4 +2480,74 @@ fn retention_boundary_is_inclusive_out_at_exact_cutoff() {
         .unwrap()
     };
     assert_eq!(resurrect_count, 0, "rebuild never resurrects aged rows");
+}
+
+#[test]
+fn typed_key_edits_keep_projected_temporal_queries_and_readable_history() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("note.md", b"---\n1: old\n\"1\": twin\n---\nbody")
+            .unwrap()
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let identity = session
+        .get_file_metadata("note.md")
+        .unwrap()
+        .unwrap()
+        .properties[0]
+        .key_identity
+        .clone();
+    session
+        .set_property_by_identity(
+            "note.md",
+            &identity,
+            crate::PropertyValue::Text("edited".into()),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        filter_paths(&session, r#"oplog.has_property_change("1", "1h")"#),
+        (vec!["note.md".into()], None)
+    );
+    // Move the set outside the window, so the next result proves removal indexing.
+    shift_events(&session, "note.md", -2 * HOUR_MS);
+    session
+        .delete_property_by_identity("note.md", &identity, None)
+        .unwrap();
+    assert_eq!(
+        filter_paths(&session, r#"oplog.has_property_change("1", "1h")"#),
+        (vec!["note.md".into()], None)
+    );
+    let rows = session.list_versions("note.md", Paging::first(10)).unwrap();
+    let labels: Vec<_> = rows
+        .items
+        .iter()
+        .flat_map(|v| &v.annotations)
+        .map(|a| a.display.as_str())
+        .collect();
+    assert!(labels.contains(&"Set property '1 (integer key)'"));
+    assert!(labels.contains(&"Removed property '1 (integer key)'"));
+    for entry in session.read_oplog("note.md").unwrap() {
+        let annotations = crate::oplog::decode_annotated(&entry.payload_bytes)
+            .unwrap()
+            .2;
+        assert!(
+            matches!(&annotations[0], crate::oplog::OpAnnotation::SetProperty { key, key_identity: Some(id), .. } | crate::oplog::OpAnnotation::RemoveProperty { key, key_identity: Some(id) } if key == "1" && id == &identity)
+        );
+    }
+    // A literal legacy key that looks like a token must stay literal in history.
+    session
+        .set_property(
+            "note.md",
+            &identity,
+            crate::PropertyValue::Text("literal".into()),
+            None,
+        )
+        .unwrap();
+    let rows = session.list_versions("note.md", Paging::first(10)).unwrap();
+    assert!(
+        rows.items
+            .iter()
+            .flat_map(|v| &v.annotations)
+            .any(|a| a.display == format!("Set property '{identity}'"))
+    );
 }

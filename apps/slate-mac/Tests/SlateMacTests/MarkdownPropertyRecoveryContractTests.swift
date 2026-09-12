@@ -57,6 +57,52 @@ final class MarkdownPropertyRecoveryContractTests: XCTestCase {
         let vault: URL
     }
 
+    func testTypedKeyRowsKeepIndependentDraftsAndWriteTheirOriginalIdentity() async throws {
+        for scalar in ["1", "true", "null", "1.5"] {
+            let fixture = try await makeFixture(alphaSource:
+                "---\n\(scalar): old\n\"\(scalar)\": twin\n---\nBody\r\n")
+            let state = fixture.state
+            let typed = try XCTUnwrap(state.currentNoteProperties.first)
+            let twin = state.currentNoteProperties[1]
+            XCTAssertEqual(typed.key, twin.key)
+            XCTAssertNotEqual(typed.keyIdentity, twin.keyIdentity)
+            XCTAssertNotEqual(propertyKeyLabel(identity: typed.keyIdentity), propertyKeyLabel(identity: twin.keyIdentity))
+            let draft = PropertyEditDraft.scalarText(ScalarTextKind(kind: "text", value: "edited"))
+            let twinDraft = PropertyEditDraft.scalarText(ScalarTextKind(kind: "text", value: "parked twin"))
+            state.preservePropertyDraft(draft, path: "alpha.md", key: typed.keyIdentity)
+            state.preservePropertyDraft(twinDraft, path: "alpha.md", key: twin.keyIdentity)
+            let write = try XCTUnwrap(state.setProperty(
+                path: "alpha.md", key: typed.keyIdentity,
+                value: .text(value: "edited"), submittedDraft: draft))
+            await write.value
+            XCTAssertNil(state.propertyEditError)
+            XCTAssertEqual(state.currentNoteProperties.count, 2)
+            XCTAssertEqual(state.currentNoteProperties.first { $0.keyIdentity == typed.keyIdentity }?.valueJson, "\"edited\"")
+            XCTAssertEqual(state.currentNoteProperties.first { $0.keyIdentity == twin.keyIdentity }?.valueJson, "\"twin\"")
+            XCTAssertEqual(state.preservedPropertyDraft(path: "alpha.md", key: twin.keyIdentity), twinDraft)
+            let deletion = try XCTUnwrap(state.deleteProperty(path: "alpha.md", key: typed.keyIdentity))
+            await deletion.value
+            XCTAssertEqual(state.currentNoteProperties.map(\.keyIdentity), [twin.keyIdentity])
+            XCTAssertEqual(state.preservedPropertyDraft(path: "alpha.md", key: twin.keyIdentity), twinDraft)
+            let source = try String(contentsOf: fixture.vault.appendingPathComponent("alpha.md"), encoding: .utf8)
+            XCTAssertTrue(source.hasSuffix("Body\r\n"))
+            state.closeVault()
+        }
+    }
+
+    func testTypedBulkRenameSelectsIntegerWithoutRenamingTheStringTwin() async throws {
+        let fixture = try await makeFixture(alphaSource: "---\n1: old\n\"1\": twin\n---\nBody\n")
+        let preview = try XCTUnwrap(fixture.state.previewPropertyRename(oldKey: "1", newKey: "renamed", oldKeyType: .integer))
+        await preview.value
+        XCTAssertEqual(fixture.state.pendingRenameReport?.affected.count, 1)
+        let apply = try XCTUnwrap(fixture.state.applyPropertyRename(oldKey: "1", newKey: "renamed", oldKeyType: .integer))
+        await apply.value
+        XCTAssertNil(fixture.state.renameError)
+        XCTAssertEqual(fixture.state.currentNoteProperties.map(\.keyIdentity), ["1", "renamed"])
+        XCTAssertEqual(fixture.state.currentNoteProperties.first?.valueJson, "\"twin\"")
+        fixture.state.closeVault()
+    }
+
     override func tearDown() {
         for root in roots {
             try? FileManager.default.removeItem(at: root)
@@ -65,7 +111,10 @@ final class MarkdownPropertyRecoveryContractTests: XCTestCase {
         super.tearDown()
     }
 
-    private func makeFixture(activePath: String = "alpha.md") async throws -> Fixture {
+    private func makeFixture(
+        activePath: String = "alpha.md",
+        alphaSource: String = "---\ntitle: Alpha\n---\n# Alpha\n"
+    ) async throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("markdown-property-recovery-\(UUID().uuidString)")
         roots.append(root)
@@ -76,7 +125,7 @@ final class MarkdownPropertyRecoveryContractTests: XCTestCase {
         try FileManager.default.createDirectory(
             at: vault.appendingPathComponent("dest"),
             withIntermediateDirectories: true)
-        try "---\ntitle: Alpha\n---\n# Alpha\n".write(
+        try alphaSource.write(
             to: vault.appendingPathComponent("alpha.md"),
             atomically: true,
             encoding: .utf8)

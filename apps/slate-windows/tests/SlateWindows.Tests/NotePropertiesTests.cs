@@ -18,6 +18,77 @@ namespace SlateWindows.Tests;
 /// </summary>
 public sealed class NotePropertiesTests
 {
+    [Theory]
+    [InlineData("1", "1 (integer key)")]
+    [InlineData("true", "true (boolean key)")]
+    [InlineData("null", "null (null key)")]
+    [InlineData("1.5", "1.5 (number key)")]
+    public void TypedRowsPreserveIndependentDraftsAndEditOnlyTheirSourceKey(string scalar, string label)
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = MakeVault("typed-property-rows");
+            File.WriteAllText(Path.Combine(fixture.Root, "props.md"),
+                $"---\n{scalar}: old\n\"{scalar}\": twin\n---\nBody\r\n");
+            using VaultSession session = OpenScanned(fixture.Root);
+            var announced = new List<A11yEvent>();
+            using var workspace = new WorkspaceViewModel(session, fixture.Root, () => [], announced.Add, startInteractionBackgroundWork: false);
+            NotePropertiesViewModel properties = AttachProperties(workspace, "props.md");
+            string typedIdentity = properties.Rows[0].KeyIdentity;
+            string stringIdentity = properties.Rows[1].KeyIdentity;
+            Assert.NotEqual(typedIdentity, stringIdentity);
+            Assert.Equal(label, properties.Rows[0].Key);
+            Assert.Contains(label, properties.Rows[0].AutomationName);
+            properties.Rows[0].EditorText = "edited";
+            properties.Rows[1].EditorText = "parked twin";
+            properties.RefreshProperties();
+            Assert.Equal("edited", properties.Rows[0].EditorText);
+            Assert.Equal("parked twin", properties.Rows[1].EditorText);
+
+            Assert.True(workspace.SetPanelProperty(properties.Rows[0]));
+            WaitForUi(() => properties.Rows.All(r => !r.WriteInFlight));
+            Assert.Equal("parked twin", properties.Rows.Single(r => r.KeyIdentity == stringIdentity).EditorText);
+            Property[] stored = session.GetFileMetadata("props.md")!.Properties;
+            Assert.Equal("\"edited\"", stored.Single(p => p.KeyIdentity == typedIdentity).ValueJson);
+            Assert.Equal("\"twin\"", stored.Single(p => p.KeyIdentity == stringIdentity).ValueJson);
+            Assert.Equal("Body\r\n", session.ReadNoteParts("props.md").Body);
+
+            // Reload discards precisely the selected draft, even with equal display names.
+            properties.Rows.Single(r => r.KeyIdentity == typedIdentity).EditorText = "discard me";
+            properties.ReloadDiscarding(typedIdentity);
+            Assert.Equal("edited", properties.Rows.Single(r => r.KeyIdentity == typedIdentity).EditorText);
+            Assert.Equal("parked twin", properties.Rows.Single(r => r.KeyIdentity == stringIdentity).EditorText);
+            Assert.True(workspace.DeletePanelProperty(properties.Rows.Single(r => r.KeyIdentity == typedIdentity)));
+            WaitForUi(() => properties.Rows.Count == 1);
+            Assert.Equal(stringIdentity, Assert.Single(session.GetFileMetadata("props.md")!.Properties).KeyIdentity);
+            Assert.Contains(announced, item => item is A11yEvent.PropertyChanged changed && changed.Key == label && changed.Deleted);
+        });
+    }
+
+    [Fact]
+    public void BulkRenameTypeSelectionTargetsTheIntegerAndDisarmsOnTypeChanges()
+    {
+        using FixtureVault fixture = MakeVault("typed-property-rename");
+        File.WriteAllText(Path.Combine(fixture.Root, "props.md"), "---\n1: old\n\"1\": twin\n---\nBody\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var vm = new BulkRenameViewModel(session, _ => { }, () => false, _ => { }, synchronousForTests: true);
+        vm.OldKey = "1";
+        vm.NewKey = "renamed";
+        vm.OldKeyType = BulkRenameViewModel.KeyTypes.Single(c => c.Kind == PropertyKeyType.Integer);
+        vm.Preview();
+        Assert.True(vm.CanApply);
+        vm.OldKeyType = BulkRenameViewModel.KeyTypes.Single(c => c.Kind == PropertyKeyType.String);
+        Assert.False(vm.CanApply);
+        vm.OldKeyType = BulkRenameViewModel.KeyTypes.Single(c => c.Kind == PropertyKeyType.Integer);
+        vm.Preview();
+        Assert.True(vm.Apply());
+        Property[] rows = session.GetFileMetadata("props.md")!.Properties;
+        Assert.Equal("1", rows[0].KeyIdentity);
+        Assert.Equal("\"twin\"", rows[0].ValueJson);
+        Assert.Equal("renamed", rows[1].Key);
+        vm.Shutdown();
+    }
+
     private const string PropsFrontmatter =
         "---\n"
         + "title: Hello\n"
@@ -1074,7 +1145,7 @@ public sealed class NotePropertiesTests
     public void SteppersAreOverflowGuardedAndDraftLocal()
     {
         var row = new PropertyRowViewModel(
-            new Property("count", "number", long.MaxValue.ToString()),
+            new Property("count", "number", long.MaxValue.ToString(), "count"),
             "note.md",
             "hash",
             _ => Assert.Fail("steppers must not commit"),

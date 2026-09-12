@@ -352,27 +352,32 @@ pub fn structured_diff(
     // --- 1. Frontmatter: key-level compare -------------------------
     let (from_props, _) = extract_frontmatter(from);
     let (to_props, _) = extract_frontmatter(to);
-    let from_map: std::collections::BTreeMap<&str, &PropertyValue> = from_props
+    let from_map: std::collections::BTreeMap<&str, &crate::Property> = from_props
         .iter()
-        .map(|p| (p.key.as_str(), &p.value))
+        .map(|p| (p.key_identity.as_str(), p))
         .collect();
-    let to_map: std::collections::BTreeMap<&str, &PropertyValue> = to_props
+    let to_map: std::collections::BTreeMap<&str, &crate::Property> = to_props
         .iter()
-        .map(|p| (p.key.as_str(), &p.value))
+        .map(|p| (p.key_identity.as_str(), p))
         .collect();
 
-    // Best-effort 1-based line of a property within a source's
-    // frontmatter: a full dotted-path walk with an indentation stack,
-    // so `second.status` anchors at the `status:` under `second:` even
-    // when another branch has its own `status:` (adversarial review —
-    // duplicate leaf names). Falls back to a bare leaf scan, then 1.
-    let key_line = |source: &str, key: &str| -> u32 { key_path_line(source, key).unwrap_or(1) };
+    // Editable scalar keys use parser markers so a quoted or dotted twin
+    // cannot anchor at another property's line. Nested paths retain the
+    // indentation-aware fallback used by the read-only nested diff surface.
+    let key_line = |source: &str, property: &crate::Property| -> u32 {
+        if crate::property_key::property_key_yaml(&property.key_identity).is_ok() {
+            crate::frontmatter::scalar_key_line(source, &property.key_identity).unwrap_or(1)
+        } else {
+            key_path_line(source, &property.key).unwrap_or(1)
+        }
+    };
 
-    for (key, to_value) in &to_map {
-        let changed = from_map.get(key) != Some(to_value);
+    for (identity, property) in &to_map {
+        let changed = from_map.get(identity).map(|p| &p.value) != Some(&property.value);
         if changed {
-            let value = display_value(to_value);
-            let line = key_line(to, key);
+            let key = crate::property_key_label(identity);
+            let value = display_value(&property.value);
+            let line = key_line(to, property);
             operations.push(DiffOperation {
                 kind: DiffOpClass::PropertySet,
                 line,
@@ -385,9 +390,10 @@ pub fn structured_diff(
             });
         }
     }
-    for key in from_map.keys() {
-        if !to_map.contains_key(key) {
-            let line = key_line(from, key);
+    for (identity, property) in &from_map {
+        if !to_map.contains_key(identity) {
+            let key = crate::property_key_label(identity);
+            let line = key_line(from, property);
             operations.push(DiffOperation {
                 kind: DiffOpClass::PropertyRemoved,
                 line,
@@ -753,6 +759,52 @@ mod tests {
 
     fn diff(from: &str, to: &str) -> StructuredDiff {
         structured_diff("note.md", "from-hash", "to-hash", from, to)
+    }
+
+    #[test]
+    fn typed_key_diffs_keep_string_twins_and_nested_paths_distinct() {
+        for (typed, label) in [
+            ("1", "1 (integer key)"),
+            ("true", "true (boolean key)"),
+            ("null", "null (null key)"),
+            ("1.5", "1.5 (number key)"),
+        ] {
+            let before = format!("---\n{typed}: old\n\"{typed}\": twin\n---\nbody");
+            let after = before.replacen(": old", ": edited", 1);
+            let edited = diff(&before, &after);
+            assert_eq!(edited.operations.len(), 1);
+            assert_eq!(edited.operations[0].line, 2);
+            let string_edit = diff(&before, &before.replace(": twin", ": changed"));
+            assert_eq!(string_edit.operations.len(), 1);
+            assert_eq!(string_edit.operations[0].line, 3);
+            assert_eq!(
+                edited.operations[0].semantic_description,
+                format!("Set property '{label}' to 'edited'")
+            );
+            let deleted = before.replacen(&format!("{typed}: old\n"), "", 1);
+            let removed = diff(&before, &deleted);
+            assert_eq!(removed.operations.len(), 1);
+            assert_eq!(
+                removed.operations[0].semantic_description,
+                format!("Removed property '{label}'")
+            );
+        }
+        let renamed = diff("---\n1: old\n---\nbody", "---\n\"1\": old\n---\nbody");
+        assert_eq!(renamed.operations.len(), 2);
+        assert!(
+            renamed
+                .operations
+                .iter()
+                .any(|op| op.semantic_description == "Removed property '1 (integer key)'")
+        );
+        let before = "---\na:\n  b: nested\n\"a.b\": literal\n---\nbody";
+        let edited = diff(before, &before.replace("literal", "edited"));
+        assert_eq!(edited.operations.len(), 1);
+        assert_eq!(edited.operations[0].line, 4);
+        assert_eq!(
+            edited.operations[0].semantic_description,
+            "Set property 'a.b' to 'edited'"
+        );
     }
 
     // --- The §7.3 walkthrough, verbatim ------------------------------

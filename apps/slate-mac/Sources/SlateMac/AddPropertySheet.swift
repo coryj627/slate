@@ -153,7 +153,7 @@ struct AddPropertySheet: View {
         inlineError = nil
         guard let task = appState.setProperty(
             path: path,
-            key: trimmed,
+            key: stringPropertyKeyIdentity(key: trimmed),
             value: selectedKind.zeroValue(),
             owner: owner)
         else {

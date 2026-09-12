@@ -259,6 +259,30 @@ final class MutationHarnessTests: XCTestCase {
         opIdOrder: inout [Int64]
     ) throws -> String? {
         switch op.op {
+        case "setProperty", "deleteProperty", "renameProperty", "previewPropertyRename":
+            let parts = try session.readNoteParts(path: op.path!)
+            let matches = parseFrontmatterProperties(fmSource: parts.fmSource).filter {
+                propertyKeyLabel(identity: $0.keyIdentity) == op.name
+            }
+            guard matches.count == 1, let property = matches.first else {
+                throw DriverError("typed property scenario must select exactly one source key")
+            }
+            if op.op == "setProperty" {
+                return normalizeSave(try session.setPropertyByIdentity(
+                    path: op.path!, identity: property.keyIdentity,
+                    value: .text(value: op.value!), expectedContentHash: parts.contentHash))
+            }
+            if op.op == "deleteProperty" {
+                return normalizeSave(try session.deletePropertyByIdentity(
+                    path: op.path!, identity: property.keyIdentity, expectedContentHash: parts.contentHash))
+            }
+            let report = try session.renamePropertyByIdentityAcrossVault(
+                identity: property.keyIdentity, newKey: op.newName!,
+                dryRun: op.op == "previewPropertyRename", cancel: CancelToken())
+            guard report.affected.count == 1, report.failed.isEmpty, report.skipped.isEmpty else {
+                throw DriverError("typed property rename did not affect exactly its fixture")
+            }
+            return nil
         case "createExclusive":
             let save = try session.createExclusive(path: op.path!, content: op.content!)
             return normalizeSave(save)

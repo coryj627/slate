@@ -253,9 +253,9 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
         foreach (var existing in Rows)
         {
             if (existing.IsDirty
-                && !string.Equals(existing.Key, discardDraftKey, StringComparison.Ordinal))
+                && !string.Equals(existing.KeyIdentity, discardDraftKey, StringComparison.Ordinal))
             {
-                parkedDrafts[existing.Key] = existing.Draft;
+                parkedDrafts[existing.KeyIdentity] = existing.Draft;
             }
         }
         Rows.Clear();
@@ -270,7 +270,7 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
                 {
                     Owner = this,
                 };
-                if (parkedDrafts.TryGetValue(row.Key, out PropertyDraft? parked))
+                if (parkedDrafts.TryGetValue(row.KeyIdentity, out PropertyDraft? parked))
                 {
                     row.Draft = parked;
                 }

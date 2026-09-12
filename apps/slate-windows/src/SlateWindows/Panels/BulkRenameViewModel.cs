@@ -22,6 +22,21 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
     internal sealed record PreviewRow(
         string Path, string Status, string Before, string After);
 
+    internal sealed record KeyTypeChoice(string Label, PropertyKeyType? Kind);
+    public static IReadOnlyList<KeyTypeChoice> KeyTypes { get; } = [
+        new("Any key type", null), new("String", PropertyKeyType.String),
+        new("Integer", PropertyKeyType.Integer), new("Boolean", PropertyKeyType.Boolean),
+        new("Null", PropertyKeyType.Null), new("Number", PropertyKeyType.Real),
+    ];
+    private KeyTypeChoice _oldKeyType = KeyTypes[0];
+    private PropertyKeyType? _armedOldKeyType;
+
+    public KeyTypeChoice OldKeyType
+    {
+        get => _oldKeyType;
+        set { if (SetField(ref _oldKeyType, value)) { Disarm(); } }
+    }
+
     private readonly VaultSession _session;
     private readonly Action<A11yEvent> _announce;
     private readonly Func<bool> _anyOpenDraftDirty;
@@ -133,11 +148,12 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
     public bool CanApply =>
         !_workInFlight
         && _armedOldKey is not null
+        && _armedOldKeyType == _oldKeyType.Kind
         && string.Equals(_armedOldKey, _oldKey.Trim(), StringComparison.Ordinal)
         && string.Equals(_armedNewKey, _newKey.Trim(), StringComparison.Ordinal);
 
     public bool CanPreview =>
-        !_workInFlight && _oldKey.Trim().Length > 0 && _newKey.Trim().Length > 0;
+        !_workInFlight && (_oldKey.Trim().Length > 0 || _oldKeyType.Kind == PropertyKeyType.Null) && _newKey.Trim().Length > 0;
 
     private void Disarm()
     {
@@ -208,6 +224,7 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
         }
         string oldKey = _oldKey.Trim();
         string newKey = _newKey.Trim();
+        PropertyKeyType? oldKeyType = _oldKeyType.Kind;
         int requestId = Interlocked.Increment(ref _requestId);
         var cancel = new CancelToken();
         _inFlightCancel = cancel;
@@ -222,7 +239,10 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
             string? error = null;
             try
             {
-                report = _session.RenamePropertyAcrossVault(oldKey, newKey, dryRun, cancel);
+                report = oldKeyType is { } kind
+                    ? _session.RenamePropertyByIdentityAcrossVault(
+                        SlateUniffiMethods.PropertyKeyIdentityForType(oldKey, kind), newKey, dryRun, cancel)
+                    : _session.RenamePropertyAcrossVault(oldKey, newKey, dryRun, cancel);
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -231,7 +251,7 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
             {
                 error = exception.Message;
             }
-            Post(() => PublishRun(requestId, dryRun, oldKey, newKey, report, error));
+            Post(() => PublishRun(requestId, dryRun, oldKey, newKey, report, error, oldKeyType));
         });
     }
 
@@ -247,7 +267,8 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
         string oldKey,
         string newKey,
         RenameReport? report,
-        string? error)
+        string? error,
+        PropertyKeyType? oldKeyType = null)
     {
         // DISK TRUTH is unconditional (adversarial round 2): an apply
         // report reconciles open tabs and announces its summary even
@@ -323,6 +344,7 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
         if (dryRun)
         {
             _armedOldKey = oldKey;
+            _armedOldKeyType = oldKeyType;
             _armedNewKey = newKey;
         }
         else

@@ -17,6 +17,7 @@ struct BulkRenameSheet: View {
 
     @State private var oldKey: String = ""
     @State private var newKey: String = ""
+    @State private var oldKeyType: PropertyKeyType? = nil
     /// True when the user has hit Preview at least once. Apply is
     /// disabled until then. Cleared when the user edits either key
     /// (the preview becomes stale).
@@ -48,6 +49,16 @@ struct BulkRenameSheet: View {
                         .accessibilityLabel("Old property key")
                         .focused($focusedField, equals: .oldKey)
                         .onChange(of: oldKey) { invalidatePreview() }
+                    Picker("Old key type", selection: $oldKeyType) {
+                        Text("Any key type").tag(nil as PropertyKeyType?)
+                        Text("String").tag(PropertyKeyType.string as PropertyKeyType?)
+                        Text("Integer").tag(PropertyKeyType.integer as PropertyKeyType?)
+                        Text("Boolean").tag(PropertyKeyType.boolean as PropertyKeyType?)
+                        Text("Null").tag(PropertyKeyType.null as PropertyKeyType?)
+                        Text("Number").tag(PropertyKeyType.real as PropertyKeyType?)
+                    }
+                    .accessibilityLabel("Old key type")
+                    .onChange(of: oldKeyType) { invalidatePreview() }
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     Text("New key")
@@ -126,7 +137,7 @@ struct BulkRenameSheet: View {
                 }
                 .disabled(
                     appState.isRenameInFlight
-                        || oldKey.trimmingCharacters(in: .whitespaces).isEmpty
+                        || (oldKey.trimmingCharacters(in: .whitespaces).isEmpty && oldKeyType != .null)
                         || newKey.trimmingCharacters(in: .whitespaces).isEmpty
                 )
                 .focused($focusedField, equals: .preview)
@@ -164,17 +175,17 @@ struct BulkRenameSheet: View {
     private func runPreview() {
         let o = oldKey.trimmingCharacters(in: .whitespaces)
         let n = newKey.trimmingCharacters(in: .whitespaces)
-        guard !o.isEmpty, !n.isEmpty else { return }
+        guard (!o.isEmpty || oldKeyType == .null), !n.isEmpty else { return }
         applied = false
-        appState.previewPropertyRename(oldKey: o, newKey: n)
+        appState.previewPropertyRename(oldKey: o, newKey: n, oldKeyType: oldKeyType)
         previewLoaded = true
     }
 
     private func runApply() {
         let o = oldKey.trimmingCharacters(in: .whitespaces)
         let n = newKey.trimmingCharacters(in: .whitespaces)
-        guard !o.isEmpty, !n.isEmpty else { return }
-        if appState.applyPropertyRename(oldKey: o, newKey: n) != nil {
+        guard (!o.isEmpty || oldKeyType == .null), !n.isEmpty else { return }
+        if appState.applyPropertyRename(oldKey: o, newKey: n, oldKeyType: oldKeyType) != nil {
             applied = true
         }
     }

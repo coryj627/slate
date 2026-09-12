@@ -60,8 +60,8 @@ pub(crate) fn replace_properties_for_file(
         return Ok(());
     }
     let mut prop_stmt = tx.prepare_cached(
-        "INSERT INTO properties (file_id, ordinal, key, value_kind, value_text, value_text_norm)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO properties (file_id, ordinal, key, value_kind, value_text, value_text_norm, key_identity)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
     )?;
     let mut list_stmt = tx.prepare_cached(
         "INSERT INTO properties_list_values (file_id, key, value_norm)
@@ -77,6 +77,7 @@ pub(crate) fn replace_properties_for_file(
             kind,
             value_text,
             value_text_norm,
+            prop.key_identity,
         ])?;
         // Expand list / tag_list into the side table so
         // files_with_property can hit a direct (key, value_norm)
@@ -167,7 +168,7 @@ pub(crate) fn properties_for_file(
     file_id: i64,
 ) -> Result<Vec<Property>, VaultError> {
     let mut stmt = conn.prepare_cached(
-        "SELECT key, value_kind, value_text
+        "SELECT key, value_kind, value_text, key_identity
          FROM properties
          WHERE file_id = ?1
          ORDER BY ordinal ASC",
@@ -177,17 +178,24 @@ pub(crate) fn properties_for_file(
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
         ))
     })?;
     let mut out = Vec::new();
     for r in rows {
-        let (key, kind, value_text) = r?;
+        let (key, kind, value_text, key_identity) = r?;
+        let key_identity =
+            key_identity.unwrap_or_else(|| crate::property_key::unresolved_key_identity(&key));
         // Deserialize failures fall back to Text so the Properties
         // Panel still surfaces the row (with the raw JSON visible)
         // instead of dropping it silently.
         let value = deserialize_value(&kind, &value_text)
             .unwrap_or_else(|| PropertyValue::Text(value_text.clone()));
-        out.push(Property { key, value });
+        out.push(Property {
+            key,
+            key_identity,
+            value,
+        });
     }
     Ok(out)
 }
@@ -691,6 +699,7 @@ mod tests {
                 value_kind TEXT NOT NULL,
                 value_text TEXT NOT NULL,
                 value_text_norm TEXT NOT NULL,
+                key_identity TEXT,
                 PRIMARY KEY (file_id, ordinal)
             );
             CREATE TABLE properties_list_values (
@@ -717,6 +726,7 @@ moments: ["2026-01-01T03:04:05Z", "2026-01-02T03:04:05Z"]
             vec![
                 Property {
                     key: "refs".to_string(),
+                    key_identity: "refs".to_string(),
                     value: PropertyValue::List(vec![
                         PropertyValue::Wikilink("Target".to_string()),
                         PropertyValue::Wikilink("Other".to_string()),
@@ -724,6 +734,7 @@ moments: ["2026-01-01T03:04:05Z", "2026-01-02T03:04:05Z"]
                 },
                 Property {
                     key: "dates".to_string(),
+                    key_identity: "dates".to_string(),
                     value: PropertyValue::List(vec![
                         PropertyValue::Date("2026-01-01".to_string()),
                         PropertyValue::Date("2026-01-02".to_string()),
@@ -731,6 +742,7 @@ moments: ["2026-01-01T03:04:05Z", "2026-01-02T03:04:05Z"]
                 },
                 Property {
                     key: "moments".to_string(),
+                    key_identity: "moments".to_string(),
                     value: PropertyValue::List(vec![
                         PropertyValue::Datetime("2026-01-01T03:04:05Z".to_string()),
                         PropertyValue::Datetime("2026-01-02T03:04:05Z".to_string()),

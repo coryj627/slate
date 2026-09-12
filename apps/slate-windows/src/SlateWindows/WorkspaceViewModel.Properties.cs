@@ -423,12 +423,12 @@ internal sealed partial class WorkspaceViewModel
         Func<string?, SaveReport> write;
         if (deleted)
         {
-            write = expectedHash => _session.DeleteProperty(path, row.Key, expectedHash);
+            write = expectedHash => _session.DeletePropertyByIdentity(path, row.KeyIdentity, expectedHash);
         }
         else
         {
             PropertyValue value = PropertyValueCodec.Encode(dispatched);
-            write = expectedHash => _session.SetProperty(path, row.Key, value, expectedHash);
+            write = expectedHash => _session.SetPropertyByIdentity(path, row.KeyIdentity, value, expectedHash);
         }
         tab.WriteProperty(
             row.ContentHash,
@@ -517,7 +517,7 @@ internal sealed partial class WorkspaceViewModel
             write = _ =>
             {
                 string freshHash = _session.ReadNoteParts(path).ContentHash;
-                return _session.DeleteProperty(path, row.Key, freshHash);
+                return _session.DeletePropertyByIdentity(path, row.KeyIdentity, freshHash);
             };
         }
         else
@@ -526,7 +526,7 @@ internal sealed partial class WorkspaceViewModel
             write = _ =>
             {
                 string freshHash = _session.ReadNoteParts(path).ContentHash;
-                return _session.SetProperty(path, row.Key, value, freshHash);
+                return _session.SetPropertyByIdentity(path, row.KeyIdentity, value, freshHash);
             };
         }
         tab.WriteProperty(
@@ -548,7 +548,7 @@ internal sealed partial class WorkspaceViewModel
     {
         if (row.Owner is { } owner)
         {
-            owner.ReloadDiscarding(row.Key);
+            owner.ReloadDiscarding(row.KeyIdentity);
             foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
             {
                 if (string.Equals(tab.Path, path, StringComparison.Ordinal)

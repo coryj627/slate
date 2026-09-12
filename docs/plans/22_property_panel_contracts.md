@@ -385,3 +385,45 @@ Accepted (below bar, recorded): the add sheet's empty-tag-list
 `tags` special case is a message-quality shortcut rather than a
 classifier mirror; `PropertyRowViewModel.Owner` is nullable but set
 by every production construction site.
+
+
+## Typed source key identity (#1080)
+
+`Property.key` remains the projected name used by query-name APIs.
+`Property.key_identity` identifies the original YAML key and is carried through
+SQLite, UniFFI, row IDs, drafts, conflict retries, and recovery records. Hosts
+pass this identity to `set_property_by_identity`, `delete_property_by_identity`,
+and the identity-aware kind probe. They render `property_key_label(identity)`
+for visual and spoken names: integer `1` is “1 (integer key)”, while string
+`"1"` is “1”. Boolean, null, and real keys have equivalent type suffixes.
+Null keys project as `null`; null values retain their existing value projection.
+
+The identity encoding belongs to core. Hosts must not construct or parse it.
+New literal names use `string_property_key_identity`, including names resembling
+the reserved token format. Nested paths and unsupported source keys receive
+identities but remain uneditable through scalar-row APIs. A literal dotted
+string key has its own identity and can be edited without selecting a nested
+path. Legacy name-only set/delete APIs retain their conservative non-string
+and dotted-key guards; add sheets retain their duplicate-name refusal.
+
+Bulk rename offers an optional old-key scalar type on both hosts. Core resolves
+that selection with `property_key_identity_for_type`; exact rename only touches
+that source identity, preserves the original YAML value, and creates a string
+key at the destination. Same-spelling integer-to-string conversion is supported.
+The default Any key type retains legacy name lookup and refuses ambiguous twins.
+Changing the selected type invalidates the preview. Collision detection includes
+mapping-valued destinations and reports `KeyCollision` consistently.
+
+Migration 038 adds nullable cache identity metadata and forces a full property
+reindex even for unchanged files. Until reindexing, old cached rows have an
+unsupported identity and refuse edits; the cache never guesses source types.
+Op-log property annotations retain the projected `key` for existing temporal
+queries and add optional `key_identity` metadata for readable history labels.
+Absent metadata retains legacy encoding and display behavior. Structured diffs
+compare identities, so typed/string twins and nested/literal dotted twins cannot
+hide each other's changes.
+
+Verification includes real-session set/delete/rename and CAS/body-byte witnesses
+for integer, boolean, null, and real keys; cache-upgrade and op-log regressions;
+independent host draft ownership tests; and shared read/mutation parity fixtures
+run through both generated language bindings.

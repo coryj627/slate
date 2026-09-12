@@ -52,6 +52,7 @@ fn sample_batch() -> Vec<u8> {
 fn sample_annotations() -> Vec<OpAnnotation> {
     vec![
         OpAnnotation::SetProperty {
+            key_identity: None,
             key: "status".into(),
             value_json: "\"final\"".into(),
         },

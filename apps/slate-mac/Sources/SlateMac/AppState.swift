@@ -345,11 +345,11 @@ struct MissingNoteRecoveryDraft: Equatable {
             sections.append("Uncommitted properties source:\n\(propertiesSourceDraft)")
         }
         for draft in propertyDrafts {
-            sections.append("Uncommitted property \(draft.key):\n\(draft.value)")
+            sections.append("Uncommitted property \(propertyKeyLabel(identity: draft.key)):\n\(draft.value)")
         }
         for update in retainedPropertyUpdates {
             sections.append(
-                "Saved property update awaiting verification \(update.key):\n\(update.value)")
+                "Saved property update awaiting verification \(propertyKeyLabel(identity: update.key)):\n\(update.value)")
         }
         return sections.joined(separator: "\n\n")
     }
@@ -20652,9 +20652,9 @@ final class AppState: ObservableObject {
         else { return nil }
         switch action {
         case .set:
-            return "Saved update awaiting verification: \(record.key)"
+            return "Saved update awaiting verification: \(propertyKeyLabel(identity: record.key))"
         case .delete:
-            return "Saved deletion awaiting verification: \(record.key)"
+            return "Saved deletion awaiting verification: \(propertyKeyLabel(identity: record.key))"
         case .setSource:
             return "Saved properties source awaiting verification"
         }
@@ -20685,9 +20685,9 @@ final class AppState: ObservableObject {
         case .set(let value):
             let valueText = record.submittedRowDraft?.recoveryText
                 ?? Self.propertyValueRecoveryText(value)
-            return "Property: \(record.key)\nAction: Set\nValue:\n\(valueText)"
+            return "Property: \(propertyKeyLabel(identity: record.key))\nAction: Set\nValue:\n\(valueText)"
         case .delete:
-            return "Property: \(record.key)\nAction: Delete"
+            return "Property: \(propertyKeyLabel(identity: record.key))\nAction: Delete"
         case .setSource(let source):
             return "Action: Replace properties source\nSource:\n\(source)"
         }
@@ -21775,17 +21775,17 @@ final class AppState: ObservableObject {
             do {
                 switch action {
                 case .set(let value):
-                    let report = try session.setProperty(
+                    let report = try session.setPropertyByIdentity(
                         path: path,
-                        key: key,
+                        identity: key,
                         value: value,
                         expectedContentHash: expectedHash
                     )
                     return .success(report)
                 case .delete:
-                    let report = try session.deleteProperty(
+                    let report = try session.deletePropertyByIdentity(
                         path: path,
-                        key: key,
+                        identity: key,
                         expectedContentHash: expectedHash
                     )
                     return .success(report)
@@ -21947,7 +21947,7 @@ final class AppState: ObservableObject {
                     postAccessibilityAnnouncement(.propertiesUpdated)
                 } else {
                     postAccessibilityAnnouncement(
-                        .propertyChanged(key: key, deleted: action == .delete))
+                        .propertyChanged(key: propertyKeyLabel(identity: key), deleted: action == .delete))
                 }
             }
         case .failure(.WriteConflict(let currentHash, let expected, let currentMtimeMs)):
@@ -22398,8 +22398,8 @@ final class AppState: ObservableObject {
     /// `pendingRenameReport` with the per-file diff for the
     /// bulk-rename sheet's preview grid. No writes.
     @discardableResult
-    func previewPropertyRename(oldKey: String, newKey: String) -> Task<Void, Never>? {
-        runRename(oldKey: oldKey, newKey: newKey, dryRun: true)
+    func previewPropertyRename(oldKey: String, newKey: String, oldKeyType: PropertyKeyType? = nil) -> Task<Void, Never>? {
+        runRename(oldKey: oldKey, newKey: newKey, dryRun: true, oldKeyType: oldKeyType)
     }
 
     /// Apply a vault-wide property rename. Each affected file is
@@ -22407,8 +22407,8 @@ final class AppState: ObservableObject {
     /// so an external mid-rename modification surfaces as a per-file
     /// `RenameFailed` rather than aborting the whole run.
     @discardableResult
-    func applyPropertyRename(oldKey: String, newKey: String) -> Task<Void, Never>? {
-        runRename(oldKey: oldKey, newKey: newKey, dryRun: false)
+    func applyPropertyRename(oldKey: String, newKey: String, oldKeyType: PropertyKeyType? = nil) -> Task<Void, Never>? {
+        runRename(oldKey: oldKey, newKey: newKey, dryRun: false, oldKeyType: oldKeyType)
     }
 
     /// Cancel an in-flight preview or apply via the existing
@@ -22430,7 +22430,7 @@ final class AppState: ObservableObject {
         return structuralMutationDisabledReason
     }
 
-    private func runRename(oldKey: String, newKey: String, dryRun: Bool) -> Task<Void, Never>? {
+    private func runRename(oldKey: String, newKey: String, dryRun: Bool, oldKeyType: PropertyKeyType?) -> Task<Void, Never>? {
         guard !isRenameInFlight else { return nil }
         guard let session = currentSession else { return nil }
         var structuralToken: Int?
@@ -22455,6 +22455,7 @@ final class AppState: ObservableObject {
                 session: session,
                 oldKey: oldKey,
                 newKey: newKey,
+                oldKeyType: oldKeyType,
                 dryRun: dryRun,
                 cancel: cancel,
                 structuralToken: structuralToken
@@ -22469,6 +22470,7 @@ final class AppState: ObservableObject {
         session: VaultSession,
         oldKey: String,
         newKey: String,
+        oldKeyType: PropertyKeyType?,
         dryRun: Bool,
         cancel: CancelToken,
         structuralToken: Int?
@@ -22500,12 +22502,15 @@ final class AppState: ObservableObject {
         }
         let outcome: Result<RenameReport, VaultError> = await Task.detached(priority: .userInitiated) {
             do {
-                let report = try session.renamePropertyAcrossVault(
-                    oldKey: oldKey,
-                    newKey: newKey,
-                    dryRun: dryRun,
-                    cancel: cancel
-                )
+                let report: RenameReport
+                if let oldKeyType {
+                    let identity = try propertyKeyIdentityForType(name: oldKey, kind: oldKeyType)
+                    report = try session.renamePropertyByIdentityAcrossVault(
+                        identity: identity, newKey: newKey, dryRun: dryRun, cancel: cancel)
+                } else {
+                    report = try session.renamePropertyAcrossVault(
+                        oldKey: oldKey, newKey: newKey, dryRun: dryRun, cancel: cancel)
+                }
                 return .success(report)
             } catch let error as VaultError {
                 return .failure(error)

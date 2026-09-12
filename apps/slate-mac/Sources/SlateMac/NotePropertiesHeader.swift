@@ -603,7 +603,7 @@ struct NotePropertiesHeader: View {
                             vaultRoot: appState.currentVaultURL,
                             owner: owner
                         )
-                        .id(PropertyEditorRowIdentity(owner: owner, key: property.key))
+                        .id(PropertyEditorRowIdentity(owner: owner, key: property.keyIdentity))
                     }
                 }
             }
@@ -662,6 +662,6 @@ struct PropertyRecoveryFocusContinuity {
 private extension Property {
     var exactPropertyRowCollectionID: String {
         BaseExactIdentity.key(
-            prefix: "note-property-row", components: [key])
+            prefix: "note-property-row", components: [keyIdentity])
     }
 }

@@ -105,7 +105,7 @@ fn semantic_saves_carry_annotations() {
     ));
     assert!(matches!(
         anns[1].as_slice(),
-        [crate::oplog::OpAnnotation::RemoveProperty { key }] if key == "draft"
+        [crate::oplog::OpAnnotation::RemoveProperty { key, .. }] if key == "draft"
     ));
     assert!(matches!(
         anns[2].as_slice(),

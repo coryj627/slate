@@ -72,7 +72,9 @@ internal sealed partial class PropertyRowViewModel : INotifyPropertyChanged
 
     public Action<PropertyRowViewModel> RequestDeleteDelegate { get; }
 
-    public string Key => Property.Key;
+    public string Key => SlateUniffiMethods.PropertyKeyLabel(KeyIdentity);
+
+    public string KeyIdentity => Property.KeyIdentity;
 
     public string Kind => Property.Kind;
 
@@ -218,7 +220,7 @@ internal sealed partial class PropertyRowViewModel : INotifyPropertyChanged
             ValidationError = PropertyPhrase.IntegerShapeError;
             return false;
         }
-        string? storedKind = PropertyKindAuthority.WouldStoreAs(Key, candidate);
+        string? storedKind = SlateUniffiMethods.RoundTripPropertyKindByIdentity(KeyIdentity, candidate);
         if (storedKind is null)
         {
             ValidationError = PropertyPhrase.AddFailedDraftKept;

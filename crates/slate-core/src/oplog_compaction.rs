@@ -611,6 +611,7 @@ mod tests {
                 OpKind::EditBatch,
                 &encode_edit_batch(&crate::diff::diff_to_ops(c0, c1)),
                 &[OpAnnotation::SetProperty {
+                    key_identity: None,
                     key: "k".into(),
                     value_json: "1".into(),
                 }],
