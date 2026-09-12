@@ -351,7 +351,10 @@ internal sealed class AccessibleDataGrid : UserControl
         // The reader's COLUMN survives: someone reading down the Color
         // column must not be dropped back to column 0 because another
         // pane moved the shared selection.
-        DataGridColumn column = _grid.CurrentCell.Column ?? _grid.Columns[0];
+        DataGridColumn column = _grid.CurrentCell.Column is { } currentColumn
+            && _grid.Columns.Contains(currentColumn)
+                ? currentColumn
+                : _grid.Columns[0];
         bool focusedTheRow = false;
         WithoutAnnouncing(() =>
         {
@@ -620,16 +623,17 @@ internal sealed class AccessibleDataGrid : UserControl
         _rowHeaderColumn is { } header ? header.Cell(row) : null;
 
     /// <summary>
-    /// Put the reader back where they were, or leave them alone.
+    /// Put the reader back where they were, or clear obsolete currency.
     ///
     /// A row that is GONE after the republish is NOT substituted with a
-    /// neighbour: silently moving someone to a different row is worse
-    /// than leaving currency where the grid put it, because nothing
-    /// announces the move.
+    /// neighbour. Neither its old item nor its detached column may remain
+    /// current: later selection and activation must use the new binding.
     /// </summary>
     private void RestoreReaderPosition(
         string? rowIdentity, int columnIndex, int previousOrdinal)
     {
+        _grid.CurrentCell = new DataGridCellInfo();
+        _grid.SelectedCells.Clear();
         if (rowIdentity is null
             || columnIndex < 0
             || columnIndex >= _grid.Columns.Count)

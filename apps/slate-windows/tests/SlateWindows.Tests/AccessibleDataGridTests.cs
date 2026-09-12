@@ -212,6 +212,55 @@ public sealed class AccessibleDataGridTests
             Assert.DoesNotContain(
                 grid.Grid.Items.Cast<object>(),
                 row => ((Widget)row).Id == "three");
+            Assert.False(grid.Grid.CurrentCell.IsValid);
+            Assert.Empty(grid.Grid.SelectedCells);
+            Assert.True(grid.SelectRow(row => ((Widget)row).Id == "one"));
+            Assert.Same(grid.Grid.Items[0], grid.Grid.CurrentCell.Item);
+            Assert.Same(grid.Grid.Columns[0], grid.Grid.CurrentCell.Column);
+        });
+    }
+
+    [Fact]
+    public void ARepublishThatDropsTheCurrentColumnClearsCurrencyAndCanSelectAgain()
+    {
+        RunSta(() =>
+        {
+            var announced = new List<A11yEvent>();
+            var grid = new AccessibleDataGrid { Announce = announced.Add };
+            IReadOnlyList<object> rows = FreshWidgets();
+            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets");
+            grid.Grid.CurrentCell = new DataGridCellInfo(rows[1], grid.Grid.Columns[1]);
+            announced.Clear();
+
+            grid.Bind([WidgetColumns()[0]], FreshWidgets(), "3 rows.", "Widgets");
+
+            Assert.False(grid.Grid.CurrentCell.IsValid);
+            Assert.Empty(grid.Grid.SelectedCells);
+            Assert.True(grid.SelectRow(row => ((Widget)row).Id == "two"));
+            Assert.Same(grid.Grid.Columns[0], grid.Grid.CurrentCell.Column);
+            Assert.Equal("two", Assert.IsType<Widget>(grid.Grid.CurrentCell.Item).Id);
+            Assert.Empty(announced);
+        });
+    }
+
+    [Fact]
+    public void AnEmptyRepublishDoesNotLeaveAStaleCellForTheNextBinding()
+    {
+        RunSta(() =>
+        {
+            var grid = new AccessibleDataGrid { Announce = _ => { } };
+            IReadOnlyList<object> rows = FreshWidgets();
+            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets");
+            grid.Grid.CurrentCell = new DataGridCellInfo(rows[2], grid.Grid.Columns[1]);
+
+            grid.Bind([], [], "No rows.", "Widgets");
+            Assert.False(grid.Grid.CurrentCell.IsValid);
+            Assert.Empty(grid.Grid.SelectedCells);
+
+            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets");
+            Assert.True(grid.SelectRow(_ => true));
+            Assert.Same(grid.Grid.Columns[0], grid.Grid.CurrentCell.Column);
+            Assert.Equal("one", Assert.IsType<Widget>(grid.Grid.CurrentCell.Item).Id);
         });
     }
 
