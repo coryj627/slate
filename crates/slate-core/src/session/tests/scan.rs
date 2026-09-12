@@ -133,6 +133,8 @@ fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
     conn.execute("ALTER TABLE files DROP COLUMN index_epoch", [])
         .unwrap();
     conn.execute("DROP TABLE index_epoch_clock", []).unwrap();
+    conn.execute("ALTER TABLE properties DROP COLUMN key_identity", [])
+        .unwrap();
     let version: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
             row.get(0)

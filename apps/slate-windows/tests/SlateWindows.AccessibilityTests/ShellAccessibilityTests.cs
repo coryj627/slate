@@ -2340,7 +2340,7 @@ public sealed class ShellAccessibilityTests
         Directory.CreateDirectory(vaultRoot);
         string notePath = Path.Combine(vaultRoot, "props.md");
         File.WriteAllText(
-            notePath, "---\ntitle: Hello\ncount: 42\n---\nBody.\n");
+            notePath, "---\ntitle: Hello\ncount: 42\n1: integer\n\"1\": string\n---\nBody.\n");
 
         Process? process = null;
         try
@@ -2401,7 +2401,7 @@ public sealed class ShellAccessibilityTests
             Assert.True(
                 SpinWait.SpinUntil(
                     () => (header.Properties.Name.ValueOrDefault ?? "")
-                        == "Properties, 2 properties",
+                        == "Properties, 4 properties",
                     TimeSpan.FromSeconds(15)),
                 "the header never took the counted group name; "
                     + $"last='{header.Properties.Name.ValueOrDefault}'");
@@ -2410,6 +2410,20 @@ public sealed class ShellAccessibilityTests
             // commit with Enter — the DISK write is the observable.
             AutomationElement rows = WaitForElement(
                 window, "PropertiesRows", TimeSpan.FromSeconds(10));
+            foreach (string label in new[] { "1 (integer key)", "1" })
+            {
+                AutomationElement? typedEditor = null;
+                Assert.True(SpinWait.SpinUntil(() =>
+                {
+                    typedEditor = rows.FindAllDescendants(
+                        automation.ConditionFactory.ByControlType(ControlType.Edit))
+                        .FirstOrDefault(item => item.Properties.Name.ValueOrDefault
+                            == $"Property {label}, text, editable");
+                    return typedEditor is not null;
+                }, TimeSpan.FromSeconds(15)), $"distinct editor for {label} is absent");
+                Assert.True(typedEditor!.Properties.IsKeyboardFocusable.Value);
+            }
+
             AutomationElement? titleEditor = null;
             Assert.True(
                 SpinWait.SpinUntil(
@@ -2465,6 +2479,10 @@ public sealed class ShellAccessibilityTests
                 window, "PropertiesBulkRenameButton", TimeSpan.FromSeconds(10));
             renameButton.Patterns.Invoke.Pattern.Invoke();
             _ = WaitForElement(window, "BulkRenameSheet", TimeSpan.FromSeconds(10));
+            AutomationElement keyType = WaitForElement(
+                window, "BulkRenameOldKeyType", TimeSpan.FromSeconds(10));
+            Assert.Equal("Old key type", keyType.Properties.Name.ValueOrDefault);
+            Assert.True(keyType.Properties.IsKeyboardFocusable.Value);
             AutomationElement oldKey = WaitForElement(
                 window, "BulkRenameOldKey", TimeSpan.FromSeconds(10));
             Assert.True(

@@ -213,6 +213,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "paths: Unicode fold indexes for the collision gate (#1077)",
         sql: include_str!("../migrations/037_path_fold_indexes.sql"),
     },
+    Migration {
+        description: "properties: preserve typed YAML source key identity (#1080)",
+        sql: include_str!("../migrations/038_property_key_identity.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.

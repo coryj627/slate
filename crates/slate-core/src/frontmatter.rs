@@ -80,6 +80,9 @@ pub struct Property {
     /// Dot-joined key path: `tags`, `person.name`, etc. Unicode keys
     /// pass through verbatim.
     pub key: String,
+    /// Stable source-key identity. Pass this to identity-based writes;
+    /// `key` alone cannot distinguish typed keys from quoted string keys.
+    pub key_identity: String,
     pub value: PropertyValue,
 }
 
@@ -533,7 +536,8 @@ pub(crate) fn extract_frontmatter_with_root<T>(
         Yaml::Hash(map) => {
             for (k, v) in map {
                 let key = yaml_key_to_string(&k);
-                walk_value(&key, &v, 0, &mut props, &mut warnings);
+                let identity = crate::property_key::yaml_key_identity(&k);
+                walk_value(&key, &identity, &v, 0, &mut props, &mut warnings);
             }
         }
         Yaml::Null | Yaml::BadValue => {
@@ -562,6 +566,7 @@ pub(crate) fn extract_frontmatter_with_root<T>(
 /// pathologically nested note can't stack-overflow the scanner.
 fn walk_value(
     key: &str,
+    identity: &str,
     value: &Yaml,
     depth: usize,
     props: &mut Vec<Property>,
@@ -587,12 +592,14 @@ fn walk_value(
             for (k, v) in map {
                 let sub_key = yaml_key_to_string(k);
                 let full_key = format!("{key}.{sub_key}");
-                walk_value(&full_key, v, depth + 1, props, warnings);
+                let child_identity = crate::property_key::nested_key_identity(identity, k);
+                walk_value(&full_key, &child_identity, v, depth + 1, props, warnings);
             }
         }
         Yaml::Array(items) => match classify_list(key, items) {
             Some(value) => props.push(Property {
                 key: key.to_string(),
+                key_identity: identity.to_string(),
                 value,
             }),
             None => warnings.push(PropertyParseWarning {
@@ -607,6 +614,7 @@ fn walk_value(
             // now. The properties panel can render this as "(empty)".
             props.push(Property {
                 key: key.to_string(),
+                key_identity: identity.to_string(),
                 value: PropertyValue::Text(String::new()),
             });
         }
@@ -614,6 +622,7 @@ fn walk_value(
             if let Some(value) = classify_leaf(key, leaf) {
                 props.push(Property {
                     key: key.to_string(),
+                    key_identity: identity.to_string(),
                     value,
                 });
             } else {
@@ -831,6 +840,7 @@ fn is_homogeneous(values: &[PropertyValue]) -> bool {
 fn yaml_key_to_string(k: &Yaml) -> String {
     match k {
         Yaml::String(s) => s.clone(),
+        Yaml::Null => "null".to_string(),
         other => value_to_string(other),
     }
 }
@@ -944,15 +954,35 @@ pub fn set_property_in_source(
     value: &PropertyValue,
 ) -> Result<String, FrontmatterEditError> {
     reject_dotted_key(key)?;
+    set_property_with_key(source, Yaml::String(key.to_string()), value, Some(key))
+}
+
+/// Set the exact top-level source key published in `Property.key_identity`.
+pub fn set_property_by_identity_in_source(
+    source: &str,
+    identity: &str,
+    value: &PropertyValue,
+) -> Result<String, FrontmatterEditError> {
+    let key = crate::property_key::property_key_yaml(identity)?;
+    set_property_with_key(source, key, value, None)
+}
+
+fn set_property_with_key(
+    source: &str,
+    yaml_key: Yaml,
+    value: &PropertyValue,
+    legacy_key: Option<&str>,
+) -> Result<String, FrontmatterEditError> {
     let yaml_value = property_value_to_yaml(value)?;
-    let yaml_key = Yaml::String(key.to_string());
 
     match frontmatter_range(source) {
         None => synthesize_block(source, yaml_key, yaml_value),
         Some(range) => {
             let yaml_src = &source[range.clone()];
             let mut hash = parse_hash(yaml_src)?;
-            reject_projected_non_string_key(&hash, key)?;
+            if let Some(key) = legacy_key {
+                reject_projected_non_string_key(&hash, key)?;
+            }
             hash.replace(yaml_key, yaml_value);
             let new_yaml = emit_hash_body(&hash);
             Ok(replace_range(source, range, &new_yaml))
@@ -974,13 +1004,31 @@ pub fn delete_property_in_source(
     key: &str,
 ) -> Result<FrontmatterEdit, FrontmatterEditError> {
     reject_dotted_key(key)?;
+    delete_property_with_key(source, Yaml::String(key.to_string()), Some(key))
+}
+
+/// Delete the exact top-level source key published in `Property.key_identity`.
+pub fn delete_property_by_identity_in_source(
+    source: &str,
+    identity: &str,
+) -> Result<FrontmatterEdit, FrontmatterEditError> {
+    let key = crate::property_key::property_key_yaml(identity)?;
+    delete_property_with_key(source, key, None)
+}
+
+fn delete_property_with_key(
+    source: &str,
+    yaml_key: Yaml,
+    legacy_key: Option<&str>,
+) -> Result<FrontmatterEdit, FrontmatterEditError> {
     let Some(range) = frontmatter_range(source) else {
         return Ok(FrontmatterEdit::Unchanged);
     };
     let yaml_src = &source[range.clone()];
     let mut hash = parse_hash(yaml_src)?;
-    reject_projected_non_string_key(&hash, key)?;
-    let yaml_key = Yaml::String(key.to_string());
+    if let Some(key) = legacy_key {
+        reject_projected_non_string_key(&hash, key)?;
+    }
     if hash.remove(&yaml_key).is_none() {
         return Ok(FrontmatterEdit::Unchanged);
     }
@@ -1006,6 +1054,91 @@ pub fn delete_property_in_source(
     let new_yaml = emit_hash_body(&hash);
     Ok(FrontmatterEdit::Changed(replace_range(
         source, range, &new_yaml,
+    )))
+}
+
+/// Find a top-level scalar key's one-based source line by YAML identity.
+/// Parser events preserve quoting, tags, and markers; feeding each scalar
+/// through YamlLoader shares the reader's typing rules instead of mirroring them.
+pub(crate) fn scalar_key_line(source: &str, identity: &str) -> Option<u32> {
+    use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser};
+    let wanted = crate::property_key::property_key_yaml(identity).ok()?;
+    let range = frontmatter_range(source)?;
+    let offset = source[..range.start]
+        .bytes()
+        .filter(|b| *b == b'\n')
+        .count();
+    let mut parser = Parser::new_from_str(&source[range]);
+    let mut depth = 0usize;
+    let mut expecting_key = true;
+    loop {
+        let (event, marker) = parser.next_token().ok()?;
+        match event {
+            Event::MappingStart(_, _) | Event::SequenceStart(_, _) => {
+                if depth == 0 && !matches!(event, Event::MappingStart(..)) {
+                    return None;
+                }
+                depth += 1;
+            }
+            Event::MappingEnd | Event::SequenceEnd => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return None;
+                }
+                if depth == 1 {
+                    expecting_key = !expecting_key;
+                }
+            }
+            Event::Scalar(..) | Event::Alias(_) if depth == 1 => {
+                if expecting_key && matches!(event, Event::Scalar(..)) {
+                    let mut loader = YamlLoader::default();
+                    loader.on_event(event, marker);
+                    loader.on_event(Event::DocumentEnd, marker);
+                    if loader.documents().first() == Some(&wanted) {
+                        return u32::try_from(offset + marker.line()).ok();
+                    }
+                }
+                expecting_key = !expecting_key;
+            }
+            Event::StreamEnd | Event::DocumentEnd => return None,
+            _ => {}
+        }
+    }
+}
+
+/// Outcome of renaming an exact top-level source key.
+pub(crate) enum FrontmatterRename {
+    Changed(String),
+    Unchanged,
+    KeyCollision,
+}
+
+/// Rename an exact source key to a string name while retaining the original
+/// YAML value, including nulls and nested values that the flat read model
+/// cannot losslessly reconstruct. Reports collisions against the original mapping, including mapping-valued destinations.
+pub(crate) fn rename_property_by_identity_in_source(
+    source: &str,
+    identity: &str,
+    new_key: &str,
+) -> Result<FrontmatterRename, FrontmatterEditError> {
+    reject_dotted_key(new_key)?;
+    let old_key = crate::property_key::property_key_yaml(identity)?;
+    let Some(range) = frontmatter_range(source) else {
+        return Ok(FrontmatterRename::Unchanged);
+    };
+    let mut hash = parse_hash(&source[range.clone()])?;
+    let new_key = Yaml::String(new_key.to_string());
+    if hash.contains_key(&new_key) {
+        return Ok(FrontmatterRename::KeyCollision);
+    }
+    let Some(value) = hash.remove(&old_key) else {
+        return Ok(FrontmatterRename::Unchanged);
+    };
+    hash.insert(new_key, value);
+    Ok(FrontmatterRename::Changed(replace_range(
+        source,
+        range,
+        &emit_hash_body(&hash),
     )))
 }
 
@@ -1967,7 +2100,7 @@ mod tests {
         // covered without reaching this one.)
         for (src, key) in [
             ("---\ntrue: x\n---\nbody\n", "true"),
-            ("---\n~: x\n---\nbody\n", ""),
+            ("---\n~: x\n---\nbody\n", "null"),
         ] {
             // The row really does publish under this stringified key…
             assert!(

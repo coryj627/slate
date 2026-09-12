@@ -2774,6 +2774,12 @@
                                      Text="{Binding OldKey, UpdateSourceTrigger=PropertyChanged}"
                                      AutomationProperties.AutomationId="BulkRenameOldKey"
                                      AutomationProperties.Name="Old property key" />
+                            <local:AutomationPresentationTextBlock Margin="0,6,0,2" Text="Old key type" />
+                            <ComboBox ItemsSource="{Binding KeyTypes}"
+                                      SelectedItem="{Binding OldKeyType}"
+                                      DisplayMemberPath="Label"
+                                      AutomationProperties.AutomationId="BulkRenameOldKeyType"
+                                      AutomationProperties.Name="Old key type" />
                         </StackPanel>
                         <StackPanel Grid.Column="2">
                             <local:AutomationPresentationTextBlock Margin="0,0,0,2" Text="New property key" />

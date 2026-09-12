@@ -26,6 +26,15 @@ mixed:
   - 7
 empty:
 almost_date: 2026-13-45
+1: integer key
+"1": string twin
+true: boolean key
+"true": string twin
+null: null key
+"null": string twin
+1.5: real key
+"1.5": string twin
+"nested.inner": literal dotted key
 ---
 
 # Property metadata
