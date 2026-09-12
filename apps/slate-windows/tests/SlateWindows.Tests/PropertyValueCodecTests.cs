@@ -199,7 +199,7 @@ public class PropertyValueCodecTests
     {
         int reverts = 0;
         var row = new PropertyRowViewModel(
-            new Property("aliases", "list", "[\"a\",\"b\"]"),
+            new Property("aliases", "list", "[\"a\",\"b\"]", "aliases"),
             "note.md",
             "hash-1",
             _ => { },
@@ -225,6 +225,6 @@ public class PropertyValueCodecTests
     }
 
     private static PropertyRowViewModel MakeRow(string key, string kind, string valueJson) =>
-        new(new Property(key, kind, valueJson), "note.md", "hash-1",
+        new(new Property(key, kind, valueJson, SlateUniffiMethods.StringPropertyKeyIdentity(key)), "note.md", "hash-1",
             _ => { }, _ => { }, _ => { });
 }

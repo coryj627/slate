@@ -283,6 +283,60 @@ pub fn round_trip_property_kind(key: String, value: PropertyValue) -> Option<Str
         .map(|property| Property::from(property).kind)
 }
 
+/// The identity-aware counterpart used to validate an existing editor row.
+#[uniffi::export]
+pub fn round_trip_property_kind_by_identity(
+    identity: String,
+    value: PropertyValue,
+) -> Option<String> {
+    let source =
+        core::frontmatter::set_property_by_identity_in_source("", &identity, &value.into()).ok()?;
+    core::extract_frontmatter(&source)
+        .0
+        .into_iter()
+        .find(|property| property.key_identity == identity)
+        .map(|property| Property::from(property).kind)
+}
+
+/// Encode a literal new-property name, without interpreting it as a token.
+#[uniffi::export]
+pub fn string_property_key_identity(key: String) -> String {
+    core::string_property_key_identity(&key)
+}
+
+/// Shared visible/spoken name; typed keys carry an explicit type suffix.
+#[uniffi::export]
+pub fn property_key_label(identity: String) -> String {
+    core::property_key_label(&identity)
+}
+
+/// YAML source-key type (separate from the property's value kind).
+#[derive(Debug, Clone, Copy, uniffi::Enum)]
+pub enum PropertyKeyType {
+    String,
+    Integer,
+    Boolean,
+    Null,
+    Real,
+}
+
+#[uniffi::export]
+pub fn property_key_identity_for_type(
+    name: String,
+    kind: PropertyKeyType,
+) -> Result<String, VaultError> {
+    let kind = match kind {
+        PropertyKeyType::String => core::PropertyKeyType::String,
+        PropertyKeyType::Integer => core::PropertyKeyType::Integer,
+        PropertyKeyType::Boolean => core::PropertyKeyType::Boolean,
+        PropertyKeyType::Null => core::PropertyKeyType::Null,
+        PropertyKeyType::Real => core::PropertyKeyType::Real,
+    };
+    core::property_key_identity_for_type(&name, kind).map_err(|error| VaultError::InvalidArgument {
+        message: error.to_string(),
+    })
+}
+
 /// Read a Markdown file from disk and return its headings.
 ///
 /// The host platform supplies the absolute path. On sandboxed platforms
@@ -1641,6 +1695,52 @@ impl VaultSession {
         Ok(report.into())
     }
 
+    /// Set the exact typed key published by the property read surface.
+    pub fn set_property_by_identity(
+        &self,
+        path: String,
+        identity: String,
+        value: PropertyValue,
+        expected_content_hash: Option<String>,
+    ) -> Result<SaveReport, VaultError> {
+        Ok(self
+            .inner
+            .set_property_by_identity(
+                &path,
+                &identity,
+                value.into(),
+                expected_content_hash.as_deref(),
+            )?
+            .into())
+    }
+
+    /// Delete the exact typed key published by the property read surface.
+    pub fn delete_property_by_identity(
+        &self,
+        path: String,
+        identity: String,
+        expected_content_hash: Option<String>,
+    ) -> Result<SaveReport, VaultError> {
+        Ok(self
+            .inner
+            .delete_property_by_identity(&path, &identity, expected_content_hash.as_deref())?
+            .into())
+    }
+
+    /// Rename one typed identity to a literal string name across the vault.
+    pub fn rename_property_by_identity_across_vault(
+        &self,
+        identity: String,
+        new_key: String,
+        dry_run: bool,
+        cancel: Arc<CancelToken>,
+    ) -> Result<RenameReport, VaultError> {
+        Ok(self
+            .inner
+            .rename_property_by_identity_across_vault(&identity, &new_key, dry_run, &cancel.inner)?
+            .into())
+    }
+
     /// Rename a YAML frontmatter property across every file in the
     /// vault that currently carries `old_key`. `dry_run = true`
     /// returns the per-file diff without writing; `dry_run = false`
@@ -2204,6 +2304,7 @@ pub struct Property {
     pub key: String,
     pub kind: String,
     pub value_json: String,
+    pub key_identity: String,
 }
 
 impl From<core::Property> for Property {
@@ -2211,6 +2312,7 @@ impl From<core::Property> for Property {
         let (kind, value_json) = encode_property(&p.value);
         Self {
             key: p.key,
+            key_identity: p.key_identity,
             kind: kind.to_string(),
             value_json,
         }
@@ -5384,20 +5486,41 @@ impl From<core::EditOp> for EditOp {
 /// (uniffi has no char primitive — the `TaskItem::status` precedent).
 #[derive(Debug, Clone, uniffi::Enum)]
 pub enum OpAnnotation {
-    SetProperty { key: String, value_json: String },
-    RemoveProperty { key: String },
-    ToggleTask { ordinal: u32, new_status: String },
+    SetProperty {
+        key: String,
+        key_identity: Option<String>,
+        value_json: String,
+    },
+    RemoveProperty {
+        key: String,
+        key_identity: Option<String>,
+    },
+    ToggleTask {
+        ordinal: u32,
+        new_status: String,
+    },
     FrontmatterReplace,
-    PathChanged { from: String, to: String },
+    PathChanged {
+        from: String,
+        to: String,
+    },
 }
 
 impl From<core::OpAnnotation> for OpAnnotation {
     fn from(a: core::OpAnnotation) -> Self {
         match a {
-            core::OpAnnotation::SetProperty { key, value_json } => {
-                OpAnnotation::SetProperty { key, value_json }
+            core::OpAnnotation::SetProperty {
+                key,
+                key_identity,
+                value_json,
+            } => OpAnnotation::SetProperty {
+                key,
+                key_identity,
+                value_json,
+            },
+            core::OpAnnotation::RemoveProperty { key, key_identity } => {
+                OpAnnotation::RemoveProperty { key, key_identity }
             }
-            core::OpAnnotation::RemoveProperty { key } => OpAnnotation::RemoveProperty { key },
             core::OpAnnotation::ToggleTask {
                 ordinal,
                 new_status,

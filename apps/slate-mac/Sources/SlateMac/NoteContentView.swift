@@ -189,12 +189,12 @@ struct NoteContentView: View {
                         }
                         ForEach(recovery.propertyDrafts) { draft in
                             recoverySection(
-                                title: "Uncommitted property: \(draft.key)",
+                                title: "Uncommitted property: \(propertyKeyLabel(identity: draft.key))",
                                 value: draft.value)
                         }
                         ForEach(recovery.retainedPropertyUpdates) { update in
                             recoverySection(
-                                title: "Saved update awaiting verification: \(update.key)",
+                                title: "Saved update awaiting verification: \(propertyKeyLabel(identity: update.key))",
                                 value: update.value)
                         }
                     }

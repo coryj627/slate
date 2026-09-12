@@ -108,7 +108,7 @@ pub(crate) fn derive_events(
     for annotation in annotations {
         let (event_class, property_key) = match annotation {
             OpAnnotation::SetProperty { key, .. } => (EVENT_PROPERTY_SET, Some(key)),
-            OpAnnotation::RemoveProperty { key } => (EVENT_PROPERTY_REMOVE, Some(key)),
+            OpAnnotation::RemoveProperty { key, .. } => (EVENT_PROPERTY_REMOVE, Some(key)),
             OpAnnotation::ToggleTask { .. } => (EVENT_TASK_TOGGLE, None),
             OpAnnotation::FrontmatterReplace => (EVENT_FM_REPLACE, None),
             OpAnnotation::PathChanged { .. } => continue,
@@ -256,10 +256,12 @@ mod tests {
                 &encode_edit_batch(&ops),
                 &[
                     OpAnnotation::SetProperty {
+                        key_identity: None,
                         key: "status".into(),
                         value_json: "1".into(),
                     },
                     OpAnnotation::RemoveProperty {
+                        key_identity: None,
                         key: "status".into(),
                     },
                     OpAnnotation::ToggleTask {

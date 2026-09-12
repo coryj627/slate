@@ -321,6 +321,8 @@ public static class MutationDriver
         op.Op switch
         {
             "createExclusive" => session.CreateExclusive(op.Path!, op.Content!),
+            "setProperty" or "deleteProperty" or "renameProperty" or "previewPropertyRename" =>
+                ExecuteProperty(session, op),
             "createFolder" => session.CreateFolder(op.Path!),
             "renameFile" => session.RenameFile(op.Path!, op.NewName!),
             "renameFolderWithNote" =>
@@ -338,6 +340,32 @@ public static class MutationDriver
                         $"op {op.OpRef}: batch report has no OpId to undo")),
             _ => throw new MutationDriverException($"unknown op '{op.Op}'"),
         };
+
+    private static object? ExecuteProperty(VaultSession session, MutationOp op)
+    {
+        var parts = session.ReadNoteParts(op.Path!);
+        // Consume the actual read-side identity; scenario names are labels,
+        // never host-created key tokens or YAML parsers.
+        Property property = SlateUniffiMethods.ParseFrontmatterProperties(parts.FmSource)
+            .Single(p => SlateUniffiMethods.PropertyKeyLabel(p.KeyIdentity) == op.Name);
+        if (op.Op == "setProperty")
+        {
+            return session.SetPropertyByIdentity(op.Path!, property.KeyIdentity,
+                new PropertyValue.Text(op.Value!), parts.ContentHash);
+        }
+        if (op.Op == "deleteProperty")
+        {
+            return session.DeletePropertyByIdentity(op.Path!, property.KeyIdentity, parts.ContentHash);
+        }
+        using var cancel = new CancelToken();
+        RenameReport report = session.RenamePropertyByIdentityAcrossVault(
+            property.KeyIdentity, op.NewName!, op.Op == "previewPropertyRename", cancel);
+        if (report.Affected.Length != 1 || report.Failed.Length != 0 || report.Skipped.Length != 0)
+        {
+            throw new MutationDriverException("typed property rename did not affect exactly its fixture");
+        }
+        return null; // Checkpoints pin all renamed bytes, including preview's non-mutation.
+    }
 
     private static object? ExecuteVoid(Action action)
     {

@@ -795,6 +795,7 @@ final class ParityHarnessTests: XCTestCase {
 
     private static func appendProperty(_ j: CanonicalJson, _ p: Property) {
         j.raw("{\"key\":").str(p.key)
+            .raw(",\"key_identity\":").str(p.keyIdentity)
             .raw(",\"kind\":").str(p.kind)
             .raw(",\"value_json\":").str(p.valueJson)
             .raw("}")

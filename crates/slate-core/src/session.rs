@@ -7811,6 +7811,7 @@ impl VaultSession {
                 (
                     new_contents,
                     crate::oplog::OpAnnotation::SetProperty {
+                        key_identity: None,
                         key: key_spelling.clone(),
                         value_json,
                     },
@@ -7828,6 +7829,7 @@ impl VaultSession {
                 (
                     new_contents,
                     crate::oplog::OpAnnotation::RemoveProperty {
+                        key_identity: None,
                         key: key_spelling.clone(),
                     },
                 )
@@ -7865,6 +7867,28 @@ impl VaultSession {
         value: crate::PropertyValue,
         expected_content_hash: Option<&str>,
     ) -> Result<SaveReport, VaultError> {
+        self.set_property_impl(path, key, value, expected_content_hash, false)
+    }
+
+    /// Set the exact YAML key from a published `Property.key_identity`.
+    pub fn set_property_by_identity(
+        &self,
+        path: &str,
+        identity: &str,
+        value: crate::PropertyValue,
+        expected_content_hash: Option<&str>,
+    ) -> Result<SaveReport, VaultError> {
+        self.set_property_impl(path, identity, value, expected_content_hash, true)
+    }
+
+    fn set_property_impl(
+        &self,
+        path: &str,
+        key: &str,
+        value: crate::PropertyValue,
+        expected_content_hash: Option<&str>,
+        by_identity: bool,
+    ) -> Result<SaveReport, VaultError> {
         validate_save_path(path)?;
 
         // Acquire the mutex before the read so a concurrent `save_text`
@@ -7873,7 +7897,12 @@ impl VaultSession {
         let mut conn = self.conn.lock().expect("session connection mutex");
 
         let contents = self.read_text(path)?;
-        let new_contents = crate::frontmatter::set_property_in_source(&contents, key, &value)
+        let edit = if by_identity {
+            crate::frontmatter::set_property_by_identity_in_source
+        } else {
+            crate::frontmatter::set_property_in_source
+        };
+        let new_contents = edit(&contents, key, &value)
             .map_err(|e| frontmatter_edit_error_to_vault_error(e, path))?;
 
         if new_contents.len() as u64 > self.config.large_file_refuse_bytes {
@@ -7890,7 +7919,13 @@ impl VaultSession {
             &new_contents,
             expected_content_hash,
             &[crate::oplog::OpAnnotation::SetProperty {
-                key: key.to_string(),
+                key_identity: by_identity.then(|| key.to_string()),
+                key: if by_identity {
+                    crate::property_key::property_key_display(key)
+                        .map_err(|e| frontmatter_edit_error_to_vault_error(e, path))?
+                } else {
+                    key.to_string()
+                },
                 value_json,
             }],
         )
@@ -7916,13 +7951,37 @@ impl VaultSession {
         key: &str,
         expected_content_hash: Option<&str>,
     ) -> Result<SaveReport, VaultError> {
+        self.delete_property_impl(path, key, expected_content_hash, false)
+    }
+
+    /// Delete the exact YAML key from a published `Property.key_identity`.
+    pub fn delete_property_by_identity(
+        &self,
+        path: &str,
+        identity: &str,
+        expected_content_hash: Option<&str>,
+    ) -> Result<SaveReport, VaultError> {
+        self.delete_property_impl(path, identity, expected_content_hash, true)
+    }
+
+    fn delete_property_impl(
+        &self,
+        path: &str,
+        key: &str,
+        expected_content_hash: Option<&str>,
+        by_identity: bool,
+    ) -> Result<SaveReport, VaultError> {
         validate_save_path(path)?;
 
         let mut conn = self.conn.lock().expect("session connection mutex");
 
         let contents = self.read_text(path)?;
-        let edit = crate::frontmatter::delete_property_in_source(&contents, key)
-            .map_err(|e| frontmatter_edit_error_to_vault_error(e, path))?;
+        let edit = if by_identity {
+            crate::frontmatter::delete_property_by_identity_in_source(&contents, key)
+        } else {
+            crate::frontmatter::delete_property_in_source(&contents, key)
+        }
+        .map_err(|e| frontmatter_edit_error_to_vault_error(e, path))?;
 
         let new_contents = match edit {
             crate::frontmatter::FrontmatterEdit::Changed(s) => s,
@@ -7974,7 +8033,13 @@ impl VaultSession {
             &new_contents,
             expected_content_hash,
             &[crate::oplog::OpAnnotation::RemoveProperty {
-                key: key.to_string(),
+                key_identity: by_identity.then(|| key.to_string()),
+                key: if by_identity {
+                    crate::property_key::property_key_display(key)
+                        .map_err(|e| frontmatter_edit_error_to_vault_error(e, path))?
+                } else {
+                    key.to_string()
+                },
             }],
         )
     }
@@ -8141,12 +8206,48 @@ impl VaultSession {
         dry_run: bool,
         cancel: &CancelToken,
     ) -> Result<RenameReport, VaultError> {
+        self.rename_property_impl(old_key, new_key, dry_run, cancel, false)
+    }
+
+    /// Rename one exact source-key identity to a string key across the vault.
+    /// This can distinguish integer `1` from string `"1"`, including when
+    /// converting the former to the latter.
+    pub fn rename_property_by_identity_across_vault(
+        &self,
+        identity: &str,
+        new_key: &str,
+        dry_run: bool,
+        cancel: &CancelToken,
+    ) -> Result<RenameReport, VaultError> {
+        self.rename_property_impl(identity, new_key, dry_run, cancel, true)
+    }
+
+    fn rename_property_impl(
+        &self,
+        old_key: &str,
+        new_key: &str,
+        dry_run: bool,
+        cancel: &CancelToken,
+        by_identity: bool,
+    ) -> Result<RenameReport, VaultError> {
+        let old_name = if by_identity {
+            crate::property_key::property_key_yaml(old_key)
+                .map_err(|e| frontmatter_edit_error_to_vault_error(e, ""))?;
+            crate::property_key::property_key_display(old_key)
+                .map_err(|e| frontmatter_edit_error_to_vault_error(e, ""))?
+        } else {
+            old_key.to_string()
+        };
         if old_key.is_empty() || new_key.is_empty() {
             return Err(VaultError::InvalidArgument {
                 message: "rename requires non-empty old_key and new_key".to_string(),
             });
         }
-        if old_key == new_key {
+        if if by_identity {
+            old_key == crate::string_property_key_identity(new_key)
+        } else {
+            old_key == new_key
+        } {
             return Err(VaultError::InvalidArgument {
                 message: "old_key and new_key are identical".to_string(),
             });
@@ -8155,10 +8256,10 @@ impl VaultSession {
         // path (which produces them by flattening nested mappings)
         // and the write path (which would create a duplicate top-
         // level key). Refuse at the boundary.
-        if old_key.contains('.') || new_key.contains('.') {
+        if (!by_identity && old_key.contains('.')) || new_key.contains('.') {
             return Err(VaultError::InvalidArgument {
                 message: format!(
-                    "rename refuses dotted keys ({old_key:?} → {new_key:?}); \
+                    "rename refuses dotted keys ({old_name:?} → {new_key:?}); \
                      the read path's dotted-key flattening isn't symmetric \
                      with the writer"
                 ),
@@ -8180,7 +8281,7 @@ impl VaultSession {
                  ORDER BY files.path COLLATE BINARY ASC",
             )?;
 
-            stmt.query_map(rusqlite::params![old_key], |row| row.get::<_, String>(0))?
+            stmt.query_map(rusqlite::params![old_name], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?
         };
 
@@ -8224,19 +8325,41 @@ impl VaultSession {
             };
 
             let (props, _) = crate::frontmatter::extract_frontmatter(&source);
-            let Some(old_value) = props
+            let matching: Vec<_> = props
                 .iter()
-                .find(|p| p.key == old_key)
-                .map(|p| p.value.clone())
-            else {
+                .filter(|p| {
+                    if by_identity {
+                        p.key_identity == old_key
+                    } else {
+                        p.key == old_key
+                    }
+                })
+                .collect();
+            if matching.len() > 1 {
+                report.failed.push(RenameFailed {
+                    path,
+                    kind: RenameFailureKind::MalformedFrontmatter,
+                    message: "multiple YAML keys share this name; select a source key identity"
+                        .into(),
+                });
+                continue;
+            }
+            let Some(property) = matching.first() else {
                 report.skipped.push(RenameSkipped {
                     path,
                     reason: RenameSkipReason::NoSuchKey,
                 });
                 continue;
             };
+            let old_value = &property.value;
 
-            if props.iter().any(|p| p.key == new_key) {
+            if props.iter().any(|p| {
+                if by_identity {
+                    p.key_identity == crate::string_property_key_identity(new_key)
+                } else {
+                    p.key == new_key
+                }
+            }) {
                 report.skipped.push(RenameSkipped {
                     path,
                     reason: RenameSkipReason::KeyCollision,
@@ -8249,7 +8372,7 @@ impl VaultSession {
             // round-trip (reader's `tags`-keyname classifier flips
             // `List ↔ TagList`). Refuse rather than silently mutate
             // the on-disk value form.
-            if crosses_tags_boundary(old_key, new_key, &old_value) {
+            if crosses_tags_boundary(&old_name, new_key, old_value) {
                 report.skipped.push(RenameSkipped {
                     path,
                     reason: RenameSkipReason::TagsKeyTypeDrift,
@@ -8257,43 +8380,48 @@ impl VaultSession {
                 continue;
             }
 
-            // In-memory edit: set new_key to the old value, then drop
-            // old_key. Both helpers reject malformed frontmatter, so the
-            // first call effectively gates the second.
-            let after_source =
-                match crate::frontmatter::set_property_in_source(&source, new_key, &old_value)
-                    .and_then(|with_new| {
-                        match crate::frontmatter::delete_property_in_source(&with_new, old_key)? {
-                            crate::frontmatter::FrontmatterEdit::Changed(s) => Ok(s),
-                            // The new key landed, the old key was
-                            // already gone before delete ran — that
-                            // shouldn't happen since we just observed
-                            // it in `props`. Treat as a successful
-                            // edit (the new key is in place).
-                            crate::frontmatter::FrontmatterEdit::Unchanged => Ok(with_new),
+            // Rewrite the exact YAML key, retaining the original YAML value.
+            let after_source = match crate::frontmatter::rename_property_by_identity_in_source(
+                &source,
+                &property.key_identity,
+                new_key,
+            ) {
+                Ok(crate::frontmatter::FrontmatterRename::Changed(s)) => s,
+                Ok(crate::frontmatter::FrontmatterRename::Unchanged) => {
+                    report.skipped.push(RenameSkipped {
+                        path,
+                        reason: RenameSkipReason::NoSuchKey,
+                    });
+                    continue;
+                }
+                Ok(crate::frontmatter::FrontmatterRename::KeyCollision) => {
+                    report.skipped.push(RenameSkipped {
+                        path,
+                        reason: RenameSkipReason::KeyCollision,
+                    });
+                    continue;
+                }
+                Err(e) => {
+                    let (kind, message) = match e {
+                        crate::frontmatter::FrontmatterEditError::MalformedFrontmatter(reason) => {
+                            (RenameFailureKind::MalformedFrontmatter, reason)
                         }
-                    }) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        let (kind, message) = match e {
-                            crate::frontmatter::FrontmatterEditError::MalformedFrontmatter(
-                                reason,
-                            ) => (RenameFailureKind::MalformedFrontmatter, reason),
-                            crate::frontmatter::FrontmatterEditError::InvalidPropertyValue {
-                                reason,
-                            } => (RenameFailureKind::Other, reason),
-                        };
-                        report.failed.push(RenameFailed {
-                            path,
-                            kind,
-                            message,
-                        });
-                        continue;
-                    }
-                };
+                        crate::frontmatter::FrontmatterEditError::InvalidPropertyValue {
+                            reason,
+                        } => (RenameFailureKind::Other, reason),
+                    };
+                    report.failed.push(RenameFailed {
+                        path,
+                        kind,
+                        message,
+                    });
+                    continue;
+                }
+            };
 
-            let before_excerpt = excerpt_around_key(&source, old_key);
-            let after_excerpt = excerpt_around_key(&after_source, new_key);
+            let before_excerpt = excerpt_around_key(&source, &property.key_identity);
+            let after_excerpt =
+                excerpt_around_key(&after_source, &crate::string_property_key_identity(new_key));
 
             if dry_run {
                 report.affected.push(RenameAffected {
@@ -11202,42 +11330,21 @@ fn classify_rename_failure(err: &VaultError) -> RenameFailureKind {
     }
 }
 
-/// Pull the YAML frontmatter line containing `key` plus one neighbour
-/// line on each side, for the bulk-rename preview UI. Returns an empty
-/// string when the file has no frontmatter or the key isn't present —
-/// the caller decides how to render the absence.
-///
-/// Match rule (audit #178): the line must start `key:` at column 0
-/// (no leading whitespace) so we don't false-positive on:
-///   - block-scalar continuation lines that happen to start with
-///     `key:` after indentation,
-///   - nested-mapping keys (those are dotted in the read path; their
-///     literal-on-disk form is indented and shouldn't match a flat
-///     top-level rename).
-///
-/// The match also tolerates yaml-rust2's emitter quoting the key
-/// (`"key":` / `'key':`) — it does that for scalars that look like
-/// YAML 1.1 booleans (`y`, `n`, `on`, `off`, etc.) or that are
-/// otherwise ambiguous.
-fn excerpt_around_key(source: &str, key: &str) -> String {
+/// Show the exact source key plus one neighboring frontmatter line on each
+/// side. Missing or unsupported keys have no excerpt, never another key's text.
+fn excerpt_around_key(source: &str, identity: &str) -> String {
     let Some(range) = crate::frontmatter::frontmatter_range(source) else {
         return String::new();
     };
-    let body = &source[range];
-    let lines: Vec<&str> = body.lines().collect();
-    let bare = format!("{key}:");
-    let dquoted = format!("\"{key}\":");
-    let squoted = format!("'{key}':");
-    let key_indexed = lines.iter().enumerate().find_map(|(i, line)| {
-        if line.starts_with(&bare) || line.starts_with(&dquoted) || line.starts_with(&squoted) {
-            Some(i)
-        } else {
-            None
-        }
-    });
-    let Some(idx) = key_indexed else {
+    let Some(line) = crate::frontmatter::scalar_key_line(source, identity) else {
         return String::new();
     };
+    let prefix_lines = source[..range.start]
+        .bytes()
+        .filter(|b| *b == b'\n')
+        .count();
+    let idx = line as usize - prefix_lines - 1;
+    let lines: Vec<&str> = source[range].lines().collect();
     let start = idx.saturating_sub(1);
     let end = (idx + 2).min(lines.len());
     lines[start..end].join("\n")
@@ -16156,13 +16263,27 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
     fn annotation_summary(ann: &crate::oplog::OpAnnotation) -> OpAnnotationSummary {
         use crate::oplog::OpAnnotation;
         match ann {
-            OpAnnotation::SetProperty { key, .. } => OpAnnotationSummary {
+            OpAnnotation::SetProperty {
+                key, key_identity, ..
+            } => OpAnnotationSummary {
                 kind: "SetProperty".into(),
-                display: format!("Set property '{key}'"),
+                display: format!(
+                    "Set property '{}'",
+                    key_identity
+                        .as_deref()
+                        .map(crate::property_key_label)
+                        .unwrap_or_else(|| key.clone())
+                ),
             },
-            OpAnnotation::RemoveProperty { key } => OpAnnotationSummary {
+            OpAnnotation::RemoveProperty { key, key_identity } => OpAnnotationSummary {
                 kind: "RemoveProperty".into(),
-                display: format!("Removed property '{key}'"),
+                display: format!(
+                    "Removed property '{}'",
+                    key_identity
+                        .as_deref()
+                        .map(crate::property_key_label)
+                        .unwrap_or_else(|| key.clone())
+                ),
             },
             OpAnnotation::ToggleTask { new_status, .. } => OpAnnotationSummary {
                 kind: "ToggleTask".into(),
@@ -20014,6 +20135,7 @@ mod tests {
 
     #[path = "properties.rs"]
     mod properties;
+    mod typed_property_keys;
 
     mod canonical_identity;
     #[path = "save.rs"]

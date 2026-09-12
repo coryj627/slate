@@ -53,6 +53,11 @@ pub mod editor_spans;
 pub mod embeds;
 pub mod file_meta_db;
 pub mod frontmatter;
+mod property_key;
+pub use property_key::{
+    PropertyKeyType, property_key_identity_for_type, property_key_label,
+    string_property_key_identity,
+};
 pub mod graph;
 pub mod graph_config;
 pub mod graph_layout;

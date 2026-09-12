@@ -328,6 +328,7 @@ public static class SurfaceSerializer
     private static void AppendProperty(CanonicalJson j, Property p)
     {
         j.Raw("{\"key\":").Str(p.Key)
+         .Raw(",\"key_identity\":").Str(p.KeyIdentity)
          .Raw(",\"kind\":").Str(p.Kind)
          .Raw(",\"value_json\":").Str(p.ValueJson)
          .Raw("}");

@@ -234,9 +234,16 @@ const ANN_TAG_PATH_CHANGED: u8 = 5;
 pub enum OpAnnotation {
     /// `set_property`: `value_json` is the JSON encoding of the value
     /// as written into the frontmatter.
-    SetProperty { key: String, value_json: String },
+    SetProperty {
+        key: String,
+        key_identity: Option<String>,
+        value_json: String,
+    },
     /// `delete_property`.
-    RemoveProperty { key: String },
+    RemoveProperty {
+        key: String,
+        key_identity: Option<String>,
+    },
     /// `toggle_task_status`: `ordinal` is the task's document ordinal,
     /// `new_status` the raw status character written between `[` `]`.
     ToggleTask { ordinal: u32, new_status: char },
@@ -262,10 +269,24 @@ impl OpAnnotation {
 
     fn body_json(&self) -> String {
         match self {
-            OpAnnotation::SetProperty { key, value_json } => {
-                serde_json::json!({ "key": key, "value_json": value_json }).to_string()
+            OpAnnotation::SetProperty {
+                key,
+                key_identity,
+                value_json,
+            } => {
+                let mut body = serde_json::json!({ "key": key, "value_json": value_json });
+                if let Some(identity) = key_identity {
+                    body["key_identity"] = serde_json::json!(identity);
+                }
+                body.to_string()
             }
-            OpAnnotation::RemoveProperty { key } => serde_json::json!({ "key": key }).to_string(),
+            OpAnnotation::RemoveProperty { key, key_identity } => {
+                let mut body = serde_json::json!({ "key": key });
+                if let Some(identity) = key_identity {
+                    body["key_identity"] = serde_json::json!(identity);
+                }
+                body.to_string()
+            }
             OpAnnotation::ToggleTask {
                 ordinal,
                 new_status,
@@ -294,13 +315,18 @@ impl OpAnnotation {
                 .map(str::to_string)
                 .ok_or_else(|| format!("annotation tag {tag}: missing field {name:?}"))
         };
+        let optional_str_field = |name: &str| -> Result<Option<String>, String> {
+            value.get(name).map(|_| str_field(name)).transpose()
+        };
         match tag {
             ANN_TAG_SET_PROPERTY => Ok(OpAnnotation::SetProperty {
                 key: str_field("key")?,
+                key_identity: optional_str_field("key_identity")?,
                 value_json: str_field("value_json")?,
             }),
             ANN_TAG_REMOVE_PROPERTY => Ok(OpAnnotation::RemoveProperty {
                 key: str_field("key")?,
+                key_identity: optional_str_field("key_identity")?,
             }),
             ANN_TAG_TOGGLE_TASK => {
                 let ordinal = value
@@ -2041,10 +2067,12 @@ mod tests {
     fn all_annotations() -> Vec<OpAnnotation> {
         vec![
             OpAnnotation::SetProperty {
+                key_identity: None,
                 key: "status".into(),
                 value_json: "\"final\"".into(),
             },
             OpAnnotation::RemoveProperty {
+                key_identity: None,
                 key: "draft".into(),
             },
             OpAnnotation::ToggleTask {
@@ -2057,6 +2085,48 @@ mod tests {
                 to: "b/new.md".into(),
             },
         ]
+    }
+
+    #[test]
+    fn typed_key_annotation_metadata_is_optional_and_strict() {
+        let identity =
+            crate::property_key_identity_for_type("1", crate::PropertyKeyType::Integer).unwrap();
+        for annotation in [
+            OpAnnotation::SetProperty {
+                key: "1".into(),
+                key_identity: Some(identity.clone()),
+                value_json: "true".into(),
+            },
+            OpAnnotation::RemoveProperty {
+                key: "1".into(),
+                key_identity: Some(identity),
+            },
+        ] {
+            assert_eq!(
+                OpAnnotation::from_tag_and_body(
+                    annotation.tag(),
+                    annotation.body_json().as_bytes()
+                )
+                .unwrap(),
+                annotation
+            );
+        }
+        let legacy = br#"{"key":"1","value_json":"true"}"#;
+        let decoded = OpAnnotation::from_tag_and_body(ANN_TAG_SET_PROPERTY, legacy).unwrap();
+        assert!(matches!(
+            &decoded,
+            OpAnnotation::SetProperty {
+                key_identity: None,
+                ..
+            }
+        ));
+        assert_eq!(decoded.body_json().as_bytes(), legacy);
+        for body in [
+            br#"{"key":"1","key_identity":null}"#.as_slice(),
+            br#"{"key":"1","key_identity":2}"#,
+        ] {
+            assert!(OpAnnotation::from_tag_and_body(ANN_TAG_REMOVE_PROPERTY, body).is_err());
+        }
     }
 
     #[test]
@@ -2510,6 +2580,7 @@ mod tests {
                 OpKind::EditBatch,
                 &encode_edit_batch(&crate::diff::diff_to_ops(v1, v2)),
                 &[OpAnnotation::SetProperty {
+                    key_identity: None,
                     key: "status".into(),
                     value_json: "\"final\"".into(),
                 }],
