@@ -370,10 +370,12 @@ extension AppState {
             // token facts require it. Clearing the error made that state
             // VISIBLE, and a visible table whose Where-am-I can never answer
             // is worse than the error it replaced (IPG-36, created by
-            // TGC-17): ask for the authority back, silently. `loadGraphTable`
-            // no-ops without a session, so the bare-state token facts are
-            // untouched.
-            loadGraphTable(announce: .silent, sort: token.request.sort)
+            // TGC-17): ask for the authority back. The replacing load must
+            // inherit this request's announcement: advancing the sequence
+            // makes the rows callback's queued count obsolete.
+            // `loadGraphTable` no-ops without a session, so the bare-state
+            // token facts are untouched.
+            loadGraphTable(announce: graphTableInFlightAnnounce ?? .silent, sort: token.request.sort)
         }
         return true
     }
