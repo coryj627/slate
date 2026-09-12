@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Text;
 using System.Text.Json.Nodes;
 using SlateWindows.Graph;
 using uniffi.slate_uniffi;
@@ -11,6 +12,12 @@ namespace SlateWindows.Tests;
 /// array, and a record compares an array by reference.</summary>
 internal static class GraphConfigs
 {
+    public static byte[] InvalidUtf8(bool withBom)
+    {
+        byte[] preamble = withBom ? [0xEF, 0xBB, 0xBF] : [];
+        return [.. preamble, .. "{\"version\":1,\"future\":\"private-config-detail-"u8.ToArray(), 0xFF, .. "\"}"u8.ToArray()];
+    }
+
     public static void AssertEqual(GraphConfig expected, GraphConfig actual)
     {
         Assert.Equal(expected.Filters, actual.Filters);
@@ -128,6 +135,95 @@ public sealed class GraphConfigStoreTests : IDisposable
             });
             Assert.Equal(text, File.ReadAllText(ConfigPath));
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InvalidUtf8RemainsReadOnlyAndUnchanged(bool withBom)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
+        byte[] original = GraphConfigs.InvalidUtf8(withBom);
+        File.WriteAllBytes(ConfigPath, original);
+        var store = new GraphConfigStore(_root);
+
+        GraphConfigLoad load = store.Read();
+        GraphConfigs.AssertEqual(SlateUniffiMethods.GraphConfigDefault(), load.Config);
+        Assert.False(load.Writable);
+        Assert.NotNull(load.Failure);
+        PumpedDispatcher.Run(() =>
+        {
+            var preferences = new GraphPreferencesViewModel(_root, new GraphConfigWriter(), store);
+            preferences.SetNameQuery("changed");
+            preferences.Shutdown();
+            Assert.False(preferences.HasPendingForTests);
+            Assert.Equal(0, preferences.OutstandingForTests);
+        });
+
+        Assert.Throws<DecoderFallbackException>(() => store.Write(load.Config));
+        Assert.Equal(original, File.ReadAllBytes(ConfigPath));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(ConfigPath)!, "*.tmp"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ValidUtf8WithOrWithoutABomPreservesUnicode(bool withBom)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
+        GraphConfig config = SlateUniffiMethods.GraphConfigDefault();
+        config = config with { Filters = config.Filters with { NameQuery = "café 日本語" } };
+        File.WriteAllText(ConfigPath, SlateUniffiMethods.GraphConfigEncode(config, null), new UTF8Encoding(withBom));
+        var store = new GraphConfigStore(_root);
+
+        GraphConfigLoad loaded = store.Read();
+        Assert.True(loaded.Writable);
+        GraphConfigs.AssertEqual(config, loaded.Config);
+        GraphConfig changed = loaded.Config with { Verbosity = GraphVerbosity.Terse };
+        store.Write(changed);
+        GraphConfigs.AssertEqual(changed, store.Read().Config);
+    }
+
+    [Theory]
+    [InlineData("unreadable", "GraphConfigReadFailed", "UnauthorizedAccessException")]
+    [InlineData("invalid-utf8", "GraphConfigReadFailed", "DecoderFallbackException")]
+    [InlineData("unparseable", "GraphConfigDecodeFailed", "Unparseable")]
+    [InlineData("newer-version", "GraphConfigDecodeFailed", "NewerVersion")]
+    public void ReadFailuresReachTheHostLogWithoutPrivateDetails(string failure, string eventName, string exceptionType)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
+        switch (failure)
+        {
+            case "unreadable":
+                Directory.CreateDirectory(ConfigPath);
+                break;
+            case "invalid-utf8":
+                File.WriteAllBytes(ConfigPath, GraphConfigs.InvalidUtf8(withBom: true));
+                break;
+            case "unparseable":
+                File.WriteAllText(ConfigPath, "private-config-detail");
+                break;
+            case "newer-version":
+                File.WriteAllText(ConfigPath, "{\"version\":999999,\"future\":\"private-config-detail\"}");
+                break;
+        }
+
+        using var output = new StringWriter();
+        TextWriter original = Console.Error;
+        try
+        {
+            Console.SetError(output);
+            Assert.False(new GraphConfigStore(_root).Read().Writable);
+        }
+        finally
+        {
+            Console.SetError(original);
+        }
+
+        string logged = output.ToString();
+        Assert.Equal($"SlateWindows.{eventName} ({exceptionType}){Environment.NewLine}", logged);
+        Assert.DoesNotContain(_root, logged, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-config-detail", logged, StringComparison.Ordinal);
     }
 
     [Fact]
