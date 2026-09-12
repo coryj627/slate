@@ -281,7 +281,8 @@ extension AppState {
     /// The ⌃⌘I readback as data — the selection clause, the zoom, the
     /// backend filter flags, the client-side needle (core trims it and
     /// omits an empty one) and the Unresolved-preset kind. Pure +
-    /// testable. The DIAGRAM's while a model is live; otherwise the TABLE's
+    /// testable. The DIAGRAM's while a model is live; the TABLE's only
+    /// while Table mode is active
     /// (W6-2 PR C, contracts doc §PR C C-8; 0a-2b as amended — the zoom
     /// clause is the diagram's alone): the shared key's row among the
     /// SHOWN rows, rendered the diagram's way, answered only while the
@@ -305,7 +306,14 @@ extension AppState {
             backend = model.filter
             zoomPercent = UInt32(max(0, model.viewport.zoomPercent))
         } else {
-            guard graphTableSnapshot != nil, !graphTableLoading,
+            // A missing diagram model can also mean its build is pending
+            // or failed. Neither state should read the cached table.
+            guard graphConfig.mode == .table,
+                graphTableSnapshot != nil, !graphTableLoading,
+                // Returning to the accepted query or sort still issues a
+                // new rows request, even though its values match the rows
+                // already shown. Wait for that request to finish too.
+                graphTableAnsweredSeq == graphTableSeq,
                 graphTablePublishedRequest == graphTableRequest,
                 // …and the request the rows answer IS the live query (C-8,
                 // IPG-32): the published request can equal the current one
