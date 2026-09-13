@@ -4,7 +4,7 @@
 // §W-E error-mapping totality (w0_spec §W0-3 item 2, #715): every
 // VaultError arm reaches C# as a typed exception — none as a panic or
 // abort. Two layers: a reflection census pinning the generated
-// VaultException subclass set to the 17 arms the FFI declares (a new or
+// VaultException subclass set to the arms the FFI declares (a new or
 // removed arm fails this census until the pin is updated deliberately),
 // and organic triggers for a representative spread, seeded from the
 // W0-1 probe's error-mapping section. CommandException mapping and the
@@ -35,6 +35,7 @@ public class ErrorMappingCensus
         "InvalidQuery",
         "Unsupported",
         "InvalidArgument",
+        "TrashConfirmationChanged",
         "DestinationExists",
         "WriteConflict",
         "SavedButUnindexed",
@@ -70,6 +71,7 @@ public class ErrorMappingCensus
         AssertArm<VaultException.InvalidQuery>("InvalidQuery", ex => Assert.Equal("census query", ex.message));
         AssertArm<VaultException.Unsupported>("Unsupported", ex => Assert.Equal("census feature", ex.feature));
         AssertArm<VaultException.InvalidArgument>("InvalidArgument", ex => Assert.Equal("census argument", ex.message));
+        AssertArm<VaultException.TrashConfirmationChanged>("TrashConfirmationChanged", ex => Assert.Equal("census trash confirmation", ex.message));
         AssertArm<VaultException.DestinationExists>("DestinationExists", ex => Assert.Equal("census/dest.md", ex.path));
         AssertArm<VaultException.WriteConflict>("WriteConflict", ex =>
         {
@@ -109,7 +111,7 @@ public class ErrorMappingCensus
         });
 
         // The pinned list and the synthesized coverage must not drift.
-        Assert.Equal(18, PinnedVaultErrorArms.Length);
+        Assert.Equal(19, PinnedVaultErrorArms.Length);
 
         // Unknown arm names are inert (the fn is a census tool, not a
         // product surface).

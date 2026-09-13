@@ -430,6 +430,10 @@ enforced by construction, not by review.
   Counts are recursive on both hosts. Unsupported providers, unreadable
   entries, unknown Windows reparse types, or inventories over 100,000 entries /
   256 levels refuse; no unknown-count bypass exists.
+  Traversal enumerates opened directories and opens each child relative to its
+  parent handle/descriptor without following links. Windows sharing flags alone
+  cannot prevent an attribute writer from converting a pinned directory into a
+  junction; no path-based enumeration fallback is used.
   **Residual:** metadata inventories are observations, not filesystem
   transactions. They cannot detect every content edit on every filesystem, nor
   exclude an arbitrary external writer between the final observation and the

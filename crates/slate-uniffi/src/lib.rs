@@ -432,6 +432,9 @@ pub fn census_synthesize_vault_error(arm: String) -> Result<(), VaultError> {
         "InvalidArgument" => VaultError::InvalidArgument {
             message: "census argument".into(),
         },
+        "TrashConfirmationChanged" => VaultError::TrashConfirmationChanged {
+            message: "census trash confirmation".into(),
+        },
         "DestinationExists" => VaultError::DestinationExists {
             path: "census/dest.md".into(),
         },
