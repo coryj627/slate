@@ -393,6 +393,7 @@ Coalescing class: `nav` / `filter` / `—` (immediate). All priorities
 | `CanvasOpened` | `title, target` | `Opened ⟨t⟩ in its default app.` ‖ `Opened ⟨t⟩ in your browser.` | | — | `CanvasContainerView.swift:177–178,188` |
 | `CanvasMutationRefused` | `reason` (6 arms) | the six admission sentences verbatim | | — | `AppState+Canvas.swift:348–357,411–412` (via `AppState.swift:16271–16276`) |
 | `CanvasLoadedDegraded` | `skipped` | `Canvas loaded. ⟨n⟩ unsupported item[s] are preserved in the file but not shown.` | | — | `CanvasContainerView.swift:354–355` (static banner today — CD-3) |
+| `CanvasLoadedReadOnly` | `available` | `Canvas opened read-only. ⟨n⟩ card[s] available to inspect. Repair the file and retry to edit.` | | — | `CanvasDocument.swift#loadAnnouncement`; `CanvasDocumentViewModel.cs#PublishReady` and `#ReadOnlyBannerText` (#1173) |
 | `CanvasEmptyOnboarding` | `new_card_chord, palette_chord` | `Canvas is empty. Press ⟨chord⟩ to create your first card. Every other canvas action is in the Command Palette, ⟨chord⟩.` — LABEL | | — | `CanvasContainerView.swift:479,481–483,492–494` |
 | `CanvasWhereAmI` | `kind_label, title, group_path[], ordinal_n, total_m, connection_count, in_count, out_count, color_name?, marked, mode?, filter` | `⟨card⟩, ⟨at canvas level‖in A › B⟩, ⟨n⟩ of ⟨m⟩, ⟨k⟩ connection[s] (⟨i⟩ in, ⟨o⟩ out)[, ⟨color⟩][, marked][, ⟨Mode⟩ mode][, ⟨x⟩ of ⟨y⟩ shown]` — always verbose-grade | | — | `CanvasAnnouncer.swift:134–152`; `AppState+Canvas.swift:315–330` |
 
@@ -1705,6 +1706,20 @@ arbitrates; it is never run locally beside the unit suite.
 `canvas_read.json` byte-for-byte against the committed golden.
 
 ---
+
+### Implementation record — recovered read-only inspection (#1173)
+
+A3 and A4-R carry the explicit disposition through core, both generated
+bindings and each host's accepted snapshot. `RecoveredCanvasTests` covers
+the real native read path, and
+`AnExistingDirtyDraftSurvivesTheReadOnlyReloadAndRefusedCommit`,
+`RecoveredSelectionAndMarksCannotOpenAuthoringPrompts` and
+`ADirtyDraftSurvivesMutationAdmissionRefusalAndCanRetry` pin draft retention
+and authoring admission. The same battery checks mounted status/Retry,
+the bound Close command and exactly-once handle release. Mac's
+CanvasRecoveryTests covers its native document and prepared-retry path.
+The A4-R addition raises the reconciliation key pin from 328 to 329 in
+both the generator and its independent census; no previous key is removed.
 
 ## PR B — the canvas table projection
 
@@ -3512,7 +3527,8 @@ each selects a sentence and has a trigger of its own — while the payload
 qualifiers (`CanvasZoomContext`, `CanvasResizePreset`,
 `CanvasOverlapTransition`, the verbosity) are data one trigger carries
 and do not split a key (IH-37): 113 keys over 53 arms at PR H, 114 with
-PR E13's `FileTypeNotOpenable`. The 187 full
+PR E13's `FileTypeNotOpenable`, and 115 keys over 54 arms with #1173's
+`CanvasLoadedReadOnly`. The 192 full canvas
 identities `A11yEventIdentity` renders stay the RENDERING corpus
 (`A11yCorpusCensus`). A site is `file#member`; a fact is a Windows test
 that constructs the key; a note names the owner-recorded designation
@@ -3599,7 +3615,7 @@ where a platform never fires the key.
 | `CanvasBlocked/LinkOpenFailed` | `CanvasContainerView.swift#activate` | `CanvasDocumentViewModel.cs#ActivateLinkCard` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasBlocked/AlignWouldOverlap` | `AppState+CanvasActions.swift#canvasAlignWith` | `CanvasDocumentViewModel.cs#CanvasAlignWith` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasBlocked/NotAUrl` | `AppState+CanvasCreate.swift#canvasAddLinkCard` | `CanvasDocumentViewModel.cs#ActivateLinkCard`, `CanvasDocumentViewModel.cs#CanvasAddLinkCard` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#ALinkOutsideTheAllowlistIsRefusedWithTheVocabularysReason` |  |
-| `CanvasBlocked/CardTextUnreadable` | `AppState+CanvasCreate.swift#canvasEditCard` | `CanvasDocumentViewModel.cs#NodeTextOf`, `CanvasDocumentViewModel.cs#OpenCardEditor` | `A11yCorpusCensus.cs#Corpus` |  |
+| `CanvasBlocked/CardTextUnreadable` | `AppState+CanvasCreate.swift#canvasEditCard`, `AppState+CanvasCreate.swift#canvasInspectCard` | `CanvasDocumentViewModel.cs#NodeTextOf`, `CanvasDocumentViewModel.cs#OpenCardEditor` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasBlocked/NotePathMustEndInMd` | `AppState+CanvasExtras.swift#canvasConvertToNote` | `CanvasDocumentViewModel.cs#CanvasConvertToNote` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasBlocked/NoFreeSpaceInGroup` | `AppState+CanvasActions.swift#canvasMoveIntoGroup` | `CanvasDocumentViewModel.cs#CanvasMoveIntoGroup` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasBlocked/NotePathExists` | `AppState+CanvasExtras.swift#canvasConvertToNote` | `CanvasDocumentViewModel.cs#CanvasConvertToNote` | `A11yCorpusCensus.cs#Corpus` |  |
@@ -3628,10 +3644,11 @@ where a platform never fires the key.
 | `CanvasMutationRefused/Reopening` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState`, `AppState+CanvasNavigation.swift#canvasFollowConnection` (+1) | — | `A11yCorpusCensus.cs#Corpus` | designated: Windows retargets synchronously (§A): no pending-preparation window exists for the refusal to arise in; the read-side Reopening status carries the state |
 | `CanvasMutationRefused/RetargetFailed` | `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+CanvasNavigation.swift#activeCanvasDocumentAnyState`, `AppState+CanvasNavigation.swift#canvasReadRefusal` (+1) | `CanvasMutationFunnel.cs#NotReadyReason` | `A11yCorpusCensus.cs#Corpus` |  |
 | `CanvasMutationRefused/Unavailable` | `AppState+Canvas.swift#activeCanvasMutationRefusal`, `AppState+Canvas.swift#canvasMutationRefusal`, `AppState+Canvas.swift#commitCanvasPromptMutation` | `CanvasMutationFunnel.cs#NotReadyReason` | `A11yCorpusCensus.cs#Corpus` |  |
-| `CanvasMutationRefused/ReadOnly` | `AppState+Canvas.swift#canvasMutationRefusal` | `CanvasMutationFunnel.cs#NotReadyReason` | `A11yCorpusCensus.cs#Corpus`, `CanvasModeControllerTests.cs#DepartingSpec`, `CanvasModeControllerTests.cs#RefusingSpec` |  |
+| `CanvasMutationRefused/ReadOnly` | `AppState+Canvas.swift#activeCanvasCardEditorRefusal`, `AppState+Canvas.swift#canvasMutationRefusal` | `CanvasCardEditorViewModel.cs#CommitOnEscape`, `CanvasMutationFunnel.cs#NotReadyReason` | `A11yCorpusCensus.cs#Corpus`, `CanvasModeControllerTests.cs#DepartingSpec`, `CanvasModeControllerTests.cs#RefusingSpec` (+1) |  |
 | `CanvasMutationRefused/CardEditorUnavailable` | `AppState+Canvas.swift#activeCanvasCardEditorRefusal` | — | `A11yCorpusCensus.cs#Corpus` | designated: rows and lease retire together on Windows (§A, §C-unit): a text row with no handle is not a reachable state, and a retired announcer refuses the sentence — no trigger to consume (PR review round 1, IH-55) |
 | `CanvasMutationRefused/RefreshPending` | — | `CanvasMutationFunnel.cs#AnnounceAdmission` | `A11yCorpusCensus.cs#Corpus`, `CanvasMutationFunnelTests.cs#ARecoveryPendingAdmissionSpeaksRefreshPending` | mac designated: Windows-only (§E TE-0): the landed-but-unindexed refresh state has no mac twin |
-| `CanvasLoadedDegraded` | `CanvasContainerView.swift#announceDegradedLoadIfNeeded`, `CanvasContainerView.swift#header` | `CanvasDocumentViewModel.cs#AnnounceDegradedLoadIfNeeded`, `CanvasDocumentViewModel.cs#DegradedBannerText` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheDegradedBannerIsTheSameRenderTheAnnouncementSpeaks` |  |
+| `CanvasLoadedDegraded` | `CanvasContainerView.swift#header`, `CanvasDocument.swift#loadAnnouncement` | `CanvasDocumentViewModel.cs#AnnounceDegradedLoadIfNeeded`, `CanvasDocumentViewModel.cs#DegradedBannerText` | `A11yCorpusCensus.cs#Corpus`, `CanvasDocumentTests.cs#TheDegradedBannerIsTheSameRenderTheAnnouncementSpeaks` |  |
+| `CanvasLoadedReadOnly` | `CanvasDocument.swift#loadAnnouncement` | `CanvasDocumentViewModel.cs#PublishReady`, `CanvasDocumentViewModel.cs#ReadOnlyBannerText` | `A11yCorpusCensus.cs#Corpus`, `RecoveredCanvasTests.cs#TwoPanesShareOneRecoveryNoticeAndItsAccessibleBannerText` |  |
 | `CanvasEmptyOnboarding` | `CanvasContainerView.swift#emptyOnboarding` | `CanvasDocumentViewModel.cs#EmptyOnboardingText` | `A11yCorpusCensus.cs#Corpus`, `CanvasAnnouncerTests.cs#LabelRenderingPostsNothingAndReturnsCoresText`, `CanvasDocumentTests.cs#AnEmptyCanvasCarriesTheOnboardingCopyFromCore` |  |
 | `CanvasWhereAmI` | `AppState+Canvas.swift#canvasWhereAmI`, `SlateCommands.swift#registerStructural` | `CanvasNavigator.cs#WhereAmI` | `A11yCorpusCensus.cs#Corpus` |  |
 
@@ -18775,7 +18792,7 @@ not keyed is not claimed as keyed.
 
 <!-- reconciliation:generated:start -->
 
-**(b) Contract → evidence — 328 keys, one row each, keyed (section, kind, id).** Generated by `scripts/canvas_reconciliation.py` from the document's own records: "discharged by" lists the record subsections of the key's section that cite the id; "pinned by" the long identifiers those paragraphs backtick, each checked against the Windows tree. "unevidenced" is a key no record cites.
+**(b) Contract → evidence — 329 keys, one row each, keyed (section, kind, id).** Generated by `scripts/canvas_reconciliation.py` from the document's own records: "discharged by" lists the record subsections of the key's section that cite the id; "pinned by" the long identifiers those paragraphs backtick, each checked against the Windows tree. "unevidenced" is a key no record cites.
 
 | Section | Kind | Id | Discharged by | Pinned by |
 |---|---|---|---|---|
@@ -18813,8 +18830,9 @@ not keyed is not claimed as keyed.
 | §0b | contract | 0b-17 | Tests that pin PR 0b (Task 0b-1) | — |
 | §A | contract | A1 | unevidenced by id — §A's pinning list is not keyed per contract | — |
 | §A | contract | A2 | Tests that pin PR A | `ActiveCanvasSurface`, `TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke`, `ShowVisualIsEnabledAndDrivesTheSurfaceSwitch`, `APendingNavigationLineFiresOnItsOwnWithoutAFlush`, `DispatcherTimer`, `CanvasDocumentTests`, `AShutdownDuringAnInFlightLoadNeverPublishesAndClosesTheHandle`, `ASecondLoadSupersedesTheFirstPublish`, +2 more |
-| §A | contract | A3 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A3 | Implementation record | `RecoveredCanvasTests`, `AnExistingDirtyDraftSurvivesTheReadOnlyReloadAndRefusedCommit`, `RecoveredSelectionAndMarksCannotOpenAuthoringPrompts`, `ADirtyDraftSurvivesMutationAdmissionRefusalAndCanRetry` |
 | §A | contract | A4 | unevidenced by id — §A's pinning list is not keyed per contract | — |
+| §A | contract | A4-R | Implementation record | `RecoveredCanvasTests`, `AnExistingDirtyDraftSurvivesTheReadOnlyReloadAndRefusedCommit`, `RecoveredSelectionAndMarksCannotOpenAuthoringPrompts`, `ADirtyDraftSurvivesMutationAdmissionRefusalAndCanRetry` |
 | §A | contract | A5 | unevidenced by id — §A's pinning list is not keyed per contract | — |
 | §A | contract | A6 | Tests that pin PR A | `ActiveCanvasSurface`, `TheTreeItemsCarryTreeSelectionItemExpandCollapseAndInvoke`, `ShowVisualIsEnabledAndDrivesTheSurfaceSwitch`, `APendingNavigationLineFiresOnItsOwnWithoutAFlush`, `DispatcherTimer`, `CanvasDocumentTests`, `AShutdownDuringAnInFlightLoadNeverPublishesAndClosesTheHandle`, `ASecondLoadSupersedesTheFirstPublish`, +2 more |
 | §A | contract | A7 | unevidenced by id — §A's pinning list is not keyed per contract | — |
@@ -19112,62 +19130,62 @@ not keyed is not claimed as keyed.
 
 | Id | Head | Recorded |
 |---|---|---|
-| CD-1 | No standalone overlap events. | Recorded divergences, line 14077 |
-| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 14088 |
-| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 14095 |
-| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 14112 |
-| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 14120 |
-| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 14131 |
-| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 14142 |
-| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 14154 |
-| CD-9 | `towardOther` is dropped. | Recorded divergences, line 14161 |
-| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 14171 |
-| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 14188 |
-| CD-12 | The family nests under one top-level variant | Recorded divergences, line 14199 |
-| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 14219 |
-| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 14239 |
-| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 14263 |
-| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 14298 |
-| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 14309 |
-| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 14317 |
-| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 14328 |
-| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 14337 |
-| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 14351 |
-| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 14367 |
-| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 14388 |
-| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 14412 |
-| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 14418 |
-| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 14438 |
-| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14468 |
-| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14499 |
-| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14516 |
-| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14528 |
-| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14544 |
-| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14556 |
-| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14572 |
-| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14587 |
-| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14620 |
-| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14643 |
-| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14656 |
-| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14672 |
-| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 14975 |
-| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 15010 |
-| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 15043 |
-| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 15071 |
-| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 15080 |
-| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 15098 |
-| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 15114 |
-| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15193 |
-| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 15216 |
-| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 15274 |
+| CD-1 | No standalone overlap events. | Recorded divergences, line 14126 |
+| CD-2 | `CanvasFilterCount` carries `matched` only. | Recorded divergences, line 14137 |
+| CD-3 | `CanvasLoadedDegraded` is an announcement Windows and mac both gain. | Recorded divergences, line 14144 |
+| CD-4 | Group entry speaks the group's CHILD count. | Recorded divergences, line 14161 |
+| CD-5 | Where-am-I has ONE filter spelling. | Recorded divergences, line 14169 |
+| CD-6 | Core's thousands grouping wins over `CountCopy`. | Recorded divergences, line 14180 |
+| CD-7 | The connection-delete sentence no longer lower-cases the author's words. | Recorded divergences, line 14191 |
+| CD-8 | The chord parameter is the one recorded platform difference in the corpus. | Recorded divergences, line 14203 |
+| CD-9 | `towardOther` is dropped. | Recorded divergences, line 14210 |
+| CD-10 | Families are typed nested enums, not one variant per sentence. | Recorded divergences, line 14220 |
+| CD-11 | Names that differ from the spec's indicative list. | Recorded divergences, line 14237 |
+| CD-12 | The family nests under one top-level variant | Recorded divergences, line 14248 |
+| CD-13 | `CanvasTracePathEnd` speaks the count of the titles it just listed. | Recorded divergences, line 14268 |
+| CD-14 | The outline's connection ROW now reads the traversal sentence. | Recorded divergences, line 14288 |
+| CD-15 | Four templates stop hardcoding the plural. | Recorded divergences, line 14312 |
+| CD-16 | `canvas_auto_sides` takes rects, not node ids | Recorded divergences, line 14347 |
+| CD-17 | `canvas_constants()` and `canvas_new_id()` are free functions | Recorded divergences, line 14358 |
+| CD-18 | Equal-area containment ties resolve to the LATER document order. | Recorded divergences, line 14366 |
+| CD-19 | `describe_relative`'s tie-break is pinned where mac's was undefined. | Recorded divergences, line 14377 |
+| CD-20 | `speakable_name` ordinals renumber on delete | Recorded divergences, line 14386 |
+| CD-21 | `place_inside_group`'s fallback fires on SIZE, not on childlessness. | Recorded divergences, line 14400 |
+| CD-22 | Case handling and whitespace trimming are Rust's, not Foundation's — and not case folding either. | Recorded divergences, line 14416 |
+| CD-23 | `speakable_name` is exposed on four records; which surface SPEAKS it stays the host's. | Recorded divergences, line 14437 |
+| CD-24 | `canvas_group_rect_around` returns `Option`. | Recorded divergences, line 14461 |
+| CD-25 | the inside-group search is a column-major LATTICE, not a ring. | Recorded divergences, line 14467 |
+| CD-26 | `count_noun` is an FFI export, because CD-6's other half is a host string. | Recorded divergences, line 14487 |
+| CD-27 | Duplicate's group expansion answers from the tree, not from "centre inside a picked group". | Recorded divergences, line 14517 |
+| CD-28 | `CanvasOpenInfo.degraded` is the PARSE-ERROR state, not the "unsupported items" banner. | Recorded divergences, line 14548 |
+| CD-29 | The degraded announcement is once per DOCUMENT on Windows and once per CONTAINER on mac. | Recorded divergences, line 14565 |
+| CD-30 | The outline row's Name spells `speakable_name`; mac's spells `title`. | Recorded divergences, line 14577 |
+| CD-31 | The surface view is a code-built `UserControl`, not a `.xaml(.cs)` pair. | Recorded divergences, line 14593 |
+| CD-32 | A retarget re-keys the registry; it does not mutate the document's path. | Recorded divergences, line 14605 |
+| CD-33 | The Windows outline NESTS; mac's is flat with indentation. | Recorded divergences, line 14621 |
+| CD-34 | `CanvasPhrase.CardReference` capitalises with .NET's SIMPLE mapping where core uses Rust's FULL one. | Recorded divergences, line 14636 |
+| CD-35 | The canvas link card has no confirmation step, and neither does the policy it reuses. | Recorded divergences, line 14669 |
+| CD-36 | The media activation hint is corrected on Windows; mac's is stale. | Recorded divergences, line 14692 |
+| CD-37 | The empty canvas renders `CanvasStatus{Empty}`, not `CanvasEmptyOnboarding`. | Recorded divergences, line 14705 |
+| CD-38 | Windows will not shell-execute a non-media file card; mac will | Recorded divergences, line 14721 |
+| CD-39 | The canvas table's ordinal columns sort differently from mac's on a mixed-normalization vault | Recorded divergences, line 15024 |
+| CD-40 | Focus delivery seats the shared selection SILENTLY; "lands focus only" is not reachable. | Recorded divergences, line 15059 |
+| CD-41 | M4 does not cancel on a shell overlay; t0 §2 M4's palette clause is superseded. | Recorded divergences, line 15092 |
+| CD-42 | The filter's visible summary is mac's sentence, not t0's spoken one. | Recorded divergences, line 15120 |
+| CD-43 | Clear Filter always answers; mac stays silent when nothing is filtered. | Recorded divergences, line 15129 |
+| CD-44 | `nextCard` the CHORD and `nextCard` the COMMAND visit different rows, deliberately. | Recorded divergences, line 15147 |
+| CD-45 | A survivor whose containing group was filtered out is promoted to a ROOT; the intermediate "nests under a surviving GRANDparent" case cannot… | Recorded divergences, line 15163 |
+| CD-46 | Next/previous card route through the read mapping; mac returns silently outside `.ready`. | Recorded divergences, line 15242 |
+| CD-47 | Escape inside the Where-am-I panel is the PANEL's, not the ladder's; t0 §2 M5 has no clause for a focused transient region. | Recorded divergences, line 15265 |
+| CD-48 | Right/Left FOLLOW unconditionally; the spec's "as mac does" premise was false. | Recorded divergences, line 15323 |
 
 | Id | Head | Recorded |
 |---|---|---|
-| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 15314 |
-| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 15326 |
-| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 15333 |
-| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 15342 |
-| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 15348 |
+| CR-1 | uniffi's 256-variant enum cap: pressure resolved, and the pattern is set. | Accepted risks, line 15363 |
+| CR-2 | `a11y.rs` is now 5,291 lines | Accepted risks, line 15375 |
+| CR-3 | Two shipped strings have English defects and were migrated verbatim. | Accepted risks, line 15382 |
+| CR-4 | `CanvasModeCancelled` and `CanvasModeEndedWithoutEffect` admit combinations no host produces | Accepted risks, line 15391 |
+| CR-5 | The residue count is unchanged by 0a-1; 0a-2 lowers it. | Accepted risks, line 15397 |
 
 **(d) Owner decisions D-1…D-7, with their resolution and evidence.**
 

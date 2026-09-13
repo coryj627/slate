@@ -157,7 +157,7 @@ public sealed class CanvasTriggerParityCensus
         List<string> derived = DerivedKeys();
         List<string> listed = Ledger().Select(r => r.Key).ToList();
         Assert.Equal(derived.OrderBy(k => k, StringComparer.Ordinal), listed.OrderBy(k => k, StringComparer.Ordinal));
-        Assert.Equal(114 /* 113 at PR H; PR E13's FileTypeNotOpenable */, derived.Count);
+        Assert.Equal(115 /* 113 at PR H; FileTypeNotOpenable; #1173 LoadedReadOnly */, derived.Count);
     }
 
     [Fact]
@@ -234,6 +234,10 @@ public sealed class CanvasTriggerParityCensus
         foreach (Row row in Ledger())
         {
             MatchCollection sites = Site.Matches(row.Mac);
+            if (sites.Any(site => site.Groups[1].Value == "slate_uniffi.swift"))
+            {
+                failures.Add($"{row.Key}: generated bindings cannot prove a host trigger");
+            }
             if (MacDesignated.Contains(row.Key))
             {
                 if (!row.Note.Contains("mac designated", StringComparison.Ordinal))

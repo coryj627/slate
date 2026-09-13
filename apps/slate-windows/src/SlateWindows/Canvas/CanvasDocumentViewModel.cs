@@ -494,7 +494,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     // Writer preflight and its basis come from one publication. Ready means
     // readable; a recovered population never supplies an authoring basis.
     private CanvasLoaded? CurrentEditableLoaded => _slot.Current is
-        { Retired: false, LoadState: CanvasLoadState.Ready, Loaded: { Population.IsEditable: true } loaded }
+    { Retired: false, LoadState: CanvasLoadState.Ready, Loaded: { Population.IsEditable: true } loaded }
             ? loaded : null;
 
     /// <summary>The row whose activation opened a card — the focus
