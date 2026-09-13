@@ -10745,15 +10745,13 @@ Inside `prepare`: expansion walks a VISITED set through
 member → the same failure); placement is `CanvasPlaceSet` anchored on
 the first member with the members' rects in order, no hint; the
 origins' count must equal the members' count, else the failure —
-nothing partial (IG2-25). The action carries, per member in order, a
-`CreateGroup` for a group (label and color kept) or a `CreateNode`
-with a fresh id whose content follows the member's kind — `File`
-with the target and subpath, `Link` with the target, `Text` with
-`CanvasNodeText` (a null answer is the empty string) — at the
-engine's origin with the member's size and color; edges are never
-copied. Unknown fields are NOT preserved: the generated
-`CanvasNodeContent` and `CreateNode` carry no opaque payload, so the
-spec's deep-copy clause is unmet here and recorded (G2D-7). The name
+nothing partial (IG2-25). #1172 replaces the host's payload
+reconstruction with one core `CloneNode` per member, with the source
+id, a fresh destination id and the engine's origin. Core preserves
+the complete stored node, including size, color, raw group labels,
+backgrounds, subpaths and ordered unknown fields (G2D-7). Edges are
+never copied. Invalid clone coordinates, a missing source or an
+occupied destination id refuse the whole action. The name
 is `duplicate "⟨title⟩"` for one member, else `duplicate` over core's
 `CountNoun`; success seats the first copy and speaks
 `CanvasCardPlaced` with `Duplicated` for one member or
@@ -10885,12 +10883,12 @@ and flips only the surface row.
   second sentence; its palette row exists because mac's does.
 - **G2D-6 — Add Media's classification is core's** (`CanvasMediaClass`
   over the FFI, 0b's row); no host extension list.
-- **G2D-7 — Duplicate does not preserve unknown fields.** The spec's
-  deep-copy clause needs a core clone op carrying the node's opaque
-  payload; the generated ABI has none. Recorded as UNMET rather than
-  claimed; the core op (`CanvasOp` gaining a clone arm, mac consuming
-  it per decision 5) is filed as upstream machinery in PR H's
-  reconciliation.
+- **G2D-7 — Duplicate preserves the complete stored node (#1172).**
+  Core's `CloneNode` carries source id, destination id and position;
+  both hosts consume it in one action. It retains opaque fields and
+  raw absent/null/empty group labels. This discharges the earlier
+  UNMET deep-copy and group-label records (including IG2-24/IG2-54);
+  historical close-out entries below describe the pre-1172 state.
 - **G2D-8 — Locate File… is offered on every file or image card**,
   mac's later rule with its reason (a "missing" test against the note
   list false-positives on media targets); this supersedes E8's and
@@ -10912,8 +10910,8 @@ and flips only the surface row.
 
 ### Recorded divergences (owner-recorded; off-limits for re-litigation)
 
-- G2D-2's shape; G2D-3's pairing; G2D-7's unmet deep copy; G2D-10's
-  scheme policy; G2D-12's renderer.
+- G2D-2's shape; G2D-3's pairing; G2D-10's scheme policy; G2D-12's
+  renderer. #1172 resolves the former G2D-7 deep-copy divergence.
 - Mac's `canvasDuplicate` seats no particular copy after a bulk
   duplicate; Windows seats the first in reading order.
 - The vault file picker names rows by display name with the path as
@@ -11437,14 +11435,12 @@ picked group brings its members and theirs (row D) — re-projected
 through reading order with EXACT set equality demanded again; every
 member's geometry comes from the basis; `CanvasPlaceSet` anchored on
 the first member places the rects as one rigid set and its origins'
-count must equal the members' (IG2-25). One action mints, per member
-in order, a `CreateGroup` (the DERIVED title standing in for the raw
-label the scene does not expose — G2D-7's sibling, recorded: a null
-or blank group label is not preserved, IG2-54) or a `CreateNode` whose
-content follows the kind — `File` with the card's target and subpath,
-`Link` with the target, `Text` with core's node text (null the empty
-string) — at the engine's origin with the member's size and color;
-edges are never copied. The name is `duplicate "⟨title⟩"` for one
+count must equal the members' (IG2-25). #1172 changes the action to
+one core `CloneNode` per member in order. Core owns the complete
+payload copy; the scene supplies only placement geometry and the
+announcement title. Raw labels and unknown fields now survive
+(G2D-7, IG2-54); edges are never copied. The name is
+`duplicate "⟨title⟩"` for one
 member, else `duplicate` over core's `CountNoun`; success seats the
 FIRST copy (`SelectCreated`) and speaks `CanvasCardPlaced` with
 `Duplicated` for one member or `CanvasBulkDuplicated` with the count;
@@ -11461,6 +11457,15 @@ typed failure, the bytes standing. Mutations, each byte-restored: M1
 the seed-equality check removed (the subset copied), M2 the
 transitive walk removed, M3 the ghost arm removed, M4 the first copy
 not seated. All bitten.
+
+#1172 adds `DuplicatePreservesStoredPayloadAndExactUndoRedo`: saved
+bytes for text, file, image, link and absent/null/empty group labels
+must retain all payload keys in order; the original stays unchanged,
+and one undo/redo restores the exact canonical bytes. The shared
+`c8_clone_opaque_payloads` and `c9_clone_unlabeled_group` scenarios
+exercise both generated bindings, sequential source edits, cloning a
+clone, group placement and the complete inverse walk. Core and Mac
+tests additionally pin complete-set refusal and stored payloads.
 
 ### TG2-6 — Convert Card to Note: the note through the sidebar's seam, inside the gate, with a recovery state
 

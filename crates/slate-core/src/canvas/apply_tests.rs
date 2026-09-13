@@ -19,6 +19,273 @@ fn action(name: &str, ops: Vec<CanvasOp>) -> CanvasAction {
     }
 }
 
+const CLONE_INPUT: &str = r##"{
+    "rootExtra":{"untouched":[1,null,true]},
+    "nodes":[
+        {"id":"text","type":"text","text":"original","x":0,"y":0,"width":100,"height":50,"color":{"future":"color"},"opaque":{"b":1,"a":[2,3]}},
+        {"id":"file","type":"file","file":"notes/a.md","subpath":"#Heading","x":0,"y":100,"width":100,"height":50,"color":"#112233","opaque":[{"kept":true}]},
+        {"id":"link","type":"link","url":"https://example.com/a","x":0,"y":200,"width":100,"height":50,"future":null},
+        {"id":"group","type":"group","label":null,"background":"images/grid.png","backgroundStyle":"future-style","x":-20,"y":-20,"width":140,"height":300,"opaque":{"group":[1,2]}},
+        {"id":"empty-label","type":"group","label":"","x":500,"y":0,"width":100,"height":100},
+        {"id":"absent-label","type":"group","x":700,"y":0,"width":100,"height":100}
+    ],
+    "edges":[{"id":"edge","fromNode":"text","toNode":"file","waypoints":[[1,2]]}]
+}"##;
+
+fn clone_op(source_id: &str, id: &str, x: f64, y: f64) -> CanvasOp {
+    CanvasOp::CloneNode {
+        source_id: source_id.into(),
+        id: id.into(),
+        x,
+        y,
+    }
+}
+
+#[test]
+fn clone_preserves_every_payload_field_except_identity_and_origin() {
+    let (original, _) = parse(CLONE_INPUT);
+    for source in &original.nodes {
+        let mut canvas = original.clone();
+        let inverse = apply(
+            &mut canvas,
+            &action(
+                "clone",
+                vec![clone_op(&source.id.0, "copy", 1200.25, -10.5)],
+            ),
+        )
+        .unwrap();
+        let copy = &canvas.nodes[node_index(&canvas, "copy").unwrap()];
+        let mut expected = node_map(source);
+        expected.insert("id".into(), serde_json::json!("copy"));
+        expected.insert("x".into(), serde_json::json!(1200.25));
+        expected.insert("y".into(), serde_json::json!(-10.5));
+        // Comparing the encoded maps also pins unknown-key order, not merely
+        // their values. Tolerated color/label values retain their raw shape.
+        assert_eq!(restore_json(&node_map(copy)), restore_json(&expected));
+        assert_eq!(copy.kind, source.kind);
+        assert_eq!(copy.color, source.color);
+        assert_eq!((copy.width, copy.height), (source.width, source.height));
+        assert_eq!(
+            &canvas.nodes[node_index(&canvas, &source.id.0).unwrap()],
+            source
+        );
+        assert_eq!(canvas.nodes.len(), original.nodes.len() + 1);
+        assert_eq!(canvas.edges, original.edges, "connections are not cloned");
+        assert_eq!(canvas.unknown, original.unknown);
+        assert_eq!(
+            inverse.ops,
+            vec![CanvasOp::DeleteNode { id: "copy".into() }]
+        );
+        assert_invertible(
+            CLONE_INPUT,
+            &action(
+                "clone",
+                vec![clone_op(&source.id.0, "copy", 1200.25, -10.5)],
+            ),
+        );
+    }
+}
+
+#[test]
+fn cloned_nested_raw_values_are_independent_of_the_source() {
+    let (mut canvas, _) = parse(CLONE_INPUT);
+    apply(
+        &mut canvas,
+        &action("clone", vec![clone_op("text", "copy", 1200.0, 0.0)]),
+    )
+    .unwrap();
+    let copy = node_index(&canvas, "copy").unwrap();
+    canvas.nodes[copy].raw["opaque"]["a"][0] = serde_json::json!(99);
+    let source = node_index(&canvas, "text").unwrap();
+    assert_eq!(canvas.nodes[source].raw["opaque"]["a"][0], 2);
+}
+
+#[test]
+fn clone_reads_the_current_sequential_source_and_redo_keeps_its_snapshot() {
+    let act = action(
+        "edit and clone",
+        vec![
+            CanvasOp::SetNodeContent {
+                id: "text".into(),
+                content: CanvasNodeContent::Text {
+                    text: "edited first".into(),
+                },
+            },
+            clone_op("text", "copy", 1200.0, 0.0),
+            clone_op("copy", "second-copy", 1400.0, 0.0),
+            CanvasOp::SetNodeContent {
+                id: "text".into(),
+                content: CanvasNodeContent::Text {
+                    text: "edited later".into(),
+                },
+            },
+        ],
+    );
+    assert_invertible(CLONE_INPUT, &act);
+    let (mut canvas, _) = parse(CLONE_INPUT);
+    apply(&mut canvas, &act).unwrap();
+    for id in ["copy", "second-copy"] {
+        assert_eq!(
+            canvas.nodes[node_index(&canvas, id).unwrap()].kind,
+            NodeKind::Text {
+                text: "edited first".into()
+            }
+        );
+    }
+
+    // Undoing a clone captures a RestoreNode payload. Redo does not reread a
+    // source that may subsequently change or disappear.
+    let inverse = apply(
+        &mut canvas,
+        &action("clone", vec![clone_op("file", "file-copy", 1600.0, 0.0)]),
+    )
+    .unwrap();
+    let snapshot = node_map(&canvas.nodes[node_index(&canvas, "file-copy").unwrap()]);
+    let redo = apply(&mut canvas, &inverse).unwrap();
+    assert!(matches!(
+        redo.ops.as_slice(),
+        [CanvasOp::RestoreNode { .. }]
+    ));
+    apply(
+        &mut canvas,
+        &action(
+            "delete source",
+            vec![CanvasOp::DeleteNode { id: "file".into() }],
+        ),
+    )
+    .unwrap();
+    apply(&mut canvas, &redo).unwrap();
+    assert_eq!(
+        node_map(&canvas.nodes[node_index(&canvas, "file-copy").unwrap()]),
+        snapshot
+    );
+}
+
+#[test]
+fn invalid_clone_rejects_the_whole_action_without_partial_edits() {
+    let (original, _) = parse(CLONE_INPUT);
+    let mut cases = vec![
+        (
+            clone_op("missing", "copy", 0.0, 0.0),
+            ApplyError::UnknownNode("missing".into()),
+        ),
+        (
+            clone_op("text", "file", 0.0, 0.0),
+            ApplyError::DuplicateId("file".into()),
+        ),
+        (
+            clone_op("text", "text", 0.0, 0.0),
+            ApplyError::DuplicateId("text".into()),
+        ),
+        (
+            clone_op("text", "edge", 0.0, 0.0),
+            ApplyError::DuplicateId("edge".into()),
+        ),
+    ];
+    for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for (x, y) in [(invalid, 0.0), (0.0, invalid)] {
+            cases.push((
+                clone_op("text", "copy", x, y),
+                ApplyError::InvalidCloneGeometry("copy".into()),
+            ));
+        }
+    }
+    for (op, expected) in cases {
+        let mut canvas = original.clone();
+        let err = apply(
+            &mut canvas,
+            &action(
+                "invalid second op",
+                vec![
+                    CanvasOp::SetNodeColor {
+                        id: "file".into(),
+                        color: Some("2".into()),
+                    },
+                    op,
+                ],
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(err, expected);
+        assert_eq!(canvas, original, "a failed clone leaked an earlier edit");
+    }
+    let mut canvas = original.clone();
+    assert_eq!(
+        apply(
+            &mut canvas,
+            &action(
+                "colliding copies",
+                vec![
+                    clone_op("text", "copy", 1200.0, 0.0),
+                    clone_op("file", "copy", 1400.0, 0.0),
+                ]
+            )
+        )
+        .unwrap_err(),
+        ApplyError::DuplicateId("copy".into())
+    );
+    assert_eq!(canvas, original);
+}
+
+#[test]
+fn cloned_group_uses_the_existing_insertion_rule_without_cloning_children() {
+    let (mut canvas, _) = parse(CLONE_INPUT);
+    let initial_nodes = canvas.nodes.len();
+    let act = action(
+        "clone frame",
+        vec![clone_op("group", "group-copy", -20.0, -20.0)],
+    );
+    apply(&mut canvas, &act).unwrap();
+    assert!(node_index(&canvas, "group-copy").unwrap() < node_index(&canvas, "text").unwrap());
+    assert_eq!(
+        canvas.nodes.len(),
+        initial_nodes + 1,
+        "a frame clone does not expand its children"
+    );
+    assert_invertible(CLONE_INPUT, &act);
+
+    // Either action order must leave the frame below its copied member.
+    for ops in [
+        vec![
+            clone_op("group", "group-copy", 1180.0, -20.0),
+            clone_op("text", "text-copy", 1200.0, 0.0),
+        ],
+        vec![
+            clone_op("text", "text-copy", 1200.0, 0.0),
+            clone_op("group", "group-copy", 1180.0, -20.0),
+        ],
+    ] {
+        let act = action("clone group and child", ops);
+        let (mut canvas, _) = parse(CLONE_INPUT);
+        apply(&mut canvas, &act).unwrap();
+        assert!(
+            node_index(&canvas, "group-copy").unwrap() < node_index(&canvas, "text-copy").unwrap()
+        );
+        assert_invertible(CLONE_INPUT, &act);
+    }
+}
+
+#[test]
+fn clone_preserves_skipped_entry_interleave_through_undo_and_redo() {
+    let act = action(
+        "clone beside skipped entries",
+        vec![clone_op("good-1", "copy", 500.0, 0.0)],
+    );
+    assert_invertible(MALFORMED, &act);
+    let (original, _) = parse(MALFORMED);
+    let mut canvas = original.clone();
+    apply(&mut canvas, &act).unwrap();
+    assert_eq!(canvas.skipped, original.skipped);
+    let before: serde_json::Value = serde_json::from_str(&serialize(&original)).unwrap();
+    let after: serde_json::Value = serde_json::from_str(&serialize(&canvas)).unwrap();
+    let original_nodes = before["nodes"].as_array().unwrap();
+    assert_eq!(
+        &after["nodes"].as_array().unwrap()[..original_nodes.len()],
+        original_nodes
+    );
+    assert_eq!(after["edges"], before["edges"]);
+}
+
 /// Apply, then apply the inverse: the file must serialize byte-equal
 /// to the original, and the inverse's inverse must redo cleanly.
 fn assert_invertible(input: &str, act: &CanvasAction) {
@@ -456,6 +723,7 @@ fn action_json_codec_round_trips_every_op() {
                 height: 50.0,
                 color: Some("2".into()),
             },
+            clone_op("codec-n", "codec-copy", 300.25, 900.5),
             CanvasOp::AddEdge {
                 id: "codec-e".into(),
                 from_node: "codec-n".into(),
@@ -488,6 +756,26 @@ fn action_json_codec_round_trips_every_op() {
         let reparsed: serde_json::Value = serde_json::from_str(&encoded.to_string()).unwrap();
         let decoded = action_from_json(&reparsed).unwrap();
         assert_eq!(&decoded, action_value);
+    }
+}
+
+#[test]
+fn clone_json_codec_requires_the_complete_identity_and_origin() {
+    let valid = serde_json::json!({
+        "op": "cloneNode", "sourceId": "source", "id": "copy", "x": 1.25, "y": -2.5,
+    });
+    assert_eq!(
+        op_from_json(&valid).unwrap(),
+        clone_op("source", "copy", 1.25, -2.5)
+    );
+    assert_eq!(op_to_json(&clone_op("source", "copy", 1.25, -2.5)), valid);
+    for key in ["sourceId", "id", "x", "y"] {
+        let mut missing = valid.clone();
+        missing.as_object_mut().unwrap().shift_remove(key);
+        assert!(op_from_json(&missing).is_err(), "missing {key} must reject");
+        let mut invalid = valid.clone();
+        invalid[key] = serde_json::Value::Null;
+        assert!(op_from_json(&invalid).is_err(), "null {key} must reject");
     }
 }
 

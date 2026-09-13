@@ -116,10 +116,11 @@ final class CanvasNavigatorTests: XCTestCase {
         ]}
         """
 
-    private func makeState() async throws -> AppState {
+    private func makeState(canvasJSON: String? = nil) async throws -> AppState {
         let vault = tempDir.appendingPathComponent("vault-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
-        try Data(Self.fixture.utf8).write(to: vault.appendingPathComponent("nav.canvas"))
+        try Data((canvasJSON ?? Self.fixture).utf8)
+            .write(to: vault.appendingPathComponent("nav.canvas"))
         let store = RecentVaultsStore(
             fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
         let state = AppState(recentsStore: store, externalOpener: { _ in true })
@@ -2019,6 +2020,134 @@ extension CanvasNavigatorTests {
 
         state.canvasUndo()
         XCTAssertEqual(doc.outline.count, countBefore, "one undo restores all 3")
+    }
+
+    func testDuplicatePreservesSavedPayloadAndRawGroupLabelsWithOneUndo() async throws {
+        let fixture = #"""
+            {"nodes":[
+            {"id":"frame","type":"group","x":0,"y":0,"width":900,"height":600,
+             "fixtureMarker":"frame","background":"assets/background.png","backgroundStyle":"cover",
+             "extension":{"version":3,"flags":[true,null,"frame"]}},
+            {"id":"nested","type":"group","x":40,"y":40,"width":400,"height":300,"label":"",
+             "fixtureMarker":"nested","extension":{"folded":false}},
+            {"id":"t","type":"text","text":"Full text\nSecond line","x":60,"y":80,"width":100,"height":80,
+             "fixtureMarker":"t","extension":{"nested":[{"answer":42},"text"]}},
+            {"id":"f","type":"file","file":"assets/diagram.png","subpath":"#Part",
+             "x":200,"y":80,"width":120,"height":80,"fixtureMarker":"f","extension":{"preview":true}},
+            {"id":"l","type":"link","url":"https://example.com/path?q=1#part","color":"#12abcd",
+             "x":60,"y":200,"width":100,"height":80,"fixtureMarker":"l","extension":{"tags":["one","two"]}},
+            {"id":"named","type":"group","x":1100,"y":0,"width":300,"height":250,"label":"  Raw label  ",
+             "fixtureMarker":"named","extension":{"empty":null}}
+            ],"edges":[{"id":"tf","fromNode":"t","toNode":"f","label":"keep original connection"}],
+            "extension":{"document":true}}
+            """#
+        let state = try await makeState(canvasJSON: fixture)
+        let doc = try XCTUnwrap(state.activeCanvasDocument)
+        let session = try XCTUnwrap(state.currentSession)
+        // Normalize the source once so one undo can be checked byte-for-byte.
+        XCTAssertTrue(
+            state.canvasApply(
+                CanvasAction(name: "normalize", ops: [.setNodeColor(id: "t", color: "1")]),
+                to: doc))
+        state.canvasUndo()
+        doc.undoStack = []
+        doc.redoStack = []
+        state.canvasSelect(nodeId: "t", in: doc, announce: false)
+        doc.selection.marked = ["frame", "named"]
+        let before = try session.readText(path: "nav.canvas")
+        let beforeJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(before.utf8)) as? [String: Any])
+        let sourceNodes = try XCTUnwrap(beforeJSON["nodes"] as? [[String: Any]])
+        let undoBefore = doc.undoStack.count
+        posted = []
+
+        state.canvasDuplicate()
+        state.canvasAnnouncer.flushForTests()
+
+        XCTAssertEqual(doc.undoStack.count, undoBefore + 1)
+        XCTAssertEqual(doc.outline.count, 12)
+        XCTAssertEqual(doc.selection.selected, "t", "selection stays on the original")
+        XCTAssertEqual(doc.selection.marked, ["frame", "named"], "originals remain marked")
+        XCTAssertEqual(posted, ["Duplicated 6 cards — one undo restores."])
+        let after = try session.readText(path: "nav.canvas")
+        let afterJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(after.utf8)) as? [String: Any])
+        let savedNodes = try XCTUnwrap(afterJSON["nodes"] as? [[String: Any]])
+        func canonical(_ value: Any) throws -> Data {
+            try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+        }
+        XCTAssertEqual(
+            try canonical(XCTUnwrap(afterJSON["edges"])),
+            try canonical(XCTUnwrap(beforeJSON["edges"])), "connections are not duplicated")
+        var delta: (x: Double, y: Double)?
+        var clones: [String: String] = [:]
+        for source in sourceNodes {
+            let id = try XCTUnwrap(source["id"] as? String)
+            let matches = savedNodes.filter { $0["fixtureMarker"] as? String == id }
+            XCTAssertEqual(matches.count, 2, "one complete copy of \(id)")
+            let original = try XCTUnwrap(matches.first { $0["id"] as? String == id })
+            XCTAssertEqual(try canonical(original), try canonical(source), "source stays intact")
+            let clone = try XCTUnwrap(matches.first { $0["id"] as? String != id })
+            clones[id] = try XCTUnwrap(clone["id"] as? String)
+            var sourcePayload = source
+            var clonePayload = clone
+            for key in ["id", "x", "y"] {
+                sourcePayload.removeValue(forKey: key)
+                clonePayload.removeValue(forKey: key)
+            }
+            XCTAssertEqual(
+                try canonical(clonePayload), try canonical(sourcePayload),
+                "saved fields, including unknown payload and raw label, survive for \(id)")
+            let dx =
+                try XCTUnwrap(clone["x"] as? NSNumber).doubleValue
+                - XCTUnwrap(source["x"] as? NSNumber).doubleValue
+            let dy =
+                try XCTUnwrap(clone["y"] as? NSNumber).doubleValue
+                - XCTUnwrap(source["y"] as? NSNumber).doubleValue
+            if let delta {
+                XCTAssertEqual(dx, delta.x, accuracy: 0.000_001)
+                XCTAssertEqual(dy, delta.y, accuracy: 0.000_001)
+            } else {
+                delta = (dx, dy)
+            }
+        }
+        let handle = try XCTUnwrap(doc.handle)
+        XCTAssertEqual(
+            try session.canvasChildrenOf(handle: handle, groupId: XCTUnwrap(clones["frame"])),
+            [try XCTUnwrap(clones["nested"])])
+        XCTAssertEqual(
+            Set(try session.canvasChildrenOf(handle: handle, groupId: XCTUnwrap(clones["nested"]))),
+            Set(try ["t", "f", "l"].map { try XCTUnwrap(clones[$0]) }))
+
+        state.canvasUndo()
+        XCTAssertEqual(
+            try session.readText(path: "nav.canvas"), before, "one undo restores every field")
+        XCTAssertEqual(doc.outline.count, 6)
+        XCTAssertEqual(doc.undoStack.count, undoBefore)
+    }
+
+    func testDuplicateRefusesStaleMarksWithoutCopyingASubset() async throws {
+        for marks in [Set(["a", "ghost"]), Set(["ghost"])] {
+            let (state, doc) = try await normalizedState()
+            let session = try XCTUnwrap(state.currentSession)
+            state.canvasSelect(nodeId: "c", in: doc, announce: false)
+            doc.selection.marked = marks
+            let before = try session.readText(path: "nav.canvas")
+            let undoBefore = doc.undoStack.count
+            let countBefore = doc.outline.count
+            posted = []
+
+            state.canvasDuplicate()
+            state.canvasAnnouncer.flushForTests()
+
+            XCTAssertEqual(try session.readText(path: "nav.canvas"), before)
+            XCTAssertEqual(doc.outline.count, countBefore)
+            XCTAssertEqual(doc.undoStack.count, undoBefore)
+            XCTAssertEqual(doc.selection.selected, "c")
+            XCTAssertEqual(doc.selection.marked, marks)
+            XCTAssertEqual(posted.count, 1)
+            XCTAssertTrue(posted.first?.hasPrefix("Duplicate failed:") == true, "\(posted)")
+        }
     }
 
     func testConvertCardToNoteCreatesFileAndRetargets() async throws {

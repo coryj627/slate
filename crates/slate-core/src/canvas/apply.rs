@@ -60,6 +60,16 @@ pub enum CanvasNodeContent {
 /// grid discipline belongs to the callers (#517 constants).
 #[derive(Debug, Clone, PartialEq)]
 pub enum CanvasOp {
+    /// Copy the source node's complete current payload, changing only its
+    /// identity and origin. The source is resolved at this operation's
+    /// position in the action. Groups keep their payload and z-order rule;
+    /// children and connections are never copied implicitly.
+    CloneNode {
+        source_id: String,
+        id: String,
+        x: f64,
+        y: f64,
+    },
     CreateNode {
         id: String,
         content: CanvasNodeContent,
@@ -189,6 +199,8 @@ pub enum ApplyError {
     UnknownEdge(String),
     #[error("id {0:?} already exists")]
     DuplicateId(String),
+    #[error("clone destination {0:?} must have finite coordinates")]
+    InvalidCloneGeometry(String),
     #[error("node {0:?} is not a group")]
     NotAGroup(String),
     #[error("node {0:?} is a group; use group ops")]
@@ -316,6 +328,31 @@ fn restore_json(map: &RawExtra) -> String {
 /// Apply one op; returns its inverse op(s) in forward order.
 fn apply_one(canvas: &mut Canvas, op: &CanvasOp) -> Result<Vec<CanvasOp>, ApplyError> {
     match op {
+        CanvasOp::CloneNode {
+            source_id,
+            id,
+            x,
+            y,
+        } => {
+            let source = node_index(canvas, source_id)?;
+            if id_taken(canvas, id) {
+                return Err(ApplyError::DuplicateId(id.clone()));
+            }
+            if !x.is_finite() || !y.is_finite() {
+                return Err(ApplyError::InvalidCloneGeometry(id.clone()));
+            }
+            let mut node = canvas.nodes[source].clone();
+            node.id = NodeId(id.clone());
+            node.x = *x;
+            node.y = *y;
+            let at = if matches!(node.kind, NodeKind::Group { .. }) {
+                group_insert_index(canvas, &node)
+            } else {
+                canvas.nodes.len()
+            };
+            canvas.nodes.insert(at, node);
+            Ok(vec![CanvasOp::DeleteNode { id: id.clone() }])
+        }
         CanvasOp::CreateNode {
             id,
             content,
@@ -707,6 +744,14 @@ fn opt_string(value: Option<&Value>) -> Option<String> {
 
 fn op_to_json(op: &CanvasOp) -> Value {
     match op {
+        CanvasOp::CloneNode {
+            source_id,
+            id,
+            x,
+            y,
+        } => serde_json::json!({
+            "op": "cloneNode", "sourceId": source_id, "id": id, "x": x, "y": y,
+        }),
         CanvasOp::CreateNode {
             id,
             content,
@@ -830,6 +875,12 @@ fn op_from_json(value: &Value) -> Result<CanvasOp, String> {
             .ok_or_else(|| format!("op {op:?} missing {key:?}"))
     };
     match op {
+        "cloneNode" => Ok(CanvasOp::CloneNode {
+            source_id: str_of("sourceId")?,
+            id: str_of("id")?,
+            x: num_of("x")?,
+            y: num_of("y")?,
+        }),
         "createNode" => Ok(CanvasOp::CreateNode {
             id: str_of("id")?,
             content: content_from(value.get("content").ok_or("createNode missing content")?)?,

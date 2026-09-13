@@ -11792,6 +11792,14 @@ impl From<core::canvas::apply::CanvasNodeContent> for CanvasNodeContent {
 /// back verbatim inside an inverse action, never constructs them.
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
 pub enum CanvasOp {
+    /// Clone the complete source node at a new origin, preserving its
+    /// payload. Children and connections are not copied implicitly.
+    CloneNode {
+        source_id: String,
+        id: String,
+        x: f64,
+        y: f64,
+    },
     CreateNode {
         id: String,
         content: CanvasNodeContent,
@@ -11878,6 +11886,17 @@ impl From<CanvasOp> for core::canvas::apply::CanvasOp {
     fn from(op: CanvasOp) -> Self {
         use core::canvas::apply::CanvasOp as O;
         match op {
+            CanvasOp::CloneNode {
+                source_id,
+                id,
+                x,
+                y,
+            } => O::CloneNode {
+                source_id,
+                id,
+                x,
+                y,
+            },
             CanvasOp::CreateNode {
                 id,
                 content,
@@ -11996,6 +12015,17 @@ impl From<core::canvas::apply::CanvasOp> for CanvasOp {
     fn from(op: core::canvas::apply::CanvasOp) -> Self {
         use core::canvas::apply::CanvasOp as O;
         match op {
+            O::CloneNode {
+                source_id,
+                id,
+                x,
+                y,
+            } => CanvasOp::CloneNode {
+                source_id,
+                id,
+                x,
+                y,
+            },
             O::CreateNode {
                 id,
                 content,
