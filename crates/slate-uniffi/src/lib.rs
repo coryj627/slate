@@ -93,6 +93,9 @@ pub enum VaultError {
     /// untouched.
     #[error("invalid argument: {message}")]
     InvalidArgument { message: String },
+    /// Checked Trash refused before any filesystem mutation.
+    #[error("{message}")]
+    TrashConfirmationChanged { message: String },
     #[error("destination already exists: {path}")]
     DestinationExists { path: String },
 
@@ -171,6 +174,9 @@ impl From<core::VaultError> for VaultError {
             core::VaultError::Unsupported { feature } => VaultError::Unsupported { feature },
             core::VaultError::InvalidArgument { message } => {
                 VaultError::InvalidArgument { message }
+            }
+            core::VaultError::TrashConfirmationChanged { message } => {
+                VaultError::TrashConfirmationChanged { message }
             }
             core::VaultError::DestinationExists { path } => VaultError::DestinationExists { path },
             core::VaultError::WriteConflict {
@@ -425,6 +431,9 @@ pub fn census_synthesize_vault_error(arm: String) -> Result<(), VaultError> {
         },
         "InvalidArgument" => VaultError::InvalidArgument {
             message: "census argument".into(),
+        },
+        "TrashConfirmationChanged" => VaultError::TrashConfirmationChanged {
+            message: "census trash confirmation".into(),
         },
         "DestinationExists" => VaultError::DestinationExists {
             path: "census/dest.md".into(),
@@ -897,6 +906,26 @@ impl VaultSession {
 
     pub fn delete_folder(&self, path: String) -> Result<(), VaultError> {
         Ok(self.inner.delete_folder(&path)?)
+    }
+
+    pub fn stage_trash(&self, request: BatchTrashRequest) -> Result<StagedTrash, VaultError> {
+        Ok(self.inner.stage_trash(request.into())?.into())
+    }
+
+    pub fn delete_file_staged(&self, path: String, token: u64) -> Result<(), VaultError> {
+        Ok(self.inner.delete_file_staged(&path, token)?)
+    }
+
+    pub fn delete_folder_staged(&self, path: String, token: u64) -> Result<(), VaultError> {
+        Ok(self.inner.delete_folder_staged(&path, token)?)
+    }
+
+    pub fn batch_trash_staged(
+        &self,
+        request: BatchTrashRequest,
+        token: u64,
+    ) -> Result<BatchTrashReport, VaultError> {
+        Ok(self.inner.batch_trash_staged(request.into(), token)?.into())
     }
 
     pub fn rename_file(
@@ -2581,6 +2610,35 @@ pub struct BatchMoveRequest {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct BatchTrashRequest {
     pub items: Vec<StructuralBatchItem>,
+}
+
+/// Counts and a single-use token from core's captured Trash inventory.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct StagedTrash {
+    pub token: u64,
+    pub items: Vec<StagedTrashItem>,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct StagedTrashItem {
+    pub item: StructuralBatchItem,
+    pub item_count: u64,
+}
+
+impl From<core::trash_confirmation::StagedTrash> for StagedTrash {
+    fn from(staged: core::trash_confirmation::StagedTrash) -> Self {
+        Self {
+            token: staged.token,
+            items: staged
+                .items
+                .into_iter()
+                .map(|entry| StagedTrashItem {
+                    item: entry.item.into(),
+                    item_count: entry.item_count,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]

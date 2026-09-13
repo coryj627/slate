@@ -1102,6 +1102,9 @@ pub struct VaultSession {
     /// filesystem/index mutation. Unlike `conn`, this guard may remain held
     /// while legacy undo calls an inverse helper which reacquires `conn`.
     structural_operation: Mutex<()>,
+    /// One pending confirmation per session; replacement expires the previous
+    /// token. Never persisted or accepted by another session.
+    trash_confirmation: Mutex<Option<crate::trash_confirmation::TrashConfirmation>>,
     /// In-memory adjacency mirror of the links table (Milestone P
     /// #550). `None` until the first graph query (`with_graph`), then
     /// maintained by replaying committed writes: hooked helpers stage
@@ -2322,6 +2325,7 @@ impl VaultSession {
             bases_generation: AtomicU64::new(1),
             structural_history_valid: std::sync::atomic::AtomicBool::new(true),
             structural_operation: Mutex::new(()),
+            trash_confirmation: Mutex::new(None),
             root_identity: None,
         };
         session.recover_structural_batch_inflight_on_open()?;
@@ -11804,6 +11808,7 @@ pub(crate) enum BatchFaultPoint {
     MoveJournal,
     MoveReconciliation,
     TrashIndex,
+    TrashWriteFence,
     TrashJournal,
     TrashReconciliation,
     RecoveryBarrier,
@@ -12051,6 +12056,72 @@ impl VaultSession {
                 message: "an interrupted structural operation requires close-and-reopen recovery"
                     .into(),
             })
+    }
+
+    /// Capture the inventory that the native Trash confirmation describes.
+    /// A newer stage expires the previous one. Hosts must use the returned
+    /// token even for the empty-folder fast path, and never restage on confirm.
+    pub fn stage_trash(
+        &self,
+        request: crate::BatchTrashRequest,
+    ) -> Result<crate::trash_confirmation::StagedTrash, VaultError> {
+        let _vault_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let _operation = self.structural_operation_guard()?;
+        *self
+            .trash_confirmation
+            .lock()
+            .expect("trash confirmation mutex") = None;
+        if request.items.is_empty() || request.items.len() > crate::MAX_STRUCTURAL_BATCH_ITEMS {
+            return Err(crate::trash_confirmation::stale());
+        }
+        let mut items = Vec::new();
+        for mut item in request.items {
+            validate_save_path(&item.path)?;
+            item.path = self.bind_source_path(&item.path)?.into_owned();
+            items.push(item);
+        }
+        let normalized = crate::structural_batch::normalize_batch_items(items);
+        if !normalized.failures.is_empty() {
+            return Err(crate::trash_confirmation::stale());
+        }
+        let conn = self.conn.lock().expect("session connection mutex");
+        ensure_structural_batch_idle(&conn)?;
+        let confirmation = crate::trash_confirmation::TrashConfirmation::capture(
+            self.provider.as_ref(),
+            crate::BatchTrashRequest {
+                items: normalized.items,
+            },
+        )?;
+        let staged = confirmation.staged();
+        *self
+            .trash_confirmation
+            .lock()
+            .expect("trash confirmation mutex") = Some(confirmation);
+        Ok(staged)
+    }
+
+    fn take_trash_confirmation(
+        &self,
+        token: u64,
+        request: &crate::BatchTrashRequest,
+    ) -> Result<crate::trash_confirmation::TrashConfirmation, VaultError> {
+        let mut pending = self
+            .trash_confirmation
+            .lock()
+            .expect("trash confirmation mutex");
+        if pending
+            .as_ref()
+            .is_none_or(|pending| pending.token != token)
+        {
+            return Err(crate::trash_confirmation::stale());
+        }
+        let confirmation = pending
+            .take()
+            .ok_or_else(crate::trash_confirmation::stale)?;
+        confirmation
+            .validate(self.provider.as_ref(), request)
+            .map_err(|_| crate::trash_confirmation::stale())?;
+        Ok(confirmation)
     }
 
     /// Move a deterministic, top-level selection as one logical request.
@@ -13595,9 +13666,29 @@ impl VaultSession {
         request: crate::BatchTrashRequest,
         faults: &dyn StructuralBatchFaultHook,
     ) -> Result<crate::BatchTrashReport, VaultError> {
+        self.batch_trash_checked(request, faults, None)
+    }
+
+    pub fn batch_trash_staged(
+        &self,
+        request: crate::BatchTrashRequest,
+        token: u64,
+    ) -> Result<crate::BatchTrashReport, VaultError> {
+        self.batch_trash_checked(request, &NoStructuralBatchFaults, Some(token))
+    }
+
+    fn batch_trash_checked(
+        &self,
+        request: crate::BatchTrashRequest,
+        faults: &dyn StructuralBatchFaultHook,
+        token: Option<u64>,
+    ) -> Result<crate::BatchTrashReport, VaultError> {
         use crate::structural_batch::{BatchFailureStage, BatchTrashState};
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
         let structural_operation = self.structural_operation_guard()?;
+        let confirmation = token
+            .map(|token| self.take_trash_confirmation(token, &request))
+            .transpose()?;
         if request.items.is_empty() || request.items.len() > crate::MAX_STRUCTURAL_BATCH_ITEMS {
             let message = if request.items.is_empty() {
                 "a structural batch must contain at least one item".to_string()
@@ -13653,11 +13744,43 @@ impl VaultSession {
 
         let mut successful = Vec::new();
         let mut untrashed = Vec::new();
+        let mut refused_before_provider = std::collections::HashSet::new();
         let mut unknown = Vec::new();
         let mut bookkeeping_failures = Vec::new();
         let mut requires_rescan = false;
         for plan in &plans {
-            let provider_result = self.provider.delete(&plan.item.path);
+            let provider_result = if let Some(confirmation) = &confirmation {
+                // Ordinary saves use the SQLite writer fence, not the
+                // structural lock. Hold both through validation and Trash.
+                let attempt = (|| -> Result<Result<(), VaultError>, VaultError> {
+                    faults.check(BatchFaultPoint::TrashWriteFence)?;
+                    let fence = db::begin_fenced(&conn)?;
+                    confirmation.validate_item(self.provider.as_ref(), &plan.item.path)?;
+                    let result = self.provider.delete(&plan.item.path);
+                    drop(fence);
+                    Ok(result)
+                })();
+                match attempt {
+                    Ok(result) => result,
+                    Err(error) => {
+                        // No provider call occurred. A missing or replaced item
+                        // must never flow into the post-delete "trashed" bucket.
+                        untrashed.push(crate::BatchTrashRemainder {
+                            item: plan.item.clone(),
+                            failure: structural_batch_failure(
+                                Some(plan.item.clone()),
+                                BatchFailureStage::Trash,
+                                error.to_string(),
+                            ),
+                        });
+                        requires_rescan = true;
+                        refused_before_provider.insert(plan.item.path.clone());
+                        continue;
+                    }
+                }
+            } else {
+                self.provider.delete(&plan.item.path)
+            };
             let expected_kind = if plan.item.is_directory {
                 EntryKind::Directory
             } else {
@@ -13828,7 +13951,9 @@ impl VaultSession {
                 }
             }
             for remainder in &untrashed {
-                clear(&remainder.item.path);
+                if !refused_before_provider.contains(&remainder.item.path) {
+                    clear(&remainder.item.path);
+                }
             }
             let _ = tx.commit();
         }
@@ -14422,12 +14547,33 @@ impl VaultSession {
     /// Move a file to the system trash. Journaled for auditability; NOT
     /// undoable via `undo_structural` (the bytes are in the trash).
     pub fn delete_file(&self, path: &str) -> Result<(), VaultError> {
+        self.delete_file_checked(path, None)
+    }
+
+    pub fn delete_file_staged(&self, path: &str, token: u64) -> Result<(), VaultError> {
+        self.delete_file_checked(path, Some(token))
+    }
+
+    fn delete_file_checked(&self, path: &str, token: Option<u64>) -> Result<(), VaultError> {
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
         let structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
         // #1077 (I2/I3): the row that goes is the stored spelling's.
         let bound_path = self.bind_source_path(path)?;
         let path: &str = &bound_path;
+        let confirmation = token
+            .map(|token| {
+                self.take_trash_confirmation(
+                    token,
+                    &crate::BatchTrashRequest {
+                        items: vec![crate::StructuralBatchItem {
+                            path: path.to_string(),
+                            is_directory: false,
+                        }],
+                    },
+                )
+            })
+            .transpose()?;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
         // Capture the op-log binding before the row goes: the journal
@@ -14464,6 +14610,9 @@ impl VaultSession {
         let mut recreated = false;
         let mut graph_sink = self.graph_sink();
         self.with_structural_tx(&mut conn, |tx| {
+            if let Some(confirmation) = &confirmation {
+                confirmation.validate_item(self.provider.as_ref(), path)?;
+            }
             self.provider.delete(path)?;
             recreated = match self.provider.stat(path) {
                 Ok(_) => true,
@@ -14525,12 +14674,33 @@ impl VaultSession {
     /// Move a folder (recursively) to the system trash. Journaled; not
     /// undoable via `undo_structural`.
     pub fn delete_folder(&self, path: &str) -> Result<(), VaultError> {
+        self.delete_folder_checked(path, None)
+    }
+
+    pub fn delete_folder_staged(&self, path: &str, token: u64) -> Result<(), VaultError> {
+        self.delete_folder_checked(path, Some(token))
+    }
+
+    fn delete_folder_checked(&self, path: &str, token: Option<u64>) -> Result<(), VaultError> {
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
         let structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
         // #1077 (I2/I3): the subtree that goes is the stored spelling's.
         let bound_path = self.bind_source_path(path)?;
         let path: &str = &bound_path;
+        let confirmation = token
+            .map(|token| {
+                self.take_trash_confirmation(
+                    token,
+                    &crate::BatchTrashRequest {
+                        items: vec![crate::StructuralBatchItem {
+                            path: path.to_string(),
+                            is_directory: true,
+                        }],
+                    },
+                )
+            })
+            .transpose()?;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
         // Membership-fenced trash (final-confirmation review): every
@@ -14541,8 +14711,12 @@ impl VaultSession {
         // Deleted events fire from the fenced membership after
         // commit. See fence_prefix_and_mutate.
 
-        let (planted_markers, ()) =
-            self.fence_prefix_and_mutate(&mut conn, path, None, || self.provider.delete(path))?;
+        let (planted_markers, ()) = self.fence_prefix_and_mutate(&mut conn, path, None, || {
+            if let Some(confirmation) = &confirmation {
+                confirmation.validate_item(self.provider.as_ref(), path)?;
+            }
+            self.provider.delete(path)
+        })?;
         let fenced_members: Vec<String> = {
             let mut unique: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
             for (marker_path, _) in &planted_markers {
@@ -20123,6 +20297,7 @@ mod tests {
 
     #[path = "structural_batch.rs"]
     mod structural_batch;
+    mod trash_confirmation;
 
     #[path = "link_integrity.rs"]
     mod link_integrity;

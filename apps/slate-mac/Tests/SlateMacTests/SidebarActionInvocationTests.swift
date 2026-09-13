@@ -1615,7 +1615,7 @@ final class SidebarActionInvocationTests: XCTestCase {
             "a formatter owned by the previous vault cannot mutate or announce")
     }
 
-    func test12TrashUsesExactSingleFileFolderOrOrderedBatchAndRejectsFalse() throws {
+    func test12TrashUsesExactSingleFileFolderOrOrderedBatchAndRejectsFalse() async throws {
         let state = try openVault(
             named: "trash", files: ["A.md", "Folder/Child.md"], folders: ["Folder"])
         let file = try snapshot(on: state, [item("A.md")], focusedPath: "A.md")
@@ -1649,6 +1649,7 @@ final class SidebarActionInvocationTests: XCTestCase {
             try state.dispatchSidebarAction(
                 intent(SlateCommandID.deleteEntry, snapshot: folder)),
             .completed(actionID: SlateCommandID.deleteEntry))
+        await state.pendingStructuralTaskForTesting?.value
         let pendingFolder = try XCTUnwrap(state.pendingFolderDelete)
         XCTAssertEqual(pendingFolder.path, "Folder")
         XCTAssertEqual(pendingFolder.itemCount, 1)

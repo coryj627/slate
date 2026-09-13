@@ -590,6 +590,18 @@ fn resolve_relative(root: &Path, relative: &str) -> Result<PathBuf, VaultError> 
 }
 
 impl VaultProvider for FsVaultProvider {
+    fn trash_snapshot(&self, relative: &str) -> Result<super::TrashSnapshot, VaultError> {
+        #[cfg(unix)]
+        {
+            let target = self.pin_mutation_target(relative, false)?;
+            super::trash_snapshot::snapshot_at(&target.parent, &target.leaf)
+        }
+        #[cfg(not(unix))]
+        {
+            super::trash_snapshot::snapshot(&self.root, &self.resolve_for_mutation(relative)?)
+        }
+    }
+
     fn list_dir(&self, relative: &str) -> Result<Vec<DirEntry>, VaultError> {
         let path = self.resolve(relative)?;
         let read = fs::read_dir(&path)?;

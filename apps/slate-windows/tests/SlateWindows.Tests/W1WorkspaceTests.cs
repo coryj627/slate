@@ -414,7 +414,7 @@ public sealed class W1SidebarCompletionTests : IDisposable
     }
 
     [Fact]
-    public void Sidebar_NonEmptyFolderDeleteStagesARefusableConfirmation_AndImportUsesExclusiveCollisionNames()
+    public async Task Sidebar_NonEmptyFolderDeleteStagesARefusableConfirmation_AndImportUsesExclusiveCollisionNames()
     {
         using FixtureVault fixture = FixtureVault.Create(1, "sidebar-import");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "full"));
@@ -437,6 +437,7 @@ public sealed class W1SidebarCompletionTests : IDisposable
         sidebar.ConfirmRecycle = _ => false;
         sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == "full");
         sidebar.DeleteCommand.Execute(null);
+        await sidebar.TrashCompletion;
         Assert.True(File.Exists(Path.Combine(fixture.Root, "full", "inner.md")));
 
         sidebar.SelectedNode = null;

@@ -417,15 +417,29 @@ enforced by construction, not by review.
   state" are defined over per-file `ReadOplog`, the returned
   reports, and typed rejections — not over the `structural_ops`
   table, which no FFI exposes.
-- **FR-8 — Delete-staging TOCTOU** (codex round 1): the F6
-  child-count probe and the trash execute without a shared lock or
-  token — a concurrent writer (a sync client) can populate a folder
-  between the probe and the trash, so contents can exceed what the
-  confirmation named. Accepted: mac's staging has the identical
-  host-probe shape, the destination is the recoverable Recycle Bin,
-  and closing the window needs a core staged-confirmation token
-  validated under the structural lock — a core FFI follow-up, filed
-  at PR time, not host scope.
+- **FR-8 — Staged Trash inventory (#1125).** Both hosts now obtain the
+  confirmation count and a session-local, single-use token from core. Core
+  captures root/descendant identity, kind, names and precise metadata, including
+  hidden and unindexed entries. A newer stage expires the previous token. The
+  checked single/batch endpoints verify the captured selection before writing;
+  final per-item validation and Trash share the structural lock and SQLite
+  writer fence. Files and empty folders use the same protocol without a prompt.
+  A stale initial token refuses the whole request with
+  `TrashConfirmationChanged`; a later stale batch item is reported untrashed,
+  retains recovery markers, and does not erase earlier successful outcomes.
+  Counts are recursive on both hosts. Unsupported providers, unreadable
+  entries, unknown Windows reparse types, or inventories over 100,000 entries /
+  256 levels refuse; no unknown-count bypass exists.
+  Traversal enumerates opened directories and opens each child relative to its
+  parent handle/descriptor without following links. Windows sharing flags alone
+  cannot prevent an attribute writer from converting a pinned directory into a
+  junction; no path-based enumeration fallback is used.
+  **Residual:** metadata inventories are observations, not filesystem
+  transactions. They cannot detect every content edit on every filesystem, nor
+  exclude an arbitrary external writer between the final observation and the
+  path-based system Trash call. The new token closes the separated host-probe
+  contract and coordinates Slate writers; it does not claim atomic exclusion of
+  sync clients. Keep #1125 open for that remaining boundary and FR-10.
 - **FR-9 — The Move-To enumeration is synchronous on the UI thread**
   (codex round 1): the paged walk (50k-folder bound, 1k-row pages)
   blocks the dispatcher for its duration on a pathologically large or
@@ -441,14 +455,12 @@ enforced by construction, not by review.
   window needs an identity-conditional core inverse (validate and
   mutate one opened object atomically) — grouped with FR-8's
   staged-token follow-up, filed at PR time.
-- **FR-11 — Staging probes are bounded but synchronous** (codex
-  round 8): the single-delete child count caps at 10,000 entries
-  (past the cap the count is UNKNOWN and the count-free message arm
-  stages), and batch staging probes emptiness with one top-level
-  read per directory — but a STALLED filesystem (a dead network
-  share) still stalls the probe, as it stalls every file operation
-  under FD-7's synchronous model. Async, cancellable staging is the
-  recorded upgrade path, grouped with FR-9's loader follow-up.
+- **FR-11 — Trash inventory work is asynchronous (#1125).** Both hosts
+  run staging and final native revalidation off the UI thread and retain
+  structural/session ownership across the work. Closing or replacing the vault
+  suppresses old-session UI completion. The bounded walk cannot interrupt a
+  stalled OS filesystem call; cancellable I/O and the Move-To loader remain
+  separate follow-ups.
 
 ## Phase plan
 

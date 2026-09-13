@@ -85,7 +85,7 @@ hayagriva = { version = "0.10", default-features = false, features = ["biblatex"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true }
+windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Security", "Win32_System_IO"] }
 
 [dev-dependencies]
 criterion = { workspace = true }

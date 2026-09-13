@@ -40,6 +40,9 @@
 
 mod fs;
 mod provider;
+mod trash_snapshot;
+
+pub use trash_snapshot::TrashSnapshot;
 
 pub use fs::{FsVaultProvider, content_hash};
 pub use provider::{

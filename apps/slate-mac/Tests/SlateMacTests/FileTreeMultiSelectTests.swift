@@ -108,7 +108,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
     }
 
     private actor BatchDeleteConfirmationProbe {
-        private(set) var roots: [URL] = []
+        private(set) var roots: [ObjectIdentifier] = []
         private(set) var folderPathRequests: [[String]] = []
         let nonEmptyFolderCount: Int
         let gate: SuspensionGate?
@@ -118,15 +118,21 @@ final class FileTreeMultiSelectTests: XCTestCase {
             self.gate = gate
         }
 
-        func run(vaultURL: URL, folderPaths: [String]) async -> Int {
-            roots.append(vaultURL)
-            folderPathRequests.append(folderPaths)
+        func run(session: VaultSession, request: BatchTrashRequest) async -> StagedTrash {
+            roots.append(ObjectIdentifier(session))
+            folderPathRequests.append(request.items.filter(\.isDirectory).map(\.path))
             if let gate { await gate.enter() }
-            return nonEmptyFolderCount
+            var remaining = nonEmptyFolderCount
+            let staged = request.items.map { item in
+                let count: UInt64 = item.isDirectory && remaining > 0 ? 1 : 0
+                if count > 0 { remaining -= 1 }
+                return StagedTrashItem(item: item, itemCount: count)
+            }
+            return StagedTrash(token: 0, items: staged)
         }
 
         func callCount() -> Int { roots.count }
-        func lastRoot() -> URL? { roots.last }
+        func lastRoot() -> ObjectIdentifier? { roots.last }
         func lastFolderPaths() -> [String]? { folderPathRequests.last }
     }
 
@@ -582,12 +588,14 @@ final class FileTreeMultiSelectTests: XCTestCase {
         state.structuralBatchRefreshRunner = { _ in }
 
         state.requestDeleteEntry(path: "folder", isDirectory: true)
+        await state.pendingStructuralTaskForTesting?.value
         let stale = try XCTUnwrap(state.pendingFolderDelete)
         XCTAssertEqual(
             stale.sessionIdentity,
             state.currentSession.map(ObjectIdentifier.init))
         XCTAssertTrue(state.cancelPendingFolderDelete(id: stale.id))
         state.requestDeleteEntry(path: "folder", isDirectory: true)
+        await state.pendingStructuralTaskForTesting?.value
         let current = try XCTUnwrap(state.pendingFolderDelete)
         XCTAssertNotEqual(current.id, stale.id, "re-staging the same path gets a fresh owner")
         XCTAssertFalse(state.confirmPendingFolderDelete(id: stale.id))
@@ -3076,23 +3084,16 @@ final class FileTreeMultiSelectTests: XCTestCase {
     /// Native batch Trash also preflights the whole projected action. A missing
     /// input is an authoritative rejection: the remaining file stays put and
     /// no successful Trash/history claim is emitted.
-    func testBatchDeleteCountsOnlySuccessesOnPartialFailure() async throws {
+    func testBatchDeleteMissingEntryRefusesDuringStaging() async throws {
         let (state, vault) = try await makeVault(files: ["a.md", "b.md"])
-        // a.md is gone before the batch runs, so b.md must not be trashed.
         try FileManager.default.removeItem(at: vault.appendingPathComponent("a.md"))
         await state.batchDelete([sel("a.md"), sel("b.md")]).value
-        XCTAssertTrue(exists(vault, "b.md"), "preflight rejection writes nothing")
-        XCTAssertEqual(
-            state.lastMutationAnnouncement,
-            "Couldn’t start moving the selected items to Trash.")
+        XCTAssertTrue(exists(vault, "b.md"))
+        XCTAssertTrue(state.lastMutationAnnouncement?.hasPrefix("Could not prepare Trash:") == true)
+        XCTAssertNotNil(state.lastError)
+        XCTAssertNil(state.batchStructuralResult)
         XCTAssertTrue(state.structuralUndoStack.isEmpty)
         XCTAssertTrue(state.structuralRedoStack.isEmpty)
-        guard case let .trash(report)? = state.batchStructuralResult?.payload else {
-            return XCTFail("the typed native Trash rejection must be retained")
-        }
-        XCTAssertEqual(report.state, .rejected)
-        XCTAssertTrue(report.trashed.isEmpty)
-        XCTAssertTrue(state.batchStructuralResult?.requiresAttention ?? false)
     }
 
     /// FL04-A replaces count-derived batch grammar with stable catalog labels;
@@ -3133,43 +3134,31 @@ final class FileTreeMultiSelectTests: XCTestCase {
 
         XCTAssertTrue(
             src.contains(
-                "typealias BatchDeleteConfirmationProbeRunner = @Sendable (URL, [String]) async -> Int"),
+                "typealias BatchDeleteConfirmationProbeRunner = @Sendable (VaultSession, BatchTrashRequest) async throws -> StagedTrash"),
             "batch confirmation probing needs one injectable whole-selection async seam")
         XCTAssertTrue(
             src.contains("var batchDeleteConfirmationProbeRunner:"),
             "AppState must own the production/test runner")
     }
 
-    func testC5BatchDeleteProbeIgnoresOnlyDSStoreAndCountsHiddenEntries() async throws {
-        let (state, vault) = try await makeVault(
-            files: ["ds-only/.DS_Store", "hidden/.env"])
-
-        let count = await state.batchDeleteConfirmationProbeRunner(
-            vault, ["ds-only", "hidden"])
-
-        XCTAssertEqual(
-            count, 1,
-            ".DS_Store-only is empty, while another hidden entry requires confirmation")
+    func testC5BatchDeleteProbeCountsEveryHiddenEntry() async throws {
+        let (state, _) = try await makeVault(files: ["ds-only/.DS_Store", "hidden/.env"])
+        let session = try XCTUnwrap(state.currentSession)
+        let staged = try await state.batchDeleteConfirmationProbeRunner(
+            session, BatchTrashRequest(items: [item("ds-only", dir: true), item("hidden", dir: true)]))
+        XCTAssertEqual(staged.items.map(\.itemCount), [1, 1])
     }
 
-    func testC5BatchDeleteProbeFailsClosedWhenFolderCannotBeEnumerated() async throws {
-        let (state, vault) = try await makeVault(files: ["a.md"])
-
-        let count = await state.batchDeleteConfirmationProbeRunner(
-            vault, ["missing-folder"])
-
-        XCTAssertEqual(count, 1, "unknown folder contents must require confirmation")
-    }
-
-    func testC5BatchDeleteProbeFailsClosedWhenRegularFileIsClaimedAsFolder() async throws {
-        let (state, vault) = try await makeVault(files: ["a.md"])
-
-        let count = await state.batchDeleteConfirmationProbeRunner(
-            vault, ["missing-folder", "a.md"])
-
-        XCTAssertEqual(
-            count, 2,
-            "both a missing path and an existing non-directory must require confirmation")
+    func testC5BatchDeleteProbeRefusesMissingOrWrongKindEntries() async throws {
+        let (state, _) = try await makeVault(files: ["a.md"])
+        let session = try XCTUnwrap(state.currentSession)
+        for path in ["missing-folder", "a.md"] {
+            do {
+                _ = try await state.batchDeleteConfirmationProbeRunner(
+                    session, BatchTrashRequest(items: [item(path, dir: true)]))
+                XCTFail("Missing or wrong-kind entry must refuse staging")
+            } catch { }
+        }
     }
 
     func testC5BatchDeleteRequestProbesAllFoldersOnceAndStagesCapturedConfirmation()
@@ -3178,8 +3167,8 @@ final class FileTreeMultiSelectTests: XCTestCase {
         let (state, vault) = try await makeVault(
             files: ["a.md", "folder/x.md", "empty/.DS_Store"])
         let probe = BatchDeleteConfirmationProbe(nonEmptyFolderCount: 1)
-        state.batchDeleteConfirmationProbeRunner = { vaultURL, folderPaths in
-            await probe.run(vaultURL: vaultURL, folderPaths: folderPaths)
+        state.batchDeleteConfirmationProbeRunner = { session, request in
+            await probe.run(session: session, request: request)
         }
         let items = [sel("a.md"), sel("folder", dir: true), sel("empty", dir: true)]
 
@@ -3193,7 +3182,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
         let probedRoot = await probe.lastRoot()
         let probedFolderPaths = await probe.lastFolderPaths()
         XCTAssertEqual(probeCallCount, 1)
-        XCTAssertEqual(probedRoot, vault)
+        XCTAssertEqual(probedRoot, ObjectIdentifier(try XCTUnwrap(state.currentSession)))
         XCTAssertEqual(probedFolderPaths, ["folder", "empty"])
         let pending = try XCTUnwrap(state.pendingBatchDelete)
         XCTAssertEqual(pending.items, items)
@@ -3211,7 +3200,9 @@ final class FileTreeMultiSelectTests: XCTestCase {
             moveReport: moveReport(state: .noOp, planned: []),
             trashReport: report)
         let (state, _) = try await makeVault(files: ["a.md", "empty/.DS_Store"])
-        state.batchDeleteConfirmationProbeRunner = { _, _ in 0 }
+        state.batchDeleteConfirmationProbeRunner = { _, request in
+            StagedTrash(token: 0, items: request.items.map { StagedTrashItem(item: $0, itemCount: 0) })
+        }
         state.batchTrashRunner = { _, request in await trashProbe.runTrash(request) }
         state.structuralBatchRefreshRunner = { _ in }
 
@@ -3237,8 +3228,8 @@ final class FileTreeMultiSelectTests: XCTestCase {
         let gate = SuspensionGate()
         let probe = BatchDeleteConfirmationProbe(nonEmptyFolderCount: 1, gate: gate)
         let (state, _) = try await makeVault(files: ["a.md", "folder/x.md"])
-        state.batchDeleteConfirmationProbeRunner = { vaultURL, folderPaths in
-            await probe.run(vaultURL: vaultURL, folderPaths: folderPaths)
+        state.batchDeleteConfirmationProbeRunner = { session, request in
+            await probe.run(session: session, request: request)
         }
         let items = [sel("a.md"), sel("folder", dir: true)]
 
@@ -3273,8 +3264,8 @@ final class FileTreeMultiSelectTests: XCTestCase {
             moveReport: moveReport(state: .noOp, planned: []),
             trashReport: report)
         let (state, _) = try await makeVault(files: ["a.md", "empty/.DS_Store"])
-        state.batchDeleteConfirmationProbeRunner = { vaultURL, folderPaths in
-            await confirmationProbe.run(vaultURL: vaultURL, folderPaths: folderPaths)
+        state.batchDeleteConfirmationProbeRunner = { session, request in
+            await confirmationProbe.run(session: session, request: request)
         }
         state.batchTrashRunner = { _, request in
             let result = await trashProbe.runTrash(request)
@@ -3314,8 +3305,8 @@ final class FileTreeMultiSelectTests: XCTestCase {
             trashReport: trashReport(state: .noOp, planned: []))
         let (state, _) = try await makeVault(
             named: "vault-a", files: ["a.md", "folder/x.md"])
-        state.batchDeleteConfirmationProbeRunner = { vaultURL, folderPaths in
-            await confirmationProbe.run(vaultURL: vaultURL, folderPaths: folderPaths)
+        state.batchDeleteConfirmationProbeRunner = { session, request in
+            await confirmationProbe.run(session: session, request: request)
         }
         state.batchTrashRunner = { _, request in await trashProbe.runTrash(request) }
 
@@ -3357,8 +3348,8 @@ final class FileTreeMultiSelectTests: XCTestCase {
             trashReport: trashReport(state: .noOp, planned: []))
         let (state, _) = try await makeVault(
             named: "vault-a", files: ["a.md", "folder/x.md"])
-        state.batchDeleteConfirmationProbeRunner = { vaultURL, folderPaths in
-            await confirmationProbe.run(vaultURL: vaultURL, folderPaths: folderPaths)
+        state.batchDeleteConfirmationProbeRunner = { session, request in
+            await confirmationProbe.run(session: session, request: request)
         }
         state.batchTrashRunner = { _, request in await trashProbe.runTrash(request) }
 
@@ -3443,17 +3434,10 @@ final class FileTreeMultiSelectTests: XCTestCase {
     /// the exact single-folder confirmation copy.
     func testRequestBatchDeleteSingleItemUsesSingleFunnel() async throws {
         let (state, _) = try await makeVault(files: ["folder/x.md", "a.md"])
-        let probe = BatchDeleteConfirmationProbe(nonEmptyFolderCount: 0)
-        state.batchDeleteConfirmationProbeRunner = { vaultURL, folderPaths in
-            await probe.run(vaultURL: vaultURL, folderPaths: folderPaths)
-        }
         state.requestBatchDelete([sel("folder", dir: true)])
-        let probeCalls = await probe.callCount()
+        await state.pendingStructuralTaskForTesting?.value
         XCTAssertNil(state.pendingBatchDelete)
-        XCTAssertEqual(probeCalls, 0, "one item never enters the batch probe")
-        XCTAssertEqual(
-            state.pendingFolderDelete?.path, "folder",
-            "one item routes to the single-node #860 confirmation")
+        XCTAssertEqual(state.pendingFolderDelete?.path, "folder")
     }
 
     func testConfirmPendingBatchDeleteTrashesTheStagedItems() async throws {

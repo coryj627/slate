@@ -90,6 +90,16 @@ pub trait VaultProvider: Send + Sync {
     /// where the platform supports it.
     fn delete(&self, relative: &str) -> Result<(), VaultError>;
 
+    /// Snapshot the entry and all descendants for later Trash confirmation.
+    /// Include hidden entries and identities; never follow descendant links.
+    /// Unsupported providers refuse rather than substitute a shallow count.
+    /// Callers must validate again under the structural lock before mutation.
+    fn trash_snapshot(&self, _relative: &str) -> Result<super::TrashSnapshot, VaultError> {
+        Err(VaultError::InvalidArgument {
+            message: "This vault provider cannot verify Trash confirmation".into(),
+        })
+    }
+
     /// Rename or move a file within the vault.
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError>;
 
