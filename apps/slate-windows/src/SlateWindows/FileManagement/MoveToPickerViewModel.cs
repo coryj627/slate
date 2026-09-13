@@ -83,6 +83,7 @@ internal sealed class MoveToPickerViewModel : BindableBase
     private string _filterText = string.Empty;
     private IReadOnlyList<MoveToRowViewModel> _rows = [];
     private MoveToRowViewModel? _selectedRow;
+    private bool _selectionIsExplicit;
     private bool _rebuilding;
     private ICommand? _activateCommand;
     private ICommand? _cancelCommand;
@@ -127,6 +128,9 @@ internal sealed class MoveToPickerViewModel : BindableBase
     public bool IsReady => !_retired && _state == MoveToLoadState.Ready;
     public bool CanRetry => !_retired && _state == MoveToLoadState.Failed;
     public string Status => _status;
+    public string RowHelpText => IsReady ? "Activate to move here."
+        : _state == MoveToLoadState.Failed ? "Destination loading failed. Try again before moving."
+        : "Destination folders are loading. You can browse now and move when loading finishes.";
     public ICommand RetryCommand => _retryCommand ??= new RelayCommand(
         _ => { if (CanRetry && _ownsPresentation()) { _retry?.Invoke(); } },
         _ => CanRetry && _ownsPresentation());
@@ -177,6 +181,7 @@ internal sealed class MoveToPickerViewModel : BindableBase
         OnPropertyChanged(nameof(IsReady));
         OnPropertyChanged(nameof(CanRetry));
         OnPropertyChanged(nameof(Status));
+        OnPropertyChanged(nameof(RowHelpText));
         OnPropertyChanged(nameof(Subtitle));
         (_activateCommand as RelayCommand)?.RaiseCanExecuteChanged();
         (_retryCommand as RelayCommand)?.RaiseCanExecuteChanged();
@@ -221,6 +226,7 @@ internal sealed class MoveToPickerViewModel : BindableBase
         get => _selectedRow;
         set
         {
+            if (!_rebuilding) { _selectionIsExplicit = value is not null; }
             if (SetField(ref _selectedRow, value)
                 && !_retired && _ownsPresentation()
                 && !_rebuilding
@@ -291,6 +297,15 @@ internal sealed class MoveToPickerViewModel : BindableBase
         }
 
         MoveToRowViewModel? previous = SelectedRow;
+        // A loading picker can temporarily fall back to the pinned root before
+        // any query match arrives. Preserve an explicit root choice, but let the
+        // first match replace that automatic fallback for keyboard activation.
+        MoveToRowViewModel? preserved = !announceCount && previous is not null
+            && (filter.Length == 0 || previous.Kind != MoveToRowKind.VaultRoot || _selectionIsExplicit)
+            ? rows.FirstOrDefault(row => row.Kind == previous.Kind
+                && row.Destination == previous.Destination)
+            : null;
+        _selectionIsExplicit = preserved is not null && _selectionIsExplicit;
         _rebuilding = true;
         try
         {
@@ -298,14 +313,10 @@ internal sealed class MoveToPickerViewModel : BindableBase
             // Default selection prefers the first row the QUERY
             // produced: with text typed, the pinned root would
             // otherwise steal Enter from the filtered match.
-            SelectedRow = !announceCount && previous is not null
-                ? rows.FirstOrDefault(row => row.Kind == previous.Kind
-                    && row.Destination == previous.Destination)
-                    ?? rows.FirstOrDefault()
-                : filter.Length == 0
+            SelectedRow = preserved ?? (filter.Length == 0
                 ? rows.FirstOrDefault()
                 : rows.FirstOrDefault(row => row.Kind != MoveToRowKind.VaultRoot)
-                    ?? rows.FirstOrDefault();
+                    ?? rows.FirstOrDefault());
         }
         finally
         {

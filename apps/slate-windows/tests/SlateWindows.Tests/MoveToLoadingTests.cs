@@ -202,6 +202,48 @@ public sealed class MoveToLoadingTests
         Assert.DoesNotContain(picker.Rows, row => row.Kind == MoveToRowKind.NewFolder);
     }
 
+    [Theory]
+    [InlineData(false, "Archive")]
+    [InlineData(true, "")]
+    public void QueryMatchReplacesOnlyAnImplicitRootSelection(bool explicitlyChooseRoot, string destination)
+    {
+        string? movedTo = null;
+        var picker = new MoveToPickerViewModel([], true, "folder/a.md", value => movedTo = value,
+            _ => { }, () => { }, _ => false, _ => { }, loading: true);
+        picker.FilterText = "Archive";
+        Assert.Equal(MoveToRowKind.VaultRoot, picker.SelectedRow?.Kind);
+        if (explicitlyChooseRoot)
+        {
+            picker.SelectedRow = picker.Rows.Single(row => row.Kind == MoveToRowKind.VaultRoot);
+        }
+        picker.PublishFolders(["Archive"], complete: false, truncated: false);
+        Assert.Equal(destination, picker.SelectedRow?.Destination);
+        Assert.False(picker.ActivateCommand.CanExecute(picker.SelectedRow));
+        picker.PublishFolders(["Archive"], complete: true, truncated: false);
+        picker.ActivateCommand.Execute(picker.SelectedRow);
+        Assert.Equal(destination, movedTo);
+    }
+
+    [Fact]
+    public void RowAccessibilityHintFollowsLoadingFailureRetryAndReadiness()
+    {
+        var picker = new MoveToPickerViewModel([], true, "folder/a.md", _ => { },
+            _ => { }, () => { }, _ => false, _ => { }, loading: true);
+        var hintChanges = new List<string>();
+        picker.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(picker.RowHelpText)) { hintChanges.Add(picker.RowHelpText); }
+        };
+        Assert.Contains("loading", picker.RowHelpText, StringComparison.Ordinal);
+        picker.FailLoading("Cannot load destinations.");
+        Assert.Contains("Try again before moving", picker.RowHelpText, StringComparison.Ordinal);
+        picker.BeginLoading();
+        Assert.Contains("move when loading finishes", picker.RowHelpText, StringComparison.Ordinal);
+        picker.PublishFolders(["Archive"], complete: true, truncated: false);
+        Assert.Equal("Activate to move here.", picker.RowHelpText);
+        Assert.Equal(3, hintChanges.Count);
+    }
+
     private static string Render(A11yEvent item) => SlateUniffiMethods.A11yRender(item).Text;
 
     private sealed class QueuedContext : SynchronizationContext

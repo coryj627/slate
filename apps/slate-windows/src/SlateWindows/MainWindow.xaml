@@ -3803,7 +3803,7 @@
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
-                                <Setter Property="AutomationProperties.HelpText" Value="Activate to move here." />
+                                <Setter Property="AutomationProperties.HelpText" Value="{Binding DataContext.RowHelpText, RelativeSource={RelativeSource AncestorType=ListBox}}" />
                                 <Setter Property="Padding" Value="8,6" />
                             </Style>
                         </ListBox.ItemContainerStyle>
