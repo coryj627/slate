@@ -70,11 +70,19 @@ public partial class MainWindow
             return;
         }
 
-        if (sidebar.MoveToSheet is not null)
+        if (sidebar.MoveToSheet is { } picker)
         {
             _focusBeforeMoveTo ??= CapturePreSheetFocus();
             _ = Dispatcher.InvokeAsync(
-                () => MoveToFilterTextBox.Focus(), DispatcherPriority.Input);
+                () =>
+                {
+                    if (ReferenceEquals(_observedFileSidebar, sidebar)
+                        && ReferenceEquals(sidebar.MoveToSheet, picker)
+                        && OpenModalSurface == ModalSurface.MoveTo)
+                    {
+                        MoveToFilterTextBox.Focus();
+                    }
+                }, DispatcherPriority.Input);
         }
         else
         {
@@ -85,10 +93,12 @@ public partial class MainWindow
     private void RestoreFocusAfterMoveTo()
     {
         IInputElement? focusBefore = _focusBeforeMoveTo;
+        FilesSidebarViewModel? sidebar = _observedFileSidebar;
         _focusBeforeMoveTo = null;
         _ = Dispatcher.InvokeAsync(
             () =>
             {
+                if (!ReferenceEquals(_observedFileSidebar, sidebar)) { return; }
                 // Invariant 4's backstop, then the supersession
                 // stand-down — the template restore's shape.
                 if (TryFocusSearchIfTopmost())

@@ -23,6 +23,8 @@ internal enum MoveToRowKind
     Folder,
 }
 
+internal enum MoveToLoadState { Loading, Ready, Failed }
+
 /// <summary>One picker row.</summary>
 internal sealed class MoveToRowViewModel
 {
@@ -64,13 +66,19 @@ internal sealed class MoveToRowViewModel
 /// </summary>
 internal sealed class MoveToPickerViewModel : BindableBase
 {
-    private readonly IReadOnlyList<string> _folders;
+    private IReadOnlyList<string> _folders;
     private readonly bool _rootIsLegal;
     private readonly Action<string> _confirmed;
     private readonly Action<string> _createAndMove;
     private readonly Action _cancelled;
     private readonly Func<string, bool> _newFolderPathAllowed;
     private readonly Action<A11yEvent> _announce;
+    private readonly Action? _retry;
+    private readonly Func<bool> _ownsPresentation;
+    private bool _retired;
+    private bool _truncated;
+    private MoveToLoadState _state;
+    private string _status = string.Empty;
 
     private string _filterText = string.Empty;
     private IReadOnlyList<MoveToRowViewModel> _rows = [];
@@ -78,6 +86,7 @@ internal sealed class MoveToPickerViewModel : BindableBase
     private bool _rebuilding;
     private ICommand? _activateCommand;
     private ICommand? _cancelCommand;
+    private ICommand? _retryCommand;
 
     internal MoveToPickerViewModel(
         IReadOnlyList<string> legalFolders,
@@ -87,7 +96,10 @@ internal sealed class MoveToPickerViewModel : BindableBase
         Action<string> createAndMove,
         Action cancelled,
         Func<string, bool> newFolderPathAllowed,
-        Action<A11yEvent> announce)
+        Action<A11yEvent> announce,
+        bool loading = false,
+        Action? retry = null,
+        Func<bool>? ownsPresentation = null)
     {
         ArgumentNullException.ThrowIfNull(legalFolders);
         ArgumentNullException.ThrowIfNull(itemNoun);
@@ -104,7 +116,71 @@ internal sealed class MoveToPickerViewModel : BindableBase
         _cancelled = cancelled;
         _newFolderPathAllowed = newFolderPathAllowed;
         _announce = announce;
+        _retry = retry;
+        _ownsPresentation = ownsPresentation ?? (() => true);
+        _state = loading ? MoveToLoadState.Loading : MoveToLoadState.Ready;
+        _status = loading ? "Loading destination folders… Escape to cancel." : string.Empty;
         RebuildRows(announceCount: false);
+    }
+
+    public MoveToLoadState State => _state;
+    public bool IsReady => !_retired && _state == MoveToLoadState.Ready;
+    public bool CanRetry => !_retired && _state == MoveToLoadState.Failed;
+    public string Status => _status;
+    public ICommand RetryCommand => _retryCommand ??= new RelayCommand(
+        _ => { if (CanRetry && _ownsPresentation()) { _retry?.Invoke(); } },
+        _ => CanRetry && _ownsPresentation());
+
+    internal void BeginLoading()
+    {
+        _folders = [];
+        _truncated = false;
+        SetLoadState(MoveToLoadState.Loading, "Loading destination folders… Escape to cancel.");
+        RebuildRows(announceCount: false);
+    }
+
+    internal void PublishFolders(IReadOnlyList<string> folders, bool complete, bool truncated)
+    {
+        if (_retired) { return; }
+        _folders = folders;
+        _truncated = truncated;
+        SetLoadState(complete ? MoveToLoadState.Ready : MoveToLoadState.Loading,
+            truncated ? "Showing the first 50,000 folders. More folders may exist."
+                : complete ? "Destination folders loaded."
+                : $"Loading destination folders… {folders.Count:N0} available so far. Escape to cancel.");
+        RebuildRows(announceCount: false);
+    }
+
+    internal void FailLoading(string reason)
+    {
+        if (_retired) { return; }
+        SetLoadState(MoveToLoadState.Failed, reason);
+        RebuildRows(announceCount: false);
+    }
+
+    internal void Retire()
+    {
+        _retired = true;
+        NotifyLoadState();
+    }
+
+    private void SetLoadState(MoveToLoadState state, string status)
+    {
+        _state = state;
+        _status = status;
+        NotifyLoadState();
+    }
+
+    private void NotifyLoadState()
+    {
+        OnPropertyChanged(nameof(State));
+        OnPropertyChanged(nameof(IsReady));
+        OnPropertyChanged(nameof(CanRetry));
+        OnPropertyChanged(nameof(Status));
+        OnPropertyChanged(nameof(Subtitle));
+        (_activateCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (_retryCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (_cancelCommand as RelayCommand)?.RaiseCanExecuteChanged();
     }
 
     /// <summary>What is moving, as prose — "a.md" or "3 items".</summary>
@@ -113,7 +189,8 @@ internal sealed class MoveToPickerViewModel : BindableBase
     public string Title => $"Move {ItemNoun} to…";
 
     public string Subtitle =>
-        "Type to filter folders. Enter moves. Escape to cancel.";
+        IsReady ? "Type to filter folders. Enter moves. Escape to cancel."
+            : "Type to filter available folders. Escape to cancel.";
 
     public string FilterText
     {
@@ -145,6 +222,7 @@ internal sealed class MoveToPickerViewModel : BindableBase
         set
         {
             if (SetField(ref _selectedRow, value)
+                && !_retired && _ownsPresentation()
                 && !_rebuilding
                 && value is not null)
             {
@@ -156,7 +234,8 @@ internal sealed class MoveToPickerViewModel : BindableBase
     public ICommand ActivateCommand => _activateCommand ??= new RelayCommand(
         parameter =>
         {
-            if (parameter is not MoveToRowViewModel row)
+            if (!IsReady || !_ownsPresentation()
+                || parameter is not MoveToRowViewModel row || !Rows.Contains(row))
             {
                 return;
             }
@@ -170,10 +249,11 @@ internal sealed class MoveToPickerViewModel : BindableBase
                 _confirmed(row.Destination);
             }
         },
-        _ => true);
+        parameter => IsReady && _ownsPresentation()
+            && parameter is MoveToRowViewModel row && Rows.Contains(row));
 
     public ICommand CancelCommand => _cancelCommand ??= new RelayCommand(
-        _ => _cancelled(), _ => true);
+        _ => { if (!_retired) { _cancelled(); } }, _ => !_retired);
 
     private void RebuildRows(bool announceCount)
     {
@@ -202,7 +282,7 @@ internal sealed class MoveToPickerViewModel : BindableBase
         // destination must never resurface as a "create" that refuses
         // typed).
         string typedPath = filter.Trim('/');
-        if (typedPath.Length > 0 && _newFolderPathAllowed(typedPath))
+        if (IsReady && !_truncated && typedPath.Length > 0 && _newFolderPathAllowed(typedPath))
         {
             rows.Add(new MoveToRowViewModel(
                 MoveToRowKind.NewFolder,
@@ -210,6 +290,7 @@ internal sealed class MoveToPickerViewModel : BindableBase
                 $"New Folder “{typedPath}”"));
         }
 
+        MoveToRowViewModel? previous = SelectedRow;
         _rebuilding = true;
         try
         {
@@ -217,7 +298,11 @@ internal sealed class MoveToPickerViewModel : BindableBase
             // Default selection prefers the first row the QUERY
             // produced: with text typed, the pinned root would
             // otherwise steal Enter from the filtered match.
-            SelectedRow = filter.Length == 0
+            SelectedRow = !announceCount && previous is not null
+                ? rows.FirstOrDefault(row => row.Kind == previous.Kind
+                    && row.Destination == previous.Destination)
+                    ?? rows.FirstOrDefault()
+                : filter.Length == 0
                 ? rows.FirstOrDefault()
                 : rows.FirstOrDefault(row => row.Kind != MoveToRowKind.VaultRoot)
                     ?? rows.FirstOrDefault();
@@ -227,7 +312,7 @@ internal sealed class MoveToPickerViewModel : BindableBase
             _rebuilding = false;
         }
 
-        if (announceCount)
+        if (announceCount && !_retired && _ownsPresentation())
         {
             // Real destinations only — the "New Folder…" pseudo-row is
             // an action, not a place that exists yet (verification,
@@ -236,7 +321,7 @@ internal sealed class MoveToPickerViewModel : BindableBase
                 row => row.Kind != MoveToRowKind.NewFolder);
             // W0.5-3 residue: Move-To filter landing copy.
             _announce(new A11yEvent.HostComposed(
-                $"{destinations:N0} {(destinations == 1 ? "destination" : "destinations")}.",
+                $"{destinations:N0} {(destinations == 1 ? "destination" : "destinations")}{(IsReady ? "." : " loaded so far.")}",
                 A11yPriority.Medium));
         }
     }

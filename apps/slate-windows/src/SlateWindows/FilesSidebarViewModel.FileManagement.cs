@@ -667,7 +667,13 @@ internal sealed partial class FilesSidebarViewModel
     public MoveToPickerViewModel? MoveToSheet
     {
         get => _moveToSheet;
-        private set => SetField(ref _moveToSheet, value);
+        private set
+        {
+            if (ReferenceEquals(_moveToSheet, value)) { return; }
+            CancelMoveToLoading();
+            _moveToSheet?.Retire();
+            SetField(ref _moveToSheet, value);
+        }
     }
 
     /// <summary>The window's modal admission seam (T9's shape):
@@ -687,22 +693,8 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
-        // Enumerate BEFORE the admission (red team, a11y 7): the
-        // admission dismisses overlays and captures their focus
-        // lineage — a walk failure after it would strand the captured
-        // token with no sheet to restore it.
-        IReadOnlyList<string> folders;
-        try
-        {
-            folders = EnumerateVaultFolders();
-        }
-        catch (VaultException exception)
-        {
-            ReportFailure($"Move failed: {exception.Message}");
-            return;
-        }
-
-        if (MoveToOpenAdmission?.Invoke() == false)
+        if (SessionShutdownStarted || MoveToSheet is not null
+            || MoveToOpenAdmission?.Invoke() == false)
         {
             return;
         }
@@ -712,14 +704,12 @@ internal sealed partial class FilesSidebarViewModel
         string[] movingFolders = [.. items
             .Where(item => item.IsDirectory)
             .Select(item => item.Path)];
-        var knownFolders = new HashSet<string>(
-            folders, StringComparer.OrdinalIgnoreCase);
+        var knownFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var illegalParentsTyped = new HashSet<string>(
             illegalParents, StringComparer.OrdinalIgnoreCase);
-        string[] legal = [.. folders.Where(folder =>
-            !illegalParents.Contains(folder)
+        bool IsLegal(string folder) => !illegalParents.Contains(folder)
             && !movingFolders.Any(moving => folder == moving
-                || folder.StartsWith(moving + "/", StringComparison.Ordinal)))];
+                || folder.StartsWith(moving + "/", StringComparison.Ordinal));
 
         // Red team (correctness 4): the typed New Folder path obeys
         // the SAME legality the folder list does — an item's current
@@ -740,18 +730,24 @@ internal sealed partial class FilesSidebarViewModel
         string noun = items.Length == 1
             ? System.IO.Path.GetFileName(items[0].Path)
             : $"{items.Length:N0} items";
-        MoveToSheet = new MoveToPickerViewModel(
-            legal,
+        MoveToPickerViewModel? picker = null;
+        picker = new MoveToPickerViewModel(
+            [],
             rootIsLegal: !illegalParents.Contains(string.Empty),
             itemNoun: noun,
             confirmed: destination => ExecuteMoveTo(items, destination),
             createAndMove: path => CreateFolderThenMove(items, path),
-            cancelled: () => MoveToSheet = null,
+            cancelled: () => { if (ReferenceEquals(MoveToSheet, picker)) { MoveToSheet = null; } },
             newFolderPathAllowed: NewFolderPathAllowed,
-            announce: _announce);
+            announce: _announce,
+            loading: true,
+            retry: () => StartMoveToLoading(picker!, knownFolders, IsLegal),
+            ownsPresentation: () => OwnsMoveToPresentation(picker!));
+        MoveToSheet = picker;
+        StartMoveToLoading(picker, knownFolders, IsLegal);
         // W0.5-3 residue: Move-To presentation copy.
         _announce(new A11yEvent.HostComposed(
-            $"Move {noun}: choose a destination folder.", A11yPriority.Medium));
+            $"Move {noun}: loading destination folders. Escape to cancel.", A11yPriority.Medium));
     }
 
     /// <summary>Batch checks win; otherwise the tree selection (F4's
@@ -767,45 +763,6 @@ internal sealed partial class FilesSidebarViewModel
         return SelectedNode is { IsPlaceholder: false, IsGroupHeader: false } node
             ? [new StructuralBatchItem(node.Path, node.IsDirectory)]
             : [];
-    }
-
-    /// <summary>Every vault folder via the paged walk (F4): breadth-
-    /// first over <c>ListDirChildrenPage</c> with cursor continuation
-    /// (core caps a single page at 10,000 rows), bounded at 50,000
-    /// folders total.</summary>
-    private IReadOnlyList<string> EnumerateVaultFolders()
-    {
-        const int Cap = 50_000;
-        const uint PageLimit = 1_000;
-        var folders = new List<string>();
-        var queue = new Queue<string>();
-        queue.Enqueue(string.Empty);
-        using var cancel = new CancelToken();
-        while (queue.Count > 0 && folders.Count < Cap)
-        {
-            string parent = queue.Dequeue();
-            string? cursor = null;
-            do
-            {
-                DirListingPage page = _session.ListDirChildrenPage(
-                    parent, new Paging(cursor, PageLimit), cancel);
-                foreach (DirNodeSummary dir in page.Dirs)
-                {
-                    if (folders.Count >= Cap)
-                    {
-                        return folders;
-                    }
-
-                    folders.Add(dir.Path);
-                    queue.Enqueue(dir.Path);
-                }
-
-                cursor = page.NextCursor;
-            }
-            while (cursor is not null);
-        }
-
-        return folders;
     }
 
     /// <summary>F4 execution: one item rides the single-entry FFIs
@@ -870,8 +827,7 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
-        MoveDestination = destination;
-        BatchMove();
+        BatchMove(items, destination);
     }
 
     /// <summary>The "New Folder…" row (F4): create the typed folder,

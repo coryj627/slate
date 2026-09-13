@@ -796,6 +796,7 @@ public sealed class FileManagementTests
 
         rig.Sidebar.SelectedNode = Node(rig, "a.md");
         rig.Sidebar.MoveToCommand.Execute(null);
+        await rig.Sidebar.MoveToCompletion.WaitAsync(TimeSpan.FromSeconds(10));
         MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
             rig.Sidebar.MoveToSheet);
 
@@ -848,6 +849,7 @@ public sealed class FileManagementTests
 
         rig.Sidebar.SelectedNode = Node(rig, "sub");
         rig.Sidebar.MoveToCommand.Execute(null);
+        await rig.Sidebar.MoveToCompletion.WaitAsync(TimeSpan.FromSeconds(10));
         MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
             rig.Sidebar.MoveToSheet);
 
@@ -875,6 +877,7 @@ public sealed class FileManagementTests
 
         rig.Sidebar.SelectedNode = Node(rig, "a.md");
         rig.Sidebar.MoveToCommand.Execute(null);
+        await rig.Sidebar.MoveToCompletion.WaitAsync(TimeSpan.FromSeconds(10));
         MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
             rig.Sidebar.MoveToSheet);
 
@@ -911,6 +914,7 @@ public sealed class FileManagementTests
         Node(rig, "one.md").IsBatchSelected = true;
         Node(rig, "two.md").IsBatchSelected = true;
         rig.Sidebar.MoveToCommand.Execute(null);
+        await rig.Sidebar.MoveToCompletion.WaitAsync(TimeSpan.FromSeconds(10));
         MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
             rig.Sidebar.MoveToSheet);
         Assert.Equal("2 items", picker.ItemNoun);
@@ -946,10 +950,12 @@ public sealed class FileManagementTests
         rig.Sidebar.MoveToOpenAdmission = () => false;
         rig.Sidebar.SelectedNode = Node(rig, "a.md");
         rig.Sidebar.MoveToCommand.Execute(null);
+        await rig.Sidebar.MoveToCompletion.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Null(rig.Sidebar.MoveToSheet);
 
         rig.Sidebar.MoveToOpenAdmission = () => true;
         rig.Sidebar.MoveToCommand.Execute(null);
+        await rig.Sidebar.MoveToCompletion.WaitAsync(TimeSpan.FromSeconds(10));
         MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
             rig.Sidebar.MoveToSheet);
 
@@ -1098,6 +1104,7 @@ public sealed class FileManagementTests
 
         rig.Sidebar.SelectedNode = Node(rig, "moving");
         rig.Sidebar.MoveToCommand.Execute(null);
+        await rig.Sidebar.MoveToCompletion.WaitAsync(TimeSpan.FromSeconds(10));
         MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
             rig.Sidebar.MoveToSheet);
 
@@ -1421,6 +1428,7 @@ public sealed class FileManagementTests
 
         rig.Sidebar.SelectedNode = Node(rig, "c.md");
         rig.Sidebar.MoveToCommand.Execute(null);
+        await rig.Sidebar.MoveToCompletion.WaitAsync(TimeSpan.FromSeconds(10));
         MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
             rig.Sidebar.MoveToSheet);
         Assert.Equal("2 items", picker.ItemNoun);
@@ -1470,6 +1478,7 @@ public sealed class FileManagementTests
 
         rig.Sidebar.SelectedNode = Node(rig, "c.md");
         rig.Sidebar.MoveToCommand.Execute(null);
+        await rig.Sidebar.MoveToCompletion.WaitAsync(TimeSpan.FromSeconds(10));
         MoveToPickerViewModel picker = Assert.IsType<MoveToPickerViewModel>(
             rig.Sidebar.MoveToSheet);
         Assert.Equal("a.md", picker.ItemNoun);

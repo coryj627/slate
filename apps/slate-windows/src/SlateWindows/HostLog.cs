@@ -58,6 +58,8 @@ internal enum HostDiagnosticEvent
     SidebarImportFailed,
     SidebarImportPickerFailed,
     SidebarImportShutdownFailed,
+    SidebarMoveToFailed,
+    SidebarMoveToShutdownFailed,
     SidebarTreeRefreshFailed,
     SidebarTreeRefreshShutdownFailed,
     SidebarOrganizationPersistFailed,
