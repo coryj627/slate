@@ -10,6 +10,17 @@ import XCTest
 
 @MainActor
 final class TrashProgressStripTests: XCTestCase {
+    // XCTest does not enter NSApplication.run(), so shared alone leaves the
+    // worker without a launched AppKit accessibility server. This process-wide
+    // setup runs once even when these tests run serially in the same worker;
+    // AppKit remains initialized for subsequent hosted tests.
+    private static let hostApplication: NSApplication = {
+        let application = NSApplication.shared
+        XCTAssertTrue(application.setActivationPolicy(.accessory))
+        application.finishLaunching()
+        return application
+    }()
+
     func testHostedPreparingCancelPressDisablesRepeatedCancellation() async throws {
         let model = ProgressFixture(phase: .preparing)
         // Standalone expectations are only registered when awaited below. A
@@ -88,8 +99,7 @@ final class TrashProgressStripTests: XCTestCase {
         model: ProgressFixture,
         onCancel: @escaping () -> Void
     ) async -> (view: NSHostingView<AnyView>, window: NSWindow, focusProbe: FocusProbeView) {
-        // Each --parallel XCTest worker must initialize AppKit independently.
-        _ = NSApplication.shared
+        _ = Self.hostApplication
         let appeared = expectation(description: "hosted Trash strip appeared")
         let view = NSHostingView(rootView: AnyView(
             LiveStrip(model: model, onCancel: onCancel)
