@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import AppKit
+import ApplicationServices
 import SwiftUI
 import XCTest
 
@@ -113,6 +114,19 @@ final class TrashProgressStripTests: XCTestCase {
     }
 
     private func cancelButton(in window: NSWindow, enabled: Bool) async throws -> AccessibilityButton {
+        // A real client request materializes SwiftUI's lazy accessibility tree.
+        // Run the self-process request off MainActor so AppKit can answer it;
+        // keep traversing this retained window, not the returned window list.
+        let accessibilityResult = await Task.detached {
+            let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windows)
+        }.value
+        guard accessibilityResult == .success else {
+            throw HostedControlError(description:
+                "Self-process accessibility initialization failed: AXError \(accessibilityResult.rawValue)")
+        }
+
         // SwiftUI publishes its accessibility tree on a later rendering pass.
         // Wait for the actual control state, not a fixed render delay.
         let deadline = ContinuousClock.now.advanced(by: .seconds(30))
