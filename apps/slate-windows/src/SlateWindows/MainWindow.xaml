@@ -587,7 +587,9 @@
         </Menu>
 
         <StatusBar DockPanel.Dock="Bottom">
-            <StatusBarItem Visibility="{Binding FileSidebar.ShowTrashProgress, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <!-- No vault means no sidebar: an unresolved binding must keep
+                 operation controls out of both layout and automation. -->
+            <StatusBarItem Visibility="{Binding FileSidebar.ShowTrashProgress, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="{Binding FileSidebar.TrashStatus}" VerticalAlignment="Center"
                                TextWrapping="Wrap" MaxWidth="360"

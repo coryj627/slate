@@ -161,6 +161,7 @@ public sealed class ShellAccessibilityTests
                 "WorkspaceView",
                 TimeSpan.FromSeconds(30));
             Assert.Equal("Slate", window.Title);
+            AssertTrashProgressAbsent(window, automation);
             Assert.NotNull(workspace.FindFirstDescendant(
                 automation.ConditionFactory.ByAutomationId("FilesPane")));
             Assert.NotNull(workspace.FindFirstDescendant(
@@ -771,6 +772,7 @@ public sealed class ShellAccessibilityTests
                     "Accessible Vault",
                     StringComparison.Ordinal));
 
+            AssertTrashProgressAbsent(window, automation);
             AssertAxeClean(process, "welcome");
         }
         finally
@@ -6107,6 +6109,7 @@ public sealed class ShellAccessibilityTests
             Assert.True(SpinWait.SpinUntil(() =>
                 window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("CancelTrash")) is null,
                 TimeSpan.FromSeconds(10)), "Cancellation waited for the external structural lock to release.");
+            AssertTrashProgressAbsent(window, automation);
             Assert.Equal("# Keep\n", File.ReadAllText(Path.Combine(vaultRoot, "keep.md")));
             blocker.Unlock(0, long.MaxValue);
         }
@@ -6125,6 +6128,15 @@ public sealed class ShellAccessibilityTests
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
             }
+        }
+    }
+
+    private static void AssertTrashProgressAbsent(Window window, UIA3Automation automation)
+    {
+        foreach (string id in new[] { "TrashProgressStatus", "CancelTrash" })
+        {
+            Assert.True(window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId(id)) is null,
+                $"Inactive Trash control {id} must not be exposed in the automation tree.");
         }
     }
 
