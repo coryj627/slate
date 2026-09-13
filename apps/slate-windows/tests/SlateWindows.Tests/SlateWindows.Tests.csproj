@@ -22,10 +22,11 @@
          disabled regions are trivia, string contents are a distinct node
          type, and overloads are enumerable.
 
-         Syntax only. Microsoft.CodeAnalysis.CSharp.Workspaces and
-         MSBuildWorkspace are deliberately NOT referenced — no project
-         loading, no MSBuild discovery, and the scrapes stay fast enough
-         to sit in the unit suite. Currency: 5.6.0 is the latest stable
+         Parser and compiler APIs only. Semantic censuses also bind symbols;
+         the graph evidence census uses the build's recorded source/reference
+         inputs. Microsoft.CodeAnalysis.CSharp.Workspaces and MSBuildWorkspace
+         remain deliberately unreferenced: no in-process project loading or
+         MSBuild discovery is needed. Currency: 5.6.0 is the latest stable
          (checked 2026-08-16). -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" PrivateAssets="all" />
     <PackageReference Include="coverlet.collector" Version="10.0.1" PrivateAssets="all" />
@@ -40,6 +41,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The graph matrix binds the native journeys' own compiled inputs. -->
+    <ProjectReference Include="..\SlateWindows.AccessibilityTests\SlateWindows.AccessibilityTests.csproj"
+                      ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\SlateUniffi\SlateUniffi.csproj" />
     <ProjectReference Include="..\..\src\SlateWindows\SlateWindows.csproj" />
     <!-- HostLoggingCensus launches this executable from its project output.
@@ -50,4 +54,5 @@
     <ProjectReference Include="..\..\tools\ParityHarness\ParityHarness.csproj" />
   </ItemGroup>
 
+  <Import Project="..\EvidenceCompilation.targets" />
 </Project>

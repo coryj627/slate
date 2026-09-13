@@ -1,0 +1,29 @@
+<Project>
+  <!-- The evidence census binds exactly the project/configuration compiled by
+       this build. Never search obj for the newest unrelated generated file. -->
+  <Target Name="WriteEvidenceCompilationInputs" AfterTargets="Build">
+    <PropertyGroup>
+      <_EvidenceDirectory>$(TargetDir)evidence-compilation/$(MSBuildProjectName)/</_EvidenceDirectory>
+    </PropertyGroup>
+    <MakeDir Directories="$(_EvidenceDirectory)" />
+    <ItemGroup>
+      <_EvidenceSources Include="@(Compile)" />
+      <_EvidenceConfigurationFiles Include="$(MSBuildProjectFullPath);$(MSBuildAllProjects);$(MSBuildThisFileFullPath)" />
+      <_EvidenceSourceTree Include="$(MSBuildProjectDirectory)/**/*.cs"
+                           Exclude="$(MSBuildProjectDirectory)/obj/**/*.cs;$(MSBuildProjectDirectory)/bin/**/*.cs" />
+    </ItemGroup>
+    <GetFileHash Files="@(_EvidenceSources);@(_EvidenceConfigurationFiles);@(ReferencePath);$(TargetPath)" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_EvidenceSourceHashes" />
+    </GetFileHash>
+    <WriteLinesToFile File="$(_EvidenceDirectory)sources.txt" Lines="@(_EvidenceSources->'%(FullPath)')" Overwrite="true" />
+    <WriteLinesToFile File="$(_EvidenceDirectory)source-tree.txt" Lines="@(_EvidenceSourceTree->'%(FullPath)')" Overwrite="true" />
+    <WriteLinesToFile File="$(_EvidenceDirectory)project-directory.txt" Lines="$(MSBuildProjectDirectory)" Overwrite="true" />
+    <WriteLinesToFile File="$(_EvidenceDirectory)source-hashes.txt" Lines="@(_EvidenceSourceHashes->'%(FullPath)|%(FileHash)')" Overwrite="true" />
+    <WriteLinesToFile File="$(_EvidenceDirectory)references.txt" Lines="@(ReferencePath->'%(FullPath)')" Overwrite="true" />
+    <WriteLinesToFile File="$(_EvidenceDirectory)defines.txt" Lines="$(DefineConstants)" Overwrite="true" />
+    <WriteLinesToFile File="$(_EvidenceDirectory)language.txt" Lines="$(LangVersion)" Overwrite="true" />
+    <WriteLinesToFile File="$(_EvidenceDirectory)assembly.txt" Lines="$(AssemblyName)" Overwrite="true" />
+    <WriteLinesToFile File="$(_EvidenceDirectory)configuration.txt" Lines="$(Configuration)" Overwrite="true" />
+    <WriteLinesToFile File="$(_EvidenceDirectory)framework.txt" Lines="$(TargetFramework)" Overwrite="true" />
+  </Target>
+</Project>

@@ -98,8 +98,6 @@ public sealed class WcMatrixGraphEvidenceCensus
 
     private static string ShellText() => TreeText("apps", "slate-windows", "src", "SlateWindows");
 
-    private static string TestText() => TreeText("apps", "slate-windows", "tests");
-
     [Fact]
     public void EveryManifestSurfaceIsARowOfTenCellsAndNoGraphRowIsUnknown()
     {
@@ -173,8 +171,7 @@ public sealed class WcMatrixGraphEvidenceCensus
     [Fact]
     public void EveryEvidenceNameResolvesAndEveryAxeLabelIsScanned()
     {
-        string tests = TestText();
-        string shell = ShellText();
+        IReadOnlyList<TestEvidence> projects = TestEvidenceCompilation.Projects;
         var failures = new List<string>();
         foreach (Surface surface in Manifest)
         {
@@ -190,19 +187,13 @@ public sealed class WcMatrixGraphEvidenceCensus
             foreach (Match backticked in Regex.Matches(evidence, "`([^`]+)`"))
             {
                 string name = backticked.Groups[1].Value;
-                bool method = Regex.IsMatch(tests, @"\b(void|Task)\s+" + Regex.Escape(name) + @"\s*\(");
-                bool type = Regex.IsMatch(tests, @"\bclass\s+" + Regex.Escape(name) + @"\b");
+                bool test = projects.Any(project => project.HasTestEvidence(name));
                 bool axe = surface.AxeLabels.Contains(name);
-                bool pathLike = name.Contains('/', StringComparison.Ordinal);
-                bool testFile = pathLike && Directory
-                    .EnumerateFiles(Path.Combine(RepoRoot, "apps", "slate-windows", "tests"), "*.cs", SearchOption.AllDirectories)
-                    .Any(p => p.Replace('\\', '/').EndsWith("/" + name + ".cs", StringComparison.Ordinal));
-                bool fixture = !pathLike && Directory
-                    .EnumerateFiles(Path.Combine(RepoRoot, "crates", "slate-core", "tests", "fixtures"), name + ".*", SearchOption.AllDirectories)
-                    .Any();
-                if (!method && !type && !axe && !testFile && !fixture)
+                bool fixture = TestEvidence.HasFixture(
+                    Path.Combine(RepoRoot, "crates", "slate-core", "tests", "fixtures"), name);
+                if (!test && !axe && !fixture)
                 {
-                    failures.Add($"{surface.Title}: `{name}` resolves to no fact, journey, test class, axe label or fixture");
+                    failures.Add($"{surface.Title}: `{name}` resolves to no executable xUnit test, class/file containing one, axe label or fixture");
                 }
             }
             foreach (string label in surface.AxeLabels)
@@ -211,13 +202,12 @@ public sealed class WcMatrixGraphEvidenceCensus
                 {
                     failures.Add($"{surface.Title}: the evidence cell lacks axe label `{label}`");
                 }
-                if (!tests.Contains($"AssertAxeClean(process, \"{label}\")", StringComparison.Ordinal))
+                if (!projects.Any(project => project.HasAxeLabel(label)))
                 {
-                    failures.Add($"{surface.Title}: no journey scans `{label}`");
+                    failures.Add($"{surface.Title}: no executable test reaches a bound AssertAxeClean call for `{label}`");
                 }
             }
         }
-        _ = shell;
         Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
 }

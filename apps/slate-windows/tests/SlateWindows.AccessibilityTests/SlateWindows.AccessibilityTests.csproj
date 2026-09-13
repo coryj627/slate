@@ -51,4 +51,5 @@
     <ProjectReference Include="..\..\src\SlateUniffi\SlateUniffi.csproj" />
   </ItemGroup>
 
+  <Import Project="..\EvidenceCompilation.targets" />
 </Project>
