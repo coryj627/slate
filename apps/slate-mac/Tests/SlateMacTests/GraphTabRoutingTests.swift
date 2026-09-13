@@ -1088,7 +1088,7 @@ final class GraphTabRoutingTests: XCTestCase {
                         label: "solo", kind: .note, inLinks: 0, outLinks: 0,
                         references: 0, embed: false), component: row.component),
                 zoomPercent: nil,
-                filter: .normal(orphansOnly: true, attachmentsShown: false, ghostsShown: true),
+                filter: .normal(orphansOnly: true, attachmentsShown: false, ghostsShown: false),
                 nameFilter: ""))
         state.graphAnnouncer.flushForTests()
         XCTAssertTrue(posts.isEmpty, "constructing the readback is silent")
