@@ -14,6 +14,20 @@ public partial class MainWindow
     private FilesSidebarViewModel? _trashCancelSidebar;
     private bool _trashCancelOwnedFocus;
 
+    private void TrashFallback_KeyDown(object sender, KeyEventArgs e)
+    {
+        // This bubbling fallback runs only after the focused control declines
+        // Escape. It belongs to the content root: the Window's disabled Escape
+        // KeyBinding still consumes input before Window instance handlers run.
+        if (!e.Handled && e.Key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None
+            && OpenModalSurface is null && _viewModel.FileSidebar?.ShowTrashProgress == true
+            && _viewModel.Workspace?.ActiveGroup.ActiveTab?.EditorInteractions.ClosePopoverCommand.CanExecute(null) != true)
+        {
+            _viewModel.FileSidebar.CancelTrashCommand.Execute(null);
+            e.Handled = true;
+        }
+    }
+
     private void TrashCancel_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
         _focusBeforeTrashCancel = e.OldFocus;

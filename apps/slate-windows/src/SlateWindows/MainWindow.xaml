@@ -58,7 +58,7 @@
         <KeyBinding Key="Escape" Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ClosePopoverCommand}" />
     </Window.InputBindings>
 
-    <DockPanel>
+    <DockPanel KeyDown="TrashFallback_KeyDown">
         <Menu x:Name="MainMenu"
               DockPanel.Dock="Top"
               AutomationProperties.Name="Application commands">

@@ -695,6 +695,15 @@ public sealed class FileManagementTests
             FilesSidebarViewModel.BatchTrashSummary(report));
         Assert.Equal("Moved 1 item to the Recycle Bin.", FilesSidebarViewModel.BatchTrashSummary(
             report with { State = BatchTrashState.Succeeded, Untrashed = [], Unknown = [], RequiresRescan = false }));
+        Assert.Equal("Stopped. Moved 1 of 2 items to the Recycle Bin. 1 item was not moved. "
+            + "Some changes could not be recorded safely.", FilesSidebarViewModel.BatchTrashSummary(
+                report with
+                {
+                    Envelope = new StructuralBatchEnvelope([landed, untouched], [], []),
+                    Unknown = [],
+                    RequiresRescan = false,
+                    BookkeepingFailures = [new BatchItemFailure(null, BatchFailureStage.Journal, "recording failed")],
+                }));
     }
 
     [Fact]

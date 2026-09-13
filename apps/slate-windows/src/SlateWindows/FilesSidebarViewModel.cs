@@ -1840,15 +1840,18 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         string UnknownSentence() =>
             $"Couldn’t verify whether {Count(report.Unknown.Length)} moved to the Recycle Bin."
             + (report.RequiresRescan ? " Rescan required." : string.Empty);
+        string bookkeepingWarning = report.BookkeepingFailures.Length > 0
+            ? " Some changes could not be recorded safely." : string.Empty;
         if (report.Untrashed.Any(item => item.Failure.Stage == BatchFailureStage.Cancelled))
         {
             return $"Stopped. Moved {report.Trashed.Length:N0} of {Count(total)} to the Recycle Bin."
                 + $" {Count(report.Untrashed.Length)} "
                 + (report.Untrashed.Length == 1 ? "was" : "were") + " not moved."
                 + (report.Unknown.Length > 0 ? " " + UnknownSentence() : string.Empty)
-                + (report.RequiresRescan && report.Unknown.Length == 0 ? " Rescan required." : string.Empty);
+                + (report.RequiresRescan && report.Unknown.Length == 0 ? " Rescan required." : string.Empty)
+                + bookkeepingWarning;
         }
-        return report.State switch
+        return (report.State switch
         {
             BatchTrashState.Rejected when report.Unknown.Length > 0 =>
                 "Couldn’t start moving the selected items to the Recycle Bin. " + UnknownSentence(),
@@ -1882,7 +1885,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 $"Couldn’t move {Count(total)} to the Recycle Bin.",
             _ => $"Moved {report.Trashed.Length:N0} of {Count(total)} to the Recycle Bin, "
                 + "but the operation did not finish safely.",
-        };
+        }) + bookkeepingWarning;
     }
 
     private void RequestOpen(string path)

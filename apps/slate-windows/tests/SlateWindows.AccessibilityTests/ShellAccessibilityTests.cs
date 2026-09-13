@@ -6012,6 +6012,103 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TrashCancellation_WhileStructuralLockIsHeld_IsReachableAndPreservesFocus(bool useEscape)
+    {
+        string testRoot = Path.Combine(Path.GetTempPath(), $"slate-trash-cancel-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(Path.Combine(vaultRoot, "keep.md"), "# Keep\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "inspect.md"), "# Inspect\n\n![[target]]\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "target.md"), "# Target\n");
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] = $"trash-cancel-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+            if (!HasInteractiveDesktop(process, "Trash cancellation")) { return; }
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(process, automation,
+                Path.Combine(logDirectory, "slate-windows.log"), TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            AutomationElement item = SelectTreeItem(window, automation, "keep.md");
+            item.Focus();
+            AssertEventuallyFocused(item, "The file did not receive focus before Delete.");
+            // The OS lock is a deterministic preparation barrier. Cancel must
+            // drain the native worker while this independent holder still owns it.
+            using var blocker = new FileStream(Path.Combine(vaultRoot, ".slate", "structural.lock"),
+                FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
+            blocker.Lock(0, long.MaxValue);
+            PressKey(VirtualKeyShort.DELETE);
+            AutomationElement cancel = WaitForElement(window, "CancelTrash", TimeSpan.FromSeconds(10));
+            Assert.Equal("Cancel moving items to the Recycle Bin", cancel.Name);
+            Assert.True(cancel.IsEnabled);
+            _ = WaitForElement(window, "TrashProgressStatus", TimeSpan.FromSeconds(10));
+            AssertAxeClean(process, "trash-cancellation-progress");
+            if (useEscape)
+            {
+                SelectTreeItem(window, automation, "inspect.md");
+                AutomationElement editor = WaitForEditor(window, automation, "inspect.md editor", TimeSpan.FromSeconds(10));
+                foreach (bool leavePopoverFocus in new[] { false, true })
+                {
+                    editor.Focus();
+                    PlaceCaretAtText(editor, "![[target]]");
+                    PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_E);
+                    _ = WaitForElement(window, "EditorInteractionPopover", TimeSpan.FromSeconds(10));
+                    AutomationElement close = WaitForElement(window, "EditorPopoverClose", TimeSpan.FromSeconds(10));
+                    (leavePopoverFocus ? cancel : close).Focus();
+                    PressKey(VirtualKeyShort.ESCAPE);
+                    Assert.True(SpinWait.SpinUntil(() =>
+                        window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("EditorInteractionPopover")) is null,
+                        TimeSpan.FromSeconds(10)), "The first Escape did not close the editor popover.");
+                    Assert.True(cancel.IsEnabled, "Escape cancelled Trash before the editor popover could dismiss.");
+                    AssertEventuallyFocused(editor, "The popover did not restore editor focus.");
+                }
+                PressKey(VirtualKeyShort.ESCAPE);
+                Assert.True(SpinWait.SpinUntil(() =>
+                    window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("CancelTrash")) is null,
+                    TimeSpan.FromSeconds(10)), "Escape did not cancel the remaining work. Focus: " + DescribeFocusedElement(automation));
+                AssertEventuallyFocused(editor, "The fallback Escape cancellation stole editor focus. Focus: "
+                    + DescribeFocusedElement(automation));
+            }
+            else
+            {
+                cancel.Focus();
+                AssertEventuallyFocused(cancel, "The Cancel button was not keyboard reachable.");
+                PressKey(VirtualKeyShort.SPACE);
+                AssertEventuallyFocused(item, "Cancellation did not restore the file's keyboard focus.");
+            }
+            Assert.True(SpinWait.SpinUntil(() =>
+                window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("CancelTrash")) is null,
+                TimeSpan.FromSeconds(10)), "Cancellation waited for the external structural lock to release.");
+            Assert.Equal("# Keep\n", File.ReadAllText(Path.Combine(vaultRoot, "keep.md")));
+            blocker.Unlock(0, long.MaxValue);
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000)) { process.Kill(entireProcessTree: true); }
+            }
+            string tempRoot = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            if (Path.GetFullPath(testRoot).StartsWith(tempRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                try { Directory.Delete(testRoot, recursive: true); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+        }
+    }
+
     /// <summary>Find a named Button under a root (the sidebar's
     /// file-actions buttons carry no AutomationIds — their labels are
     /// the accessible names).</summary>
