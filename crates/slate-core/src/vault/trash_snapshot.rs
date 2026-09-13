@@ -33,10 +33,15 @@ fn refused(message: &str) -> VaultError {
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub(super) use windows::snapshot;
+pub(super) use windows::snapshot_cancellable;
 
 #[cfg(not(any(unix, windows)))]
-pub(super) fn snapshot(_root: &Path, _path: &Path) -> Result<TrashSnapshot, VaultError> {
+pub(super) fn snapshot_cancellable(
+    _root: &Path,
+    _path: &Path,
+    cancel: &crate::CancelToken,
+) -> Result<TrashSnapshot, VaultError> {
+    cancel.check()?;
     Err(refused("Trash snapshots are unavailable on this platform"))
 }
 
@@ -49,11 +54,21 @@ fn field(hasher: &mut blake3::Hasher, value: &[u8]) {
 pub(super) fn snapshot_at(
     parent: &fs::File,
     leaf: &std::ffi::CStr,
+    cancel: &crate::CancelToken,
 ) -> Result<TrashSnapshot, VaultError> {
+    cancel.check()?;
     use std::os::fd::AsRawFd;
     let mut hasher = blake3::Hasher::new();
     let mut entries = 1;
-    let is_directory = unix_visit(parent.as_raw_fd(), leaf, &mut hasher, &mut entries, 0)?;
+    let is_directory = unix_visit(
+        parent.as_raw_fd(),
+        leaf,
+        &mut hasher,
+        &mut entries,
+        0,
+        cancel,
+    )?;
+    cancel.check()?;
     Ok(TrashSnapshot {
         fingerprint: hasher.finalize().to_hex().to_string(),
         is_directory,
@@ -107,7 +122,9 @@ fn unix_visit(
     hasher: &mut blake3::Hasher,
     entries: &mut u64,
     depth: usize,
+    cancel: &crate::CancelToken,
 ) -> Result<bool, VaultError> {
+    cancel.check()?;
     use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
     if *entries > MAX_ENTRIES || depth > MAX_DEPTH {
         return Err(refused(
@@ -115,6 +132,7 @@ fn unix_visit(
         ));
     }
     let metadata = unix_stat(parent, leaf)?;
+    cancel.check()?;
     let before = unix_stamp(&metadata);
     let kind = metadata.st_mode & libc::S_IFMT;
     if depth == 0 && kind == libc::S_IFLNK {
@@ -123,6 +141,7 @@ fn unix_visit(
     hasher.update(&[0]); // begin entry
     field(hasher, &before);
     if kind == libc::S_IFDIR {
+        cancel.check()?;
         // SAFETY: parent and leaf are live; openat returns an owned descriptor.
         // O_DIRECTORY|O_NOFOLLOW refuses a leaf replaced by a link or file.
         let fd = unsafe {
@@ -165,6 +184,7 @@ fn unix_visit(
         let stream = DirectoryStream(raw);
         let mut children = Vec::new();
         loop {
+            cancel.check()?;
             // SAFETY: errno is thread-local; stream is live and exclusively
             // used here. Copy each readdir name before the next call.
             let entry = unsafe {
@@ -198,13 +218,23 @@ fn unix_visit(
             children.push(name.to_owned());
             *entries += 1;
         }
+        cancel.check()?;
         children.sort();
+        cancel.check()?;
         for name in children {
             hasher.update(&[1]); // child name follows
             field(hasher, name.to_bytes());
-            unix_visit(directory.as_raw_fd(), &name, hasher, entries, depth + 1)?;
+            unix_visit(
+                directory.as_raw_fd(),
+                &name,
+                hasher,
+                entries,
+                depth + 1,
+                cancel,
+            )?;
         }
     }
+    cancel.check()?;
     if before != unix_stamp(&unix_stat(parent, leaf)?) {
         return Err(refused(
             "Files changed while preparing Trash. Request deletion again",

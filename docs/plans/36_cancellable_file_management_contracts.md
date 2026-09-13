@@ -92,6 +92,11 @@ failure stage/remainder data; successful, remaining, and unknown items retain
 their existing meanings. A stopped batch preserves completed Trash operations;
 it does not attempt to restore them from the system Trash.
 
+Single-item endpoints keep their existing success/error contract. A provider
+failure after dispatch can be physically ambiguous and retains normal recovery
+markers; it must not become a clean `Cancelled` result or claim that the item
+remained untouched. Only cancellation observed before dispatch has that meaning.
+
 Marker cleanup is token-scoped. Known unattempted items may clear their own
 markers; uncertain outcomes retain recovery evidence. Cancellation never clears
 another writer's marker or bypasses normal reconciliation/events.

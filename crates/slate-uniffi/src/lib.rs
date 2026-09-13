@@ -1015,6 +1015,58 @@ impl VaultSession {
         Ok(self.inner.delete_folder(&path)?)
     }
 
+    /// Prepare a single-use confirmation, stopping cooperatively before more I/O.
+    pub fn stage_trash_cancellable(
+        &self,
+        request: BatchTrashRequest,
+        cancel: Arc<CancelToken>,
+    ) -> Result<StagedTrash, VaultError> {
+        Ok(self
+            .inner
+            .stage_trash_cancellable(request.into(), &cancel.inner)?
+            .into())
+    }
+
+    /// Discard only the named confirmation, preserving any newer stage.
+    pub fn discard_staged_trash(&self, token: u64) {
+        self.inner.discard_staged_trash(token);
+    }
+
+    pub fn delete_file_staged_cancellable(
+        &self,
+        path: String,
+        token: u64,
+        cancel: Arc<CancelToken>,
+    ) -> Result<(), VaultError> {
+        Ok(self
+            .inner
+            .delete_file_staged_cancellable(&path, token, &cancel.inner)?)
+    }
+
+    pub fn delete_folder_staged_cancellable(
+        &self,
+        path: String,
+        token: u64,
+        cancel: Arc<CancelToken>,
+    ) -> Result<(), VaultError> {
+        Ok(self
+            .inner
+            .delete_folder_staged_cancellable(&path, token, &cancel.inner)?)
+    }
+
+    /// Stop before the next item, retaining the ledger for completed attempts.
+    pub fn batch_trash_staged_cancellable(
+        &self,
+        request: BatchTrashRequest,
+        token: u64,
+        cancel: Arc<CancelToken>,
+    ) -> Result<BatchTrashReport, VaultError> {
+        Ok(self
+            .inner
+            .batch_trash_staged_cancellable(request.into(), token, &cancel.inner)?
+            .into())
+    }
+
     pub fn stage_trash(&self, request: BatchTrashRequest) -> Result<StagedTrash, VaultError> {
         Ok(self.inner.stage_trash(request.into())?.into())
     }
@@ -2795,6 +2847,7 @@ pub enum BatchFailureStage {
     Trash,
     Reconciliation,
     RecoveryBarrier,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -2991,6 +3044,7 @@ impl From<core::structural_batch::BatchFailureStage> for BatchFailureStage {
             C::Trash => Self::Trash,
             C::Reconciliation => Self::Reconciliation,
             C::RecoveryBarrier => Self::RecoveryBarrier,
+            C::Cancelled => Self::Cancelled,
         }
     }
 }
@@ -14153,6 +14207,10 @@ mod tests {
             (c::BatchFailureStage::Journal, BatchFailureStage::Journal),
             (c::BatchFailureStage::Rollback, BatchFailureStage::Rollback),
             (c::BatchFailureStage::Trash, BatchFailureStage::Trash),
+            (
+                c::BatchFailureStage::Cancelled,
+                BatchFailureStage::Cancelled,
+            ),
             (
                 c::BatchFailureStage::Reconciliation,
                 BatchFailureStage::Reconciliation,

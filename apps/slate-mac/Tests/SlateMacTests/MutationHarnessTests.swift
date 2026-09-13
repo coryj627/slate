@@ -524,6 +524,7 @@ final class MutationHarnessTests: XCTestCase {
         case .journal: return "Journal"
         case .rollback: return "Rollback"
         case .trash: return "Trash"
+        case .cancelled: return "Cancelled"
         case .reconciliation: return "Reconciliation"
         case .recoveryBarrier: return "RecoveryBarrier"
         }

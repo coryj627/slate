@@ -777,6 +777,7 @@ final class AppState: ObservableObject {
             case .journal: return "History recording"
             case .rollback: return "Restoration"
             case .trash: return "Trash"
+            case .cancelled: return "Cancelled"
             case .reconciliation: return "Reconciliation"
             case .recoveryBarrier: return "Recovery safety"
             }

@@ -100,6 +100,20 @@ pub trait VaultProvider: Send + Sync {
         })
     }
 
+    /// Cancellable inventory. Providers with their own traversal should override
+    /// this to check between entries; the compatibility default checks around
+    /// the existing operation without weakening its inventory guarantees.
+    fn trash_snapshot_cancellable(
+        &self,
+        relative: &str,
+        cancel: &crate::CancelToken,
+    ) -> Result<super::TrashSnapshot, VaultError> {
+        cancel.check()?;
+        let snapshot = self.trash_snapshot(relative)?;
+        cancel.check()?;
+        Ok(snapshot)
+    }
+
     /// Rename or move a file within the vault.
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError>;
 

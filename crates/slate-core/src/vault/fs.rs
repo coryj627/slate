@@ -591,14 +591,27 @@ fn resolve_relative(root: &Path, relative: &str) -> Result<PathBuf, VaultError> 
 
 impl VaultProvider for FsVaultProvider {
     fn trash_snapshot(&self, relative: &str) -> Result<super::TrashSnapshot, VaultError> {
+        self.trash_snapshot_cancellable(relative, &crate::CancelToken::new())
+    }
+
+    fn trash_snapshot_cancellable(
+        &self,
+        relative: &str,
+        cancel: &crate::CancelToken,
+    ) -> Result<super::TrashSnapshot, VaultError> {
+        cancel.check()?;
         #[cfg(unix)]
         {
             let target = self.pin_mutation_target(relative, false)?;
-            super::trash_snapshot::snapshot_at(&target.parent, &target.leaf)
+            super::trash_snapshot::snapshot_at(&target.parent, &target.leaf, cancel)
         }
         #[cfg(not(unix))]
         {
-            super::trash_snapshot::snapshot(&self.root, &self.resolve_for_mutation(relative)?)
+            super::trash_snapshot::snapshot_cancellable(
+                &self.root,
+                &self.resolve_for_mutation(relative)?,
+                cancel,
+            )
         }
     }
 
