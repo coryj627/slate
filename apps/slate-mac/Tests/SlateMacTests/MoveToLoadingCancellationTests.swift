@@ -7,16 +7,38 @@ import XCTest
 @MainActor
 final class MoveToLoadingCancellationTests: XCTestCase {
     func testDismissalRejectsFoldersReturnedByAnAlreadyRunningLoader() async {
+        let ready = XCTestExpectation(description: "destination loader suspended")
+        let finished = XCTestExpectation(description: "cancelled presentation loader finished")
         var suspended: CheckedContinuation<[String], Never>?
-        let task = Task {
-            await MoveToFolderSheet.loadFoldersForPresentation {
-                await withCheckedContinuation { suspended = $0 }
+        var result: [String]?
+        let task = Task { @MainActor in
+            result = await MoveToFolderSheet.loadFoldersForPresentation {
+                await withCheckedContinuation { continuation in
+                    // If readiness timed out before this task ran, cleanup has
+                    // already cancelled it. Never park a late continuation.
+                    guard !Task.isCancelled else {
+                        continuation.resume(returning: ["late destination"])
+                        return
+                    }
+                    suspended = continuation
+                    ready.fulfill()
+                }
             }
+            finished.fulfill()
         }
-        while suspended == nil { await Task.yield() }
+        func releaseLoader() {
+            let continuation = suspended
+            suspended = nil
+            continuation?.resume(returning: ["late destination"])
+        }
+        defer {
+            task.cancel()
+            releaseLoader()
+        }
+        await fulfillment(of: [ready], timeout: 5)
         task.cancel()
-        suspended?.resume(returning: ["late destination"])
-        let result = await task.value
+        releaseLoader()
+        await fulfillment(of: [finished], timeout: 5)
         XCTAssertNil(result)
     }
 
