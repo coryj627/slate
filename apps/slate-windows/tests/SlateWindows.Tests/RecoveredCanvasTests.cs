@@ -122,7 +122,7 @@ public sealed class RecoveredCanvasTests : IDisposable
         document.AnnouncerForTests.FlushForTests();
         string expected = CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasLoadedReadOnly(3));
         Assert.Equal(expected, document.ReadOnlyBannerText);
-        Assert.Single(_announced.Where(line => line.Text == expected));
+        Assert.Single(_announced, line => line.Text == expected);
         Assert.DoesNotContain(_announced, line => line.Text.Contains("unsupported", StringComparison.Ordinal));
     }
 
@@ -258,7 +258,7 @@ public sealed class RecoveredCanvasTests : IDisposable
     }
 
     [Fact]
-    public void ADirtyDraftSurvivesMutationAdmissionRefusalAndCanRetry()
+    public void ADirtyDraftSurvivesMutationAdmissionRefusalAndCanRetry() => RunSta(() =>
     {
         RepairFile();
         CanvasDocumentViewModel document = OpenDocument();
@@ -266,21 +266,30 @@ public sealed class RecoveredCanvasTests : IDisposable
         CanvasCardEditorViewModel editor = Assert.IsType<CanvasCardEditorViewModel>(
             document.OpenCardEditor("recovered-text"));
         editor.Draft = "Retained until authoring is admitted";
+        string seedBasis = editor.SeedBasis;
         string source = File.ReadAllText(CanvasPath);
         int epoch = document.UndoStack.Epoch;
-        document.Navigator.EnterMoveMode();
+        var surface = new CanvasSurfaceView { Model = document };
+        document.Navigator.AttachPresenter(surface);
+        Assert.True(document.Navigator.EnterMoveMode());
+        Assert.True(document.Modes.IsActive);
 
         Assert.False(document.IsReadOnly);
         Assert.False(editor.CommitOnEscape());
         Assert.Equal("Retained until authoring is admitted", editor.Draft);
+        Assert.Equal(seedBasis, editor.SeedBasis);
         Assert.Equal(source, File.ReadAllText(CanvasPath));
         Assert.Equal(epoch, document.UndoStack.Epoch);
+        Assert.Null(document.UndoStack.OfferedUndo);
+        Assert.Null(document.UndoStack.OfferedRedo);
+        Assert.True(document.Modes.IsActive);
 
-        document.Navigator.CancelMode();
+        Assert.True(document.Navigator.CancelMode());
+        Assert.False(document.Modes.IsActive);
         Assert.True(editor.CommitOnEscape());
         Assert.Equal(editor.Draft, document.NodeTextOf("recovered-text"));
         Assert.NotNull(document.UndoStack.OfferedUndo);
-    }
+    });
 
     [Fact]
     public void ReloadCanStayRecoveredBecomeEditableAndBecomeRecoveredAgain()
