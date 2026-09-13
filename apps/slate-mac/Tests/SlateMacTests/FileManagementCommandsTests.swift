@@ -921,9 +921,10 @@ final class FileManagementCommandsTests: XCTestCase {
     func testRequestDeleteFolderWithChildrenStagesConfirmation() async throws {
         let (state, vault) = try await makeVault(files: ["proj/a.md", "proj/b.md"])
         state.requestDeleteEntry(path: "proj", isDirectory: true)
+        await state.pendingStructuralTaskForTesting?.value
         let pending = try XCTUnwrap(state.pendingFolderDelete)
         XCTAssertEqual(pending.path, "proj")
-        XCTAssertEqual(pending.itemCount, 2, "staged with the FileManager shallow count")
+        XCTAssertEqual(pending.itemCount, 2, "staged with the core inventory count")
         XCTAssertTrue(fileExists(vault, "proj/a.md"), "nothing deleted yet")
 
         XCTAssertTrue(state.confirmPendingFolderDelete(id: pending.id))
@@ -936,6 +937,7 @@ final class FileManagementCommandsTests: XCTestCase {
     func testCancelPendingFolderDeleteKeepsEverything() async throws {
         let (state, vault) = try await makeVault(files: ["proj/a.md"])
         state.requestDeleteEntry(path: "proj", isDirectory: true)
+        await state.pendingStructuralTaskForTesting?.value
         let pending = try XCTUnwrap(state.pendingFolderDelete)
 
         XCTAssertTrue(state.cancelPendingFolderDelete(id: pending.id))
@@ -951,6 +953,7 @@ final class FileManagementCommandsTests: XCTestCase {
         XCTAssertTrue(fileExists(vault, "empty"))
 
         state.requestDeleteEntry(path: "empty", isDirectory: true)
+        await state.pendingStructuralTaskForTesting?.value
         XCTAssertNil(state.pendingFolderDelete, "0 children ⇒ no alert")
         await state.pendingStructuralTaskForTesting?.value
         XCTAssertFalse(fileExists(vault, "empty"), "deleted directly")
@@ -960,6 +963,7 @@ final class FileManagementCommandsTests: XCTestCase {
     func testRequestDeleteFileSkipsConfirmation() async throws {
         let (state, vault) = try await makeVault(files: ["a.md"])
         state.requestDeleteEntry(path: "a.md", isDirectory: false)
+        await state.pendingStructuralTaskForTesting?.value
         XCTAssertNil(state.pendingFolderDelete)
         await state.pendingStructuralTaskForTesting?.value
         XCTAssertFalse(fileExists(vault, "a.md"))
@@ -973,6 +977,7 @@ final class FileManagementCommandsTests: XCTestCase {
         // knownChildCount: 0 with a child actually on disk: the zero is
         // treated as unknown, the probe finds the child, the alert stages.
         state.requestDeleteEntry(path: "proj", isDirectory: true, knownChildCount: 0)
+        await state.pendingStructuralTaskForTesting?.value
         let pending = try XCTUnwrap(state.pendingFolderDelete)
         XCTAssertEqual(pending.itemCount, 1)
         XCTAssertTrue(state.cancelPendingFolderDelete(id: pending.id))
@@ -984,6 +989,7 @@ final class FileManagementCommandsTests: XCTestCase {
             at: vault.appendingPathComponent("proj/a.md"),
             to: vault.appendingPathComponent("proj/.env"))
         state.requestDeleteEntry(path: "proj", isDirectory: true, knownChildCount: nil)
+        await state.pendingStructuralTaskForTesting?.value
         let hiddenPending = try XCTUnwrap(
             state.pendingFolderDelete, "hidden-only folder must still confirm")
         XCTAssertEqual(hiddenPending.itemCount, 1)
@@ -991,13 +997,11 @@ final class FileManagementCommandsTests: XCTestCase {
         await state.pendingStructuralTaskForTesting?.value
         XCTAssertFalse(fileExists(vault, "proj"))
 
-        // knownChildCount: 3 stages without touching the filesystem — the
-        // path doesn't even exist anymore.
+        // A cached positive cannot authorize a path that disappeared.
         state.requestDeleteEntry(path: "proj", isDirectory: true, knownChildCount: 3)
-        let trusted = try XCTUnwrap(state.pendingFolderDelete)
-        XCTAssertEqual(trusted.path, "proj")
-        XCTAssertEqual(trusted.itemCount, 3)
-        XCTAssertTrue(state.cancelPendingFolderDelete(id: trusted.id))
+        await state.pendingStructuralTaskForTesting?.value
+        XCTAssertNil(state.pendingFolderDelete)
+        XCTAssertNotNil(state.lastError)
     }
 
     /// The registry's Move to Trash routes folder selections through the
@@ -1006,10 +1010,62 @@ final class FileManagementCommandsTests: XCTestCase {
         let (state, vault) = try await makeVault(files: ["proj/a.md"])
         try publishSidebarSelection(state, path: "proj", isDirectory: true)
         try state.commandRegistry.invokeById(id: SlateCommandID.deleteEntry)
+        await state.pendingStructuralTaskForTesting?.value
         let pending = try XCTUnwrap(
             state.pendingFolderDelete, "palette/menu path stages too")
         XCTAssertTrue(fileExists(vault, "proj/a.md"))
         XCTAssertTrue(state.cancelPendingFolderDelete(id: pending.id))
+    }
+
+    func testConfirmedFolderTrashRefusesNewContents() async throws {
+        let (state, vault) = try await makeVault(files: ["folder/a.md"])
+        state.requestDeleteEntry(path: "folder", isDirectory: true)
+        await state.pendingStructuralTaskForTesting?.value
+        let pending = try XCTUnwrap(state.pendingFolderDelete)
+        try "unconfirmed".write(to: vault.appendingPathComponent("folder/late.md"), atomically: true, encoding: .utf8)
+        XCTAssertTrue(state.confirmPendingFolderDelete(id: pending.id))
+        await state.pendingStructuralTaskForTesting?.value
+        XCTAssertTrue(fileExists(vault, "folder/a.md"))
+        XCTAssertTrue(fileExists(vault, "folder/late.md"))
+        XCTAssertTrue(state.lastMutationAnnouncement?.contains("Request deletion again") == true)
+        XCTAssertFalse(state.isMutatingStructure)
+    }
+
+    func testEmptyFolderPopulationAfterStageRefusesWithoutNewConfirmation() async throws {
+        let (state, vault) = try await makeVault(files: ["keep.md"])
+        await state.createFolder(name: "empty", in: "")?.value
+        let nativeStage = state.batchDeleteConfirmationProbeRunner
+        state.batchDeleteConfirmationProbeRunner = { session, request in
+            let staged = try await nativeStage(session, request)
+            try "keep".write(to: vault.appendingPathComponent("empty/late.md"), atomically: true, encoding: .utf8)
+            return staged
+        }
+        state.requestDeleteEntry(path: "empty", isDirectory: true)
+        await state.pendingStructuralTaskForTesting?.value
+        XCTAssertNil(state.pendingFolderDelete)
+        XCTAssertTrue(fileExists(vault, "empty/late.md"))
+        XCTAssertTrue(state.lastMutationAnnouncement?.contains("Request deletion again") == true)
+        XCTAssertFalse(state.isMutatingStructure)
+    }
+
+    func testConfirmedBatchTrashRefusalKeepsUndoHistory() async throws {
+        let (state, vault) = try await makeVault(files: ["folder/a.md", "keep.md", "dest/other.md"])
+        await state.moveEntry(path: "keep.md", isDirectory: false, to: "dest")?.value
+        let history = state.structuralUndoStack
+        XCTAssertFalse(history.isEmpty)
+        state.requestBatchDelete([
+            .init(path: "folder", isDirectory: true), .init(path: "dest/keep.md", isDirectory: false)
+        ])
+        await state.pendingStructuralTaskForTesting?.value
+        let pending = try XCTUnwrap(state.pendingBatchDelete)
+        try "unconfirmed".write(to: vault.appendingPathComponent("folder/late.md"), atomically: true, encoding: .utf8)
+        XCTAssertTrue(state.confirmPendingBatchDelete(id: pending.id))
+        await state.pendingStructuralTaskForTesting?.value
+        XCTAssertTrue(fileExists(vault, "folder/a.md"))
+        XCTAssertTrue(fileExists(vault, "dest/keep.md"))
+        XCTAssertEqual(state.structuralUndoStack, history)
+        XCTAssertTrue(state.lastMutationAnnouncement?.contains("Request deletion again") == true)
+        XCTAssertFalse(state.isMutatingStructure)
     }
 
     // MARK: - Expansion persistence (#873, AppState round trip)

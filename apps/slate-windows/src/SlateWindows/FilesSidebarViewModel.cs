@@ -424,34 +424,34 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         ClearFilterCommand = new RelayCommand(_ => FilterText = string.Empty, _ => FilterText.Length > 0);
         ToggleTagsCommand = new RelayCommand(_ => ShowTags = !ShowTags, _ => true);
         ToggleDualPaneCommand = new RelayCommand(_ => IsDualPaneEnabled = !IsDualPaneEnabled, _ => true);
-        AddTagCommand = new RelayCommand(_ => EditTag(add: true), _ => !IsImporting && BatchSelectionCount > 0 && TagInput.Length > 0);
-        RemoveTagCommand = new RelayCommand(_ => EditTag(add: false), _ => !IsImporting && BatchSelectionCount > 0 && TagInput.Length > 0);
+        AddTagCommand = new RelayCommand(_ => EditTag(add: true), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0 && TagInput.Length > 0);
+        RemoveTagCommand = new RelayCommand(_ => EditTag(add: false), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0 && TagInput.Length > 0);
         // W5-4 F1/F2: the creates are auto-named and selection-
         // independent — the MutationName text-box flow retired for
         // these verbs.
-        CreateFolderCommand = new RelayCommand(_ => CreateFolder(), _ => !IsImporting);
-        CreateNoteCommand = new RelayCommand(_ => CreateNote(), _ => !IsImporting);
-        CreateCanvasCommand = new RelayCommand(_ => CreateCanvas(), _ => !IsImporting);
+        CreateFolderCommand = new RelayCommand(_ => CreateFolder(), _ => !IsImporting && !IsTrashing);
+        CreateNoteCommand = new RelayCommand(_ => CreateNote(), _ => !IsImporting && !IsTrashing);
+        CreateCanvasCommand = new RelayCommand(_ => CreateCanvas(), _ => !IsImporting && !IsTrashing);
         RenameCommand = new RelayCommand(
             _ => TryRenameSelected(),
-            _ => !IsImporting
+            _ => !IsImporting && !IsTrashing
                 && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false }
                 && MutationName.Length > 0);
         // Red team: placeholders and group headers are selectable rows
         // with Path "" — Delete on one reached DeleteFile("") and spoke
         // a spurious failure; the guard matches every sibling verb.
-        DeleteCommand = new RelayCommand(
-            _ => DeleteSelected(),
-            _ => !IsImporting
+        DeleteCommand = new AsyncRelayCommand(
+            _ => _trashCompletion = DeleteSelectedAsync(),
+            _ => !IsImporting && !IsTrashing
                 && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
-        CreateFolderNoteCommand = new RelayCommand(_ => CreateFolderNote(), _ => !IsImporting && SelectedNode?.IsDirectory == true && !SelectedNode.HasFolderNote);
-        DeleteFolderNoteCommand = new RelayCommand(_ => DeleteFolderNote(), _ => !IsImporting && SelectedNode?.IsDirectory == true && SelectedNode.HasFolderNote);
+        CreateFolderNoteCommand = new RelayCommand(_ => CreateFolderNote(), _ => !IsImporting && !IsTrashing && SelectedNode?.IsDirectory == true && !SelectedNode.HasFolderNote);
+        DeleteFolderNoteCommand = new RelayCommand(_ => DeleteFolderNote(), _ => !IsImporting && !IsTrashing && SelectedNode?.IsDirectory == true && SelectedNode.HasFolderNote);
         CopyWikilinkCommand = new RelayCommand(_ => CopyWikilink(), _ => SelectedNode is { IsDirectory: false });
         // W5-4 Phase B (F5/F7/F8). Duplicate stays executable on a
         // folder so the canonical DuplicateFilesOnly refusal can speak.
         DuplicateCommand = new RelayCommand(
             _ => DuplicateSelected(),
-            _ => !IsImporting && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
+            _ => !IsImporting && !IsTrashing && SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
         CopyPathCommand = new RelayCommand(
             _ => CopyPathSelected(),
             _ => SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
@@ -462,7 +462,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         // selection — the verb is live with either.
         MoveToCommand = new RelayCommand(
             _ => OpenMoveTo(),
-            _ => !IsImporting
+            _ => !IsImporting && !IsTrashing
                 && (BatchSelectionCount > 0
                     || SelectedNode is { IsPlaceholder: false, IsGroupHeader: false }));
         PinCommand = new RelayCommand(_ => PinSelected(), _ => SelectedNode is { IsDirectory: false });
@@ -474,11 +474,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         OpenCurrentCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.CurrentTab), _ => CanOpenSelected());
         OpenNewTabCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.NewTab), _ => CanOpenSelected());
         OpenSplitCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.SplitRight), _ => CanOpenSelected());
-        BatchMoveCommand = new RelayCommand(_ => BatchMove(), _ => !IsImporting && BatchSelectionCount > 0 && MoveDestination.Length > 0);
-        BatchTrashCommand = new RelayCommand(_ => BatchTrash(), _ => !IsImporting && BatchSelectionCount > 0);
+        BatchMoveCommand = new RelayCommand(_ => BatchMove(), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0 && MoveDestination.Length > 0);
+        BatchTrashCommand = new AsyncRelayCommand(_ => _trashCompletion = BatchTrashAsync(), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0);
         ImportCommand = new AsyncRelayCommand(
             _ => _importCompletion = ImportAsync(),
-            () => !IsImporting);
+            () => !IsImporting && !IsTrashing);
         CancelImportCommand = new RelayCommand(_ => CancelImport(), _ => IsImporting);
         ClearRecentsCommand = new RelayCommand(_ => ClearRecents(), _ => _recents.Count > 0);
         CollapseAllCommand = new RelayCommand(_ => CollapseAll(), _ => true);
@@ -1404,71 +1404,60 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     // as TryRenameSelected (W5-4 F3: report consumption, the
     // unconditional RenameFolderWithNote, error-keeps-field).
 
-    private void DeleteSelected()
+    private async Task DeleteSelectedAsync()
     {
-        if (SelectedNode is not
+        if (IsTrashing || SessionShutdownStarted || SelectedNode is not
             { IsPlaceholder: false, IsGroupHeader: false } node)
         {
             return;
         }
 
-        // W5-4 F6 (mac #860/#852 semantics): files and EMPTY folders
-        // trash immediately — no confirmation (Finder parity). A
-        // non-empty folder stages the styled confirmation; the probe
-        // runs AT STAGE TIME, and an unreadable folder is fail-closed
-        // (confirmed like a non-empty one, with the folder-clause
-        // message because no count exists to speak).
+        IsTrashing = true;
         BeginStructuralResult();
-        if (node.IsDirectory)
-        {
-            int? contents = CountFolderContents(node.Path);
-            if (contents is not 0)
-            {
-                string message = contents is int known
-                    ? RecycleBinCopy.SingleFolderMessage(node.DisplayName, known)
-                    : RecycleBinCopy.BatchMessage(1, 1);
-                if (!ConfirmRecycle(
-                    (RecycleBinCopy.SingleFolderTitle(node.DisplayName), message)))
-                {
-                    return;
-                }
-            }
-        }
-
         try
         {
-            if (!TryRunSessionWork(() =>
-            {
-                if (node.IsDirectory)
-                {
-                    _session.DeleteFolder(node.Path);
-                }
-                else
-                {
-                    _session.DeleteFile(node.Path);
-                }
-            }))
+            StagedTrash staged = await RunTrashWorkAsync(() => _session.StageTrash(
+                new BatchTrashRequest([new StructuralBatchItem(node.Path, node.IsDirectory)])));
+            if (SessionShutdownStarted) { return; }
+            TrashStagedForTesting?.Invoke(staged);
+            StagedTrashItem entry = staged.Items[0];
+            if (node.IsDirectory && entry.ItemCount > 0 && !ConfirmRecycle((
+                RecycleBinCopy.SingleFolderTitle(node.DisplayName),
+                RecycleBinCopy.SingleFolderMessage(node.DisplayName, checked((int)entry.ItemCount)))))
             {
                 return;
             }
+            if (SessionShutdownStarted) { return; }
+            await RunTrashWorkAsync(() =>
+            {
+                if (node.IsDirectory) { _session.DeleteFolderStaged(entry.Item.Path, staged.Token); }
+                else { _session.DeleteFileStaged(entry.Item.Path, staged.Token); }
+                return true;
+            });
+            if (SessionShutdownStarted) { return; }
 
             TransformStoredPaths(node.Path, node.Path, node.IsDirectory, deleted: true);
             // W5-4 F10: trash is not undoable AND a history barrier
             // (mac's rule — the bytes are in the Recycle Bin).
             StructuralHistoryBarrier();
-            SelectedNode = null;
             // F6: "focus returns to the tree" — the publication's
             // container discard would otherwise eject keyboard focus
             // to the window (red team, a11y 2a). The sentence reports
             // AFTER Refresh (codex round 1).
-            RequestSelectionAt(null);
+            if (ReferenceEquals(SelectedNode, node))
+            {
+                SelectedNode = null;
+                RequestSelectionAt(null);
+            }
             Refresh();
             ReportMutationResult($"Moved {node.DisplayName} to the Recycle Bin.");
         }
+        catch (OperationCanceledException) when (SessionShutdownStarted) { }
         catch (VaultException exception)
         {
-            ReportFailure($"Delete failed: {exception.Message}");
+            if (!SessionShutdownStarted) { ReportFailure($"Delete failed: {exception.Message}"); }
         }
+        finally { IsTrashing = false; }
     }
 
     private void CreateFolderNote()
@@ -1737,38 +1726,29 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
     }
 
-    private void BatchTrash()
+    private async Task BatchTrashAsync()
     {
         StructuralBatchItem[] items = SelectedBatchItems();
-        if (items.Length == 0)
-        {
-            return;
-        }
-
-        // W5-4 F6: a batch confirms only when it carries a non-empty
-        // folder (Finder parity — files and empty folders go
-        // straight to the Recycle Bin). The probe runs at stage time;
-        // unreadable counts as non-empty (fail-closed). Emptiness
-        // only — one top-level read per directory, never a recursive
-        // walk (codex round 8).
-        int nonEmptyFolders = items.Count(
-            item => item.IsDirectory && FolderHasContents(item.Path) is not false);
-        if (nonEmptyFolders > 0 && !ConfirmRecycle((
-            RecycleBinCopy.BatchTitle(items.Length),
-            RecycleBinCopy.BatchMessage(items.Length, nonEmptyFolders))))
-        {
-            return;
-        }
-
+        if (IsTrashing || SessionShutdownStarted || items.Length == 0) { return; }
+        IsTrashing = true;
         BeginStructuralResult();
         try
         {
-            if (!TryRunSessionWork(
-                () => _session.BatchTrash(new BatchTrashRequest(items)),
-                out BatchTrashReport report))
+            StagedTrash staged = await RunTrashWorkAsync(() =>
+                _session.StageTrash(new BatchTrashRequest(items)));
+            if (SessionShutdownStarted) { return; }
+            TrashStagedForTesting?.Invoke(staged);
+            int nonEmptyFolders = staged.Items.Count(entry => entry.Item.IsDirectory && entry.ItemCount > 0);
+            if (nonEmptyFolders > 0 && !ConfirmRecycle((
+                RecycleBinCopy.BatchTitle(staged.Items.Length),
+                RecycleBinCopy.BatchMessage(staged.Items.Length, nonEmptyFolders))))
             {
                 return;
             }
+            if (SessionShutdownStarted) { return; }
+            BatchTrashReport report = await RunTrashWorkAsync(() => _session.BatchTrashStaged(
+                new BatchTrashRequest(staged.Items.Select(entry => entry.Item).ToArray()), staged.Token));
+            if (SessionShutdownStarted) { return; }
 
             foreach (StructuralBatchItem item in report.Trashed)
             {
@@ -1777,14 +1757,22 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
             // W5-4 F10: trash is not undoable AND a history barrier.
             StructuralHistoryBarrier();
-            RequestSelectionAt(null);
+            FileTreeNodeViewModel? selected = SelectedNode;
+            if (selected is null || report.Trashed.Any(item =>
+                selected.Path == item.Path || (item.IsDirectory &&
+                    selected.Path.StartsWith(item.Path + "/", StringComparison.Ordinal))))
+            {
+                RequestSelectionAt(null);
+            }
             Refresh();
             ReportMutationResult(BatchTrashSummary(report));
         }
+        catch (OperationCanceledException) when (SessionShutdownStarted) { }
         catch (VaultException exception)
         {
-            ReportFailure($"Trash failed: {exception.Message}");
+            if (!SessionShutdownStarted) { ReportFailure($"Trash failed: {exception.Message}"); }
         }
+        finally { IsTrashing = false; }
     }
 
     private static string BatchMoveSummary(BatchMoveReport report, string destination)
@@ -2235,7 +2223,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             HistoryForwardCommand,
         })
         {
-            ((RelayCommand)command).RaiseCanExecuteChanged();
+            if (command is AsyncRelayCommand asynchronous) { asynchronous.RaiseCanExecuteChanged(); }
+            else { ((RelayCommand)command).RaiseCanExecuteChanged(); }
         }
 
 

@@ -55,6 +55,9 @@ struct FaultState {
     fail_read_after_write: BTreeMap<String, usize>,
     pending_read_failures: BTreeSet<String>,
     delete_number: usize,
+    remove_after_delete: BTreeMap<String, String>,
+    snapshot_number: usize,
+    fail_snapshot_numbers: BTreeSet<usize>,
     rename_number: usize,
 }
 
@@ -226,6 +229,16 @@ impl FaultInjectingProvider {
 }
 
 impl VaultProvider for FaultInjectingProvider {
+    fn trash_snapshot(&self, path: &str) -> Result<crate::vault::TrashSnapshot, VaultError> {
+        let mut state = self.state.lock().unwrap();
+        state.snapshot_number += 1;
+        let fail = state.fail_snapshot_numbers.contains(&state.snapshot_number);
+        drop(state);
+        if fail {
+            return Err(Self::injected("snapshot became unreadable"));
+        }
+        self.inner.trash_snapshot(path)
+    }
     fn list_dir(&self, relative: &str) -> Result<Vec<DirEntry>, VaultError> {
         self.inner.list_dir(relative)
     }
@@ -298,6 +311,7 @@ impl VaultProvider for FaultInjectingProvider {
         let fail = state.fail_delete_numbers.contains(&number);
         let fail_after = state.fail_deletes_after_mutation.contains(&number);
         let replacement_kind = state.replace_after_delete_with_kind.get(relative).copied();
+        let remove_after = state.remove_after_delete.get(relative).cloned();
         drop(state);
         if let Some(replacement_kind) = replacement_kind {
             let path = self.root.join(relative);
@@ -321,7 +335,11 @@ impl VaultProvider for FaultInjectingProvider {
             self.inner.delete(relative)?;
             Err(Self::injected("injected post-mutation delete failure"))
         } else {
-            self.inner.delete(relative)
+            self.inner.delete(relative)?;
+            if let Some(path) = remove_after {
+                std::fs::remove_file(self.root.join(path))?;
+            }
+            Ok(())
         }
     }
 
@@ -3572,5 +3590,106 @@ fn deletes_keep_rows_and_markers_for_recreated_paths() {
             )
             .unwrap();
         assert_eq!(markers, 0, "the read resolved the delete marker");
+    }
+}
+
+#[test]
+fn staged_trash_later_stale_item_preserves_partial_report_and_recovery_marker() {
+    let (tmp, session, state) = fixture(&[("a.md", "first"), ("b/child.md", "second")], &[]);
+    let request = BatchTrashRequest {
+        items: vec![file("a.md"), folder("b")],
+    };
+    let staged = session.stage_trash(request.clone()).unwrap();
+    state
+        .lock()
+        .unwrap()
+        .remove_after_delete
+        .insert("a.md".into(), "b/child.md".into());
+    let report = session.batch_trash_staged(request, staged.token).unwrap();
+    assert_eq!(report.state, BatchTrashState::Partial);
+    assert_eq!(report.trashed, vec![file("a.md")]);
+    assert_eq!(report.untrashed.len(), 1);
+    assert_eq!(report.untrashed[0].item, folder("b"));
+    assert!(report.unknown.is_empty());
+    assert!(report.requires_rescan);
+    assert!(report.op_id.is_some());
+    assert!(tmp.path().join("b").is_dir());
+    assert_eq!(state.lock().unwrap().delete_number, 1);
+    let conn = session.conn.lock().unwrap();
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM files WHERE path = 'a.md'", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM text_write_intents WHERE path = 'b/child.md'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn staged_trash_later_fence_failure_still_finalizes_earlier_deletion() {
+    let (tmp, session, state) = fixture(&[("a.md", "first"), ("b.md", "second")], &[]);
+    let request = BatchTrashRequest {
+        items: vec![file("a.md"), file("b.md")],
+    };
+    let staged = session.stage_trash(request.clone()).unwrap();
+    let faults = NthBatchFault::new(BatchFaultPoint::TrashWriteFence, 2);
+    let report = session
+        .batch_trash_checked(request, &faults, Some(staged.token))
+        .unwrap();
+    assert_eq!(report.state, BatchTrashState::Partial);
+    assert_eq!(report.trashed, vec![file("a.md")]);
+    assert_eq!(report.untrashed[0].item, file("b.md"));
+    assert!(report.op_id.is_some());
+    assert_eq!(std::fs::read(tmp.path().join("b.md")).unwrap(), b"second");
+    assert_eq!(state.lock().unwrap().delete_number, 1);
+    let conn = session.conn.lock().unwrap();
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM files WHERE path = 'a.md'", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn staged_trash_final_snapshot_failure_is_a_typed_no_mutation_refusal() {
+    for is_directory in [false, true] {
+        let (_tmp, session, state) = fixture(&[("folder/a.md", "keep")], &[]);
+        let path = if is_directory {
+            "folder"
+        } else {
+            "folder/a.md"
+        };
+        let request = BatchTrashRequest {
+            items: vec![StructuralBatchItem {
+                path: path.into(),
+                is_directory,
+            }],
+        };
+        let staged = session.stage_trash(request).unwrap();
+        // Stage is snapshot 1, initial token validation is 2, and the final
+        // check under the writer fence is 3.
+        state.lock().unwrap().fail_snapshot_numbers.insert(3);
+        let result = if is_directory {
+            session.delete_folder_staged(path, staged.token)
+        } else {
+            session.delete_file_staged(path, staged.token)
+        };
+        assert!(matches!(
+            result,
+            Err(VaultError::TrashConfirmationChanged { .. })
+        ));
+        assert_eq!(state.lock().unwrap().delete_number, 0);
+        assert_eq!(session.provider.read_file("folder/a.md").unwrap(), b"keep");
     }
 }

@@ -91,6 +91,7 @@ pub mod tasks;
 pub mod tasks_db;
 pub mod templates;
 pub mod text_buffer;
+pub mod trash_confirmation;
 pub mod vault;
 mod vault_config;
 
@@ -230,6 +231,10 @@ pub enum VaultError {
     /// file is left untouched.
     #[error("invalid argument: {message}")]
     InvalidArgument { message: String },
+
+    /// The checked Trash request refused before any filesystem mutation.
+    #[error("{message}")]
+    TrashConfirmationChanged { message: String },
     /// A structural mutation's destination already exists (case-insensitive
     /// on APFS). There is deliberately no overwrite path (DoD §F).
     #[error("destination already exists: {path}")]

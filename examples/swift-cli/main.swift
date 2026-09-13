@@ -60,7 +60,7 @@ func run() {
 func describe(_ error: VaultError) -> String {
     switch error {
     case .Io(let m), .Db(let m), .Trash(let m), .InvalidQuery(let m),
-        .InvalidArgument(let m):
+        .InvalidArgument(let m), .TrashConfirmationChanged(let m):
         return m
     case .InvalidPath(let path, let reason):
         return "invalid path \(path): \(reason)"

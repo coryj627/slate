@@ -216,6 +216,7 @@ internal sealed partial class FilesSidebarViewModel
     /// </summary>
     internal bool TryRenameSelected()
     {
+        if (IsTrashing) { return false; }
         if (SelectedNode is not FileTreeNodeViewModel node)
         {
             return false;
@@ -280,6 +281,7 @@ internal sealed partial class FilesSidebarViewModel
     /// "Nothing to undo.").</summary>
     internal void UndoStructural()
     {
+        if (IsTrashing) { AnnounceUndoResidue("Trash is in progress. Try again when it finishes."); return; }
         if (!_structuralUndo.TryPopUndo(out StructuralUndoStep step))
         {
             AnnounceUndoResidue("Nothing to undo.");
@@ -291,6 +293,7 @@ internal sealed partial class FilesSidebarViewModel
 
     internal void RedoStructural()
     {
+        if (IsTrashing) { AnnounceUndoResidue("Trash is in progress. Try again when it finishes."); return; }
         if (!_structuralUndo.TryPopRedo(out StructuralUndoStep step))
         {
             AnnounceUndoResidue("Nothing to redo.");
@@ -875,70 +878,6 @@ internal sealed partial class FilesSidebarViewModel
         request => HistoryConfirmationDialog.Confirm(
             request.Title, request.Message,
             confirmLabel: RecycleBinCopy.ActionLabel);
-
-    /// <summary>The F6 child-count probe, re-run AT STAGE TIME so a
-    /// stale zero can never bypass the confirmation. Null (an
-    /// unreadable folder) is fail-closed: it stages the confirmation
-    /// like a non-empty folder.</summary>
-    private int? CountFolderContents(string vaultRelative)
-    {
-        // Bounded (codex round 8): an unbounded recursive Count() on
-        // the dispatcher froze the shell before the confirmation
-        // could appear. Past the cap the count is UNKNOWN, not a
-        // number we did not finish — the caller stages with the
-        // count-free message arm, same as unreadable.
-        const int Cap = 10_000;
-        if (_vaultRoot is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            int count = 0;
-            foreach (string _ in System.IO.Directory.EnumerateFileSystemEntries(
-                AbsoluteVaultPath(vaultRelative),
-                "*",
-                System.IO.SearchOption.AllDirectories))
-            {
-                if (++count > Cap)
-                {
-                    return null;
-                }
-            }
-
-            return count;
-        }
-        catch (Exception exception)
-            when (exception is System.IO.IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>Emptiness-only probe for batch staging (codex round
-    /// 8): the batch copy needs non-empty, never a count, and a
-    /// single top-level read answers it — no recursive walk per
-    /// selected directory. Null (unreadable) is fail-closed
-    /// non-empty.</summary>
-    private bool? FolderHasContents(string vaultRelative)
-    {
-        if (_vaultRoot is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            return System.IO.Directory.EnumerateFileSystemEntries(
-                AbsoluteVaultPath(vaultRelative)).Any();
-        }
-        catch (Exception exception)
-            when (exception is System.IO.IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
 
     /// <summary>F5: mac's Finder-parity duplicate — no new FFI, a
     /// <c>ReadText</c> + <c>CreateExclusive</c> loop advancing on

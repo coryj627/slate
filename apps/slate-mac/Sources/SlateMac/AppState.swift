@@ -1614,7 +1614,7 @@ final class AppState: ObservableObject {
     typealias BatchTrashRunner =
         @Sendable (VaultSession, BatchTrashRequest) async throws -> BatchTrashReport
     typealias BatchDeleteConfirmationProbeRunner =
-        @Sendable (URL, [String]) async -> Int
+        @Sendable (VaultSession, BatchTrashRequest) async throws -> StagedTrash
     typealias BatchTrashPresenceProbeRunner =
         @Sendable (URL, Bool) -> BatchTrashPhysicalPresence
     typealias BatchUndoMoveRunner =
@@ -1634,25 +1634,18 @@ final class AppState: ObservableObject {
             try session.batchMove(request: request)
         }.value
     }
-    var batchTrashRunner: BatchTrashRunner = { session, request in
-        try await Task.detached(priority: .userInitiated) {
-            try session.batchTrash(request: request)
-        }.value
-    }
+    /// Optional executor override for deterministic landing tests. Production
+    /// uses the confirmed core token in performBatchTrash.
+    var batchTrashRunner: BatchTrashRunner?
     var batchTrashPresenceProbeRunner: BatchTrashPresenceProbeRunner = {
         url, expectedIsDirectory in
         AppState.batchTrashPhysicalPresence(
             at: url, expectedIsDirectory: expectedIsDirectory)
     }
     var batchDeleteConfirmationProbeRunner: BatchDeleteConfirmationProbeRunner = {
-        vaultURL, folderPaths in
-        await Task.detached(priority: .userInitiated) {
-            folderPaths.reduce(into: 0) { count, path in
-                let url = vaultURL.appendingPathComponent(path, isDirectory: true)
-                if AppState.batchDeleteFolderRequiresConfirmation(at: url) {
-                    count += 1
-                }
-            }
+        session, request in
+        try await Task.detached(priority: .userInitiated) {
+            try session.stageTrash(request: request)
         }.value
     }
     var batchUndoMoveRunner: BatchUndoMoveRunner = { session, opID in
@@ -12613,7 +12606,7 @@ final class AppState: ObservableObject {
     private nonisolated static func humanReadableVaultError(_ error: VaultError) -> String {
         switch error {
         case .Io(let m), .Db(let m), .Trash(let m), .InvalidQuery(let m),
-            .InvalidArgument(let m):
+            .InvalidArgument(let m), .TrashConfirmationChanged(let m):
             return m
         case .InvalidPath(let path, let reason):
             return "Invalid path \(path): \(reason)"
@@ -18215,17 +18208,16 @@ final class AppState: ObservableObject {
     /// A non-empty folder delete awaiting user confirmation (#860). Set by
     /// `requestDeleteEntry` when the target is a folder with children; the
     /// MainSplitView alert consumes it (Move to Trash confirms, Cancel
-    /// drops). Files and empty folders never stage — they keep the
-    /// no-confirm Finder-parity path (a file trash is recoverable; a whole
+    /// drops). Files and empty folders also capture a core token, while keeping
+    /// the no-confirm Finder-parity path (a file trash is recoverable; a whole
     /// subtree moving on one chord is the heavier loss-of-context event).
     struct PendingFolderDelete: Equatable, Identifiable {
         let id: UUID
         let sessionIdentity: ObjectIdentifier
         let path: String
-        /// Immediate (non-recursive) child count — the "its N items" the
-        /// alert message speaks. Advisory: the delete itself takes the whole
-        /// subtree regardless.
+        /// Recursive count from the same inventory the token validates.
         let itemCount: Int
+        let confirmationToken: UInt64
         var name: String { (path as NSString).lastPathComponent }
     }
 
@@ -18235,9 +18227,8 @@ final class AppState: ObservableObject {
     /// tree ⌘⌫ / rotor / context menu, and the menu/palette command. A
     /// folder with children stages `pendingFolderDelete` (confirmation
     /// alert) instead of deleting; everything else falls straight through to
-    /// `deleteEntry`. `knownChildCount` lets the tree pass its node's cached
-    /// immediate count; callers without one (the selection-scoped command)
-    /// leave it nil and a shallow FileManager enumerate fills in.
+    /// `deleteEntry`. Cached child counts never authorize deletion: core's
+    /// captured inventory supplies both the spoken count and validation token.
     @discardableResult
     func requestDeleteEntry(
         path: String, isDirectory: Bool, knownChildCount: Int? = nil
@@ -18247,25 +18238,41 @@ final class AppState: ObservableObject {
         guard admitBatchTrashMutation(
             of: [StructuralBatchItem(path: path, isDirectory: isDirectory)])
         else { return false }
-        if isDirectory {
-            // A cached count of ZERO is treated as unknown: the tree's
-            // itemCount can be stale (folder filled externally since the
-            // fetch), and a stale zero would BYPASS the confirmation —
-            // trashing a non-empty folder unprompted. Only the zero case
-            // re-probes; a stale positive merely over-confirms (harmless).
-            let count = knownChildCount.flatMap { $0 > 0 ? $0 : nil }
-                ?? shallowChildCount(ofFolder: path)
-            if count > 0 {
-                pendingFolderDelete = PendingFolderDelete(
-                    id: UUID(),
-                    sessionIdentity: ObjectIdentifier(session),
-                    path: path,
-                    itemCount: count)
-                return true
+        let request = BatchTrashRequest(items: [
+            StructuralBatchItem(path: path, isDirectory: isDirectory)
+        ])
+        let owner = beginStructuralMutation()
+        let stageRunner = batchDeleteConfirmationProbeRunner
+        let task = Task { @MainActor [weak self] in
+            do {
+                let staged = try await stageRunner(session, request)
+                guard let self, self.ownsStructuralMutation(owner, session: session) else { return }
+                guard let entry = staged.items.first else {
+                    self.endStructuralMutation(owner)
+                    return
+                }
+                if isDirectory && entry.itemCount > 0 {
+                    self.pendingFolderDelete = PendingFolderDelete(
+                        id: UUID(), sessionIdentity: ObjectIdentifier(session),
+                        path: entry.item.path, itemCount: Int(entry.itemCount),
+                        confirmationToken: staged.token)
+                    self.endStructuralMutation(owner)
+                } else {
+                    if let deletion = self.deleteEntry(
+                        path: entry.item.path, isDirectory: isDirectory,
+                        confirmationToken: staged.token, structuralOwner: owner) {
+                        await deletion.value
+                    } else {
+                        self.endStructuralMutation(owner)
+                    }
+                }
+            } catch {
+                guard let self, self.ownsStructuralMutation(owner, session: session) else { return }
+                let failure = (error as? VaultError) ?? .Io(message: error.localizedDescription)
+                self.lastError = self.humanReadable(failure)
+                self.postMutationAnnouncement("Could not prepare Trash: \(self.humanReadable(failure))")
+                self.endStructuralMutation(owner)
             }
-        }
-        guard let task = deleteEntry(path: path, isDirectory: isDirectory) else {
-            return false
         }
         pendingStructuralTaskForTesting = task
         return true
@@ -18285,7 +18292,7 @@ final class AppState: ObservableObject {
             return false
         }
         guard admitStructuralMutationRequest() else { return false }
-        guard let task = deleteEntry(path: pending.path, isDirectory: true) else {
+        guard let task = deleteEntry(path: pending.path, isDirectory: true, confirmationToken: pending.confirmationToken) else {
             return false
         }
         pendingFolderDelete = nil
@@ -18325,6 +18332,7 @@ final class AppState: ObservableObject {
         /// How many non-empty folders the batch includes — drives the alert
         /// message ("including N folders with contents").
         let nonEmptyFolderCount: Int
+        let confirmation: StagedTrash
         var itemCount: Int { items.count }
     }
 
@@ -18376,12 +18384,10 @@ final class AppState: ObservableObject {
             return requestDeleteEntry(
                 path: only.path, isDirectory: only.isDirectory)
         }
-        guard let vaultURL = currentVaultURL else { return false }
         let capturedItems = items
         let capturedFocusPath = preferredFocusPath
         let sessionIdentity = ObjectIdentifier(session)
         let confirmationID = UUID()
-        let folderPaths = items.compactMap { $0.isDirectory ? $0.path : nil }
         let probeRunner = batchDeleteConfirmationProbeRunner
         let trashRunner = batchTrashRunner
         let refresher = structuralBatchRefreshRunner
@@ -18391,27 +18397,33 @@ final class AppState: ObservableObject {
             })
         let token = beginStructuralMutation()
         let task = Task { @MainActor [weak self] in
-            let nonEmptyFolderCount = await probeRunner(vaultURL, folderPaths)
-            guard let self, self.ownsStructuralMutation(token, session: session) else {
-                return
+            do {
+                let staged = try await probeRunner(session, trashRequest)
+                guard let self, self.ownsStructuralMutation(token, session: session) else { return }
+                let nonEmptyFolderCount = staged.items.filter {
+                    $0.item.isDirectory && $0.itemCount > 0
+                }.count
+                guard nonEmptyFolderCount > 0 else {
+                    await self.performBatchTrash(
+                        request: trashRequest,
+                        preferredFocusPath: capturedFocusPath,
+                        session: session, token: token,
+                        confirmation: staged,
+                        runner: trashRunner, refresher: refresher)
+                    return
+                }
+                self.pendingBatchDelete = BatchDelete(
+                    id: confirmationID, sessionIdentity: sessionIdentity,
+                    items: capturedItems, preferredFocusPath: capturedFocusPath,
+                    nonEmptyFolderCount: nonEmptyFolderCount, confirmation: staged)
+                self.endStructuralMutation(token)
+            } catch {
+                guard let self, self.ownsStructuralMutation(token, session: session) else { return }
+                let failure = (error as? VaultError) ?? .Io(message: error.localizedDescription)
+                self.lastError = self.humanReadable(failure)
+                self.postMutationAnnouncement("Could not prepare Trash: \(self.humanReadable(failure))")
+                self.endStructuralMutation(token)
             }
-            guard nonEmptyFolderCount > 0 else {
-                await self.performBatchTrash(
-                    request: trashRequest,
-                    preferredFocusPath: capturedFocusPath,
-                    session: session,
-                    token: token,
-                    runner: trashRunner,
-                    refresher: refresher)
-                return
-            }
-            self.pendingBatchDelete = BatchDelete(
-                id: confirmationID,
-                sessionIdentity: sessionIdentity,
-                items: capturedItems,
-                preferredFocusPath: capturedFocusPath,
-                nonEmptyFolderCount: nonEmptyFolderCount)
-            self.endStructuralMutation(token)
         }
         pendingStructuralTaskForTesting = task
         return true
@@ -18429,7 +18441,7 @@ final class AppState: ObservableObject {
         }
         guard admitStructuralMutationRequest() else { return false }
         guard batchDelete(
-            pending.items, preferredFocusPath: pending.preferredFocusPath) != nil
+            pending.items, preferredFocusPath: pending.preferredFocusPath, confirmation: pending.confirmation) != nil
         else { return false }
         pendingBatchDelete = nil
         return true
@@ -18453,8 +18465,13 @@ final class AppState: ObservableObject {
     @discardableResult
     func batchDelete(
         _ items: [TreeSelection],
-        preferredFocusPath: String?
+        preferredFocusPath: String?,
+        confirmation: StagedTrash? = nil
     ) -> Task<Void, Never>? {
+        if confirmation == nil && batchTrashRunner == nil {
+            guard requestBatchDelete(items, preferredFocusPath: preferredFocusPath) else { return nil }
+            return pendingStructuralTaskForTesting
+        }
         guard !items.isEmpty, admitStructuralMutationRequest(),
             let session = currentSession
         else {
@@ -18479,6 +18496,7 @@ final class AppState: ObservableObject {
                 preferredFocusPath: preferredFocusPath,
                 session: session,
                 token: token,
+                confirmation: confirmation,
                 runner: runner,
                 refresher: refresher)
         }
@@ -18495,12 +18513,24 @@ final class AppState: ObservableObject {
         preferredFocusPath: String?,
         session: VaultSession,
         token: Int,
-        runner: BatchTrashRunner,
+        confirmation: StagedTrash?,
+        runner: BatchTrashRunner?,
         refresher: StructuralBatchRefreshRunner
     ) async {
         let outcome: Result<BatchTrashReport, Error>
         do {
-            outcome = .success(try await runner(session, request))
+            if let runner {
+                outcome = .success(try await runner(session, request))
+            } else {
+                guard let confirmation else {
+                    throw VaultError.TrashConfirmationChanged(message: "Trash confirmation expired. Request deletion again")
+                }
+                outcome = .success(try await Task.detached(priority: .userInitiated) {
+                    try session.batchTrashStaged(
+                        request: BatchTrashRequest(items: confirmation.items.map(\.item)),
+                        token: confirmation.token)
+                }.value)
+            }
         } catch {
             outcome = .failure(error)
         }
@@ -18542,6 +18572,14 @@ final class AppState: ObservableObject {
             }
             landBatchTrash(report, preferredFocusPath: preferredFocusPath)
         case .failure(let error):
+            if let vaultError = error as? VaultError,
+                case .TrashConfirmationChanged = vaultError {
+                let message = humanReadable(vaultError)
+                lastError = message
+                postMutationAnnouncement("Trash operation failed: \(message)")
+                endStructuralMutation(token)
+                return
+            }
             await refresher(self)
             guard ownsStructuralMutation(token, session: session) else { return }
             clearStructuralUndoStacks()
@@ -18550,7 +18588,7 @@ final class AppState: ObservableObject {
                 rewrittenCount: 0,
                 requiresRescan: true,
                 preferredFocusPath: preferredFocusPath)
-            let message = error.localizedDescription
+            let message = (error as? VaultError).map(humanReadable) ?? error.localizedDescription
             setBatchStructuralResult(BatchStructuralResult(
                 payload: .infrastructure(operation: .trash, message: message),
                 requiresAttention: true))
@@ -19022,56 +19060,6 @@ final class AppState: ObservableObject {
         postMutationAnnouncement(BatchTrashCopy.announcement(for: report))
     }
 
-    /// Immediate child count of a vault folder via a shallow FileManager
-    /// enumerate (hidden entries COUNT — a folder holding only `.env`
-    /// must confirm; only Finder-noise `.DS_Store` is ignored — and
-    /// Hidden entries count (only `.DS_Store` is ignored); an unreadable
-    /// directory reads as NON-empty (fail-closed → the confirmation), so
-    /// unknown never bypasses the prompt.
-    private func shallowChildCount(ofFolder path: String) -> Int {
-        guard let url = currentVaultURL?.appendingPathComponent(path) else { return 1 }
-        // Hidden entries COUNT (Codex P1: a folder holding only `.env` or
-        // `.git` must still confirm — those are exactly the deletions that
-        // hurt); only the Finder-noise `.DS_Store` is ignored. Enumeration
-        // failure fails CLOSED (treated as non-empty → confirmation), not
-        // open — the alert is the safe side of "unknown".
-        guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: url, includingPropertiesForKeys: nil)
-        else { return 1 }
-        return contents.filter { $0.lastPathComponent != ".DS_Store" }.count
-    }
-
-    /// Probe one folder for the batch confirmation threshold without allocating
-    /// its complete child list. Hidden entries count; only Finder's `.DS_Store`
-    /// noise is ignored. Every unknown/error path returns true so an unreadable
-    /// folder can never bypass the destructive confirmation.
-    nonisolated private static func batchDeleteFolderRequiresConfirmation(at url: URL) -> Bool {
-        let fileManager = FileManager.default
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
-            isDirectory.boolValue
-        else { return true }
-
-        var enumerationFailed = false
-        guard
-            let enumerator = fileManager.enumerator(
-                at: url,
-                includingPropertiesForKeys: nil,
-                options: [.skipsSubdirectoryDescendants],
-                errorHandler: { _, _ in
-                    enumerationFailed = true
-                    return false
-                })
-        else { return true }
-
-        while let child = enumerator.nextObject() as? URL {
-            if child.lastPathComponent != ".DS_Store" {
-                return true
-            }
-        }
-        return enumerationFailed
-    }
-
     /// Send the file or folder at `path` to the system trash. Any open tab
     /// holding the file (or a descendant of the folder) flips to the missing-
     /// file error state (spec §U2-5). Refreshes the parent level + moves the
@@ -19083,20 +19071,34 @@ final class AppState: ObservableObject {
     @discardableResult
     func deleteEntry(
         path: String, isDirectory: Bool, announce: Bool = true,
-        onResult: ((Bool) -> Void)? = nil
+        onResult: ((Bool) -> Void)? = nil,
+        confirmationToken: UInt64? = nil, structuralOwner: Int? = nil
     ) -> Task<Void, Never>? {
-        guard admitStructuralMutationRequest(), let session = currentSession else { return nil }
+        guard let session = currentSession else { return nil }
+        if let structuralOwner {
+            guard ownsStructuralMutation(structuralOwner, session: session) else { return nil }
+        } else {
+            guard admitStructuralMutationRequest() else { return nil }
+        }
         guard admitBatchTrashMutation(
             of: [StructuralBatchItem(path: path, isDirectory: isDirectory)])
         else { return nil }
-        let token = beginStructuralMutation()
+        let token = structuralOwner ?? beginStructuralMutation()
         let task = Task { [weak self] in
             let outcome: Result<Void, VaultError> = await Task.detached(
                 priority: .userInitiated
             ) {
                 do {
-                    if isDirectory { try session.deleteFolder(path: path) }
-                    else { try session.deleteFile(path: path) }
+                    let confirmed: UInt64
+                    if let confirmationToken {
+                        confirmed = confirmationToken
+                    } else {
+                        confirmed = try session.stageTrash(request: BatchTrashRequest(items: [
+                            StructuralBatchItem(path: path, isDirectory: isDirectory)
+                        ])).token
+                    }
+                    if isDirectory { try session.deleteFolderStaged(path: path, token: confirmed) }
+                    else { try session.deleteFileStaged(path: path, token: confirmed) }
                     return .success(())
                 } catch let e as VaultError { return .failure(e) }
                 catch { return .failure(.Io(message: error.localizedDescription)) }
@@ -23756,6 +23758,8 @@ final class AppState: ObservableObject {
             return "\(feature) is not implemented yet."
         case .InvalidArgument(let message):
             return "Invalid argument: \(message)"
+        case .TrashConfirmationChanged(let message):
+            return message
         case .WriteConflict:
             // The editor's save-flow handles this case directly with
             // a "Keep mine / Reload from disk" affordance (issue #64);

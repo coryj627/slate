@@ -177,6 +177,7 @@ public sealed class FileManagementTests
         // The system trash requires an STA apartment (the DeleteOnSta
         // pattern) — xunit facts run MTA.
         OnSta(() => rig.Sidebar.DeleteCommand.Execute(null));
+        await rig.Sidebar.TrashCompletion;
         rig.Sidebar.UndoStructural();
         Assert.Contains(
             "Nothing to undo.",
@@ -495,6 +496,7 @@ public sealed class FileManagementTests
         // parity, F6).
         rig.Sidebar.SelectedNode = Node(rig, "note.md");
         OnSta(() => rig.Sidebar.DeleteCommand.Execute(null));
+        await rig.Sidebar.TrashCompletion;
         Assert.Empty(staged);
         Assert.False(File.Exists(Path.Combine(fixture.Root, "note.md")));
         Assert.Contains(
@@ -506,6 +508,7 @@ public sealed class FileManagementTests
         await rig.Settle();
         rig.Sidebar.SelectedNode = Node(rig, "empty");
         OnSta(() => rig.Sidebar.DeleteCommand.Execute(null));
+        await rig.Sidebar.TrashCompletion;
         Assert.Empty(staged);
         Assert.False(Directory.Exists(Path.Combine(fixture.Root, "empty")));
 
@@ -515,6 +518,7 @@ public sealed class FileManagementTests
         await rig.Settle();
         rig.Sidebar.SelectedNode = Node(rig, "full");
         OnSta(() => rig.Sidebar.DeleteCommand.Execute(null));
+        await rig.Sidebar.TrashCompletion;
         (string title, string message) = Assert.Single(staged);
         Assert.Equal("Move “full” to the Recycle Bin?", title);
         Assert.Equal(
@@ -522,6 +526,76 @@ public sealed class FileManagementTests
             + "Slate can't undo this action.",
             message);
         Assert.True(File.Exists(Path.Combine(fixture.Root, "full", "one.md")));
+    }
+
+    [Fact]
+    public async Task ConfirmedTrashRefusesLateContentsAndPreservesFilesAndSelection()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-staged-late");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
+        File.WriteAllText(Path.Combine(fixture.Root, "folder", "original.md"), "original");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        rig.Sidebar.SelectedNode = Node(rig, "folder");
+        rig.Sidebar.ConfirmRecycle = _ =>
+        {
+            File.WriteAllText(Path.Combine(fixture.Root, "folder", "late.md"), "unconfirmed");
+            return true;
+        };
+        rig.Sidebar.DeleteCommand.Execute(null);
+        await rig.Sidebar.TrashCompletion;
+        Assert.Equal("unconfirmed", File.ReadAllText(Path.Combine(fixture.Root, "folder", "late.md")));
+        Assert.Equal("folder", rig.Sidebar.SelectedNode?.Path);
+        Assert.Contains("Request deletion again", rig.Sidebar.Status);
+        Assert.DoesNotContain(announced.OfType<A11yEvent.HostComposed>(), e => e.Text.StartsWith("Moved ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EmptyFolderPopulationAfterStageRefusesWithoutOpeningConfirmation()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-staged-empty");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "empty"));
+        using VaultSession session = OpenScanned(fixture.Root);
+        SidebarRig rig = await NewSidebar(session, fixture, new SynchronizedAnnouncements());
+        rig.Sidebar.SelectedNode = Node(rig, "empty");
+        int prompts = 0;
+        rig.Sidebar.ConfirmRecycle = _ => { prompts++; return true; };
+        rig.Sidebar.TrashStagedForTesting = _ => File.WriteAllText(Path.Combine(fixture.Root, "empty", "late.md"), "keep");
+        rig.Sidebar.DeleteCommand.Execute(null);
+        await rig.Sidebar.TrashCompletion;
+        Assert.Equal(0, prompts);
+        Assert.Equal("keep", File.ReadAllText(Path.Combine(fixture.Root, "empty", "late.md")));
+        Assert.Contains("Request deletion again", rig.Sidebar.Status);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TrashWorkerPreservesNewSelectionAndRejectsConcurrentUndo(bool batch)
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-trash-selection");
+        File.WriteAllText(Path.Combine(fixture.Root, "a.md"), "a");
+        File.WriteAllText(Path.Combine(fixture.Root, "keep.md"), "keep");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        rig.Sidebar.SelectedNode = Node(rig, "a.md");
+        if (batch) { Node(rig, "a.md").IsBatchSelected = true; }
+        rig.Sidebar.TrashStagedForTesting = _ =>
+        {
+            Assert.True(rig.Sidebar.IsTrashing);
+            rig.Sidebar.SelectedNode = Node(rig, "keep.md");
+            rig.Sidebar.UndoStructural();
+            rig.Sidebar.RedoStructural();
+        };
+        if (batch) { rig.Sidebar.BatchTrashCommand.Execute(null); }
+        else { rig.Sidebar.DeleteCommand.Execute(null); }
+        await rig.Sidebar.TrashCompletion;
+        await rig.Settle();
+        Assert.False(File.Exists(Path.Combine(fixture.Root, "a.md")));
+        Assert.Equal("keep.md", rig.Sidebar.SelectedNode?.Path);
+        Assert.Contains(announced.OfType<A11yEvent.HostComposed>(), e => e.Text.Contains("Trash is in progress", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -546,6 +620,7 @@ public sealed class FileManagementTests
         Node(rig, "a.md").IsBatchSelected = true;
         Node(rig, "b.md").IsBatchSelected = true;
         OnSta(() => rig.Sidebar.BatchTrashCommand.Execute(null));
+        await rig.Sidebar.TrashCompletion;
         Assert.Empty(staged);
         Assert.False(File.Exists(Path.Combine(fixture.Root, "a.md")));
         Assert.False(File.Exists(Path.Combine(fixture.Root, "b.md")));
@@ -555,6 +630,7 @@ public sealed class FileManagementTests
         await rig.Settle();
         Node(rig, "full").IsBatchSelected = true;
         OnSta(() => rig.Sidebar.BatchTrashCommand.Execute(null));
+        await rig.Sidebar.TrashCompletion;
         (string title, string message) = Assert.Single(staged);
         Assert.Equal("Move 1 item to the Recycle Bin?", title);
         Assert.Equal(
