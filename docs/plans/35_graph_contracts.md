@@ -8750,7 +8750,16 @@ surface's field, panel and state host).
   delivered quiescent landing.
 - **Term F5 — silence.** Delivery lands the reader and says nothing —
   the grid's re-seat under the syncing guard writes no key and posts no
-  row move (the canvas's C12).
+  row move (the canvas's C12). **#1193 readback amendment:** Where-am-I
+  may describe that silent seat without writing the shared key. A present
+  shared key has precedence and must name a currently shown row; a hidden
+  or missing keyed row still yields `NoSelection` (IPG-3). Only when the
+  key is absent may readback use the current visible native table row.
+  On a host with no independent current-without-selected row, the sole
+  current visible result is an unambiguous fallback. Zero rows or multiple
+  rows without a valid current seat yield `NoSelection`; do not invent a
+  first-row selection. These reads preserve the existing query-currency,
+  active-projection and effective-document admission rules.
 - **Term F6 — the shell's route and the arbiter.** `FocusEditorPane`
   (`MainWindow.xaml.cs:1645–1690`) gains a graph arm before its editor
   and tab-container fallbacks — the canvas arm's shape (`:1660–1664`) —
@@ -9280,11 +9289,13 @@ QUIESCENT and the publication CURRENT (Term Q7: a READY record held,
 its query the view state's, nothing in flight — with a request in
 flight the verb is unavailable, so an old node is never read under new
 filter prose; IGO-29) and composes ONE `GraphWhereAmI`: `selection` =
-the shared key's node in the held SNAPSHOT (`Snapshot.Nodes` scanned by
-`StableKey` — spec R-A's no-index rule) rendered the diagram's way —
+the shared key's currently shown node in the held SNAPSHOT (`Snapshot.Nodes`
+scanned by `StableKey` — spec R-A's no-index rule), or F5's validated
+silent table seat when the key is absent (#1193). A present hidden or
+missing key never falls back. The row is rendered the diagram's way —
 `references = in_links`, `embed = false`, the node's `component` (the
 mac's `GraphDiagramModel.rowCopy`, `:98–109`) — and `NoSelection` when
-the key is null or absent from the snapshot; `zoom_percent` = None
+neither rule supplies a current visible row; `zoom_percent` = None
 (0a-2b as amended: no zoom clause); the filter clause `UnresolvedOnly`
 when `KindOnly == Ghost`, else `Normal` from the view state's filter
 (the mac's clause, `AppState+GraphDiagram.swift:300–306`); `name_filter`
@@ -11064,10 +11075,14 @@ palette's enabled state, the in-flight fall-through is pinned in-process
 (a FlaUI journey cannot hold a load open). FINDINGS FOR THE OWNER, not
 fixed here (filed 2026-09-11 as #1193, #1194 and #1195 in that
 order): (i) under rule F's silent seat with no shared key, a ONE-ROW
-result (a preset's lone orphan) has no keyboard route to a selection —
-Where-am-I reads "No node selected" over the row the reader sits on
-(Term F5 as frozen; the mac clears its selection the same way, but its
-table has no current-without-selected row); (ii) the switcher panel
+result (a preset's lone orphan) made Where-am-I read "No node selected"
+over the row the reader sits on (Term F5 as originally frozen; the Mac
+table has no independent current-without-selected row). **Superseded by
+#1193:** F5 and C-8 now permit a read-only fallback without changing the
+shared key. The original claim that Windows had no keyboard route was
+too broad: `ACellNavigationKeySelectsTheOnlyRowAfterASilentLanding`
+already proves Right/Tab selection. The remaining problem was immediate
+truthful readback before such a move; (ii) the switcher panel
 GraphSurfaceSwitcher (PR A) has no automation peer, so the matrix's
 "Group for the mode switcher" names an element UIA never reports; (iii)
 the wrapper's `SelectRow` seats through `CurrentCell.Column`, and its
@@ -11082,6 +11097,26 @@ evidence map dropping whereAmI (EveryImplementedCommandMapsToACommandGroup);
 the matrix row losing its axe label and its `GraphRow` source (the two
 evidence-census facts); the model's admission dropped (32 of 32 cells
 diverge under the narrowed run). CI-shaped regression green.
+
+**#1193 — Table readback after a silent landing.** The contract changes
+readback alone. Windows obtains the native current row through the active
+presenter's existing ownership boundary; it validates document identity,
+the bound publication, current row membership, visible table mode and
+effective pane ownership before using it. A stale or detached surface
+cannot supply a seat, and an old presenter's delayed detach cannot clear
+its successor. Mac has no separate current row when the bound selection
+is absent, so only its sole current visible result supplies the fallback.
+Both hosts retain all pending, failed and superseded-query guards before
+constructing the existing core `GraphWhereAmI` event. Reading does not
+select, move focus, or emit a row-movement announcement. Windows panel and
+speech continue to render the same event; diagram readback is unchanged.
+
+Regression obligations cover an orphan preset, a one-row needle and Escape
+clear before any movement; zero and ambiguous multiple rows; a present
+hidden key with one different visible row; stale publication and pending or
+failed queries; and presenter replacement, unload and inactive split panes.
+The shared key remains absent after fallback. These are native host behaviors;
+no new core announcement vocabulary or graph query API is needed.
 
 **TGC-10 — The codex post-implementation pass 1 (IPG-1..7): four
 blockers and three majors, each verified, each discharged.** The pass

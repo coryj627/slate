@@ -506,9 +506,9 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// QUIESCENT and the publication CURRENT — a READY or EMPTY record held
     /// (EMPTY holds the snapshot too: the ninth witness's state), its query
     /// the view state's, nothing in flight (Term Q7; IGO-29) — composing ONE
-    /// GraphWhereAmI: the shared key's node in the held SNAPSHOT (scanned by
-    /// StableKey — R-A's no-index rule) rendered the diagram's way — the
-    /// references its in-links, no embed, the node's component — else
+    /// GraphWhereAmI: the shared key's visible row, else (only with NO key)
+    /// the current native seat or unambiguous sole row, rendered the
+    /// diagram's way — references its in-links, no embed, its component — else
     /// NoSelection; NO zoom clause (0a-2b as amended); UnresolvedOnly under
     /// the kind overlay, else Normal from the view state's filter; the raw
     /// needle as the name filter (core trims, 0a-6).</summary>
@@ -534,7 +534,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         {
             return null;
         }
-        GraphWhereAmISelection selection = new GraphWhereAmISelection.NoSelection();
+        GraphTableRow? selected = null;
         if (ViewState.SelectedKey is { } key)
         {
             // The SHOWN rows, not the snapshot's nodes — the mac's twin
@@ -549,13 +549,24 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             {
                 if (string.Equals(row.StableKey, key, StringComparison.Ordinal))
                 {
-                    selection = new GraphWhereAmISelection.Node(
-                        new GraphRowCopy(row.Label, row.Kind, row.LinksIn, row.LinksOut, row.LinksIn, false),
-                        row.Component);
+                    selected = row;
                     break;
                 }
             }
         }
+        else
+        {
+            // F5's silent landing never writes SelectedKey or announces a
+            // move. Read its native seat; without one, a single shown row
+            // is unambiguous. Never guess the first of several rows.
+            selected = Navigator?.ReadTableSeat(this, publication);
+            selected ??= publication.Rows.Count == 1 ? publication.Rows[0] : null;
+        }
+        GraphWhereAmISelection selection = selected is { } current
+            ? new GraphWhereAmISelection.Node(
+                new GraphRowCopy(current.Label, current.Kind, current.LinksIn, current.LinksOut, current.LinksIn, false),
+                current.Component)
+            : new GraphWhereAmISelection.NoSelection();
         GraphFilter backend = ViewState.Filter;
         GraphWhereAmIFilter filter = ViewState.KindOnly == GraphNodeKind.Ghost
             ? new GraphWhereAmIFilter.UnresolvedOnly()

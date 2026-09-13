@@ -353,6 +353,19 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
 
     public bool IsLive => !_detached && Model is { IsRetired: false };
 
+    public GraphTableRow? ReadTableSeat(GraphDocumentViewModel document, GraphPublication publication)
+    {
+        if (!IsLive || !IsLoaded || !IsVisible
+            || !ReferenceEquals(Model, document) || !document.IsEffective
+            || document.ViewState.Mode != GraphSurfaceMode.Table
+            || (!ReferenceEquals(Owner, this)
+                && !(Owner is WorkspaceTabViewModel { IsGraph: true } tab && ReferenceEquals(tab.Graph, document))))
+        {
+            return null;
+        }
+        return _table.ReadSeat(document, publication);
+    }
+
     private void OnKeyboardFocusWithinChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (e.NewValue is true)
