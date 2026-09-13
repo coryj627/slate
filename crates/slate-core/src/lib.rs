@@ -106,6 +106,7 @@ pub use structural_batch::{
 };
 
 pub use blocks::{BlockAnchor, BlockKind, extract_blocks};
+pub use canvas::CanvasLoadDisposition;
 pub use citations::bibliography::{
     Author, BibEntry, BibFormat, BibIndex, BibLoadWarning, BibliographyChangeSink,
     BibliographySource, DEFAULT_DEBOUNCE, KeyCollision, LoadResult,

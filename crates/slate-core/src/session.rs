@@ -1275,7 +1275,22 @@ struct OpenCanvasState {
     canvas: crate::canvas::Canvas,
     model: crate::canvas::model::CanvasModel,
     content_hash: String,
-    degraded: bool,
+    disposition: crate::canvas::CanvasLoadDisposition,
+    /// Exact source for an unwritable parse, never a partial serialization.
+    read_only_source: Option<String>,
+}
+
+impl OpenCanvasState {
+    fn require_editable(&self) -> Result<(), VaultError> {
+        if self.disposition != crate::canvas::CanvasLoadDisposition::Editable {
+            return Err(VaultError::InvalidArgument {
+                message: "canvas is read-only because it could not be opened safely; \
+                          repair the file and reopen before editing"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
 }
 
 enum OpenBaseSource {
@@ -16469,7 +16484,7 @@ impl VaultSession {
             };
             let (mut canvas, warnings) = crate::canvas::parse(&text);
             if crate::canvas::is_load_degraded(&warnings) {
-                continue; // unwritable; nothing modelable to rewrite
+                continue; // recovered content is readable, never safe to rewrite
             }
             let mut changed = false;
             for node in &mut canvas.nodes {
@@ -19850,7 +19865,7 @@ pub struct CanvasLoadWarning {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CanvasLoadWarningKind {
-    /// Whole file unusable — canvas is empty and read-only.
+    /// A top-level parse failure; any recovered nodes are read-only.
     ParseFailed,
     /// An entry is preserved in the file but not shown.
     SkippedEntry,
@@ -19866,9 +19881,9 @@ pub struct CanvasOpenInfo {
     pub handle: u64,
     pub node_count: u32,
     pub edge_count: u32,
-    /// True when the file could not be loaded as a canvas at all; the
-    /// document must be treated as read-only (t0 §5 error state).
-    pub degraded: bool,
+    /// Whether this handle can edit, inspect recovered nodes, or show
+    /// only the load failure (t0 §5).
+    pub disposition: crate::canvas::CanvasLoadDisposition,
     pub warnings: Vec<CanvasLoadWarning>,
     /// The content hash of the bytes this open parsed — the handle's
     /// CAS basis, exposed so a host can bind history entries, editor
@@ -20171,7 +20186,7 @@ impl VaultSession {
         self.graph_apply(graph_sink);
         drop(conn);
 
-        let degraded = crate::canvas::is_load_degraded(&warnings);
+        let disposition = crate::canvas::load_disposition(&parsed, &warnings);
         let info_warnings = warnings.iter().map(load_warning).collect();
         // One hash computation feeds the state's CAS basis AND the
         // info's exposed basis — they cannot drift (IE-3).
@@ -20182,7 +20197,7 @@ impl VaultSession {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             node_count: parsed.nodes.len() as u32,
             edge_count: parsed.edges.len() as u32,
-            degraded,
+            disposition,
             warnings: info_warnings,
             content_hash: opened_hash.clone(),
         };
@@ -20194,7 +20209,9 @@ impl VaultSession {
                 canvas: parsed,
                 model,
                 content_hash: opened_hash,
-                degraded,
+                disposition,
+                read_only_source: (disposition != crate::canvas::CanvasLoadDisposition::Editable)
+                    .then_some(text),
             },
         );
         Ok(info)
@@ -20209,9 +20226,39 @@ impl VaultSession {
             .remove(&handle);
     }
 
-    /// Depth-first outline rows, one per node, in reading order — a
-    /// single indexed query against the derived columns (§K).
+    /// Depth-first outline rows, one per node, in reading order — an
+    /// indexed query for editable handles (§K), or the retained model
+    /// for read-only handles that must not observe later index revisions.
     pub fn canvas_outline(&self, handle: u64) -> Result<Vec<CanvasOutlineRow>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        if state.disposition != crate::canvas::CanvasLoadDisposition::Editable {
+            // A rescan can replace DB rows while this recovered handle
+            // still describes the original file. All its reads must
+            // stay on that same retained snapshot, including empty
+            // unavailable handles.
+            return Ok(state
+                .model
+                .reading_order
+                .iter()
+                .map(|id| {
+                    let s = &state.model.summaries[id];
+                    CanvasOutlineRow {
+                        node_id: id.0.clone(),
+                        depth: s.group_path.len() as u32,
+                        kind: s.kind_label.to_string(),
+                        title: s.display_title.clone(),
+                        speakable_name: s.speakable_name.clone(),
+                        group_path: s.group_path.clone(),
+                        ordinal_n: s.position_in_container as u32,
+                        total_m: s.container_size as u32,
+                        connection_count: s.connection_count as u32,
+                        color_name: s.color_name.clone(),
+                    }
+                })
+                .collect());
+        }
+        drop(canvases);
         let (file_id, speakable) = self.canvas_rows_context(handle)?;
         let conn = self.conn.lock().expect("session connection mutex");
         let mut stmt = conn.prepare_cached(
@@ -20239,8 +20286,32 @@ impl VaultSession {
     }
 
     /// Flat table rows in reading order; the table view sorts client-side
-    /// per column (#519 v2 comparators).
+    /// per column (#519 v2 comparators). Read-only handles use their
+    /// retained model, with the same snapshot boundary as the outline.
     pub fn canvas_table_rows(&self, handle: u64) -> Result<Vec<CanvasTableRow>, VaultError> {
+        let canvases = self.canvases.lock().expect("canvas registry mutex");
+        let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        if state.disposition != crate::canvas::CanvasLoadDisposition::Editable {
+            return Ok(state
+                .model
+                .reading_order
+                .iter()
+                .map(|id| {
+                    let s = &state.model.summaries[id];
+                    CanvasTableRow {
+                        node_id: id.0.clone(),
+                        kind: s.kind_label.to_string(),
+                        title: s.display_title.clone(),
+                        speakable_name: s.speakable_name.clone(),
+                        group_path: s.group_path.clone(),
+                        target: s.target.clone(),
+                        connection_count: s.connection_count as u32,
+                        color_name: s.color_name.clone(),
+                    }
+                })
+                .collect());
+        }
+        drop(canvases);
         let (file_id, speakable) = self.canvas_rows_context(handle)?;
         let conn = self.conn.lock().expect("session connection mutex");
         let mut stmt = conn.prepare_cached(
@@ -20606,13 +20677,7 @@ impl VaultSession {
         let state = canvases
             .get_mut(&handle)
             .ok_or_else(|| bad_handle(handle))?;
-        if state.degraded {
-            return Err(VaultError::InvalidArgument {
-                message: "canvas failed to load and is read-only (t0 §5); \
-                          fix the file on disk and reopen"
-                    .to_string(),
-            });
-        }
+        state.require_editable()?;
 
         // Mutate a working copy; `apply` guarantees all-or-nothing.
         let mut working = state.canvas.clone();
@@ -20849,17 +20914,21 @@ impl VaultSession {
         )
     }
 
-    /// The handle's CURRENT document serialized (W6-1 §E TE-3,
+    /// The handle's CURRENT document (W6-1 §E TE-3,
     /// IE-17): at conflict time the in-memory canvas is still the
     /// pre-conflict revision — the apply refused, the state did not
     /// move — and Save a Copy applies the retained action to THIS
     /// text detachedly. Locked, and paired with the basis so the
-    /// caller can prove which revision it captured.
+    /// caller can prove which revision it captured. Noneditable handles
+    /// return the exact opened source, never a lossy partial serialization.
     pub fn canvas_current_text(&self, handle: u64) -> Result<CanvasEditorSeed, VaultError> {
         let canvases = self.canvases.lock().expect("canvas registry mutex");
         let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
         Ok(CanvasEditorSeed {
-            text: crate::canvas::serialize::serialize(&state.canvas),
+            text: state
+                .read_only_source
+                .clone()
+                .unwrap_or_else(|| crate::canvas::serialize::serialize(&state.canvas)),
             content_hash: state.content_hash.clone(),
         })
     }
@@ -20870,6 +20939,8 @@ impl VaultSession {
     /// reverse — when an apply lands between them; this pairing is
     /// taken under the registry lock and cannot tear. `None` for a
     /// non-text card, `bad_node` for an id the canvas does not hold.
+    /// Read-only handles refuse editor admission; `canvas_node_text`
+    /// remains available for inspection without an authoring seed.
     pub fn canvas_editor_seed(
         &self,
         handle: u64,
@@ -20877,6 +20948,7 @@ impl VaultSession {
     ) -> Result<Option<CanvasEditorSeed>, VaultError> {
         let canvases = self.canvases.lock().expect("canvas registry mutex");
         let state = canvases.get(&handle).ok_or_else(|| bad_handle(handle))?;
+        state.require_editable()?;
         let node = state
             .canvas
             .nodes

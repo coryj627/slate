@@ -69,6 +69,8 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     private readonly Button _modeCancel;
     private readonly TextBlock _stateBanner;
     private readonly TextBlock _degradedBanner;
+    private readonly TextBlock _readOnlyBanner;
+    private readonly Button _retryLoad;
     private readonly ListBox _warningRows;
     private readonly TextBlock _onboarding;
     private readonly CanvasOutlineView _outline;
@@ -200,6 +202,22 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
 
         _stateBanner = BannerText("CanvasStateBanner");
         _degradedBanner = BannerText("CanvasDegradedBanner");
+        _readOnlyBanner = BannerText("CanvasReadOnlyBanner");
+        _readOnlyBanner.Focusable = true;
+        KeyboardNavigation.SetIsTabStop(_readOnlyBanner, true);
+        _retryLoad = new Button
+        {
+            Content = "Retry",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Visibility = Visibility.Collapsed,
+        };
+        AutomationProperties.SetAutomationId(_retryLoad, "CanvasRetryLoad");
+        AutomationProperties.SetName(_retryLoad, "Retry opening canvas");
+        _retryLoad.Click += (_, _) =>
+        {
+            Model?.Load();
+            FocusProjection();
+        };
         _onboarding = BannerText("CanvasEmptyOnboarding");
         // t0 §3: the onboarding copy is a focusable region, not a
         // decoration a keyboard user cannot reach.
@@ -221,6 +239,8 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         var banners = new StackPanel { Margin = new Thickness(12, 0, 12, 4) };
         banners.Children.Add(_stateBanner);
         banners.Children.Add(_degradedBanner);
+        banners.Children.Add(_readOnlyBanner);
+        banners.Children.Add(_retryLoad);
         banners.Children.Add(_onboarding);
 
         _outline = new CanvasOutlineView();
@@ -335,6 +355,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     internal ListBox WarningRowsForTests => _warningRows;
 
     internal TextBlock DegradedBannerForTests => _degradedBanner;
+
+    internal TextBlock ReadOnlyBannerForTests => _readOnlyBanner;
+
+    internal Button RetryLoadForTests => _retryLoad;
 
     internal TextBlock OnboardingForTests => _onboarding;
 
@@ -1373,6 +1397,9 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             _stateBanner,
             errorState ? AutomationLiveSetting.Assertive : AutomationLiveSetting.Off);
         SetBanner(_degradedBanner, model.DegradedBannerText ?? string.Empty);
+        SetBanner(_readOnlyBanner, model.ReadOnlyBannerText ?? string.Empty);
+        _retryLoad.Visibility = model.IsRecoveredReadOnly || errorState
+            ? Visibility.Visible : Visibility.Collapsed;
         SetBanner(_onboarding, model.EmptyOnboardingText ?? string.Empty);
 
         RenderFilter(model);

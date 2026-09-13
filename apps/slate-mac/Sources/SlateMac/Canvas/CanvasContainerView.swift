@@ -33,13 +33,6 @@ struct CanvasContainerView: View {
     /// remain governed by the document reservation and AppState scheduler.
     @State private var retargetRetryInFlight = false
 
-    /// CD-3 / t0 §5: a degraded load is ANNOUNCED once per open, in
-    /// addition to the pull-readable banner below. mac shipped the
-    /// banner alone, which is a t0 cheat — a screen-reader user had to
-    /// go hunting for a region nothing told them about. `@State` gives
-    /// the "once per open" scope: a fresh open is a fresh view.
-    @State private var announcedDegradedLoad = false
-
     var body: some View {
         Group {
             switch document.state {
@@ -60,7 +53,7 @@ struct CanvasContainerView: View {
             // Focus the canvas content once the surface exists. The
             // async hop lets SwiftUI mount the destination first.
             DispatchQueue.main.async { contentFocused = true }
-            announceDegradedLoadIfNeeded()
+            announceLoadIfNeeded()
         }
         // M3 (t0 §2): active mode is inspectable from the container's
         // AX value — never announcement-only (braille rule §3).
@@ -88,9 +81,12 @@ struct CanvasContainerView: View {
             appState.canvasAnnounceFilterCount(doc: document)
         }
         .onChange(of: document.state) { _, newState in
-            announceDegradedLoadIfNeeded()
+            announceLoadIfNeeded()
             guard case .retargetFailed(let message) = newState else { return }
             announceCanvasRetargetFailure(message)
+        }
+        .onChange(of: document.loadRevision) { _, _ in
+            announceLoadIfNeeded()
         }
         // M2: Return commits the active spatial mode (#521).
         .onKeyPress(.return) {
@@ -165,7 +161,7 @@ struct CanvasContainerView: View {
         document.lastActivatedNode = nodeId
         switch kind {
         case "text":
-            appState.canvasEditCard(nodeId: nodeId)
+            appState.canvasInspectCard(nodeId: nodeId)
         case "file", "image":
             let target = document.target(of: nodeId)
             if target.lowercased().hasSuffix(".md") || target.lowercased().hasSuffix(".markdown") {
@@ -242,7 +238,14 @@ struct CanvasContainerView: View {
     @ViewBuilder private var readyBody: some View {
         if let reason = appState.canvasMutationDisabledReason(for: document) {
             VStack(spacing: 0) {
-                canvasQuarantineBanner(reason)
+                canvasQuarantineBanner(
+                    document.disposition == .recoveredReadOnly
+                        && !appState.isBatchTrashPathQuarantined(document.path)
+                        ? document.loadAnnouncement.map {
+                            a11yRender(event: .canvas(event: $0)).text
+                        }
+                            ?? reason
+                        : reason)
                 Divider()
                 canvasBody(readOnly: true)
             }
@@ -280,7 +283,12 @@ struct CanvasContainerView: View {
                             .accessibilityFocused($contentFocused)
                     }
                 }
-                .disabled(readOnly)
+                .disabled(
+                    readOnly
+                        && !(document.disposition == .recoveredReadOnly
+                            && document.handle != nil
+                            && !appState.isBatchTrashPathQuarantined(document.path))
+                )
             }
         }
     }
@@ -295,10 +303,23 @@ struct CanvasContainerView: View {
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.ColorRole.textSecondary)
                     .textSelection(.enabled)
+                if document.disposition == .recoveredReadOnly, !document.warnings.isEmpty {
+                    DisclosureGroup("Canvas warnings") {
+                        ForEach(Array(document.warnings.enumerated()), id: \.offset) { _, warning in
+                            Text(warning.detail)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .font(Tokens.Typography.caption)
+                }
             }
             Spacer(minLength: 0)
             if let recoveryLabel = appState.canvasRecoveryActionLabel(for: document) {
-                let disabledReason = appState.structuralMutationDisabledReason
+                let disabledReason =
+                    appState.structuralMutationDisabledReason
+                    ?? (document.isRetargetPreparationInFlight
+                        ? "Canvas retry is in progress." : nil)
                 Button(recoveryLabel) {
                     _ = appState.retryCanvasRecovery(for: document)
                 }
@@ -317,6 +338,8 @@ struct CanvasContainerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.ColorRole.surfaceSecondary)
         .accessibilityElement(children: .contain)
+        .focusable()
+        .accessibilityLabel("Canvas is read-only. \(reason)")
     }
 
     /// Surface switcher + t0 §5 warning banner. The switcher mirrors
@@ -352,10 +375,10 @@ struct CanvasContainerView: View {
                 }
             }
 
-            if document.preservedItemCount > 0 {
+            if document.disposition == .editable, document.preservedItemCount > 0 {
                 // Pull-readable, not announcement-only (t0 §3): a
-                // focusable banner; #362's outline footer adds the
-                // per-item detail rows.
+                // warning sentence stays inspectable independently of speech.
+                // Recovered loads expose diagnostic details in their banner.
                 Text(
                     a11yRender(
                         event: .canvas(
@@ -473,18 +496,13 @@ struct CanvasContainerView: View {
         }
     }
 
-    /// CD-3: the polite "loaded with skipped items" announcement,
-    /// exactly once per open. The banner keeps its own copy of the
-    /// same rendered sentence, so the two cannot drift.
-    private func announceDegradedLoadIfNeeded() {
-        guard case .ready = document.state,
-            document.preservedItemCount > 0,
-            !announcedDegradedLoad
+    /// The same typed event supplies the mounted banner and one announcement
+    /// for each installed snapshot, including Ready-to-Ready recovery retries.
+    private func announceLoadIfNeeded() {
+        guard appState.activeCanvasRecoveryDocument === document,
+            let event = document.takeLoadAnnouncement()
         else { return }
-        announcedDegradedLoad = true
-        appState.canvasAnnouncer.announce(
-            .canvasLoadedDegraded(
-                skipped: UInt32(clamping: document.preservedItemCount)))
+        appState.canvasAnnouncer.announce(event)
     }
 
     private func announceCanvasRetargetFailure(_ message: String) {

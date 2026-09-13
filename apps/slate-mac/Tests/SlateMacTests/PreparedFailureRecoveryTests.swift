@@ -253,6 +253,7 @@ final class PreparedFailureRecoveryTests: XCTestCase {
     private func preparedCanvas(handle: UInt64) -> CanvasPreparedLoad {
         .ready(
             handle: handle,
+            disposition: .editable,
             warnings: [],
             outline: [
                 CanvasOutlineRow(

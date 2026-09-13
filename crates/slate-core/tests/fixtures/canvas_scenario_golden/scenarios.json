@@ -403,6 +403,7 @@
     }
   ],
   "excluded": {
+    "../canvas/recovered-readonly.canvas": "read-only recovery — both read artifacts cover the surviving snapshot; core and host recovery tests prove every mutation is refused, so this fixture cannot run a mutation scenario",
     "../canvas/large_2000.canvas": "size — the 2,000-node fixture is the §K budget corpus, excluded from the read artifact for the same reason (CanvasArtifactExclusions)"
   }
 }

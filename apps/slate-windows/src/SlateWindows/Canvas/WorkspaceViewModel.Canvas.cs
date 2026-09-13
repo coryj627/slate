@@ -433,7 +433,13 @@ internal sealed partial class WorkspaceViewModel
     public CanvasCardEditorViewModel? CanvasCardEditorSheet
     {
         get => _canvasCardEditorSheet;
-        private set => SetField(ref _canvasCardEditorSheet, value);
+        private set
+        {
+            if (SetField(ref _canvasCardEditorSheet, value))
+            {
+                _closeCanvasInspectionCommand?.RaiseCanExecuteChanged();
+            }
+        }
     }
 
     /// <summary>Open the editor for the active canvas selection (M8's
@@ -454,6 +460,13 @@ internal sealed partial class WorkspaceViewModel
     /// discard; never a refusal, whose whole point is the sheet
     /// standing.</summary>
     public void CloseCanvasCardEditor() => CanvasCardEditorSheet = null;
+
+    public System.Windows.Input.ICommand CloseCanvasInspectionCommand =>
+        _closeCanvasInspectionCommand ??= new RelayCommand(
+            _ => CloseCanvasCardEditor(),
+            _ => CanvasCardEditorSheet?.InspectionOnly == true);
+
+    private RelayCommand? _closeCanvasInspectionCommand;
 
     private ICanvasPickerSheet? _canvasCardPickerSheet;
 

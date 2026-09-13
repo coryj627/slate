@@ -47,9 +47,9 @@ fn side_str(side: Option<Side>) -> Option<&'static str> {
 /// `.canvas` source text. Returns the derived model so callers that
 /// need it (the open-canvas path) don't re-derive.
 ///
-/// A degraded parse (`is_load_degraded`) clears the file's rows — the
-/// UI shows the t0 §5 error state from the live parse warnings, and an
-/// empty index is honest about "nothing modelable here".
+/// Recovered nodes are indexed for the current file. An unavailable
+/// parse clears its rows. Read-only handles serve their retained model
+/// directly, so later scans cannot change the snapshot they describe.
 pub(crate) fn replace_canvas_for_file(
     tx: &Transaction,
     file_id: i64,

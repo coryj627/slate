@@ -110,7 +110,7 @@ internal enum CanvasLoadOutcome
     /// is closed.</summary>
     Refused,
 
-    /// <summary>The open was degraded: ParseError published, the handle
+    /// <summary>The open was unavailable: ParseError published, the handle
     /// closed at once.</summary>
     ParseError,
 
@@ -214,7 +214,8 @@ internal sealed class CanvasLoadPipeline
             current.Population?.Warnings,
             current.Population?.LastActivatedNode,
             scene,
-            contentHash: basis);
+            contentHash: basis,
+            disposition: current.Population?.Disposition ?? CanvasLoadDisposition.Unavailable);
         CanvasEffectResolution seat = resolveSeat(population);
         if (seat.IsRequiredTargetMissing)
         {
@@ -355,10 +356,10 @@ internal sealed class CanvasLoadPipeline
 
                 CanvasOpenInfo info = _source.Open();
                 lease = new CanvasHandleLease(info.Handle, _source.Close);
-                if (info.Degraded)
+                if (info.Disposition == CanvasLoadDisposition.Unavailable)
                 {
-                    // Read-only by construction (contract A3): nothing
-                    // will use the handle, so the finally releases it.
+                    // No navigable content survived. The finally releases
+                    // this handle; recovered snapshots are accepted below.
                     failure = _source.ParseError(info.Warnings);
                     return CanvasLoadOutcome.ParseError;
                 }
@@ -389,7 +390,8 @@ internal sealed class CanvasLoadPipeline
                     info.Warnings,
                     lastActivatedNode: null,
                     scene: scene,
-                    contentHash: info.ContentHash);
+                    contentHash: info.ContentHash,
+                    disposition: info.Disposition);
                 _probe?.Reached(CanvasLoadPoint.Built);
 
                 CanvasLoadAcceptance acceptance = CanvasLeaseTransfer.TryAccept(

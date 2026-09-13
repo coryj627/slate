@@ -990,19 +990,19 @@ invocation, and asserts the comment's named set EQUALS the derived set
 in both directions. A sixth site that forgets the comment fails; a
 comment naming a site that no longer exists fails too.
 
-**A3 — Five load states, and `degraded` is the PARSE-ERROR one.**
+**A3 — Five presentation states; disposition determines editability (#1173).**
 `CanvasLoadState { Loading, Ready, ParseError, Failed, RetargetAbsent }`
-is the mac `CanvasDocument.LoadState` twin
-(`apps/slate-mac/Sources/SlateMac/Canvas/CanvasDocument.swift:174–186`)
-with mac's `.degraded` renamed, because on Windows two different things
-were both called degraded and the reviewer has to be able to tell them
-apart:
+remains the Mac presentation-state twin. Core's explicit
+`CanvasLoadDisposition` replaces the ambiguous `CanvasOpenInfo.degraded`
+flag. `Ready` means readable; its accepted population is editable only
+when the disposition is `Editable`:
 
 | Source fact | State | What the user gets |
 |---|---|---|
 | `open_canvas` threw | `Failed` | the failure message, retry-able |
-| `CanvasOpenInfo.degraded` | `ParseError` | the `ParseFailed` warning's detail; handle closed at once; read-only by construction |
-| open succeeded | `Ready` | rows; the A4 banner rides on top when any entry was skipped |
+| disposition `Unavailable` | `ParseError` | `ParseFailed` detail and Retry; no navigable cards; handle closed at once |
+| disposition `RecoveredReadOnly` | `Ready` | retained snapshot, read-only status and Retry; authoring refused |
+| disposition `Editable` | `Ready` | editable rows; the A4 banner rides on top when any entry was skipped |
 | a retarget's reopen threw | `RetargetAbsent` | the message names both spellings |
 | before the first publish | `Loading` | the spinner label |
 
@@ -1013,19 +1013,15 @@ half. `Loading` does not: it is transient, and a tab stop that vanishes
 under the cursor is its own defect. Pinned by
 `TheFailureBannerIsAFocusableRegion`.
 
-`canvas::is_load_degraded` (`crates/slate-core/src/canvas/mod.rs:356`)
-is `any(ParseFailed)`, and every `ParseFailed` arm of `canvas::parse`
-returns `Canvas::default()` — so a degraded open carries **no** skipped
-entries, and rendering `CanvasLoadedDegraded { skipped }` for it would
-speak a count of zero for a file that was not loaded at all. t0 §5
-agrees: its sentence is introduced as "Parse warnings (#359 tolerant
-contract)", i.e. the warnings, not the flag. Mac reads it the same way —
-`preservedItemCount` counts `.skippedEntry`
-(`CanvasDocument.swift:486–490`) and the banner renders only in
-`.ready` (`CanvasContainerView.swift:354`). The spec's PR A behavior
-row 2 folds the two facts into one sentence; this row unfolds them and
-takes mac's shipped shape, which is the reference implementation for
-both. (CD-28.)
+A top-level `ParseFailed` warning still prohibits every mutation. Recovery
+now retains valid sections of a syntactically valid JSON object, requiring
+at least one modeled node (groups count as cards). Invalid JSON, non-object
+roots and zero-card recovery stay unavailable. Ordinary valid empty canvases
+and individual skipped entries remain editable. `CanvasLoadedDegraded`
+continues to count only skipped entries; the distinct recovery event counts
+available modeled cards. Recovery uses only the recovery status and speech;
+all warnings, including skipped-entry details, remain inspectable below it.
+This replaces A3's historical all-ParseFailed-means-empty assumption (CD-28).
 
 **A4 — `CanvasLoadedDegraded` is announced once per document OPEN.**
 Controller ruling on CD-3's Windows reading: the announcement belongs to
@@ -1052,6 +1048,42 @@ keeps the vocabulary's number, because that is the parameter the event
 takes. The footer renders only under `Ready`: a parse error's state
 message IS its single `ParseFailed` detail (A3), so listing it below
 would say the same sentence twice.
+
+**A4-R — Recovered reads and editing capability travel together (#1173).**
+The accepted population carries its immutable disposition with the rows,
+scene and content hash. Core serves every recovered projection from the
+retained model, including outline and table, so rescans and another open
+handle cannot mix index rows with the older snapshot. `canvas_current_text`
+returns the exact original source. Mutation, history, writable editor seeds,
+detached actions and structural rewrites all continue to refuse a parse
+failure; reading a surviving text card uses `canvas_node_text`.
+
+Both hosts keep recovered projections interactive and provide a focusable
+status plus a named Retry control. The status and polite speech render
+`CanvasLoadedReadOnly { available }`; speech belongs to installation/open,
+not mounting a second pane. Retry follows normal load ownership and currency
+rules: the old handle is released exactly once, incomplete or stale results
+cannot publish, and editing is enabled only by a newly accepted `Editable`
+snapshot. A repaired file and a later damaged reload can change capability
+without changing the meaning of `Ready`. Failure and trash states retain
+their existing admission rules.
+
+Fresh text activation creates immutable read-only inspection with a Close
+action. Existing editable drafts keep their identity and text across a
+read-only reload; commit refuses rather than silently dismissing the draft.
+Windows retains its history basis quarantine. Mac's same-byte retry preserves
+history; a changed source invalidates its old inverse history under the
+existing host policy. Neither path may save the recovered model over the
+original file. Both read parity artifacts include the recovered fixture;
+the mutation scenario corpus excludes it with this refusal rationale.
+
+The shared announcement corpus appends plural, singular and zero-count cases
+after all existing entries, preserving their identities and indices. The
+zero-count wording is renderer coverage; zero-card recovery is unavailable.
+Core recovery tests and both host recovery batteries cover the capability
+transition, readable state, refused writes and ownership. Native Mac execution
+is verified by the PR's macOS CI lane; local Windows validation does not claim
+that execution or a manual assistive-technology pass.
 
 **A5 — `CanvasAnnouncer` is a relay and a clock, and nothing else —
 and it publishes its RETIREMENT so speakers can ask.** `IsRetired` is
@@ -15460,7 +15492,10 @@ Read during PR 0b (Task 0b-2), not this issue's to fix — **file at
 close-out**:
 
 - **A degraded or unavailable canvas is ANNOUNCED but still not
-  NAVIGABLE, and t0 §5 wants both.** The state story itself lives in
+  NAVIGABLE, and t0 §5 wants both.** Historical finding, superseded by
+  #1173's A3/A4-R disposition and bounded recovery contract above. Invalid
+  JSON and recovery without surviving cards remain unavailable; useful
+  recovered snapshots are now readable without granting editing authority. The state story itself lives in
   VA-2's section — `canvasReadRefusal(for:)`'s table — and this entry
   cites it rather than restating it; what is filed here is only the
   half that remains open.

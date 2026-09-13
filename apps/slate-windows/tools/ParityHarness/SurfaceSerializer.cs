@@ -1756,7 +1756,7 @@ public static class SurfaceSerializer
             try
             {
                 j.Raw("{\"file\":").Str(Slash(rel))
-                 .Raw(",\"degraded\":").Bool(info.Degraded)
+                 .Raw(",\"disposition\":").Str(CanvasDispositionName(info.Disposition))
                  .Raw(",\"bounds\":");
                 CanvasRect? bounds = session.CanvasBounds(info.Handle);
                 if (bounds == null)
@@ -1949,7 +1949,7 @@ public static class SurfaceSerializer
                 j.Raw("{\"file\":").Str(Slash(rel))
                  .Raw(",\"node_count\":").Num(info.NodeCount)
                  .Raw(",\"edge_count\":").Num(info.EdgeCount)
-                 .Raw(",\"degraded\":").Bool(info.Degraded)
+                 .Raw(",\"disposition\":").Str(CanvasDispositionName(info.Disposition))
                  .Raw(",\"warnings\":[");
                 for (int w = 0; w < info.Warnings.Length; w++)
                 {
@@ -1963,18 +1963,16 @@ public static class SurfaceSerializer
                 }
                 j.Raw("]");
 
-                // A degraded open has nothing worth reading: core
-                // returns an empty canvas and the host releases the
-                // handle at once (contract A3, CD-28). The sections stay
-                // present and EMPTY rather than absent, so the
-                // artifact's shape never varies with the fixture.
-                CanvasOutlineRow[] outline = info.Degraded
+                // Recovered snapshots remain readable. Only unavailable
+                // input has no navigable content; keep its sections present
+                // and empty so the artifact shape remains stable.
+                CanvasOutlineRow[] outline = info.Disposition == CanvasLoadDisposition.Unavailable
                     ? []
                     : session.CanvasOutline(info.Handle);
-                CanvasTableRow[] tableRows = info.Degraded
+                CanvasTableRow[] tableRows = info.Disposition == CanvasLoadDisposition.Unavailable
                     ? []
                     : session.CanvasTableRows(info.Handle);
-                CanvasScene scene = info.Degraded
+                CanvasScene scene = info.Disposition == CanvasLoadDisposition.Unavailable
                     ? new CanvasScene([], [])
                     : session.CanvasScene(info.Handle);
 
@@ -2208,6 +2206,14 @@ public static class SurfaceSerializer
         CanvasEdgeDirection.Undirected => "undirected",
         _ => throw new InvalidOperationException(
             $"unmapped CanvasEdgeDirection {direction}"),
+    };
+
+    private static string CanvasDispositionName(CanvasLoadDisposition disposition) => disposition switch
+    {
+        CanvasLoadDisposition.Editable => "editable",
+        CanvasLoadDisposition.RecoveredReadOnly => "recovered_read_only",
+        CanvasLoadDisposition.Unavailable => "unavailable",
+        _ => throw new InvalidOperationException($"Unknown canvas disposition: {disposition}"),
     };
 
     public static string LoadWarningKindName(CanvasLoadWarningKind kind) => kind switch

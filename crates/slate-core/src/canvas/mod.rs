@@ -14,11 +14,12 @@
 //!   malformed node/edge yields a [`CanvasWarning`], is excluded from the
 //!   typed model, and is **retained** in [`Canvas::skipped`] so a later
 //!   save re-emits it in place — a save must never delete what the
-//!   parser couldn't model. Only a file that isn't valid JSON at all (or
-//!   whose root shape is unusable) degrades to an empty canvas with a
+//!   parser couldn't model. Invalid JSON and non-object roots are
+//!   unavailable. A malformed top-level section can retain modeled
+//!   nodes from the valid section for read-only inspection, with a
 //!   [`CanvasWarning::ParseFailed`]; callers must treat such a canvas as
-//!   read-only (see [`is_load_degraded`]) — the serializer (#366)
-//!   refuses to write over a degraded load. Known limitation: a number
+//!   read-only (see [`is_load_degraded`]) — structured write paths
+//!   refuse to serialize a degraded load. Known limitation: a number
 //!   beyond f64 range (`1e999`) fails JSON parsing entirely, so one
 //!   such value degrades the whole file rather than skipping one entry;
 //!   JS tooling can hand-produce such a file but never `JSON.stringify`
@@ -317,8 +318,9 @@ pub struct Canvas {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CanvasWarning {
     /// The file is not usable JSON Canvas at all (invalid JSON, or the
-    /// root/`nodes`/`edges` shapes are wrong). The canvas is empty and
-    /// **must not be saved over** — see [`is_load_degraded`].
+    /// root/`nodes`/`edges` shapes are wrong). A valid section may still
+    /// yield readable nodes, but this canvas **must not be saved over**
+    /// — see [`is_load_degraded`].
     ParseFailed { reason: String },
     /// A nodes entry that could not be modeled (skipped + retained).
     MalformedNode { index: usize, reason: String },
@@ -350,9 +352,33 @@ pub enum CanvasWarning {
     },
 }
 
-/// True when the warnings indicate the file could not be loaded as a
-/// canvas at all. A degraded canvas is read-only: writing it back would
-/// replace the user's file with an empty one.
+/// Whether a parsed canvas is safe to edit or only inspect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasLoadDisposition {
+    /// Empty canvases and ordinary tolerated entry warnings are editable.
+    Editable,
+    /// At least one modeled node survives a top-level section failure.
+    RecoveredReadOnly,
+    /// The source has no navigable model; warning details remain available.
+    Unavailable,
+}
+
+/// Classify the parse without inspecting warning prose. Entry-level
+/// warnings remain editable; top-level failures retain only readable
+/// modeled nodes, never a writable approximation of the source.
+pub fn load_disposition(canvas: &Canvas, warnings: &[CanvasWarning]) -> CanvasLoadDisposition {
+    if !is_load_degraded(warnings) {
+        CanvasLoadDisposition::Editable
+    } else if canvas.nodes.is_empty() {
+        CanvasLoadDisposition::Unavailable
+    } else {
+        CanvasLoadDisposition::RecoveredReadOnly
+    }
+}
+
+/// True when the source cannot safely be reconstructed from the model.
+/// A degraded canvas is read-only even if some nodes were recovered:
+/// writing it back would replace unreadable source data with arrays.
 pub fn is_load_degraded(warnings: &[CanvasWarning]) -> bool {
     warnings
         .iter()
@@ -397,7 +423,6 @@ pub fn parse(input: &str) -> (Canvas, Vec<CanvasWarning>) {
             warnings.push(CanvasWarning::ParseFailed {
                 reason: format!("\"{key}\" is not an array"),
             });
-            return (Canvas::default(), warnings);
         }
     }
 
@@ -463,6 +488,11 @@ pub fn parse(input: &str) -> (Canvas, Vec<CanvasWarning>) {
         }
     }
 
+    if is_load_degraded(&warnings) && canvas.nodes.is_empty() {
+        // Edges without any modeled nodes cannot make an unavailable
+        // document navigable. The session retains the original source.
+        return (Canvas::default(), warnings);
+    }
     (canvas, warnings)
 }
 

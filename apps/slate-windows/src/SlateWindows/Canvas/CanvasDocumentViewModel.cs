@@ -11,21 +11,21 @@ namespace SlateWindows.Canvas;
 
 /// <summary>The document's load posture (contract A3) — the mac
 /// <c>CanvasDocument.LoadState</c> twin with mac's <c>.degraded</c>
-/// renamed <see cref="ParseError"/>, because core's <c>degraded</c>
-/// flag is the parse failure and the t0 §5 "unsupported items" banner
-/// is the SkippedEntry count, and calling both degraded is what
-/// CD-28 exists to stop.</summary>
+/// renamed <see cref="ParseError"/> for an unavailable snapshot.
+/// Ready means readable; the population's disposition separately
+/// determines editing capability. The t0 §5 unsupported-items banner
+/// counts SkippedEntry warnings (CD-28).</summary>
 internal enum CanvasLoadState
 {
     /// <summary>Before the first publish.</summary>
     Loading,
 
-    /// <summary>Loaded and navigable — possibly with entry-level
-    /// warnings, which ride as the A4 banner, not as a state.</summary>
+    /// <summary>Loaded and navigable, including recovered read-only
+    /// snapshots. Entry warnings and recovery status ride as banners.</summary>
     Ready,
 
-    /// <summary>The file could not be loaded as a canvas at all
-    /// (<c>CanvasOpenInfo.degraded</c>). Read-only BY CONSTRUCTION: the
+    /// <summary>No navigable canvas could be recovered
+    /// (<c>CanvasLoadDisposition.Unavailable</c>). Read-only by construction: the
     /// handle is released immediately, so nothing can mutate it.</summary>
     ParseError,
 
@@ -201,6 +201,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private IReadOnlyList<CanvasTableRow> _tableRows = [];
     private IReadOnlyList<CanvasLoadWarning> _warnings = [];
     private bool _announcedDegradedLoad;
+    private bool _announcedRecoveredLoad;
     private Task? _asyncClose;
     private string _filterText = string.Empty;
     private string? _whereAmIText;
@@ -437,8 +438,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     }
 
     /// <summary>Skipped-but-preserved entries (t0 §5). The mac
-    /// <c>preservedItemCount</c>: the SkippedEntry warnings, NOT
-    /// <c>CanvasOpenInfo.degraded</c> — CD-28.</summary>
+    /// <c>preservedItemCount</c>: the SkippedEntry warnings, independent
+    /// of the load disposition — CD-28.</summary>
     public int PreservedItemCount => _preservedCount;
 
     private int _preservedCount;
@@ -447,7 +448,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// once-per-open announcement speaks (contract A4), so banner and
     /// speech cannot drift. Null when nothing was skipped.</summary>
     public string? DegradedBannerText =>
-        State == CanvasLoadState.Ready && PreservedItemCount > 0
+        State == CanvasLoadState.Ready && !IsRecoveredReadOnly && PreservedItemCount > 0
             ? CanvasAnnouncer.RenderLabel(
                 new CanvasA11yEvent.CanvasLoadedDegraded((uint)PreservedItemCount))
             : null;
@@ -464,7 +465,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// with the rule that demanded it.
     /// </remarks>
     public string? EmptyOnboardingText =>
-        State == CanvasLoadState.Ready && _outline.Count == 0
+        !IsReadOnly && _outline.Count == 0
             ? CanvasAnnouncer.RenderLabel(
                 new CanvasA11yEvent.CanvasEmptyOnboarding(
                     "Control Alt N", "Control Shift P"))
@@ -478,9 +479,23 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         Commands.ChordTable.WindowsChordFor("windows.view.showCommandPalette")
         ?? "Ctrl+Shift+P";
 
-    /// <summary>Mutations are refused outside Ready (spec behavior 2);
-    /// PR E's funnel is the first consumer.</summary>
-    public bool IsReadOnly => State != CanvasLoadState.Ready;
+    /// <summary>Mutations require a Ready, editable population;
+    /// PR E's funnel enforces the same capability at admission.</summary>
+    public bool IsReadOnly => State != CanvasLoadState.Ready
+        || _applied?.Loaded?.Population.IsEditable != true;
+
+    public bool IsRecoveredReadOnly => State == CanvasLoadState.Ready
+        && _applied?.Loaded?.Population.Disposition == CanvasLoadDisposition.RecoveredReadOnly;
+
+    public string? ReadOnlyBannerText => IsRecoveredReadOnly
+        ? CanvasAnnouncer.RenderLabel(new CanvasA11yEvent.CanvasLoadedReadOnly((uint)_outline.Count))
+        : null;
+
+    // Writer preflight and its basis come from one publication. Ready means
+    // readable; a recovered population never supplies an authoring basis.
+    private CanvasLoaded? CurrentEditableLoaded => _slot.Current is
+        { Retired: false, LoadState: CanvasLoadState.Ready, Loaded: { Population.IsEditable: true } loaded }
+            ? loaded : null;
 
     /// <summary>The row whose activation opened a card — the focus
     /// restoration target when the user comes back (WCAG 2.4.3,
@@ -688,6 +703,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private void NotifyStateChanged()
     {
         OnPropertyChanged(nameof(IsReadOnly));
+        OnPropertyChanged(nameof(IsRecoveredReadOnly));
+        OnPropertyChanged(nameof(ReadOnlyBannerText));
         OnPropertyChanged(nameof(PreservedItemCount));
         OnPropertyChanged(nameof(DegradedBannerText));
         OnPropertyChanged(nameof(EmptyOnboardingText));
@@ -1381,6 +1398,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             return;
         }
         _announcedDegradedLoad = false;
+        _announcedRecoveredLoad = false;
         ApplyPublication();
         StartWork(() =>
         {
@@ -1662,6 +1680,23 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             Selection.Selected = unit.ResolvedSelection
                 ?? (population.Count > 0 ? population.Outline[0].NodeId : null);
         }
+        // A repair or a later damaged reload changes the capability even
+        // when the readable state remains Ready. Notify it with the rows.
+        OnPropertyChanged(nameof(IsReadOnly));
+        OnPropertyChanged(nameof(IsRecoveredReadOnly));
+        OnPropertyChanged(nameof(ReadOnlyBannerText));
+        if (population.Disposition == CanvasLoadDisposition.RecoveredReadOnly)
+        {
+            if (!_announcedRecoveredLoad)
+            {
+                _announcedRecoveredLoad = true;
+                Speak(new CanvasA11yEvent.CanvasLoadedReadOnly((uint)population.Count));
+            }
+        }
+        else
+        {
+            _announcedRecoveredLoad = false;
+        }
         OutlinePublished?.Invoke(this, EventArgs.Empty);
         AnnounceDegradedLoadIfNeeded();
     }
@@ -1673,7 +1708,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     private void AnnounceDegradedLoadIfNeeded()
     {
         int skipped = PreservedItemCount;
-        if (skipped == 0 || _announcedDegradedLoad)
+        if (skipped == 0 || IsRecoveredReadOnly || _announcedDegradedLoad)
         {
             return;
         }
@@ -2157,7 +2192,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     private void RunHistory(bool redo)
     {
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return;
@@ -2202,7 +2237,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>§F TF-1: the basis a mode-entry operation mints
     /// against - null while nothing is loaded, and the entry then
     /// refuses with the not-ready sentence.</summary>
-    internal CanvasLoaded? CurrentLoadedForModeEntry => _slot.Current.Loaded;
+    internal CanvasLoaded? CurrentLoadedForModeEntry => CurrentEditableLoaded;
 
     /// <summary>§F TF-3: the session the mode's reads run
     /// against - the navigator's steps query overlap and the
@@ -2297,7 +2332,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// core's relative phrase.</summary>
     public void CanvasNewCard(object? owner = null)
     {
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return;
@@ -2360,14 +2395,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// <summary>§E TE-5b: the editor's commit — one SetNodeContent
     /// when the text changed; the no-change arm is the editor task's
     /// (TE-7), which owns the seed comparison.</summary>
-    public void CanvasCommitCardEdit(string nodeId, string newText)
+    public bool CanvasCommitCardEdit(string nodeId, string newText)
     {
         ArgumentNullException.ThrowIfNull(nodeId);
         ArgumentNullException.ThrowIfNull(newText);
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
-            return;
+            return false;
         }
         var operation = new CanvasMutationOperation(
             new CanvasOperationId("edit card"),
@@ -2375,13 +2410,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             nodeId,
             basis,
             CanvasMutationEffect.KeepSelection);
-        _ = Funnel.Apply(
+        return Funnel.Apply(
             operation,
             _ => new CanvasAction(
                 $"edit \"{TitleOf(nodeId)}\"",
                 [new CanvasOp.SetNodeContent(nodeId, new CanvasNodeContent.Text(newText))]),
             $"edit \"{TitleOf(nodeId)}\"",
-            confirm: () => new CanvasA11yEvent.CanvasCardUpdated(TitleOf(nodeId)));
+            confirm: () => new CanvasA11yEvent.CanvasCardUpdated(TitleOf(nodeId)))
+                == CanvasMutationAdmission.Admitted;
     }
 
     /// <summary>§E TE-5b: the delete verb's CARD arm — mac's
@@ -2390,7 +2426,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// ride the next slice with their tables.</summary>
     public void CanvasDeleteSelection()
     {
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return;
@@ -2440,7 +2476,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         // §G2 TG2-1 (G2D-11): a null label is mac's unlabeled group, spoken
         // "Untitled"; the op carries the null and core names the frame.
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -2495,7 +2531,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         string groupId, string? label, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(groupId);
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -2523,7 +2559,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     public void CanvasUngroup(string groupId)
     {
         ArgumentNullException.ThrowIfNull(groupId);
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return;
@@ -2559,7 +2595,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         string groupId, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(groupId);
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -2636,7 +2672,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     public CanvasMutationOperation? CanvasSetColor(
         string? color, Action<CanvasOperationOutcome>? completion = null, object? owner = null)
     {
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -2689,7 +2725,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         ArgumentNullException.ThrowIfNull(fromId);
         ArgumentNullException.ThrowIfNull(toId);
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return;
@@ -2735,7 +2771,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(edgeId);
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -2785,7 +2821,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         CanvasNeighbor neighbor, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(neighbor);
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -2823,7 +2859,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         string edgeId, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(edgeId);
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -2882,7 +2918,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(path);
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -2938,7 +2974,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         string url, object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(url);
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -3000,7 +3036,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         ArgumentNullException.ThrowIfNull(nodeId);
         ArgumentNullException.ThrowIfNull(newPath);
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -3054,10 +3090,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         // mac's CardEditorUnavailable is DESIGNATED on Windows in the
         // trigger ledger with that reason. A handle whose text cannot
         // be read is the blocked arm below.
-        if (_slot.Current.Lease is not { } lease || _slot.Current.Retired)
+        // The row and its capability belong to the applied snapshot. A
+        // pending replacement must not lend a newer lease to an older row.
+        if (_applied is not { Retired: false, LoadState: CanvasLoadState.Ready, Loaded: { } loaded })
         {
             return null;
         }
+        CanvasHandleLease lease = loaded.Lease;
+        bool inspectionOnly = loaded.Population.Disposition == CanvasLoadDisposition.RecoveredReadOnly;
         CanvasEditorSeed? seed = null;
         _ = lease.Invoke(
             () =>
@@ -3065,14 +3105,27 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 CanvasPublication now = _slot.Current;
                 return !now.Retired && now.Names(lease);
             },
-            handle => seed = _session.CanvasEditorSeed(handle, nodeId));
+            handle =>
+            {
+                if (inspectionOnly)
+                {
+                    // Full text remains readable without issuing a writable
+                    // editor seed for the recovered snapshot.
+                    string? text = _session.CanvasNodeText(handle, nodeId);
+                    seed = text is null ? null : new CanvasEditorSeed(text, loaded.Population.ContentHash);
+                }
+                else
+                {
+                    seed = _session.CanvasEditorSeed(handle, nodeId);
+                }
+            });
         if (seed is null)
         {
             Speak(new CanvasA11yEvent.CanvasBlocked(
                 new CanvasBlockedReason.CardTextUnreadable()));
             return null;
         }
-        return new CanvasCardEditorViewModel(this, nodeId, row.Title, seed);
+        return new CanvasCardEditorViewModel(this, nodeId, row.Title, seed, inspectionOnly);
     }
 
     /// <summary>§E TE-8: a row surface asks for the editor. The sheet
@@ -3104,7 +3157,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     internal void OpenCardPicker(CanvasCardPickerPurpose purpose)
     {
-        if (_slot.Current.Loaded is not { } loaded)
+        if (CurrentEditableLoaded is not { } loaded)
         {
             SpeakNotReady();
             return;
@@ -3155,7 +3208,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(target);
-        if (_slot.Current.Loaded is not { } loaded
+        if (CurrentEditableLoaded is not { } loaded
             || !ReferenceEquals(loaded, request.Identity))
         {
             Speak(new CanvasA11yEvent.CanvasStatus(
@@ -3356,7 +3409,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     internal void RequestNewGroup(object? owner = null)
     {
-        if (_slot.Current.Loaded is not { } loaded)
+        if (CurrentEditableLoaded is not { } loaded)
         {
             SpeakNotReady();
             return;
@@ -3370,7 +3423,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     internal void RequestAddLink(object? owner = null)
     {
-        if (_slot.Current.Loaded is not { } loaded)
+        if (CurrentEditableLoaded is not { } loaded)
         {
             SpeakNotReady();
             return;
@@ -3385,7 +3438,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     internal void RequestMoveIntoGroup(object? owner = null)
     {
-        if (_slot.Current.Loaded is not { } loaded)
+        if (CurrentEditableLoaded is not { } loaded)
         {
             SpeakNotReady();
             return;
@@ -3474,7 +3527,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     public CanvasMutationOperation? CanvasRemoveFromGroup(
         object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -3556,7 +3609,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         object? owner = null,
         Action<CanvasOperationOutcome>? completion = null)
     {
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -3630,7 +3683,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     public CanvasMutationOperation? CanvasDuplicate(
         object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -3774,7 +3827,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     internal void RequestConvertToNote(object? owner = null)
     {
-        if (_slot.Current.Loaded is not { } loaded)
+        if (CurrentEditableLoaded is not { } loaded)
         {
             SpeakNotReady();
             return;
@@ -3826,7 +3879,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         ArgumentNullException.ThrowIfNull(nodeId);
         ArgumentNullException.ThrowIfNull(cleanPath);
         ArgumentNullException.ThrowIfNull(creator);
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -3930,7 +3983,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     internal void RequestCreateConnectedDirection(object? owner = null)
     {
-        if (_slot.Current.Loaded is not { } loaded)
+        if (CurrentEditableLoaded is not { } loaded)
         {
             SpeakNotReady();
             return;
@@ -3956,7 +4009,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     internal void RequestVaultPick(CanvasVaultPickPurpose purpose, object? owner = null)
     {
-        if (_slot.Current.Loaded is not { } loaded)
+        if (CurrentEditableLoaded is not { } loaded)
         {
             SpeakNotReady();
             return;
@@ -4062,7 +4115,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     internal void RequestEditConnection(CanvasNeighbor neighbor, object? owner = null)
     {
         ArgumentNullException.ThrowIfNull(neighbor);
-        if (_slot.Current.Loaded is not { } loaded)
+        if (CurrentEditableLoaded is not { } loaded)
         {
             SpeakNotReady();
             return;
@@ -4077,7 +4130,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
 
     private void RequestConnectionVerb(object? owner, bool toDelete)
     {
-        if (_slot.Current.Loaded is not { } loaded)
+        if (CurrentEditableLoaded is not { } loaded)
         {
             SpeakNotReady();
             return;
@@ -4213,7 +4266,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     internal void CanvasPlaceRelative(
         CanvasCardPickerRequest request, string target, CanvasPlaceDirection direction)
     {
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return;
@@ -4324,7 +4377,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// Align (IF-22).</summary>
     internal void CanvasAlignWith(CanvasCardPickerRequest request, string target)
     {
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return;
@@ -4599,7 +4652,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         ArgumentNullException.ThrowIfNull(verbWord);
         ArgumentNullException.ThrowIfNull(opFor);
         ArgumentNullException.ThrowIfNull(confirmFor);
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;
@@ -4687,7 +4740,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     internal CanvasMutationOperation? SubmitGroupMarked(
         string? label, Action<CanvasOperationOutcome>? completion = null)
     {
-        if (_slot.Current.Loaded is not { } basis)
+        if (CurrentEditableLoaded is not { } basis)
         {
             SpeakNotReady();
             return null;

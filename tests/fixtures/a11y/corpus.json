@@ -2608,5 +2608,20 @@
     "event": "Graph { event: GraphBlocked { reason: NoteCreateFailed { message: \"exists\" } } }",
     "priority": "high",
     "text": "Couldn't create note: exists"
+  },
+  {
+    "event": "Canvas { event: CanvasLoadedReadOnly { available: 3 } }",
+    "priority": "medium",
+    "text": "Canvas opened read-only. 3 cards available to inspect. Repair the file and retry to edit."
+  },
+  {
+    "event": "Canvas { event: CanvasLoadedReadOnly { available: 1 } }",
+    "priority": "medium",
+    "text": "Canvas opened read-only. 1 card available to inspect. Repair the file and retry to edit."
+  },
+  {
+    "event": "Canvas { event: CanvasLoadedReadOnly { available: 0 } }",
+    "priority": "medium",
+    "text": "Canvas opened read-only. 0 cards available to inspect. Repair the file and retry to edit."
   }
 ]

@@ -576,6 +576,9 @@ public sealed class A11yCorpusCensus
         new A11yEvent.Graph(Event: new GraphA11yEvent.GraphBlocked(Reason: new GraphBlockedReason.LoadFailed(Message: "io error"))),
         new A11yEvent.Graph(Event: new GraphA11yEvent.GraphBlocked(Reason: new GraphBlockedReason.ConnectionsLoadFailed(Message: "io error"))),
         new A11yEvent.Graph(Event: new GraphA11yEvent.GraphBlocked(Reason: new GraphBlockedReason.NoteCreateFailed(Message: "exists"))),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasLoadedReadOnly(Available: 3)),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasLoadedReadOnly(Available: 1)),
+        new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasLoadedReadOnly(Available: 0)),
     ];
 
     [Fact]

@@ -363,6 +363,7 @@ extension AppState {
             case .converted(let result):
                 doc.undoStack.append((name: action.name, inverse: result.inverse))
                 doc.redoStack = []
+                doc.noteApplySucceeded(newContentHash: result.newContentHash)
                 doc.reloadAfterMutation(session: session)
                 self.noteUndoStacksChanged()
                 self.canvasAnnouncer.announce(

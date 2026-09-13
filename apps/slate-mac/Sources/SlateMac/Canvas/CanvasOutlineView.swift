@@ -227,8 +227,12 @@ struct CanvasOutlineView: View {
         .accessibilityAction(named: "Toggle Mark") {
             selecting(row) { appState.canvasToggleMark() }
         }
-        .accessibilityAction(named: "Delete") {
-            selecting(row) { appState.canvasDeleteSelection() }
+        .accessibilityActions {
+            if mutationDisabledReason == nil {
+                Button("Delete") {
+                    selecting(row) { appState.canvasDeleteSelection() }
+                }
+            }
         }
         .accessibilityRotorEntry(id: row.nodeId, in: rotorSpace)
         .accessibilityFocused($focusedRow, equals: row.nodeId)
@@ -245,9 +249,13 @@ struct CanvasOutlineView: View {
                 Button("Edit Card Text…") {
                     selecting(row) { appState.canvasEditCard() }
                 }
+                .disabled(mutationDisabledReason != nil)
+                .help(mutationDisabledReason ?? "")
                 Button("Convert to Note…") {
                     selecting(row) { appState.canvasPromptConvertToNote() }
                 }
+                .disabled(mutationDisabledReason != nil)
+                .help(mutationDisabledReason ?? "")
                 .disabled(convertDisabledReason != nil)
                 .accessibilityHint(
                     convertDisabledReason
@@ -259,18 +267,26 @@ struct CanvasOutlineView: View {
             Button("Create Connected Card") {
                 selecting(row) { appState.canvasCreateConnectedCard() }
             }
+            .disabled(mutationDisabledReason != nil)
+            .help(mutationDisabledReason ?? "")
             Button("Duplicate") {
                 selecting(row) { appState.canvasDuplicate() }
             }
+            .disabled(mutationDisabledReason != nil)
+            .help(mutationDisabledReason ?? "")
             if row.kind == "group" {
                 Button("Rename Group…") {
                     selecting(row) { appState.canvasPromptRenameGroup() }
                 }
+                .disabled(mutationDisabledReason != nil)
+                .help(mutationDisabledReason ?? "")
             }
             if row.kind == "file" || row.kind == "image" {
                 Button("Locate File…") {
                     selecting(row) { appState.canvasOpenLocate() }
                 }
+                .disabled(mutationDisabledReason != nil)
+                .help(mutationDisabledReason ?? "")
             }
             Divider()
             Button("Toggle Mark") {
@@ -279,22 +295,32 @@ struct CanvasOutlineView: View {
             Button("Connect To…") {
                 selecting(row) { appState.canvasOpenConnectPicker() }
             }
+            .disabled(mutationDisabledReason != nil)
+            .help(mutationDisabledReason ?? "")
             Button("Set Color…") {
                 selecting(row) { appState.canvasPromptSetColor() }
             }
+            .disabled(mutationDisabledReason != nil)
+            .help(mutationDisabledReason ?? "")
             Divider()
             Button("Move into Group…") {
                 selecting(row) { appState.canvasPromptMoveIntoGroup() }
             }
+            .disabled(mutationDisabledReason != nil)
+            .help(mutationDisabledReason ?? "")
             if !row.groupPath.isEmpty {
                 Button("Remove from Group") {
                     selecting(row) { appState.canvasRemoveFromGroup() }
                 }
+                .disabled(mutationDisabledReason != nil)
+                .help(mutationDisabledReason ?? "")
             }
             Divider()
             Button(row.kind == "group" ? "Ungroup" : "Delete", role: .destructive) {
                 selecting(row) { appState.canvasDeleteSelection() }
             }
+            .disabled(mutationDisabledReason != nil)
+            .help(mutationDisabledReason ?? "")
         }
     }
 
@@ -438,6 +464,10 @@ struct CanvasOutlineView: View {
         selection.selected = nodeId
         focusedRow = nodeId
         announceMove(to: nodeId, from: origin)
+    }
+
+    private var mutationDisabledReason: String? {
+        appState.canvasMutationDisabledReason(for: document)
     }
 
     private func activationHint(_ row: CanvasOutlineRow) -> String {
