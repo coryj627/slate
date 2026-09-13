@@ -47,7 +47,6 @@ internal sealed partial class FilesSidebarViewModel
             }
             catch (Exception exception)
             {
-                lease?.Dispose();
                 completion.TrySetException(exception);
             }
         })
