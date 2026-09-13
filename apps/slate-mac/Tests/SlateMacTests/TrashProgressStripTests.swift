@@ -152,8 +152,10 @@ final class TrashProgressStripTests: XCTestCase {
         let role = element.accessibilityRole?()
         let names = [element.accessibilityLabel?(), element.accessibilityTitle?()].compactMap { $0 }
         let isEnabled = element.isAccessibilityEnabled?()
-        let children = element.accessibilityChildren?() ?? []
-        let navigationChildren = element.accessibilityChildrenInNavigationOrder?() ?? []
+        let children = accessibilityArray(
+            from: element, selector: #selector(NSAccessibilityProtocol.accessibilityChildren))
+        let navigationChildren = accessibilityArray(
+            from: element, selector: #selector(NSAccessibilityProtocol.accessibilityChildrenInNavigationOrder))
         let subviews: [NSView]
         if let view = element as? NSView {
             subviews = view.subviews
@@ -180,11 +182,23 @@ final class TrashProgressStripTests: XCTestCase {
         // Visit both platform accessibility edges and real native view edges;
         // SwiftUI can expose either proxies or view-backed controls. Identity
         // tracking deduplicates overlaps and prevents cycles through wrappers.
-        for child in children + navigationChildren.map({ $0 as Any }) + subviews.map({ $0 as Any }) {
+        for child in children + navigationChildren + subviews.map({ $0 as Any }) {
             if let button = findCancelButton(
                 in: child, enabled: enabled, visited: &visited, snapshot: &snapshot) { return button }
         }
         return nil
+    }
+
+    private func accessibilityArray(from element: AnyObject, selector: Selector) -> [Any] {
+        // Native navigation arrays can contain NSAccessibilityReparentingCellProxy.
+        // Calling the Swift-imported typed getter traps while bridging that
+        // proxy, before a subsequent `as [Any]` can help. Invoke the same public
+        // Objective-C getter and preserve its raw NSArray elements instead.
+        guard let object = element as? any NSObjectProtocol,
+            object.responds(to: selector),
+            let array = object.perform(selector)?.takeUnretainedValue() as? NSArray
+        else { return [] }
+        return (0..<array.count).map { array.object(at: $0) }
     }
 
     @MainActor
