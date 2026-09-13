@@ -6,8 +6,8 @@ import SwiftUI
 /// Window-owned progress remains reachable when Trash originates from the
 /// menu or palette with the Files sidebar hidden.
 struct TrashProgressStrip: View {
-    static let cancellationHint =
-        "Stops remaining work. The current system operation may finish. Completed items remain in Trash."
+    static let cancellationHint = String(localized:
+        "Stops remaining work. The current system operation may finish. Completed items remain in Trash.")
 
     let progress: AppState.TrashProgress
     let onCancel: () -> Void

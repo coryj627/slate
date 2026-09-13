@@ -16266,9 +16266,17 @@ final class AppState: ObservableObject {
     /// flag itself un-wedges the new vault (the stale task's own session guard
     /// returns before its release, so nothing else clears it).
     private func cancelStructuralMutationOwnership() {
-        currentTrashOwner?.requestCancellation()
+        // Revoke presentation before signalling native cancellation: its
+        // synchronous callback must not announce Stopping for a departing vault.
+        // The outstanding owner still retains the session and Quit fence until
+        // its native work and result handling drain.
+        let departingTrashOwner = currentTrashOwner
         currentTrashOwner = nil
         trashProgress = nil
+        if lastMutationAnnouncement != nil {
+            lastMutationAnnouncement = nil
+        }
+        departingTrashOwner?.requestCancellation()
         discardPendingTrashConfirmations()
         structuralMutationToken &+= 1
         activeStructuralRecoveryReservation = nil
