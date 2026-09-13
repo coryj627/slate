@@ -358,6 +358,7 @@ final class MutationHarnessTests: XCTestCase {
         case .InvalidQuery: return ("InvalidQuery", nil)
         case .Unsupported: return ("Unsupported", nil)
         case .InvalidArgument: return ("InvalidArgument", nil)
+        case let .StructuralMutationIncomplete(path, _): return ("StructuralMutationIncomplete", path)
         case .TrashConfirmationChanged: return ("TrashConfirmationChanged", nil)
         case let .DestinationExists(path): return ("DestinationExists", path)
         case .WriteConflict: return ("WriteConflict", nil)

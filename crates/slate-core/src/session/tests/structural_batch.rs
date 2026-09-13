@@ -59,6 +59,8 @@ struct FaultState {
     snapshot_number: usize,
     fail_snapshot_numbers: BTreeSet<usize>,
     rename_number: usize,
+    #[cfg(windows)]
+    collision_after_conditional_rename: BTreeMap<(String, String), String>,
 }
 
 #[derive(Debug)]
@@ -341,6 +343,26 @@ impl VaultProvider for FaultInjectingProvider {
             }
             Ok(())
         }
+    }
+
+    #[cfg(windows)]
+    fn mutation_identity(&self, path: &str) -> Result<String, VaultError> {
+        self.inner.mutation_identity(path)
+    }
+
+    #[cfg(windows)]
+    fn rename_if_identity(&self, from: &str, to: &str, expected: &str) -> Result<(), VaultError> {
+        self.inner.rename_if_identity(from, to, expected)?;
+        let collision = self
+            .state
+            .lock()
+            .unwrap()
+            .collision_after_conditional_rename
+            .remove(&(from.to_string(), to.to_string()));
+        if let Some(path) = collision {
+            std::fs::write(self.root.join(path), b"stranger")?;
+        }
+        Ok(())
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
@@ -3692,4 +3714,59 @@ fn staged_trash_final_snapshot_failure_is_a_typed_no_mutation_refusal() {
         assert_eq!(state.lock().unwrap().delete_number, 0);
         assert_eq!(session.provider.read_file("folder/a.md").unwrap(), b"keep");
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn conditional_inverse_late_note_collision_does_not_retarget_the_original_to_a_stranger() {
+    #[derive(Default)]
+    struct Changes(Mutex<Vec<FileChangeEvent>>);
+    impl VaultEventListener for Changes {
+        fn on_error(&self, _code: EventErrorCode, _path: String, _message: String) {}
+        fn on_file_change(&self, event: FileChangeEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+    let (dir, session, faults) = fixture(&[("Renamed/Renamed.md", "original")], &[]);
+    let identity = session
+        .capture_structural_identity("Renamed", true)
+        .unwrap();
+    faults
+        .lock()
+        .unwrap()
+        .collision_after_conditional_rename
+        .insert(
+            ("Renamed".into(), "Folder".into()),
+            "Folder/Folder.md".into(),
+        );
+    let changes = Arc::new(Changes::default());
+    session.register_event_listener(changes.clone());
+    let error = session
+        .rename_folder_with_note_if_identity("Renamed", "Folder", &identity)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        VaultError::StructuralMutationIncomplete { .. }
+    ));
+    assert_eq!(
+        std::fs::read(dir.path().join("Folder/Renamed.md")).unwrap(),
+        b"original"
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("Folder/Folder.md")).unwrap(),
+        b"stranger"
+    );
+    let events = changes.0.lock().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.kind == FileChangeKind::Renamed
+                && event.path == "Folder/Renamed.md"
+                && event.previous_path.as_deref() == Some("Renamed/Renamed.md"))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.kind == FileChangeKind::Renamed && event.path == "Folder/Folder.md")
+    );
 }

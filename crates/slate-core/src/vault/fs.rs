@@ -728,6 +728,31 @@ impl VaultProvider for FsVaultProvider {
         }
     }
 
+    #[cfg(windows)]
+    fn mutation_identity(&self, relative: &str) -> Result<String, VaultError> {
+        let path = self.resolve_for_mutation(relative)?;
+        let relative = path
+            .strip_prefix(&self.root)
+            .map_err(|_| VaultError::InvalidArgument {
+                message: "Mutation path is outside the vault".into(),
+            })?;
+        super::windows_entry::capture(&self.root, relative)
+    }
+
+    #[cfg(windows)]
+    fn rename_if_identity(&self, from: &str, to: &str, expected: &str) -> Result<(), VaultError> {
+        let from = self.resolve_for_mutation(from)?;
+        let to = self.resolve_for_mutation(to)?;
+        let relative = |path: &std::path::Path| {
+            path.strip_prefix(&self.root)
+                .map(std::path::Path::to_path_buf)
+                .map_err(|_| VaultError::InvalidArgument {
+                    message: "Mutation path is outside the vault".into(),
+                })
+        };
+        super::windows_entry::rename(&self.root, &relative(&from)?, &relative(&to)?, expected)
+    }
+
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
         let from_path = self.resolve_for_mutation(from)?;
         let to_path = self.resolve_for_mutation(to)?;

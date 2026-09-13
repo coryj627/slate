@@ -446,15 +446,31 @@ enforced by construction, not by review.
   slow vault, FD-7's trade-off extended to a read. Accepted at the
   recorded bound; an async, cancellable destination loader is the
   recorded upgrade path, filed at PR time.
-- **FR-10 — The undo identity guard is a preflight, not an atomic
-  bind** (codex round 3): the inverse records the mutated object's
-  filesystem identity BEFORE the forward op and validates it before
-  the inverse runs, which closes the push-time window — but core's
-  rename/move are path-addressed, so a replacement landing between
-  the validation and the mutation can still be renamed. Closing that
-  window needs an identity-conditional core inverse (validate and
-  mutate one opened object atomically) — grouped with FR-8's
-  staged-token follow-up, filed at PR time.
+- **FR-10 — Windows identity-conditional inverse (#1125).** The Windows
+  host captures filesystem IDs before forward operations. Single-file moves and
+  renames, compound folder-note renames, and batch undo/redo pass those IDs into
+  core. The Windows provider compares volume plus 128-bit file ID on the source
+  handle used by native `NtSetInformationFile(FileRenameInformation)`; destination
+  resolution is relative to pinned no-follow directory handles, with replacement
+  disabled. Conditional rollback uses the same primitive. Batch recovery records
+  persist the conditions in version 2 so older binaries refuse recovery rather
+  than retrying with path-only renames. Missing/unsupported IDs never fall back to
+  an existence-only inverse; a completed forward operation without verified IDs
+  becomes a history barrier. The host also verifies that its recorded IDs still
+  hold after successful operations; its own atomic link rewrites can invalidate
+  an undo/redo frame, which is discarded without adopting a replacement ID.
+  Strict compound inverses defer link rewrites until both guarded renames finish
+  so an in-place edit cannot make the inverse invalidate its own pending step.
+  A journal or compensation failure after a checked move returns a typed partial
+  result, refreshes the affected location, and invalidates history. Completed
+  link rewrites are preserved; unknown occupants never imply a rename event.
+  **Residual:** filesystem IDs may eventually be reused after deletion; these
+  are not permanent incarnation IDs. In-place content edits retain the ID, while
+  replacing a file (including an atomic-save replacement) invalidates its inverse.
+  This closes the Windows validation-to-path-rename window. macOS/Linux public
+  rename APIs still resolve source names and do not offer the same conditional
+  primitive; their existing undo behavior remains. Keep #1125 open for those
+  platform limits and FR-8's final observation-to-Trash boundary.
 - **FR-11 — Trash inventory work is asynchronous (#1125).** Both hosts
   run staging and final native revalidation off the UI thread and retain
   structural/session ownership across the work. Closing or replacing the vault

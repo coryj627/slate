@@ -231,12 +231,13 @@ internal sealed partial class FilesSidebarViewModel
         // file ID survives the rename, and capturing after it left a
         // window where a replacement's identity got recorded as the
         // mutated object's.
-        string? identity = FileIdentity.TryGet(AbsoluteVaultPath(oldPath));
+        StructuralIdentity? identity = null;
         try
         {
             StructuralReport? report = null;
             if (!TryRunSessionWork(() =>
             {
+                identity = TryCaptureStructuralIdentity(oldPath, node.IsDirectory);
                 report = node.IsDirectory
                     ? _session.RenameFolderWithNote(oldPath, newName)
                     : _session.RenameFile(oldPath, newName);
@@ -248,7 +249,7 @@ internal sealed partial class FilesSidebarViewModel
             int rewritten = ConsumeStructuralReport(report);
             TransformStoredPaths(oldPath, newPath, node.IsDirectory, deleted: false);
             CorrectStoredPathsFromReport(report, oldPath, newPath);
-            _structuralUndo.Push(new StructuralUndoStep(
+            PushIdentityCheckedStep(new StructuralUndoStep(
                 StructuralUndoKind.Rename,
                 Path: newPath,
                 Argument: oldName,
@@ -310,36 +311,52 @@ internal sealed partial class FilesSidebarViewModel
     /// team, contracts 1).</summary>
     internal void StructuralHistoryBarrier() => _structuralUndo.Barrier();
 
+    private StructuralIdentity? TryCaptureStructuralIdentity(string path, bool includeFolderNote)
+    {
+        try { return _session.CaptureStructuralIdentity(path, includeFolderNote); }
+        catch (VaultException) { return null; }
+    }
+
+    private void PushIdentityCheckedStep(StructuralUndoStep step)
+    {
+        if (StepIdentitiesStillHold(step)) { _structuralUndo.Push(step); }
+        else { StructuralHistoryBarrier(); }
+    }
+
+    private bool StepIdentitiesStillHold(StructuralUndoStep step)
+    {
+        try
+        {
+            return TryRunSessionWork(() =>
+            {
+                if (step.Kind == StructuralUndoKind.BatchMove)
+                {
+                    return step.BatchIdentities is not null
+                        && _session.StructuralIdentitiesMatch(step.BatchIdentities);
+                }
+                if (step.Identity is null) { return false; }
+                StructuralIdentity current = _session.CaptureStructuralIdentity(
+                    step.Path, step.Kind == StructuralUndoKind.Rename && step.IsDirectory);
+                return current.Entry == step.Identity.Entry && current.FolderNote == step.Identity.FolderNote;
+            }, out bool holds) && holds;
+        }
+        catch (VaultException) { return false; }
+    }
+
     private void ExecuteUndoStep(StructuralUndoStep step, bool redo)
     {
         BeginStructuralResult();
         string verb = redo ? "Redid" : "Undid";
-        // The executability preflight (mac: drop suspect history
-        // rather than replay inverses against strangers). Existence
-        // alone admits a REPLACEMENT at the recorded path (codex
-        // round 2: delete b.md, create an unrelated b.md, Ctrl+Z
-        // renames the stranger) — the filesystem identity captured at
-        // push must still match; a null token on either side degrades
-        // to the existence check. BatchMove preflights core-side —
-        // UndoBatchMove refuses typed when the latest journal row is
-        // not the batch.
-        if (step.Kind is not StructuralUndoKind.BatchMove)
+        // Core validates and renames one opened object. Missing identities must
+        // refuse rather than degrade to an existence-only preflight.
+        if ((step.Kind == StructuralUndoKind.BatchMove && step.BatchIdentities is null)
+            || (step.Kind != StructuralUndoKind.BatchMove && step.Identity is null))
         {
-            string absolute = AbsoluteVaultPath(step.Path);
-            bool exists = System.IO.File.Exists(absolute)
-                || System.IO.Directory.Exists(absolute);
-            bool identityHolds = exists
-                && (step.Identity is not string recorded
-                    || FileIdentity.TryGet(absolute) is not string current
-                    || current == recorded);
-            if (!exists || !identityHolds)
-            {
-                _structuralUndo.DropForChangedFiles();
-                AnnounceUndoResidue(redo
-                    ? "Can't redo — the files have changed."
-                    : "Can't undo — the files have changed.");
-                return;
-            }
+            _structuralUndo.DropForChangedFiles();
+            AnnounceUndoResidue(redo
+                ? "Can't redo — the files have changed."
+                : "Can't undo — the files have changed.");
+            return;
         }
 
         try
@@ -356,8 +373,8 @@ internal sealed partial class FilesSidebarViewModel
                         string restoredPath = CombineVaultPath(
                             ParentPath(step.Path), step.Argument);
                         StructuralReport renamed = step.IsDirectory
-                            ? _session.RenameFolderWithNote(step.Path, step.Argument)
-                            : _session.RenameFile(step.Path, step.Argument);
+                            ? _session.RenameFolderWithNoteIfIdentity(step.Path, step.Argument, step.Identity!)
+                            : _session.RenameFileIfIdentity(step.Path, step.Argument, step.Identity!.Entry);
                         _ = ConsumeStructuralReport(renamed);
                         TransformStoredPaths(
                             step.Path, restoredPath, step.IsDirectory, deleted: false);
@@ -374,8 +391,8 @@ internal sealed partial class FilesSidebarViewModel
                         string previousParent = ParentPath(step.Path);
                         string movedPath = CombineVaultPath(step.Argument, leaf);
                         StructuralReport movedReport = step.IsDirectory
-                            ? _session.MoveFolder(step.Path, step.Argument)
-                            : _session.MoveFile(step.Path, step.Argument);
+                            ? _session.MoveFolderIfIdentity(step.Path, step.Argument, step.Identity!.Entry)
+                            : _session.MoveFileIfIdentity(step.Path, step.Argument, step.Identity!.Entry);
                         _ = ConsumeStructuralReport(movedReport);
                         TransformStoredPaths(
                             step.Path, movedPath, step.IsDirectory, deleted: false);
@@ -387,7 +404,7 @@ internal sealed partial class FilesSidebarViewModel
                         };
                         break;
                     case StructuralUndoKind.BatchMove:
-                        batchReport = _session.UndoBatchMove(step.BatchOpId);
+                        batchReport = _session.UndoBatchMoveIfIdentities(step.BatchOpId, step.BatchIdentities!);
                         foreach (BatchPathChange change in batchReport.Standing)
                         {
                             RetargetRequested?.Invoke(change.OldPath, change.NewPath);
@@ -405,7 +422,14 @@ internal sealed partial class FilesSidebarViewModel
                         if (batchReport.State == BatchMoveState.Succeeded
                             && batchReport.OpId is long inverseOpId)
                         {
-                            inverse = step with { BatchOpId = inverseOpId };
+                            inverse = step with
+                            {
+                                BatchOpId = inverseOpId,
+                                BatchIdentities = batchReport.Standing.ToDictionary(
+                                    change => change.NewPath,
+                                    change => step.BatchIdentities![change.OldPath],
+                                    StringComparer.Ordinal),
+                            };
                         }
 
                         break;
@@ -445,7 +469,13 @@ internal sealed partial class FilesSidebarViewModel
                 inverse = inverse with { Identity = step.Identity };
             }
 
-            if (redo)
+            // Our own atomic link rewrites can replace a renamed entry. Never
+            // adopt the ID now found at its pathname; discard invalid history.
+            if (!StepIdentitiesStillHold(inverse))
+            {
+                StructuralHistoryBarrier();
+            }
+            else if (redo)
             {
                 _structuralUndo.PushUndoFromRedo(inverse);
             }
@@ -469,6 +499,13 @@ internal sealed partial class FilesSidebarViewModel
                 StructuralUndoKind.Move => $"{verb} move of {step.Noun}.",
                 _ => $"{verb} move of {step.Noun}.",
             });
+        }
+        catch (VaultException.StructuralMutationIncomplete exception)
+        {
+            _structuralUndo.DropForChangedFiles();
+            RequestSelectionAt(exception.path);
+            Refresh();
+            ReportMutationResult($"{(redo ? "Redo" : "Undo")} stopped. {exception.message}");
         }
         catch (VaultException)
         {
@@ -783,12 +820,13 @@ internal sealed partial class FilesSidebarViewModel
             StructuralBatchItem single = items[0];
             string leaf = System.IO.Path.GetFileName(single.Path);
             // Identity captured BEFORE the forward op (codex round 3).
-            string? identity = FileIdentity.TryGet(AbsoluteVaultPath(single.Path));
+            StructuralIdentity? identity = null;
             try
             {
                 StructuralReport? report = null;
                 if (!TryRunSessionWork(() =>
                 {
+                    identity = TryCaptureStructuralIdentity(single.Path, includeFolderNote: false);
                     report = single.IsDirectory
                         ? _session.MoveFolder(single.Path, destination)
                         : _session.MoveFile(single.Path, destination);
@@ -801,7 +839,7 @@ internal sealed partial class FilesSidebarViewModel
                 string movedPath = CombineVaultPath(destination, leaf);
                 TransformStoredPaths(single.Path, movedPath, single.IsDirectory, deleted: false);
                 CorrectStoredPathsFromReport(report, single.Path, movedPath);
-                _structuralUndo.Push(new StructuralUndoStep(
+                PushIdentityCheckedStep(new StructuralUndoStep(
                     StructuralUndoKind.Move,
                     Path: movedPath,
                     Argument: ParentPath(single.Path),

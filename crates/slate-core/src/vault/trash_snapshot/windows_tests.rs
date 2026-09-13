@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::*;
+use std::os::windows::ffi::OsStrExt;
 
 fn junction(path: &Path, target: &Path) {
     let file = fs::OpenOptions::new()

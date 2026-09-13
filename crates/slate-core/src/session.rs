@@ -2344,7 +2344,19 @@ impl VaultSession {
             Ok(None) => return Ok(()),
             Err(error) => return self.fail_structural_batch_recovery_locked(&mut conn, error),
         };
-        if inflight.version != 1 || inflight.entries.is_empty() {
+        if !matches!(inflight.version, 1 | 2)
+            || inflight.entries.is_empty()
+            || (inflight.version == 2
+                && inflight
+                    .entries
+                    .iter()
+                    .any(|entry| entry.expected_identity.as_deref().is_none_or(str::is_empty)))
+            || (inflight.version == 1
+                && inflight
+                    .entries
+                    .iter()
+                    .any(|entry| entry.expected_identity.is_some()))
+        {
             return self.fail_structural_batch_recovery_locked(
                 &mut conn,
                 VaultError::InvalidArgument {
@@ -2460,8 +2472,9 @@ impl VaultSession {
         let mut physical = Vec::with_capacity(inflight.entries.len());
         for entry in &inflight.entries {
             let original =
-                structural_batch_mutation_path_exists(self.provider.as_ref(), &entry.from)?;
-            let forward = structural_batch_mutation_path_exists(self.provider.as_ref(), &entry.to)?;
+                self.identity_matches_location(&entry.from, entry.expected_identity.as_deref())?;
+            let forward =
+                self.identity_matches_location(&entry.to, entry.expected_identity.as_deref())?;
             let truth = match (original, forward) {
                 (true, false) => StructuralBatchTruth::Original,
                 (false, true) => StructuralBatchTruth::Forward,
@@ -2542,11 +2555,15 @@ impl VaultSession {
         // therefore indistinguishable from (and as safe as) a recorded step.
         for (entry, truth) in inflight.entries.iter().zip(&physical).rev() {
             if *truth == StructuralBatchTruth::Forward {
-                let rename_result = self.provider.rename(&entry.to, &entry.from);
-                let original =
-                    structural_batch_mutation_path_exists(self.provider.as_ref(), &entry.from)?;
+                let rename_result = self.rename_with_identity(
+                    &entry.to,
+                    &entry.from,
+                    entry.expected_identity.as_deref(),
+                );
+                let original = self
+                    .identity_matches_location(&entry.from, entry.expected_identity.as_deref())?;
                 let forward =
-                    structural_batch_mutation_path_exists(self.provider.as_ref(), &entry.to)?;
+                    self.identity_matches_location(&entry.to, entry.expected_identity.as_deref())?;
                 if !original || forward {
                     return Err(rename_result.err().unwrap_or_else(|| {
                         VaultError::InvalidArgument {
@@ -11512,6 +11529,13 @@ struct StructuralBatchIndexSnapshot {
     occupied_lower: std::collections::BTreeMap<String, String>,
 }
 
+// Defer strict compound rewrites until all guarded physical renames finish.
+enum StructuralRewritePlan<'a> {
+    Skip,
+    Moved,
+    Explicit(&'a [(String, String)]),
+}
+
 /// Durable rollback intent committed before a batch's first filesystem
 /// mutation.  The row is updated after every externally-visible step.  The
 /// counters are diagnostics; recovery always classifies physical and SQLite
@@ -11537,6 +11561,8 @@ struct StructuralBatchInflightEntry {
     from: String,
     to: String,
     is_directory: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_identity: Option<String>,
 }
 
 /// A content rewrite's exact known states.  `hash_before` is guaranteed
@@ -11565,6 +11591,7 @@ impl StructuralBatchInflight {
                     from: plan.item.path.clone(),
                     to: plan.destination.clone(),
                     is_directory: plan.item.is_directory,
+                    expected_identity: None,
                 })
                 .collect(),
             moved: plans
@@ -12219,6 +12246,7 @@ impl VaultSession {
                     Vec::new(),
                     failure,
                     faults,
+                    None,
                 )?;
                 drop(conn);
                 drop(structural_operation);
@@ -12239,6 +12267,7 @@ impl VaultSession {
                     Vec::new(),
                     structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
                     faults,
+                    None,
                 )?;
                 drop(conn);
                 drop(structural_operation);
@@ -12325,6 +12354,7 @@ impl VaultSession {
                 Vec::new(),
                 structural_batch_failure(None, BatchFailureStage::Index, error.to_string()),
                 faults,
+                None,
             )?;
             drop(conn);
             drop(structural_operation);
@@ -12345,6 +12375,7 @@ impl VaultSession {
                 Vec::new(),
                 structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
                 faults,
+                None,
             )?;
             drop(conn);
             drop(structural_operation);
@@ -12372,6 +12403,7 @@ impl VaultSession {
                     Vec::new(),
                     structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
                     faults,
+                    None,
                 )?;
                 drop(conn);
                 drop(structural_operation);
@@ -12391,6 +12423,7 @@ impl VaultSession {
                 Vec::new(),
                 structural_batch_failure(None, BatchFailureStage::LinkRewrite, error.to_string()),
                 faults,
+                None,
             )?;
             drop(conn);
             drop(structural_operation);
@@ -12419,6 +12452,7 @@ impl VaultSession {
                     "link rewrite physical outcome could not be established",
                 ),
                 faults,
+                None,
             )?;
             drop(conn);
             drop(structural_operation);
@@ -12471,6 +12505,7 @@ impl VaultSession {
                     rewrite_failures,
                     structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
                     faults,
+                    None,
                 )?;
                 drop(conn);
                 drop(structural_operation);
@@ -12699,6 +12734,7 @@ impl VaultSession {
         mut rewrite_failures: Vec<crate::structural::RewriteFailure>,
         failure: crate::BatchItemFailure,
         faults: &dyn StructuralBatchFaultHook,
+        identities: Option<&std::collections::HashMap<String, String>>,
     ) -> Result<crate::BatchMoveReport, VaultError> {
         use crate::structural_batch::{BatchFailureStage, BatchMoveState};
 
@@ -12719,7 +12755,11 @@ impl VaultSession {
         )?;
         let mut rollback_failures = Vec::new();
         for plan in applied.iter().rev() {
-            if let Err(error) = self.provider.rename(&plan.destination, &plan.item.path) {
+            if let Err(error) = self.rename_with_identity(
+                &plan.destination,
+                &plan.item.path,
+                identities.map(|ids| ids[&plan.item.path].as_str()),
+            ) {
                 rollback_failures.push(structural_batch_failure(
                     Some(plan.item.clone()),
                     BatchFailureStage::Rollback,
@@ -12736,10 +12776,14 @@ impl VaultSession {
         let mut recovery_incomplete = forward_rewrite_health.physical_unknown;
         let mut physical_topology_uncertain = false;
         for plan in applied {
-            let source =
-                structural_batch_mutation_path_exists(self.provider.as_ref(), &plan.item.path);
-            let destination =
-                structural_batch_mutation_path_exists(self.provider.as_ref(), &plan.destination);
+            let source = self.identity_matches_location(
+                &plan.item.path,
+                identities.map(|ids| ids[&plan.item.path].as_str()),
+            );
+            let destination = self.identity_matches_location(
+                &plan.destination,
+                identities.map(|ids| ids[&plan.item.path].as_str()),
+            );
             match (source, destination) {
                 (Ok(true), Ok(false)) => restored_plans.push(plan.clone()),
                 (Ok(false), Ok(true)) => standing_plans.push(plan.clone()),
@@ -12994,6 +13038,23 @@ impl VaultSession {
         op_id: i64,
         faults: &dyn StructuralBatchFaultHook,
     ) -> Result<crate::BatchMoveReport, VaultError> {
+        self.undo_batch_move_checked(op_id, faults, None)
+    }
+
+    pub fn undo_batch_move_if_identities(
+        &self,
+        op_id: i64,
+        identities: std::collections::HashMap<String, String>,
+    ) -> Result<crate::BatchMoveReport, VaultError> {
+        self.undo_batch_move_checked(op_id, &NoStructuralBatchFaults, Some(&identities))
+    }
+
+    fn undo_batch_move_checked(
+        &self,
+        op_id: i64,
+        faults: &dyn StructuralBatchFaultHook,
+        identities: Option<&std::collections::HashMap<String, String>>,
+    ) -> Result<crate::BatchMoveReport, VaultError> {
         use crate::structural_batch::{BatchFailureStage, BatchMoveState};
 
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
@@ -13061,7 +13122,36 @@ impl VaultSession {
             return Ok(empty_batch_move_report(envelope, BatchMoveState::Rejected));
         }
 
+        if let Some(identities) = identities {
+            if identities.len() != plans.len()
+                || plans
+                    .iter()
+                    .any(|plan| !identities.contains_key(&plan.item.path))
+            {
+                return Err(VaultError::InvalidArgument {
+                    message: "Cannot undo or redo: the recorded selection has changed".into(),
+                });
+            }
+            for plan in &plans {
+                if !self.identity_matches_location(
+                    &plan.item.path,
+                    Some(&identities[&plan.item.path]),
+                )? {
+                    return Err(VaultError::InvalidArgument {
+                        message: "Cannot undo or redo: the files have changed".into(),
+                    });
+                }
+            }
+        }
         let mut inflight = StructuralBatchInflight::from_plans(&plans);
+        if let Some(identities) = identities {
+            // Version 2 prevents older binaries from recovering a strict inverse
+            // with a path-only rename after a crash.
+            inflight.version = 2;
+            for entry in &mut inflight.entries {
+                entry.expected_identity = Some(identities[&entry.from].clone());
+            }
+        }
         structural_batch_insert_inflight(&conn, &inflight)?;
         // Round 35: mark both sides of every file this inverse batch
         // touches before the first filesystem mutation — see
@@ -13076,7 +13166,11 @@ impl VaultSession {
         )?;
         let mut applied = Vec::new();
         for plan in &plans {
-            if let Err(error) = self.provider.rename(&plan.item.path, &plan.destination) {
+            if let Err(error) = self.rename_with_identity(
+                &plan.item.path,
+                &plan.destination,
+                identities.map(|ids| ids[&plan.item.path].as_str()),
+            ) {
                 let failure = structural_batch_failure(
                     Some(plan.item.clone()),
                     BatchFailureStage::Move,
@@ -13084,10 +13178,13 @@ impl VaultSession {
                 );
                 let mut recovery_candidates = applied.clone();
                 match (
-                    structural_batch_mutation_path_exists(self.provider.as_ref(), &plan.item.path),
-                    structural_batch_mutation_path_exists(
-                        self.provider.as_ref(),
+                    self.identity_matches_location(
+                        &plan.item.path,
+                        identities.map(|ids| ids[&plan.item.path].as_str()),
+                    ),
+                    self.identity_matches_location(
                         &plan.destination,
+                        identities.map(|ids| ids[&plan.item.path].as_str()),
                     ),
                 ) {
                     (Ok(true), Ok(false)) => {}
@@ -13103,6 +13200,7 @@ impl VaultSession {
                     Vec::new(),
                     failure,
                     faults,
+                    identities,
                 )?;
                 drop(conn);
                 drop(structural_operation);
@@ -13123,6 +13221,7 @@ impl VaultSession {
                     Vec::new(),
                     structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
                     faults,
+                    identities,
                 )?;
                 drop(conn);
                 drop(structural_operation);
@@ -13206,6 +13305,7 @@ impl VaultSession {
                 Vec::new(),
                 structural_batch_failure(None, BatchFailureStage::Index, error.to_string()),
                 faults,
+                identities,
             )?;
             drop(conn);
             drop(structural_operation);
@@ -13226,6 +13326,7 @@ impl VaultSession {
                 Vec::new(),
                 structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
                 faults,
+                identities,
             )?;
             drop(conn);
             drop(structural_operation);
@@ -13253,6 +13354,7 @@ impl VaultSession {
                     Vec::new(),
                     structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
                     faults,
+                    identities,
                 )?;
                 drop(conn);
                 drop(structural_operation);
@@ -13276,6 +13378,7 @@ impl VaultSession {
                     error.to_string(),
                 ),
                 faults,
+                identities,
             )?;
             drop(conn);
             drop(structural_operation);
@@ -13370,6 +13473,7 @@ impl VaultSession {
                     "inverse link rewrite physical outcome could not be established",
                 ),
                 faults,
+                identities,
             )?;
             drop(conn);
             drop(structural_operation);
@@ -13421,6 +13525,7 @@ impl VaultSession {
                     rewrite_failures,
                     structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
                     faults,
+                    identities,
                 )?;
                 drop(conn);
                 drop(structural_operation);
@@ -14295,7 +14400,8 @@ impl VaultSession {
             path,
             &new_path,
             crate::structural::StructuralOpKind::RenameFolder,
-            true,
+            StructuralRewritePlan::Moved,
+            None,
         )?;
         drop(structural_operation);
         drop(vault_structural_lock);
@@ -14326,6 +14432,24 @@ impl VaultSession {
         &self,
         path: &str,
         new_name: &str,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        self.rename_folder_with_note_checked(path, new_name, None)
+    }
+
+    pub fn rename_folder_with_note_if_identity(
+        &self,
+        path: &str,
+        new_name: &str,
+        expected: &crate::StructuralIdentity,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        self.rename_folder_with_note_checked(path, new_name, Some(expected))
+    }
+
+    fn rename_folder_with_note_checked(
+        &self,
+        path: &str,
+        new_name: &str,
+        expected: Option<&crate::StructuralIdentity>,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
         let structural_operation = self.structural_operation_guard()?;
@@ -14376,6 +14500,20 @@ impl VaultSession {
             indexed
         };
 
+        if let Some(expected) = expected
+            && expected.folder_note.is_some() != note_present
+        {
+            return Err(VaultError::InvalidArgument {
+                message: "Cannot undo or redo: the folder note has changed".into(),
+            });
+        }
+        if let Some(note_identity) = expected.and_then(|identity| identity.folder_note.as_deref())
+            && !self.identity_matches_location(&old_note, Some(note_identity))?
+        {
+            return Err(VaultError::InvalidArgument {
+                message: "Cannot undo or redo: the folder note has changed".into(),
+            });
+        }
         if !note_present {
             // Operation-time truth: no note, no compound — the plain
             // rename, identical semantics and report shape.
@@ -14383,7 +14521,8 @@ impl VaultSession {
                 path,
                 &new_path,
                 crate::structural::StructuralOpKind::RenameFolder,
-                true,
+                StructuralRewritePlan::Moved,
+                expected.map(|identity| identity.entry.as_str()),
             )?;
             drop(structural_operation);
             drop(vault_structural_lock);
@@ -14395,17 +14534,59 @@ impl VaultSession {
             path,
             &new_path,
             crate::structural::StructuralOpKind::RenameFolder,
-            true,
+            if expected.is_some() {
+                StructuralRewritePlan::Skip
+            } else {
+                StructuralRewritePlan::Moved
+            },
+            expected.map(|identity| identity.entry.as_str()),
         )?;
         let first_op_id = first.op_id;
+        let deferred_mapping: Vec<_> = first
+            .moved
+            .iter()
+            .map(|(old, new)| {
+                (
+                    old.clone(),
+                    if *old == old_note {
+                        new_note.clone()
+                    } else {
+                        new.clone()
+                    },
+                )
+            })
+            .collect();
         let second = match self.structural_move_file(
             &interim_note,
             &new_note,
             crate::structural::StructuralOpKind::RenameFile,
-            true,
+            if expected.is_some() {
+                StructuralRewritePlan::Explicit(&deferred_mapping)
+            } else {
+                StructuralRewritePlan::Moved
+            },
+            expected.and_then(|identity| identity.folder_note.as_deref()),
         ) {
             Ok(second) => second,
             Err(step_error) => {
+                if let Some(expected) = expected {
+                    let unchanged_note = self
+                        .identity_matches_location(&interim_note, expected.folder_note.as_deref());
+                    let final_note =
+                        structural_batch_mutation_path_exists(self.provider.as_ref(), &new_note);
+                    if !matches!((unchanged_note, final_note), (Ok(true), Ok(false))) {
+                        // The note hop may have completed its rename and rewrites
+                        // before its journal failed. Do not compensate an unknown
+                        // phase, or rewrite/rename a newly observed replacement.
+                        self.notify_moved(&first);
+                        // A final-path occupant is not proof that our note moved.
+                        // Let the typed outcome drive refresh; never retarget an
+                        // open note to a replacement based on existence alone.
+                        return Err(self.structural_mutation_incomplete(&new_path, format!(
+                            "Files changed at \"{new_path}\", but the folder-note operation could not finish ({step_error}). Review the files and reopen the vault before trying again."
+                        )));
+                    }
+                }
                 // Roll the folder rename back and report the outcome
                 // HONESTLY: a clean rollback restores pre-op state; a
                 // rollback with link-restoration failures says so; a
@@ -14416,7 +14597,12 @@ impl VaultSession {
                     &new_path,
                     path,
                     crate::structural::StructuralOpKind::RenameFolder,
-                    true,
+                    if expected.is_some() {
+                        StructuralRewritePlan::Skip
+                    } else {
+                        StructuralRewritePlan::Moved
+                    },
+                    expected.map(|identity| identity.entry.as_str()),
                 ) {
                     Ok(rollback) => {
                         let residue = rollback.failed.len();
@@ -14437,6 +14623,12 @@ impl VaultSession {
                         Err(VaultError::InvalidArgument { message })
                     }
                     Err(rollback_error) => {
+                        if expected.is_some() {
+                            self.notify_moved(&first);
+                            return Err(self.structural_mutation_incomplete(&new_path, format!(
+                                "The folder-note operation stopped and the folder could not be restored ({step_error}; {rollback_error}). Review \"{new_path}\" and reopen the vault before trying again."
+                            )));
+                        }
                         // The folder DID move; say so and tell listeners.
                         self.notify_moved(&first);
                         Err(VaultError::InvalidArgument {
@@ -14487,6 +14679,24 @@ impl VaultSession {
         path: &str,
         new_parent: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
+        self.move_folder_checked(path, new_parent, None)
+    }
+
+    pub fn move_folder_if_identity(
+        &self,
+        path: &str,
+        new_parent: &str,
+        expected_identity: &str,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        self.move_folder_checked(path, new_parent, Some(expected_identity))
+    }
+
+    fn move_folder_checked(
+        &self,
+        path: &str,
+        new_parent: &str,
+        expected_identity: Option<&str>,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
         let structural_operation = self.structural_operation_guard()?;
         let new_path = child_path(new_parent, leaf_name(path))?;
@@ -14494,7 +14704,8 @@ impl VaultSession {
             path,
             &new_path,
             crate::structural::StructuralOpKind::MoveFolder,
-            true,
+            StructuralRewritePlan::Moved,
+            expected_identity,
         )?;
         drop(structural_operation);
         drop(vault_structural_lock);
@@ -14508,6 +14719,24 @@ impl VaultSession {
         path: &str,
         new_name: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
+        self.rename_file_checked(path, new_name, None)
+    }
+
+    pub fn rename_file_if_identity(
+        &self,
+        path: &str,
+        new_name: &str,
+        expected_identity: &str,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        self.rename_file_checked(path, new_name, Some(expected_identity))
+    }
+
+    fn rename_file_checked(
+        &self,
+        path: &str,
+        new_name: &str,
+        expected_identity: Option<&str>,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
         let structural_operation = self.structural_operation_guard()?;
         let new_path = sibling_path(path, new_name)?;
@@ -14515,7 +14744,8 @@ impl VaultSession {
             path,
             &new_path,
             crate::structural::StructuralOpKind::RenameFile,
-            true,
+            StructuralRewritePlan::Moved,
+            expected_identity,
         )?;
         drop(structural_operation);
         drop(vault_structural_lock);
@@ -14529,6 +14759,24 @@ impl VaultSession {
         path: &str,
         new_parent: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
+        self.move_file_checked(path, new_parent, None)
+    }
+
+    pub fn move_file_if_identity(
+        &self,
+        path: &str,
+        new_parent: &str,
+        expected_identity: &str,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        self.move_file_checked(path, new_parent, Some(expected_identity))
+    }
+
+    fn move_file_checked(
+        &self,
+        path: &str,
+        new_parent: &str,
+        expected_identity: Option<&str>,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
         let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
         let structural_operation = self.structural_operation_guard()?;
         let new_path = child_path(new_parent, leaf_name(path))?;
@@ -14536,7 +14784,8 @@ impl VaultSession {
             path,
             &new_path,
             crate::structural::StructuralOpKind::MoveFile,
-            true,
+            StructuralRewritePlan::Moved,
+            expected_identity,
         )?;
         drop(structural_operation);
         drop(vault_structural_lock);
@@ -14915,12 +15164,22 @@ impl VaultSession {
                     failed: Vec::new(),
                 })?
             }
-            StructuralOpKind::RenameFolder | StructuralOpKind::MoveFolder => {
-                self.structural_move_folder(&payload.to, &payload.from, kind, false)?
-            }
-            StructuralOpKind::RenameFile | StructuralOpKind::MoveFile => {
-                self.structural_move_file(&payload.to, &payload.from, kind, false)?
-            }
+            StructuralOpKind::RenameFolder | StructuralOpKind::MoveFolder => self
+                .structural_move_folder(
+                    &payload.to,
+                    &payload.from,
+                    kind,
+                    StructuralRewritePlan::Skip,
+                    None,
+                )?,
+            StructuralOpKind::RenameFile | StructuralOpKind::MoveFile => self
+                .structural_move_file(
+                    &payload.to,
+                    &payload.from,
+                    kind,
+                    StructuralRewritePlan::Skip,
+                    None,
+                )?,
             StructuralOpKind::MoveBatch => {
                 return Err(VaultError::InvalidArgument {
                     message: "batch moves must be undone with undo_batch_move".into(),
@@ -14978,6 +15237,176 @@ impl VaultSession {
         Ok(report)
     }
 
+    /// Capture before a forward operation. Compound rename captures only the
+    /// indexed folder note that the normal operation would rename.
+    pub fn capture_structural_identity(
+        &self,
+        path: &str,
+        include_folder_note: bool,
+    ) -> Result<crate::StructuralIdentity, VaultError> {
+        validate_save_path(path)?;
+        let _vault_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let _operation = self.structural_operation_guard()?;
+        if !self
+            .structural_history_valid
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(VaultError::InvalidArgument {
+                message: "Structural history is unavailable; reopen the vault".into(),
+            });
+        }
+        let path = self.bind_source_path(path)?;
+        let entry = self.provider.mutation_identity(&path)?;
+        let folder_note = if include_folder_note {
+            let leaf = path.rsplit('/').next().unwrap_or(&path);
+            let note = format!("{path}/{leaf}.md");
+            let conn = self.conn.lock().expect("session connection mutex");
+            ensure_structural_batch_idle(&conn)?;
+            let indexed: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM files WHERE path = ?1)",
+                [&note],
+                |row| row.get(0),
+            )?;
+            if indexed {
+                Some(self.provider.mutation_identity(&note)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Ok(crate::StructuralIdentity { entry, folder_note })
+    }
+
+    pub fn capture_batch_move_identities(
+        &self,
+        items: Vec<crate::StructuralBatchItem>,
+    ) -> Result<std::collections::HashMap<String, String>, VaultError> {
+        let _vault_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let _operation = self.structural_operation_guard()?;
+        if !self
+            .structural_history_valid
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(VaultError::InvalidArgument {
+                message: "Structural history is unavailable; reopen the vault".into(),
+            });
+        }
+        if items.is_empty() || items.len() > crate::MAX_STRUCTURAL_BATCH_ITEMS {
+            return Err(VaultError::InvalidArgument {
+                message: "Invalid identity selection".into(),
+            });
+        }
+        let mut bound = Vec::new();
+        for mut item in items {
+            validate_save_path(&item.path)?;
+            item.path = self.bind_source_path(&item.path)?.into_owned();
+            bound.push(item);
+        }
+        let normalized = crate::structural_batch::normalize_batch_items(bound);
+        if !normalized.failures.is_empty() {
+            return Err(VaultError::InvalidArgument {
+                message: "Invalid identity selection".into(),
+            });
+        }
+        let conn = self.conn.lock().expect("session connection mutex");
+        ensure_structural_batch_idle(&conn)?;
+        normalized
+            .items
+            .into_iter()
+            .map(|item| {
+                Ok((
+                    item.path.clone(),
+                    self.provider.mutation_identity(&item.path)?,
+                ))
+            })
+            .collect()
+    }
+
+    pub fn structural_identities_match(
+        &self,
+        identities: std::collections::HashMap<String, String>,
+    ) -> Result<bool, VaultError> {
+        if identities.is_empty() || identities.len() > crate::MAX_STRUCTURAL_BATCH_ITEMS {
+            return Ok(false);
+        }
+        let _vault_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let _operation = self.structural_operation_guard()?;
+        if !self
+            .structural_history_valid
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(false);
+        }
+
+        for (path, expected) in identities {
+            validate_save_path(&path)?;
+            if !self.identity_matches_location(&path, Some(&expected))? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn identity_matches_location(
+        &self,
+        path: &str,
+        expected: Option<&str>,
+    ) -> Result<bool, VaultError> {
+        if !structural_batch_mutation_path_exists(self.provider.as_ref(), path)? {
+            return Ok(false);
+        }
+        match expected {
+            Some(expected) => {
+                Ok(!expected.is_empty() && self.provider.mutation_identity(path)? == expected)
+            }
+            None => Ok(true),
+        }
+    }
+
+    fn structural_mutation_incomplete(&self, path: &str, message: String) -> VaultError {
+        self.structural_history_valid
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        // Prevent old journal inverses after reopening. If persistence itself is
+        // unavailable, the in-memory flag still refuses further conditional work.
+        if let Ok(conn) = self.conn.lock()
+            && let Ok(tx) = db::begin_fenced(&conn)
+            && journal_append(
+                &tx,
+                crate::structural::StructuralOpKind::RecoveryBarrier,
+                &crate::structural::StructuralOpPayload::default(),
+            )
+            .is_ok()
+        {
+            let _ = tx.commit();
+        }
+        VaultError::StructuralMutationIncomplete {
+            path: path.into(),
+            message,
+        }
+    }
+
+    fn rename_with_identity(
+        &self,
+        from: &str,
+        to: &str,
+        expected: Option<&str>,
+    ) -> Result<(), VaultError> {
+        if expected.is_some()
+            && !self
+                .structural_history_valid
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(VaultError::InvalidArgument {
+                message: "Structural history is unavailable; reopen the vault".into(),
+            });
+        }
+        match expected {
+            Some(expected) => self.provider.rename_if_identity(from, to, expected),
+            None => self.provider.rename(from, to),
+        }
+    }
+
     // ----- internals -----
 
     fn structural_move_folder(
@@ -14985,7 +15414,8 @@ impl VaultSession {
         from: &str,
         to: &str,
         kind: crate::structural::StructuralOpKind,
-        plan_rewrites: bool,
+        plan_rewrites: StructuralRewritePlan<'_>,
+        expected_identity: Option<&str>,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         validate_save_path(from)?;
         validate_save_path(to)?;
@@ -15053,7 +15483,7 @@ impl VaultSession {
         let mut conn = conn;
         let (planted_markers, ()) =
             self.fence_prefix_and_mutate(&mut conn, from, Some(to), || {
-                self.provider.rename(from, to)
+                self.rename_with_identity(from, to, expected_identity)
             })?;
         // The index rewrite uses the FROZEN pre-rename snapshot —
         // never a fresh prefix enumeration (model-confirmation
@@ -15068,6 +15498,7 @@ impl VaultSession {
             moved,
             plan_rewrites,
             planted_markers,
+            expected_identity,
             move |tx, _sink| {
                 rename_prefix_in_index(tx, provider_for_index.as_ref(), from, to, &moved_for_index)
             },
@@ -15079,7 +15510,8 @@ impl VaultSession {
         from: &str,
         to: &str,
         kind: crate::structural::StructuralOpKind,
-        plan_rewrites: bool,
+        plan_rewrites: StructuralRewritePlan<'_>,
+        expected_identity: Option<&str>,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         validate_save_path(from)?;
         validate_save_path(to)?;
@@ -15127,7 +15559,7 @@ impl VaultSession {
         // Round 35: mark both sides before the filesystem mutation —
         // see plant_move_markers_locked.
         let planted_markers = self.plant_move_markers_locked(&conn, [from, to])?;
-        self.provider.rename(from, to)?;
+        self.rename_with_identity(from, to, expected_identity)?;
         let moved = vec![(from.to_string(), to.to_string())];
         self.finish_structural_move(
             conn,
@@ -15137,6 +15569,7 @@ impl VaultSession {
             moved,
             plan_rewrites,
             planted_markers,
+            expected_identity,
             move |tx, sink| {
                 let (name, extension, is_markdown) = classify_path(to);
                 let is_base = extension.as_deref() == Some("base");
@@ -15212,8 +15645,9 @@ impl VaultSession {
         from: &str,
         to: &str,
         moved: Vec<(String, String)>,
-        plan_rewrites: bool,
+        plan_rewrites: StructuralRewritePlan<'_>,
         planted_markers: Vec<(String, i64)>,
+        expected_identity: Option<&str>,
         update_index: impl FnOnce(
             &rusqlite::Transaction,
             &mut crate::graph::GraphOpSink,
@@ -15263,7 +15697,7 @@ impl VaultSession {
             Ok(())
         })();
         if let Err(e) = tx1 {
-            let _ = self.provider.rename(to, from);
+            let rollback = self.rename_with_identity(to, from, expected_identity);
             // Round 39: the failed transaction rolled back its
             // ensure-and-age, but the compensating rename above is
             // one more filesystem mutation — re-assert the marker
@@ -15274,6 +15708,12 @@ impl VaultSession {
             if let Ok(tx) = db::begin_fenced(&conn) {
                 let _ = Self::age_move_markers_in_tx(&tx, &planted_markers)
                     .and_then(|()| tx.commit().map_err(Into::into));
+            }
+            if expected_identity.is_some() && rollback.is_err() {
+                drop(conn);
+                return Err(self.structural_mutation_incomplete(to, format!(
+                    "Files changed at \"{to}\", but the operation could not restore them after an index failure ({e}). Review the files and reopen the vault before trying again."
+                )));
             }
             return Err(e);
         }
@@ -15294,10 +15734,12 @@ impl VaultSession {
         // journal — it must never plan NEW rewrites (the reverse pass would
         // both break byte-identity and invalidate the hash-guarded
         // restores; census-found, seed 0).
-        let (rewritten, failed, rewrite_health) = if plan_rewrites {
-            self.apply_link_rewrites(&mut conn, &moved)
-        } else {
-            (Vec::new(), Vec::new(), LinkRewriteHealth::default())
+        let (rewritten, failed, rewrite_health) = match plan_rewrites {
+            StructuralRewritePlan::Skip => (Vec::new(), Vec::new(), LinkRewriteHealth::default()),
+            StructuralRewritePlan::Moved => self.apply_link_rewrites(&mut conn, &moved),
+            StructuralRewritePlan::Explicit(mapping) => {
+                self.apply_link_rewrites(&mut conn, mapping)
+            }
         };
         if rewrite_health.requires_rescan {
             let mut graph = self.graph.lock().expect("graph index mutex");
@@ -15333,6 +15775,12 @@ impl VaultSession {
         let op_id = match journal_result {
             Ok(id) => id,
             Err(error) => {
+                if expected_identity.is_some() {
+                    drop(conn);
+                    return Err(self.structural_mutation_incomplete(to, format!(
+                        "Files changed at \"{to}\", but their history could not be recorded ({error}). Review the files and reopen the vault before trying again."
+                    )));
+                }
                 if rewrite_health.physical_unknown {
                     self.structural_history_valid
                         .store(false, std::sync::atomic::Ordering::SeqCst);
@@ -20297,6 +20745,9 @@ mod tests {
 
     #[path = "structural_batch.rs"]
     mod structural_batch;
+    #[cfg(windows)]
+    #[path = "structural_identity.rs"]
+    mod structural_identity;
     mod trash_confirmation;
 
     #[path = "link_integrity.rs"]

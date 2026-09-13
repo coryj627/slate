@@ -103,6 +103,27 @@ pub trait VaultProvider: Send + Sync {
     /// Rename or move a file within the vault.
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError>;
 
+    /// File-system-issued identity for a later conditional inverse. Providers
+    /// without a same-handle conditional rename must refuse this capability.
+    fn mutation_identity(&self, _path: &str) -> Result<String, VaultError> {
+        Err(VaultError::Unsupported {
+            feature: "identity-conditional structural inverse".into(),
+        })
+    }
+
+    /// Compare the expected identity and rename the same opened source object.
+    /// Never implement this as stat/check followed by a path-addressed rename.
+    fn rename_if_identity(
+        &self,
+        _from: &str,
+        _to: &str,
+        _expected: &str,
+    ) -> Result<(), VaultError> {
+        Err(VaultError::Unsupported {
+            feature: "identity-conditional structural inverse".into(),
+        })
+    }
+
     /// Best-effort capability probe for a later rename. Batch structural
     /// operations call every probe before their first mutation. This cannot
     /// eliminate ACL/TOCTOU failures; runtime reporting remains authoritative.

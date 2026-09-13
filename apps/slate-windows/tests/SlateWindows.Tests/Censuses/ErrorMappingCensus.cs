@@ -36,6 +36,7 @@ public class ErrorMappingCensus
         "Unsupported",
         "InvalidArgument",
         "TrashConfirmationChanged",
+        "StructuralMutationIncomplete",
         "DestinationExists",
         "WriteConflict",
         "SavedButUnindexed",
@@ -72,6 +73,11 @@ public class ErrorMappingCensus
         AssertArm<VaultException.Unsupported>("Unsupported", ex => Assert.Equal("census feature", ex.feature));
         AssertArm<VaultException.InvalidArgument>("InvalidArgument", ex => Assert.Equal("census argument", ex.message));
         AssertArm<VaultException.TrashConfirmationChanged>("TrashConfirmationChanged", ex => Assert.Equal("census trash confirmation", ex.message));
+        AssertArm<VaultException.StructuralMutationIncomplete>("StructuralMutationIncomplete", ex =>
+        {
+            Assert.Equal("census/structural", ex.path);
+            Assert.Equal("census partial mutation", ex.message);
+        });
         AssertArm<VaultException.DestinationExists>("DestinationExists", ex => Assert.Equal("census/dest.md", ex.path));
         AssertArm<VaultException.WriteConflict>("WriteConflict", ex =>
         {
@@ -111,7 +117,7 @@ public class ErrorMappingCensus
         });
 
         // The pinned list and the synthesized coverage must not drift.
-        Assert.Equal(19, PinnedVaultErrorArms.Length);
+        Assert.Equal(20, PinnedVaultErrorArms.Length);
 
         // Unknown arm names are inert (the fn is a census tool, not a
         // product surface).

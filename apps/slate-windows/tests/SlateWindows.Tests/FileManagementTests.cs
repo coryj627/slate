@@ -1133,6 +1133,74 @@ public sealed class FileManagementTests
     }
 
     [Fact]
+    public async Task BatchUndoRefusesAReplacementWithoutMovingTheOtherSelection()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-batch-identity");
+        File.WriteAllText(Path.Combine(fixture.Root, "one.md"), "original one");
+        File.WriteAllText(Path.Combine(fixture.Root, "two.md"), "original two");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "sub"));
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        Node(rig, "one.md").IsBatchSelected = true;
+        Node(rig, "two.md").IsBatchSelected = true;
+        rig.Sidebar.MoveDestination = "sub";
+        rig.Sidebar.BatchMoveCommand.Execute(null);
+        File.Move(Path.Combine(fixture.Root, "sub/two.md"), Path.Combine(fixture.Root, "original.md"));
+        File.WriteAllText(Path.Combine(fixture.Root, "sub/two.md"), "stranger");
+        rig.Sidebar.UndoStructural();
+        Assert.Equal("stranger", File.ReadAllText(Path.Combine(fixture.Root, "sub/two.md")));
+        Assert.Equal("original one", File.ReadAllText(Path.Combine(fixture.Root, "sub/one.md")));
+        Assert.False(File.Exists(Path.Combine(fixture.Root, "one.md")));
+        Assert.Contains("Can't undo — the files have changed.", announced.OfType<A11yEvent.HostComposed>()
+            .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+    }
+
+    [Fact]
+    public async Task AnOwnFolderNoteRewriteBecomesAHistoryBarrier()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-note-history-barrier");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "Folder"));
+        File.WriteAllText(Path.Combine(fixture.Root, "Folder/Folder.md"), "[[Folder/child]]");
+        File.WriteAllText(Path.Combine(fixture.Root, "Folder/child.md"), "child");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        rig.Sidebar.SelectedNode = Node(rig, "Folder");
+        rig.Sidebar.MutationName = "Renamed";
+        Assert.True(rig.Sidebar.TryRenameSelected());
+        Assert.Equal("[[Renamed/child]]", File.ReadAllText(Path.Combine(fixture.Root, "Renamed/Renamed.md")));
+        announced.Clear();
+        rig.Sidebar.UndoStructural();
+        Assert.Contains("Nothing to undo.", announced.OfType<A11yEvent.HostComposed>()
+            .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, "Folder")));
+    }
+
+    [Fact]
+    public async Task FolderNoteUndoDefersAnInPlaceEditsLinkRewriteAndDiscardsAnInvalidRedo()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-note-deferred-rewrite");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "Folder"));
+        File.WriteAllText(Path.Combine(fixture.Root, "Folder/Folder.md"), "plain note");
+        File.WriteAllText(Path.Combine(fixture.Root, "Folder/child.md"), "child");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        rig.Sidebar.SelectedNode = Node(rig, "Folder");
+        rig.Sidebar.MutationName = "Renamed";
+        Assert.True(rig.Sidebar.TryRenameSelected());
+        File.WriteAllText(Path.Combine(fixture.Root, "Renamed/Renamed.md"), "[[Renamed/child]]");
+        using (var token = new CancelToken()) { session.ScanInitial(token); }
+        rig.Sidebar.UndoStructural();
+        Assert.Equal("[[Folder/child]]", File.ReadAllText(Path.Combine(fixture.Root, "Folder/Folder.md")));
+        announced.Clear();
+        rig.Sidebar.RedoStructural();
+        Assert.Contains("Nothing to redo.", announced.OfType<A11yEvent.HostComposed>()
+            .Select(item => SlateUniffiMethods.A11yRender(item).Text));
+    }
+
+    [Fact]
     public async Task UndoRefusesAReplacementAtTheRecordedPath()
     {
         using FixtureVault fixture = FixtureVault.Create(0, "fm-undo-replacement");

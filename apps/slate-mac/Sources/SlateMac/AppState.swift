@@ -12608,6 +12608,8 @@ final class AppState: ObservableObject {
         case .Io(let m), .Db(let m), .Trash(let m), .InvalidQuery(let m),
             .InvalidArgument(let m), .TrashConfirmationChanged(let m):
             return m
+        case .StructuralMutationIncomplete(_, let message):
+            return message
         case .InvalidPath(let path, let reason):
             return "Invalid path \(path): \(reason)"
         case .Cancelled:
@@ -23743,6 +23745,8 @@ final class AppState: ObservableObject {
     func humanReadable(_ error: VaultError) -> String {
         switch error {
         case .Io(let message), .Db(let message), .Trash(let message):
+            return message
+        case .StructuralMutationIncomplete(_, let message):
             return message
         case .InvalidPath(let path, let reason):
             return "Invalid path \(path): \(reason)"
