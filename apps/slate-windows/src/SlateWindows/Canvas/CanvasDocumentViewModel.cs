@@ -4209,6 +4209,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     internal void RequestGroupRename(string groupId)
     {
         ArgumentNullException.ThrowIfNull(groupId);
+        if (CurrentEditableLoaded is null)
+        {
+            SpeakNotReady();
+            return;
+        }
         GroupRenameRequested?.Invoke(groupId, RowFor(groupId)?.Title ?? "group");
     }
 
@@ -4223,6 +4228,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         if (Selection.Selected is null)
         {
             Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NothingSelected()));
+            return;
+        }
+        if (CurrentEditableLoaded is null)
+        {
+            SpeakNotReady();
             return;
         }
         SetColorRequested?.Invoke();
@@ -4722,6 +4732,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
             return;
         }
+        if (CurrentEditableLoaded is null)
+        {
+            SpeakNotReady();
+            return;
+        }
         ColorMarkedRequested?.Invoke();
     }
 
@@ -4815,6 +4830,11 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         if (_slot.Current.MarkedIntent.Count == 0)
         {
             Speak(new CanvasA11yEvent.CanvasStatus(new CanvasStatusNote.NoMarks()));
+            return;
+        }
+        if (CurrentEditableLoaded is null)
+        {
+            SpeakNotReady();
             return;
         }
         GroupMarkedRequested?.Invoke();
