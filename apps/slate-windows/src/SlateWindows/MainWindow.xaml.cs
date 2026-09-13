@@ -954,6 +954,16 @@ public partial class MainWindow : Window
 
         if (e.Key == Key.Escape
             && modifiers == ModifierKeys.None
+            && OpenModalSurface is null
+            && _viewModel.FileSidebar?.ShowTrashProgress == true)
+        {
+            _viewModel.FileSidebar.CancelTrashCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.Escape
+            && modifiers == ModifierKeys.None
             && _viewModel.QuickSwitcher?.IsOpen != true
             && _viewModel.FileSidebar?.IsImporting == true)
         {

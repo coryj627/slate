@@ -568,6 +568,7 @@
                 <Separator />
                 <MenuItem Header="_Import Files and Folders…" Command="{Binding FileSidebar.ImportCommand}" />
                 <MenuItem Header="_Cancel Import" Command="{Binding FileSidebar.CancelImportCommand}" />
+                <MenuItem Header="Cancel Recycle _Bin Operation" Command="{Binding FileSidebar.CancelTrashCommand}" />
                 <Separator />
                 <MenuItem Header="_Refresh" Command="{Binding FileSidebar.RefreshCommand}" />
                 <MenuItem Header="_Collapse All" Command="{Binding FileSidebar.CollapseAllCommand}" />
@@ -587,6 +588,21 @@
         </Menu>
 
         <StatusBar DockPanel.Dock="Bottom">
+            <StatusBarItem Visibility="{Binding FileSidebar.ShowTrashProgress, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding FileSidebar.TrashStatus}" VerticalAlignment="Center"
+                               TextWrapping="Wrap" MaxWidth="360"
+                               AutomationProperties.AutomationId="TrashProgressStatus" />
+                    <Button Content="Cancel" Margin="8,0,8,0"
+                            Command="{Binding FileSidebar.CancelTrashCommand}"
+                            GotKeyboardFocus="TrashCancel_GotKeyboardFocus"
+                            LostKeyboardFocus="TrashCancel_LostKeyboardFocus"
+                            IsEnabledChanged="TrashCancel_AvailabilityChanged"
+                            IsVisibleChanged="TrashCancel_AvailabilityChanged"
+                            AutomationProperties.AutomationId="CancelTrash"
+                            AutomationProperties.Name="Cancel moving items to the Recycle Bin" />
+                </StackPanel>
+            </StatusBarItem>
             <StatusBarItem>
                 <TextBlock x:Name="StatusTextBlock"
                            AutomationProperties.AutomationId="VaultStatus"
