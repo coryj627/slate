@@ -11,8 +11,10 @@ import XCTest
 final class TrashProgressStripTests: XCTestCase {
     func testHostedPreparingCancelPressDisablesRepeatedCancellation() async throws {
         let model = ProgressFixture(phase: .preparing)
-        let cancelled = expectation(description: "Cancel Trash invokes its callback")
-        let repeated = expectation(description: "Stopping must suppress repeated cancellation")
+        // Standalone expectations are only registered when awaited below. A
+        // discovery error must not also produce unwaited-expectation failures.
+        let cancelled = XCTestExpectation(description: "Cancel Trash invokes its callback")
+        let repeated = XCTestExpectation(description: "Stopping must suppress repeated cancellation")
         repeated.isInverted = true
         let hosted = await host(model: model) {
             model.cancellationCount += 1
@@ -22,14 +24,14 @@ final class TrashProgressStripTests: XCTestCase {
         }
         defer { hosted.window.close() }
 
-        let button = try await cancelButton(in: hosted.view, enabled: true)
+        let button = try await cancelButton(in: hosted.window, enabled: true)
         // AXPress is the real hosted control's click action; SwiftUI need not
         // implement its Button as an NSButton in the NSView subtree.
         XCTAssertTrue(button.accessibilityPerformPress())
         await fulfillment(of: [cancelled], timeout: 30)
         XCTAssertEqual(model.cancellationCount, 1)
 
-        let stoppingButton = try await cancelButton(in: hosted.view, enabled: false)
+        let stoppingButton = try await cancelButton(in: hosted.window, enabled: false)
         _ = stoppingButton.accessibilityPerformPress()
         _ = hosted.window.performKeyEquivalent(with: try commandPeriod(in: hosted.window))
         await fulfillment(of: [repeated], timeout: 0.5)
@@ -39,8 +41,8 @@ final class TrashProgressStripTests: XCTestCase {
 
     func testHostedExecutingCommandPeriodDisablesRepeatedCancellation() async throws {
         let model = ProgressFixture(phase: .executing)
-        let cancelled = expectation(description: "Command-period invokes Cancel Trash")
-        let repeated = expectation(description: "Stopping must suppress repeated cancellation")
+        let cancelled = XCTestExpectation(description: "Command-period invokes Cancel Trash")
+        let repeated = XCTestExpectation(description: "Stopping must suppress repeated cancellation")
         repeated.isInverted = true
         let hosted = await host(model: model) {
             model.cancellationCount += 1
@@ -49,13 +51,13 @@ final class TrashProgressStripTests: XCTestCase {
             else { repeated.fulfill() }
         }
         defer { hosted.window.close() }
-        _ = try await cancelButton(in: hosted.view, enabled: true)
+        _ = try await cancelButton(in: hosted.window, enabled: true)
 
         XCTAssertTrue(hosted.window.performKeyEquivalent(with: try commandPeriod(in: hosted.window)))
         await fulfillment(of: [cancelled], timeout: 30)
         XCTAssertEqual(model.cancellationCount, 1)
 
-        let stoppingButton = try await cancelButton(in: hosted.view, enabled: false)
+        let stoppingButton = try await cancelButton(in: hosted.window, enabled: false)
         _ = hosted.window.performKeyEquivalent(with: try commandPeriod(in: hosted.window))
         _ = stoppingButton.accessibilityPerformPress()
         await fulfillment(of: [repeated], timeout: 0.5)
@@ -110,36 +112,88 @@ final class TrashProgressStripTests: XCTestCase {
         return (view, window, focusProbe)
     }
 
-    private func cancelButton(in view: NSView, enabled: Bool) async throws -> any NSAccessibilityProtocol {
+    private func cancelButton(in window: NSWindow, enabled: Bool) async throws -> AccessibilityButton {
         // SwiftUI publishes its accessibility tree on a later rendering pass.
         // Wait for the actual control state, not a fixed render delay.
         let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        var snapshot: [String] = []
         repeat {
-            view.layoutSubtreeIfNeeded()
+            window.contentView?.layoutSubtreeIfNeeded()
             var visited = Set<ObjectIdentifier>()
-            if let button = firstAccessibilityButton(in: view, visited: &visited),
-                button.isAccessibilityEnabled() == enabled {
-                let names = [button.accessibilityLabel(), button.accessibilityTitle()].compactMap { $0 }
-                XCTAssertTrue(names.contains(String(localized: "Cancel Trash")))
+            snapshot = []
+            if let button = findCancelButton(
+                in: window, enabled: enabled, visited: &visited, snapshot: &snapshot) {
                 return button
             }
             try await Task.sleep(for: .milliseconds(20))
         } while ContinuousClock.now < deadline
-        XCTFail("Hosted Cancel Trash never became \(enabled ? "enabled" : "disabled")")
-        throw HostedControlError.buttonNotReady
+        throw HostedControlError(description:
+            "Hosted Cancel Trash never became \(enabled ? "enabled" : "disabled"); "
+            + "window visible=\(window.isVisible), key=\(window.isKeyWindow), "
+            + "content frame=\(String(describing: window.contentView?.frame)). "
+            + "Accessibility/view snapshot (at most 20 nodes):\n"
+            + snapshot.joined(separator: "\n"))
     }
 
-    private func firstAccessibilityButton(
+    private func findCancelButton(
         in root: Any,
-        visited: inout Set<ObjectIdentifier>
-    ) -> (any NSAccessibilityProtocol)? {
-        guard let element = root as? any NSAccessibilityProtocol,
+        enabled: Bool,
+        visited: inout Set<ObjectIdentifier>,
+        snapshot: inout [String]
+    ) -> AccessibilityButton? {
+        let element = root as AnyObject
+        guard visited.count < 200,
             visited.insert(ObjectIdentifier(element)).inserted else { return nil }
-        if element.accessibilityRole() == .button { return element }
-        for child in element.accessibilityChildren() ?? [] {
-            if let button = firstAccessibilityButton(in: child, visited: &visited) { return button }
+
+        // AppKit explicitly supports accessibility methods without formal
+        // protocol conformance. SwiftUI navigation children only promise the
+        // minimal element protocol, so a full-protocol cast cannot gate a walk.
+        // These optional Objective-C calls dispatch public accessibility APIs.
+        let role = element.accessibilityRole?()
+        let names = [element.accessibilityLabel?(), element.accessibilityTitle?()].compactMap { $0 }
+        let isEnabled = element.isAccessibilityEnabled?()
+        let children = element.accessibilityChildren?() ?? []
+        let navigationChildren = element.accessibilityChildrenInNavigationOrder?() ?? []
+        let subviews: [NSView]
+        if let view = element as? NSView {
+            subviews = view.subviews
+        } else if let window = element as? NSWindow, let content = window.contentView {
+            subviews = [content]
+        } else {
+            subviews = []
+        }
+
+        if snapshot.count < 20 {
+            let typeName = String(String(reflecting: type(of: element)).prefix(96))
+            let name = String(names.joined(separator: " / ").prefix(80))
+            snapshot.append(
+                "\(typeName) role=\(role?.rawValue ?? "nil") name=\(name) "
+                + "enabled=\(String(describing: isEnabled)) "
+                + "protocols=\(element is any NSAccessibilityProtocol)/"
+                + "\(element is any NSAccessibilityElementProtocol)/\(element is any NSAccessibilityButton) "
+                + "children=\(children.count)/\(navigationChildren.count)/\(subviews.count)")
+        }
+        if role == .button, names.contains(String(localized: "Cancel Trash")), isEnabled == enabled {
+            return AccessibilityButton(element: element)
+        }
+
+        // Visit both platform accessibility edges and real native view edges;
+        // SwiftUI can expose either proxies or view-backed controls. Identity
+        // tracking deduplicates overlaps and prevents cycles through wrappers.
+        for child in children + navigationChildren.map({ $0 as Any }) + subviews.map({ $0 as Any }) {
+            if let button = findCancelButton(
+                in: child, enabled: enabled, visited: &visited, snapshot: &snapshot) { return button }
         }
         return nil
+    }
+
+    @MainActor
+    private struct AccessibilityButton {
+        let element: AnyObject
+
+        func accessibilityPerformPress() -> Bool {
+            element.accessibilityPerformPress?() ?? false
+        }
     }
 
     private func commandPeriod(in window: NSWindow) throws -> NSEvent {
@@ -160,5 +214,7 @@ final class TrashProgressStripTests: XCTestCase {
         override var acceptsFirstResponder: Bool { true }
     }
 
-    private enum HostedControlError: Error { case buttonNotReady }
+    private struct HostedControlError: Error, CustomStringConvertible {
+        let description: String
+    }
 }
