@@ -5946,6 +5946,25 @@ public sealed class ShellAccessibilityTests
 
             Keyboard.Type("arch");
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            AutomationElement destinations = WaitForElement(
+                window, "MoveToList", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            AutomationElement? row = destinations.FindFirstDescendant(
+                                automation.ConditionFactory.ByControlType(ControlType.ListItem));
+                            return row?.Properties.HelpText.ValueOrDefault == "Activate to move here.";
+                        }
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "a ready Move-To destination did not expose its activation hint through UIA.");
             PressKey(VirtualKeyShort.ENTER);
             Assert.True(
                 SpinWait.SpinUntil(

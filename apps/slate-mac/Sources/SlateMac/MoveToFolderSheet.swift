@@ -225,7 +225,10 @@ struct MoveToFolderSheet: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .onExitCommand { dismissSheet() }
         .task {
-            allFolders = await appState.loadAllFolders()
+            guard let folders = await Self.loadFoldersForPresentation({
+                await appState.loadAllFolders()
+            }) else { return }
+            allFolders = folders
             isLoading = false
             // Default the highlight to the first offered row so Return works
             // immediately.
@@ -241,6 +244,18 @@ struct MoveToFolderSheet: View {
             if let sel = selection, offered.contains(sel) { return }
             selection = offered.first
         }
+    }
+
+    /// SwiftUI cancels the presentation task on dismissal. The native loader
+    /// may still return a partial result after cancellation; do not publish it
+    /// or reset selection in a sheet that no longer owns that task (C8).
+    @MainActor
+    static func loadFoldersForPresentation(
+        _ load: () async -> [String]
+    ) async -> [String]? {
+        let folders = await load()
+        guard !Task.isCancelled else { return nil }
+        return folders
     }
 
     // MARK: - Header

@@ -382,7 +382,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         SynchronizationContext? treeUiContext = null,
         Func<Action, CancellationToken, Task>? treeWorker = null,
         Func<Action, CancellationToken, Task>? filterWorker = null,
-        Func<Action, CancellationToken, Task>? importWorker = null)
+        Func<Action, CancellationToken, Task>? importWorker = null,
+        Func<Action, CancellationToken, Task>? moveToWorker = null)
     {
         _session = session;
         _announce = announce;
@@ -396,6 +397,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         _runTreeWorker = treeWorker ?? ((work, token) => Task.Run(work, token));
         _runFilterWorker = filterWorker ?? ((work, token) => Task.Run(work, token));
         _runImportWorker = importWorker ?? ((work, token) => Task.Run(work, token));
+        _runMoveToWorker = moveToWorker ?? ((work, token) => Task.Run(work, token));
         _vaultRoot = vaultRoot;
         if (vaultRoot is not null)
         {
@@ -1687,9 +1689,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         .OrderBy(pair => pair.Key, StringComparer.Ordinal)
         .Select(pair => new StructuralBatchItem(pair.Key, pair.Value))];
 
-    private void BatchMove()
+    private void BatchMove() => BatchMove(SelectedBatchItems(), MoveDestination);
+
+    private void BatchMove(StructuralBatchItem[] items, string destination)
     {
-        StructuralBatchItem[] items = SelectedBatchItems();
         if (items.Length == 0)
         {
             return;
@@ -1704,7 +1707,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 {
                     try { identities = _session.CaptureBatchMoveIdentities(items); }
                     catch (VaultException) { /* The move may proceed without undo support. */ }
-                    return _session.BatchMove(new BatchMoveRequest(items, MoveDestination));
+                    return _session.BatchMove(new BatchMoveRequest(items, destination));
                 },
                 out BatchMoveReport report))
             {
@@ -1741,7 +1744,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
             RequestSelectionAt(null);
             Refresh();
-            ReportMutationResult(BatchMoveSummary(report, MoveDestination));
+            ReportMutationResult(BatchMoveSummary(report, destination));
         }
         catch (VaultException exception)
         {

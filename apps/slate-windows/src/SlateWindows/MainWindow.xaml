@@ -3762,11 +3762,22 @@
                                  AutomationProperties.AutomationId="MoveToFilter"
                                  AutomationProperties.Name="Filter folders"
                                  AutomationProperties.HelpText="Type to filter destination folders, or type a new folder name." />
+                        <TextBlock Text="{Binding Status}"
+                                   Margin="0,8,0,0"
+                                   TextWrapping="Wrap"
+                                   AutomationProperties.AutomationId="MoveToStatus" />
                     </StackPanel>
                     <StackPanel DockPanel.Dock="Bottom"
                                 Margin="0,12,0,0"
                                 HorizontalAlignment="Right"
                                 Orientation="Horizontal">
+                        <Button Content="Try again"
+                                Margin="0,0,8,0"
+                                Padding="10,4"
+                                Command="{Binding RetryCommand}"
+                                Visibility="{Binding CanRetry, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                AutomationProperties.AutomationId="MoveToRetry"
+                                AutomationProperties.HelpText="Loads destination folders again, keeping the filter." />
                         <Button x:Name="MoveToCancelButton"
                                 Padding="10,4"
                                 Content="Cancel"
@@ -3792,7 +3803,7 @@
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
-                                <Setter Property="AutomationProperties.HelpText" Value="Activate to move here." />
+                                <Setter Property="AutomationProperties.HelpText" Value="{Binding DataContext.RowHelpText, RelativeSource={RelativeSource AncestorType=ListBox}}" />
                                 <Setter Property="Padding" Value="8,6" />
                             </Style>
                         </ListBox.ItemContainerStyle>

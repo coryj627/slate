@@ -271,6 +271,7 @@ public partial class MainWindow : Window
                 FileSidebar_TreeSelectionRestored;
             _observedFileSidebar.PropertyChanged -= FileSidebar_MoveToSheetChanged;
             _observedFileSidebar.MoveToOpenAdmission = null;
+            _observedFileSidebar.MoveToOwnsModal = null;
         }
 
         _observedFileSidebar = sidebar;
@@ -286,6 +287,8 @@ public partial class MainWindow : Window
             // W5-4 F4: the Move-To sheet's admission and present/
             // dismiss observation (the template sheets' shape).
             sidebar.MoveToOpenAdmission = TryClearTheWayForMoveTo;
+            sidebar.MoveToOwnsModal = () => ReferenceEquals(_observedFileSidebar, sidebar)
+                && OpenModalSurface == ModalSurface.MoveTo;
             sidebar.PropertyChanged += FileSidebar_MoveToSheetChanged;
         }
 

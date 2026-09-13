@@ -440,12 +440,17 @@ enforced by construction, not by review.
   path-based system Trash call. The new token closes the separated host-probe
   contract and coordinates Slate writers; it does not claim atomic exclusion of
   sync clients. Keep #1125 open for that remaining boundary and FR-10.
-- **FR-9 — The Move-To enumeration is synchronous on the UI thread**
-  (codex round 1): the paged walk (50k-folder bound, 1k-row pages)
-  blocks the dispatcher for its duration on a pathologically large or
-  slow vault, FD-7's trade-off extended to a read. Accepted at the
-  recorded bound; an async, cancellable destination loader is the
-  recorded upgrade path, filed at PR time.
+- **FR-9 — Windows Move-To destination loading is asynchronous (#1126).**
+  The admitted picker opens immediately with Loading/Cancel, then receives
+  bounded 1,000-row pages from a cancellable worker, up to 50,000 folders.
+  Filter and selection survive page publication; mutation is enabled only
+  after successful discovery. Failure retains the sheet with Retry/Cancel;
+  reaching the cap is disclosed and does not offer New Folder from a partial
+  inventory. Cancellation, picker replacement and vault shutdown suppress
+  stale rows, focus and announcements. Native work retains a session lease
+  through completion; dispatcher publication holds none. See
+  `36_cancellable_file_management_contracts.md` C6–C8. A stalled OS call can
+  still delay cancellation/drain until that call returns.
 - **FR-10 — Windows identity-conditional inverse (#1125).** The Windows
   host captures filesystem IDs before forward operations. Single-file moves and
   renames, compound folder-note renames, and batch undo/redo pass those IDs into
