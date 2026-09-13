@@ -1035,8 +1035,8 @@ final class FileManagementCommandsTests: XCTestCase {
         let (state, vault) = try await makeVault(files: ["keep.md"])
         await state.createFolder(name: "empty", in: "")?.value
         let nativeStage = state.batchDeleteConfirmationProbeRunner
-        state.batchDeleteConfirmationProbeRunner = { session, request in
-            let staged = try await nativeStage(session, request)
+        state.batchDeleteConfirmationProbeRunner = { session, request, cancel in
+            let staged = try await nativeStage(session, request, cancel)
             try "keep".write(to: vault.appendingPathComponent("empty/late.md"), atomically: true, encoding: .utf8)
             return staged
         }
