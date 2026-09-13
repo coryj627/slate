@@ -21,7 +21,7 @@ public partial class MainWindow
         // KeyBinding still consumes input before Window instance handlers run.
         if (!e.Handled && e.Key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None
             && OpenModalSurface is null && _viewModel.FileSidebar?.ShowTrashProgress == true
-            && _viewModel.Workspace?.ActiveGroup.ActiveTab?.EditorInteractions.ClosePopoverCommand.CanExecute(null) != true)
+            && _viewModel.Workspace?.ActiveGroup.ActiveTab?.EditorInteractions?.ClosePopoverCommand.CanExecute(null) != true)
         {
             _viewModel.FileSidebar.CancelTrashCommand.Execute(null);
             e.Handled = true;

@@ -6013,9 +6013,10 @@ public sealed class ShellAccessibilityTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void TrashCancellation_WhileStructuralLockIsHeld_IsReachableAndPreservesFocus(bool useEscape)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void TrashCancellation_WhileStructuralLockIsHeld_IsReachableAndPreservesFocus(bool useEscape, bool useCanvas)
     {
         string testRoot = Path.Combine(Path.GetTempPath(), $"slate-trash-cancel-{Guid.NewGuid():N}");
         string vaultRoot = Path.Combine(testRoot, "Vault");
@@ -6024,6 +6025,11 @@ public sealed class ShellAccessibilityTests
         File.WriteAllText(Path.Combine(vaultRoot, "keep.md"), "# Keep\n");
         File.WriteAllText(Path.Combine(vaultRoot, "inspect.md"), "# Inspect\n\n![[target]]\n");
         File.WriteAllText(Path.Combine(vaultRoot, "target.md"), "# Target\n");
+        if (useCanvas)
+        {
+            File.Copy(Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
+                Path.Combine(vaultRoot, "sample.canvas"));
+        }
         Process? process = null;
         try
         {
@@ -6052,7 +6058,20 @@ public sealed class ShellAccessibilityTests
             Assert.True(cancel.IsEnabled);
             _ = WaitForElement(window, "TrashProgressStatus", TimeSpan.FromSeconds(10));
             AssertAxeClean(process, "trash-cancellation-progress");
-            if (useEscape)
+            if (useCanvas)
+            {
+                // Canvas tabs have no EditorInteractions coordinator. Escape
+                // must still reach the global cancellation fallback safely.
+                OpenCanvasFromTree(window, automation, "sample");
+                AutomationElement canvas = WaitForElement(window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
+                AutomationElement canvasItem = WaitForTreeItems(automation, canvas, 5)[0];
+                canvasItem.Focus();
+                AssertEventuallyFocused(canvasItem, "The canvas item did not receive focus before cancellation.");
+                cancel.Focus();
+                PressKey(VirtualKeyShort.ESCAPE);
+                AssertEventuallyFocused(canvasItem, "Escape cancellation did not restore canvas focus.");
+            }
+            else if (useEscape)
             {
                 SelectTreeItem(window, automation, "inspect.md");
                 AutomationElement editor = WaitForEditor(window, automation, "inspect.md editor", TimeSpan.FromSeconds(10));
