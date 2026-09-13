@@ -4756,7 +4756,9 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertTrue(progress.contains(".onExitCommand"))
         XCTAssertTrue(progress.contains(".accessibilityHint(Self.cancellationHint)"))
         XCTAssertTrue(progress.contains(".accessibilityHidden(true)"))
-        XCTAssertTrue(TrashProgressStrip.cancellationHint.contains("Completed items remain in Trash"))
+        XCTAssertTrue(progress.contains(
+            "Stops remaining work. The current system operation may finish. Completed items remain in Trash."))
+        XCTAssertFalse(TrashProgressStrip.cancellationHint.isEmpty)
     }
 
     // MARK: - Source helpers
