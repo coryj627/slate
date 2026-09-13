@@ -529,148 +529,143 @@ public sealed partial class ConnectionsLeafTests
     {
         ReRootCell[] cells = [.. ReRootCellsOf()];
         Assert.Equal(ReRootCells, cells.Length);
-        string[] only = (Environment.GetEnvironmentVariable("SLATE_MODEL_ONLY") ?? string.Empty)
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        using var run = new ModelTestRun<ReRootCell>(
+            "reroot", cells, cell => cell.ToString(), cell => cell.Route.ToString(),
+            UnreachableReRoot, ModelShardConfiguration.FromEnvironment());
+        run.AssertInventory(ReRootCells, ReRootUnreachable, ReRootDriven);
         var failures = new List<string>();
-        var unreachable = new List<string>();
-        int driven = 0;
         PumpedDispatcher.Run(() =>
         {
             Fixture? fixture = null;
-            foreach (ReRootCell cell in cells)
+            foreach (var modelCase in run.SelectedCases)
             {
-                if (UnreachableReRoot(cell) is { } reason)
+                run.RunCase(modelCase, timing =>
                 {
-                    unreachable.Add($"{cell}: {reason}");
-                    continue;
-                }
-                if (only.Length > 0 && !only.All(term => cell.ToString().Contains(term, StringComparison.Ordinal)))
-                {
-                    continue;
-                }
-                using GraphVault vault = GraphVault.Copy($"reroot-{driven}");
-                if (cell.Entrance == Entrance.Table && cell.Target == Target.Attachment)
-                {
-                    // W6-2 PR C (C-10): the graph's fresh open re-applies the
-                    // vault's config filters, so the attachment is admitted by
-                    // graph.json BEFORE the host reads it — a view-state write
-                    // in the arrangement was overridden by the open (the T6
-                    // push's app-model failure, TGC-9).
-                    AdmitAttachments(vault.Root);
-                }
-                fixture ??= FixtureOf();
-                var gate = new GateSeam();
-                using Host host = ReRootHost(vault.Root, gate);
-                ReRootDerivation expected = DeriveReRoot(cell, fixture);
-                driven++;
-                int before;
-                try
-                {
-                    ArrangeReRoot(host, cell, fixture, gate);
-                    host.Clear();
-                    before = host.Loads;
-                    DriveReRoot(host, cell);
-                    SettleTheDocuments(host);
-                }
-                catch (Exception failure) when (failure is Xunit.Sdk.XunitException or InvalidOperationException)
-                {
-                    // A state the model cannot arrange or drive is a divergence of
-                    // its own, reported with the rest (the fact still fails).
-                    failures.Add($"{cell}: failed — {failure.Message.ReplaceLineEndings(" ")}");
-                    continue;
-                }
-                int loads = host.Loads - before;
-                string[] timeline =
-                [
-                    .. expected.Timeline.Select(entry => entry == LinePlaceholder
-                        ? expected.Root is { } root ? LineFor(host, root, expected.Depth) : "<no root to report>"
-                        : entry),
-                ];
-                var mismatch = new List<string>();
-                if (loads != expected.Loads)
-                {
-                    mismatch.Add($"loads {loads}, derived {expected.Loads}");
-                }
-                // The depth is the leaf's own and survives a root change (rule
-                // C): derived, never read back from the leaf (IPC-15).
-                if (host.Leaf.Root is not null && host.Leaf.Depth != expected.Depth)
-                {
-                    mismatch.Add($"depth {host.Leaf.Depth}, derived {expected.Depth}");
-                }
-                if (!TimelinesAgree(host.Timeline, timeline, expected.Unordered))
-                {
-                    mismatch.Add($"timeline [{string.Join(" | ", host.Timeline)}], derived [{string.Join(" | ", timeline)}]{(expected.Unordered > 0 ? $" (the last {expected.Unordered} in either order)" : string.Empty)}");
-                }
-                if (!string.Equals(host.Leaf.Root, expected.Root, StringComparison.Ordinal))
-                {
-                    mismatch.Add($"root {host.Leaf.Root ?? "none"}, derived {expected.Root ?? "none"}");
-                }
-                if (host.Leaf.Root is not null && host.Leaf.IsStale)
-                {
-                    mismatch.Add("stale after the route");
-                }
-                if (host.Leaf.InFlight)
-                {
-                    mismatch.Add("a load still in flight after the settle");
-                }
-                ConnectionsLoadState state = expected.Root is null ? ConnectionsLoadState.NoNote : LoadedStateOf(host, expected.Root);
-                if (host.Leaf.Publication.State != state)
-                {
-                    mismatch.Add($"state {host.Leaf.Publication.State}, derived {state}");
-                }
-                if (!string.Equals(host.Leaf.Pin, expected.Mode.Pin, StringComparison.Ordinal))
-                {
-                    mismatch.Add($"pin {host.Leaf.Pin ?? "FOLLOWING"}, derived {expected.Mode.Pin ?? "FOLLOWING"}");
-                }
-                if (!string.Equals(host.Leaf.NoteInView, expected.Mode.NoteInView, StringComparison.Ordinal))
-                {
-                    mismatch.Add($"note in view {host.Leaf.NoteInView ?? "none"}, derived {expected.Mode.NoteInView ?? "none"}");
-                }
-                if (!host.Leaf.BackStack.SequenceEqual(expected.Mode.Stack))
-                {
-                    mismatch.Add($"stack [{StackText(host.Leaf.BackStack)}], derived [{StackText(expected.Mode.Stack)}]");
-                }
-                string? key = host.Workspace.GraphViewStateForTests.SelectedKey;
-                if (!string.Equals(key, expected.Mode.Key, StringComparison.Ordinal))
-                {
-                    mismatch.Add($"key {key ?? "none"}, derived {expected.Mode.Key ?? "none"}");
-                }
-                if (host.Workspace.ConnectionsMountPendingForTests)
-                {
-                    mismatch.Add("a mount still pending after the settle");
-                }
-                string? focus = host.FocusRequests.LastOrDefault();
-                if (!string.Equals(focus, expected.Focus, StringComparison.Ordinal))
-                {
-                    mismatch.Add($"focus {focus ?? "none"}, derived {expected.Focus ?? "none"}");
-                }
-                if (host.FocusRequests.Contains("editor"))
-                {
-                    mismatch.Add("the editor's focus was requested (IGL-3)");
-                }
-                if (cell.Gate == Gate.Clean && gate.Asked > 0)
-                {
-                    mismatch.Add("the dirty gate asked with nothing dirty");
-                }
-                if (cell.Gate != Gate.Clean && gate.Asked == 0 && cell.Route == ReRootRoute.ReRoot && cell.Target != Target.SameRoot && !(cell.Entrance == Entrance.Bases && cell.Root == RootState.Note))
-                {
-                    mismatch.Add("the dirty gate never asked");
-                }
-                if (mismatch.Count > 0)
-                {
-                    string tabs = $" — tabs [{string.Join(", ", host.Workspace.Groups.SelectMany(g => g.Tabs).Select(t => t.Item.Kind + ":" + (t.Path ?? t.Title) + (ReferenceEquals(t, host.Workspace.ActiveGroup.ActiveTab) ? "*" : "")))}]";
-                    failures.Add($"{cell}: {string.Join("; ", mismatch)}{tabs}");
-                }
+                    ReRootCell cell = modelCase.Value;
+                    int driven = modelCase.Ordinal;
+                    using GraphVault vault = GraphVault.Copy($"reroot-{driven - 1}");
+                    if (cell.Entrance == Entrance.Table && cell.Target == Target.Attachment)
+                    {
+                        // W6-2 PR C (C-10): the graph's fresh open re-applies the
+                        // vault's config filters, so the attachment is admitted by
+                        // graph.json BEFORE the host reads it — a view-state write
+                        // in the arrangement was overridden by the open (the T6
+                        // push's app-model failure, TGC-9).
+                        AdmitAttachments(vault.Root);
+                    }
+                    fixture ??= FixtureOf();
+                    var gate = new GateSeam();
+                    timing.Phase("sessionSetup");
+                    using Host host = ReRootHost(vault.Root, gate);
+                    ReRootDerivation expected = DeriveReRoot(cell, fixture);
+                    int before;
+                    try
+                    {
+                        timing.Phase("arrangement");
+                        ArrangeReRoot(host, cell, fixture, gate);
+                        host.Clear();
+                        before = host.Loads;
+                        timing.Phase("drive");
+                        DriveReRoot(host, cell);
+                        timing.Phase("settleAndVerify");
+                        SettleTheDocuments(host);
+                    }
+                    catch (Exception failure) when (failure is Xunit.Sdk.XunitException or InvalidOperationException)
+                    {
+                        // A state the model cannot arrange or drive is a divergence of
+                        // its own, reported with the rest (the fact still fails).
+                        timing.Phase("cleanup");
+                        failures.Add($"{cell}: failed — {failure.Message.ReplaceLineEndings(" ")}");
+                        return;
+                    }
+                    int loads = host.Loads - before;
+                    string[] timeline =
+                    [
+                        .. expected.Timeline.Select(entry => entry == LinePlaceholder
+                            ? expected.Root is { } root ? LineFor(host, root, expected.Depth) : "<no root to report>"
+                            : entry),
+                    ];
+                    var mismatch = new List<string>();
+                    if (loads != expected.Loads)
+                    {
+                        mismatch.Add($"loads {loads}, derived {expected.Loads}");
+                    }
+                    // The depth is the leaf's own and survives a root change (rule
+                    // C): derived, never read back from the leaf (IPC-15).
+                    if (host.Leaf.Root is not null && host.Leaf.Depth != expected.Depth)
+                    {
+                        mismatch.Add($"depth {host.Leaf.Depth}, derived {expected.Depth}");
+                    }
+                    if (!TimelinesAgree(host.Timeline, timeline, expected.Unordered))
+                    {
+                        mismatch.Add($"timeline [{string.Join(" | ", host.Timeline)}], derived [{string.Join(" | ", timeline)}]{(expected.Unordered > 0 ? $" (the last {expected.Unordered} in either order)" : string.Empty)}");
+                    }
+                    if (!string.Equals(host.Leaf.Root, expected.Root, StringComparison.Ordinal))
+                    {
+                        mismatch.Add($"root {host.Leaf.Root ?? "none"}, derived {expected.Root ?? "none"}");
+                    }
+                    if (host.Leaf.Root is not null && host.Leaf.IsStale)
+                    {
+                        mismatch.Add("stale after the route");
+                    }
+                    if (host.Leaf.InFlight)
+                    {
+                        mismatch.Add("a load still in flight after the settle");
+                    }
+                    ConnectionsLoadState state = expected.Root is null ? ConnectionsLoadState.NoNote : LoadedStateOf(host, expected.Root);
+                    if (host.Leaf.Publication.State != state)
+                    {
+                        mismatch.Add($"state {host.Leaf.Publication.State}, derived {state}");
+                    }
+                    if (!string.Equals(host.Leaf.Pin, expected.Mode.Pin, StringComparison.Ordinal))
+                    {
+                        mismatch.Add($"pin {host.Leaf.Pin ?? "FOLLOWING"}, derived {expected.Mode.Pin ?? "FOLLOWING"}");
+                    }
+                    if (!string.Equals(host.Leaf.NoteInView, expected.Mode.NoteInView, StringComparison.Ordinal))
+                    {
+                        mismatch.Add($"note in view {host.Leaf.NoteInView ?? "none"}, derived {expected.Mode.NoteInView ?? "none"}");
+                    }
+                    if (!host.Leaf.BackStack.SequenceEqual(expected.Mode.Stack))
+                    {
+                        mismatch.Add($"stack [{StackText(host.Leaf.BackStack)}], derived [{StackText(expected.Mode.Stack)}]");
+                    }
+                    string? key = host.Workspace.GraphViewStateForTests.SelectedKey;
+                    if (!string.Equals(key, expected.Mode.Key, StringComparison.Ordinal))
+                    {
+                        mismatch.Add($"key {key ?? "none"}, derived {expected.Mode.Key ?? "none"}");
+                    }
+                    if (host.Workspace.ConnectionsMountPendingForTests)
+                    {
+                        mismatch.Add("a mount still pending after the settle");
+                    }
+                    string? focus = host.FocusRequests.LastOrDefault();
+                    if (!string.Equals(focus, expected.Focus, StringComparison.Ordinal))
+                    {
+                        mismatch.Add($"focus {focus ?? "none"}, derived {expected.Focus ?? "none"}");
+                    }
+                    if (host.FocusRequests.Contains("editor"))
+                    {
+                        mismatch.Add("the editor's focus was requested (IGL-3)");
+                    }
+                    if (cell.Gate == Gate.Clean && gate.Asked > 0)
+                    {
+                        mismatch.Add("the dirty gate asked with nothing dirty");
+                    }
+                    if (cell.Gate != Gate.Clean && gate.Asked == 0 && cell.Route == ReRootRoute.ReRoot && cell.Target != Target.SameRoot && !(cell.Entrance == Entrance.Bases && cell.Root == RootState.Note))
+                    {
+                        mismatch.Add("the dirty gate never asked");
+                    }
+                    if (mismatch.Count > 0)
+                    {
+                        string tabs = $" — tabs [{string.Join(", ", host.Workspace.Groups.SelectMany(g => g.Tabs).Select(t => t.Item.Kind + ":" + (t.Path ?? t.Title) + (ReferenceEquals(t, host.Workspace.ActiveGroup.ActiveTab) ? "*" : "")))}]";
+                        failures.Add($"{cell}: {string.Join("; ", mismatch)}{tabs}");
+                    }
+                    timing.Phase("cleanup");
+                    timing.Complete();
+                });
             }
         });
-        Assert.True(failures.Count == 0, $"{failures.Count} of {driven} cells diverge from the model (unreachable {unreachable.Count}):\n{string.Join("\n", failures)}");
-        if (only.Length > 0)
-        {
-            Assert.True(driven > 0, $"the narrowing [{string.Join(", ", only)}] matched no cell");
-            return;
-        }
-        Assert.True(
-            unreachable.Count == ReRootUnreachable && driven == ReRootDriven,
-            $"the model named {unreachable.Count} cells as not states of the system and drove {driven}; pinned {ReRootUnreachable} and {ReRootDriven}");
+        Assert.True(failures.Count == 0, $"{failures.Count} of {run.SelectedCases.Count} cells diverge from the model (unreachable {run.UnreachableCells}):\n{string.Join("\n", failures)}");
+        run.Complete();
     }
 }

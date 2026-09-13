@@ -1020,173 +1020,168 @@ public sealed partial class ConnectionsLeafTests
         Assert.Equal(ComposedRoutes, Enum.GetValues<Composed>().Length);
         ComposedCell[] cells = [.. ComposedCellsOf()];
         Assert.Equal(ComposedCells, cells.Length);
-        string[] only = (Environment.GetEnvironmentVariable("SLATE_MODEL_ONLY") ?? string.Empty)
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        using var run = new ModelTestRun<ComposedCell>(
+            "composed", cells, cell => cell.ToString(), cell => cell.Route.ToString(),
+            UnreachableComposed, ModelShardConfiguration.FromEnvironment());
+        run.AssertInventory(ComposedCells, ComposedUnreachable, ComposedDriven);
         var failures = new List<string>();
-        var unreachable = new List<string>();
-        int driven = 0;
         PumpedDispatcher.Run(() =>
         {
             Fixture? fixture = null;
-            foreach (ComposedCell cell in cells)
+            foreach (var modelCase in run.SelectedCases)
             {
-                if (UnreachableComposed(cell) is { } reason)
+                run.RunCase(modelCase, timing =>
                 {
-                    unreachable.Add($"{cell}: {reason}");
-                    continue;
-                }
-                if (only.Length > 0 && !only.All(term => cell.ToString().Contains(term, StringComparison.Ordinal)))
-                {
-                    continue;
-                }
-                using GraphVault vault = GraphVault.Copy($"composed-{driven}");
-                fixture ??= FixtureOf();
-                var gate = new GateSeam();
-                using Host host = ReRootHost(vault.Root, gate);
-                ComposedDerivation expected = DeriveComposed(cell, fixture);
-                driven++;
-                int before;
-                ParkedFetch? parked = null;
-                string? lineBefore = null;
-                string? pinLineBefore = null;
-                try
-                {
-                    parked = ArrangeComposed(host, cell, fixture, gate);
-                    if (expected.Root is { } rootBefore && SpeaksTheTreeBefore.Contains(cell.Route))
+                    ComposedCell cell = modelCase.Value;
+                    int driven = modelCase.Ordinal;
+                    using GraphVault vault = GraphVault.Copy($"composed-{driven - 1}");
+                    fixture ??= FixtureOf();
+                    var gate = new GateSeam();
+                    timing.Phase("sessionSetup");
+                    using Host host = ReRootHost(vault.Root, gate);
+                    ComposedDerivation expected = DeriveComposed(cell, fixture);
+                    int before;
+                    ParkedFetch? parked = null;
+                    string? lineBefore = null;
+                    string? pinLineBefore = null;
+                    try
                     {
-                        // The tree the parked load fetched: the target's, as it stands
-                        // before the dialog's action.
-                        lineBefore = LineFor(host, rootBefore, expected.Depth);
+                        timing.Phase("arrangement");
+                        parked = ArrangeComposed(host, cell, fixture, gate);
+                        if (expected.Root is { } rootBefore && SpeaksTheTreeBefore.Contains(cell.Route))
+                        {
+                            // The tree the parked load fetched: the target's, as it stands
+                            // before the dialog's action.
+                            lineBefore = LineFor(host, rootBefore, expected.Depth);
+                        }
+                        if (host.Leaf.Pin is { } pinnedBefore)
+                        {
+                            // The pin's own line at the route's depth, before the drive
+                            // (a prior load over the pin released inside Back's open).
+                            pinLineBefore = LineFor(host, pinnedBefore, expected.Depth);
+                        }
+                        host.Clear();
+                        before = host.Loads;
+                        timing.Phase("drive");
+                        parked = DriveComposed(host, cell, gate, parked);
+                        parked?.Gate.Set();
+                        timing.Phase("settleAndVerify");
+                        if (cell.Route is not (Composed.RetirementInDialog or Composed.RetirementInBackDialog))
+                        {
+                            SettleTheDocuments(host);
+                        }
+                        else
+                        {
+                            SettleTheGraph(host);
+                        }
                     }
-                    if (host.Leaf.Pin is { } pinnedBefore)
+                    catch (Exception failure) when (failure is Xunit.Sdk.XunitException or InvalidOperationException)
                     {
-                        // The pin's own line at the route's depth, before the drive
-                        // (a prior load over the pin released inside Back's open).
-                        pinLineBefore = LineFor(host, pinnedBefore, expected.Depth);
+                        timing.Phase("cleanup");
+                        parked?.Gate.Set();
+                        parked?.Dispose();
+                        failures.Add($"{cell}: failed — {failure.Message.ReplaceLineEndings(" ")}");
+                        return;
                     }
-                    host.Clear();
-                    before = host.Loads;
-                    parked = DriveComposed(host, cell, gate, parked);
-                    parked?.Gate.Set();
-                    if (cell.Route is not (Composed.RetirementInDialog or Composed.RetirementInBackDialog))
+                    int loads = host.Loads - before;
+                    string[] timeline =
+                    [
+                        .. expected.Timeline.Select(entry => entry switch
+                        {
+                            LinePlaceholder => lineBefore ?? (expected.Root is { } root ? LineFor(host, root, expected.Depth) : "<no root to report>"),
+                            PinLinePlaceholder => pinLineBefore ?? "<no pin before the route>",
+                            _ => entry,
+                        }),
+                    ];
+                    var mismatch = new List<string>();
+                    if (parked is { TimedOut: true })
                     {
-                        SettleTheDocuments(host);
+                        mismatch.Add("the parked fetch resumed on its own before the route released it");
                     }
-                    else
+                    if (loads != expected.Loads && loads != expected.LoadsOr)
                     {
-                        SettleTheGraph(host);
+                        mismatch.Add($"loads {loads}, derived {expected.Loads}{(expected.LoadsOr is { } alternative ? $" or {alternative}" : string.Empty)}");
                     }
-                }
-                catch (Exception failure) when (failure is Xunit.Sdk.XunitException or InvalidOperationException)
-                {
-                    parked?.Gate.Set();
+                    if (!TimelinesAgree(host.Timeline, timeline, expected.Unordered))
+                    {
+                        mismatch.Add($"timeline [{string.Join(" | ", host.Timeline)}], derived [{string.Join(" | ", timeline)}]");
+                    }
+                    if (!string.Equals(host.Leaf.Root, expected.Root, StringComparison.Ordinal))
+                    {
+                        mismatch.Add($"root {host.Leaf.Root ?? "none"}, derived {expected.Root ?? "none"}");
+                    }
+                    // Every route, the retirements included (IPC-15): a retired leaf
+                    // holds NoNote, nothing in flight, its depth and root retained.
+                    bool retirement = cell.Route is Composed.RetirementInDialog or Composed.RetirementInBackDialog;
+                    if (host.Leaf.IsRetired != retirement)
+                    {
+                        mismatch.Add(retirement ? "the leaf survived its retirement" : "the leaf retired");
+                    }
+                    if (!retirement && host.Leaf.Root is not null && host.Leaf.IsStale)
+                    {
+                        mismatch.Add("stale after the route");
+                    }
+                    if (host.Leaf.InFlight)
+                    {
+                        mismatch.Add("a load still in flight after the settle");
+                    }
+                    if (host.Leaf.Root is not null && host.Leaf.Depth != expected.Depth)
+                    {
+                        mismatch.Add($"depth {host.Leaf.Depth}, derived {expected.Depth}");
+                    }
+                    ConnectionsLoadState state = expected.State ?? (expected.Root is null ? ConnectionsLoadState.NoNote : LoadedStateOf(host, expected.Root));
+                    if (host.Leaf.Publication.State != state)
+                    {
+                        mismatch.Add($"state {host.Leaf.Publication.State}, derived {state}");
+                    }
+                    if (!string.Equals(host.Leaf.Pin, expected.Mode.Pin, StringComparison.Ordinal))
+                    {
+                        mismatch.Add($"pin {host.Leaf.Pin ?? "FOLLOWING"}, derived {expected.Mode.Pin ?? "FOLLOWING"}");
+                    }
+                    if (!string.Equals(host.Leaf.NoteInView, expected.Mode.NoteInView, StringComparison.Ordinal))
+                    {
+                        mismatch.Add($"note in view {host.Leaf.NoteInView ?? "none"}, derived {expected.Mode.NoteInView ?? "none"}");
+                    }
+                    if (!host.Leaf.BackStack.SequenceEqual(expected.Mode.Stack))
+                    {
+                        mismatch.Add($"stack [{StackText(host.Leaf.BackStack)}], derived [{StackText(expected.Mode.Stack)}]");
+                    }
+                    string? key = host.Workspace.GraphViewStateForTests.SelectedKey;
+                    if (!string.Equals(key, expected.Mode.Key, StringComparison.Ordinal))
+                    {
+                        mismatch.Add($"key {key ?? "none"}, derived {expected.Mode.Key ?? "none"}");
+                    }
+                    if (host.Workspace.ConnectionsMountPendingForTests)
+                    {
+                        mismatch.Add("a mount still pending after the settle");
+                    }
+                    string? focus = host.FocusRequests.LastOrDefault();
+                    if (!string.Equals(focus, expected.Focus, StringComparison.Ordinal))
+                    {
+                        mismatch.Add($"focus {focus ?? "none"}, derived {expected.Focus ?? "none"}");
+                    }
+                    if (host.FocusRequests.Contains("editor") != expected.EditorRequested)
+                    {
+                        mismatch.Add(expected.EditorRequested
+                            ? "the pane-focus command's editor request never came"
+                            : "the editor's focus was requested (IGL-3)");
+                    }
+                    if (gate.Asked != expected.Asked)
+                    {
+                        mismatch.Add($"the gate asked {gate.Asked} times, derived {expected.Asked}");
+                    }
+                    if (mismatch.Count > 0)
+                    {
+                        string tabs = $" — tabs [{string.Join(", ", host.Workspace.Groups.SelectMany(g => g.Tabs).Select(t => t.Item.Kind + ":" + (t.Path ?? t.Title) + (ReferenceEquals(t, host.Workspace.ActiveGroup.ActiveTab) ? "*" : "")))}]";
+                        failures.Add($"{cell}: {string.Join("; ", mismatch)}{tabs}");
+                    }
+                    timing.Phase("cleanup");
                     parked?.Dispose();
-                    failures.Add($"{cell}: failed — {failure.Message.ReplaceLineEndings(" ")}");
-                    continue;
-                }
-                int loads = host.Loads - before;
-                string[] timeline =
-                [
-                    .. expected.Timeline.Select(entry => entry switch
-                    {
-                        LinePlaceholder => lineBefore ?? (expected.Root is { } root ? LineFor(host, root, expected.Depth) : "<no root to report>"),
-                        PinLinePlaceholder => pinLineBefore ?? "<no pin before the route>",
-                        _ => entry,
-                    }),
-                ];
-                var mismatch = new List<string>();
-                if (parked is { TimedOut: true })
-                {
-                    mismatch.Add("the parked fetch resumed on its own before the route released it");
-                }
-                if (loads != expected.Loads && loads != expected.LoadsOr)
-                {
-                    mismatch.Add($"loads {loads}, derived {expected.Loads}{(expected.LoadsOr is { } alternative ? $" or {alternative}" : string.Empty)}");
-                }
-                if (!TimelinesAgree(host.Timeline, timeline, expected.Unordered))
-                {
-                    mismatch.Add($"timeline [{string.Join(" | ", host.Timeline)}], derived [{string.Join(" | ", timeline)}]");
-                }
-                if (!string.Equals(host.Leaf.Root, expected.Root, StringComparison.Ordinal))
-                {
-                    mismatch.Add($"root {host.Leaf.Root ?? "none"}, derived {expected.Root ?? "none"}");
-                }
-                // Every route, the retirements included (IPC-15): a retired leaf
-                // holds NoNote, nothing in flight, its depth and root retained.
-                bool retirement = cell.Route is Composed.RetirementInDialog or Composed.RetirementInBackDialog;
-                if (host.Leaf.IsRetired != retirement)
-                {
-                    mismatch.Add(retirement ? "the leaf survived its retirement" : "the leaf retired");
-                }
-                if (!retirement && host.Leaf.Root is not null && host.Leaf.IsStale)
-                {
-                    mismatch.Add("stale after the route");
-                }
-                if (host.Leaf.InFlight)
-                {
-                    mismatch.Add("a load still in flight after the settle");
-                }
-                if (host.Leaf.Root is not null && host.Leaf.Depth != expected.Depth)
-                {
-                    mismatch.Add($"depth {host.Leaf.Depth}, derived {expected.Depth}");
-                }
-                ConnectionsLoadState state = expected.State ?? (expected.Root is null ? ConnectionsLoadState.NoNote : LoadedStateOf(host, expected.Root));
-                if (host.Leaf.Publication.State != state)
-                {
-                    mismatch.Add($"state {host.Leaf.Publication.State}, derived {state}");
-                }
-                if (!string.Equals(host.Leaf.Pin, expected.Mode.Pin, StringComparison.Ordinal))
-                {
-                    mismatch.Add($"pin {host.Leaf.Pin ?? "FOLLOWING"}, derived {expected.Mode.Pin ?? "FOLLOWING"}");
-                }
-                if (!string.Equals(host.Leaf.NoteInView, expected.Mode.NoteInView, StringComparison.Ordinal))
-                {
-                    mismatch.Add($"note in view {host.Leaf.NoteInView ?? "none"}, derived {expected.Mode.NoteInView ?? "none"}");
-                }
-                if (!host.Leaf.BackStack.SequenceEqual(expected.Mode.Stack))
-                {
-                    mismatch.Add($"stack [{StackText(host.Leaf.BackStack)}], derived [{StackText(expected.Mode.Stack)}]");
-                }
-                string? key = host.Workspace.GraphViewStateForTests.SelectedKey;
-                if (!string.Equals(key, expected.Mode.Key, StringComparison.Ordinal))
-                {
-                    mismatch.Add($"key {key ?? "none"}, derived {expected.Mode.Key ?? "none"}");
-                }
-                if (host.Workspace.ConnectionsMountPendingForTests)
-                {
-                    mismatch.Add("a mount still pending after the settle");
-                }
-                string? focus = host.FocusRequests.LastOrDefault();
-                if (!string.Equals(focus, expected.Focus, StringComparison.Ordinal))
-                {
-                    mismatch.Add($"focus {focus ?? "none"}, derived {expected.Focus ?? "none"}");
-                }
-                if (host.FocusRequests.Contains("editor") != expected.EditorRequested)
-                {
-                    mismatch.Add(expected.EditorRequested
-                        ? "the pane-focus command's editor request never came"
-                        : "the editor's focus was requested (IGL-3)");
-                }
-                if (gate.Asked != expected.Asked)
-                {
-                    mismatch.Add($"the gate asked {gate.Asked} times, derived {expected.Asked}");
-                }
-                if (mismatch.Count > 0)
-                {
-                    string tabs = $" — tabs [{string.Join(", ", host.Workspace.Groups.SelectMany(g => g.Tabs).Select(t => t.Item.Kind + ":" + (t.Path ?? t.Title) + (ReferenceEquals(t, host.Workspace.ActiveGroup.ActiveTab) ? "*" : "")))}]";
-                    failures.Add($"{cell}: {string.Join("; ", mismatch)}{tabs}");
-                }
-                parked?.Dispose();
+                    timing.Complete();
+                });
             }
         });
-        Assert.True(failures.Count == 0, $"{failures.Count} of {driven} cells diverge from the model (unreachable {unreachable.Count}):\n{string.Join("\n", failures)}");
-        if (only.Length > 0)
-        {
-            Assert.True(driven > 0, $"the narrowing [{string.Join(", ", only)}] matched no cell");
-            return;
-        }
-        Assert.True(
-            unreachable.Count == ComposedUnreachable && driven == ComposedDriven,
-            $"the model named {unreachable.Count} cells as not states of the system and drove {driven}; pinned {ComposedUnreachable} and {ComposedDriven}");
+        Assert.True(failures.Count == 0, $"{failures.Count} of {run.SelectedCases.Count} cells diverge from the model (unreachable {run.UnreachableCells}):\n{string.Join("\n", failures)}");
+        run.Complete();
     }
 }
