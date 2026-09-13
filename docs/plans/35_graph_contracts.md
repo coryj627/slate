@@ -8755,7 +8755,7 @@ surface's field, panel and state host).
   shared key has precedence and must name a currently shown row; a hidden
   or missing keyed row still yields `NoSelection` (IPG-3). Only when the
   key is absent may readback use the current visible native table row.
-  On a host with no independent current-without-selected row, the sole
+  When no valid independent native seat is available, the sole
   current visible result is an unambiguous fallback. Zero rows or multiple
   rows without a valid current seat yield `NoSelection`; do not invent a
   first-row selection. These reads preserve the existing query-currency,
@@ -8873,7 +8873,8 @@ surface does (`CanvasSurfaceView.cs:1035`, `:1058`); the template's
 IGraphSurfacePresenter: RequestProjectionFocus (Term F1's raise, never
 an immediate `Focus()`), FocusFilterField, DismissTransientRegion,
 ProjectionHasFocus, FilterRegionHasKeys (the field, the count region or
-Clear — IGO-14), IsLive — implemented by `GraphSurfaceView`. ATTACHMENT on every `HandleKey` and on the
+Clear — IGO-14), IsLive, and #1193's ReadTableSeat(document, publication)
+read-only currency query — implemented by `GraphSurfaceView`. ATTACHMENT on every `HandleKey` and on the
 false→true edge of `IsKeyboardFocusWithin`, kept afterwards;
 DETACHMENT (IGN-12): on `Unloaded` — the route a CLOSE takes, since the
 tab's `Dispose` never clears `Graph` (`WorkspaceViewModel.cs:694–702`)
