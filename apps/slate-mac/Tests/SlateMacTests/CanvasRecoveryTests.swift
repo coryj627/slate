@@ -155,6 +155,7 @@ final class CanvasRecoveryTests: XCTestCase {
         state.canvasInspectCard(nodeId: "a")
         let request = try XCTUnwrap(state.canvasCardEditor)
         XCTAssertTrue(request.inspectionOnly)
+        XCTAssertEqual(request.basis, doc.contentHash)
         XCTAssertEqual(request.initialText, "Survived text\nSecond line")
         XCTAssertFalse(state.canvasCommitCardEdit(nodeId: "a", newText: "must not save"))
         XCTAssertEqual(state.canvasCardEditor, request)
