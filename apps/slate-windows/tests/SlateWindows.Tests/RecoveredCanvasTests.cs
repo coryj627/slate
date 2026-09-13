@@ -173,6 +173,40 @@ public sealed class RecoveredCanvasTests : IDisposable
     }
 
     [Fact]
+    public void RecoveredSelectionAndMarksCannotOpenAuthoringPrompts()
+    {
+        CanvasDocumentViewModel document = OpenDocument();
+        int prompts = 0;
+        document.GroupRenameRequested += (_, _) => prompts++;
+        document.SetColorRequested += () => prompts++;
+        document.ColorMarkedRequested += () => prompts++;
+        document.GroupMarkedRequested += () => prompts++;
+        document.SeatSelectionSilently("recovered-group");
+        document.ToggleMark();
+        document.AnnouncerForTests.FlushForTests();
+        _announced.Clear();
+
+        document.RequestGroupRenameForSelection();
+        document.RequestSetColor();
+        document.RequestColorMarked();
+        document.RequestGroupMarked();
+        document.AnnouncerForTests.FlushForTests();
+
+        Assert.Equal(0, prompts);
+        Assert.Equal(4, _announced.Count);
+        Assert.All(_announced, line => Assert.Equal(ReadOnlyRefusal, line.Text));
+        Assert.Equal(_recovered, File.ReadAllText(CanvasPath));
+
+        RepairFile();
+        document.Load();
+        document.RequestGroupRenameForSelection();
+        document.RequestSetColor();
+        document.RequestColorMarked();
+        document.RequestGroupMarked();
+        Assert.Equal(4, prompts);
+    }
+
+    [Fact]
     public void FreshInspectionCannotWriteEvenAfterTheDocumentIsRepaired()
     {
         CanvasDocumentViewModel document = OpenDocument();
@@ -221,6 +255,31 @@ public sealed class RecoveredCanvasTests : IDisposable
         Assert.Equal(_recovered, File.ReadAllText(CanvasPath));
         document.AnnouncerForTests.FlushForTests();
         Assert.Equal(ReadOnlyRefusal, Assert.Single(_announced).Text);
+    }
+
+    [Fact]
+    public void ADirtyDraftSurvivesMutationAdmissionRefusalAndCanRetry()
+    {
+        RepairFile();
+        CanvasDocumentViewModel document = OpenDocument();
+        document.SeatSelectionSilently("recovered-text");
+        CanvasCardEditorViewModel editor = Assert.IsType<CanvasCardEditorViewModel>(
+            document.OpenCardEditor("recovered-text"));
+        editor.Draft = "Retained until authoring is admitted";
+        string source = File.ReadAllText(CanvasPath);
+        int epoch = document.UndoStack.Epoch;
+        document.Navigator.EnterMoveMode();
+
+        Assert.False(document.IsReadOnly);
+        Assert.False(editor.CommitOnEscape());
+        Assert.Equal("Retained until authoring is admitted", editor.Draft);
+        Assert.Equal(source, File.ReadAllText(CanvasPath));
+        Assert.Equal(epoch, document.UndoStack.Epoch);
+
+        document.Navigator.CancelMode();
+        Assert.True(editor.CommitOnEscape());
+        Assert.Equal(editor.Draft, document.NodeTextOf("recovered-text"));
+        Assert.NotNull(document.UndoStack.OfferedUndo);
     }
 
     [Fact]
