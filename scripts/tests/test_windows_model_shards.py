@@ -119,6 +119,14 @@ class ModelShardVerificationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             verifier.verify([path], shard_count=2)
 
+    def test_inconsistent_phase_sum_fails_but_rounding_noise_passes(self):
+        route = self.reports[0]["routes"][0]
+        route["phases"]["drive"] += 1
+        with self.assertRaisesRegex(ValueError, "phase timings"):
+            self.verify()
+        route["phases"]["drive"] = 950 + 1e-9
+        self.verify()
+
     def test_invalid_shard_count_fails(self):
         for count in (0, -1, True):
             with self.subTest(count=count), self.assertRaises(ValueError):

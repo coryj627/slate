@@ -87,6 +87,11 @@ def verify(paths, shard_count):
             for phase, elapsed in phases.items():
                 require(type(phase) is str and phase, f"{label}/{name}: invalid phase name")
                 milliseconds(elapsed, f"{label}/{name}/{phase}")
+            # C# accumulates per-phase and per-case doubles separately. Allow
+            # floating-point summation noise, not a missing or inflated phase.
+            require(math.isclose(sum(phases.values()), route["elapsedMilliseconds"],
+                                 rel_tol=1e-9, abs_tol=1e-6),
+                    f"{label}/{name}: phase timings do not sum to elapsedMilliseconds")
         require(route_cases == len(expected_ordinals), f"{label}: route counts do not cover the partition")
         reports[key] = report
 
