@@ -568,7 +568,6 @@
                 <Separator />
                 <MenuItem Header="_Import Files and Folders…" Command="{Binding FileSidebar.ImportCommand}" />
                 <MenuItem Header="_Cancel Import" Command="{Binding FileSidebar.CancelImportCommand}" />
-                <MenuItem Header="Cancel Recycle _Bin Operation" Command="{Binding FileSidebar.CancelTrashCommand}" />
                 <Separator />
                 <MenuItem Header="_Refresh" Command="{Binding FileSidebar.RefreshCommand}" />
                 <MenuItem Header="_Collapse All" Command="{Binding FileSidebar.CollapseAllCommand}" />
