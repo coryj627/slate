@@ -22,8 +22,9 @@ extension CancelImportCommandContract {
 /// works globally; "Open Vault…" itself lives on ⇧⌘O.
 /// Rounds 31–32: quit fence. Queued sidebar-organization writes and
 /// in-flight structural operations are the user's committed intent —
-/// normal termination waits for both to settle (bounded at five
-/// seconds) instead of killing them mid-flight. Durable cross-launch
+/// normal termination waits for sidebar writes for up to five seconds.
+/// Admitted Trash work is cancelled cooperatively and drained without a
+/// deadline, because an OS operation may still be changing files. Durable cross-launch
 /// recovery of writes that already FAILED is tracked in #944.
 final class SlateAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(

@@ -53,6 +53,7 @@ internal sealed partial class FilesSidebarViewModel
         Task childExpansions = CancelChildExpansionsAndGetCompletion();
         CancelExpandLoaded();
         CancelImport();
+        CancelTrash();
         return new SidebarSessionShutdown(sessionWork, treeRefresh, filter, childExpansions);
     }
 

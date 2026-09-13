@@ -232,6 +232,11 @@ struct MainSplitView: View {
     /// Files sidebar is hidden, so their feedback belongs to the window shell.
     @ViewBuilder private var windowStructuralStatusSurface: some View {
         VStack(spacing: 0) {
+            if let progress = appState.trashProgress {
+                TrashProgressStrip(progress: progress) {
+                    appState.requestTrashCancellation(id: progress.id)
+                }
+            }
             sidebarActionBackgroundProgress
             sidebarActionBackgroundFailure
             batchTrashQuarantineRecovery

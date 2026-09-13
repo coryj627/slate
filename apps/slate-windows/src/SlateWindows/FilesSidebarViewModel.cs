@@ -480,6 +480,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             _ => _importCompletion = ImportAsync(),
             () => !IsImporting && !IsTrashing);
         CancelImportCommand = new RelayCommand(_ => CancelImport(), _ => IsImporting);
+        CancelTrashCommand = new RelayCommand(_ => CancelTrash(), _ => CanCancelTrash);
         ClearRecentsCommand = new RelayCommand(_ => ClearRecents(), _ => _recents.Count > 0);
         CollapseAllCommand = new RelayCommand(_ => CollapseAll(), _ => true);
         ExpandLoadedCommand = new AsyncRelayCommand(
@@ -1412,28 +1413,30 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return;
         }
 
-        IsTrashing = true;
-        BeginStructuralResult();
+        TrashWorkOwner owner = BeginTrash();
+        StagedTrash? staged = null;
         try
         {
-            StagedTrash staged = await RunTrashWorkAsync(() => _session.StageTrash(
-                new BatchTrashRequest([new StructuralBatchItem(node.Path, node.IsDirectory)])));
+            staged = await PrepareTrashAsync(
+                new BatchTrashRequest([new StructuralBatchItem(node.Path, node.IsDirectory)]), owner);
             if (SessionShutdownStarted) { return; }
             TrashStagedForTesting?.Invoke(staged);
+            if (owner.CancellationRequested) { throw new OperationCanceledException(); }
             StagedTrashItem entry = staged.Items[0];
-            if (node.IsDirectory && entry.ItemCount > 0 && !ConfirmRecycle((
+            if (node.IsDirectory && entry.ItemCount > 0 && !ConfirmTrash(ref owner, (
                 RecycleBinCopy.SingleFolderTitle(node.DisplayName),
                 RecycleBinCopy.SingleFolderMessage(node.DisplayName, checked((int)entry.ItemCount)))))
             {
                 return;
             }
             if (SessionShutdownStarted) { return; }
+            SetTrashPhase(TrashPhase.Executing);
             await RunTrashWorkAsync(() =>
             {
-                if (node.IsDirectory) { _session.DeleteFolderStaged(entry.Item.Path, staged.Token); }
-                else { _session.DeleteFileStaged(entry.Item.Path, staged.Token); }
+                if (node.IsDirectory) { _session.DeleteFolderStagedCancellable(entry.Item.Path, staged.Token, owner.Token); }
+                else { _session.DeleteFileStagedCancellable(entry.Item.Path, staged.Token, owner.Token); }
                 return true;
-            });
+            }, owner);
             if (SessionShutdownStarted) { return; }
 
             TransformStoredPaths(node.Path, node.Path, node.IsDirectory, deleted: true);
@@ -1452,12 +1455,19 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             Refresh();
             ReportMutationResult($"Moved {node.DisplayName} to the Recycle Bin.");
         }
-        catch (OperationCanceledException) when (SessionShutdownStarted) { }
+        catch (OperationCanceledException)
+        {
+            if (!SessionShutdownStarted) { ReportMutationResult("Cancelled. No items were moved to the Recycle Bin."); }
+        }
+        catch (VaultException.Cancelled)
+        {
+            if (!SessionShutdownStarted) { ReportMutationResult("Cancelled. No items were moved to the Recycle Bin."); }
+        }
         catch (VaultException exception)
         {
             if (!SessionShutdownStarted) { ReportFailure($"Delete failed: {exception.Message}"); }
         }
-        finally { IsTrashing = false; }
+        finally { EndTrash(owner, staged); }
     }
 
     private void CreateFolderNote()
@@ -1743,24 +1753,25 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     {
         StructuralBatchItem[] items = SelectedBatchItems();
         if (IsTrashing || SessionShutdownStarted || items.Length == 0) { return; }
-        IsTrashing = true;
-        BeginStructuralResult();
+        TrashWorkOwner owner = BeginTrash();
+        StagedTrash? staged = null;
         try
         {
-            StagedTrash staged = await RunTrashWorkAsync(() =>
-                _session.StageTrash(new BatchTrashRequest(items)));
+            staged = await PrepareTrashAsync(new BatchTrashRequest(items), owner);
             if (SessionShutdownStarted) { return; }
             TrashStagedForTesting?.Invoke(staged);
+            if (owner.CancellationRequested) { throw new OperationCanceledException(); }
             int nonEmptyFolders = staged.Items.Count(entry => entry.Item.IsDirectory && entry.ItemCount > 0);
-            if (nonEmptyFolders > 0 && !ConfirmRecycle((
+            if (nonEmptyFolders > 0 && !ConfirmTrash(ref owner, (
                 RecycleBinCopy.BatchTitle(staged.Items.Length),
                 RecycleBinCopy.BatchMessage(staged.Items.Length, nonEmptyFolders))))
             {
                 return;
             }
             if (SessionShutdownStarted) { return; }
-            BatchTrashReport report = await RunTrashWorkAsync(() => _session.BatchTrashStaged(
-                new BatchTrashRequest(staged.Items.Select(entry => entry.Item).ToArray()), staged.Token));
+            SetTrashPhase(TrashPhase.Executing);
+            BatchTrashReport report = await RunTrashWorkAsync(() => _session.BatchTrashStagedCancellable(
+                new BatchTrashRequest(staged.Items.Select(entry => entry.Item).ToArray()), staged.Token, owner.Token), owner);
             if (SessionShutdownStarted) { return; }
 
             foreach (StructuralBatchItem item in report.Trashed)
@@ -1768,8 +1779,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 TransformStoredPaths(item.Path, item.Path, item.IsDirectory, deleted: true);
             }
 
-            // W5-4 F10: trash is not undoable AND a history barrier.
-            StructuralHistoryBarrier();
+            // A clean pre-attempt cancellation leaves structural history intact.
+            if (report.Trashed.Length > 0 || report.Unknown.Length > 0
+                || report.RequiresRescan || report.BookkeepingFailures.Length > 0)
+            {
+                StructuralHistoryBarrier();
+            }
             FileTreeNodeViewModel? selected = SelectedNode;
             if (selected is null || report.Trashed.Any(item =>
                 selected.Path == item.Path || (item.IsDirectory &&
@@ -1780,12 +1795,19 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             Refresh();
             ReportMutationResult(BatchTrashSummary(report));
         }
-        catch (OperationCanceledException) when (SessionShutdownStarted) { }
+        catch (OperationCanceledException)
+        {
+            if (!SessionShutdownStarted) { ReportMutationResult("Cancelled. No items were moved to the Recycle Bin."); }
+        }
+        catch (VaultException.Cancelled)
+        {
+            if (!SessionShutdownStarted) { ReportMutationResult("Cancelled. No items were moved to the Recycle Bin."); }
+        }
         catch (VaultException exception)
         {
             if (!SessionShutdownStarted) { ReportFailure($"Trash failed: {exception.Message}"); }
         }
-        finally { IsTrashing = false; }
+        finally { EndTrash(owner, staged); }
     }
 
     private static string BatchMoveSummary(BatchMoveReport report, string destination)
@@ -1809,7 +1831,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         };
     }
 
-    private static string BatchTrashSummary(BatchTrashReport report)
+    internal static string BatchTrashSummary(BatchTrashReport report)
     {
         string Count(int count) => $"{count:N0} {(count == 1 ? "item" : "items")}";
         int total = Math.Max(
@@ -1818,7 +1840,18 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         string UnknownSentence() =>
             $"Couldn’t verify whether {Count(report.Unknown.Length)} moved to the Recycle Bin."
             + (report.RequiresRescan ? " Rescan required." : string.Empty);
-        return report.State switch
+        string bookkeepingWarning = report.BookkeepingFailures.Length > 0
+            ? " Some changes could not be recorded safely." : string.Empty;
+        if (report.Untrashed.Any(item => item.Failure.Stage == BatchFailureStage.Cancelled))
+        {
+            return $"Stopped. Moved {report.Trashed.Length:N0} of {Count(total)} to the Recycle Bin."
+                + $" {Count(report.Untrashed.Length)} "
+                + (report.Untrashed.Length == 1 ? "was" : "were") + " not moved."
+                + (report.Unknown.Length > 0 ? " " + UnknownSentence() : string.Empty)
+                + (report.RequiresRescan && report.Unknown.Length == 0 ? " Rescan required." : string.Empty)
+                + bookkeepingWarning;
+        }
+        return (report.State switch
         {
             BatchTrashState.Rejected when report.Unknown.Length > 0 =>
                 "Couldn’t start moving the selected items to the Recycle Bin. " + UnknownSentence(),
@@ -1852,7 +1885,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 $"Couldn’t move {Count(total)} to the Recycle Bin.",
             _ => $"Moved {report.Trashed.Length:N0} of {Count(total)} to the Recycle Bin, "
                 + "but the operation did not finish safely.",
-        };
+        }) + bookkeepingWarning;
     }
 
     private void RequestOpen(string path)
@@ -2243,5 +2276,6 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         ((AsyncRelayCommand)ImportCommand).RaiseCanExecuteChanged();
         ((RelayCommand)CancelImportCommand).RaiseCanExecuteChanged();
+        ((RelayCommand)CancelTrashCommand).RaiseCanExecuteChanged();
     }
 }

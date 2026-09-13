@@ -1174,6 +1174,16 @@ final class AppState: ObservableObject {
         }
 
         static func announcement(for report: BatchTrashReport) -> String {
+            let wasCancelled = report.untrashed.contains { $0.failure.stage == .cancelled }
+            if wasCancelled, report.unknown.isEmpty, report.bookkeepingFailures.isEmpty {
+                let suffix = report.requiresRescan ? " Rescan required." : ""
+                if report.trashed.isEmpty {
+                    return "Trash stopped. Nothing was moved to Trash." + suffix
+                }
+                return "Trash stopped. Moved \(countText(report.trashed.count)) to Trash. "
+                    + "\(countText(report.untrashed.count)) \(CountCopy.verb(report.untrashed.count, "was", "were")) not moved."
+                    + suffix
+            }
             switch report.state {
             case .rejected:
                 if !report.unknown.isEmpty {
@@ -1615,7 +1625,11 @@ final class AppState: ObservableObject {
     typealias BatchTrashRunner =
         @Sendable (VaultSession, BatchTrashRequest) async throws -> BatchTrashReport
     typealias BatchDeleteConfirmationProbeRunner =
-        @Sendable (VaultSession, BatchTrashRequest) async throws -> StagedTrash
+        @Sendable (VaultSession, BatchTrashRequest, CancelToken) async throws -> StagedTrash
+    typealias CancellableBatchTrashRunner =
+        @Sendable (VaultSession, BatchTrashRequest, UInt64, CancelToken) async throws -> BatchTrashReport
+    typealias CancellableSingleTrashRunner =
+        @Sendable (VaultSession, String, Bool, UInt64, CancelToken) async throws -> Void
     typealias BatchTrashPresenceProbeRunner =
         @Sendable (URL, Bool) -> BatchTrashPhysicalPresence
     typealias BatchUndoMoveRunner =
@@ -1638,15 +1652,29 @@ final class AppState: ObservableObject {
     /// Optional executor override for deterministic landing tests. Production
     /// uses the confirmed core token in performBatchTrash.
     var batchTrashRunner: BatchTrashRunner?
+    var cancellableBatchTrashRunner: CancellableBatchTrashRunner = { session, request, token, cancel in
+        try await Task.detached(priority: .userInitiated) {
+            try session.batchTrashStagedCancellable(request: request, token: token, cancel: cancel)
+        }.value
+    }
+    var cancellableSingleTrashRunner: CancellableSingleTrashRunner = { session, path, isDirectory, token, cancel in
+        try await Task.detached(priority: .userInitiated) {
+            if isDirectory {
+                try session.deleteFolderStagedCancellable(path: path, token: token, cancel: cancel)
+            } else {
+                try session.deleteFileStagedCancellable(path: path, token: token, cancel: cancel)
+            }
+        }.value
+    }
     var batchTrashPresenceProbeRunner: BatchTrashPresenceProbeRunner = {
         url, expectedIsDirectory in
         AppState.batchTrashPhysicalPresence(
             at: url, expectedIsDirectory: expectedIsDirectory)
     }
     var batchDeleteConfirmationProbeRunner: BatchDeleteConfirmationProbeRunner = {
-        session, request in
+        session, request, cancel in
         try await Task.detached(priority: .userInitiated) {
-            try session.stageTrash(request: request)
+            try session.stageTrashCancellable(request: request, cancel: cancel)
         }.value
     }
     var batchUndoMoveRunner: BatchUndoMoveRunner = { session, opID in
@@ -5095,21 +5123,31 @@ final class AppState: ObservableObject {
     @MainActor static var hasPendingSidebarWorkAtTermination: Bool {
         !sidebarStoreWriterChains.isEmpty
             || structuralMutationInFlightForTermination
+            || !outstandingTrashOwners.isEmpty
     }
 
-    /// Rounds 31–32: await quiescence with an unconditionally REAL
-    /// five-second bound. Deadline-based polling never awaits an
-    /// unbounded chain value (a writer wedged on the store's blocking
-    /// flock must not turn Quit into a hang) — chains retire their own
-    /// registry entries, so an empty registry IS settlement. Parked
+    /// Rounds 31–32: sidebar persistence retains its five-second bound.
+    /// Admitted Trash workers are signalled and drained without a deadline;
+    /// closing the visible vault never makes active physical work disappear.
+    /// Registry entries retire only after native calls and result handling. Parked
     /// retained writes whose vault is closed are not recoverable at
     /// quit; durable cross-launch recovery is tracked in #944.
     @MainActor
-    static func settleSidebarWriterChainsForTermination() async {
+    static func settleSidebarWriterChainsForTermination(sidebarTimeout: Duration = .seconds(5)) async {
+        trashTerminationDrainInProgress = true
+        defer { trashTerminationDrainInProgress = false }
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(5))
-        while clock.now < deadline, hasPendingSidebarWorkAtTermination {
-            try? await Task.sleep(for: .milliseconds(50))
+        let deadline = clock.now.advanced(by: sidebarTimeout)
+        // Cooperative cancellation never abandons a native Trash worker at the
+        // older sidebar-writer deadline. A stalled OS operation can delay Quit.
+        for owner in outstandingTrashOwners.values { owner.requestCancellation() }
+        while !outstandingTrashOwners.isEmpty
+            || (clock.now < deadline && hasPendingSidebarWorkAtTermination) {
+            // A cancelled caller must still yield so the owners can retire.
+            // The independent timer is not cancelled with the drain task.
+            await Task.detached(priority: .utility) {
+                try? await Task.sleep(for: .milliseconds(50))
+            }.value
         }
     }
 
@@ -14958,6 +14996,9 @@ final class AppState: ObservableObject {
         "Wait for the current property update to finish."
 
     private var sidebarValidationIndependentStructuralMutationDisabledReason: String? {
+        if Self.trashTerminationDrainInProgress {
+            return "Slate is stopping file operations before quitting."
+        }
         if isSaving { return Self.saveInProgressReason }
         if isEditingProperty { return Self.propertyEditInProgressReason }
         if !propertyPublicationUncertainties.isEmpty {
@@ -16225,6 +16266,18 @@ final class AppState: ObservableObject {
     /// flag itself un-wedges the new vault (the stale task's own session guard
     /// returns before its release, so nothing else clears it).
     private func cancelStructuralMutationOwnership() {
+        // Revoke presentation before signalling native cancellation: its
+        // synchronous callback must not announce Stopping for a departing vault.
+        // The outstanding owner still retains the session and Quit fence until
+        // its native work and result handling drain.
+        let departingTrashOwner = currentTrashOwner
+        currentTrashOwner = nil
+        trashProgress = nil
+        if lastMutationAnnouncement != nil {
+            lastMutationAnnouncement = nil
+        }
+        departingTrashOwner?.requestCancellation()
+        discardPendingTrashConfirmations()
         structuralMutationToken &+= 1
         activeStructuralRecoveryReservation = nil
         isMutatingStructure = false
@@ -18206,6 +18259,115 @@ final class AppState: ObservableObject {
         caseInsensitive ? (a.compare(b, options: .caseInsensitive) == .orderedSame) : (a == b)
     }
 
+    // MARK: - Cancellable Trash ownership
+
+    enum TrashWorkPhase: Equatable {
+        case preparing
+        case executing
+        case stopping
+
+        var title: String {
+            switch self {
+            case .preparing: return "Preparing Trash…"
+            case .executing: return "Moving items to Trash…"
+            case .stopping: return "Stopping Trash…"
+            }
+        }
+    }
+
+    struct TrashProgress: Equatable, Identifiable {
+        let id: UUID
+        var phase: TrashWorkPhase
+    }
+
+    /// Retained independently of the visible vault until native work and its
+    /// result handling drain. Closing a vault must not remove the Quit fence.
+    @MainActor
+    final class TrashWorkOwner {
+        let id = UUID()
+        let session: VaultSession
+        let mutationToken: Int
+        let cancel = CancelToken()
+        var cancellationRequested = false
+        var cancellationDidChange: (() -> Void)?
+
+        init(session: VaultSession, mutationToken: Int) {
+            self.session = session
+            self.mutationToken = mutationToken
+        }
+
+        @discardableResult
+        func requestCancellation() -> Bool {
+            guard !cancellationRequested else { return false }
+            cancellationRequested = true
+            cancel.cancel()
+            cancellationDidChange?()
+            return true
+        }
+    }
+
+    private static var outstandingTrashOwners: [UUID: TrashWorkOwner] = [:]
+    private static var trashTerminationDrainInProgress = false
+    private var currentTrashOwner: TrashWorkOwner?
+    @Published private(set) var trashProgress: TrashProgress?
+    static var hasOutstandingTrashWorkForTermination: Bool { !outstandingTrashOwners.isEmpty }
+
+    private func beginTrashWork(session: VaultSession) -> TrashWorkOwner {
+        let owner = TrashWorkOwner(session: session, mutationToken: beginStructuralMutation())
+        currentTrashOwner = owner
+        Self.outstandingTrashOwners[owner.id] = owner
+        owner.cancellationDidChange = { [weak self, weak owner] in
+            guard let self, let owner, self.ownsTrashWork(owner) else { return }
+            self.trashProgress = TrashProgress(id: owner.id, phase: .stopping)
+            self.postMutationAnnouncement("Stopping Trash. The current system operation may finish. Completed items remain in Trash.")
+        }
+        trashProgress = TrashProgress(id: owner.id, phase: .preparing)
+        postMutationAnnouncement(TrashWorkPhase.preparing.title)
+        return owner
+    }
+
+    private func ownsTrashWork(_ owner: TrashWorkOwner) -> Bool {
+        currentTrashOwner === owner
+            && ownsStructuralMutation(owner.mutationToken, session: owner.session)
+    }
+
+    private func executeTrashWork(_ owner: TrashWorkOwner) {
+        guard ownsTrashWork(owner), !owner.cancellationRequested else { return }
+        trashProgress = TrashProgress(id: owner.id, phase: .executing)
+        postMutationAnnouncement(TrashWorkPhase.executing.title)
+    }
+
+    private func finishTrashWork(_ owner: TrashWorkOwner) {
+        Self.outstandingTrashOwners.removeValue(forKey: owner.id)
+        owner.cancellationDidChange = nil
+        guard currentTrashOwner === owner else { return }
+        currentTrashOwner = nil
+        trashProgress = nil
+        endStructuralMutation(owner.mutationToken)
+    }
+
+    @discardableResult
+    func requestTrashCancellation(id: UUID) -> Bool {
+        guard let owner = currentTrashOwner, owner.id == id else { return false }
+        return owner.requestCancellation()
+    }
+
+    private func discardPendingTrashConfirmations() {
+        guard let session = currentSession else { return }
+        if let pending = pendingFolderDelete,
+            pending.sessionIdentity == ObjectIdentifier(session) {
+            session.discardStagedTrash(token: pending.confirmationToken)
+        }
+        if let pending = pendingBatchDelete,
+            pending.sessionIdentity == ObjectIdentifier(session) {
+            session.discardStagedTrash(token: pending.confirmation.token)
+        }
+    }
+
+    private func landCleanTrashCancellation() {
+        postMutationAnnouncement("Trash cancelled. Nothing was moved to Trash.")
+    }
+
     // MARK: Delete
 
     /// A non-empty folder delete awaiting user confirmation (#860). Set by
@@ -18244,37 +18406,47 @@ final class AppState: ObservableObject {
         let request = BatchTrashRequest(items: [
             StructuralBatchItem(path: path, isDirectory: isDirectory)
         ])
-        let owner = beginStructuralMutation()
+        discardPendingTrashConfirmations()
+        pendingFolderDelete = nil
+        pendingBatchDelete = nil
+        let owner = beginTrashWork(session: session)
         let stageRunner = batchDeleteConfirmationProbeRunner
-        let task = Task { @MainActor [weak self] in
+        let task = Task { @MainActor [self] in
+            defer { finishTrashWork(owner) }
             do {
-                let staged = try await stageRunner(session, request)
-                guard let self, self.ownsStructuralMutation(owner, session: session) else { return }
+                let staged = try await stageRunner(session, request, owner.cancel)
+                guard ownsTrashWork(owner), !owner.cancellationRequested else {
+                    session.discardStagedTrash(token: staged.token)
+                    if ownsTrashWork(owner) { landCleanTrashCancellation() }
+                    return
+                }
                 guard let entry = staged.items.first else {
-                    self.endStructuralMutation(owner)
+                    session.discardStagedTrash(token: staged.token)
                     return
                 }
                 if isDirectory && entry.itemCount > 0 {
-                    self.pendingFolderDelete = PendingFolderDelete(
+                    pendingFolderDelete = PendingFolderDelete(
                         id: UUID(), sessionIdentity: ObjectIdentifier(session),
                         path: entry.item.path, itemCount: Int(entry.itemCount),
                         confirmationToken: staged.token)
-                    self.endStructuralMutation(owner)
                 } else {
-                    if let deletion = self.deleteEntry(
+                    if let deletion = deleteEntry(
                         path: entry.item.path, isDirectory: isDirectory,
-                        confirmationToken: staged.token, structuralOwner: owner) {
+                        confirmationToken: staged.token, trashOwner: owner) {
                         await deletion.value
                     } else {
-                        self.endStructuralMutation(owner)
+                        session.discardStagedTrash(token: staged.token)
                     }
                 }
             } catch {
-                guard let self, self.ownsStructuralMutation(owner, session: session) else { return }
+                guard ownsTrashWork(owner) else { return }
                 let failure = (error as? VaultError) ?? .Io(message: error.localizedDescription)
-                self.lastError = self.humanReadable(failure)
-                self.postMutationAnnouncement("Could not prepare Trash: \(self.humanReadable(failure))")
-                self.endStructuralMutation(owner)
+                if case .Cancelled = failure {
+                    landCleanTrashCancellation()
+                } else {
+                    lastError = humanReadable(failure)
+                    postMutationAnnouncement("Could not prepare Trash: \(humanReadable(failure))")
+                }
             }
         }
         pendingStructuralTaskForTesting = task
@@ -18314,7 +18486,10 @@ final class AppState: ObservableObject {
     /// Alert "Cancel" — nothing is deleted.
     @discardableResult
     func cancelPendingFolderDelete(id: UUID) -> Bool {
-        guard pendingFolderDelete?.id == id else { return false }
+        guard let pending = pendingFolderDelete, pending.id == id else { return false }
+        if let session = currentSession, pending.sessionIdentity == ObjectIdentifier(session) {
+            session.discardStagedTrash(token: pending.confirmationToken)
+        }
         pendingFolderDelete = nil
         return true
     }
@@ -18398,34 +18573,44 @@ final class AppState: ObservableObject {
             items: capturedItems.map {
                 StructuralBatchItem(path: $0.path, isDirectory: $0.isDirectory)
             })
-        let token = beginStructuralMutation()
-        let task = Task { @MainActor [weak self] in
+        discardPendingTrashConfirmations()
+        pendingFolderDelete = nil
+        pendingBatchDelete = nil
+        let owner = beginTrashWork(session: session)
+        let task = Task { @MainActor [self] in
+            defer { finishTrashWork(owner) }
             do {
-                let staged = try await probeRunner(session, trashRequest)
-                guard let self, self.ownsStructuralMutation(token, session: session) else { return }
+                let staged = try await probeRunner(session, trashRequest, owner.cancel)
+                guard ownsTrashWork(owner), !owner.cancellationRequested else {
+                    session.discardStagedTrash(token: staged.token)
+                    if ownsTrashWork(owner) { landCleanTrashCancellation() }
+                    return
+                }
                 let nonEmptyFolderCount = staged.items.filter {
                     $0.item.isDirectory && $0.itemCount > 0
                 }.count
                 guard nonEmptyFolderCount > 0 else {
-                    await self.performBatchTrash(
+                    await performBatchTrash(
                         request: trashRequest,
                         preferredFocusPath: capturedFocusPath,
-                        session: session, token: token,
+                        owner: owner,
                         confirmation: staged,
                         runner: trashRunner, refresher: refresher)
                     return
                 }
-                self.pendingBatchDelete = BatchDelete(
+                pendingBatchDelete = BatchDelete(
                     id: confirmationID, sessionIdentity: sessionIdentity,
                     items: capturedItems, preferredFocusPath: capturedFocusPath,
                     nonEmptyFolderCount: nonEmptyFolderCount, confirmation: staged)
-                self.endStructuralMutation(token)
             } catch {
-                guard let self, self.ownsStructuralMutation(token, session: session) else { return }
+                guard ownsTrashWork(owner) else { return }
                 let failure = (error as? VaultError) ?? .Io(message: error.localizedDescription)
-                self.lastError = self.humanReadable(failure)
-                self.postMutationAnnouncement("Could not prepare Trash: \(self.humanReadable(failure))")
-                self.endStructuralMutation(token)
+                if case .Cancelled = failure {
+                    landCleanTrashCancellation()
+                } else {
+                    lastError = humanReadable(failure)
+                    postMutationAnnouncement("Could not prepare Trash: \(humanReadable(failure))")
+                }
             }
         }
         pendingStructuralTaskForTesting = task
@@ -18453,7 +18638,10 @@ final class AppState: ObservableObject {
     /// Alert "Cancel" — nothing is deleted.
     @discardableResult
     func cancelPendingBatchDelete(id: UUID) -> Bool {
-        guard pendingBatchDelete?.id == id else { return false }
+        guard let pending = pendingBatchDelete, pending.id == id else { return false }
+        if let session = currentSession, pending.sessionIdentity == ObjectIdentifier(session) {
+            session.discardStagedTrash(token: pending.confirmation.token)
+        }
         pendingBatchDelete = nil
         return true
     }
@@ -18485,20 +18673,19 @@ final class AppState: ObservableObject {
                 StructuralBatchItem(path: $0.path, isDirectory: $0.isDirectory)
             })
         else { return nil }
-        let token = beginStructuralMutation()
+        let owner = beginTrashWork(session: session)
         let runner = batchTrashRunner
         let refresher = structuralBatchRefreshRunner
         let request = BatchTrashRequest(
             items: items.map {
                 StructuralBatchItem(path: $0.path, isDirectory: $0.isDirectory)
             })
-        let task = Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.performBatchTrash(
+        let task = Task { @MainActor [self] in
+            defer { finishTrashWork(owner) }
+            await performBatchTrash(
                 request: request,
                 preferredFocusPath: preferredFocusPath,
-                session: session,
-                token: token,
+                owner: owner,
                 confirmation: confirmation,
                 runner: runner,
                 refresher: refresher)
@@ -18514,12 +18701,17 @@ final class AppState: ObservableObject {
     private func performBatchTrash(
         request: BatchTrashRequest,
         preferredFocusPath: String?,
-        session: VaultSession,
-        token: Int,
+        owner: TrashWorkOwner,
         confirmation: StagedTrash?,
         runner: BatchTrashRunner?,
         refresher: StructuralBatchRefreshRunner
     ) async {
+        let session = owner.session
+        let token = owner.mutationToken
+        defer {
+            if let confirmation { session.discardStagedTrash(token: confirmation.token) }
+        }
+        executeTrashWork(owner)
         let outcome: Result<BatchTrashReport, Error>
         do {
             if let runner {
@@ -18528,11 +18720,9 @@ final class AppState: ObservableObject {
                 guard let confirmation else {
                     throw VaultError.TrashConfirmationChanged(message: "Trash confirmation expired. Request deletion again")
                 }
-                outcome = .success(try await Task.detached(priority: .userInitiated) {
-                    try session.batchTrashStaged(
-                        request: BatchTrashRequest(items: confirmation.items.map(\.item)),
-                        token: confirmation.token)
-                }.value)
+                outcome = .success(try await cancellableBatchTrashRunner(
+                    session, BatchTrashRequest(items: confirmation.items.map(\.item)),
+                    confirmation.token, owner.cancel))
             }
         } catch {
             outcome = .failure(error)
@@ -18575,12 +18765,15 @@ final class AppState: ObservableObject {
             }
             landBatchTrash(report, preferredFocusPath: preferredFocusPath)
         case .failure(let error):
+            if let vaultError = error as? VaultError, case .Cancelled = vaultError {
+                landCleanTrashCancellation()
+                return
+            }
             if let vaultError = error as? VaultError,
                 case .TrashConfirmationChanged = vaultError {
                 let message = humanReadable(vaultError)
                 lastError = message
                 postMutationAnnouncement("Trash operation failed: \(message)")
-                endStructuralMutation(token)
                 return
             }
             await refresher(self)
@@ -18597,7 +18790,6 @@ final class AppState: ObservableObject {
                 requiresAttention: true))
             postMutationAnnouncement("Trash operation failed: \(message)")
         }
-        endStructuralMutation(token)
     }
 
     private static func batchTrashNeedsRefresh(_ report: BatchTrashReport) -> Bool {
@@ -19075,38 +19267,54 @@ final class AppState: ObservableObject {
     func deleteEntry(
         path: String, isDirectory: Bool, announce: Bool = true,
         onResult: ((Bool) -> Void)? = nil,
-        confirmationToken: UInt64? = nil, structuralOwner: Int? = nil
+        confirmationToken: UInt64? = nil, trashOwner: TrashWorkOwner? = nil
     ) -> Task<Void, Never>? {
         guard let session = currentSession else { return nil }
-        if let structuralOwner {
-            guard ownsStructuralMutation(structuralOwner, session: session) else { return nil }
+        if let trashOwner {
+            guard ownsTrashWork(trashOwner) else { return nil }
         } else {
             guard admitStructuralMutationRequest() else { return nil }
         }
         guard admitBatchTrashMutation(
             of: [StructuralBatchItem(path: path, isDirectory: isDirectory)])
         else { return nil }
-        let token = structuralOwner ?? beginStructuralMutation()
-        let task = Task { [weak self] in
-            let outcome: Result<Void, VaultError> = await Task.detached(
-                priority: .userInitiated
-            ) {
-                do {
-                    let confirmed: UInt64
-                    if let confirmationToken {
-                        confirmed = confirmationToken
-                    } else {
-                        confirmed = try session.stageTrash(request: BatchTrashRequest(items: [
-                            StructuralBatchItem(path: path, isDirectory: isDirectory)
-                        ])).token
+        let owner = trashOwner ?? beginTrashWork(session: session)
+        let stageRunner = batchDeleteConfirmationProbeRunner
+        let trashRunner = cancellableSingleTrashRunner
+        let task = Task { @MainActor [self] in
+            // An automatic stage→execute chain has one outer owner. Idempotent
+            // retirement also covers the direct single-entry API.
+            var executionToken: UInt64?
+            defer {
+                if let executionToken { session.discardStagedTrash(token: executionToken) }
+                finishTrashWork(owner)
+            }
+            let outcome: Result<Void, VaultError>
+            do {
+                let confirmed: UInt64
+                if let confirmationToken {
+                    confirmed = confirmationToken
+                } else {
+                    let staged = try await stageRunner(session, BatchTrashRequest(items: [
+                        StructuralBatchItem(path: path, isDirectory: isDirectory)
+                    ]), owner.cancel)
+                    guard ownsTrashWork(owner), !owner.cancellationRequested else {
+                        session.discardStagedTrash(token: staged.token)
+                        if ownsTrashWork(owner) {
+                            landCleanTrashCancellation()
+                            onResult?(false)
+                        }
+                        return
                     }
-                    if isDirectory { try session.deleteFolderStaged(path: path, token: confirmed) }
-                    else { try session.deleteFileStaged(path: path, token: confirmed) }
-                    return .success(())
-                } catch let e as VaultError { return .failure(e) }
-                catch { return .failure(.Io(message: error.localizedDescription)) }
-            }.value
-            guard let self, self.currentSession === session else { return }
+                    confirmed = staged.token
+                }
+                executionToken = confirmed
+                executeTrashWork(owner)
+                try await trashRunner(session, path, isDirectory, confirmed, owner.cancel)
+                outcome = .success(())
+            } catch let error as VaultError { outcome = .failure(error) }
+            catch { outcome = .failure(.Io(message: error.localizedDescription)) }
+            guard ownsTrashWork(owner) else { return }
             switch outcome {
             case .success:
                 // Moving an item to the system Trash is not undoable through
@@ -19146,13 +19354,19 @@ final class AppState: ObservableObject {
                 self.publishTreeMutation(
                     .delete(path: path, parent: parent, wasDirectory: isDirectory),
                     rewrittenCount: 0)
+                await self.loadFiles()
+                guard self.ownsTrashWork(owner) else { return }
                 if announce {
                     self.postMutationAnnouncement(
                         "Moved \((path as NSString).lastPathComponent) to Trash.")
                 }
-                await self.loadFiles()
                 onResult?(true)
             case .failure(let error):
+                if case .Cancelled = error {
+                    self.landCleanTrashCancellation()
+                    onResult?(false)
+                    return
+                }
                 self.lastError = self.humanReadable(error)
                 // #852 red-team: batch (`announce == false`) suppresses the
                 // per-item VoiceOver failure; the batch announces one summary
@@ -19164,7 +19378,6 @@ final class AppState: ObservableObject {
                 }
                 onResult?(false)
             }
-            self.endStructuralMutation(token)
         }
         return task
     }

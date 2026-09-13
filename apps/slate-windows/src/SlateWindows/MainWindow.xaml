@@ -58,7 +58,7 @@
         <KeyBinding Key="Escape" Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ClosePopoverCommand}" />
     </Window.InputBindings>
 
-    <DockPanel>
+    <DockPanel KeyDown="TrashFallback_KeyDown">
         <Menu x:Name="MainMenu"
               DockPanel.Dock="Top"
               AutomationProperties.Name="Application commands">
@@ -587,6 +587,23 @@
         </Menu>
 
         <StatusBar DockPanel.Dock="Bottom">
+            <!-- No vault means no sidebar: an unresolved binding must keep
+                 operation controls out of both layout and automation. -->
+            <StatusBarItem Visibility="{Binding FileSidebar.ShowTrashProgress, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding FileSidebar.TrashStatus}" VerticalAlignment="Center"
+                               TextWrapping="Wrap" MaxWidth="360"
+                               AutomationProperties.AutomationId="TrashProgressStatus" />
+                    <Button Content="Cancel" Margin="8,0,8,0"
+                            Command="{Binding FileSidebar.CancelTrashCommand}"
+                            GotKeyboardFocus="TrashCancel_GotKeyboardFocus"
+                            LostKeyboardFocus="TrashCancel_LostKeyboardFocus"
+                            IsEnabledChanged="TrashCancel_AvailabilityChanged"
+                            IsVisibleChanged="TrashCancel_AvailabilityChanged"
+                            AutomationProperties.AutomationId="CancelTrash"
+                            AutomationProperties.Name="Cancel moving items to the Recycle Bin" />
+                </StackPanel>
+            </StatusBarItem>
             <StatusBarItem>
                 <TextBlock x:Name="StatusTextBlock"
                            AutomationProperties.AutomationId="VaultStatus"

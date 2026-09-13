@@ -158,6 +158,9 @@ final class MarkdownPropertyRecoveryContractTests: XCTestCase {
         await state.scanTask?.value
         state.openFile(activePath, target: .currentTab)
         await state.noteLoadTask?.value
+        // Properties belong to the independent links load, so note-body
+        // completion alone does not make the property rows ready to inspect.
+        await state.linksLoadTask?.value
         XCTAssertEqual(state.loadedFilePath, activePath)
         XCTAssertFalse(state.hasUnsavedChanges)
         return Fixture(state: state, vault: vault)

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 
@@ -439,6 +440,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
             (.journal, "History recording"),
             (.rollback, "Restoration"),
             (.trash, "Trash"),
+            (.cancelled, "Cancelled"),
             (.reconciliation, "Reconciliation"),
             (.recoveryBarrier, "Recovery safety"),
         ]
@@ -2802,7 +2804,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertTrue(state.isMutatingStructure)
         XCTAssertNil(state.treeMutation)
         XCTAssertNil(state.batchStructuralResult)
-        XCTAssertNil(state.lastMutationAnnouncement)
+        XCTAssertEqual(state.lastMutationAnnouncement, AppState.TrashWorkPhase.executing.title)
 
         XCTAssertNil(
             state.batchDelete(
@@ -3134,7 +3136,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
 
         XCTAssertTrue(
             src.contains(
-                "typealias BatchDeleteConfirmationProbeRunner = @Sendable (VaultSession, BatchTrashRequest) async throws -> StagedTrash"),
+                "typealias BatchDeleteConfirmationProbeRunner = @Sendable (VaultSession, BatchTrashRequest, CancelToken) async throws -> StagedTrash"),
             "batch confirmation probing needs one injectable whole-selection async seam")
         XCTAssertTrue(
             src.contains("var batchDeleteConfirmationProbeRunner:"),
@@ -3145,8 +3147,25 @@ final class FileTreeMultiSelectTests: XCTestCase {
         let (state, _) = try await makeVault(files: ["ds-only/.DS_Store", "hidden/.env"])
         let session = try XCTUnwrap(state.currentSession)
         let staged = try await state.batchDeleteConfirmationProbeRunner(
-            session, BatchTrashRequest(items: [item("ds-only", dir: true), item("hidden", dir: true)]))
+            session, BatchTrashRequest(items: [item("ds-only", dir: true), item("hidden", dir: true)]), CancelToken())
         XCTAssertEqual(staged.items.map(\.itemCount), [1, 1])
+    }
+
+    func testC5BatchDeleteProbeHonorsAlreadyCancelledToken() async throws {
+        let (state, vault) = try await makeVault(files: ["folder/a.md"])
+        let session = try XCTUnwrap(state.currentSession)
+        let cancel = CancelToken()
+        cancel.cancel()
+        do {
+            _ = try await state.batchDeleteConfirmationProbeRunner(
+                session, BatchTrashRequest(items: [item("folder", dir: true)]), cancel)
+            XCTFail("The production probe must forward cancellation to native staging")
+        } catch {
+            guard let error = error as? VaultError, case .Cancelled = error else {
+                return XCTFail("Expected clean cancellation, got \(error)")
+            }
+        }
+        XCTAssertTrue(exists(vault, "folder/a.md"))
     }
 
     func testC5BatchDeleteProbeRefusesMissingOrWrongKindEntries() async throws {
@@ -3155,7 +3174,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
         for path in ["missing-folder", "a.md"] {
             do {
                 _ = try await state.batchDeleteConfirmationProbeRunner(
-                    session, BatchTrashRequest(items: [item(path, dir: true)]))
+                    session, BatchTrashRequest(items: [item(path, dir: true)]), CancelToken())
                 XCTFail("Missing or wrong-kind entry must refuse staging")
             } catch { }
         }
@@ -3167,7 +3186,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
         let (state, vault) = try await makeVault(
             files: ["a.md", "folder/x.md", "empty/.DS_Store"])
         let probe = BatchDeleteConfirmationProbe(nonEmptyFolderCount: 1)
-        state.batchDeleteConfirmationProbeRunner = { session, request in
+        state.batchDeleteConfirmationProbeRunner = { session, request, _ in
             await probe.run(session: session, request: request)
         }
         let items = [sel("a.md"), sel("folder", dir: true), sel("empty", dir: true)]
@@ -3200,7 +3219,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
             moveReport: moveReport(state: .noOp, planned: []),
             trashReport: report)
         let (state, _) = try await makeVault(files: ["a.md", "empty/.DS_Store"])
-        state.batchDeleteConfirmationProbeRunner = { _, request in
+        state.batchDeleteConfirmationProbeRunner = { _, request, _ in
             StagedTrash(token: 0, items: request.items.map { StagedTrashItem(item: $0, itemCount: 0) })
         }
         state.batchTrashRunner = { _, request in await trashProbe.runTrash(request) }
@@ -3228,7 +3247,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
         let gate = SuspensionGate()
         let probe = BatchDeleteConfirmationProbe(nonEmptyFolderCount: 1, gate: gate)
         let (state, _) = try await makeVault(files: ["a.md", "folder/x.md"])
-        state.batchDeleteConfirmationProbeRunner = { session, request in
+        state.batchDeleteConfirmationProbeRunner = { session, request, _ in
             await probe.run(session: session, request: request)
         }
         let items = [sel("a.md"), sel("folder", dir: true)]
@@ -3264,7 +3283,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
             moveReport: moveReport(state: .noOp, planned: []),
             trashReport: report)
         let (state, _) = try await makeVault(files: ["a.md", "empty/.DS_Store"])
-        state.batchDeleteConfirmationProbeRunner = { session, request in
+        state.batchDeleteConfirmationProbeRunner = { session, request, _ in
             await confirmationProbe.run(session: session, request: request)
         }
         state.batchTrashRunner = { _, request in
@@ -3305,7 +3324,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
             trashReport: trashReport(state: .noOp, planned: []))
         let (state, _) = try await makeVault(
             named: "vault-a", files: ["a.md", "folder/x.md"])
-        state.batchDeleteConfirmationProbeRunner = { session, request in
+        state.batchDeleteConfirmationProbeRunner = { session, request, _ in
             await confirmationProbe.run(session: session, request: request)
         }
         state.batchTrashRunner = { _, request in await trashProbe.runTrash(request) }
@@ -3317,11 +3336,19 @@ final class FileTreeMultiSelectTests: XCTestCase {
         let oldTask = try XCTUnwrap(state.pendingStructuralTaskForTesting)
         await probeGate.waitForEntrants(1)
 
+        var transitionAnnouncements: [String] = []
+        let observation = state.$lastMutationAnnouncement
+            .dropFirst()
+            .compactMap { $0 }
+            .sink { transitionAnnouncements.append($0) }
+        defer { observation.cancel() }
+
         let vaultB = tempDir.appendingPathComponent("vault-b")
         try FileManager.default.createDirectory(at: vaultB, withIntermediateDirectories: true)
         try "# b\n".write(
             to: vaultB.appendingPathComponent("b.md"), atomically: true, encoding: .utf8)
         state.openVault(at: vaultB)
+        XCTAssertNil(state.lastMutationAnnouncement, "Vault switch must clear departing progress copy")
         await state.scanTask?.value
         let replacementSession = try XCTUnwrap(state.currentSession)
 
@@ -3335,6 +3362,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertNil(state.batchStructuralResult)
         XCTAssertNil(state.treeMutation)
         XCTAssertNil(state.lastMutationAnnouncement)
+        XCTAssertTrue(transitionAnnouncements.isEmpty, "Vault switch and stale completion must stay silent")
         let nativeCalls = await trashProbe.callCounts()
         XCTAssertEqual(nativeCalls.trash, 0)
     }
@@ -3348,7 +3376,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
             trashReport: trashReport(state: .noOp, planned: []))
         let (state, _) = try await makeVault(
             named: "vault-a", files: ["a.md", "folder/x.md"])
-        state.batchDeleteConfirmationProbeRunner = { session, request in
+        state.batchDeleteConfirmationProbeRunner = { session, request, _ in
             await confirmationProbe.run(session: session, request: request)
         }
         state.batchTrashRunner = { _, request in await trashProbe.runTrash(request) }
@@ -3360,6 +3388,13 @@ final class FileTreeMultiSelectTests: XCTestCase {
         let oldTask = try XCTUnwrap(state.pendingStructuralTaskForTesting)
         await oldProbeGate.waitForEntrants(1)
 
+        var transitionAnnouncements: [String] = []
+        let observation = state.$lastMutationAnnouncement
+            .dropFirst()
+            .compactMap { $0 }
+            .sink { transitionAnnouncements.append($0) }
+        defer { observation.cancel() }
+
         let vaultB = tempDir.appendingPathComponent("vault-b")
         try FileManager.default.createDirectory(at: vaultB, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(
@@ -3367,6 +3402,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
         try "# b\n".write(
             to: vaultB.appendingPathComponent("b.md"), atomically: true, encoding: .utf8)
         state.openVault(at: vaultB)
+        XCTAssertNil(state.lastMutationAnnouncement, "Vault switch must clear departing progress copy")
         await state.scanTask?.value
 
         let replacementReport = moveReport(
@@ -3397,6 +3433,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertNil(state.batchStructuralResult)
         XCTAssertNil(state.treeMutation)
         XCTAssertNil(state.lastMutationAnnouncement)
+        XCTAssertTrue(transitionAnnouncements.isEmpty, "The old owner must not announce in the replacement vault")
         let nativeCalls = await trashProbe.callCounts()
         XCTAssertEqual(nativeCalls.trash, 0)
 
@@ -4347,6 +4384,381 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertNil(cleared.listSelection)
         XCTAssertTrue(cleared.shouldMirrorListSelection)
         XCTAssertTrue(cleared.shouldSuppressAnnouncement)
+    }
+
+    // MARK: - Cooperative Trash cancellation (#1126)
+
+    private actor TrashCancellationProbe {
+        private(set) var cancel: CancelToken?
+        private(set) var staged: StagedTrash?
+
+        func record(_ cancel: CancelToken, staged: StagedTrash? = nil) {
+            self.cancel = cancel
+            self.staged = staged
+        }
+    }
+
+    func testTrashPreparationCancellationDrainsAndDiscardsLateConfirmation() async throws {
+        let (state, vault) = try await makeVault(files: ["folder/a.md", "keep.md", "dest/x.md"])
+        await state.moveEntry(path: "keep.md", isDirectory: false, to: "dest")?.value
+        let history = state.structuralUndoStack
+        let session = try XCTUnwrap(state.currentSession)
+        let nativeStage = state.batchDeleteConfirmationProbeRunner
+        let gate = SuspensionGate()
+        let probe = TrashCancellationProbe()
+        state.batchDeleteConfirmationProbeRunner = { session, request, cancel in
+            let staged = try await nativeStage(session, request, cancel)
+            await probe.record(cancel, staged: staged)
+            await gate.enter()
+            return staged
+        }
+        XCTAssertTrue(state.requestDeleteEntry(path: "folder", isDirectory: true))
+        let task = try XCTUnwrap(state.pendingStructuralTaskForTesting)
+        let progress = try XCTUnwrap(state.trashProgress)
+        await gate.waitForEntrants(1)
+        XCTAssertTrue(state.requestTrashCancellation(id: progress.id))
+        let stoppingAnnouncement = state.lastMutationAnnouncement
+        XCTAssertEqual(stoppingAnnouncement, "Stopping Trash. The current system operation may finish. Completed items remain in Trash.")
+        XCTAssertFalse(state.requestTrashCancellation(id: progress.id))
+        XCTAssertEqual(state.lastMutationAnnouncement, stoppingAnnouncement)
+        let cancel = await probe.cancel
+        XCTAssertTrue(try XCTUnwrap(cancel).isCancelled())
+        XCTAssertEqual(state.trashProgress?.phase, .stopping)
+        XCTAssertTrue(state.isMutatingStructure, "Cancel must not announce false idle")
+        XCTAssertTrue(AppState.hasOutstandingTrashWorkForTermination)
+        await gate.releaseOne()
+        await task.value
+        XCTAssertNil(state.trashProgress)
+        XCTAssertNil(state.pendingFolderDelete)
+        XCTAssertFalse(state.isMutatingStructure)
+        XCTAssertEqual(state.structuralUndoStack, history)
+        XCTAssertTrue(exists(vault, "folder/a.md"))
+        XCTAssertEqual(state.lastMutationAnnouncement, "Trash cancelled. Nothing was moved to Trash.")
+        let staged = await probe.staged
+        let expired = try XCTUnwrap(staged)
+        XCTAssertThrowsError(try session.deleteFolderStagedCancellable(
+            path: "folder", token: expired.token, cancel: CancelToken())) { error in
+            guard let error = error as? VaultError, case .TrashConfirmationChanged = error else {
+                return XCTFail("Late cancelled staging must discard its exact token: \(error)")
+            }
+        }
+    }
+
+    func testDirectSinglePreparationCancellationReportsFailureToItsCaller() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md"])
+        let nativeStage = state.batchDeleteConfirmationProbeRunner
+        let gate = SuspensionGate()
+        state.batchDeleteConfirmationProbeRunner = { session, request, cancel in
+            let staged = try await nativeStage(session, request, cancel)
+            await gate.enter()
+            return staged
+        }
+        var completion: Bool?
+        let task = try XCTUnwrap(state.deleteEntry(
+            path: "a.md", isDirectory: false, onResult: { completion = $0 }))
+        await gate.waitForEntrants(1)
+        XCTAssertTrue(state.requestTrashCancellation(id: try XCTUnwrap(state.trashProgress?.id)))
+        await gate.releaseOne()
+        await task.value
+        XCTAssertEqual(completion, false)
+        XCTAssertTrue(exists(vault, "a.md"))
+        XCTAssertFalse(state.isMutatingStructure)
+    }
+
+    func testAutomaticBatchTrashKeepsOneCancellationOwnerThroughExecution() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md", "b.md"])
+        let gate = SuspensionGate()
+        let probe = TrashCancellationProbe()
+        state.cancellableBatchTrashRunner = { _, _, _, cancel in
+            await probe.record(cancel)
+            await gate.enter()
+            if cancel.isCancelled() { throw VaultError.Cancelled }
+            throw VaultError.Io(message: "Test requires cancellation")
+        }
+        XCTAssertTrue(state.requestBatchDelete([sel("a.md"), sel("b.md")]))
+        let task = try XCTUnwrap(state.pendingStructuralTaskForTesting)
+        let initialOwner = try XCTUnwrap(state.trashProgress?.id)
+        await gate.waitForEntrants(1)
+        XCTAssertEqual(state.trashProgress?.id, initialOwner)
+        XCTAssertEqual(state.trashProgress?.phase, .executing)
+        XCTAssertTrue(state.requestTrashCancellation(id: initialOwner))
+        XCTAssertTrue(state.isMutatingStructure)
+        await gate.releaseOne()
+        await task.value
+        XCTAssertNil(state.batchStructuralResult, "Pre-attempt cancellation is not infrastructure failure")
+        XCTAssertNil(state.treeMutation)
+        XCTAssertTrue(exists(vault, "a.md"))
+        XCTAssertTrue(exists(vault, "b.md"))
+        XCTAssertNil(state.lastError)
+        XCTAssertFalse(state.isMutatingStructure)
+    }
+
+    func testStoppedBatchLandsCompletedAndCancelledItemsAfterRefresh() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md", "b.md", "keep.md", "dest/x.md"])
+        await state.moveEntry(path: "keep.md", isDirectory: false, to: "dest")?.value
+        XCTAssertFalse(state.structuralUndoStack.isEmpty)
+        let a = item("a.md"), b = item("b.md")
+        let report = trashReport(
+            state: .partial, planned: [a, b], opID: 301, trashed: [a],
+            untrashed: [BatchTrashRemainder(item: b, failure: BatchItemFailure(
+                item: b, stage: .cancelled, message: "Not attempted because cancellation was requested"))])
+        let gate = SuspensionGate()
+        state.cancellableBatchTrashRunner = { _, _, _, _ in
+            await gate.enter()
+            return report
+        }
+        state.structuralBatchRefreshRunner = { state in
+            state.postMutationAnnouncement("Refresh finished")
+        }
+        XCTAssertTrue(state.requestBatchDelete([sel("a.md"), sel("b.md")]))
+        let task = try XCTUnwrap(state.pendingStructuralTaskForTesting)
+        await gate.waitForEntrants(1)
+        let owner = try XCTUnwrap(state.trashProgress?.id)
+        XCTAssertTrue(state.requestTrashCancellation(id: owner))
+        await gate.releaseOne()
+        await task.value
+        guard case .trash(let landed)? = state.batchStructuralResult?.payload else {
+            return XCTFail("Cancellation must retain the actual physical ledger")
+        }
+        XCTAssertEqual(landed, report)
+        XCTAssertTrue(state.structuralUndoStack.isEmpty)
+        XCTAssertTrue(exists(vault, "b.md"))
+        XCTAssertEqual(state.lastMutationAnnouncement, "Trash stopped. Moved 1 item to Trash. 1 item was not moved.")
+        XCTAssertNil(state.trashProgress)
+    }
+
+    func testStoppedBatchPreservesUnknownOutcomeAndRecoveryGuidance() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md"])
+        let a = item("a.md"), b = item("b.md")
+        let report = trashReport(
+            state: .failed, planned: [a, b], opID: 302,
+            untrashed: [BatchTrashRemainder(item: b, failure: BatchItemFailure(
+                item: b, stage: .cancelled, message: "Not attempted"))],
+            unknown: [BatchTrashRemainder(item: a, failure: BatchItemFailure(
+                item: a, stage: .trash, message: "System outcome unknown"))],
+            requiresRescan: true)
+        let gate = SuspensionGate()
+        state.cancellableBatchTrashRunner = { _, _, _, _ in
+            await gate.enter()
+            return report
+        }
+        state.structuralBatchRefreshRunner = { _ in }
+        state.batchTrashPresenceProbeRunner = { _, _ in .indeterminate }
+        XCTAssertTrue(state.requestBatchDelete([sel("a.md"), sel("b.md")]))
+        let task = try XCTUnwrap(state.pendingStructuralTaskForTesting)
+        await gate.waitForEntrants(1)
+        XCTAssertTrue(state.requestTrashCancellation(id: try XCTUnwrap(state.trashProgress?.id)))
+        await gate.releaseOne()
+        await task.value
+        XCTAssertTrue(state.isBatchTrashPathQuarantined("a.md"))
+        XCTAssertFalse(state.isBatchTrashPathQuarantined("b.md"))
+        XCTAssertTrue(state.lastMutationAnnouncement?.contains("Couldn’t verify") == true)
+        XCTAssertTrue(state.lastMutationAnnouncement?.contains("Rescan required") == true)
+        guard case .trash(let landed)? = state.batchStructuralResult?.payload else {
+            return XCTFail("Unknown physical outcome must survive cancellation")
+        }
+        XCTAssertEqual(landed, report)
+    }
+
+    func testStoppedBatchCopyRetainsRescanGuidanceWithoutUnknownItems() {
+        let a = item("a.md")
+        let report = trashReport(
+            state: .failed, planned: [a],
+            untrashed: [BatchTrashRemainder(item: a, failure: BatchItemFailure(
+                item: a, stage: .cancelled, message: "Not attempted"))],
+            requiresRescan: true)
+        XCTAssertEqual(AppState.BatchTrashCopy.announcement(for: report),
+            "Trash stopped. Nothing was moved to Trash. Rescan required.")
+    }
+
+    func testLateCancelCannotReplaceSuccessfulSingleTrashOutcome() async throws {
+        let (state, _) = try await makeVault(files: ["a.md"])
+        let gate = SuspensionGate()
+        state.cancellableSingleTrashRunner = { _, _, _, _, _ in
+            // Core returns the actual outcome after dispatch even if cancellation
+            // arrives while that indivisible system operation is in flight.
+            await gate.enter()
+        }
+        XCTAssertTrue(state.requestDeleteEntry(path: "a.md", isDirectory: false))
+        let task = try XCTUnwrap(state.pendingStructuralTaskForTesting)
+        await gate.waitForEntrants(1)
+        XCTAssertTrue(state.requestTrashCancellation(id: try XCTUnwrap(state.trashProgress?.id)))
+        await gate.releaseOne()
+        await task.value
+        XCTAssertEqual(state.lastMutationAnnouncement, "Moved a.md to Trash.")
+        XCTAssertNil(state.lastError)
+        XCTAssertNil(state.trashProgress)
+        XCTAssertFalse(state.isMutatingStructure)
+    }
+
+    func testCancelledConfirmationDiscardsOnlyItsExactToken() async throws {
+        let (state, _) = try await makeVault(files: ["first/a.md", "second/b.md"])
+        let session = try XCTUnwrap(state.currentSession)
+        XCTAssertTrue(state.requestDeleteEntry(path: "first", isDirectory: true))
+        await state.pendingStructuralTaskForTesting?.value
+        let first = try XCTUnwrap(state.pendingFolderDelete)
+        XCTAssertTrue(state.requestDeleteEntry(path: "second", isDirectory: true))
+        await state.pendingStructuralTaskForTesting?.value
+        let second = try XCTUnwrap(state.pendingFolderDelete)
+        XCTAssertFalse(state.cancelPendingFolderDelete(id: first.id))
+        XCTAssertEqual(state.pendingFolderDelete?.id, second.id)
+        XCTAssertThrowsError(try session.deleteFolderStagedCancellable(
+            path: "first", token: first.confirmationToken, cancel: CancelToken()))
+        XCTAssertTrue(state.cancelPendingFolderDelete(id: second.id))
+        XCTAssertThrowsError(try session.deleteFolderStagedCancellable(
+            path: "second", token: second.confirmationToken, cancel: CancelToken()))
+    }
+
+    func testClosingTrashSignalsNativeTokenAndRetainsFenceUntilDrain() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md"])
+        let gate = SuspensionGate()
+        let probe = TrashCancellationProbe()
+        state.cancellableSingleTrashRunner = { _, _, _, _, cancel in
+            await probe.record(cancel)
+            await gate.enter()
+            throw VaultError.Cancelled
+        }
+        XCTAssertTrue(state.requestDeleteEntry(path: "a.md", isDirectory: false))
+        let task = try XCTUnwrap(state.pendingStructuralTaskForTesting)
+        await gate.waitForEntrants(1)
+
+        var transitionAnnouncements: [String] = []
+        let observation = state.$lastMutationAnnouncement
+            .dropFirst()
+            .compactMap { $0 }
+            .sink { transitionAnnouncements.append($0) }
+        defer { observation.cancel() }
+        XCTAssertTrue(state.closeVault())
+        XCTAssertNil(state.lastMutationAnnouncement, "Close must immediately clear departing progress copy")
+        let cancel = await probe.cancel
+        XCTAssertTrue(try XCTUnwrap(cancel).isCancelled())
+        XCTAssertNil(state.currentSession)
+        XCTAssertNil(state.trashProgress)
+        XCTAssertTrue(AppState.hasOutstandingTrashWorkForTermination)
+        XCTAssertTrue(AppState.hasPendingSidebarWorkAtTermination)
+        await gate.releaseOne()
+        await task.value
+        XCTAssertFalse(AppState.hasOutstandingTrashWorkForTermination)
+        XCTAssertNil(state.lastMutationAnnouncement, "Old-vault cancellation must stay silent")
+        XCTAssertTrue(transitionAnnouncements.isEmpty, "Close must not briefly publish a Stopping announcement")
+        XCTAssertTrue(exists(vault, "a.md"))
+    }
+
+    func testClosingAlreadyStoppingTrashClearsItsAnnouncementWithoutAbandoningWork() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md"])
+        let gate = SuspensionGate()
+        state.cancellableSingleTrashRunner = { _, _, _, _, cancel in
+            await gate.enter()
+            if cancel.isCancelled() { throw VaultError.Cancelled }
+            throw VaultError.Io(message: "Test requires cancellation")
+        }
+        XCTAssertTrue(state.requestDeleteEntry(path: "a.md", isDirectory: false))
+        let task = try XCTUnwrap(state.pendingStructuralTaskForTesting)
+        await gate.waitForEntrants(1)
+        XCTAssertTrue(state.requestTrashCancellation(id: try XCTUnwrap(state.trashProgress?.id)))
+        XCTAssertEqual(state.trashProgress?.phase, .stopping)
+        XCTAssertNotNil(state.lastMutationAnnouncement)
+
+        var transitionAnnouncements: [String] = []
+        let observation = state.$lastMutationAnnouncement
+            .dropFirst()
+            .compactMap { $0 }
+            .sink { transitionAnnouncements.append($0) }
+        defer { observation.cancel() }
+        XCTAssertTrue(state.closeVault())
+        XCTAssertNil(state.lastMutationAnnouncement)
+        XCTAssertNil(state.trashProgress)
+        XCTAssertTrue(AppState.hasOutstandingTrashWorkForTermination)
+
+        await gate.releaseOne()
+        await task.value
+        XCTAssertNil(state.lastMutationAnnouncement)
+        XCTAssertTrue(transitionAnnouncements.isEmpty)
+        XCTAssertFalse(AppState.hasOutstandingTrashWorkForTermination)
+        XCTAssertTrue(exists(vault, "a.md"))
+    }
+
+    func testTrashTerminationClosesAdmissionAndOutlivesSidebarDeadline() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md"])
+        let gate = SuspensionGate()
+        let probe = TrashCancellationProbe()
+        state.cancellableSingleTrashRunner = { _, _, _, _, cancel in
+            await probe.record(cancel)
+            await gate.enter()
+            throw VaultError.Cancelled
+        }
+        XCTAssertTrue(state.requestDeleteEntry(path: "a.md", isDirectory: false))
+        let task = try XCTUnwrap(state.pendingStructuralTaskForTesting)
+        await gate.waitForEntrants(1)
+        let capturedCancel = await probe.cancel
+        let cancel = try XCTUnwrap(capturedCancel)
+        var drainFinished = false
+        let drain = Task { @MainActor in
+            await AppState.settleSidebarWriterChainsForTermination(sidebarTimeout: .zero)
+            drainFinished = true
+        }
+        // Wait for an explicit token transition rather than filesystem timing.
+        while !cancel.isCancelled() { await Task.yield() }
+        XCTAssertFalse(drainFinished, "Native Trash cannot be abandoned at the sidebar deadline")
+        XCTAssertEqual(state.structuralMutationDisabledReason, "Slate is stopping file operations before quitting.")
+        XCTAssertFalse(state.requestDeleteEntry(path: "b.md", isDirectory: false))
+        XCTAssertTrue(AppState.hasOutstandingTrashWorkForTermination)
+        await gate.releaseOne()
+        await task.value
+        await drain.value
+        XCTAssertTrue(drainFinished)
+        XCTAssertFalse(AppState.hasOutstandingTrashWorkForTermination)
+        XCTAssertNil(state.structuralMutationDisabledReason)
+    }
+
+    func testOldTrashCompletionCannotReleaseNewVaultTrashOwner() async throws {
+        let (state, _) = try await makeVault(named: "old", files: ["a.md"])
+        let oldGate = SuspensionGate()
+        state.cancellableSingleTrashRunner = { _, _, _, _, _ in
+            await oldGate.enter()
+            throw VaultError.Cancelled
+        }
+        XCTAssertTrue(state.requestDeleteEntry(path: "a.md", isDirectory: false))
+        let oldTask = try XCTUnwrap(state.pendingStructuralTaskForTesting)
+        await oldGate.waitForEntrants(1)
+        let replacement = tempDir.appendingPathComponent("replacement")
+        try FileManager.default.createDirectory(at: replacement, withIntermediateDirectories: true)
+        try "replacement".write(to: replacement.appendingPathComponent("b.md"), atomically: true, encoding: .utf8)
+        state.openVault(at: replacement)
+        await state.scanTask?.value
+        let newGate = SuspensionGate()
+        state.cancellableSingleTrashRunner = { _, _, _, _, _ in
+            await newGate.enter()
+            throw VaultError.Cancelled
+        }
+        XCTAssertTrue(state.requestDeleteEntry(path: "b.md", isDirectory: false))
+        let newTask = try XCTUnwrap(state.pendingStructuralTaskForTesting)
+        await newGate.waitForEntrants(1)
+        let newProgress = try XCTUnwrap(state.trashProgress)
+        await oldGate.releaseOne()
+        await oldTask.value
+        XCTAssertEqual(state.trashProgress, newProgress)
+        XCTAssertTrue(state.isMutatingStructure)
+        XCTAssertTrue(AppState.hasOutstandingTrashWorkForTermination)
+        XCTAssertEqual(state.lastMutationAnnouncement, AppState.TrashWorkPhase.executing.title)
+        await newGate.releaseOne()
+        await newTask.value
+        XCTAssertFalse(AppState.hasOutstandingTrashWorkForTermination)
+    }
+
+    func testTrashProgressIsAlwaysMountedAndCancellationIsAccessible() throws {
+        let shell = try Self.normalizedSource("MainSplitView.swift")
+        let progress = try Self.rawSource("TrashProgressStrip.swift")
+        XCTAssertTrue(shell.contains("TrashProgressStrip(progress: progress)"))
+        XCTAssertTrue(shell.contains("appState.requestTrashCancellation(id: progress.id)"))
+        XCTAssertTrue(progress.contains("Button(\"Cancel Trash\")"))
+        XCTAssertTrue(progress.contains(".keyboardShortcut(\".\", modifiers: [.command])"))
+        XCTAssertTrue(progress.contains(".onExitCommand"))
+        XCTAssertTrue(progress.contains(".accessibilityHint(Self.cancellationHint)"))
+        XCTAssertTrue(progress.contains(".accessibilityHidden(true)"))
+        XCTAssertTrue(progress.contains(
+            "Stops remaining work. The current system operation may finish. Completed items remain in Trash."))
+        XCTAssertFalse(TrashProgressStrip.cancellationHint.isEmpty)
     }
 
     // MARK: - Source helpers

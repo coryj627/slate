@@ -598,6 +598,144 @@ public sealed class FileManagementTests
         Assert.Contains(announced.OfType<A11yEvent.HostComposed>(), e => e.Text.Contains("Trash is in progress", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CancelStagedTrashPreservesSelectionChecksAndUndoAndDiscardsConfirmation(bool batch)
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-cancel-trash");
+        File.WriteAllText(Path.Combine(fixture.Root, "before.md"), "keep");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        rig.Sidebar.SelectedNode = Node(rig, "before.md");
+        rig.Sidebar.MutationName = "after.md";
+        Assert.True(rig.Sidebar.TryRenameSelected());
+        await rig.Settle();
+        FileTreeNodeViewModel node = Node(rig, "after.md");
+        rig.Sidebar.SelectedNode = node;
+        if (batch) { node.IsBatchSelected = true; }
+        ulong? token = null;
+        rig.Sidebar.TrashStagedForTesting = staged =>
+        {
+            token = staged.Token;
+            Assert.True(rig.Sidebar.ShowTrashProgress);
+            Assert.True(rig.Sidebar.CancelTrashCommand.CanExecute(null));
+            rig.Sidebar.CancelTrashCommand.Execute(null);
+            rig.Sidebar.CancelTrashCommand.Execute(null);
+            Assert.True(rig.Sidebar.IsTrashing);
+            Assert.False(rig.Sidebar.CanCancelTrash);
+            Assert.StartsWith("Stopping.", rig.Sidebar.TrashStatus);
+        };
+        (batch ? rig.Sidebar.BatchTrashCommand : rig.Sidebar.DeleteCommand).Execute(null);
+        await rig.Sidebar.TrashCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(rig.Sidebar.IsTrashing);
+        Assert.False(rig.Sidebar.ShowTrashProgress);
+        Assert.Same(node, rig.Sidebar.SelectedNode);
+        Assert.Equal(batch ? 1 : 0, rig.Sidebar.BatchSelectionCount);
+        Assert.Equal("keep", File.ReadAllText(Path.Combine(fixture.Root, "after.md")));
+        Assert.Equal("Cancelled. No items were moved to the Recycle Bin.", rig.Sidebar.Status);
+        Assert.Single(announced.OfType<A11yEvent.HostComposed>(), item => item.Text.StartsWith("Stopping.", StringComparison.Ordinal));
+        Assert.NotNull(token);
+        Assert.ThrowsAny<VaultException>(() => session.DeleteFileStaged("after.md", token.Value));
+        rig.Sidebar.UndoStructural();
+        await rig.Settle();
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "before.md")));
+    }
+
+    [Fact]
+    public async Task TrashShutdownCancelsNativeWorkAndDrainsBeforeIgnoringLateCompletion()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-cancel-trash-close");
+        File.WriteAllText(Path.Combine(fixture.Root, "keep.md"), "keep");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new SynchronizedAnnouncements();
+        SidebarRig rig = await NewSidebar(session, fixture, announced);
+        rig.Sidebar.SelectedNode = Node(rig, "keep.md");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        rig.Sidebar.TrashWorkerStartingForTesting = _ =>
+        {
+            entered.TrySetResult();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        };
+        rig.Sidebar.DeleteCommand.Execute(null);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        SidebarSessionShutdown shutdown = rig.Sidebar.BeginSessionShutdownAndCaptureWork();
+        try
+        {
+            Assert.False(shutdown.SessionWork.IsCompleted);
+            Assert.True(rig.Sidebar.IsTrashing);
+            Assert.False(rig.Sidebar.CanCancelTrash);
+        }
+        finally { release.Set(); }
+        await shutdown.SessionWork.WaitAsync(TimeSpan.FromSeconds(5));
+        int count = announced.Count;
+        await rig.Sidebar.TrashCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(count, announced.Count);
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "keep.md")));
+        Assert.False(rig.Sidebar.IsTrashing);
+    }
+
+    [Fact]
+    public void StoppedBatchSummaryPreservesConfirmedUnknownAndUnattemptedOutcomes()
+    {
+        var landed = new StructuralBatchItem("landed.md", false);
+        var unknown = new StructuralBatchItem("unknown.md", false);
+        var untouched = new StructuralBatchItem("untouched.md", false);
+        var report = new BatchTrashReport(
+            new StructuralBatchEnvelope([landed, unknown, untouched], [], []),
+            BatchTrashState.Partial, null, [landed],
+            [new BatchTrashRemainder(untouched, new BatchItemFailure(untouched, BatchFailureStage.Cancelled, "opaque detail"))],
+            [new BatchTrashRemainder(unknown, new BatchItemFailure(unknown, BatchFailureStage.Reconciliation, "opaque detail"))],
+            [], true);
+        Assert.Equal("Stopped. Moved 1 of 3 items to the Recycle Bin. 1 item was not moved. "
+            + "Couldn’t verify whether 1 item moved to the Recycle Bin. Rescan required.",
+            FilesSidebarViewModel.BatchTrashSummary(report));
+        Assert.Equal("Moved 1 item to the Recycle Bin.", FilesSidebarViewModel.BatchTrashSummary(
+            report with { State = BatchTrashState.Succeeded, Untrashed = [], Unknown = [], RequiresRescan = false }));
+        Assert.Equal("Stopped. Moved 1 of 2 items to the Recycle Bin. 1 item was not moved. "
+            + "Some changes could not be recorded safely.", FilesSidebarViewModel.BatchTrashSummary(
+                report with
+                {
+                    Envelope = new StructuralBatchEnvelope([landed, untouched], [], []),
+                    Unknown = [],
+                    RequiresRescan = false,
+                    BookkeepingFailures = [new BatchItemFailure(null, BatchFailureStage.Journal, "recording failed")],
+                }));
+    }
+
+    [Fact]
+    public async Task ConfirmationRetiresPreparationAndUsesFreshExecutionToken()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "fm-trash-confirm-owner");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
+        File.WriteAllText(Path.Combine(fixture.Root, "folder", "keep.md"), "keep");
+        using VaultSession session = OpenScanned(fixture.Root);
+        SidebarRig rig = await NewSidebar(session, fixture, new SynchronizedAnnouncements());
+        rig.Sidebar.SelectedNode = Node(rig, "folder");
+        var tokens = new List<CancelToken>();
+        rig.Sidebar.TrashWorkerStartingForTesting = token =>
+        {
+            tokens.Add(token);
+            if (tokens.Count == 2) { token.Cancel(); }
+        };
+        rig.Sidebar.ConfirmRecycle = _ =>
+        {
+            Assert.True(rig.Sidebar.IsTrashing);
+            Assert.False(rig.Sidebar.ShowTrashProgress);
+            Assert.False(rig.Sidebar.CancelTrashCommand.CanExecute(null));
+            return true;
+        };
+        rig.Sidebar.DeleteCommand.Execute(null);
+        await rig.Sidebar.TrashCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(2, tokens.Count);
+        Assert.NotSame(tokens[0], tokens[1]);
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "folder", "keep.md")));
+        Assert.Equal("Cancelled. No items were moved to the Recycle Bin.", rig.Sidebar.Status);
+    }
+
     [Fact]
     public async Task ABatchWithANonEmptyFolderStagesTheBatchCopy()
     {

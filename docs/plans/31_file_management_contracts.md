@@ -378,11 +378,11 @@ enforced by construction, not by review.
 - **FD-5 — "Reveal in File Explorer"** label vs mac's "Reveal in
   Finder"; the P3 label census carries the disposition.
 - **FD-6 — "Cancellation" scenario redefined** (finding 5): the
-  host-drivable cancellation observable is the pre-mutation abort
-  (S5); true mid-operation cancellation requires FFI that does not
-  exist and is recorded as future work (FR-2), not silently claimed.
-- **FD-7 — Windows mutations stay synchronous on the UI thread**
-  (the shipped model; mac detaches under a structural gate). A
+  original harness's cancellation observable is the pre-mutation abort
+  (S5). Trash now has cooperative cancellation through preparation and
+  between batch items (FR-11); move/rename cancellation remains FR-2.
+- **FD-7 — Windows move/rename mutations stay synchronous on the UI thread**
+  (mac detaches under a structural gate; Trash uses FR-11's workers). A
   large link-rewriting rename blocks the UI for its duration; the
   harness measures worst-case fixture timings so the trade-off is
   quantified, and FR-4 records it.
@@ -393,16 +393,16 @@ enforced by construction, not by review.
   (mac's own U2-6 markers); canonical adoption limited to
   `SelectionCopied` + `DuplicateFilesOnly`. A vocabulary family for
   structural mutations is cross-language scope beyond #744.
-- **FR-2 — No mutation cancellation FFI**; `RewriteFailureKind::
+- **FR-2 — No move/rename cancellation FFI**; `RewriteFailureKind::
   Cancelled` stays a reserved shape. S5 is the analog; a
-  cancel-bearing overload set is future core work.
+  cancel-bearing move/rename overload set is future core work.
+  Trash cancellation is covered by FR-11.
 - **FR-3 — Rollback residue states** (single-move tx1 best-effort
   revert; `RollbackIncomplete` + `rollback_failures` +
   `requires_rescan` batches; folder-note rename rewrite residue) are
   core-documented behavior; the harness pins that they are typed and
   reported, not that they cannot exist.
-- **FR-4 — Sync UI-thread mutations** (FD-7): accepted for parity
-  with every shipped Windows structural op; revisit if harness
+- **FR-4 — Sync UI-thread move/rename mutations** (FD-7): revisit if harness
   timings show user-visible stalls on realistic vaults.
 - **FR-5 — Trash is a black hole**: bytes leave the vault via the
   platform trash; the tree oracle asserts absence + the journaled
@@ -471,12 +471,21 @@ enforced by construction, not by review.
   rename APIs still resolve source names and do not offer the same conditional
   primitive; their existing undo behavior remains. Keep #1125 open for those
   platform limits and FR-8's final observation-to-Trash boundary.
-- **FR-11 — Trash inventory work is asynchronous (#1125).** Both hosts
-  run staging and final native revalidation off the UI thread and retain
-  structural/session ownership across the work. Closing or replacing the vault
-  suppresses old-session UI completion. The bounded walk cannot interrupt a
-  stalled OS filesystem call; cancellable I/O and the Move-To loader remain
-  separate follow-ups.
+- **FR-11 — Cooperative Trash cancellation (#1126).** Both hosts run
+  preparation and execution off the UI thread with an accessible Cancel control.
+  Core checks cancellation during bounded inventory, lock waits and final
+  revalidation, then stops before the next physical Trash attempt. Cancelling a
+  confirmation discards only its exact token. A clean pre-attempt cancellation
+  preserves selection and history; a stopped batch retains its confirmed,
+  untrashed and unknown outcomes. Once an OS Trash call starts, its result,
+  recovery markers and index/journal bookkeeping finish before cancellation can
+  stop another item. Closing/replacing the vault suppresses stale UI completion;
+  shutdown retains native ownership until work drains. The full contract is
+  [plan 36](36_cancellable_file_management_contracts.md).
+  **Residual:** an OS filesystem call already in progress may remain blocked.
+  Cooperative cancellation cannot promise an interruption deadline for arbitrary
+  drivers and does not abandon active mutation bookkeeping. Move/rename
+  cancellation remains FR-2; Windows destination loading is tracked by FR-9.
 
 ## Phase plan
 
