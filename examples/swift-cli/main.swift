@@ -62,6 +62,8 @@ func describe(_ error: VaultError) -> String {
     case .Io(let m), .Db(let m), .Trash(let m), .InvalidQuery(let m),
         .InvalidArgument(let m), .TrashConfirmationChanged(let m):
         return m
+    case .StructuralMutationIncomplete(_, let message):
+        return message
     case .InvalidPath(let path, let reason):
         return "invalid path \(path): \(reason)"
     case .Cancelled:

@@ -96,6 +96,10 @@ pub enum VaultError {
     /// Checked Trash refused before any filesystem mutation.
     #[error("{message}")]
     TrashConfirmationChanged { message: String },
+    /// A structural operation changed files but could not complete or safely
+    /// compensate. The host must refresh and discard its structural history.
+    #[error("{message}")]
+    StructuralMutationIncomplete { path: String, message: String },
     #[error("destination already exists: {path}")]
     DestinationExists { path: String },
 
@@ -177,6 +181,9 @@ impl From<core::VaultError> for VaultError {
             }
             core::VaultError::TrashConfirmationChanged { message } => {
                 VaultError::TrashConfirmationChanged { message }
+            }
+            core::VaultError::StructuralMutationIncomplete { path, message } => {
+                VaultError::StructuralMutationIncomplete { path, message }
             }
             core::VaultError::DestinationExists { path } => VaultError::DestinationExists { path },
             core::VaultError::WriteConflict {
@@ -434,6 +441,10 @@ pub fn census_synthesize_vault_error(arm: String) -> Result<(), VaultError> {
         },
         "TrashConfirmationChanged" => VaultError::TrashConfirmationChanged {
             message: "census trash confirmation".into(),
+        },
+        "StructuralMutationIncomplete" => VaultError::StructuralMutationIncomplete {
+            path: "census/structural".into(),
+            message: "census partial mutation".into(),
         },
         "DestinationExists" => VaultError::DestinationExists {
             path: "census/dest.md".into(),
@@ -894,6 +905,102 @@ impl VaultSession {
         new_name: String,
     ) -> Result<StructuralReport, VaultError> {
         Ok(self.inner.rename_folder_with_note(&path, &new_name)?.into())
+    }
+
+    pub fn capture_structural_identity(
+        &self,
+        path: String,
+        include_folder_note: bool,
+    ) -> Result<StructuralIdentity, VaultError> {
+        let identity = self
+            .inner
+            .capture_structural_identity(&path, include_folder_note)?;
+        Ok(StructuralIdentity {
+            entry: identity.entry,
+            folder_note: identity.folder_note,
+        })
+    }
+
+    pub fn rename_folder_with_note_if_identity(
+        &self,
+        path: String,
+        new_name: String,
+        identity: StructuralIdentity,
+    ) -> Result<StructuralReport, VaultError> {
+        Ok(self
+            .inner
+            .rename_folder_with_note_if_identity(
+                &path,
+                &new_name,
+                &core::StructuralIdentity {
+                    entry: identity.entry,
+                    folder_note: identity.folder_note,
+                },
+            )?
+            .into())
+    }
+
+    pub fn rename_file_if_identity(
+        &self,
+        path: String,
+        new_name: String,
+        identity: String,
+    ) -> Result<StructuralReport, VaultError> {
+        Ok(self
+            .inner
+            .rename_file_if_identity(&path, &new_name, &identity)?
+            .into())
+    }
+
+    pub fn move_folder_if_identity(
+        &self,
+        path: String,
+        new_parent: String,
+        identity: String,
+    ) -> Result<StructuralReport, VaultError> {
+        Ok(self
+            .inner
+            .move_folder_if_identity(&path, &new_parent, &identity)?
+            .into())
+    }
+
+    pub fn move_file_if_identity(
+        &self,
+        path: String,
+        new_parent: String,
+        identity: String,
+    ) -> Result<StructuralReport, VaultError> {
+        Ok(self
+            .inner
+            .move_file_if_identity(&path, &new_parent, &identity)?
+            .into())
+    }
+
+    pub fn structural_identities_match(
+        &self,
+        identities: std::collections::HashMap<String, String>,
+    ) -> Result<bool, VaultError> {
+        Ok(self.inner.structural_identities_match(identities)?)
+    }
+
+    pub fn capture_batch_move_identities(
+        &self,
+        items: Vec<StructuralBatchItem>,
+    ) -> Result<std::collections::HashMap<String, String>, VaultError> {
+        Ok(self
+            .inner
+            .capture_batch_move_identities(items.into_iter().map(Into::into).collect())?)
+    }
+
+    pub fn undo_batch_move_if_identities(
+        &self,
+        op_id: i64,
+        identities: std::collections::HashMap<String, String>,
+    ) -> Result<BatchMoveReport, VaultError> {
+        Ok(self
+            .inner
+            .undo_batch_move_if_identities(op_id, identities)?
+            .into())
     }
 
     pub fn move_folder(
@@ -2610,6 +2717,13 @@ pub struct BatchMoveRequest {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct BatchTrashRequest {
     pub items: Vec<StructuralBatchItem>,
+}
+
+/// Expected native identities captured before a forward structural operation.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct StructuralIdentity {
+    pub entry: String,
+    pub folder_note: Option<String>,
 }
 
 /// Counts and a single-use token from core's captured Trash inventory.

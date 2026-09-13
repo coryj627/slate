@@ -48,3 +48,6 @@ pub use fs::{FsVaultProvider, content_hash};
 pub use provider::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, VaultProvider, WatchHandle,
 };
+
+#[cfg(windows)]
+mod windows_entry;

@@ -1688,8 +1688,14 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         BeginStructuralResult();
         try
         {
+            Dictionary<string, string>? identities = null;
             if (!TryRunSessionWork(
-                () => _session.BatchMove(new BatchMoveRequest(items, MoveDestination)),
+                () =>
+                {
+                    try { identities = _session.CaptureBatchMoveIdentities(items); }
+                    catch (VaultException) { /* The move may proceed without undo support. */ }
+                    return _session.BatchMove(new BatchMoveRequest(items, MoveDestination));
+                },
                 out BatchMoveReport report))
             {
                 return;
@@ -1704,16 +1710,23 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // W5-4 F10: a SUCCEEDED batch move is undoable through the
             // dedicated endpoint; anything less than Succeeded is not a
             // clean inverse and records nothing.
-            if (report.State == BatchMoveState.Succeeded && report.OpId is long opId)
+            if (report.State == BatchMoveState.Succeeded && report.OpId is long opId
+                && identities is not null && report.Standing.All(change => identities.ContainsKey(change.OldPath)))
             {
-                _structuralUndo.Push(new StructuralUndoStep(
+                PushIdentityCheckedStep(new StructuralUndoStep(
                     StructuralUndoKind.BatchMove,
                     Path: string.Empty,
                     Argument: string.Empty,
                     IsDirectory: false,
                     Noun: $"{report.Standing.Length:N0} "
                         + (report.Standing.Length == 1 ? "item" : "items"),
-                    BatchOpId: opId));
+                    BatchOpId: opId,
+                    BatchIdentities: report.Standing.ToDictionary(
+                        change => change.NewPath, change => identities[change.OldPath], StringComparer.Ordinal)));
+            }
+            else if (report.State == BatchMoveState.Succeeded)
+            {
+                StructuralHistoryBarrier();
             }
 
             RequestSelectionAt(null);

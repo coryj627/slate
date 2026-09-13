@@ -7,30 +7,16 @@
 use super::{MAX_DEPTH, MAX_ENTRIES, TrashSnapshot, field, refused};
 use crate::VaultError;
 use std::os::windows::{
-    ffi::{OsStrExt, OsStringExt},
+    ffi::OsStringExt,
     fs::{MetadataExt, OpenOptionsExt},
-    io::{AsRawHandle, FromRawHandle},
+    io::AsRawHandle,
 };
 use std::{
     ffi::{OsStr, OsString},
     fs, io,
     path::{Component, Path},
 };
-use windows_sys::{
-    Wdk::{
-        Foundation::OBJECT_ATTRIBUTES,
-        Storage::FileSystem::{
-            FILE_OPEN, FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT, NtCreateFile,
-        },
-    },
-    Win32::{
-        Foundation::{
-            ERROR_NO_MORE_FILES, OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError, UNICODE_STRING,
-        },
-        Storage::FileSystem::*,
-        System::IO::IO_STATUS_BLOCK,
-    },
-};
+use windows_sys::Win32::{Foundation::ERROR_NO_MORE_FILES, Storage::FileSystem::*};
 
 pub(in crate::vault) fn snapshot(root: &Path, path: &Path) -> Result<TrashSnapshot, VaultError> {
     let relative = path
@@ -85,58 +71,11 @@ fn check_directory(file: &fs::File) -> Result<(), VaultError> {
 }
 
 fn open_child(parent: &fs::File, name: &OsStr) -> io::Result<fs::File> {
-    let mut name: Vec<u16> = name.encode_wide().collect();
-    if name.is_empty()
-        || name == [46]
-        || name == [46, 46]
-        || name.iter().any(|c| matches!(*c, 0 | 47 | 58 | 92))
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Expected a simple entry name",
-        ));
-    }
-    let length = u16::try_from(name.len() * 2)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Entry name is too long"))?;
-    let mut unicode = UNICODE_STRING {
-        Length: length,
-        MaximumLength: length,
-        Buffer: name.as_mut_ptr(),
-    };
-    let attributes = OBJECT_ATTRIBUTES {
-        Length: std::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
-        RootDirectory: parent.as_raw_handle(),
-        ObjectName: &mut unicode,
-        Attributes: OBJ_CASE_INSENSITIVE,
-        ..Default::default()
-    };
-    let mut handle = std::ptr::null_mut();
-    let mut status_block: IO_STATUS_BLOCK = unsafe { std::mem::zeroed() };
-    // SAFETY: the synchronous call borrows live name/attribute/status buffers and
-    // the parent handle. A single component plus OPEN_REPARSE_POINT never follows
-    // a child link; converted parent reparses fail instead of re-resolving a path.
-    let status = unsafe {
-        NtCreateFile(
-            &mut handle,
-            FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | SYNCHRONIZE,
-            &attributes,
-            &mut status_block,
-            std::ptr::null(),
-            0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            FILE_OPEN,
-            FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
-            std::ptr::null(),
-            0,
-        )
-    };
-    if status < 0 {
-        return Err(io::Error::from_raw_os_error(
-            unsafe { RtlNtStatusToDosError(status) } as i32,
-        ));
-    }
-    // SAFETY: a successful NtCreateFile transfers a newly owned file handle.
-    Ok(unsafe { fs::File::from_raw_handle(handle) })
+    crate::vault::windows_entry::open_relative(
+        parent,
+        name,
+        FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
+    )
 }
 
 fn visit(

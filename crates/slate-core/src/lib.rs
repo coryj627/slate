@@ -235,6 +235,10 @@ pub enum VaultError {
     /// The checked Trash request refused before any filesystem mutation.
     #[error("{message}")]
     TrashConfirmationChanged { message: String },
+    /// A structural operation changed files but could not complete or safely
+    /// compensate. The host must refresh and discard its structural history.
+    #[error("{message}")]
+    StructuralMutationIncomplete { path: String, message: String },
     /// A structural mutation's destination already exists (case-insensitive
     /// on APFS). There is deliberately no overwrite path (DoD §F).
     #[error("destination already exists: {path}")]
@@ -733,3 +737,6 @@ mod tests {
         );
     }
 }
+
+mod structural_identity;
+pub use structural_identity::StructuralIdentity;
