@@ -648,7 +648,7 @@ public sealed class GraphNavigatorCensus
     /// the constructor's read alone; the store's Write reached from the
     /// writer's queue body alone; and the WRITE CLASS closed across the shell:
     /// the literal "graph.json" in the store's path builder alone, and every
-    /// filesystem mutation API under Graph/ inside the store's Write.</summary>
+    /// graph-path mutation across the shell originates in the store's Write.</summary>
     [Fact]
     public void TheWriterIsOneStaticAndItsOperationsHaveTheirNamedCallersAndTheWriteClassIsClosed()
     {
@@ -660,42 +660,13 @@ public sealed class GraphNavigatorCensus
             CallersOf(ThePreferencesType, "TransferPending"));
         Assert.Equal(["Graph/GraphPreferencesViewModel.cs:<ctor>"], CallersOf(TheWriterType, "Newest"));
         Assert.Equal(["Graph/GraphConfigWriter.cs:Write"], CallersOf(TheStoreType, "Write"));
-        var literals = new List<string>();
-        var mutations = new List<string>();
-        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
-        {
-            foreach (LiteralExpressionSyntax literal in source.Root.DescendantNodes().OfType<LiteralExpressionSyntax>())
-            {
-                if (literal.IsKind(SyntaxKind.StringLiteralExpression) && literal.Token.ValueText == "graph.json")
-                {
-                    literals.Add($"{relative}:{OwnerOf(literal)}");
-                }
-            }
-            if (!relative.StartsWith("Graph/", StringComparison.Ordinal))
-            {
-                continue;
-            }
-            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
-            {
-                string callee = CSharpSource.Normalize(call.Expression);
-                if (callee is "File.Move" or "File.Replace" or "File.WriteAllText" or "File.WriteAllBytes" or "File.Copy" or "File.Delete" or "File.AppendAllText")
-                {
-                    mutations.Add($"{relative}:{OwnerOf(call)}:{callee}");
-                }
-            }
-            foreach (ObjectCreationExpressionSyntax creation in source.Root.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
-            {
-                string type = creation.Type.ToString();
-                if (type is "FileStream" or "StreamWriter")
-                {
-                    mutations.Add($"{relative}:{OwnerOf(creation)}:new {type}");
-                }
-            }
-        }
-        Assert.Equal(["Graph/GraphConfigStore.cs:FileName"], literals);
-        Assert.Equal(
-            ["Graph/GraphConfigStore.cs:Write:File.Move", "Graph/GraphConfigStore.cs:Write:File.WriteAllText"],
-            mutations.Order(StringComparer.Ordinal));
+        GraphConfigMutationCensus.Report report = GraphConfigMutationCensus.Inspect(
+            ShellCompilation.Compilation, ShellCompilation.Sources.Select(file => file.Source.Root.SyntaxTree));
+        Assert.True(report.Violations.Count == 0, string.Join("\n", report.Violations));
+        Assert.Contains(report.Mutations, mutation => mutation.Contains("GraphConfigStore.cs:Write:", StringComparison.Ordinal)
+            && mutation.EndsWith(": File.WriteAllText", StringComparison.Ordinal));
+        Assert.Contains(report.Mutations, mutation => mutation.Contains("GraphConfigStore.cs:Write:", StringComparison.Ordinal)
+            && mutation.EndsWith(": File.Move", StringComparison.Ordinal));
     }
 
     // --- C-13: the label theory ----------------------------------------------------
