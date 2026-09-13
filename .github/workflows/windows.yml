@@ -1,7 +1,7 @@
 # Windows frontend CI (w0_spec §W0-2 item 3, #603): path-filtered so a
 # Windows PR doesn't block on mac checks and vice versa (the per-area
-# pattern of a11y-check.yml / swift-tests.yml). Three parallel jobs and a
-# gate:
+# pattern of a11y-check.yml / swift-tests.yml). Parallel build/test lanes
+# and required aggregation:
 #
 #   rust-tests — the deliberate platform witnesses (slate-core, slate-cli
 #     suites: MoveFileExW no-clobber, reserved-name validation,
@@ -10,10 +10,10 @@
 #     it instead of serially in front of it.
 #   windows — release cdylib + C# bindings, app build, xUnit suite, the
 #     `dotnet format` promise, and the FlaUI binaries handoff.
-#   windows-model — the same setup and build, running only the
-#     Connections leaf's executable model (W6-2 PR B2, B2-8): three facts
-#     that drive ~7,000 fresh workspaces for ~45 minutes serially, kept
-#     out of the suite lane's wall time.
+#   windows-model-shard — two independent jobs divide all 13,069
+#     Connections model scenarios, retaining serial dispatcher execution
+#     and fresh workspaces in each process. windows-model verifies their
+#     complete, disjoint coverage and keeps the existing check name.
 #   flaui — the FlaUI/axe-windows shell gate, on GITHUB-HOSTED
 #     windows-latest: the 2026-07-31 spike run proved the Namespace
 #     Windows session is NON-INTERACTIVE, and the W1-1 gate launches
@@ -124,6 +124,8 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - '.github/workflows/windows.yml'
+      - 'scripts/verify_windows_model_shards.py'
+      - 'scripts/tests/test_windows_model_shards.py'
   push:
     branches: [main]
     paths:
@@ -133,6 +135,8 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - '.github/workflows/windows.yml'
+      - 'scripts/verify_windows_model_shards.py'
+      - 'scripts/tests/test_windows_model_shards.py'
   workflow_dispatch:
 
 concurrency:
@@ -486,20 +490,19 @@ jobs:
             }
           }
 
-  # W1-1 / §W-C: launch the real Fluent-styled WinExe, drive its shell
-  # through UIA3, and run the axe-windows rule set against the live
-  # tree. GitHub-hosted: the Namespace Windows session is
-  # non-interactive (2026-07-31 spike) and this gate needs a desktop.
-  # Runs on the app lane's built binaries — no checkout, no compilers,
-  # no cache; setup-dotnet supplies the runtime.
-  windows-model:
-    name: app model (windows x64)
+  windows-model-shard:
+    name: app model (windows x64, shard ${{ matrix.shard }})
     runs-on: namespace-profile-winx64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-windows-model
-    # The model alone runs ~45 minutes; a cold cache adds the bindings build.
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        shard: [0, 1]
+    # Preserve cold-build headroom; successful waits are completion-based.
     timeout-minutes: 90
-    # The model lane mirrors the suite lane's setup step for step (the
-    # cache attestation included); it uploads no artifact and runs no
-    # format gate — the suite lane keeps both.
+    # Both runners receive private cache-volume forks and build the same
+    # release/NuGet graph, so the existing lineage stays useful to either.
+    # Results live outside the cache. Trusted-main/PR routing is unchanged.
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
@@ -609,15 +612,70 @@ jobs:
       - name: Build
         run: dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
 
-      # W6-2 PR B2 (B2-8): the Connections leaf's executable model — three
-      # facts over rule C's routes crossed with rule D's modes, the re-root
-      # and Back product and the composed routes — drives ~7,000 fresh
-      # workspaces and runs ~45 minutes serially (the assembly disables
-      # xunit parallelism), so it has a lane of its own beside the suite.
+      # Partition reachable global ordinals, never the debug text filter.
+      # Every shard still validates the complete inventory and exclusions.
       - name: Test (the Connections model)
-        run: dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --configuration Release --no-build --filter "FullyQualifiedName~ConnectionsLeafTests.TheModelOf"
+        run: >-
+          dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj
+          --configuration Release --no-build
+          --filter "FullyQualifiedName~ConnectionsLeafTests.TheModelOf"
+          --logger "trx;LogFileName=connections-model.trx"
+          --results-directory "${{ runner.temp }}\slate-model-results"
+        env:
+          SLATE_MODEL_SHARD_INDEX: '${{ matrix.shard }}'
+          SLATE_MODEL_SHARD_COUNT: '2'
+          SLATE_MODEL_REPORT_DIR: '${{ runner.temp }}\slate-model-results'
+          SLATE_MODEL_ONLY: ''
+
+      - name: Upload model timings and coverage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          # Re-running only failed jobs retains successful sibling artifacts.
+          # A rerun replaces this shard's evidence within the same run/SHA.
+          name: windows-model-${{ github.run_id }}-${{ matrix.shard }}
+          overwrite: true
+          path: '${{ runner.temp }}\slate-model-results\**\*'
+          if-no-files-found: error
+          retention-days: 30
+
+  windows-model:
+    name: app model (windows x64)
+    needs: [windows-model-shard]
+    if: ${{ always() }}
+    runs-on: namespace-profile-x64-fast
+    timeout-minutes: 5
+    steps:
+      - name: Require all model shards to succeed
+        env:
+          MODEL_RESULT: '${{ needs.windows-model-shard.result }}'
+        run: |
+          if [ "$MODEL_RESULT" != "success" ]; then
+            echo "::error::model shards=$MODEL_RESULT"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+
+      - name: Test model coverage verifier
+        run: python3 -m unittest discover -s scripts/tests -p test_windows_model_shards.py
+
+      - name: Download every model shard report
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
+        with:
+          pattern: windows-model-${{ github.run_id }}-*
+          path: '${{ runner.temp }}/slate-model-reports'
+
+      - name: Verify complete model coverage and summarize timings
+        run: >-
+          python3 scripts/verify_windows_model_shards.py
+          --reports-dir "${{ runner.temp }}/slate-model-reports"
+          --shard-count 2 --summary "$GITHUB_STEP_SUMMARY"
 
 
+  # W1-1 / §W-C: launch the real Fluent-styled WinExe on an interactive
+  # desktop, drive UIA3 and run axe-windows using the app lane's binaries.
   flaui:
     name: shell accessibility gate (windows x64)
     needs: [windows]
@@ -668,8 +726,8 @@ jobs:
   # The historical required-check identity. Fails unless ALL lanes
   # succeed, so "build + test (windows x64)" green still means what it
   # meant when the lanes were one serial job. Runs on the Namespace
-  # Linux x64 profile (license-headers.yml's runner): it evaluates
-  # three strings, and the vendor-standard runner boots fast and bills
+# Linux x64 profile (license-headers.yml's runner): it evaluates
+  # the lane results, and the vendor-standard runner boots fast and bills
   # at 1x.
   gate:
     name: build + test (windows x64)

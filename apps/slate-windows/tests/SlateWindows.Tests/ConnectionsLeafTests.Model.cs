@@ -2031,202 +2031,198 @@ public sealed partial class ConnectionsLeafTests
         Assert.Equal(PinnedModes, Enum.GetValues<Mode>().Length);
         Cell[] cells = [.. Cells()];
         Assert.Equal(PinnedCells, cells.Length);
-        string[] only = (Environment.GetEnvironmentVariable("SLATE_MODEL_ONLY") ?? string.Empty)
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        using var run = new ModelTestRun<Cell>(
+            "routes", cells, cell => cell.ToString(), cell => cell.Route.ToString(),
+            Unreachable, ModelShardConfiguration.FromEnvironment());
+        run.AssertInventory(PinnedCells, PinnedUnreachable, PinnedDriven);
         var failures = new List<string>();
-        var unreachable = new List<string>();
-        int driven = 0;
         PumpedDispatcher.Run(() =>
         {
             Fixture? fixture = null;
-            foreach (Cell cell in cells)
+            foreach (var modelCase in run.SelectedCases)
             {
-                if (Unreachable(cell) is { } reason)
+                run.RunCase(modelCase, timing =>
                 {
-                    unreachable.Add($"{cell}: {reason}");
-                    continue;
-                }
-                if (only.Length > 0 && !only.All(term => cell.ToString().Contains(term, StringComparison.Ordinal)))
-                {
-                    continue;
-                }
-                using GraphVault vault = GraphVault.Copy($"model-{driven}");
-                fixture ??= FixtureOf();
-                Derivation expected = Derive(cell, fixture);
-                Host host;
-                Host? created = null;
-                int before;
-                string? lineBefore = null;
-                string? captured = null;
-                ParkedFetch? parked = null;
-                driven++;
-                try
-                {
-                    if (cell.Route == Route.Launch)
+                    Cell cell = modelCase.Value;
+                    int driven = modelCase.Ordinal;
+                    using GraphVault vault = GraphVault.Copy($"model-{driven - 1}");
+                    fixture ??= FixtureOf();
+                    Derivation expected = Derive(cell, fixture);
+                    Host host;
+                    Host? created = null;
+                    int before;
+                    string? lineBefore = null;
+                    string? captured = null;
+                    ParkedFetch? parked = null;
+                    try
                     {
-                        using (Host first = ModelHost(vault.Root))
+                        timing.Phase("sessionSetup");
+                        if (cell.Route == Route.Launch)
                         {
-                            _ = Arrange(first, cell, fixture, driven);
-                            SettleTheDocuments(first);
+                            using (Host first = ModelHost(vault.Root))
+                            {
+                                timing.Phase("arrangement");
+                                _ = Arrange(first, cell, fixture, driven);
+                                SettleTheDocuments(first);
+                            }
+                            // The launch IS the construction: its timeline from the start.
+                            timing.Phase("sessionSetup");
+                            host = created = ModelHost(vault.Root);
+                            before = 0;
                         }
-                        // The launch IS the construction: its timeline from the start.
-                        host = created = ModelHost(vault.Root);
-                        before = 0;
+                        else
+                        {
+                            timing.Phase("sessionSetup");
+                            host = created = ModelHost(vault.Root);
+                            try
+                            {
+                                timing.Phase("arrangement");
+                                parked = Arrange(host, cell, fixture, driven);
+                            }
+                            catch (Exception arrangement) when (arrangement is Xunit.Sdk.XunitException or InvalidOperationException)
+                            {
+                                // A state the model cannot arrange is a divergence of
+                                // its own, reported with the rest rather than aborting
+                                // the run (the fact still fails).
+                                timing.Phase("cleanup");
+                                parked?.Gate.Set();
+                                parked?.Dispose();
+                                host.Dispose();
+                                failures.Add($"{cell}: the arrangement failed — {arrangement.Message.ReplaceLineEndings(" ")}");
+                                return;
+                            }
+                            if (RootBefore(cell) is { } rootBefore)
+                            {
+                                lineBefore = LineFor(host, rootBefore, DepthBefore(cell));
+                            }
+                            host.Clear();
+                            before = host.Loads;
+                            timing.Phase("drive");
+                            captured = Drive(host, cell, fixture, parked);
+                            parked?.Gate.Set();
+                        }
+                    }
+                    catch (Exception drive) when (drive is Xunit.Sdk.XunitException or InvalidOperationException)
+                    {
+                        timing.Phase("cleanup");
+                        parked?.Gate.Set();
+                        parked?.Dispose();
+                        created?.Dispose();
+                        failures.Add($"{cell}: the drive failed — {drive.Message.ReplaceLineEndings(" ")}");
+                        return;
+                    }
+                    timing.Phase("settleAndVerify");
+                    if (cell.Route != Route.Shutdown)
+                    {
+                        SettleTheDocuments(host);
+                    }
+                    int loads = host.Loads - before;
+
+                    uint depthAfter = cell.Route == Route.DepthChange ? DepthBefore(cell) + 1 : DepthBefore(cell);
+                    string[] timeline =
+                    [
+                        .. expected.Timeline.Select(entry => entry switch
+                        {
+                            LinePlaceholder => expected.Root is { } root ? LineFor(host, root, depthAfter) : "<no root to report>",
+                            LineBeforePlaceholder => lineBefore ?? "<no tree before the route>",
+                            CapturedPlaceholder => captured ?? "<nothing captured>",
+                            _ => entry,
+                        }),
+                    ];
+                    var mismatch = new List<string>();
+                    if (parked is { TimedOut: true })
+                    {
+                        mismatch.Add("the parked fetch resumed on its own before the route released it");
+                    }
+                    if (loads != expected.Loads && loads != expected.LoadsOr)
+                    {
+                        mismatch.Add($"loads {loads}, derived {expected.Loads}{(expected.LoadsOr is { } alternative ? $" or {alternative}" : string.Empty)}");
+                    }
+                    if (!timeline.SequenceEqual(host.Timeline))
+                    {
+                        mismatch.Add($"timeline [{string.Join(" | ", host.Timeline)}], derived [{string.Join(" | ", timeline)}]");
+                    }
+                    // Every route, the shutdown included (IPC-15): the retired leaf
+                    // holds NoNote, nothing in flight, its root, its depth and rule
+                    // D's state retained.
+                    if (host.Leaf.IsRetired != (cell.Route == Route.Shutdown))
+                    {
+                        mismatch.Add(cell.Route == Route.Shutdown ? "the leaf survived the shutdown" : "the leaf retired");
+                    }
+                    {
+                        if (!string.Equals(host.Leaf.Root, expected.Root, StringComparison.Ordinal))
+                        {
+                            mismatch.Add($"root {host.Leaf.Root ?? "none"}, derived {expected.Root ?? "none"}");
+                        }
+                        if (expected.Stale is { } stale && host.Leaf.Root is not null && host.Leaf.IsStale != stale)
+                        {
+                            mismatch.Add($"stale {host.Leaf.IsStale}, derived {stale}");
+                        }
+                        if (host.Leaf.Root is not null && host.Leaf.Depth != depthAfter)
+                        {
+                            mismatch.Add($"depth {host.Leaf.Depth}, derived {depthAfter}");
+                        }
+                        ConnectionsLoadState stateAfter = StateAfter(cell, expected);
+                        if (host.Leaf.Publication.State != stateAfter)
+                        {
+                            mismatch.Add($"state {host.Leaf.Publication.State}, derived {stateAfter}");
+                        }
+                        if (host.Leaf.InFlight)
+                        {
+                            mismatch.Add("a load still in flight after the settle");
+                        }
+                        // Rule D's state (B2-8): the mode, the note in view, the whole
+                        // stack, the shared key, the pending mount, the last focus request.
+                        RootMode mode = RootModeAfter(cell, fixture, expected);
+                        if (!string.Equals(host.Leaf.Pin, mode.Pin, StringComparison.Ordinal))
+                        {
+                            mismatch.Add($"pin {host.Leaf.Pin ?? "FOLLOWING"}, derived {mode.Pin ?? "FOLLOWING"}");
+                        }
+                        if (!string.Equals(host.Leaf.NoteInView, mode.NoteInView, StringComparison.Ordinal))
+                        {
+                            mismatch.Add($"note in view {host.Leaf.NoteInView ?? "none"}, derived {mode.NoteInView ?? "none"}");
+                        }
+                        if (!host.Leaf.BackStack.SequenceEqual(mode.Stack))
+                        {
+                            mismatch.Add($"stack [{StackText(host.Leaf.BackStack)}], derived [{StackText(mode.Stack)}]");
+                        }
+                        string? key = host.Workspace.GraphViewStateForTests.SelectedKey;
+                        if (!string.Equals(key, mode.Key, StringComparison.Ordinal))
+                        {
+                            mismatch.Add($"key {key ?? "none"}, derived {mode.Key ?? "none"}");
+                        }
+                        if (host.Workspace.ConnectionsMountPendingForTests)
+                        {
+                            mismatch.Add("a mount still pending after the settle");
+                        }
+                        string? focus = host.FocusRequests.LastOrDefault();
+                        if (!string.Equals(focus, FocusAfter(cell), StringComparison.Ordinal))
+                        {
+                            mismatch.Add($"focus {focus ?? "none"}, derived {FocusAfter(cell) ?? "none"}");
+                        }
+                    }
+                    if (mismatch.Count > 0)
+                    {
+                        string tabs = cell.Route == Route.Shutdown
+                            ? string.Empty
+                            : $" — tabs [{string.Join(", ", host.Workspace.Groups.SelectMany(g => g.Tabs).Select(t => t.Item.Kind + ":" + (t.Path ?? t.Title) + (ReferenceEquals(t, host.Workspace.ActiveGroup.ActiveTab) ? "*" : "")))}]";
+                        failures.Add($"{cell}: {string.Join("; ", mismatch)}{tabs}");
+                    }
+                    timing.Phase("cleanup");
+                    parked?.Dispose();
+                    if (cell.Route == Route.Shutdown)
+                    {
+                        host.Session.Dispose();
                     }
                     else
                     {
-                        host = created = ModelHost(vault.Root);
-                        try
-                        {
-                            parked = Arrange(host, cell, fixture, driven);
-                        }
-                        catch (Exception arrangement) when (arrangement is Xunit.Sdk.XunitException or InvalidOperationException)
-                        {
-                            // A state the model cannot arrange is a divergence of
-                            // its own, reported with the rest rather than aborting
-                            // the run (the fact still fails).
-                            parked?.Gate.Set();
-                            parked?.Dispose();
-                            host.Dispose();
-                            failures.Add($"{cell}: the arrangement failed — {arrangement.Message.ReplaceLineEndings(" ")}");
-                            continue;
-                        }
-                        if (RootBefore(cell) is { } rootBefore)
-                        {
-                            lineBefore = LineFor(host, rootBefore, DepthBefore(cell));
-                        }
-                        host.Clear();
-                        before = host.Loads;
-                        captured = Drive(host, cell, fixture, parked);
-                        parked?.Gate.Set();
+                        host.Dispose();
                     }
-                }
-                catch (Exception drive) when (drive is Xunit.Sdk.XunitException or InvalidOperationException)
-                {
-                    parked?.Gate.Set();
-                    parked?.Dispose();
-                    created?.Dispose();
-                    failures.Add($"{cell}: the drive failed — {drive.Message.ReplaceLineEndings(" ")}");
-                    continue;
-                }
-                if (cell.Route != Route.Shutdown)
-                {
-                    SettleTheDocuments(host);
-                }
-                int loads = host.Loads - before;
-
-                uint depthAfter = cell.Route == Route.DepthChange ? DepthBefore(cell) + 1 : DepthBefore(cell);
-                string[] timeline =
-                [
-                    .. expected.Timeline.Select(entry => entry switch
-                    {
-                        LinePlaceholder => expected.Root is { } root ? LineFor(host, root, depthAfter) : "<no root to report>",
-                        LineBeforePlaceholder => lineBefore ?? "<no tree before the route>",
-                        CapturedPlaceholder => captured ?? "<nothing captured>",
-                        _ => entry,
-                    }),
-                ];
-                var mismatch = new List<string>();
-                if (parked is { TimedOut: true })
-                {
-                    mismatch.Add("the parked fetch resumed on its own before the route released it");
-                }
-                if (loads != expected.Loads && loads != expected.LoadsOr)
-                {
-                    mismatch.Add($"loads {loads}, derived {expected.Loads}{(expected.LoadsOr is { } alternative ? $" or {alternative}" : string.Empty)}");
-                }
-                if (!timeline.SequenceEqual(host.Timeline))
-                {
-                    mismatch.Add($"timeline [{string.Join(" | ", host.Timeline)}], derived [{string.Join(" | ", timeline)}]");
-                }
-                // Every route, the shutdown included (IPC-15): the retired leaf
-                // holds NoNote, nothing in flight, its root, its depth and rule
-                // D's state retained.
-                if (host.Leaf.IsRetired != (cell.Route == Route.Shutdown))
-                {
-                    mismatch.Add(cell.Route == Route.Shutdown ? "the leaf survived the shutdown" : "the leaf retired");
-                }
-                {
-                    if (!string.Equals(host.Leaf.Root, expected.Root, StringComparison.Ordinal))
-                    {
-                        mismatch.Add($"root {host.Leaf.Root ?? "none"}, derived {expected.Root ?? "none"}");
-                    }
-                    if (expected.Stale is { } stale && host.Leaf.Root is not null && host.Leaf.IsStale != stale)
-                    {
-                        mismatch.Add($"stale {host.Leaf.IsStale}, derived {stale}");
-                    }
-                    if (host.Leaf.Root is not null && host.Leaf.Depth != depthAfter)
-                    {
-                        mismatch.Add($"depth {host.Leaf.Depth}, derived {depthAfter}");
-                    }
-                    ConnectionsLoadState stateAfter = StateAfter(cell, expected);
-                    if (host.Leaf.Publication.State != stateAfter)
-                    {
-                        mismatch.Add($"state {host.Leaf.Publication.State}, derived {stateAfter}");
-                    }
-                    if (host.Leaf.InFlight)
-                    {
-                        mismatch.Add("a load still in flight after the settle");
-                    }
-                    // Rule D's state (B2-8): the mode, the note in view, the whole
-                    // stack, the shared key, the pending mount, the last focus request.
-                    RootMode mode = RootModeAfter(cell, fixture, expected);
-                    if (!string.Equals(host.Leaf.Pin, mode.Pin, StringComparison.Ordinal))
-                    {
-                        mismatch.Add($"pin {host.Leaf.Pin ?? "FOLLOWING"}, derived {mode.Pin ?? "FOLLOWING"}");
-                    }
-                    if (!string.Equals(host.Leaf.NoteInView, mode.NoteInView, StringComparison.Ordinal))
-                    {
-                        mismatch.Add($"note in view {host.Leaf.NoteInView ?? "none"}, derived {mode.NoteInView ?? "none"}");
-                    }
-                    if (!host.Leaf.BackStack.SequenceEqual(mode.Stack))
-                    {
-                        mismatch.Add($"stack [{StackText(host.Leaf.BackStack)}], derived [{StackText(mode.Stack)}]");
-                    }
-                    string? key = host.Workspace.GraphViewStateForTests.SelectedKey;
-                    if (!string.Equals(key, mode.Key, StringComparison.Ordinal))
-                    {
-                        mismatch.Add($"key {key ?? "none"}, derived {mode.Key ?? "none"}");
-                    }
-                    if (host.Workspace.ConnectionsMountPendingForTests)
-                    {
-                        mismatch.Add("a mount still pending after the settle");
-                    }
-                    string? focus = host.FocusRequests.LastOrDefault();
-                    if (!string.Equals(focus, FocusAfter(cell), StringComparison.Ordinal))
-                    {
-                        mismatch.Add($"focus {focus ?? "none"}, derived {FocusAfter(cell) ?? "none"}");
-                    }
-                }
-                if (mismatch.Count > 0)
-                {
-                    string tabs = cell.Route == Route.Shutdown
-                        ? string.Empty
-                        : $" — tabs [{string.Join(", ", host.Workspace.Groups.SelectMany(g => g.Tabs).Select(t => t.Item.Kind + ":" + (t.Path ?? t.Title) + (ReferenceEquals(t, host.Workspace.ActiveGroup.ActiveTab) ? "*" : "")))}]";
-                    failures.Add($"{cell}: {string.Join("; ", mismatch)}{tabs}");
-                }
-                parked?.Dispose();
-                if (cell.Route == Route.Shutdown)
-                {
-                    host.Session.Dispose();
-                }
-                else
-                {
-                    host.Dispose();
-                }
+                    timing.Complete();
+                });
             }
         });
-        Assert.True(failures.Count == 0, $"{failures.Count} of {driven} cells diverge from the model (unreachable {unreachable.Count}):\n{string.Join("\n", failures)}");
-        if (only.Length > 0)
-        {
-            // A narrowed run (SLATE_MODEL_ONLY, a development and mutation
-            // affordance): the cells it drove agree; the totals are the whole
-            // model's.
-            Assert.True(driven > 0, $"the narrowing [{string.Join(", ", only)}] matched no cell");
-            return;
-        }
-        Assert.True(
-            unreachable.Count == PinnedUnreachable && driven == PinnedDriven,
-            $"the model named {unreachable.Count} cells as not states of the system and drove {driven}; pinned {PinnedUnreachable} and {PinnedDriven}");
+        Assert.True(failures.Count == 0, $"{failures.Count} of {run.SelectedCases.Count} cells diverge from the model (unreachable {run.UnreachableCells}):\n{string.Join("\n", failures)}");
+        run.Complete();
     }
 }
