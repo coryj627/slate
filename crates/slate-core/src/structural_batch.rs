@@ -66,6 +66,8 @@ pub enum BatchFailureStage {
     Trash,
     Reconciliation,
     RecoveryBarrier,
+    /// This item was never dispatched because cancellation stopped the batch.
+    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

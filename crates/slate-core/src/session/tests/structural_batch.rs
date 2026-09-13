@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::structural_batch::{
-    BatchMoveRequest, BatchMoveState, BatchTrashRequest, BatchTrashState,
+    BatchFailureStage, BatchMoveRequest, BatchMoveState, BatchTrashRequest, BatchTrashState,
     MAX_STRUCTURAL_BATCH_ITEMS, StructuralBatchItem,
 };
 use crate::{DirEntry, FileEventSink, FileStat, WatchHandle};
@@ -57,10 +57,20 @@ struct FaultState {
     delete_number: usize,
     remove_after_delete: BTreeMap<String, String>,
     snapshot_number: usize,
+    cancel_snapshot_numbers: BTreeMap<usize, CancelToken>,
+    cancel_delete_numbers: BTreeMap<usize, CancelToken>,
+    fail_deletes_with_cancelled: BTreeSet<usize>,
+    snapshot_gate: Option<(usize, Arc<SnapshotGate>)>,
     fail_snapshot_numbers: BTreeSet<usize>,
     rename_number: usize,
     #[cfg(windows)]
     collision_after_conditional_rename: BTreeMap<(String, String), String>,
+}
+
+#[derive(Debug)]
+struct SnapshotGate {
+    reached: mpsc::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
 }
 
 #[derive(Debug)]
@@ -235,7 +245,23 @@ impl VaultProvider for FaultInjectingProvider {
         let mut state = self.state.lock().unwrap();
         state.snapshot_number += 1;
         let fail = state.fail_snapshot_numbers.contains(&state.snapshot_number);
+        let cancel = state
+            .cancel_snapshot_numbers
+            .get(&state.snapshot_number)
+            .cloned();
+        let gate = state
+            .snapshot_gate
+            .as_ref()
+            .filter(|(number, _)| *number == state.snapshot_number)
+            .map(|(_, gate)| gate.clone());
         drop(state);
+        if let Some(gate) = gate {
+            gate.reached.send(()).unwrap();
+            gate.release.lock().unwrap().recv_timeout(LIVENESS).unwrap();
+        }
+        if let Some(cancel) = cancel {
+            cancel.cancel();
+        }
         if fail {
             return Err(Self::injected("snapshot became unreadable"));
         }
@@ -314,7 +340,12 @@ impl VaultProvider for FaultInjectingProvider {
         let fail_after = state.fail_deletes_after_mutation.contains(&number);
         let replacement_kind = state.replace_after_delete_with_kind.get(relative).copied();
         let remove_after = state.remove_after_delete.get(relative).cloned();
+        let cancel = state.cancel_delete_numbers.get(&number).cloned();
+        let fail_cancelled = state.fail_deletes_with_cancelled.contains(&number);
         drop(state);
+        if let Some(cancel) = cancel {
+            cancel.cancel();
+        }
         if let Some(replacement_kind) = replacement_kind {
             let path = self.root.join(relative);
             let metadata = path.symlink_metadata().map_err(VaultError::Io)?;
@@ -333,6 +364,9 @@ impl VaultProvider for FaultInjectingProvider {
             Ok(())
         } else if fail {
             Err(Self::injected("injected delete failure"))
+        } else if fail_cancelled {
+            self.inner.delete(relative)?;
+            Err(VaultError::Cancelled)
         } else if fail_after {
             self.inner.delete(relative)?;
             Err(Self::injected("injected post-mutation delete failure"))
@@ -493,6 +527,412 @@ fn write_fixture(root: &std::path::Path, path: &str, contents: &str) {
     let full = root.join(path);
     std::fs::create_dir_all(full.parent().unwrap()).unwrap();
     std::fs::write(full, contents).unwrap();
+}
+
+#[test]
+fn cancellable_trash_inventory_never_publishes_cancelled_stage() {
+    let (_dir, session, state) = fixture(&[("a.md", "a"), ("b.md", "b")], &[]);
+    let cancel = CancelToken::new();
+    state
+        .lock()
+        .unwrap()
+        .cancel_snapshot_numbers
+        .insert(1, cancel.clone());
+    let request = BatchTrashRequest {
+        items: vec![file("a.md"), file("b.md")],
+    };
+    assert!(matches!(
+        session.stage_trash_cancellable(request, &cancel),
+        Err(VaultError::Cancelled)
+    ));
+    assert!(session.trash_confirmation.lock().unwrap().is_none());
+    assert_eq!(state.lock().unwrap().snapshot_number, 1);
+    assert_eq!(state.lock().unwrap().delete_number, 0);
+}
+
+#[test]
+fn cancellable_trash_validation_preserves_cancellation_and_consumes_token() {
+    for final_validation in [false, true] {
+        let (_dir, session, state) = fixture(&[("a.md", "a"), ("b.md", "b")], &[]);
+        let request = BatchTrashRequest {
+            items: vec![file("a.md"), file("b.md")],
+        };
+        let staged = session.stage_trash(request.clone()).unwrap();
+        let cancel = CancelToken::new();
+        let next_snapshot =
+            state.lock().unwrap().snapshot_number + if final_validation { 3 } else { 1 };
+        state
+            .lock()
+            .unwrap()
+            .cancel_snapshot_numbers
+            .insert(next_snapshot, cancel.clone());
+        assert!(matches!(
+            session.batch_trash_staged_cancellable(request.clone(), staged.token, &cancel),
+            Err(VaultError::Cancelled)
+        ));
+        assert_eq!(state.lock().unwrap().delete_number, 0);
+        assert!(matches!(
+            session.batch_trash_staged(request, staged.token),
+            Err(VaultError::TrashConfirmationChanged { .. })
+        ));
+        assert_eq!(
+            session
+                .conn
+                .lock()
+                .unwrap()
+                .query_row("SELECT count(*) FROM structural_ops", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
+fn cancellable_trash_keeps_completed_attempt_and_stops_remaining_items() {
+    for outcome in ["success", "failure", "unknown", "failure_after"] {
+        let (dir, session, state) = fixture(&[("a.md", "a"), ("b.md", "b")], &[]);
+        let request = BatchTrashRequest {
+            items: vec![file("a.md"), file("b.md")],
+        };
+        let staged = session.stage_trash(request.clone()).unwrap();
+        let cancel = CancelToken::new();
+        {
+            let mut faults = state.lock().unwrap();
+            faults.cancel_delete_numbers.insert(1, cancel.clone());
+            match outcome {
+                "failure" => {
+                    faults.fail_delete_numbers.insert(1);
+                }
+                "unknown" => {
+                    faults.fail_existence_after_delete.insert("a.md".into());
+                }
+                "failure_after" => {
+                    faults.fail_deletes_after_mutation.insert(1);
+                }
+                _ => {}
+            }
+        }
+        let report = session
+            .batch_trash_staged_cancellable(request, staged.token, &cancel)
+            .unwrap();
+        assert_eq!(state.lock().unwrap().delete_number, 1, "{outcome}");
+        assert!(dir.path().join("b.md").exists(), "{outcome}");
+        assert!(
+            report.untrashed.iter().any(|item| item.item.path == "b.md"
+                && item.failure.stage == BatchFailureStage::Cancelled),
+            "{outcome}"
+        );
+        match outcome {
+            "failure" => {
+                assert_eq!(report.state, BatchTrashState::Failed);
+                assert!(report.trashed.is_empty());
+                assert_eq!(report.untrashed.len(), 2);
+                assert!(dir.path().join("a.md").exists());
+            }
+            "unknown" => {
+                assert_eq!(report.state, BatchTrashState::Failed);
+                assert_eq!(report.unknown.len(), 1);
+                assert!(report.requires_rescan);
+                assert!(report.trashed.is_empty());
+            }
+            _ => {
+                assert_eq!(report.state, BatchTrashState::Partial);
+                assert_eq!(report.trashed, vec![file("a.md")]);
+                assert!(report.op_id.is_some());
+                let conn = session.conn.lock().unwrap();
+                assert_eq!(
+                    conn.query_row("SELECT count(*) FROM files WHERE path='a.md'", [], |r| r
+                        .get::<_, i64>(0))
+                        .unwrap(),
+                    0
+                );
+                assert_eq!(
+                    conn.query_row("SELECT count(*) FROM text_write_intents", [], |r| r
+                        .get::<_, i64>(0))
+                        .unwrap(),
+                    0
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn cancellable_single_trash_finishes_bookkeeping_after_dispatch() {
+    for folder in [false, true] {
+        let (dir, session, state) = fixture(&[("folder/a.md", "a")], &[]);
+        let item = if folder {
+            StructuralBatchItem {
+                path: "folder".into(),
+                is_directory: true,
+            }
+        } else {
+            file("folder/a.md")
+        };
+        let staged = session
+            .stage_trash(BatchTrashRequest {
+                items: vec![item.clone()],
+            })
+            .unwrap();
+        let cancel = CancelToken::new();
+        state
+            .lock()
+            .unwrap()
+            .cancel_delete_numbers
+            .insert(1, cancel.clone());
+        if folder {
+            session
+                .delete_folder_staged_cancellable(&item.path, staged.token, &cancel)
+                .unwrap();
+        } else {
+            session
+                .delete_file_staged_cancellable(&item.path, staged.token, &cancel)
+                .unwrap();
+        }
+        assert!(cancel.is_cancelled());
+        assert!(!dir.path().join(&item.path).exists());
+        let conn = session.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM files", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM structural_ops", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM text_write_intents", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
+fn cancellable_trash_new_stage_prevents_older_inventory_publication() {
+    let (_dir, session, state) = fixture(&[("a.md", "a")], &[]);
+    let (reached_tx, reached_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    state.lock().unwrap().snapshot_gate = Some((
+        1,
+        Arc::new(SnapshotGate {
+            reached: reached_tx,
+            release: Mutex::new(release_rx),
+        }),
+    ));
+    std::thread::scope(|scope| {
+        let old = scope.spawn(|| {
+            session.stage_trash(BatchTrashRequest {
+                items: vec![file("a.md")],
+            })
+        });
+        reached_rx.recv_timeout(LIVENESS).unwrap();
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        assert!(matches!(
+            session.stage_trash_cancellable(
+                BatchTrashRequest {
+                    items: vec![file("a.md")]
+                },
+                &cancel
+            ),
+            Err(VaultError::Cancelled)
+        ));
+        release_tx.send(()).unwrap();
+        assert!(matches!(old.join().unwrap(), Err(VaultError::Cancelled)));
+    });
+    assert!(session.trash_confirmation.lock().unwrap().is_none());
+}
+
+#[test]
+fn cancellable_trash_cancel_between_marker_plants_cleans_own_tokens() {
+    struct CancelAfterPlant(CancelToken);
+    impl StructuralBatchFaultHook for CancelAfterPlant {
+        fn check(&self, point: BatchFaultPoint) -> Result<(), VaultError> {
+            if point == BatchFaultPoint::TrashMarkersPlanted {
+                self.0.cancel();
+            }
+            Ok(())
+        }
+    }
+    let (_dir, session, state) = fixture(&[("a.md", "a"), ("b.md", "b")], &[]);
+    let request = BatchTrashRequest {
+        items: vec![file("a.md"), file("b.md")],
+    };
+    let staged = session.stage_trash(request.clone()).unwrap();
+    let cancel = CancelToken::new();
+    assert!(matches!(
+        session.batch_trash_checked(
+            request,
+            &CancelAfterPlant(cancel.clone()),
+            Some(staged.token),
+            &cancel
+        ),
+        Err(VaultError::Cancelled)
+    ));
+    assert_eq!(state.lock().unwrap().delete_number, 0);
+    let conn = session.conn.lock().unwrap();
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM text_write_intents", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM structural_ops", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn cancellable_single_trash_final_validation_cleans_own_tokens() {
+    for folder in [false, true] {
+        let (_dir, session, state) = fixture(&[("folder/a.md", "a")], &[]);
+        let item = if folder {
+            StructuralBatchItem {
+                path: "folder".into(),
+                is_directory: true,
+            }
+        } else {
+            file("folder/a.md")
+        };
+        let staged = session
+            .stage_trash(BatchTrashRequest {
+                items: vec![item.clone()],
+            })
+            .unwrap();
+        let cancel = CancelToken::new();
+        state
+            .lock()
+            .unwrap()
+            .cancel_snapshot_numbers
+            .insert(3, cancel.clone());
+        let result = if folder {
+            session.delete_folder_staged_cancellable(&item.path, staged.token, &cancel)
+        } else {
+            session.delete_file_staged_cancellable(&item.path, staged.token, &cancel)
+        };
+        assert!(matches!(result, Err(VaultError::Cancelled)));
+        assert_eq!(state.lock().unwrap().delete_number, 0);
+        let conn = session.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM text_write_intents", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM structural_ops", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
+fn cancellable_trash_cleanup_failure_keeps_evidence_and_is_not_clean_cancellation() {
+    let (_dir, session, state) = fixture(&[("a.md", "a")], &[]);
+    let request = BatchTrashRequest {
+        items: vec![file("a.md")],
+    };
+    let staged = session.stage_trash(request.clone()).unwrap();
+    session.conn.lock().unwrap().execute_batch("CREATE TRIGGER refuse_marker_cleanup BEFORE DELETE ON text_write_intents BEGIN SELECT RAISE(FAIL, 'test cleanup failure'); END;").unwrap();
+    let cancel = CancelToken::new();
+    state
+        .lock()
+        .unwrap()
+        .cancel_snapshot_numbers
+        .insert(3, cancel.clone());
+    let report = session
+        .batch_trash_staged_cancellable(request, staged.token, &cancel)
+        .unwrap();
+    assert_eq!(report.state, BatchTrashState::Failed);
+    assert!(report.trashed.is_empty());
+    assert!(report.requires_rescan);
+    assert!(!report.bookkeeping_failures.is_empty());
+    assert_eq!(state.lock().unwrap().delete_number, 0);
+    assert_eq!(
+        session
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT count(*) FROM text_write_intents", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn cancellable_single_trash_provider_cancellation_is_an_uncertain_failure() {
+    for folder in [false, true] {
+        let (dir, session, state) = fixture(&[("folder/a.md", "a")], &[]);
+        let item = if folder {
+            StructuralBatchItem {
+                path: "folder".into(),
+                is_directory: true,
+            }
+        } else {
+            file("folder/a.md")
+        };
+        let staged = session
+            .stage_trash(BatchTrashRequest {
+                items: vec![item.clone()],
+            })
+            .unwrap();
+        let cancel = CancelToken::new();
+        {
+            let mut faults = state.lock().unwrap();
+            faults.cancel_delete_numbers.insert(1, cancel.clone());
+            faults.fail_deletes_with_cancelled.insert(1);
+        }
+        let result = if folder {
+            session.delete_folder_staged_cancellable(&item.path, staged.token, &cancel)
+        } else {
+            session.delete_file_staged_cancellable(&item.path, staged.token, &cancel)
+        };
+        assert!(matches!(result, Err(VaultError::Trash { .. })));
+        assert!(!dir.path().join(&item.path).exists());
+        assert_eq!(
+            session
+                .conn
+                .lock()
+                .unwrap()
+                .query_row("SELECT count(*) FROM text_write_intents", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+}
+
+#[test]
+fn cancellable_trash_late_cancel_does_not_replace_completed_batch_success() {
+    let (_dir, session, state) = fixture(&[("a.md", "a")], &[]);
+    let request = BatchTrashRequest {
+        items: vec![file("a.md")],
+    };
+    let staged = session.stage_trash(request.clone()).unwrap();
+    let cancel = CancelToken::new();
+    state
+        .lock()
+        .unwrap()
+        .cancel_delete_numbers
+        .insert(1, cancel.clone());
+    let report = session
+        .batch_trash_staged_cancellable(request, staged.token, &cancel)
+        .unwrap();
+    assert_eq!(report.state, BatchTrashState::Succeeded);
+    assert_eq!(report.trashed, vec![file("a.md")]);
+    assert!(report.untrashed.is_empty());
 }
 
 fn fixture(
@@ -3665,7 +4105,7 @@ fn staged_trash_later_fence_failure_still_finalizes_earlier_deletion() {
     let staged = session.stage_trash(request.clone()).unwrap();
     let faults = NthBatchFault::new(BatchFaultPoint::TrashWriteFence, 2);
     let report = session
-        .batch_trash_checked(request, &faults, Some(staged.token))
+        .batch_trash_checked(request, &faults, Some(staged.token), &CancelToken::new())
         .unwrap();
     assert_eq!(report.state, BatchTrashState::Partial);
     assert_eq!(report.trashed, vec![file("a.md")]);

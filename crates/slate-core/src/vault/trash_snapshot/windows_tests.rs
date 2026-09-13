@@ -72,7 +72,11 @@ fn staged_trash_handle_walk_never_follows_attribute_only_junction_conversion() {
     assert_ne!(before, stamp(&folder).unwrap());
     // Enumeration stays on the opened empty directory. Relative child lookup
     // must fail; it must never discover/open the outside target's private file.
-    assert!(children(&folder, &mut 1).unwrap().is_empty());
+    assert!(
+        children(&folder, &mut 1, &crate::CancelToken::new())
+            .unwrap()
+            .is_empty()
+    );
     assert!(open_child(&folder, OsStr::new("private.md")).is_err());
     assert!(snapshot(vault.path(), &vault.path().join("folder")).is_err());
     drop(folder);

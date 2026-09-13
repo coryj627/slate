@@ -18,7 +18,17 @@ use std::{
 };
 use windows_sys::Win32::{Foundation::ERROR_NO_MORE_FILES, Storage::FileSystem::*};
 
-pub(in crate::vault) fn snapshot(root: &Path, path: &Path) -> Result<TrashSnapshot, VaultError> {
+#[cfg(test)]
+fn snapshot(root: &Path, path: &Path) -> Result<TrashSnapshot, VaultError> {
+    snapshot_cancellable(root, path, &crate::CancelToken::new())
+}
+
+pub(in crate::vault) fn snapshot_cancellable(
+    root: &Path,
+    path: &Path,
+    cancel: &crate::CancelToken,
+) -> Result<TrashSnapshot, VaultError> {
+    cancel.check()?;
     let relative = path
         .strip_prefix(root)
         .map_err(|_| refused("Trash path is outside the vault"))?;
@@ -34,6 +44,7 @@ pub(in crate::vault) fn snapshot(root: &Path, path: &Path) -> Result<TrashSnapsh
         return Err(refused("Cannot stage Trash for the vault root"));
     }
     for (index, component) in components.iter().enumerate() {
+        cancel.check()?;
         let Component::Normal(name) = component else {
             return Err(refused("Invalid Trash path component"));
         };
@@ -50,7 +61,8 @@ pub(in crate::vault) fn snapshot(root: &Path, path: &Path) -> Result<TrashSnapsh
     }
     let mut hasher = blake3::Hasher::new();
     let mut entries = 1;
-    visit(file, &mut hasher, &mut entries, 0)?;
+    visit(file, &mut hasher, &mut entries, 0, cancel)?;
+    cancel.check()?;
     Ok(TrashSnapshot {
         fingerprint: hasher.finalize().to_hex().to_string(),
         is_directory: metadata.is_dir(),
@@ -83,13 +95,16 @@ fn visit(
     hasher: &mut blake3::Hasher,
     entries: &mut u64,
     depth: usize,
+    cancel: &crate::CancelToken,
 ) -> Result<(), VaultError> {
+    cancel.check()?;
     if depth > MAX_DEPTH {
         return Err(refused(
             "Folder is too large to verify for Trash; select a smaller group of items",
         ));
     }
     let before = stamp(file)?;
+    cancel.check()?;
     let metadata = file.metadata()?;
     hasher.update(&[0]);
     field(hasher, &before);
@@ -99,13 +114,15 @@ fn visit(
         ));
     }
     if metadata.is_dir() && !is_link(&metadata) {
-        for name in children(file, entries)? {
+        for name in children(file, entries, cancel)? {
+            cancel.check()?;
             hasher.update(&[1]);
             field(hasher, name.as_encoded_bytes());
             let child = open_child(file, &name)?;
-            visit(&child, hasher, entries, depth + 1)?;
+            visit(&child, hasher, entries, depth + 1, cancel)?;
         }
     }
+    cancel.check()?;
     if before != stamp(file)? {
         return Err(refused(
             "Files changed while preparing Trash. Request deletion again",
@@ -115,7 +132,11 @@ fn visit(
     Ok(())
 }
 
-fn children(directory: &fs::File, entries: &mut u64) -> Result<Vec<OsString>, VaultError> {
+fn children(
+    directory: &fs::File,
+    entries: &mut u64,
+    cancel: &crate::CancelToken,
+) -> Result<Vec<OsString>, VaultError> {
     // Eight-byte alignment, fixed memory irrespective of directory size. Charge
     // names when discovered, so nested pending child lists share one budget.
     let mut buffer = vec![0u64; 8192];
@@ -123,6 +144,7 @@ fn children(directory: &fs::File, entries: &mut u64) -> Result<Vec<OsString>, Va
     let mut class = FileFullDirectoryRestartInfo;
     let mut names = Vec::new();
     loop {
+        cancel.check()?;
         buffer.fill(0);
         // SAFETY: live directory handle and writable, aligned, correctly sized buffer.
         if unsafe {
@@ -147,6 +169,7 @@ fn children(directory: &fs::File, entries: &mut u64) -> Result<Vec<OsString>, Va
             unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), size as usize) };
         let mut offset = 0;
         loop {
+            cancel.check()?;
             let name_offset = std::mem::offset_of!(FILE_FULL_DIR_INFO, FileName);
             if offset + std::mem::size_of::<FILE_FULL_DIR_INFO>() > bytes.len() {
                 return Err(refused("Invalid directory inventory"));
@@ -182,7 +205,9 @@ fn children(directory: &fs::File, entries: &mut u64) -> Result<Vec<OsString>, Va
             offset += next;
         }
     }
+    cancel.check()?;
     names.sort();
+    cancel.check()?;
     Ok(names)
 }
 

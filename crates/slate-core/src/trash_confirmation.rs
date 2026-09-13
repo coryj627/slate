@@ -25,6 +25,14 @@ pub(crate) struct TrashConfirmation {
     snapshots: Vec<TrashSnapshot>,
 }
 
+pub(crate) fn preserve_cancellation(error: VaultError) -> VaultError {
+    if matches!(error, VaultError::Cancelled) {
+        error
+    } else {
+        stale()
+    }
+}
+
 pub(crate) fn stale() -> VaultError {
     VaultError::TrashConfirmationChanged {
         message: "Files changed or Trash confirmation expired. Request deletion again".into(),
@@ -35,7 +43,9 @@ impl TrashConfirmation {
     pub fn capture(
         provider: &dyn VaultProvider,
         request: BatchTrashRequest,
+        cancel: &crate::CancelToken,
     ) -> Result<Self, VaultError> {
+        cancel.check()?;
         static NEXT_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let token = NEXT_TOKEN
             .fetch_update(
@@ -47,7 +57,7 @@ impl TrashConfirmation {
         let mut snapshots = Vec::new();
         let mut total = 0;
         for item in &request.items {
-            let snapshot = provider.trash_snapshot(&item.path)?;
+            let snapshot = provider.trash_snapshot_cancellable(&item.path, cancel)?;
             if item.is_directory != snapshot.is_directory {
                 return Err(stale());
             }
@@ -59,6 +69,7 @@ impl TrashConfirmation {
             }
             snapshots.push(snapshot);
         }
+        cancel.check()?;
         Ok(Self {
             token,
             request,
@@ -82,32 +93,49 @@ impl TrashConfirmation {
         }
     }
 
+    #[cfg(test)]
     pub fn validate(
         &self,
         provider: &dyn VaultProvider,
         request: &BatchTrashRequest,
     ) -> Result<(), VaultError> {
+        self.validate_cancellable(provider, request, &crate::CancelToken::new())
+    }
+
+    pub fn validate_cancellable(
+        &self,
+        provider: &dyn VaultProvider,
+        request: &BatchTrashRequest,
+        cancel: &crate::CancelToken,
+    ) -> Result<(), VaultError> {
+        cancel.check()?;
         if *request != self.request {
             return Err(stale());
         }
         for item in &request.items {
-            self.validate_item(provider, &item.path)?;
+            self.validate_item_cancellable(provider, &item.path, cancel)?;
         }
         Ok(())
     }
 
-    pub fn validate_item(
+    pub fn validate_item_cancellable(
         &self,
         provider: &dyn VaultProvider,
         path: &str,
+        cancel: &crate::CancelToken,
     ) -> Result<(), VaultError> {
+        cancel.check()?;
         let index = self
             .request
             .items
             .iter()
             .position(|item| item.path == path)
             .ok_or_else(stale)?;
-        if provider.trash_snapshot(path).map_err(|_| stale())? != self.snapshots[index] {
+        if provider
+            .trash_snapshot_cancellable(path, cancel)
+            .map_err(preserve_cancellation)?
+            != self.snapshots[index]
+        {
             return Err(stale());
         }
         Ok(())
