@@ -667,6 +667,10 @@ internal sealed class GraphConfigMutationCensus
         }
         if (type.StartsWith("System.Collections", StringComparison.Ordinal) && any && instance is not null)
         {
+            if (IsFrameworkType(method.ContainingType, typeof(List<>)) && method.Name is "Contains" or "IndexOf")
+            {
+                return false; // Searching for a path does not store it in the list.
+            }
             // Collection writes retain the union of their elements. Indexers
             // and enumeration read that same conservative carrier value.
             Assign(instance, true, state);
@@ -686,6 +690,10 @@ internal sealed class GraphConfigMutationCensus
         }
         if (type.StartsWith("System.IO.", StringComparison.Ordinal) && (any || receiver))
         {
+            if (IsFrameworkType(method.ContainingType, typeof(Directory)) && method.Name == "Exists")
+            {
+                return false;
+            }
             _violations.Add($"{Location(syntax)}: unclassified graph-path API {type}.{method.Name}");
             return CarriesPath(method.ReturnType);
         }
@@ -694,6 +702,10 @@ internal sealed class GraphConfigMutationCensus
         // deliberate exception because their returned contents are not paths.
         return CarriesPath(construction ? method.ContainingType : method.ReturnType) && (receiver || any);
     }
+
+    private static bool IsFrameworkType(INamedTypeSymbol symbol, Type frameworkType) =>
+        symbol.MetadataName == frameworkType.Name && symbol.ContainingNamespace.ToDisplayString() == frameworkType.Namespace
+        && symbol.ContainingAssembly.Identity.Name == frameworkType.Assembly.GetName().Name;
 
     private static bool ReadOnlyOpen(IMethodSymbol method, System.Collections.Immutable.ImmutableArray<IArgumentOperation> arguments)
     {

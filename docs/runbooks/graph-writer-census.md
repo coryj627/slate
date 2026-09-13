@@ -39,6 +39,9 @@ transforms preserve provenance. Member state and aliases retain graph-path
 effects without making every member of a workspace a graph path. Intrinsic
 fields and properties keep separate provenance entries; input-dependent object
 and collection carriers conservatively combine their possible contents.
+Source calls carry the originating operation's writer authorization. Lambda
+bodies are examined in that source context, and task-wrapped path values retain
+provenance; scheduling alone does not grant a separate caller writer authority.
 
 Bound `System.IO.File` and `FileInfo` operations distinguish mutation arguments
 from read-only sources, including copy destinations, both move paths and replace
@@ -48,7 +51,10 @@ options; `DeleteOnClose` is a mutation even with read access. File contents read
 from the configuration do not become paths just because the input was a path.
 
 The analysis joins possible flows conservatively: overwriting a graph path does
-not necessarily remove its provenance. Ambiguous open options, unclassified
+not necessarily remove its provenance. `List<T>.Contains` and `List<T>.IndexOf`
+do not add their search argument to the collection's contents;
+unknown collection calls conservatively retain graph-bearing arguments.
+`Directory.Exists` is a recognized read-only check. Ambiguous open options, unclassified
 `System.IO` effects with graph inputs, unresolved graph delegate calls, recursive
 graph flows and exhausting the context limit fail rather than silently truncate
 analysis. Native interop, reflection and arbitrary external effects are outside

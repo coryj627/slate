@@ -160,11 +160,58 @@ public sealed class GraphConfigMutationCensusTests
     [InlineData("using var stream = new FileStream(store.FilePath, FileMode.Open, FileAccess.Read);")]
     [InlineData("using var stream = File.Open(store.FilePath, FileMode.Open, FileAccess.Read);")]
     [InlineData("using var handle = File.OpenHandle(store.FilePath);")]
+    [InlineData("Directory.Exists(store.FilePath);")]
     [InlineData("string directory = Path.GetDirectoryName(store.FilePath)!; File.WriteAllText(Path.Combine(directory, \"notes.txt\"), \"text\");")]
     public void UnrelatedWritesAndReadOnlyGraphAccessRemainAllowed(string body)
     {
         GraphConfigMutationCensus.Report report = Inspect(Writer(body));
         Assert.True(report.Violations.Count == 0, string.Join("\n", report.Violations));
+    }
+
+    [Theory]
+    [InlineData("Contains")]
+    [InlineData("IndexOf")]
+    public void ReadOnlyListQueriesDoNotStoreTheirSearchPath(string query)
+    {
+        string body = $$"""
+            var paths = new System.Collections.Generic.List<string> { "other.txt" };
+            paths.{{query}}(store.FilePath);
+            File.Delete(paths[0]);
+            """;
+        GraphConfigMutationCensus.Report allowed = Inspect(Writer(body));
+        Assert.True(allowed.Violations.Count == 0, string.Join("\n", allowed.Violations));
+        foreach (string mutationCall in new[] { "paths.Add(store.FilePath);", "paths.Insert(1, store.FilePath);" })
+        {
+            string mutation = body.Replace($"paths.{query}(store.FilePath);", mutationCall, StringComparison.Ordinal)
+                .Replace("paths[0]", "paths[1]", StringComparison.Ordinal);
+            Assert.Contains(Inspect(Writer(mutation)).Violations,
+                violation => violation.Contains("outside GraphConfigStore.Write's call context", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void ASourceTypeCannotBorrowTheFrameworkListQueryException()
+    {
+        const string sourceType = """
+            namespace System.Collections.Generic
+            {
+                internal sealed class List<T>
+                {
+                    internal extern bool Contains(T item);
+                    internal string Path { get; } = "other.txt";
+                }
+            }
+            """;
+        string source = Writer("var paths = new System.Collections.Generic.List<string>(); paths.Contains(store.FilePath); File.Delete(paths.Path);");
+        Assert.NotEmpty(Inspect(source, StoreSource + sourceType).Violations);
+    }
+
+    [Fact]
+    public void OtherDirectoryEffectsStillRequireClassificationWhenTheyReceiveAGraphPath()
+    {
+        Assert.Contains(Inspect(Writer("Directory.Delete(store.FilePath);")).Violations,
+            violation => violation.Contains("unclassified graph-path API System.IO.Directory.Delete", StringComparison.Ordinal));
+        Assert.Empty(Inspect(Writer("Directory.Delete(\"other-directory\");")).Violations);
     }
 
     [Theory]
