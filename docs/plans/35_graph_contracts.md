@@ -11752,9 +11752,10 @@ three journeys re-run.
 
 ## PR D — the diagram: the renderer, the per-node peers, the tiers, the layout driver, zoom
 
-Revision 2, 2026-09-14 (revision 1 = 095ecb0f; round 1's nine findings
-IGQ-1..9 discharged in the text below), branch `feat/w6-2-d` on the
-merged A, B1, B2 and C (`main` at 9a8028a7). The spec is `w6_2_graph_spec.md` §PR D
+Revision 3, 2026-09-14 (revision 1 = 095ecb0f, revision 2 = 8d0a85f3;
+round 1's nine findings IGQ-1..9 and round 2's one finding IGR-1
+discharged in the text below), branch `feat/w6-2-d` on the merged A,
+B1, B2 and C (`main` at 9a8028a7). The spec is `w6_2_graph_spec.md` §PR D
 (amended in place by this revision where DD-14 says so), consuming §1's
 rules R-A..R-I, §2's rows D, H, J, L, M, N and P, §5 and §7. Every
 neighbouring section of this document — 0a, 0b, A (rule L), B (rule C),
@@ -11765,7 +11766,7 @@ by an owner amendment PENDING at DD-Q5 (the text is given there and is
 applied in place when the owner answers), and C-15 iv's closed census
 lists are amended under the provision C-15 iv itself makes for later PRs
 ("by amendment of this list"; DD-16). Round numbering: IGQ-n (round 1),
-IGR-n (round 2), the post-implementation passes IPH-n.
+IGR-n (round 2), IGS-n (round 3), the post-implementation passes IPH-n.
 
 **Five owner questions at the head (DD-Q1..DD-Q5).** Each is written to
 its stated DEFAULT below, the alternative recorded beside it; a round
@@ -12275,10 +12276,20 @@ a diagram arm named in Term M4; rules L, P, Q and W are untouched.
   the diagram's readback seam (Term M3), drops the model from the
   document and DISPOSES the `LayoutSession` AT ONCE: the binding's call
   counter defers the native free until an in-flight `Tick`,
-  `RunToConvergence` or `Refresh` returns ("What stands today"), and a
-  compute that reaches a disposed session (ObjectDisposedException)
-  returns a REFUSED step — the scheduler's no-throw rule — whose apply
-  applies nothing; an apply that finds its run cancelled applies nothing
+  `RunToConvergence` or `Refresh` returns ("What stands today"). A
+  compute QUEUED before the teardown that STARTS after it reaches a
+  disposed session, and the binding THROWS ObjectDisposedException at
+  the call (`CallWithPointer`'s zero-counter check); the scheduler
+  converts nothing — a throwing compute FAULTS the tracked task
+  (`RunAlwaysAsync`, `PanelWorkScheduler.cs:387`; the placeholder
+  completed with the exception, `:348`) and `WhenAllWorkDrained` (`:526`)
+  would fault the workspace's drain with it — so the REFUSAL IS THE
+  DRIVER'S OWN OBLIGATION (IGR-1): every session compute the driver, the
+  build and the refresh issue wraps its calls in a catch of
+  ObjectDisposedException (and, for the refresh, `VaultException`) and
+  returns a TYPED result — GraphLayoutStep.Refused — whose apply applies
+  nothing; no session call is ever made outside that wrapper (a census
+  arm, D-15 iii). An apply that finds its run cancelled applies nothing
   either. Disposal never waits for an apply, because `Retire()`'s
   `Shutdown` skips every later apply (the scheduler's admission,
   `PanelWorkScheduler.cs:320–360`). `WhenAllWorkDrained` covers every
@@ -12696,7 +12707,13 @@ convergence → none; armed then torn down then rebuilt → none);
 ACancelledRunAppliesNothingAndTheSessionIsFreedWhenTheInFlightCallReturns
 (the compute parked on the fetch gate, the teardown issued — the session
 `Dispose`d at once — the gate released: no frame, the handle count back
-to baseline after the call); AStepAfterDisposalIsRefusedNotThrown.
+to baseline after the call);
+AStepQueuedBeforeTeardownThatStartsAfterDisposalIsRefusedAndTheDrainCompletes
+(the step's compute parked BEFORE its session call through the
+scheduler's `BeforeComputeForTests`, the teardown run — the session
+disposed — then the park released: the compute returns Refused, the
+apply applies nothing, and `WhenAllWorkDrained` completes WITHOUT a
+fault — IGR-1; a planted bare `Tick` outside the wrapper faults it).
 
 **D-5 — The refresh and the rebuild (Term G6).** Pinned by facts:
 AProbeThatMovedTheGenerationRefreshesTheLayoutAndAdoptsMonotonically
@@ -12883,7 +12900,11 @@ computes alone; `PinNode` / `UnpinNode` inside TogglePin alone;
 members alone — and keeps its "no `Task.Run`, `ThreadPool`, `Thread`,
 `Dispatcher.BeginInvoke` or second scheduler under `Graph/`" arm, the
 driver's `DispatcherTimer` the ONE named exception (a timer that issues a
-scheduler step, not a body); (iv) the announcement-seam census: the
+scheduler step, not a body); and a WRAPPER arm (IGR-1): every `Tick`,
+`RunToConvergence`, `Refresh`, `StartGraphLayout`, `NodeIds`, `Edges`,
+`NodeMetadata` and `Generation` invocation sits inside a try whose catch
+names ObjectDisposedException and returns the refused result — a bare
+call is the named mutation; (iv) the announcement-seam census: the
 document's boundary gains the six seams and the renderer, the peers, the
 driver and the model post nothing; (v) the writers census: `Mode` (Term
 M1) and `SelectedKey`'s writers unchanged (the diagram writes through
@@ -13042,9 +13063,11 @@ before every push; CI's shell accessibility lane arbitrates.
   mode line** (Term M1; IGQ-1): `GraphMode` is the switch's line; rule
   L's Term 6 sequences stay a projection onto the family as frozen.
 - **DD-19 — The layout session is disposed at once at teardown** (Term
-  G7): the binding's call counter makes an in-flight call harmless and a
-  later call a refused step; disposal never depends on an apply the
-  retired scheduler would skip.
+  G7): the binding's call counter makes an in-flight call harmless, and
+  a later call is CAUGHT by the driver's own wrapper as a refused step
+  (IGR-1 — the scheduler faults a throwing compute and the drain with
+  it); disposal never depends on an apply the retired scheduler would
+  skip.
 
 ### Recorded divergences (PR D)
 
@@ -13173,7 +13196,19 @@ generated bindings' line numbers (regenerated on 2026-09-14) and Term
 G7's disposal rule, which now rests on the binding's call counter
 rather than on an apply the retired scheduler would skip (DD-19).
 
-### Tests that pin PR D (revision 2's list; the task loop records what lands)
+### Round 2 — one finding (IGR-1), disposition
+
+Run 2026-09-14 on revision 2 (8d0a85f3) with `codex exec` on gpt-5.5 at
+medium effort, read-only over the local tree; 1 blocker, 0 majors, 0
+minors — CREATED by revision 2's DD-19 (the protocol's rule 5 counts it
+double; rule G has now carried a blocker in two rounds, so a third in
+round 3 invokes rule 4).
+
+| # | Severity | Disposition |
+|---|---|---|
+| IGR-1 | BLOCKER (created by revision 2, DD-19) | taken — Term G7: the driver's computes catch ObjectDisposedException (and the refresh's `VaultException`) and return a typed refused result; the scheduler converts nothing and its drain would fault with a throwing compute; the wrapper arm joins the crossings census (D-15 iii); the fact codex named pins it (D-4); DD-19 corrected |
+
+### Tests that pin PR D (revision 3's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14
   — the model's lifecycle, the build, the epoch, the driver, the refresh,
