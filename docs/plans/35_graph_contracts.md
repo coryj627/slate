@@ -14382,4 +14382,560 @@ to ready on this landing; CI and codoki arbitrate the head.
 - The mac lane (unrun here, DR-1): `ParityHarnessTests.swift`'s `layout`
   section.
 
+## PR E — the inspector: filters, groups, display, forces
+
+Revision 1, 2026-09-14 — OPEN for round 1, branch `feat/w6-2-e` on the
+merged A, B1, B2, C and D (`main` at 6f58dc07). The spec is
+`w6_2_graph_spec.md` §PR E (its Goal, Consumes, Builds, Behavior,
+Tests, Evidence and Hand-off lines; amended in place where ED-8 says
+so), consuming §1's rules R-A..R-I, §2's rows D, H, J, L, M, N and P,
+§5 and §7. Every neighbouring section of this document — 0a, 0b, A
+(rule L), B (rule C), B2 (rule D), C (rules P, Q, F, W), D (rules G, M,
+T, N, V) — is FROZEN; this section consumes their seams and touches
+frozen text in exactly the places each froze provision names: rule W's
+Term W7 lists "PR E's filter change → the three backend flags" and this
+section adds the groups and the display to that list BY THE AMENDMENT
+Term W7's own sentence anticipates (ED-2); C-15's closed census lists
+are amended under the provision C-15 iv makes for later PRs ("by
+amendment of this list"; ED-9); rule Q's `Request(Filter)` arm and the
+view state's `ApplyQuery` name PR E as their fourth caller and this
+section is that caller (C-4, Term Q4). Round numbering: IGU-n (round
+1), IGV-n (round 2), IGW-n (round 3), IGX-n (round 4); the
+post-implementation passes IPI-n; the task-loop records TGE-n.
+
+**Six owner questions at the head (ED-Q1..ED-Q6).** Each is written to
+its stated DEFAULT below, the alternative recorded beside it; a round
+reports the text's application of its default, never the choice.
+
+- **ED-Q1 — Where does the inspector LIVE: the shell's right pane as a
+  LEAF, or a flyout inside the graph tab?** Default: a LEAF — the
+  right pane hosts one active leaf chosen from the workspace's leaf
+  registry (`WorkspaceViewModel.cs:1750–1768`, `Leaves`; the Connections
+  leaf is the precedent: `WorkspaceViewModel.Connections.cs:23`,
+  `:182–204`), the pane is keyboard-reachable by the shell's pane chords
+  and its active leaf persists (`WorkspaceViewModel.Persistence.cs:44`),
+  and the mac's inspector is a trailing panel the graph header toggles,
+  available in both modes (`GraphTableView.swift:179–182`,
+  `GraphInspectorView.swift:13–20`) — the leaf is the Windows twin of a
+  trailing panel. Alternative: a flyout docked in the graph tab, which
+  would be a second host machinery for one panel.
+- **ED-Q2 — Does the inspector carry its own name field (the mac's
+  `Filter by name`, `GraphInspectorView.swift:33–34`) beside the
+  header's field PR C built?** Default: YES, bound to the ONE writer the
+  header's field uses — the navigator's `SetNameQuery` (C-6; C-15 v's
+  wall unchanged) — so the two fields are two views of one needle;
+  the mac shows both (its table header carries the field and the three
+  toggles too, `GraphTableView.swift:170–176`). Alternative: omit it.
+- **ED-Q3 — What is a slider's accessible VALUE?** Default: WPF's
+  RangeValue pattern (the numeric value, its minimum and maximum) with
+  the visible `%.2f` text beside the slider as the mac's
+  (`GraphInspectorView.swift:187–201`); the mac's `accessibilityValue`
+  is the `%.2f` string because AppKit sliders have no range pattern,
+  and Windows's twin is the pattern a screen reader already speaks; the
+  force's spoken line is S9's percent. Alternative: a `%.2f` ItemStatus.
+- **ED-Q4 — Do group and display edits speak?** Default: NO — the mac's
+  `setGraphGroups` and `setGraphDisplay` announce nothing
+  (`AppState+GraphConfig.swift:159–170`); the renderer re-renders and the
+  control's own value is what the reader hears. Alternative: a status
+  line per edit.
+- **ED-Q5 — Is there a command row for the toggle?** Default: NO — the
+  spec's Evidence line says "no new command rows (the inspector is a
+  pane)"; the header's toggle button is the route, the mac's
+  (`GraphTableView.swift:179–182`). Alternative: `slate.graph.toggleInspector`.
+- **ED-Q6 — Is a DISPLAY change a new epoch?** Default: NO, a REDRAW —
+  the spec's §PR D Hand-off line says "a display or groups change is a
+  new epoch (Term G3)", but core's topology carries no display term
+  (`graph_topology` reads the config's groups for `Group`; the renderer
+  applies `NodeSizeMultiplier`, `LinkThickness`, `Arrows` and
+  `TextFadeZoom` at paint, `GraphDiagramView.cs:714`, `:720`) and D's
+  epoch key is (model, generation, query, groups) — a display change
+  under that key returns early. Groups ARE an epoch (Term G3, frozen:
+  `OnViewStateChanged` reopens on `Groups`,
+  `GraphDocumentViewModel.cs:1350`); the display is the renderer's
+  redraw on the document's `DiagramDisplay` change. The spec's line is
+  amended in place (ED-8). Alternative: force an epoch on display.
+
+### Design — one view model over two sources, the preferences as the aggregate
+
+The inspector is FOUR sections over TWO sources of truth that already
+exist and are frozen: the view state (`GraphViewState`, the workspace's
+one instance: `Filter`, `NameQuery`, `Groups`, `KindOnly`) for what the
+projections READ, and the preferences (`GraphPreferencesViewModel`, rule
+W: `CurrentConfig` by field) for what is PERSISTED — display and forces
+live only in the config and are read live from it (`DiagramDisplay =>
+CurrentConfig.Display`, `GraphDocumentViewModel.cs:1124`; the build's
+forces, Term G2). The inspector's view model, ONE per workspace,
+constructed after the preferences and the view state and before the
+graph document (the same counted construction the preferences have,
+C-15 i), holds no copy of either: every bound property reads through
+to its source and every write is one call into the frozen seam that
+owns the field — the view state's `ApplyQuery` for the backend filter
+(with the document's `Request(GraphRequest.Filter)` behind it, Term
+Q4), the navigator's `SetNameQuery` for the needle, the view state's
+`Groups` setter and the preferences' `SetGroups` for the groups, the
+preferences' `SetDisplay` for the display, the preferences' `SetForces`
+and the document's `ApplyForces` for the forces. The no-shadow census
+(A-2) keeps it so: the inspector adds no mutable copy of a filter, a
+query, a group list, a display or a forces record. The pane is a leaf
+(ED-Q1); the header's toggle is the mac's button; the strings are the
+label inventory's rows T29–T60, T71 and T72, moved byte for byte into
+`GraphPhrase` (0a-16), the pickers' titles from core's vectors and
+never typed (0bD-12).
+
+#### Rule I — the pane, in six terms
+
+- **Term I1 — the leaf.** The workspace's leaf registry gains ONE
+  entry, `new("inspector", "Graph inspector")`, placed after
+  `connections` (`WorkspaceViewModel.cs:1750–1768`); the right pane's
+  host gains a DockPanel keyed by `ActiveLeaf.Id == "inspector"` in the
+  shape of the Connections leaf's (`MainWindow.xaml:1965–1982`),
+  AutomationId GraphInspectorBody, hosting GraphInspectorView with
+  `Model` bound to the workspace's inspector view model. The view's
+  root is a Group named `Graph inspector` (T37), AutomationId
+  `GraphInspector`; its four sections are Groups named `Filters`,
+  `Groups`, `Display`, `Forces` (T38, T43, T50, T55).
+- **Term I2 — the toggle.** The graph surface's header gains a
+  ToggleButton after the switcher: content `Inspector` (T29),
+  AutomationId GraphInspectorToggle, Name `Toggle graph inspector`
+  and HelpText `Show the graph inspector — filters, colour groups,
+  display, and forces.` (T30), `IsChecked` bound one way to the
+  workspace's IsGraphInspectorShown (true iff the right pane is
+  visible AND the active leaf is the inspector). Its click calls the
+  workspace's `ToggleGraphInspector()`: when not shown → the pane made
+  visible if it is not, the active leaf set to the inspector (the
+  setter posts the shell's `LeafPanelShown("Graph inspector")` line,
+  `WorkspaceViewModel.cs:1854–1860`, the same line every leaf switch
+  posts), then `FocusBoundaryRequested(RightPane)` as `ShowConnections`
+  raises it (`WorkspaceViewModel.Connections.cs:182–204`); when shown →
+  the pane hidden (`IsRightPaneVisible = false`), the active leaf left
+  as it is, the keys returned to the graph surface's projection through
+  the presenter's `RequestProjectionFocus` (rule F's request; Term F1).
+- **Term I3 — both modes.** The header is mode-independent (Term M5's
+  cluster keeps the header in both modes), so the toggle and the pane
+  are reachable in Table and in Diagram; the inspector's filter section
+  drives the table's rows and the diagram's rebuild alike (rule X).
+- **Term I4 — persistence of the leaf.** The active leaf persists and
+  restores as every leaf does (`WorkspaceViewModel.Persistence.cs:44`);
+  a restored `inspector` leaf with the pane visible shows the inspector
+  on launch and speaks nothing of its own (the restore is silent as the
+  shell's is). No new persistence key.
+- **Term I5 — the keys inside the pane.** Every control is a standard
+  WPF control with its own peer (CheckBox, TextBox, ComboBox, Slider,
+  Button): Tab walks the sections in order; the pane's first stop is the
+  name field; Escape inside the pane bubbles to the shell (rule F's
+  ladder is the graph tab's, not the pane's).
+- **Term I6 — one view model, no copy.** GraphInspectorViewModel is
+  constructed once in the workspace's constructor after
+  `_graphPreferences` and `_graphViewState` and before the graph
+  document, holding the view state, the preferences, a `Func<GraphNavigator?>`
+  (the needle's writer) and a `Func<GraphDocumentViewModel?>` (the
+  filter request and the forces apply); disposed with the workspace
+  (its subscriptions to the two sources released). It caches nothing
+  the census would call a shadow (A-2): the group rows are projections
+  of `ViewState.Groups` rebuilt on its change.
+
+#### Rule X — the filters, in five terms
+
+- **Term X1 — the three flags, one write.** The CheckBoxes
+  `Attachments`, `Unresolved`, `Orphans only` (T40–T42, with their
+  hints) bind the view state's `Filter` flags one way; a toggle calls
+  the inspector's `SetBackendFilter(GraphFilter)`, which calls the
+  document's `ChangeFilter(GraphFilter)` — PR E's named fourth caller
+  of `ApplyQuery` (C-4; C-15 iv, v): `ViewState.ApplyQuery(new
+  GraphVisibilityQuery(filter, ViewState.NameQuery, null))` (the
+  overlay CLEARED — the mac's `setGraphTableFilter`, `applyPersisted…`'s
+  rule), then `Request(new GraphRequest.Filter(filter))` — rule Q's arm
+  as frozen (`GraphDocumentViewModel.cs:1552–1561`): a pair under
+  `FilterCount`, a Preset policy in flight not inherited, the pending
+  sort carried. THEN the preferences' `SetFilters(GraphFilter)` — Term
+  W7's trigger for "the three backend flags", updating `filters`'
+  three flags and no other field (the needle stays as `SetNameQuery`
+  left it) before the schedule.
+- **Term X2 — the diagram follows the view state.** The view state's
+  `Filter` write is what D's `OnViewStateChanged` hears
+  (`GraphDocumentViewModel.cs:1350–1368`): in Diagram mode the model
+  rebuilds (Term G6, frozen) — the inspector calls nothing on the
+  diagram for a filter change.
+- **Term X3 — the needle.** The inspector's `Filter by name` field
+  (T39, Name `Filter graph by note name`) binds the view state's
+  `NameQuery` one way and its text change calls the navigator's
+  `SetNameQuery(raw)` (C-6): the token, the trim, the count and the
+  persistence are PR C's; the header's field and the inspector's are two
+  views of one needle (ED-Q2), and the writers census's list for
+  `NameQuery` is unchanged (`ApplyQuery` and `SetNameQuery`).
+- **Term X4 — refusals.** A filter change on a retired document is a
+  no-op (`ChangeFilter` refuses under the `SelectRow` guard's shape:
+  retired or unseated); the same flags re-asserted (the CheckBox's
+  value equal to the view state's) write nothing, request nothing and
+  schedule nothing.
+- **Term X5 — equivalence.** Table and diagram read ONE predicate —
+  the view state's `Filter` through core's query — so the inspector's
+  flags narrow both projections identically; a preset's overlay
+  (`KindOnly`) is cleared by a manual flag change, as the mac clears it
+  (the `.ghost` overlay is preset-only).
+
+#### Rule Y — the groups, in six terms
+
+- **Term Y1 — the list is the view state's.** The section's rows are a
+  projection of `ViewState.Groups` (one row per group, in order): the
+  query field (T46, Name `Group ⟨n⟩ query`), the colour picker (T47,
+  Name `Group ⟨n⟩ colour`), the ring picker (T48, Name `Group ⟨n⟩ ring
+  style`), the remove button (T49, Name `Remove group ⟨n⟩`); the empty
+  text T44 (`No groups. Add one to colour matching nodes.`) when the
+  list is empty; the `Add Group` button (T45 with its hint). ⟨n⟩ is
+  1-based, the mac's `index + 1`.
+- **Term Y2 — one write, two seams.** Every edit — add, remove, a
+  query's text, a colour, a ring — builds the NEW list and calls the
+  inspector's `SetGroups(IReadOnlyList<GraphGroup>)`: the view state's
+  `Groups` setter (its writers: the seed at `WorkspaceViewModel.cs:1621`
+  and this one site; C-15 v's list amended) then the preferences'
+  `SetGroups(list)` — a new Term W7 trigger updating `groups` and no
+  other field before the schedule. The view state's `Groups` change is
+  what D's `OnViewStateChanged` reopens the epoch on (Term G3, frozen):
+  the diagram's fills and rings follow through the topology's `Group`
+  index, computed by core (`graph_config_matching_group`,
+  first-match-wins) — the inspector calls nothing on the diagram.
+- **Term Y3 — add takes core's next style.** `Add Group` appends
+  `new GraphGroup(string.Empty, style.ColorToken, style.RingStyle)`
+  with `style = GraphConfigNextGroupStyle((uint)count)` — the mac's
+  `addGraphGroup` (`AppState+GraphConfig.swift:175–180`; 0b-12), so
+  successive groups differ on both channels; the new row's query field
+  takes the keys.
+- **Term Y4 — the pickers list core's vectors.** The colour picker's
+  items are `GraphColorTokens()` in order (eight; T71's titles `Red …
+  Pink` are core's `Title`), the ring picker's are `GraphRingStyles()`
+  (four; T72's `Solid … Dotted`) — fetched once per process, never a
+  case typed (0bD-12; the label theory's picker arm).
+- **Term Y5 — remove.** The row's button removes its index and writes
+  the list (Term Y2); the keys move to the previous row's query field,
+  or to `Add Group` when the list empties.
+- **Term Y6 — silent.** No group edit speaks (ED-Q4); the fresh open
+  restores the groups from `CurrentConfig.Groups` (the seed, frozen
+  C-10); a load failure's read-only config keeps the seeded defaults
+  and refuses every save (Term W7's decode arms) — the inspector shows
+  the rows and its writes reach the view state but never the file.
+
+#### Rule Z — the display, in four terms
+
+- **Term Z1 — the four controls.** `Arrows` (a CheckBox, T51 with its
+  hint) and three sliders — `Text fade` 0.1…2.0 (T52), `Node size`
+  0.5…2.0 (T53), `Link thickness` 0.5…4.0 (T54) — bind
+  `CurrentConfig.Display` one way; a change calls the preferences'
+  `SetDisplay(GraphDisplay)` — a new Term W7 trigger updating `display`
+  and no other field before the schedule; equal values are a no-op.
+- **Term Z2 — the redraw.** The preferences raise `DisplayChanged`
+  after the field's update; the document forwards it as its own
+  `PropertyChanged(nameof(DiagramDisplay))`; the renderer's
+  `OnDocumentChanged` (`GraphDiagramView.cs:236`) redraws on that name
+  — the three visuals repainted under the new display (Term T6's list
+  gains "display" as its fifth trigger by this record); the hit radius
+  reads `NodeSizeMultiplier` live (`ScaledDiameter`, `:720`), so no
+  grid rebuild. No epoch (ED-Q6).
+- **Term Z3 — the value text.** Each slider shows its value as `%.2f`
+  beside its title (the mac's `labeledSlider`, T60), the text's own
+  peer; the slider's Name is the title, its HelpText the hint, its
+  value the RangeValue pattern's (ED-Q3).
+- **Term Z4 — silent.** No display edit speaks (ED-Q4).
+
+#### Rule K — the forces, in six terms
+
+- **Term K1 — the four sliders.** `Center`, `Repel`, `Link force`,
+  `Link distance`, each 0…1 (T56–T59 with their hints), bind
+  `CurrentConfig.Forces` one way; a change calls the inspector's
+  `SetForces(GraphForcesConfig)`.
+- **Term K2 — three seams, one order.** `SetForces` (i) calls the
+  preferences' `SetForces(forces)` (Term W7's trigger as built:
+  `GraphPreferencesViewModel.cs:212–221`, a no-op for equal forces);
+  (ii) calls the document's `ApplyForces(forces)`: with a LIVE model,
+  `model.SetForces(ForcesOf(forces))` through the gate (Term G7 — the
+  synchronous mutator rule D already names for PR E's forces,
+  `GraphDiagramModel.cs:330`; refused, not thrown, after a teardown),
+  `SettleAnnouncementArmed = true` (Term G4's arm — the mac's
+  `graphForcesSettlePending`, armed ONLY when a live diagram will
+  re-heat and converge, `AppState+GraphConfig.swift:131–143`) and
+  `Driver.StartSettle()` (the run restarted so the re-heated kernel is
+  ticked to its predicate or ceiling — a run that had ended would
+  otherwise never converge again); with NO live model (Table mode, a
+  build in flight, a failed build) nothing is armed and nothing is
+  ticked — the build's install re-reads `CurrentConfig.Forces` (Term
+  G2, frozen: the forces re-read at the install); (iii) speaks the
+  CHANGED control.
+- **Term K3 — the changed control.** `ChangedForce(old, new)` — a pure
+  static on the inspector's view model, the mac's `changedForce`
+  (`AppState+GraphConfig.swift:146–157`): the FIRST of `Center`,
+  `Repel`, `Link`, `LinkDistance` whose value differs, its percent
+  `(uint)Math.Max(0, Math.Round(v × 100))`; null when none differs. The
+  document's `AnnounceForceValue(control, percent)` posts
+  `GraphForceValue{control, percent}` through `AnnounceIfEffective` —
+  the relay's `forceValue` class, 200 ms latest-wins
+  (`GraphAnnouncer.cs:32`, `:36`; 0a-2b), so a drag coalesces to its
+  resting value; the copy is core's (`Center force ⟨percent⟩ percent`
+  and the three siblings, 0a-16).
+- **Term K4 — the settle line, once.** At the run's convergence the
+  driver's `Converged` fires and `OnSettleConverged`
+  (`GraphDocumentViewModel.cs:1325–1333`) speaks `GraphLayoutSettled`
+  once and disarms — Term G4 as frozen: two events in the mac's order,
+  the force value then the settle (0a-D5). A second edit before the
+  settle re-arms and restarts; the line speaks once for the last.
+- **Term K5 — a run at the ceiling.** The driver ends a run at
+  `MaxIterationsPerRun` when the predicate never holds (TGD-2's
+  deviation); the settle line speaks at that end too (`Converged` is
+  raised for the ceiling as for the predicate — the fact that pins it
+  is D's `AssertSettled` shape).
+- **Term K6 — the sliders' keys.** Left/Right step the slider by its
+  `SmallChange` (0.01), PageUp/PageDown by `LargeChange` (0.1), Home/End
+  to the bounds — WPF's; each step is one `SetForces` (coalesced by K3).
+
+**E-1 — The files, the owners, the lifetimes.** `Graph/` gains
+GraphInspectorViewModel.cs (Term I6; the workspace's) and
+`GraphInspectorView.xaml(.cs)` (the leaf's view; hosted in
+`MainWindow.xaml`'s right pane, Term I1) — the spec's §1 lines amended
+(ED-8). The workspace gains the leaf entry, `Inspector` (the view
+model), IsGraphInspectorShown and `ToggleGraphInspector()` (Term I2).
+The surface gains the header's toggle (Term I2). The preferences gain
+`SetFilters`, `SetGroups`, `SetDisplay` and the `DisplayChanged` event
+(Terms X1, Y2, Z1, Z2). The document gains `ChangeFilter(GraphFilter)`
+(Term X1), `ApplyForces(GraphForcesConfig)` (Term K2), AnnounceForceValue
+(Term K3) and the `DiagramDisplay` forward (Term Z2). `GraphPhrase`
+gains the inventory's strings (E-11). No other file in the shell
+changes; core and the mac are untouched.
+
+**E-2 — The view model's surface.** Bound properties, each a read
+through to its source: `IncludeAttachments`, `IncludeGhosts`,
+`OrphansOnly` (the view state's `Filter`), `NameQuery` (the view
+state's), `Groups` (rows over the view state's list: `Query`,
+`ColorToken`, `RingStyle`, `Index`, `RemoveCommand`), `Arrows`,
+`TextFadeZoom`, `NodeSizeMultiplier`, `LinkThickness` (the preferences'
+`CurrentConfig.Display`), `Center`, `Repel`, `Link`, `LinkDistance`
+(`CurrentConfig.Forces`), `ColorTokens` and `RingStyles` (core's
+vectors), AddGroupCommand. Writes: SetBackendFilter, `SetNameQuery`
+(→ the navigator), `SetGroups`, `AddGroup`, `RemoveGroup(index)`,
+`SetDisplay`, `SetForces`. Change notification: the view model
+subscribes to the view state's `PropertyChanged` (Filter, NameQuery,
+Groups) and the preferences' `DisplayChanged` / `ForcesChanged` and
+raises its own properties, so an outside write (a preset's overlay
+clear, the fresh open's re-apply, a forces edit landing from the build)
+re-renders the pane.
+
+**E-3 — The pane and the toggle** are rule I. The leaf's title
+`Graph inspector` is the shell's panel line's text on every switch to
+it (the leaf setter, frozen); ToggleGraphInspector speaks nothing
+else; hiding speaks nothing (the mac's toggle speaks nothing).
+
+**E-4 — The filter route** is rule X: one `ApplyQuery`, one
+`Request(Filter)`, one `SetFilters`; the count spoken by the pair
+(rule Q, Term Q4); the diagram's rebuild by the view state (Term G6).
+
+**E-5 — The needle** is PR C's writer (Term X3); the inspector adds no
+count region — the header's region is the one region (C-5).
+
+**E-6 — The groups** are rule Y: core's next style, core's vectors,
+core's matching; the epoch by the view state (Term G3).
+
+**E-7 — The display** is rule Z: the preferences' field, the
+document's forward, the renderer's redraw; no epoch (ED-Q6).
+
+**E-8 — The forces** are rule K: the preferences' field, the gate's
+mutator, the arm, the restart, the changed control's line coalesced,
+the settle line once.
+
+**E-9 — The announcements, every one through the relay.** `FilterCount`
+on a flag change (the pair's, rule Q); `GraphForceValue` on a forces
+edit (Term K3; the `forceValue` class); `GraphLayoutSettled` once at
+the settle (Term K4; the `settle` class); the shell's `LeafPanelShown`
+on the switch to the inspector (the leaf setter's, not the graph
+family's). NOTHING for a group edit, a display edit, the toggle's hide,
+a refused write. The announcement-seam census (C-15 iv's shape) gains
+AnnounceForceValue as the document's one force seam; the inspector
+posts nothing itself.
+
+**E-10 — Persistence** is rule W as frozen, its Term W7 trigger list
+extended by amendment (ED-2): `SetFilters` → the three backend flags,
+`SetGroups` → `groups`, `SetDisplay` → `display`, `SetForces` →
+`forces` (built); each updates its field and no other before the
+schedule; the debounce, the hand-off, the flush and the read-only gate
+are C's (`GraphPreferencesViewModel.cs:241–300`). The fresh open's
+re-apply restores the filters and the groups (C-10's seed,
+`WorkspaceViewModel.cs:1620–1621`); the display and the forces are read
+live. The file's round-trip, its unknown keys preserved, its refusal to
+downgrade and the superseded generation dropped are the store's and the
+writer's as frozen (CD-13) — `GraphConfigStoreTests` and
+`GraphConfigWriterTests` gain the inspector's four fields in their
+round-trip facts.
+
+**E-11 — The strings are the inventory's, byte for byte.** `GraphPhrase`
+gains, from the label inventory: T29 `Inspector`, T30's help and AX
+label, T37 `Graph inspector`, T38 `Filters`, T39 `Filter by name` and
+`Filter graph by note name` (the latter IS `FilterFieldName`, C-5 —
+one constant), T40–T42's toggles and hints, T43 `Groups`, T44's empty
+text, T45's `Add Group` and hint, T46–T49's composed labels (`Group {0}
+query`, `Group {0} colour`, `Group {0} ring style`, `Remove group {0}`
+— composed by `string.Format` with the 1-based index), T50 `Display`,
+T51–T54's titles and hints, T55 `Forces`, T56–T59's titles and hints;
+the pickers' titles are core's (T71, T72), never in `GraphPhrase`. A
+`MacCatalogParityTests` fact reads every shipped string against
+`GraphInspectorView.swift` and `GraphTableView.swift:179–182`.
+
+**E-12 — The censuses, falsifiable, bound semantically** (C-15's shape,
+its closed lists amended under C-15 iv's provision; ED-9): (i) the
+inspector view model is constructed exactly once, in the workspace's
+constructor, after the preferences and before the graph document (the
+instance census's theory gains it); (ii) `ApplyQuery`'s callers gain
+`ChangeFilter` (four: the seed, the preset, the fresh open's re-apply,
+the inspector's route) and no other; `Groups`' writers are the seed and
+`SetGroups`; `KindOnly`'s writer is `ApplyQuery` alone (unchanged);
+`NameQuery`'s unchanged; (iii) the preferences' Term W7 triggers are
+the closed list `SetNameQuery`, `SetVerbosity`, `SetConnectionsDepth`,
+`SetMode`, `SetForces`, `SetFilters`, `SetGroups`, `SetDisplay`, each
+updating its field alone (a Roslyn fact over the `with` expressions);
+(iv) the document's AnnounceForceValue is the one force seam and the
+inspector's sources post no announcement (the postless theory);
+(v) the label theory: no picker case's title is a literal anywhere in
+the shell (the eight and the four are core's `Title`); (vi) D-15 iii's
+wall stands: the forces cross the gate in `GraphDiagramModel.SetForces`
+alone; (vii) the no-shadow census: the inspector holds no mutable
+`GraphFilter`, `GraphVisibilityQuery`, `IReadOnlyList<GraphGroup>`,
+`GraphDisplay` or `GraphForcesConfig` field.
+
+**E-13 — §W-C: the journey and the axe scan.** The FlaUI journey
+GraphInspector_FiltersGroupsAndForces_AreClean beside the four graph
+journeys: `WaitForVaultOpen`, open the graph from the palette and land
+on the grid; the header's toggle (GraphInspectorToggle) → the pane's
+Group `Graph inspector`, the keys inside it; the four sections by name;
+`Attachments` off → the grid's rows fall by the attachment count
+(oracle: two `graph_table_rows` reads BEFORE the app opens, with and
+without attachments) and the count region reads core's `FilterCount`
+render; the `.slate/graph.json` on disk carries `includeAttachments:
+false` within the save window (oracle: core's encoder over the expected
+config, read after the window); `Add Group` → one row whose colour
+picker reads core's `GraphConfigNextGroupStyle(0)` title and whose ring
+picker the matching ring title, the keys in its query field; type
+`note` → the row's query; the file carries the group; `Remove group 1`
+→ the empty text returns; Shift+Tab twice to the switcher, Right to
+Diagram; the `Repel` slider by Right (one `SmallChange`) → its RangeValue
+moved and, after the settle, the file carries the new `repel`;
+`Ctrl+Alt+Shift+I` on the renderer → the readback's filter clause
+reflects the flags (the render of `GraphWhereAmI` with the expected
+`Normal(false, false, true)` clause); the toggle again → the pane
+hidden, the keys on the renderer; axe with the scan id
+`graph-inspector` while the pane is shown. Run locally to its last step
+before every push; CI's shell accessibility lane arbitrates. The
+announcements are not observable through UIA; the facts pin them.
+
+**E-14 — §W-A, §K, the matrices.** No golden changes (the `config`
+section already pins the codec both twins share; the inspector adds no
+artifact). No benchmark (the pane's work is the projections' and the
+preferences', already budgeted). `w_c_matrix.md` gains the row
+"Graph inspector (W6-2 PR E)" (ids GraphInspectorToggle,
+GraphInspectorBody, `GraphInspector`, the sections' and controls'
+automation ids named in E-15); `WcMatrixGraphEvidenceCensus`' manifest
+gains the surface; no parity-matrix row changes (ED-Q5: no command).
+
+**E-15 — The automation ids.** The toggle GraphInspectorToggle; the
+leaf body GraphInspectorBody; the root `GraphInspector`; the sections
+GraphInspectorFilters, GraphInspectorGroups, GraphInspectorDisplay,
+GraphInspectorForces; the name field GraphInspectorNameQuery; the
+flags GraphInspectorAttachments, GraphInspectorGhosts,
+GraphInspectorOrphans; GraphInspectorAddGroup; a row's controls
+`GraphInspectorGroupQuery:{n}`, `GraphInspectorGroupColour:{n}`,
+`GraphInspectorGroupRing:{n}`, `GraphInspectorRemoveGroup:{n}`; the
+display GraphInspectorArrows, GraphInspectorTextFade,
+GraphInspectorNodeSize, GraphInspectorLinkThickness; the forces
+GraphInspectorCenter, GraphInspectorRepel, GraphInspectorLink,
+GraphInspectorLinkDistance.
+
+### Decisions (PR E)
+
+- **ED-1 — The inspector is a right-pane leaf toggled from the graph
+  header** (ED-Q1, ED-Q5): one host machinery, the shell's pane chords,
+  the persisted active leaf.
+- **ED-2 — Term W7's trigger list is extended by the amendment its own
+  sentence anticipates** ("PR E's filter change → the three backend
+  flags"): `SetFilters`, `SetGroups`, `SetDisplay` join `SetForces`; the
+  list is closed again by E-12 iii.
+- **ED-3 — The filter change is one `ApplyQuery`, one `Request(Filter)`,
+  one `SetFilters`, in that order** (Term X1): the overlay cleared, the
+  count spoken by the pair, the flags persisted by field; the diagram
+  rebuilds by the view state (Term G6), never by a call from the pane.
+- **ED-4 — Groups are an epoch, display is a redraw** (ED-Q6): core
+  matches groups in the topology; the renderer paints the display.
+- **ED-5 — The forces edit re-heats through the gate, arms the settle
+  and restarts the run** (Term K2): the mac's `set_forces` re-heats the
+  kernel and its renderer ticks it; Windows's driver must be told to
+  run again, or a converged run would never observe the re-heat.
+- **ED-6 — The changed control's line is the FIRST differing control at
+  its resting percent through the relay's forceValue class** (Term K3):
+  the mac's `changedForce` and the 200 ms latest-wins window; two
+  controls changed in one write (a programmatic set) speak the first.
+- **ED-7 — Group and display edits speak nothing; the toggle's hide
+  speaks nothing** (ED-Q4).
+- **ED-8 — The spec's lines are amended in place:** §1's file list (the
+  two files), §PR D's Hand-off sentence (groups an epoch, display a
+  redraw), §PR E's Builds (the leaf, the toggle, the three triggers).
+- **ED-9 — C-15's closed lists are amended under C-15 iv's provision**:
+  the callers of `ApplyQuery`, the writers of `Groups`, the triggers of
+  Term W7, the announcement seams.
+- **ED-10 — The sliders' accessible value is the RangeValue pattern;
+  the `%.2f` text is a sibling** (ED-Q3).
+- **ED-11 — No new command row and no chord** (ED-Q5): the parity
+  matrix is unchanged; `ChordTableTests` is unchanged.
+- **ED-12 — The inspector's name field is a second view of the one
+  needle** (ED-Q2): it calls the navigator's `SetNameQuery`; the writers
+  list is unchanged.
+
+### Divergences recorded (PR E)
+
+- **E-D1 — The pane is a leaf, the mac's is a trailing panel inside the
+  graph tab** (ED-1): the Windows shell has one right pane and a leaf
+  registry; the mac's panel takes no focus on show, the Windows toggle
+  requests the pane boundary as `ShowConnections` does (a reader who
+  toggled wants the pane).
+- **E-D2 — The accessible value of a slider is numeric** (ED-10); the
+  mac's is the `%.2f` string.
+- **E-D3 — The forces edit restarts the driver's run** (ED-5); the mac's
+  renderer ticks on its own display link.
+- **E-D4 — A display change is a redraw, not an epoch** (ED-4); the
+  spec's hand-off line said otherwise and is amended.
+- **E-D5 — The pane's hide returns the keys to the projection** through
+  rule F's request; the mac's toggle leaves the keys where they were.
+
+### Risks (PR E)
+
+- **ER-1 — A slider drag's writes.** Every `ValueChanged` is one
+  `SetForces`: one gate crossing, one arm, one restart, one coalesced
+  post, one schedule (400 ms restarted). The gate refuses nothing while
+  live; the restart cancels the previous run's token (Term G4's cancel).
+  The facts pin the counts per step; the journey's single Right step
+  pins the route end to end.
+- **ER-2 — The seed's order.** The inspector reads the view state and
+  the preferences at construction; it must be constructed after both
+  (Term I6) — the instance census pins the order.
+- **ER-3 — The right pane's other leaves.** Hiding the pane when the
+  inspector is active leaves the active leaf `inspector`; a later
+  `ShowConnections` switches it (frozen); a restore with the pane hidden
+  and the leaf `inspector` shows nothing until toggled — the mac's
+  hidden panel likewise.
+
+### Tests that pin PR E (revision 1's list; the task loop records what lands)
+
+- GraphInspectorTests (new): the view model's reads and writes per rule
+  (I6, X1–X5, Y1–Y6, Z1–Z4, K1–K6), the changed-control table, the
+  refusals, the notifications from outside writes.
+- `GraphTableTests`: the header's toggle, the pane's show and hide, the
+  keys' landing (Terms I2, I5).
+- `GraphPreferencesTests`: the three new triggers by field, the no-ops,
+  the read-only gate.
+- `GraphDiagramTests`: the forces' arm and restart through the gate, the
+  settle line once, the display's redraw, the groups' epoch (Terms K2,
+  K4, Z2, Y2).
+- `GraphDocumentTests`: `ChangeFilter`'s route (the overlay cleared, the
+  pair under FilterCount, the pending sort carried).
+- `GraphConfigStoreTests`, `GraphConfigWriterTests`: the four fields'
+  round-trip.
+- `MacCatalogParityTests`: the inventory's strings (E-11).
+- The censuses of E-12, each with a mutation.
+- The journey (E-13), run to its last step locally before every push.
+- `WcMatrixGraphEvidenceCensus`: the row (E-14).
+
 <!-- end of the graph contracts document -->
+
