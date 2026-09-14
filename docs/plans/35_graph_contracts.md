@@ -13770,6 +13770,100 @@ Ctrl+wheel input and Terms N3, N5's menu, N6, N7's toggle UI are T4's —
 the renderer exposes PanBy and ZoomStepAt for them. MUTATIONS, each
 restored byte for byte, each caught by the named fact: the tier boundary made exclusive, the peers minted per rebuild, the stale peers kept (it SURVIVED the first sweep — the tier-B fact's B→A path clears every peer, so the drop of an id that leaves tier A was unpinned; TheNeedleAndTheKindOverlayNarrowTheVisibleSetToTheTables now asserts the hidden ids' peers are gone and catches it), GraphTierEntered on every rebuild in B, the Name at a fixed verbosity, the HelpText without the prefix, IsOffscreen never true, labels drawn below the fade zoom, the grouped ring thin, the Dashed pattern dropped, the empty-set fit moving the zoom, ZoomIn about the origin, the scroll into view dropped, the hit radius negative, the container's children exposed while collapsed, a planted `Slate.Graph.` literal, a second renderer constructed, the light edge token below the floor, the prefix retyped, the pattern's Select silent, AddToSelection replacing silently, the summary's Invoke inert, the fit on every frame — twenty-three of twenty-three caught (`gD-mutations.py`, the T3 entries).
 
+**TGD-4 — T4: rule N in the renderer and the document — the keyboard
+through core's steps, the type-ahead, the pointer, the wheel, the Escape
+ladder's rung 3, the tooltip, the actions menu, the pin, the diagram's
+Where-am-I readback (D-11, D-12, D-14; D-13's Term V6 fact; D-5's
+stable-key fact; Terms N1, N3–N7, V5).** THE RENDERER
+(`Graph/GraphDiagramView.cs`): Term N3 — `OnKeyDown`: Down/Up/Right/Left →
+SpatialMove (no selection → the first visible node, no crossing; else
+ONE `GraphSpatialStep` over every visible id's position with the entry's
+neighbour ids and the unit axis; a null step moves nothing); Tab /
+Shift+Tab → StructuralMove (ONE `GraphStructuralStep` over VisibleIds,
+wrapping; consumed only while the visible set is non-empty); Enter →
+Term N5's activation of the selection; `OnTextInput` → TypeAhead (a bare
+letter or digit without Ctrl/Alt; the one-second buffer; the first
+visible id whose label starts with it, OrdinalIgnoreCase); Escape is
+not handled here and bubbles to the shell (rung 3); the four viewport
+chords and Ctrl+Alt+Shift+I are the navigator's through the surface's
+tunnelling handler; Menu / Shift+F10 are WPF's route to the persistent
+context menu. Term N4 / V5 — PointerPressed: a click selects announced,
+a double-click selects silently and activates, empty space begins a drag
+pan (the mouse captured; OnMouseMove pans by the delta); OnMouseWheel →
+Wheel: the delta pans, Shift pans across, Ctrl zooms one step
+centre-preserving on the pointer. T68 — the tooltip: a Popup over the
+hovered node with the composed label (label, " — ", in, " in / ", out, "
+out"), HOVERABLE (the pointer travelling onto it keeps it), DISMISSABLE
+(DismissTooltip; the surface's DismissTransientRegion reaches it after
+the Where-am-I panel — Escape's rung 0), closed when the pointer leaves
+both; never announced. Term N5 — ONE persistent `ContextMenu` from
+construction, MUTATED per opening (the grid's and the leaf's rule): a
+pointer request targets the hit node (none → no menu), a keyboard
+request the selection; the items are core's per-kind action titles in
+core's order with a disabled item's reason as its HelpText and ToolTip,
+each Click through the document's ExecuteFromDiagram, then a separator
+and Pin / Unpin (T67). Term N7 — TogglePin: the model's TogglePin at the
+node's CURRENT position through the gate (a retired model refuses,
+nothing spoken), `GraphPinned` through the document's AnnouncePinned,
+the peer's ItemStatus change raised. Term N1 — SelectedId now DELEGATES
+to the document's ONE rule (DiagramSelectedEntry) within the renderer's
+visible set. Term V6 — the renderer installs DiagramZoomPercent on the
+document at bind (cleared at unbind). THE DOCUMENT: DiagramSelectedEntry
+(the accepted topology's entry whose key is the shared key, among the
+ids the model knows); DiagramZoomPercent (the renderer's seam; 100 with
+none); DiagramWhereAmI (Term N6: null while no model is live, else ONE
+`GraphWhereAmI` — the derived selection's entry as the row copy with its
+component else NoSelection, `zoom_percent` present, the filter clause
+and the needle exactly `TableWhereAmI`'s); InstallBuild installs the seam
+through `InstallDiagramReadback` at the model's install (DropModel and
+the teardown clear it). THE SURFACE: DismissTransientRegion's second
+arm. THE CENSUS: the crossings fact names Term G8's two free functions
+by site — `GraphSpatialStep` in SpatialMove, `GraphStructuralStep` in
+StructuralMove. FACTS (GraphDiagramTests, the Keyboard partial —
+twenty-three): D-11's twelve — TheSelectionIsTheSharedKeysVisibleNode
+(present, hidden by the needle with the key kept, absent),
+ASelectWritesTheSharedKeyThroughTheDocumentsGuard (a node the table's
+snapshot lacks refused — DR-4; a retired document refused),
+ArrowsStepSpatiallyNeighboursFirstThenFallBack (over injected positions:
+the neighbour at 100 beats the nearer non-neighbour at 50; back; the
+fallback over every visible node; a direction with nothing — one
+crossing per press), TabWrapsStructurallyAndIsConsumedOnlyWithAVisibleSet,
+TypeAheadJumpsByPrefixWithinASecond, EnterActivatesTheSelection,
+AKeyboardMoveSpeaksOneRowLineAndTheLandingSpeaksNothing,
+AnOutsideKeyWriteMovesTheRingSilently, ClickSelectsAndDoubleClickActivates,
+TheWheelPansAndCtrlWheelZooms, TheEscapeLadderBubblesFromTheRenderer (the
+press unconsumed with rungs 0–2 empty; an open tooltip is the rung's
+most transient region), TheTooltipIsTheInventorysComposedLabel; D-12's
+five — TheDiagramsActionsEqualTheTablesPlusPin (per kind the diagram's
+titles equal the grid's row-actions menu's plus Pin, and core's vector),
+AGhostWithoutCreateAdmissionShowsTheReasonAndInvokeDoesNothing,
+AGhostOmitsShowConnections, EachActionReachesTheTablesSeam (Open,
+OpenInNewTab, Reveal, ShowConnections, CreateNote — each once by the
+node's path or label; a menu item's Click reaches the same seam),
+AStaleNodeIsRefused; ThePinTogglesThroughTheGateAndSpeaksPinned (Term
+N7; a retired model refused silently); D-14's four —
+TheDiagramReadbackNamesTheSelectionsTopologyEntryWithTheZoomClause (with
+TheChordOpensThePanelWithTheSameTextItSpoke's arm: the panel's text and
+ONE post render the one event), TheDiagramReadbackReadsNoSelectionWithoutAVisibleKey,
+TheDiagramReadbackCarriesTheNeedleAndTheOverlay,
+TheReadbackIsRefusedWhileTheDiagramBuildsAndAnswersAtInstall (with
+TheRowEnablesWhenTheDiagramSeamInstalls's arm: `CanWhereAmI` false under
+the build, true at the install, the table's again after the teardown);
+Term V6's TheValueAndTheClauseReadOneNumber; D-5's
+AGenerationChurnKeepsTheSelectionByStableKey (two notes added, the
+generation moved, the key unchanged, the ring on the node's id after the
+adopt). DEVIATIONS: (i) the fixture's every note links back to note0, so
+note0 neighbours everything and a note may neighbour itself — the arrows
+fact chooses an origin with a non-neighbour and the non-hub neighbour;
+(ii) the tooltip's dismissal rides the surface's DismissTransientRegion
+after the Where-am-I panel (the canvas's DD-3 shape: the most transient
+region first inside the rung); (iii) TheChordOpensThePanelWithTheSameTextItSpoke
+and TheRowEnablesWhenTheDiagramSeamInstalls are arms of two facts rather
+than facts of their own; (iv) Term N5's "focusOwningGroup" (the mac's)
+has no Windows twin — the seams address the workspace's own group
+rules. MUTATIONS, each restored byte for byte, each caught by the named
+fact: no selection stepping to the last visible node, the neighbours not passed to the step, Tab consumed over an empty set, the type-ahead buffer never resetting, Enter without a selection activating, a keyboard move silent, the double-click announced, the wheel zooming without Ctrl, the tooltip's separator retyped, the tooltip not hoverable, the menu without Pin, the disabled reason not the HelpText, the create admission ignored, the currency ignored, a ghost's activation opening, the pin silent, the zoom clause dropped, the readback seam never installed, the readback answering without a model, a planted step crossing outside the two move members, the ladder skipping the tooltip — twenty-one of twenty-one caught (`gD-mutations.py`, the T4 entries).
+
 ### Tests that pin PR D (revision 5's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14

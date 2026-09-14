@@ -116,6 +116,7 @@ internal sealed class GraphDiagramView : FrameworkElement
         // The container's children follow the cluster's visibility (Term M5):
         // a collapsed board exposes none, so the peer's cache is reset here.
         IsVisibleChanged += (_, _) => RaiseStructureChanged();
+        WireMenu();
     }
 
     // --- The model (rule G's owner is the document; this view reads) ---------------
@@ -136,6 +137,7 @@ internal sealed class GraphDiagramView : FrameworkElement
                 old.PropertyChanged -= OnDocumentChanged;
                 old.DiagramTopologyChanged -= OnTopologyChanged;
                 old.ViewState.PropertyChanged -= OnViewStateChanged;
+                old.DiagramZoomPercent = null;
             }
             _model = value;
             if (value is not null)
@@ -202,6 +204,11 @@ internal sealed class GraphDiagramView : FrameworkElement
             old.Driver.FrameApplied -= OnFrameApplied;
         }
         _diagram = diagram;
+        if (_model is { } document)
+        {
+            // Term V6: the readback's clause and the container's Value read ONE number.
+            document.DiagramZoomPercent = diagram is null ? null : () => _viewport.ZoomPercent;
+        }
         // Term V1: the viewport is reset with the model; Term T3: the tier
         // latch resets with the model; Term T2: the peers are per model.
         _viewport = CanvasViewportState.Seed().WithViewSize(ActualWidth, ActualHeight);
@@ -351,7 +358,7 @@ internal sealed class GraphDiagramView : FrameworkElement
     /// <summary>Selection = the visible id whose topology entry's key equals the
     /// shared key; none while the key is hidden, absent or gone.</summary>
     internal ulong? SelectedId =>
-        _model?.ViewState.SelectedKey is { } key && _entriesByKey.TryGetValue(key, out ulong id) ? id : null;
+        _model?.DiagramSelectedEntry() is { } entry && _visibleSet.Contains(entry.Id) ? entry.Id : null;
 
     /// <summary>Term N4: a select, announced or silent — the entry's key through
     /// the document's ONE guarded writer (refused: the ring does not move),
@@ -898,7 +905,456 @@ internal sealed class GraphDiagramView : FrameworkElement
         return best;
     }
 
+    // --- Term N3: the moves, all through core -----------------------------------------------
+
+    private string _typeAheadBuffer = string.Empty;
+    private DateTime _typeAheadStamp = DateTime.MinValue;
+
+    /// <summary>The arrows: no selection → the first visible node; else core's
+    /// spatial step over every visible id's position with the entry's
+    /// neighbour ids (0b-10) — a null step moves nothing.</summary>
+    internal bool SpatialMove(double dx, double dy)
+    {
+        if (_diagram is null || _visibleIds.Length == 0)
+        {
+            return false;
+        }
+        if (SelectedId is not { } current || !_diagram.Positions.ContainsKey(current))
+        {
+            return SelectNode(_visibleIds[0], announce: true);
+        }
+        var points = new List<GraphPoint>(_visibleIds.Length);
+        foreach (ulong id in _visibleIds)
+        {
+            if (_diagram.Positions.TryGetValue(id, out GraphPoint? point))
+            {
+                points.Add(point);
+            }
+        }
+        ulong[] neighbours = _entries.TryGetValue(current, out GraphTopologyNode? entry) ? [.. entry.Neighbors.Select(n => n.Id)] : [];
+        _diagram.Count("graph_spatial_step");
+        ulong? best = SlateUniffiMethods.GraphSpatialStep([.. points], neighbours, current, dx, dy);
+        return best is { } next && SelectNode(next, announce: true);
+    }
+
+    /// <summary>Tab / Shift+Tab: core's structural step over the visible order,
+    /// wrapping; consumed only while the visible set is non-empty.</summary>
+    internal bool StructuralMove(bool forward)
+    {
+        if (_diagram is null || _visibleIds.Length == 0)
+        {
+            return false;
+        }
+        _diagram.Count("graph_structural_step");
+        ulong? next = SlateUniffiMethods.GraphStructuralStep(_visibleIds, SelectedId, forward);
+        if (next is { } id)
+        {
+            _ = SelectNode(id, announce: true);
+        }
+        return true;
+    }
+
+    /// <summary>A bare letter or digit: the one-second buffer, the first visible
+    /// id whose label starts with it (OrdinalIgnoreCase; the mac's
+    /// <c>lowercased().hasPrefix</c>, recorded D-D6).</summary>
+    internal bool TypeAhead(string text, DateTime now)
+    {
+        if (_diagram is null || string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
+        if ((now - _typeAheadStamp) > TimeSpan.FromSeconds(1))
+        {
+            _typeAheadBuffer = string.Empty;
+        }
+        _typeAheadStamp = now;
+        _typeAheadBuffer += text;
+        foreach (ulong id in _visibleIds)
+        {
+            if (_entries.TryGetValue(id, out GraphTopologyNode? entry) && entry.Label.StartsWith(_typeAheadBuffer, StringComparison.OrdinalIgnoreCase))
+            {
+                _ = SelectNode(id, announce: true);
+                return true;
+            }
+        }
+        return true;
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.Handled || _diagram is null)
+        {
+            return;
+        }
+        // The four viewport chords and Ctrl+Alt+Shift+I are the navigator's,
+        // delivered by the surface's tunnelling handler before this; Escape is
+        // the surface's ladder and bubbles (rung 3); Menu / Shift+F10 are WPF's
+        // route to the persistent context menu.
+        switch (e.Key)
+        {
+            case Key.Down:
+                e.Handled = SpatialMove(0, 1) || true;
+                break;
+            case Key.Up:
+                e.Handled = SpatialMove(0, -1) || true;
+                break;
+            case Key.Right:
+                e.Handled = SpatialMove(1, 0) || true;
+                break;
+            case Key.Left:
+                e.Handled = SpatialMove(-1, 0) || true;
+                break;
+            case Key.Tab:
+                e.Handled = StructuralMove(forward: !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
+                break;
+            case Key.Enter:
+                if (SelectedId is { } selected)
+                {
+                    _ = ActivateNode(selected);
+                    e.Handled = true;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    protected override void OnTextInput(TextCompositionEventArgs e)
+    {
+        base.OnTextInput(e);
+        if (e.Handled || _diagram is null || string.IsNullOrEmpty(e.Text))
+        {
+            return;
+        }
+        char first = e.Text[0];
+        if ((char.IsLetter(first) || char.IsDigit(first))
+            && (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) == 0)
+        {
+            e.Handled = TypeAhead(e.Text, DateTime.UtcNow);
+        }
+    }
+
+    // --- Term N4 / Term V5: the pointer ------------------------------------------------------
+
+    private Point? _dragOrigin;
+    private ulong? _hoverNode;
+    private bool _pointerOnTooltip;
+
+    /// <summary>A click selects (announced); a double-click selects silently and
+    /// activates; empty space begins a drag pan.</summary>
+    internal void PointerPressed(Point view, int clickCount)
+    {
+        _ = Focus();
+        if (HitTest(view) is { } hit)
+        {
+            if (clickCount >= 2)
+            {
+                _ = SelectNode(hit, announce: false);
+                _ = ActivateNode(hit);
+            }
+            else
+            {
+                _ = SelectNode(hit, announce: true);
+            }
+            return;
+        }
+        _dragOrigin = view;
+    }
+
+    protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonDown(e);
+        ArgumentNullException.ThrowIfNull(e);
+        PointerPressed(e.GetPosition(this), e.ClickCount);
+        if (_dragOrigin is not null)
+        {
+            _ = CaptureMouse();
+        }
+        e.Handled = true;
+    }
+
+    protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonUp(e);
+        if (_dragOrigin is not null)
+        {
+            _dragOrigin = null;
+            ReleaseMouseCapture();
+        }
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        ArgumentNullException.ThrowIfNull(e);
+        Point view = e.GetPosition(this);
+        if (_dragOrigin is { } origin && e.LeftButton == MouseButtonState.Pressed)
+        {
+            PanBy(view.X - origin.X, view.Y - origin.Y);
+            _dragOrigin = view;
+            return;
+        }
+        ulong? hovered = HitTest(view);
+        if (hovered != _hoverNode)
+        {
+            _hoverNode = hovered;
+            UpdateTooltip();
+        }
+    }
+
+    protected override void OnMouseLeave(MouseEventArgs e)
+    {
+        base.OnMouseLeave(e);
+        _hoverNode = null;
+        UpdateTooltip();
+    }
+
+    /// <summary>Term V5: the wheel pans by the delta; Ctrl+wheel zooms one step
+    /// per notch, centre-preserving on the pointer; Shift+wheel pans across.</summary>
+    internal void Wheel(Point view, int delta, ModifierKeys modifiers)
+    {
+        if (_diagram is null || delta == 0)
+        {
+            return;
+        }
+        if (modifiers.HasFlag(ModifierKeys.Control))
+        {
+            ZoomStepAt(view, delta > 0);
+            return;
+        }
+        if (modifiers.HasFlag(ModifierKeys.Shift))
+        {
+            PanBy(delta, 0);
+            return;
+        }
+        PanBy(0, delta);
+    }
+
+    protected override void OnMouseWheel(MouseWheelEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        ArgumentNullException.ThrowIfNull(e);
+        if (_diagram is null)
+        {
+            return;
+        }
+        Wheel(e.GetPosition(this), e.Delta, Keyboard.Modifiers);
+        e.Handled = true;
+    }
+
+    // --- T68: the tooltip (a visual 1.4.13 tooltip, never announced) ---------------------
+
+    private System.Windows.Controls.Primitives.Popup? _tooltip;
+    private System.Windows.Controls.TextBlock? _tooltipText;
+    private ulong? _tooltipSubject;
+
+    private System.Windows.Controls.Primitives.Popup Tooltip
+    {
+        get
+        {
+            if (_tooltip is null)
+            {
+                _tooltipText = new System.Windows.Controls.TextBlock
+                {
+                    Padding = new Thickness(6, 4, 6, 4),
+                    MaxWidth = 360,
+                    TextWrapping = TextWrapping.Wrap,
+                };
+                var border = new System.Windows.Controls.Border { Child = _tooltipText, BorderThickness = new Thickness(1) };
+                border.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, "Slate.SurfaceBrush");
+                border.SetResourceReference(System.Windows.Controls.Border.BorderBrushProperty, "Slate.BorderBrush");
+                _tooltipText.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "Slate.TextBrush");
+                // HOVERABLE (1.4.13): the pointer travelling onto the tooltip
+                // is itself a trigger, so arriving there never closes it.
+                border.MouseEnter += (_, _) => _pointerOnTooltip = true;
+                border.MouseLeave += (_, _) =>
+                {
+                    _pointerOnTooltip = false;
+                    UpdateTooltip();
+                };
+                _tooltip = new System.Windows.Controls.Primitives.Popup
+                {
+                    Child = border,
+                    PlacementTarget = this,
+                    Placement = System.Windows.Controls.Primitives.PlacementMode.Relative,
+                    StaysOpen = true,
+                };
+            }
+            return _tooltip;
+        }
+    }
+
+    /// <summary>The composed label — label, " — ", in, " in / ", out, " out"
+    /// — over the topology entry (T68).</summary>
+    internal string TooltipTextFor(ulong id) =>
+        _entries.TryGetValue(id, out GraphTopologyNode? entry)
+            ? entry.Label + GraphPhrase.TooltipSeparator + entry.InLinks.ToString(CultureInfo.InvariantCulture) + GraphPhrase.TooltipInSuffix
+                + entry.OutLinks.ToString(CultureInfo.InvariantCulture) + GraphPhrase.TooltipOutSuffix
+            : string.Empty;
+
+    private void UpdateTooltip()
+    {
+        ulong? subject = _hoverNode is { } hovered && _entries.ContainsKey(hovered)
+            ? hovered
+            : _pointerOnTooltip && _tooltip is { IsOpen: true } ? _tooltipSubject : null;
+        if (subject is not { } id || _diagram is null || !_diagram.Positions.ContainsKey(id))
+        {
+            if (_tooltip is not null)
+            {
+                _tooltip.IsOpen = false;
+            }
+            _tooltipSubject = null;
+            return;
+        }
+        _tooltipSubject = id;
+        _ = Tooltip;
+        _tooltipText!.Text = TooltipTextFor(id);
+        Rect rect = NodeViewRect(id);
+        Tooltip.HorizontalOffset = rect.X;
+        Tooltip.VerticalOffset = rect.Bottom + 2;
+        Tooltip.IsOpen = true;
+    }
+
+    /// <summary>Escape's answer inside the surface's rung: the open tooltip
+    /// closes; false when none is open.</summary>
+    internal bool DismissTooltip()
+    {
+        if (_tooltip is not { IsOpen: true })
+        {
+            return false;
+        }
+        _tooltip.IsOpen = false;
+        _hoverNode = null;
+        _pointerOnTooltip = false;
+        _tooltipSubject = null;
+        return true;
+    }
+
+    // --- Term N5: the actions menu; Term N7: the pin ---------------------------------------
+
+    private readonly System.Windows.Controls.ContextMenu _menu = new();
+    private bool _menuWired;
+
+    private void WireMenu()
+    {
+        if (_menuWired)
+        {
+            return;
+        }
+        _menuWired = true;
+        // The menu EXISTS from construction and is MUTATED per request, never
+        // replaced (the grid's and the leaf's rule): WPF opens on the Menu key,
+        // Shift+F10 or a right-click by the menu that exists when the request
+        // arrives.
+        ContextMenu = _menu;
+        AddHandler(System.Windows.Controls.ContextMenuService.ContextMenuOpeningEvent, new System.Windows.Controls.ContextMenuEventHandler(OnMenuOpening), handledEventsToo: false);
+    }
+
+    private void OnMenuOpening(object sender, System.Windows.Controls.ContextMenuEventArgs e)
+    {
+        bool pointerRequest = e.CursorLeft >= 0 || e.CursorTop >= 0;
+        ulong? target = pointerRequest ? HitTest(new Point(e.CursorLeft, e.CursorTop)) : SelectedId;
+        if (target is not { } id || !RebuildMenu(id))
+        {
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>The persistent menu mutated to the node's actions: core's
+    /// per-kind titles in core's order with a disabled item's reason as its
+    /// HelpText (A-8's shape), then a separator and Pin / Unpin (T67;
+    /// diagram-only, exempt from §P-B parity).</summary>
+    internal bool RebuildMenu(ulong id)
+    {
+        if (_model is not { } model || !_entries.TryGetValue(id, out GraphTopologyNode? entry))
+        {
+            return false;
+        }
+        _menu.Items.Clear();
+        foreach (GraphRowActionSpec spec in model.ActionSpecs(entry.Kind))
+        {
+            var item = new System.Windows.Controls.MenuItem { Header = spec.Title, IsEnabled = model.IsDiagramActionEnabled(spec.Action, entry) };
+            string? reason = model.ActionDisabledReason(spec.Action);
+            AutomationProperties.SetHelpText(item, reason ?? spec.Title);
+            if (!item.IsEnabled && reason is { Length: > 0 })
+            {
+                item.ToolTip = reason;
+                System.Windows.Controls.ToolTipService.SetShowOnDisabled(item, true);
+            }
+            GraphRowAction action = spec.Action;
+            item.Click += (_, _) => _ = model.ExecuteFromDiagram(action, entry);
+            _ = _menu.Items.Add(item);
+        }
+        _ = _menu.Items.Add(new System.Windows.Controls.Separator());
+        bool pinned = _diagram is { } diagram && diagram.Pinned.Contains(id);
+        var pin = new System.Windows.Controls.MenuItem { Header = pinned ? GraphPhrase.UnpinLabel : GraphPhrase.PinLabel };
+        AutomationProperties.SetHelpText(pin, (string)pin.Header);
+        pin.Click += (_, _) => _ = TogglePin(id);
+        _ = _menu.Items.Add(pin);
+        return true;
+    }
+
+    /// <summary>The menu's titles for a node, in order — the drift fact's read.</summary>
+    internal IReadOnlyList<string> MenuTitlesForTests(ulong id) =>
+        RebuildMenu(id) ? [.. _menu.Items.OfType<System.Windows.Controls.MenuItem>().Select(item => (string)item.Header)] : [];
+
+    internal System.Windows.Controls.ContextMenu MenuForTests => _menu;
+
+    /// <summary>Term N7: the model's set and the session's PinNode at the node's
+    /// CURRENT layout position, or UnpinNode, THROUGH the gate — a retired
+    /// model refuses and nothing is spoken; else GraphPinned through the
+    /// document's seam, the peer's status and the menu re-read.</summary>
+    internal bool TogglePin(ulong id)
+    {
+        if (_diagram is null || _model is null || !_visibleSet.Contains(id) || !_diagram.Positions.TryGetValue(id, out GraphPoint? point))
+        {
+            return false;
+        }
+        if (!_diagram.TogglePin(id, (float)point.X, (float)point.Y))
+        {
+            return false;
+        }
+        _model.AnnouncePinned(_diagram.Pinned.Contains(id));
+        if (_peers.TryGetValue(id, out GraphNodeAutomationPeer? peer) && AutomationPeer.ListenerExists(AutomationEvents.PropertyChanged))
+        {
+            peer.RaisePropertyChangedEvent(AutomationElementIdentifiers.ItemStatusProperty, null, peer.GetItemStatus());
+        }
+        return true;
+    }
+
     // --- Test seams ------------------------------------------------------------------------
+
+    internal void PointerEnteredForTests(ulong id)
+    {
+        _hoverNode = id;
+        UpdateTooltip();
+    }
+
+    internal void PointerLeftForTests()
+    {
+        _hoverNode = null;
+        _pointerOnTooltip = false;
+        UpdateTooltip();
+    }
+
+    /// <summary>The pointer left the NODE (onto the tooltip, or away): the hover
+    /// trigger alone departs.</summary>
+    internal void PointerLeftNodeForTests()
+    {
+        _hoverNode = null;
+        UpdateTooltip();
+    }
+
+    internal void PointerOnTooltipForTests(bool on)
+    {
+        _pointerOnTooltip = on;
+        UpdateTooltip();
+    }
+
+    internal bool TooltipIsOpenForTests => _tooltip is { IsOpen: true };
+
+    internal string TooltipTextForTests => _tooltipText?.Text ?? string.Empty;
 
     internal int RedrawsForTests { get; private set; }
 

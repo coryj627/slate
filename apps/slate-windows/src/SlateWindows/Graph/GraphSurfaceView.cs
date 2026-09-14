@@ -356,7 +356,9 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     {
         if (_whereAmIPanel.Visibility != Visibility.Visible)
         {
-            return false;
+            // W6-2 PR D (T68): the diagram's open tooltip is the next most
+            // transient region inside the rung; false with neither open.
+            return _diagram.DismissTooltip();
         }
         CloseWhereAmI();
         return true;

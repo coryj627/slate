@@ -930,6 +930,9 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         model.Driver.Converged += OnSettleConverged;
         DiagramLoading = false;
         HasLiveDiagram = true;
+        // Term N6 / Term M3: the diagram's readback seam installed at the
+        // model's install (cleared by the teardown's order).
+        Navigator?.InstallDiagramReadback(DiagramWhereAmI);
         OpenEpoch();
         model.Driver.StartSettle();
         NotifyDiagramAvailabilityChanged();
@@ -1102,6 +1105,53 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
         ViewState.SelectedKey = null;
         return true;
+    }
+
+    /// <summary>Term N1, the ONE rule: the accepted topology's entry whose
+    /// <c>stable_key</c> equals the shared key, among the ids the live model
+    /// knows; null while the key is absent, hidden or gone (the renderer's
+    /// SelectedId is this entry's id within its visible set).</summary>
+    internal GraphTopologyNode? DiagramSelectedEntry()
+    {
+        if (_diagramModel is not { Topology: { } topology } model || ViewState.SelectedKey is not { } key)
+        {
+            return null;
+        }
+        foreach (GraphTopologyNode entry in topology.Nodes)
+        {
+            if (string.Equals(entry.StableKey, key, StringComparison.Ordinal) && model.NodesById.ContainsKey(entry.Id))
+            {
+                return entry;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Term V6: the renderer's ZoomPercent, installed on bind and
+    /// cleared on unbind — the readback's clause and the container's Value
+    /// read ONE number; 100 (the seed) with no renderer attached.</summary>
+    internal Func<uint>? DiagramZoomPercent { get; set; }
+
+    /// <summary>Term N6: the DIAGRAM's readback — null while no model is live
+    /// (the seam is uninstalled then), else ONE GraphWhereAmI: the derived
+    /// selection's topology entry rendered the row copy's way with its
+    /// component, else NoSelection; <c>zoom_percent</c> present; the filter
+    /// clause and the needle exactly <see cref="TableWhereAmI"/>'s; answered
+    /// whatever the layout's settle state.</summary>
+    internal GraphA11yEvent.GraphWhereAmI? DiagramWhereAmI()
+    {
+        if (_diagramModel is null)
+        {
+            return null;
+        }
+        GraphWhereAmISelection selection = DiagramSelectedEntry() is { } entry
+            ? new GraphWhereAmISelection.Node(RowCopyOf(entry), entry.Component)
+            : new GraphWhereAmISelection.NoSelection();
+        GraphFilter backend = ViewState.Filter;
+        GraphWhereAmIFilter filter = ViewState.KindOnly == GraphNodeKind.Ghost
+            ? new GraphWhereAmIFilter.UnresolvedOnly()
+            : new GraphWhereAmIFilter.Normal(backend.OrphansOnly, backend.IncludeAttachments, backend.IncludeGhosts);
+        return new GraphA11yEvent.GraphWhereAmI(selection, DiagramZoomPercent?.Invoke() ?? 100u, filter, ViewState.NameQuery);
     }
 
     /// <summary>Term N5's currency: the node's id in the LIVE model's visible

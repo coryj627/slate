@@ -375,6 +375,14 @@ public sealed class GraphNavigatorCensus
                     {
                         crossings.Add($"{relative}:{OwnerOf(call)}:{layout.Name}");
                     }
+                    // Term G8's three free functions: the two steps inside the
+                    // renderer's two move members alone (GraphConstants is the
+                    // once-fetched holder's, B-5).
+                    if (candidate is IMethodSymbol { Name: "GraphSpatialStep" or "GraphStructuralStep" } step
+                        && step.ContainingType.Name == "SlateUniffiMethods")
+                    {
+                        crossings.Add($"{relative}:{OwnerOf(call)}:{step.Name}");
+                    }
                 }
                 if (!relative.StartsWith("Graph/", StringComparison.Ordinal))
                 {
@@ -421,6 +429,8 @@ public sealed class GraphNavigatorCensus
                 "Graph/GraphDiagramModel.cs:SetForces:SetForces",
                 "Graph/GraphDiagramModel.cs:TogglePin:PinNode",
                 "Graph/GraphDiagramModel.cs:TogglePin:UnpinNode",
+                "Graph/GraphDiagramView.cs:SpatialMove:GraphSpatialStep",
+                "Graph/GraphDiagramView.cs:StructuralMove:GraphStructuralStep",
                 "Graph/GraphDocumentViewModel.cs:BuildDiagram:Edges",
                 "Graph/GraphDocumentViewModel.cs:BuildDiagram:Generation",
                 "Graph/GraphDocumentViewModel.cs:BuildDiagram:NodeIds",
