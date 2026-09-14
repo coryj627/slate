@@ -480,6 +480,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// the gated generation fact.</summary>
     internal Action? FetchGateForTests { get; set; }
 
+    /// <summary>Test seam (IPH-2-3): invoked at the head of the epoch's
+    /// topology compute — a throw is the injected fetch failure.</summary>
+    internal Action? TopologyGateForTests { get; set; }
+
     /// <summary>Test seam: FFI crossings the document made, by name.</summary>
     internal Dictionary<string, int> CrossingsForTests { get; } = new(StringComparer.Ordinal)
     {
@@ -1008,20 +1012,34 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             {
                 try
                 {
+                    TopologyGateForTests?.Invoke();
                     lock (CrossingsForTests)
                     {
                         CrossingsForTests["graph_topology"]++;
                     }
                     return (GraphTopology?)_session.GraphTopology(query, config);
                 }
-                catch (VaultException)
+                catch (VaultException exception)
                 {
+                    HostLog.Write(HostDiagnosticEvent.GraphTopologyFetchFailed, exception);
                     return null;
                 }
             },
             topology =>
             {
-                if (topology is null || _retired || !ReferenceEquals(_diagramModel, model) || epoch != _epochSeq || topology.Generation != model.Generation)
+                if (topology is null)
+                {
+                    // IPH-2-3: the epoch was marked current BEFORE its fetch;
+                    // a failed fetch leaves it UNFETCHED, so the next request
+                    // for the same key — a probe's refresh, a view-state
+                    // change — fetches again instead of returning early.
+                    if (epoch == _epochSeq && _epoch is { } current && ReferenceEquals(current.Model, model))
+                    {
+                        _epoch = null;
+                    }
+                    return;
+                }
+                if (_retired || !ReferenceEquals(_diagramModel, model) || epoch != _epochSeq || topology.Generation != model.Generation)
                 {
                     return;
                 }
@@ -1081,6 +1099,20 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// <summary>Test seam (D-5): a refresh issued without the probe's
     /// comparison — the four terminal paths' facts drive it.</summary>
     internal void RefreshDiagramForTests() => RefreshDiagram();
+
+    /// <summary>Test seam (IPH-2-3): the epoch re-asked for the key in force
+    /// — a fetched key returns early, a failed one fetches again.</summary>
+    internal void ReopenEpochForTests() => OpenEpoch();
+
+    /// <summary>Test seam (IPH-2-4): a refresh's answer applied as the
+    /// scheduler would apply it — the frame with its read.</summary>
+    internal void ApplyRefreshForTests(LayoutFrame frame, GraphDiagramTopologyRead read)
+    {
+        if (_diagramModel is { } model)
+        {
+            ApplyRefresh(model, new GraphDiagramRefresh(frame, read, null));
+        }
+    }
 
     /// <summary>Test seam (D-9): the epoch's landing raised over a topology a
     /// fact installed through the model's own seams.</summary>
@@ -1166,6 +1198,20 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         && model.NodesById.ContainsKey(id)
         && topology.Nodes.Any(node => node.Id == id);
 
+    /// <summary>Term N5's currency for a captured ENTRY (IPH-2-2): its id in
+    /// the live model's visible set AND its stable key the one that id
+    /// names now — core may reassign ids across a generation, so a menu
+    /// left open across a refresh must not act on a record whose id another
+    /// node inherited.</summary>
+    internal bool IsNodeCurrent(GraphTopologyNode node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        return _diagramModel is { Topology: { } topology } model
+            && model.NodesById.TryGetValue(node.Id, out GraphNode? live)
+            && string.Equals(live.StableKey, node.StableKey, StringComparison.Ordinal)
+            && topology.Nodes.Any(current => current.Id == node.Id && string.Equals(current.StableKey, node.StableKey, StringComparison.Ordinal));
+    }
+
     /// <summary>Term N5's admission for a topology entry — <see cref="IsActionEnabled"/>'s
     /// rule addressed by the node's path, the create admission for a ghost.</summary>
     internal bool IsDiagramActionEnabled(GraphRowAction action, GraphTopologyNode node)
@@ -1188,7 +1234,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     internal bool ExecuteFromDiagram(GraphRowAction action, GraphTopologyNode node)
     {
         ArgumentNullException.ThrowIfNull(node);
-        if (_retired || !IsNodeCurrent(node.Id) || !ActionAppliesTo(action, node.Kind) || !IsDiagramActionEnabled(action, node))
+        if (_retired || !IsNodeCurrent(node) || !ActionAppliesTo(action, node.Kind) || !IsDiagramActionEnabled(action, node))
         {
             return false;
         }
@@ -1248,6 +1294,14 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         else if (answer is { Frame: { } frame, Read: { } read } && frame.Generation > model.Generation)
         {
             model.Adopt(read);
+            // IPH-2-4 (Term G5/G6): the refresh's frame carries the new
+            // generation's positions for the new ids — adopted with the
+            // read, so no window exists in which the peers, the hit grid
+            // and a spatial step read new ids with no positions.
+            if (frame.Positions.Length == read.Ids.Length * 2)
+            {
+                model.AdoptFrame(frame);
+            }
             OpenEpoch();
             model.Driver.StartSettle();
         }

@@ -400,6 +400,31 @@ public sealed partial class GraphDiagramTests
 
     // --- D-12: the actions and the menu (Term N5); Term N7's pin -------------------------
 
+    /// <summary>Term N5's currency for a captured entry (IPH-2-2): an entry
+    /// whose id the model still knows but whose stable key that id no longer
+    /// names is REFUSED — a menu left open across a refresh cannot act on a
+    /// node that inherited the id; the live entry is admitted.</summary>
+    [Fact]
+    public void AMenuActionOverAStaleEntryIsRefused()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-stale-entry");
+            GraphDocumentViewModel document = host.Open();
+            (_, _, GraphDiagramView diagram, _) = LiveDiagram(host, document);
+            GraphTopologyNode live = diagram.Entries.Values.First(entry => entry.Kind == GraphNodeKind.Note);
+            GraphTopologyNode stale = live with { StableKey = "p:elsewhere.md", Path = "elsewhere.md", Label = "elsewhere" };
+            Assert.True(document.IsNodeCurrent(live));
+            Assert.True(document.IsNodeCurrent(live.Id));
+            Assert.False(document.IsNodeCurrent(stale));
+            Assert.False(document.ExecuteFromDiagram(GraphRowAction.Reveal, stale));
+            Assert.False(diagram.TogglePin(stale.Id, stale.StableKey));
+            Assert.Empty(diagram.Diagram!.Pinned);
+            Assert.True(diagram.TogglePin(live.Id, live.StableKey));
+            Assert.Contains(live.Id, diagram.Diagram!.Pinned);
+        });
+    }
+
     /// <summary>Term N5's target rule (IPH-1-3): a pointer request opens the
     /// menu on the node HIT at the view point — not the selection — none
     /// over empty space; a keyboard request (the Menu key, Shift+F10: -1, -1)

@@ -103,6 +103,15 @@ internal sealed class GraphDiagramModel
     /// topology lost (Term G6).</summary>
     internal HashSet<ulong> Pinned { get; } = [];
 
+    /// <summary>Term N7 / G6 (IPH-2-1): the pins are the NODES' — kept by
+    /// stable key across a generation whose ids core may reassign
+    /// (graph.rs's id contract; the kernel keeps its own pins by key through
+    /// warm_update). <see cref="Pinned"/> is the ids' view of this set for
+    /// the read the model currently holds.</summary>
+    private readonly HashSet<string> _pinnedKeys = new(StringComparer.Ordinal);
+
+    internal IReadOnlySet<string> PinnedKeys => _pinnedKeys;
+
     /// <summary>Term G3: the accepted epoch's record — null until the first
     /// epoch of the model lands; written by the document's topology apply
     /// alone.</summary>
@@ -241,7 +250,22 @@ internal sealed class GraphDiagramModel
         NodesById = byId;
         Edges = read.Edges;
         Generation = read.Generation;
-        _ = Pinned.RemoveWhere(id => !byId.ContainsKey(id));
+        // The pins pruned to the keys the read still carries, then the ids'
+        // view rebuilt under the read's ids (IPH-2-1).
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (GraphNode node in byId.Values)
+        {
+            _ = keys.Add(node.StableKey);
+        }
+        _pinnedKeys.IntersectWith(keys);
+        Pinned.Clear();
+        foreach (GraphNode node in byId.Values)
+        {
+            if (_pinnedKeys.Contains(node.StableKey))
+            {
+                _ = Pinned.Add(node.Id);
+            }
+        }
     }
 
     /// <summary>Term G5: an applied frame replaces the position map; the
@@ -263,7 +287,12 @@ internal sealed class GraphDiagramModel
     /// it; false — nothing changed — once the model is retired (IGS-2).</summary>
     internal bool TogglePin(ulong id, float x, float y)
     {
-        bool pin = !Pinned.Contains(id);
+        if (!NodesById.TryGetValue(id, out GraphNode? node))
+        {
+            return false;
+        }
+        string key = node.StableKey;
+        bool pin = !_pinnedKeys.Contains(key);
         bool admitted = WithSession(
             session =>
             {
@@ -284,10 +313,12 @@ internal sealed class GraphDiagramModel
         {
             if (pin)
             {
+                _ = _pinnedKeys.Add(key);
                 _ = Pinned.Add(id);
             }
             else
             {
+                _ = _pinnedKeys.Remove(key);
                 _ = Pinned.Remove(id);
             }
         }

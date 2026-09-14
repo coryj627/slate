@@ -1006,11 +1006,133 @@ public sealed partial class GraphDiagramTests
             Assert.Equal(1, document.CrossingsForTests["layout_refresh"]);
             Assert.DoesNotContain(model.NodesById.Values, node => node.Path == "note3.md");
             Assert.DoesNotContain(lost, model.Pinned);
-            // Every surviving pin names a live id (the kept note's, unless the
-            // refresh reassigned it — the mac prunes by id the same way).
-            Assert.NotEmpty(model.Pinned);
+            // The kept note's pin SURVIVES by its stable key under whatever id
+            // the refresh gave the note (IPH-2-1) — the one pin left.
+            ulong keptNow = model.NodesById.Values.Single(node => node.Path == "note0.md").Id;
+            Assert.Equal([keptNow], model.Pinned.ToArray());
+            Assert.Contains(model.NodesById[keptNow].StableKey, model.PinnedKeys);
             Assert.All(model.Pinned, id => Assert.Contains(id, model.NodeIds));
             _ = kept;
+        });
+    }
+
+    /// <summary>Term N7 / G6 (IPH-2-1): a pin is the NODE's, by stable key —
+    /// a read that reassigns every id (core's id contract across a
+    /// generation) carries the pin to the node's new id and never to the
+    /// node that inherited the old one.</summary>
+    [Fact]
+    public void APinSurvivesAnIdReassignmentByItsStableKey()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-pin-by-key");
+            GraphDocumentViewModel document = host.Open();
+            Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+            GraphDiagramModel model = SettledModel(host, document);
+            ulong[] ids = model.NodeIds;
+            Assert.True(ids.Length >= 2);
+            ulong pinnedOld = ids[0];
+            ulong otherOld = ids[1];
+            string pinnedKey = model.NodesById[pinnedOld].StableKey;
+            Assert.True(model.TogglePin(pinnedOld, 0f, 0f));
+            Assert.Equal([pinnedOld], model.Pinned.ToArray());
+            // Every id shifted by one slot: the OTHER node inherits the pinned
+            // node's old id.
+            var shifted = new Dictionary<ulong, ulong>();
+            for (int i = 0; i < ids.Length; i++)
+            {
+                shifted[ids[i]] = ids[(i + 1) % ids.Length];
+            }
+            GraphNode[] nodes = [.. ids.Select(id => model.NodesById[id] with { Id = shifted[id] })];
+            GraphEdge[] edges = [.. model.Edges.Select(edge => edge with { SourceId = shifted[edge.SourceId], TargetId = shifted[edge.TargetId] })];
+            model.Adopt(new GraphDiagramTopologyRead([.. ids.Select(id => shifted[id])], edges, nodes, model.Generation + 1));
+            ulong pinnedNew = shifted[pinnedOld];
+            Assert.Equal(pinnedKey, model.NodesById[pinnedNew].StableKey);
+            Assert.Equal([pinnedNew], model.Pinned.ToArray());
+            Assert.DoesNotContain(pinnedOld, model.Pinned.Where(id => id != pinnedNew));
+            Assert.Equal([pinnedKey], model.PinnedKeys.ToArray());
+            _ = otherOld;
+        });
+    }
+
+    /// <summary>Term G3 / D-3 (IPH-2-3): a failed topology fetch leaves the
+    /// epoch UNFETCHED — logged, the previous set standing — and the next
+    /// request for the same key fetches again.</summary>
+    [Fact]
+    public void AFailedTopologyFetchIsRetriedOnTheNextEpochRequest()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-topology-retry");
+            GraphDocumentViewModel document = host.Open();
+            Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+            GraphDiagramModel model = SettledModel(host, document);
+            Assert.Equal(1, document.CrossingsForTests["graph_topology"]);
+            TextWriter original = Console.Error;
+            var captured = new StringWriter();
+            Console.SetError(captured);
+            try
+            {
+                document.TopologyGateForTests = () => throw new VaultException.Io("topology down");
+                document.ViewState.NameQuery = "note";
+                host.Settle(document);
+            }
+            finally
+            {
+                Console.SetError(original);
+                document.TopologyGateForTests = null;
+            }
+            // The failed fetch never counted the crossing (the gate threw
+            // first); the failure is logged; the previous epoch's set stands.
+            Assert.Contains("SlateWindows.GraphTopologyFetchFailed", captured.ToString());
+            Assert.Equal(1, document.CrossingsForTests["graph_topology"]);
+            Assert.NotNull(model.Topology);
+            // The same key asked again fetches — an unfetched epoch is not a
+            // fetched one.
+            document.ReopenEpochForTests();
+            host.Settle(document);
+            Assert.Equal(2, document.CrossingsForTests["graph_topology"]);
+            Assert.NotNull(model.Topology);
+            // And a fetched key returns early.
+            document.ReopenEpochForTests();
+            host.Settle(document);
+            Assert.Equal(2, document.CrossingsForTests["graph_topology"]);
+        });
+    }
+
+    /// <summary>Term G5 / G6 (IPH-2-4): a refresh's answer adopts its FRAME
+    /// with its read — the new generation's ids have positions the moment the
+    /// read lands, before any tick of the restarted settle.</summary>
+    [Fact]
+    public void ARefreshAdoptsItsFrameWithItsRead()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-refresh-frame");
+            GraphDocumentViewModel document = host.Open();
+            Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+            GraphDiagramModel model = SettledModel(host, document);
+            ulong generation = model.Generation + 1;
+            const ulong added = 900_001;
+            GraphNode[] nodes = [.. model.NodeIds.Select(id => model.NodesById[id]), new GraphNode(added, "p:added.md", "added.md", "added", GraphNodeKind.Note, 0, 0, 0, 0, 0, true, 0, null)];
+            ulong[] ids = [.. nodes.Select(node => node.Id)];
+            var positions = new float[ids.Length * 2];
+            for (int i = 0; i < ids.Length; i++)
+            {
+                positions[2 * i] = 10f * i;
+                positions[(2 * i) + 1] = -10f * i;
+            }
+            var frame = new LayoutFrame(positions, 1, false, generation);
+            document.ApplyRefreshForTests(frame, new GraphDiagramTopologyRead(ids, model.Edges, nodes, generation));
+            // Synchronously, before the dispatcher runs the settle's first
+            // apply: the read landed and the frame with it.
+            Assert.Equal(generation, model.Generation);
+            Assert.Contains(added, model.NodeIds);
+            Assert.True(model.Positions.TryGetValue(added, out GraphPoint? point));
+            Assert.Equal(10.0 * (ids.Length - 1), point!.X);
+            Assert.Same(frame, model.LastFrame);
+            Assert.Equal(ids.Length, model.Positions.Count);
+            host.Settle(document);
         });
     }
 

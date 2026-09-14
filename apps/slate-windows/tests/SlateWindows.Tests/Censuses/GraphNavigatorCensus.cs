@@ -284,6 +284,7 @@ public sealed class GraphNavigatorCensus
             [
                 "<ctor>",
                 "ApplyRefresh",
+                "ApplyRefreshForTests",
                 "BuildDiagram",
                 "EnsureDiagram",
                 "EnterDiagram",
@@ -300,6 +301,7 @@ public sealed class GraphNavigatorCensus
                 "ReceiveForTests",
                 "RefreshDiagram",
                 "RefreshDiagramForTests",
+                "ReopenEpochForTests",
                 "Request",
                 "SetMode",
             ],
@@ -317,7 +319,7 @@ public sealed class GraphNavigatorCensus
         foreach (string arm in new[]
         {
             "Issue", "IssueReplacing", "Receive", "ReceiveForTests",
-            "ApplyRefresh", "BuildDiagram", "EnterDiagram", "FetchTopology", "InstallBuild", "OnViewStateChanged", "OpenEpoch", "RebuildDiagram", "RefreshDiagram", "RefreshDiagramForTests",
+            "ApplyRefresh", "ApplyRefreshForTests", "BuildDiagram", "EnterDiagram", "FetchTopology", "InstallBuild", "OnViewStateChanged", "OpenEpoch", "RebuildDiagram", "RefreshDiagram", "RefreshDiagramForTests", "ReopenEpochForTests",
         })
         {
             Assert.Empty(CallersOf(TheDocumentType, arm, includeInsideType: false));

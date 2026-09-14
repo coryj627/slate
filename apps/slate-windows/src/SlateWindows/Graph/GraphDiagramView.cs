@@ -1364,7 +1364,8 @@ internal sealed class GraphDiagramView : FrameworkElement
         bool pinned = _diagram is { } diagram && diagram.Pinned.Contains(id);
         var pin = new System.Windows.Controls.MenuItem { Header = pinned ? GraphPhrase.UnpinLabel : GraphPhrase.PinLabel };
         AutomationProperties.SetHelpText(pin, (string)pin.Header);
-        pin.Click += (_, _) => _ = TogglePin(id);
+        string key = entry.StableKey;
+        pin.Click += (_, _) => _ = TogglePin(id, key);
         _ = _menu.Items.Add(pin);
         return true;
     }
@@ -1379,6 +1380,13 @@ internal sealed class GraphDiagramView : FrameworkElement
     /// CURRENT layout position, or UnpinNode, THROUGH the gate — a retired
     /// model refuses and nothing is spoken; else GraphPinned through the
     /// document's seam, the peer's status and the menu re-read.</summary>
+    /// <summary>The menu's pin (IPH-2-2): the item captured an id and its
+    /// key; the toggle applies only while that id still names that key.</summary>
+    internal bool TogglePin(ulong id, string key) =>
+        _entries.TryGetValue(id, out GraphTopologyNode? current)
+        && string.Equals(current.StableKey, key, StringComparison.Ordinal)
+        && TogglePin(id);
+
     internal bool TogglePin(ulong id)
     {
         if (_diagram is null || _model is null || !_visibleSet.Contains(id) || !_diagram.Positions.TryGetValue(id, out GraphPoint? point))

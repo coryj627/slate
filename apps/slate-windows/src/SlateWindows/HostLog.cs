@@ -45,6 +45,7 @@ internal enum HostDiagnosticEvent
     GraphConfigPersistFailed,
     GraphConfigReadFailed,
     GraphLayoutRefreshFailed,
+    GraphTopologyFetchFailed,
     MonitorEnumerationFailed,
     QuickOpenRankingFailed,
     RecentVaultJumpListUpdateFailed,

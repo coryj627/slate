@@ -14176,6 +14176,65 @@ observable is pixels), recorded. The stop rule (the standing gate met
 on a head AND a pass with no blocker twice running) is not met: IPH-2
 runs on this landing.
 
+**TGD-9 — post-implementation pass IPH-2 (gpt-5.5 medium, read-only,
+over da842e5d): four findings, all TAKEN.** THE PASS returned two
+blockers and two majors and the verdict "not safe to continue" on the
+blockers; every finding held against the frozen terms and core's id
+contract (`graph.rs`: an id is the StableGraph index, stable while the
+generation is unchanged, and a generation change MAY reassign ids).
+IPH-2-1 [BLOCKER], "pins are tracked by generation-local node id" —
+TAKEN: the model kept `Pinned` as a set of ids pruned by id on every
+adopt, so a refresh that reassigned ids could drop a surviving node's
+pin or hand it to the node that inherited the id, while the kernel
+keeps its own pins by key through warm_update; the pins are now the
+NODES' stable keys (`GraphDiagramModel.PinnedKeys`), pruned to the keys
+a read still carries, and `Pinned` is the ids' view rebuilt under each
+read; `TogglePin` resolves the id's key first and refuses an id the
+model does not know; APinSurvivesAnIdReassignmentByItsStableKey adopts
+a read whose every id is shifted one slot (the other node inherits the
+pinned node's old id) and finds the pin on the node's NEW id alone;
+ARefreshPrunesAPinTheTopologyLost now asserts the kept pin SURVIVES
+under whatever id the refresh gave its note (its earlier "unless the
+refresh reassigned it" clause was the defect, stated). IPH-2-2
+[BLOCKER], "diagram menu actions execute a stale topology record" —
+TAKEN: the menu's items captured a `GraphTopologyNode` and the click
+checked only that its id was current; the currency for a captured
+entry is now its id AND its stable key against the live model and the
+accepted topology (IsNodeCurrent's entry overload; `ExecuteFromDiagram`
+refuses a stale entry), and the Pin item captures the id with its key
+and toggles only while that id still names that key
+(`GraphDiagramView.TogglePin(id, key)`); AMenuActionOverAStaleEntryIsRefused
+pins both (the live entry admitted, a re-keyed copy refused, the pin
+too). IPH-2-3 [MAJOR], "a topology fetch failure permanently
+suppresses retry for the same epoch" — TAKEN: OpenEpoch marked the
+epoch current before its fetch, so a fetch that threw left the key
+"fetched" and the next OpenEpoch for the same key returned early with
+no accepted topology; the failure is now logged
+(`HostDiagnosticEvent.GraphTopologyFetchFailed`) and the apply's null
+arm clears the epoch record when it is still this epoch's, so the next
+request for the same key fetches again (the seams
+`TopologyGateForTests` — the refresh gate's twin — and
+`ReopenEpochForTests`); AFailedTopologyFetchIsRetriedOnTheNextEpochRequest
+fails one fetch under a changed needle, sees the log line and the
+previous set standing, re-asks the same key and counts the fetch, then
+re-asks a fetched key and counts none. IPH-2-4 [MAJOR], "the refresh
+adopts the new topology before adopting the refresh frame" — TAKEN:
+ApplyRefresh adopted the read and restarted the settle, leaving the new
+generation's ids without positions until the settle's first apply; the
+refresh's frame is now adopted with its read (under the length guard)
+before the epoch opens and the settle restarts; ARefreshAdoptsItsFrameWithItsRead
+applies a synthetic answer through `ApplyRefreshForTests` and finds the
+added id's position synchronously, before any tick. FACTS: the diagram, document, drift, lifetime and announcer facts green (221 of 222 on the first run, the one failure the census below).
+CENSUSES: the navigator census's closed list of load-starting members gains the two seams (ApplyRefreshForTests, ReopenEpochForTests) — both reach the scheduler through ApplyRefresh and OpenEpoch — and its no-outside-callers arms the same; green on the re-run. MUTATIONS, each restored byte for byte, each
+caught by the named fact: the pins pruned by id (the reassignment
+fact); the entry's currency ignoring the key (the stale-entry fact); a
+failed epoch staying "fetched" (the retry fact); the refresh's frame not
+adopted (the frame fact) — four of four caught. CI on da842e5d:
+every lane green (the Windows app lane after T8's drift fix; the Swift
+suite matching the `layout` golden); codoki's second review approved,
+"Safe to merge", no actionable item. The stop rule is not met (IPH-2
+carried blockers): IPH-3 runs on this landing.
+
 ### Tests that pin PR D (revision 5's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14
