@@ -13,12 +13,12 @@ As issued (next/prev card in reading order, enter/exit group, follow connection 
 
 - **The navigator is a command layer, not a fourth view** (t2 shared-architecture decision): its commands are hosted by every canvas surface and operate on `CanvasSelection`. Arrow bindings scope per surface (outline rows already consume ↑/↓ as list navigation — the navigator's ←/→ connection-following works there too; on the visual surface all four arrows are navigator moves outside of modes).
 - **`CommandSection.canvas`** already exists (landed with #369 in Wave 2); this issue registers the navigator command set into it. The deferred `.workspace` section case may ride along with #369's enum change if trivial.
-- All navigator movements are `CommandSection.canvas` commands with t0-conformant announcements via #518 (destination phrasing, N-of-M, direction phrases). Plain-arrow bindings follow program rule R2 (canvas-surface focus only; palette equivalents always; VO Quick Nav caveat documented in each command's help).
-- **Mode-stack plumbing** (t0 §2) ships here as shared infrastructure (`CanvasModeController`): entry/exit/announce/queryable-value/auto-cancel-on-focus-departure/Esc-ladder — consumed by #521/#523 in Wave 4. M1–M7 tests land now against a test mode.
+- All navigator movements are `CommandSection.canvas` commands with t0-conformant announcements via #518 (destination phrasing, N-of-M, direction phrases, and group-boundary context as one logical arrival under t0 §1.2). Plain-arrow bindings follow program rule R2 (canvas-surface focus only; palette equivalents always; VO Quick Nav caveat documented in each command's help). Ordinary next/previous stays filtered; structural group/connection/path navigation reveals an excluded resolved target under t0 §1.6, preserving refusal and currency guards.
+- **Mode-stack plumbing** (t0 §2) ships here as shared infrastructure (`CanvasModeController`): entry/exit/announce/queryable-value, M4's cancellation on owning-context departure, and the M5 Escape dispositions — consumed by #521/#523 in Wave 4. M1–M7 tests land now against a test mode.
 - Chords per the program allocation table; the existing chord↔surface **drift test** extends to the canvas section.
 - "Trace path from selected card": walks the outgoing chain (cycle-safe), announcing each hop; any dead-end announced ("End of path — 4 cards visited").
 
-**Tests:** each movement on fixture canvases (dead-ends, group boundaries, multi-edge, cycles); drift test; mode-controller M1–M7; announcement strings.
+**Tests:** each movement on fixture canvases (dead-ends, group boundaries, multi-edge, cycles); drift test; mode-controller M1–M7; delivered boundary-plus-arrival output after coalescing; structural targets inside/outside the filter, failed/stale targets, and final focus/selection agreement across surfaces. See t0 §6 for the implementation obligations introduced by #1171.
 
 ## #372 — Op-log + undo
 
