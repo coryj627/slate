@@ -55,6 +55,16 @@ public sealed class WcMatrixGraphEvidenceCensus
             ["GraphPhrase", "GraphFilterCount", "GraphWhereAmI", "GraphRow", "graph_verbosities"],
             ["GraphNavigatorTests", "GraphTableTests", "GraphMenuTests", "GraphPreferencesTests", "GraphConfigStoreTests", "GraphConfigWriterTests", "Censuses/GraphNavigatorCensus", "GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean"],
             ["graph-navigator"]),
+        // W6-2 PR D (D-19): the diagram — the container, the per-node peers,
+        // the tier-B summary, the four verbs' menu items.
+        new(
+            "Graph diagram (W6-2 PR D)",
+            ["GraphDiagram", "GraphNode:", "GraphTierSummary", "GraphZoomInMenuItem", "GraphZoomOutMenuItem", "GraphActualSizeMenuItem", "GraphFitGraphMenuItem"],
+            ["Group", "Button", "MenuItem"],
+            ["Value", "Selection", "SelectionItem", "Invoke", "ExpandCollapse"],
+            ["GraphPhrase", "GraphRow", "GraphNeighborsContent", "GraphWhereAmI"],
+            ["GraphDiagramTests", "HandleLifetimeCensus", "Censuses/GraphNavigatorCensus", "ThemeTokenContrastTests", "ParityHarnessCensus", "TheLayoutSectionIsTheSessionsSixtiethTickQuantised", "TwoLayoutsOverOneVaultAreBitIdentical", "GraphMenuTests", "ChordTableTests", "GraphSurfaces_DiagramPeersTiersAndZoom_AreClean"],
+            ["graph-diagram"]),
     ];
 
     private sealed record Row(string Title, string[] Cells);

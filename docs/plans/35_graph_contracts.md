@@ -14016,6 +14016,101 @@ from the numeric names; the driver's cadence no longer dividing sixty
 (the sixtieth-tick fact); the example fixture dropping the section —
 thirteen of thirteen caught (`gD-mutations.py`, the T6 entries).
 
+**TGD-7 — T7: §W-C the journey, the matrices, the evidence (D-19;
+D-13's rows).** THE JOURNEY (`ShellAccessibilityTests`,
+GraphSurfaces_DiagramPeersTiersAndZoom_AreClean, gate W-C): over a
+four-note vault with one unresolved target (Alpha ↔ Beta, Gamma → Alpha
+and a missing note, Solo alone — five nodes under the default filter);
+the oracles are core's renders over the same vault read BEFORE the app
+opens (the PR C journey's discipline, IPG-24/25): the epoch's
+`graph_topology` under the fresh open's query and config, the first
+node's row copy (the diagram's `RowCopyOf` mapping restated as
+DiagramRowCopyOf: label, kind, degrees, the in-degree as the ghost's
+references, never pinned) rendered as `GraphRow` at Standard, its
+neighbours as `GraphNeighborsContent` behind the mac's "Connects to: "
+prefix, core's note actions from `GraphRowActions`. The walk: `Open
+Graph` from the palette and the grid's realised cell (Term F6);
+Shift+Tab to the switcher and Right to the Diagram choice (ChooseRadio:
+WPF's directional navigation moves the keys; the choice checks on the
+arrow or, within a beat, on Space); the GraphDiagram container, five
+Button children, the keys ON the renderer (Term M4's live arm), the
+container's Name "Graph, visual diagram"; the first peer's AutomationId
+"GraphNode:" + the stable key, its Name and HelpText the oracles, not
+keyboard-focusable (DD-Q2); the Value "Zoom N percent" — Ctrl+0 → "Zoom
+100 percent"; Right → the first peer IsSelected (Term N3); Ctrl+= → the
+Value changed and the selected peer's BoundingRectangle changed (the
+canvas journey's stale-frame classic; the peers' read-time rectangles);
+Ctrl+Alt+0 → the Value changed again; the Menu key → the row-actions
+menu's items equal core's note actions then Pin; Escape and the keys
+back on the renderer; Enter → the note opened in the graph's pane; `Open
+Graph` again → the persisted Diagram mode built at the seat (DD-18),
+five peers, the keys on the renderer, the first peer ALREADY selected (Term N1: the selection is derived from the shared key the one document keeps across the note's detour); Ctrl+Alt+Shift+I → the
+readback equals the render of `GraphWhereAmI` over the first node with
+the ZOOM CLAUSE the container's Value carries at that moment (and
+differs from the render without it), the panel takes the keys, Escape
+returns them; Table chosen through the switcher's SelectionItem
+pattern (a screen reader's object navigation; Term N3 consumes Tab in a
+non-empty diagram) with the keys on the renderer → a USER switch: the
+grid returns with the ring's node as the current row (the shared key,
+Term N1); axe
+`graph-diagram`. Run locally to its last step with NVDA stopped:
+passed on 2026-09-14 (18 s, the axe scan clean) after two runs that each found a shell or a journey defect — the landing transient below, then the reopen's kept selection and the Tab consumption Term N3 names. THE FINDING (the journey's, fixed in this task): the
+install notifies `DiagramLoading` false BEFORE `HasLiveDiagram` true,
+and the surface's Term M4 arm read the "not loading, not live, no
+error" transient as the FAILED arm — it seated the state host,
+completed the request, and the next notification collapsed the host, so
+WPF dropped the keys on the workspace tab strip (the journey's first
+failure: "focus is Tab name='Workspace tabs'"); T1's landing fact
+stopped at "waits under a build" and never saw the arrival. The arm now
+waits for a terminal flag (a model live → the renderer; `DiagramError`
+set → the state host) and
+TheUserSwitchsLandingArrivesOnTheRendererWhenTheBuildLands pins the
+arrival (GraphDiagramTests). THE MATRICES: `w_c_matrix.md` gains the
+row "Graph diagram (W6-2 PR D)" — the container, the node peers, the
+tier-B summary and the four menu items by automation id, the control
+types, the Name sources, the patterns, the keys, the announcements and
+the evidence — and PR A's staged claim ("Diagram present and disabled
+until the graph's diagram slice") is retired in place;
+`WcMatrixGraphEvidenceCensus`' manifest gains the surface (the ids the
+shell sets, the types, the patterns, the sources, the evidence names
+that resolve, the axe label a journey scans); the parity generator
+gains W6_2_PR_D_STATUS and the four zoom ids as delivered, the matrix
+regenerated (the four rows at the PR D status, dated 2026-09-14);
+`chords.json`'s delivery evidence maps the four ids to the graph group
+and the group gains the diagram's anchors (`GraphDiagramView`,
+`GraphLayoutDriver`, GraphZoomInCommand; `GraphDiagramTests`, the
+journey); `GraphNavigatorCensus` gains
+TheParityMatrixCarriesTheFourZoomRowsAtThePrDStatus (the generator's
+own string read from its source, the four rows, the w_c row, the staged
+claim gone). DEVIATIONS: (i) D-19 reads the actual-size percent from
+the container; the first frame FITS (D-4), so the journey states the
+size with Ctrl+0 first and reads "Zoom 100 percent" after it; (ii) the
+readback's zoom is read at run time from the container's Value (a pure
+render, no second session), not pinned before the app opens; (iii) the
+oracle's subject is the topology's FIRST node — the visible order and
+the first arrow's target — with its kind asserted a note so Enter opens
+rather than creates; (iv) the reopen presses no Right — a Right would STEP away from the kept selection; (v) the switcher's Right is ChooseRadio's two
+idioms (arrow, then Space within a beat) — WPF's RadioButton group
+moves the keys on an arrow and checks on Space or on the arrow by
+theme; and the RETURN is not a Shift+Tab — Term N3 (P2-3's normative
+Tab, the mac's keyDown 48) consumes Tab inside a non-empty diagram, the
+reader leaving by the shell's pane and tab chords, the palette, or an
+object navigation's Select on the switcher's item, which the journey
+uses (D-19's "Right to the Table item" read through the term); (vi) `HandleLifetimeCensus` is the evidence name (the partial's
+class), not its graph file; (vii) a shell fix (the surface's arm) lands
+in T7, not T1 — rule M's frozen facts pass unchanged and the new fact
+is the arrival's; (viii) the delivery evidence's command set is guarded
+by the generator at regeneration (no CI step runs it) and by the
+census mirror's marker and scope checks. MUTATIONS, each restored byte
+for byte, each caught by the named fact: the transient read as the
+failed arm again (the arrival fact); the manifest naming another row
+(the ten-cells fact); the row dropping an id's backticks (the sources
+fact); the evidence cell dropping the journey (the evidence fact); the
+generator's status retyped and the staged claim returning (the parity
+fact); the journey's anchor retyped in the delivery evidence (the
+census mirror) — seven of seven caught (`gD-mutations.py`, the T7
+entries).
+
 ### Tests that pin PR D (revision 5's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14

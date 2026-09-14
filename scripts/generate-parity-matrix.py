@@ -674,6 +674,22 @@ W6_2_PR_C_DELIVERED_COMMANDS = {
     "slate.graph.whereAmI",
 }
 
+# W6-2 PR D (#746, contracts D-13, D-19): the diagram's four viewport verbs
+# carry the date THEIR gates went green (IPA-13's rule, per slice): the
+# navigator's verbs through the surface's presenter, the Graph-menu items,
+# Ctrl+= / Ctrl+- / Ctrl+0 / Ctrl+Alt+0 in the Graph scope.
+W6_2_PR_D_STATUS = (
+    "implemented; local gates green 2026-09-14; "
+    "interactive CI + human AT pending"
+)
+
+W6_2_PR_D_DELIVERED_COMMANDS = {
+    "slate.graph.zoomIn",
+    "slate.graph.zoomOut",
+    "slate.graph.actualSize",
+    "slate.graph.fitGraph",
+}
+
 W6_2_DELIVERED_COMMANDS = {
     # W6-2 PR A (#746, contract A-12): the graph tab's one chordless row,
     # executable through the palette and the registrar; B–E add the leaf's,
@@ -892,7 +908,8 @@ def load_delivery_evidence(
     } | W3_DELIVERED_COMMANDS | W4_DELIVERED_COMMANDS | W5_2_DELIVERED_COMMANDS \
         | W5_3_DELIVERED_COMMANDS | W5_4_DELIVERED_COMMANDS | W6_1_DELIVERED_COMMANDS \
         | W6_2_DELIVERED_COMMANDS \
-        | W6_2_PR_C_DELIVERED_COMMANDS
+        | W6_2_PR_C_DELIVERED_COMMANDS \
+        | W6_2_PR_D_DELIVERED_COMMANDS
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
         missing = sorted(delivered_commands - mapped_commands)
@@ -966,6 +983,8 @@ def command_delivery_status(
         return W6_1_STATUS
     if command_id in W6_2_PR_C_DELIVERED_COMMANDS:
         return W6_2_PR_C_STATUS
+    if command_id in W6_2_PR_D_DELIVERED_COMMANDS:
+        return W6_2_PR_D_STATUS
     if command_id in W6_2_DELIVERED_COMMANDS:
         return W6_2_STATUS
     return (

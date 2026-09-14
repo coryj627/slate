@@ -2645,7 +2645,10 @@
           "apps/slate-windows/src/SlateWindows/Graph/GraphNavigator.cs#GraphNavigator",
           "apps/slate-windows/src/SlateWindows/Graph/GraphPreferencesViewModel.cs#GraphPreferencesViewModel",
           "apps/slate-windows/src/SlateWindows/Graph/GraphSurfaceView.cs#GraphSurfaceView",
-          "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphWhereAmICommand"
+          "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphWhereAmICommand",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphDiagramView.cs#GraphDiagramView",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphLayoutDriver.cs#GraphLayoutDriver",
+          "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphZoomInCommand"
         ],
         "tests": [
           "apps/slate-windows/tests/SlateWindows.Tests/GraphDocumentTests.cs#GraphDocumentTests",
@@ -2655,7 +2658,9 @@
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphConnections_LeafWalkDepthAndReRoot_AreClean",
           "apps/slate-windows/tests/SlateWindows.Tests/GraphNavigatorTests.cs#GraphNavigatorTests",
           "apps/slate-windows/tests/SlateWindows.Tests/GraphPreferencesTests.cs#GraphPreferencesTests",
-          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean"
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphDiagramTests.cs#GraphDiagramTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_DiagramPeersTiersAndZoom_AreClean"
         ]
       }
     },
@@ -2834,7 +2839,11 @@
       "slate.graph.orphans": "graph",
       "slate.graph.unresolved": "graph",
       "slate.graph.mostLinked": "graph",
-      "slate.graph.whereAmI": "graph"
+      "slate.graph.whereAmI": "graph",
+      "slate.graph.zoomIn": "graph",
+      "slate.graph.zoomOut": "graph",
+      "slate.graph.actualSize": "graph",
+      "slate.graph.fitGraph": "graph"
     },
     "issues": {
       "#720": "vault",

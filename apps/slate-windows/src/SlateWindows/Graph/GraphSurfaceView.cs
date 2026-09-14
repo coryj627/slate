@@ -831,6 +831,18 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
                 }
                 return;
             }
+            // The build's two terminal states, each read by its own flag: a
+            // model live → the renderer; failed → the state host. The install
+            // notifies one property at a time, so a "not loading, not live,
+            // no error" read between its notifications is a TRANSIENT, never
+            // the failed arm — a request seated on the state host there was
+            // completed against a host the next notification collapsed, and
+            // WPF dropped the keys on the tab strip (the journey's finding,
+            // TGD-7). The request waits for a terminal flag.
+            if (!model.HasLiveDiagram && model.DiagramError is null)
+            {
+                return;
+            }
             bool landed = model.HasLiveDiagram ? FocusDiagramProjection() : _stateHost.Focus();
             if (landed)
             {

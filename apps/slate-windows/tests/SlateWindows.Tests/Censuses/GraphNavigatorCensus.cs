@@ -1109,4 +1109,30 @@ public sealed class GraphNavigatorCensus
         Assert.Contains("| Graph navigator, filter and Where-am-I (W6-2 PR C) |", wc, StringComparison.Ordinal);
     }
 
+    /// <summary>W6-2 PR D (D-13, D-19): the four viewport verbs' ids carry
+    /// the PR D status in the generated parity matrix (the generator's own
+    /// string, read from its source), the w_c_matrix carries the diagram
+    /// row, and PR A's staged claim — the Diagram item disabled until the
+    /// diagram slice — is retired (rule M, Term M2).</summary>
+    [Fact]
+    public void TheParityMatrixCarriesTheFourZoomRowsAtThePrDStatus()
+    {
+        string repo = SourceText.RepoRoot();
+        string script = File.ReadAllText(Path.Combine(repo, "scripts", "generate-parity-matrix.py"));
+        var status = System.Text.RegularExpressions.Regex.Match(
+            script, "W6_2_PR_D_STATUS = \\(\\s*\"([^\"]+)\"\\s*\"([^\"]+)\"\\s*\\)");
+        Assert.True(status.Success, "the generator's W6_2_PR_D_STATUS is not in its two-string shape");
+        string expected = status.Groups[1].Value + status.Groups[2].Value;
+        string matrix = File.ReadAllText(Path.Combine(repo, "docs", "plans", "18_windows_port", "parity_matrix.md"));
+        foreach (string id in new[] { ChordTable.Ids.GraphZoomIn, ChordTable.Ids.GraphZoomOut, ChordTable.Ids.GraphActualSize, ChordTable.Ids.GraphFitGraph })
+        {
+            string? row = matrix.Split('\n').FirstOrDefault(line => line.StartsWith("| `" + id + "`", StringComparison.Ordinal));
+            Assert.True(row is not null, $"{id} has no parity row");
+            Assert.EndsWith("| " + expected + " |", row.TrimEnd(), StringComparison.Ordinal);
+        }
+        string wc = File.ReadAllText(Path.Combine(repo, "docs", "plans", "18_windows_port", "w_c_matrix.md"));
+        Assert.Contains("| Graph diagram (W6-2 PR D) |", wc, StringComparison.Ordinal);
+        Assert.DoesNotContain("disabled until the graph's diagram slice", wc, StringComparison.Ordinal);
+    }
+
 }

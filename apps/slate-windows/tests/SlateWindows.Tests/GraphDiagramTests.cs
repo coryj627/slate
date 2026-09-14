@@ -326,6 +326,38 @@ public sealed partial class GraphDiagramTests
         });
     }
 
+    /// <summary>Term M4's live arm through the build's terminal state: a USER
+    /// switch's request waits under the build and lands on the RENDERER when
+    /// the build lands — never on the state host the install collapses (the
+    /// journey's finding, TGD-7: the install notifies one property at a time,
+    /// and the "not loading, not live, no error" read between its
+    /// notifications is a transient, not the failed arm).</summary>
+    [Fact]
+    public void TheUserSwitchsLandingArrivesOnTheRendererWhenTheBuildLands()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-switch-landing-arrives");
+            GraphDocumentViewModel document = host.Open();
+            GraphSurfaceView surface = SurfaceFor(host, document);
+            using HostedWindow window = HostInWindow(surface);
+            RadioButton diagram = Choice(surface, GraphSurfaceMode.Diagram);
+            Assert.True(diagram.Focus());
+            diagram.IsChecked = true;
+            window.UpdateLayout();
+            Assert.NotNull(document.FocusRequest);
+            Assert.True(document.DiagramLoading);
+            _ = SettledModel(host, document);
+            window.UpdateLayout();
+            Assert.True(document.HasLiveDiagram);
+            Assert.True(
+                surface.DiagramForTests.IsKeyboardFocused,
+                $"the landing did not arrive on the renderer; focus is {System.Windows.Input.Keyboard.FocusedElement}");
+            Assert.False(surface.StateHostForTests.IsKeyboardFocused);
+            Assert.Equal(Visibility.Collapsed, surface.StateHostForTests.Visibility);
+        });
+    }
+
     [Fact]
     public void DiagramAvailabilityChangedIsRaisedAtTheSwitchAndTheEffectiveEdge()
     {
