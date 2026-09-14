@@ -33,6 +33,11 @@ internal sealed class ThemeManager : IDisposable
 
     internal static event EventHandler? ResourcesChanged;
 
+    /// <summary>Test seam (W6-2 PR D, IPH-3-1): the theme's change raised
+    /// without a dictionary swap — a renderer that paints from the theme's
+    /// tokens must redraw on it.</summary>
+    internal static void RaiseResourcesChangedForTests() => ResourcesChanged?.Invoke(null, EventArgs.Empty);
+
     private static readonly string[] RequiredSlateBrushKeys =
     [
         "Slate.WindowBackgroundBrush",

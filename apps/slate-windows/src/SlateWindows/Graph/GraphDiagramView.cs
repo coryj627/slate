@@ -116,6 +116,8 @@ internal sealed class GraphDiagramView : FrameworkElement
         // The container's children follow the cluster's visibility (Term M5):
         // a collapsed board exposes none, so the peer's cache is reset here.
         IsVisibleChanged += (_, _) => RaiseStructureChanged();
+        Loaded += (_, _) => SubscribeToTheme();
+        Unloaded += (_, _) => ReleaseTheme();
         WireMenu();
     }
 
@@ -151,6 +153,44 @@ internal sealed class GraphDiagramView : FrameworkElement
             {
                 BindDiagram(null);
             }
+        }
+    }
+
+    private bool _themeSubscribed;
+
+    /// <summary>Term T6 (IPH-3-1): the visuals are painted from the theme's
+    /// tokens read per redraw, so a theme swap must redraw them — the theme
+    /// manager's event is STATIC, so the subscription is the renderer's
+    /// time in the tree (Loaded to Unloaded), never a second time; a
+    /// renderer outside the tree holds no reference from it.</summary>
+    private void SubscribeToTheme()
+    {
+        if (!_themeSubscribed)
+        {
+            ThemeManager.ResourcesChanged += OnThemeChanged;
+            _themeSubscribed = true;
+        }
+    }
+
+    private void ReleaseTheme()
+    {
+        if (_themeSubscribed)
+        {
+            ThemeManager.ResourcesChanged -= OnThemeChanged;
+            _themeSubscribed = false;
+        }
+    }
+
+    /// <summary>Term T6's theme arm (IPH-3-1): the theme manager raises on the
+    /// dispatcher that swapped the dictionaries — the three visuals are
+    /// repainted under the new tokens. A renderer on another dispatcher
+    /// (a test host's finished STA thread, still in the static event) is
+    /// not the raise's audience: its visuals are that thread's.</summary>
+    private void OnThemeChanged(object? sender, EventArgs e)
+    {
+        if (Dispatcher.CheckAccess())
+        {
+            Redraw();
         }
     }
 

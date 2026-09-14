@@ -85,6 +85,39 @@ public sealed partial class GraphDiagramTests
 
     private static string TierEnteredLine() => Render(new GraphA11yEvent.GraphTierEntered());
 
+    // --- Term T6's theme arm (IPH-3-1) ------------------------------------------------
+
+    /// <summary>Term T6 / D-10 (IPH-3-1): the visuals are repainted on a
+    /// theme change — no frame, epoch, size or viewport moved — and not
+    /// after the renderer left the tree (Unloaded released it from the
+    /// theme manager's static event).</summary>
+    [Fact]
+    public void AThemeChangeRedrawsTheDiagramAndUnloadReleasesIt()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-theme-redraw");
+            GraphDocumentViewModel document = host.Open();
+            (_, HostedWindow window, GraphDiagramView diagram, _) = LiveDiagram(host, document);
+            int before = diagram.RedrawsForTests;
+            int fits = diagram.FitsForTests;
+            ThemeManager.RaiseResourcesChangedForTests();
+            Assert.Equal(before + 1, diagram.RedrawsForTests);
+            Assert.Equal(fits, diagram.FitsForTests);
+            ThemeManager.RaiseResourcesChangedForTests();
+            Assert.Equal(before + 2, diagram.RedrawsForTests);
+            // The window's close unloads the surface: Shutdown clears the
+            // visuals with a redraw of its own, so the count read AFTER the
+            // close is the one a released renderer must hold.
+            window.Dispose();
+            // Unloaded is a broadcast the dispatcher delivers after the close.
+            Assert.True(PumpedDispatcher.PumpUntil(() => !diagram.IsLoaded, TimeSpan.FromSeconds(5)), "the window's close never unloaded the renderer");
+            int released = diagram.RedrawsForTests;
+            ThemeManager.RaiseResourcesChangedForTests();
+            Assert.Equal(released, diagram.RedrawsForTests);
+        });
+    }
+
     // --- D-8: tier A's complete peers (Term T2) ---------------------------------------
 
     [Fact]

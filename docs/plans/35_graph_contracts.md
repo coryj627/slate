@@ -14235,6 +14235,40 @@ suite matching the `layout` golden); codoki's second review approved,
 "Safe to merge", no actionable item. The stop rule is not met (IPH-2
 carried blockers): IPH-3 runs on this landing.
 
+**TGD-10 — post-implementation pass IPH-3 (gpt-5.5 medium, read-only,
+over 6d36eb99): one finding, TAKEN.** THE PASS returned one blocker and
+the verdict "not safe to continue" on it. IPH-3-1 [BLOCKER], "the
+diagram's drawing does not invalidate on theme changes" — TAKEN against
+frozen Term T6 / D-10, which says the three visuals are redrawn on
+every frame, epoch, viewport OR THEME change: the renderer read its
+brushes from the theme's dictionaries per redraw (`RedrawStyles`) but
+never subscribed to the theme manager's change, so a Light/Dark/Contrast
+swap after the settle left the visuals painted under the old tokens
+until an unrelated redraw (the editor's highlighter subscribes to the
+same event; the canvas board binds its brushes dynamically); the
+renderer now subscribes to `ThemeManager.ResourcesChanged` for its
+time in the TREE — Loaded to Unloaded, once — and repaints the three
+visuals on it (the manager raises on the dispatcher that swapped the
+dictionaries; the handler posts nothing, the census's rule); the event
+is static, so the subscription is the tree's lifetime and not the
+bound model's: a first cut tied it to the Model setter and the suite
+caught it — facts that build a surface without a window left renderers
+subscribed from dead STA threads, and the next raise reached them
+cross-thread — and a second cut showed the suite's own leak too: the
+renderer facts never close their hosted windows, so their renderers
+stay Loaded and subscribed on finished threads, and `RenderOpen`
+refused the cross-thread call; the handler acts only on its own
+dispatcher (Dispatcher.CheckAccess), a renderer on another dispatcher
+not being the raise's audience; `ThemeManager` gains RaiseResourcesChangedForTests (the
+change raised without a swap);
+AThemeChangeRedrawsTheDiagramAndUnloadReleasesIt pins it (the redraw
+count advances on the raise with no frame, epoch, size or viewport
+change — the fit count not — twice, and not after the window's close
+unloaded the renderer). FACTS: the diagram facts and the navigator census green (127) once the fact pumped the asynchronous Unloaded before its release check. MUTATIONS, each restored
+byte for byte, each caught by the named fact: the Loaded subscription
+dropped; Unloaded keeping it — two of two caught. CI on 6d36eb99: every lane green, the shell accessibility gate with the four graph journeys among them; codoki's third review approved, "Safe to merge" — its one note, the layout facts' exact float and property-order equality, DECLINED: that equality is the frozen contract (DD-Q4, §P-C's per-platform bit-identity; the census re-derives on the same platform; DR-2 records the drift risk and the quantum). The stop rule is not met (IPH-3
+carried a blocker): IPH-4 runs on this landing.
+
 ### Tests that pin PR D (revision 5's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14
