@@ -1136,6 +1136,52 @@ public sealed partial class GraphDiagramTests
         });
     }
 
+    /// <summary>Term G5 / G6 (IPH-4-1): a refresh answer whose frame is not
+    /// two floats per id is MALFORMED — logged, nothing adopted: the
+    /// generation, the ids, the positions and the last frame stand, no epoch
+    /// opens and the settle does not restart.</summary>
+    [Fact]
+    public void AMalformedRefreshAnswerIsLoggedAndLeavesTheModelStanding()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-refresh-malformed");
+            GraphDocumentViewModel document = host.Open();
+            Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+            GraphDiagramModel model = SettledModel(host, document);
+            ulong generation = model.Generation;
+            ulong[] ids = model.NodeIds;
+            LayoutFrame? lastFrame = model.LastFrame;
+            int positions = model.Positions.Count;
+            int topologies = document.CrossingsForTests["graph_topology"];
+            int steps = model.Driver.StepsForTests;
+            GraphNode[] nodes = [.. ids.Select(id => model.NodesById[id]), new GraphNode(900_002, "p:added2.md", "added2.md", "added2", GraphNodeKind.Note, 0, 0, 0, 0, 0, true, 0, null)];
+            ulong[] newIds = [.. nodes.Select(node => node.Id)];
+            // One float short of two per id.
+            var frame = new LayoutFrame(new float[(newIds.Length * 2) - 1], 1, false, generation + 1);
+            TextWriter original = Console.Error;
+            var captured = new StringWriter();
+            Console.SetError(captured);
+            try
+            {
+                document.ApplyRefreshForTests(frame, new GraphDiagramTopologyRead(newIds, model.Edges, nodes, generation + 1));
+            }
+            finally
+            {
+                Console.SetError(original);
+            }
+            Assert.Contains("SlateWindows.GraphLayoutRefreshFailed", captured.ToString());
+            Assert.Equal(generation, model.Generation);
+            Assert.Equal(ids, model.NodeIds);
+            Assert.Equal(positions, model.Positions.Count);
+            Assert.Same(lastFrame, model.LastFrame);
+            Assert.False(model.Driver.IsSettling);
+            host.Settle(document);
+            Assert.Equal(topologies, document.CrossingsForTests["graph_topology"]);
+            Assert.Equal(steps, model.Driver.StepsForTests);
+        });
+    }
+
     [Fact]
     public void ABackendFilterChangeUnderALiveModelRebuildsIt()
     {

@@ -14269,6 +14269,42 @@ byte for byte, each caught by the named fact: the Loaded subscription
 dropped; Unloaded keeping it — two of two caught. CI on 6d36eb99: every lane green, the shell accessibility gate with the four graph journeys among them; codoki's third review approved, "Safe to merge" — its one note, the layout facts' exact float and property-order equality, DECLINED: that equality is the frozen contract (DD-Q4, §P-C's per-platform bit-identity; the census re-derives on the same platform; DR-2 records the drift risk and the quantum). The stop rule is not met (IPH-3
 carried a blocker): IPH-4 runs on this landing.
 
+**TGD-11 — post-implementation pass IPH-4 (gpt-5.5 medium, read-only,
+over 28472d4e): one finding, TAKEN; the first pass without a blocker.**
+THE PASS returned one major and the verdict "safe to continue" — the
+first of the loop. IPH-4-1 [MAJOR], "the refresh's length guard sits
+after the mutation" — TAKEN against Terms G5/G6 and TGD-9's own words
+("adopted with the read under the length guard"): ApplyRefresh adopted
+the read, then guarded only the FRAME by its length, so a malformed
+answer (a frame that is not two floats per id) still advanced the ids,
+the nodes, the edges and the generation, opened an epoch and restarted
+the settle with no positions for the new ids — IPH-2-4's window
+re-created for a malformed buffer; the adoption is now ATOMIC behind
+the guard: a malformed answer is logged
+(`HostDiagnosticEvent.GraphLayoutRefreshFailed`, the refresh's failure
+event, with the counts) and nothing is adopted, the model standing for
+the next probe's refresh;
+AMalformedRefreshAnswerIsLoggedAndLeavesTheModelStanding applies a
+newer-generation answer one float short and finds the generation, the
+ids, the positions and the last frame unchanged, no epoch opened, the
+settle not restarted, the line logged. CODOKI's fourth review
+(28472d4e): APPROVED, "Safe to merge"; its notes, dispositioned: the
+handler's own-dispatcher rule documented more explicitly — the
+handler's remark already states it (a renderer on another dispatcher is
+not the raise's audience), no change; a weak event or a further guard
+for subscriptions without an Unloaded — the subscription is paired
+with WPF's Loaded/Unloaded contract, the tree's own lifetime, no
+change; the fact's pump determinism — the fact raises the change on the
+STA thread that hosts the diagram and pumps the asynchronous Unloaded
+under a bounded wait, no change. FACTS: the diagram facts and the navigator census green (128). MUTATIONS, each
+restored byte for byte, each caught by the named fact: the read adopted
+before the guard (the malformed-answer fact) — one of one caught.
+CI on 28472d4e: the mac, rust, lint, bench and scan lanes green and codoki approving when this landed, the Windows app lanes still in flight — CI arbitrates them on this head. THE STOP RULE: the standing gate is met on a
+head (every lane green on 6d36eb99 and on 28472d4e, codoki approving
+each) and IPH-4 carried no blocker; the rule asks for two such passes
+running — IPH-5 runs on this landing and, without a blocker, closes the
+loop with its findings posted as the owner's ledger.
+
 ### Tests that pin PR D (revision 5's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14

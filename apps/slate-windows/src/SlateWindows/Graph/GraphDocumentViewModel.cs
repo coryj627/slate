@@ -1293,17 +1293,26 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
         else if (answer is { Frame: { } frame, Read: { } read } && frame.Generation > model.Generation)
         {
-            model.Adopt(read);
             // IPH-2-4 (Term G5/G6): the refresh's frame carries the new
-            // generation's positions for the new ids — adopted with the
+            // generation's positions for the new ids — adopted WITH the
             // read, so no window exists in which the peers, the hit grid
-            // and a spatial step read new ids with no positions.
-            if (frame.Positions.Length == read.Ids.Length * 2)
+            // and a spatial step read new ids with no positions. The
+            // adoption is atomic behind the frame's length guard (IPH-4-1):
+            // a frame that is not two floats per id is a malformed answer,
+            // logged, and the model stands for the next probe's refresh.
+            if (frame.Positions.Length != read.Ids.Length * 2)
             {
-                model.AdoptFrame(frame);
+                HostLog.Write(
+                    HostDiagnosticEvent.GraphLayoutRefreshFailed,
+                    new InvalidOperationException($"the refresh's frame carries {frame.Positions.Length} positions for {read.Ids.Length} ids."));
             }
-            OpenEpoch();
-            model.Driver.StartSettle();
+            else
+            {
+                model.Adopt(read);
+                model.AdoptFrame(frame);
+                OpenEpoch();
+                model.Driver.StartSettle();
+            }
         }
         if (_refreshAgain)
         {
