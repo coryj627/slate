@@ -11752,10 +11752,14 @@ three journeys re-run.
 
 ## PR D — the diagram: the renderer, the per-node peers, the tiers, the layout driver, zoom
 
-Revision 3, 2026-09-14 (revision 1 = 095ecb0f, revision 2 = 8d0a85f3;
-round 1's nine findings IGQ-1..9 and round 2's one finding IGR-1
-discharged in the text below), branch `feat/w6-2-d` on the merged A,
-B1, B2 and C (`main` at 9a8028a7). The spec is `w6_2_graph_spec.md` §PR D
+Revision 4, 2026-09-14 (revision 1 = 095ecb0f, revision 2 = 8d0a85f3,
+revision 3 = 826ff113; rounds 1–3's findings IGQ-1..9, IGR-1 and
+IGS-1..5 discharged in the text below), branch `feat/w6-2-d` on the
+merged A, B1, B2 and C (`main` at 9a8028a7). Revision 4 is the DESIGN
+PASS the protocol's rule 4 requires — rule G carried a blocker in three
+consecutive rounds, every one the disposed-handle class — and it removes
+the class rather than its sites: the layout session lives behind ONE
+admission gate ("Design pass II" below; Term G7). The spec is `w6_2_graph_spec.md` §PR D
 (amended in place by this revision where DD-14 says so), consuming §1's
 rules R-A..R-I, §2's rows D, H, J, L, M, N and P, §5 and §7. Every
 neighbouring section of this document — 0a, 0b, A (rule L), B (rule C),
@@ -11766,7 +11770,7 @@ by an owner amendment PENDING at DD-Q5 (the text is given there and is
 applied in place when the owner answers), and C-15 iv's closed census
 lists are amended under the provision C-15 iv itself makes for later PRs
 ("by amendment of this list"; DD-16). Round numbering: IGQ-n (round 1),
-IGR-n (round 2), IGS-n (round 3), the post-implementation passes IPH-n.
+IGR-n (round 2), IGS-n (round 3), IGT-n (round 4), the post-implementation passes IPH-n.
 
 **Five owner questions at the head (DD-Q1..DD-Q5).** Each is written to
 its stated DEFAULT below, the alternative recorded beside it; a round
@@ -11810,8 +11814,9 @@ reports the text's application of its default, never the choice.
   artifact's `diameter_x100` idiom, `SurfaceSerializer.cs:1399`) — the
   BINDING's determinism on the twin's own platform (§P-C promises
   bit-identity per platform, `graph_layout.rs:8–17`); sixty iterations on
-  the seven-node vault keep cross-platform libm drift far below the
-  quantum. Alternative: `run_to_convergence` at the same quantum (three
+  the graph vault's twelve nodes (eleven under the default filter — the
+  committed `parity_golden/graph_queries.json`; IGS-4) keep cross-platform
+  libm drift far below the quantum. Alternative: `run_to_convergence` at the same quantum (three
   hundred iterations; the drift risk DR-2 names grows with the count).
 - **DD-Q5 — Rule F's Term F4 (frozen, PR C) names the TABLE projection's
   landing arms; the diagram needs one. Amend F4 in place, or keep F
@@ -12269,46 +12274,98 @@ a diagram arm named in Term M4; rules L, P, Q and W are untouched.
   superseded (its sequence bumped; Term G2's guard refuses it) and Term
   G2 run again under the new filter (the mac's `:113–115`). The selection is never
   stored on the model: Term N1 derives it, so no remap is needed.
-- **Term G7 — teardown, in order, to a disposed handle.** TeardownDiagram
-  — on the switch to Table (Term M2), on the rebuild (Term G6), on
-  `Retire()` (A-1's retirement) and on the workspace's drain — cancels
-  the settle run's `CancelToken`, disarms the settle announcement, clears
-  the diagram's readback seam (Term M3), drops the model from the
-  document and DISPOSES the `LayoutSession` AT ONCE: the binding's call
-  counter defers the native free until an in-flight `Tick`,
-  `RunToConvergence` or `Refresh` returns ("What stands today"). A
-  compute QUEUED before the teardown that STARTS after it reaches a
-  disposed session, and the binding THROWS ObjectDisposedException at
-  the call (`CallWithPointer`'s zero-counter check); the scheduler
-  converts nothing — a throwing compute FAULTS the tracked task
-  (`RunAlwaysAsync`, `PanelWorkScheduler.cs:387`; the placeholder
-  completed with the exception, `:348`) and `WhenAllWorkDrained` (`:526`)
-  would fault the workspace's drain with it — so the REFUSAL IS THE
-  DRIVER'S OWN OBLIGATION (IGR-1): every session compute the driver, the
-  build and the refresh issue wraps its calls in a catch of
-  ObjectDisposedException (and, for the refresh, `VaultException`) and
-  returns a TYPED result — GraphLayoutStep.Refused — whose apply applies
-  nothing; no session call is ever made outside that wrapper (a census
-  arm, D-15 iii). An apply that finds its run cancelled applies nothing
-  either. Disposal never waits for an apply, because `Retire()`'s
-  `Shutdown` skips every later apply (the scheduler's admission,
-  `PanelWorkScheduler.cs:320–360`). `WhenAllWorkDrained` covers every
-  step's compute, so the workspace's bounded drain (`ShutdownGraphDocument`'s,
-  `WorkspaceViewModel.Graph.cs:392–410`) covers the last call's return.
-  Pinned by the lifetime census's baseline (D-15 xiv).
+- **Term G7 — teardown, in order, behind ONE gate.** The `LayoutSession`
+  is PRIVATE to the model and reachable through exactly ONE member,
+  WithSession — `T WithSession<T>(Func<LayoutSession, T> call, T refused)`
+  — which keeps the model's own ADMISSION COUNT (the binding's
+  `CallWithPointer` pattern, one level up): under the model's lock it
+  REFUSES when the model is retired — returns `refused` and touches no
+  handle — else increments the in-flight count; it runs `call` outside
+  the lock; on return it decrements and, when the count reaches zero
+  AND the model is retired, DISPOSES the handle. Every session call in
+  the shell is a `call` handed to WithSession with a typed refused value
+  OF ITS OWN SHAPE (IGS-1: one step-shaped result cannot serve every
+  shape): the driver's `Tick` and `RunToConvergence` → a null frame;
+  the refresh's `Refresh` and its three reads → a null answer; the
+  pin's `PinNode`/`UnpinNode` (Term N7) and PR E's `SetForces` → false
+  (IGS-2: the synchronous mutators are inside the gate too — a stale
+  menu item, a peer action or a forces edit after a teardown is
+  refused and changes nothing). The BUILD is the one exception by
+  construction: its compute creates the fresh handle and reads
+  `NodeIds`/`Edges`/`NodeMetadata`/`Generation` over it BEFORE any
+  model owns it — a private scope no other code can reach — and its
+  apply either seats it in the new model or disposes it (Term G2); no
+  call follows a refused build. No site anywhere catches
+  ObjectDisposedException: the throw is UNREACHABLE — a call is
+  admitted only while the model is live and the handle is disposed only
+  after the last admitted call returns — and a catch would only hide a
+  bypass, so the census forbids one (D-15 iii). TeardownDiagram — on
+  the switch to Table (Term M2), on the rebuild (Term G6), on `Retire()`
+  (A-1's retirement) and on the workspace's drain — in this order:
+  cancels the settle run's `CancelToken`, disarms the settle
+  announcement, clears the diagram's readback seam (Term M3), drops the
+  model from the document, then RETIRES the gate — later calls are
+  refused; the handle is freed at the count's zero, at once when
+  nothing is in flight. A compute queued before the teardown that
+  starts after it is refused at the gate and its apply applies nothing;
+  a compute admitted before the teardown returns normally and its apply
+  finds the run cancelled and applies nothing; the scheduler is never
+  faulted (`RunAlwaysAsync` faults the tracked task on a throwing
+  compute, `PanelWorkScheduler.cs:387`, and `WhenAllWorkDrained`, `:526`,
+  would fault the drain with it — the gate keeps that path unreachable).
+  Disposal never depends on an apply (`Retire()`'s `Shutdown` skips every
+  later apply, `:320–360`). `WhenAllWorkDrained` covers every admitted
+  call's return, so the workspace's bounded drain (`ShutdownGraphDocument`'s,
+  `WorkspaceViewModel.Graph.cs:392–410`) covers the handle's free. The
+  gate's WALL is a census (D-15 iii). Pinned by the lifetime census's
+  baseline (D-15 xiv) and D-4's and D-6's facts.
 - **Term G8 — the crossings, per path.** A build: one `StartGraphLayout`,
   one `NodeIds`, one `Edges`, one `NodeMetadata`, one `Generation`. A
   settle step: one `Tick`; a Reduce Motion settle: one `RunToConvergence`.
-  An epoch: one `GraphTopology`. A refresh: one `Refresh` and, when it
-  adopted, one each of `NodeIds`, `Edges`, `NodeMetadata`. A pin: one
+  An epoch: one `GraphTopology`. A refresh: one `Refresh` and — on every
+  NON-NULL answer, adopted or dropped, because the compute reads before
+  the apply judges (the mac's `:171–173`; IGS-3) — one each of `NodeIds`,
+  `Edges`, `NodeMetadata`; a null answer costs the `Refresh` alone. A pin: one
   `PinNode` or `UnpinNode`. A spatial move: one `GraphSpatialStep`; a
   structural move: one `GraphStructuralStep`; nothing per frame, nothing
   per pan, nothing per zoom (the mac's "no crossing here", `:878–880`).
   Every crossing is on the pool through the scheduler EXCEPT the three
   free functions (`GraphSpatialStep`, `GraphStructuralStep`,
-  `GraphConstants`) and the session's `PinNode`/`UnpinNode`, which are
-  synchronous handle calls the renderer makes on the dispatcher (the
-  mac's `:260`, `:264`; internally synchronised, `lib.rs:5136–5160`).
+  `GraphConstants`) and the session's `PinNode`/`UnpinNode` (and PR E's `SetForces`),
+  synchronous calls the renderer makes on the dispatcher THROUGH the gate
+  (Term G7; the mac's `:260`, `:264`; internally synchronised,
+  `lib.rs:5136–5160`).
+
+#### Design pass II — the session behind one gate (rule 4 invoked at round 3)
+
+Rounds 1, 2 and 3 each returned a blocker in rule G, and each was the
+SAME class seen at another site: revision 1 disposed the handle after an
+apply the retired scheduler would never run; revision 2 disposed at once
+and let the binding's throw be "refused" by a scheduler that converts
+nothing (IGR-1); revision 3 wrapped the driver's computes in a catch and
+left the build's and the refresh's shapes and the synchronous mutators
+outside it (IGS-1, IGS-2). Three rounds, one class: a handle that can be
+disposed while some path can still reach it. The protocol's rule 4 says
+to write the design instead of the next site.
+
+**The design.** The handle is unreachable except through one member of
+the model, WithSession, which is an ADMISSION GATE with a count — the
+binding's own `CallWithPointer`/`Destroy` pattern (`slate_uniffi.cs:
+10740–10790`), lifted one level so the shell's retirement, not the GC's
+finalizer, decides the free: (1) a call is admitted only while the model
+is live, and every admitted call runs over a handle that cannot be freed
+until it returns; (2) a retired model refuses every later call with a
+value of the call's own shape, so no caller needs to know the model was
+torn down; (3) the handle is freed exactly once, by whichever comes last
+— the retirement or the last admitted call's return. Consequences that
+close the class: no ObjectDisposedException can be thrown (nothing
+calls a freed handle), so no catch exists and the scheduler's faulting
+path is never entered; the build's fresh handle is the one object outside
+the gate, and it is private to the build's compute and apply; the
+synchronous mutators — the pin, PR E's forces — go through the same gate
+and are refused, not thrown, after a teardown. The census wall (D-15
+iii) makes the gate the ONLY reader of the handle, so a future site
+cannot reopen the class by holding a `LayoutSession` of its own.
 
 #### Rule M — the mode switch, in five terms
 
@@ -12557,7 +12614,9 @@ a diagram arm named in Term M4; rules L, P, Q and W are untouched.
   settling diagram has a position for every node).
 - **Term N7 — the pin.** TogglePin(id): the model's set and the session's
   `PinNode(id, x, y)` at the node's CURRENT layout position or
-  `UnpinNode(id)` (the mac's `:256–267`), `GraphPinned{pinned}` through
+  `UnpinNode(id)` (the mac's `:256–267`) THROUGH the gate (Term G7 — a
+  retired model refuses the call and the toggle changes nothing, no line
+  spoken; IGS-2), `GraphPinned{pinned}` through
   the document's AnnouncePinned seam, the peer's ItemStatus and the menu
   item re-read; a refresh prunes a pinned id the topology lost (Term G6);
   a rebuild forgets every pin (a new session; the mac's model is new too).
@@ -12705,15 +12764,21 @@ TheSettledLineSpeaksOnlyWhenArmedAndTeardownDisarms
 armed then converged → one `GraphLayoutSettled`; the build's own
 convergence → none; armed then torn down then rebuilt → none);
 ACancelledRunAppliesNothingAndTheSessionIsFreedWhenTheInFlightCallReturns
-(the compute parked on the fetch gate, the teardown issued — the session
-`Dispose`d at once — the gate released: no frame, the handle count back
-to baseline after the call);
-AStepQueuedBeforeTeardownThatStartsAfterDisposalIsRefusedAndTheDrainCompletes
-(the step's compute parked BEFORE its session call through the
-scheduler's `BeforeComputeForTests`, the teardown run — the session
-disposed — then the park released: the compute returns Refused, the
-apply applies nothing, and `WhenAllWorkDrained` completes WITHOUT a
-fault — IGR-1; a planted bare `Tick` outside the wrapper faults it).
+(the compute parked on the fetch gate, the teardown issued — the gate
+retired — the park released: no frame, the handle freed when the call
+returns, the count back to baseline after it);
+AStepQueuedBeforeTeardownThatStartsAfterItIsRefusedAtTheGateAndTheDrainCompletes
+(the step's compute parked BEFORE its gate call through the scheduler's
+`BeforeComputeForTests`, the teardown run — the gate retired, the handle
+freed at once since nothing is admitted — then the park released: the
+call is refused, the apply applies nothing, `WhenAllWorkDrained`
+completes WITHOUT a fault — IGR-1, IGS-1; a planted bare `Tick` on the
+field faults it); AnAdmittedCallOutlivesTheTeardownAndFreesTheHandleOnReturn
+(parked INSIDE the gate's call: the teardown retires the gate with the
+count at one; the handle is freed when the call returns; the lifetime
+census's baseline holds after); EachRefusedShapeIsItsOwn (a null frame,
+a null refresh, a false pin, a false forces edit — IGS-1);
+APinOrAForcesEditOnARetiredModelIsRefusedSilently (IGS-2).
 
 **D-5 — The refresh and the rebuild (Term G6).** Pinned by facts:
 AProbeThatMovedTheGenerationRefreshesTheLayoutAndAdoptsMonotonically
@@ -12733,10 +12798,10 @@ alone — `testPresetFromDiagramModeSpeaksTheHeadlineAlone`'s Windows
 twin, the `GraphMode` line absent).
 
 **D-6 — Teardown, disposal, the drain (Term G7).** Pinned by facts:
-TheSwitchToTableTearsDownAndDisposesAtOnce (an in-flight tick returns
-harmlessly); RetirementTearsDownTheDiagram (the retired scheduler's
-skipped apply cannot be the disposal's owner);
-TheWorkspaceDrainCoversTheLastCallsReturn;
+TheSwitchToTableRetiresTheGateAndFreesTheHandle (nothing in flight: at
+once; an admitted tick: on its return); RetirementTearsDownTheDiagram
+(the retired scheduler's skipped apply plays no part in the disposal);
+TheWorkspaceDrainCoversTheLastAdmittedCallsReturn;
 TheLayoutSessionCountReturnsToBaseline (`HandleLifetimeCensus`'s
 counter, the graph document's diagrams built and torn down twenty
 times); a seam-parked compute that outlives the teardown disposes on
@@ -12900,11 +12965,17 @@ computes alone; `PinNode` / `UnpinNode` inside TogglePin alone;
 members alone — and keeps its "no `Task.Run`, `ThreadPool`, `Thread`,
 `Dispatcher.BeginInvoke` or second scheduler under `Graph/`" arm, the
 driver's `DispatcherTimer` the ONE named exception (a timer that issues a
-scheduler step, not a body); and a WRAPPER arm (IGR-1): every `Tick`,
-`RunToConvergence`, `Refresh`, `StartGraphLayout`, `NodeIds`, `Edges`,
-`NodeMetadata` and `Generation` invocation sits inside a try whose catch
-names ObjectDisposedException and returns the refused result — a bare
-call is the named mutation; (iv) the announcement-seam census: the
+scheduler step, not a body); and the GATE arm (Term G7; IGR-1, IGS-1, IGS-2): the model's session
+field is private and read by WithSession alone; every `Tick`,
+`RunToConvergence`, `Refresh`, `NodeIds`, `Edges`, `NodeMetadata`,
+`Generation`, `PinNode`, `UnpinNode` and `SetForces` invocation's
+receiver is WithSession's lambda parameter, or the build compute's
+fresh handle (`StartGraphLayout`'s result before a model owns it); no
+`LayoutSession`-typed field, property or local exists under `Graph/`
+outside the model and the build's compute; no handler names
+ObjectDisposedException under `Graph/` — a bare call on the field, a
+second reader of the field, a `LayoutSession` held elsewhere and a
+planted catch are the named mutations; (iv) the announcement-seam census: the
 document's boundary gains the six seams and the renderer, the peers, the
 driver and the model post nothing; (v) the writers census: `Mode` (Term
 M1) and `SelectedKey`'s writers unchanged (the diagram writes through
@@ -12936,8 +13007,8 @@ so the priority IS the focus (D-D1); `testAdoptDropsStaleSelectionAndPins`
 — the selection is derived (Term N1) and the pin pruning is D-5's;
 `testTopologyFromAnotherGenerationOrFilterIsDropped` — D-3's dropped
 fetch and D-5's rebuild; `testSetGraphForcesUpdatesConfigAndTheLiveLayoutStaysFinite`
-— PR E's (this PR pins the seam: SetForces on a live model re-heats and
-the next tick is finite); `testDiagramColorsMeetAPCAInBothAppearances` —
+— PR E's (this PR pins the seam: `SetForces` through the gate on a live model
+re-heats and the next tick is finite; on a retired model it is refused); `testDiagramColorsMeetAPCAInBothAppearances` —
 D-10's token matrix.
 
 **D-17 — The matrix rows, the projection, the spec's amendments.**
@@ -12957,7 +13028,9 @@ amended in place (DD-14): §1's `GraphDiagramView.cs` line (the five
 files), §PR D's Goal ("windowed to the viewport" → "complete, every
 visible node — DD-Q1"), Builds (the five files; the settle seam; DD-Q3's
 items), Tests (the suites and censuses D-15 names), Hand-off (the
-SetForces seam and the settle arm for PR E, the readback seam installed).
+SetForces seam and the settle arm for PR E, the readback seam installed);
+and §PR F's §K line — "first windowed rebuild" → "first rebuild", the
+peers being complete (IGS-5).
 
 **D-18 — §W-A: the position golden (DD-Q4); §K: the benchmarks.**
 `SurfaceSerializer.GraphQueriesArtifact` (`SurfaceSerializer.cs:1327+`)
@@ -13062,12 +13135,12 @@ before every push; CI's shell accessibility lane arbitrates.
 - **DD-18 — A persisted Diagram mode builds at the seat and speaks no
   mode line** (Term M1; IGQ-1): `GraphMode` is the switch's line; rule
   L's Term 6 sequences stay a projection onto the family as frozen.
-- **DD-19 — The layout session is disposed at once at teardown** (Term
-  G7): the binding's call counter makes an in-flight call harmless, and
-  a later call is CAUGHT by the driver's own wrapper as a refused step
-  (IGR-1 — the scheduler faults a throwing compute and the drain with
-  it); disposal never depends on an apply the retired scheduler would
-  skip.
+- **DD-19 — The layout session lives behind ONE admission gate** (Term
+  G7; revision 4's design pass under the protocol's rule 4): counted
+  like the binding's own object, refused once the model is retired,
+  freed at the last admitted call's return; no catch anywhere, the
+  throw unreachable; disposal never depends on an apply the retired
+  scheduler would skip.
 
 ### Recorded divergences (PR D)
 
@@ -13132,8 +13205,9 @@ before every push; CI's shell accessibility lane arbitrates.
   applied to BOTH twins (a coarser quantum or a fixture change,
   regenerated once), never by a per-host golden. §P-C promises
   bit-identity PER platform; the risk recorded is only that the failure
-  is found on the mac lane (DR-1's cost), because sixty iterations on
-  seven nodes at a thousandth sit far below any libm drift.
+  is found on the mac lane (DR-1's cost), because sixty iterations over
+  the vault's twelve nodes at a thousandth sit far below any libm drift
+  (IGS-4).
 - **DR-3 — A complete peer set of 1,500 Buttons.** UIA clients that walk
   the whole tree (axe, a scan-mode reader) pay for it once per rebuild;
   the benchmark's first-rebuild budget (D-18) is the guard; the windowed
@@ -13208,7 +13282,24 @@ round 3 invokes rule 4).
 |---|---|---|
 | IGR-1 | BLOCKER (created by revision 2, DD-19) | taken — Term G7: the driver's computes catch ObjectDisposedException (and the refresh's `VaultException`) and return a typed refused result; the scheduler converts nothing and its drain would fault with a throwing compute; the wrapper arm joins the crossings census (D-15 iii); the fact codex named pins it (D-4); DD-19 corrected |
 
-### Tests that pin PR D (revision 3's list; the task loop records what lands)
+### Round 3 — five findings (IGS-1..IGS-5), dispositions; rule 4 invoked
+
+Run 2026-09-14 on revision 3 (826ff113) with `codex exec` on gpt-5.5 at
+medium effort, read-only over the local tree; 2 blockers (both CREATED
+by revision 3's IGR-1 fix — rule 5 counts them double), 3 majors, 0
+minors. Rule G has carried a blocker in rounds 1, 2 and 3 — the
+protocol's rule 4: revision 4 is a DESIGN PASS ("Design pass II"), the
+disposed-handle class removed by one gate rather than a fourth site.
+
+| # | Severity | Disposition |
+|---|---|---|
+| IGS-1 | BLOCKER (created by IGR-1) | taken by the design pass — Term G7: one gate with a refused value of each call's own shape; no catch anywhere; D-4's facts EachRefusedShapeIsItsOwn and the drain fact |
+| IGS-2 | BLOCKER (created by IGR-1) | taken by the design pass — the pin's and PR E's synchronous mutators go through the gate (Terms G7, G8, N7; D-16's seam); APinOrAForcesEditOnARetiredModelIsRefusedSilently |
+| IGS-3 | MAJOR | taken — Term G8: the refresh's three reads happen on every non-null answer, adopted or dropped (the mac's `:171–173`) |
+| IGS-4 | MAJOR | taken — DD-Q4 and DR-2 name the graph vault's twelve nodes (eleven under the default filter), not seven |
+| IGS-5 | MAJOR | taken — the spec's §PR F §K line amended in place ("first windowed rebuild" → "first rebuild") and listed under D-17 |
+
+### Tests that pin PR D (revision 4's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14
   — the model's lifecycle, the build, the epoch, the driver, the refresh,

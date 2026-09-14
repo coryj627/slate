@@ -256,7 +256,7 @@ Each PR section lists: **Goal · Consumes · Builds · Behavior pinned · Tests 
 
 **Builds / records.**
 1. **E2E suite** (`GraphEndToEndTests`, through the real `VaultSession` and the document, not mocks): open the graph on the shared corpus → table rows and summary verbatim → sort → preset → filter → Connections leaf walk and re-root → diagram: layout to convergence, spatial steps, zoom, Where-am-I → the config round-trip; plus the large fixture under P's budgets.
-2. **§K** — `BENCHMARKS.md` "Milestone W6-2 — graph through the C# binding": snapshot marshalling (A), warm tick / first windowed rebuild / per-pan hop / spatial step (D) with budgets asserted.
+2. **§K** — `BENCHMARKS.md` "Milestone W6-2 — graph through the C# binding": snapshot marshalling (A), warm tick / first rebuild (the peers complete — W6-2 PR D DD-Q1) / per-pan hop / spatial step (D) with budgets asserted.
 3. **§W-A** — `graph_queries` scenarios and the position golden byte-identical on both twins; the parity-harness censuses extended.
 4. **§W-D** — the corpus covers the graph family on both twins; the trigger-parity table (the canvas ledger's generator generalised or twinned) recorded; the residue count 29 → 28 recorded.
 5. **§W-C** — `w_c_matrix.md` rows per projection + leaf + inspector; axe 0 failures across the graph journeys; the matrix census extended.

@@ -108,11 +108,11 @@ public sealed class GraphContractsCitationCensus
                 // The diagram section: the design pass of five rules, nineteen
                 // contracts, the decisions, the divergences, the risks, the pins.
                 6_000,
-                // Revision 3 cites existing identifiers only through the
+                // Revision 4 cites existing identifiers only through the
                 // shell, its tests and the core and mac sources it names; D's
                 // own names are unbackticked until they exist. The floor sits
                 // one below the measured population and rises with the records.
-                134),
+                135),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
