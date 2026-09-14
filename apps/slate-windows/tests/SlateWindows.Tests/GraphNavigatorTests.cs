@@ -151,6 +151,8 @@ public sealed class GraphNavigatorTests
 
         public GraphSurfaceMode ProjectionKind { get; set; } = GraphSurfaceMode.Table;
 
+        public GraphViewportOutcome ViewportCommand(GraphViewportVerb verb) => GraphViewportOutcome.Refused;
+
         public void RequestProjectionFocus() => ProjectionRequests++;
 
         public void FocusFilterField() => FieldRequests++;

@@ -312,7 +312,7 @@ public sealed class GraphNavigatorCensus
         Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:NotifyGraphOfVaultChange"], CallersOf(TheDocumentType, "Probe", includeInsideType: false));
         // W6-2 PR D (D-15 iii): the switch from the surface's choice alone; the
         // seat's build from the attach funnel alone; the rest from nowhere.
-        Assert.Equal(["Graph/GraphSurfaceView.cs:OnModeChosen"], CallersOf(TheDocumentType, "SetMode", includeInsideType: false));
+        Assert.Equal(["Graph/GraphDiagramView.cs:SwitchToTable", "Graph/GraphSurfaceView.cs:OnModeChosen"], CallersOf(TheDocumentType, "SetMode", includeInsideType: false));
         Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:AttachGraphDocumentTo"], CallersOf(TheDocumentType, "EnsureDiagram", includeInsideType: false));
         foreach (string arm in new[]
         {
@@ -581,6 +581,87 @@ public sealed class GraphNavigatorCensus
         Assert.Empty(outsideTheGate);
         Assert.Equal(["Graph/GraphDocumentViewModel.cs:BuildDiagram (StartGraphLayout into the model constructor)"], sessionTyped);
         Assert.Empty(disposalHandlers);
+    }
+
+    // --- W6-2 PR D (D-15 ii, iv, x): the renderer's instance, the posting wall, the tokens ---
+
+    private const string TheRendererType = "SlateWindows.Graph.GraphDiagramView";
+
+    /// <summary>D-15 (ii): exactly one renderer per surface, constructed in the
+    /// surface's constructor; its peers are minted by the renderer alone.</summary>
+    [Fact]
+    public void ExactlyOneRendererIsConstructedInTheSurfaceConstructor()
+    {
+        Assert.Equal(["Graph/GraphSurfaceView.cs:<ctor>"], CreationsOf(TheRendererType));
+        Assert.Equal(["Graph/GraphDiagramView.cs:RebuildVisibleSet"], CreationsOf("SlateWindows.Graph.GraphNodeAutomationPeer"));
+        Assert.Equal(["Graph/GraphDiagramView.cs:RebuildVisibleSet"], CreationsOf("SlateWindows.Graph.GraphTierSummaryAutomationPeer"));
+    }
+
+    /// <summary>D-15 (iv): the renderer, the peers, the driver and the model
+    /// POST nothing — no instance member of the announcer is invoked in the
+    /// four files; <c>RenderLabel</c>, the static render without a post, is
+    /// the one announcer name they may reach.</summary>
+    [Fact]
+    public void TheRendererThePeersTheDriverAndTheModelPostNothing()
+    {
+        string[] files = ["Graph/GraphDiagramView.cs", "Graph/GraphDiagramPeers.cs", "Graph/GraphLayoutDriver.cs", "Graph/GraphDiagramModel.cs"];
+        var posts = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources.Where(s => files.Contains(s.Relative)))
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                foreach (ISymbol candidate in Candidates(model.GetSymbolInfo(call)))
+                {
+                    if (candidate is IMethodSymbol method
+                        && (method.ContainingType.Name == "GraphAnnouncer" || method.ContainingType.Name == "A11yAnnouncer")
+                        && !(method.IsStatic && method.Name == "RenderLabel"))
+                    {
+                        posts.Add($"{relative}:{OwnerOf(call)}:{method.Name}");
+                    }
+                }
+            }
+        }
+        Assert.Empty(posts);
+    }
+
+    /// <summary>D-15 (x), D-10: the token-drift census — every
+    /// <c>Slate.Graph.*</c> key the renderer looks up (its literal list) is
+    /// declared as a brush in the three dictionaries, every declared graph
+    /// brush is looked up, and no other <c>Slate.Graph.</c> literal exists
+    /// under Graph/ outside the renderer's list.</summary>
+    [Fact]
+    public void EveryGraphTokenTheRendererLooksUpIsDeclaredInEveryDictionaryAndViceVersa()
+    {
+        string[] lookedUp = [.. GraphDiagramView.TokenKeys.Order(StringComparer.Ordinal)];
+        Assert.Equal(lookedUp.Length, lookedUp.Distinct(StringComparer.Ordinal).Count());
+        foreach (string dictionary in new[] { "Slate.Light.xaml", "Slate.Dark.xaml", "Slate.Contrast.xaml" })
+        {
+            XDocument xaml = XDocument.Load(Path.Combine(ShellRoot, "Themes", dictionary));
+            string[] declared = [.. xaml.Descendants()
+                .Where(e => e.Name.LocalName == "SolidColorBrush")
+                .Select(e => e.Attributes().Single(a => a.Name.LocalName == "Key").Value)
+                .Where(key => key.StartsWith("Slate.Graph.", StringComparison.Ordinal))
+                .Order(StringComparer.Ordinal)];
+            Assert.Equal(lookedUp, declared);
+        }
+        // The literals under Graph/: the renderer's list and nothing else.
+        var literals = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            if (!relative.StartsWith("Graph/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            foreach (LiteralExpressionSyntax literal in source.Root.DescendantNodes().OfType<LiteralExpressionSyntax>())
+            {
+                if (literal.IsKind(SyntaxKind.StringLiteralExpression) && literal.Token.ValueText.StartsWith("Slate.Graph.", StringComparison.Ordinal))
+                {
+                    literals.Add($"{relative}:{literal.Token.ValueText}");
+                }
+            }
+        }
+        Assert.Equal([.. lookedUp.Select(key => "Graph/GraphDiagramView.cs:" + key)], literals.Order(StringComparer.Ordinal));
     }
 
     // --- (v) the preset's argument ------------------------------------------------
@@ -954,6 +1035,11 @@ public sealed class GraphNavigatorCensus
         Assert.Equal(GraphPhrase.LoadingAccessibleName, GraphSurfaceView.LoadingAccessibleName);
         Assert.Equal(GraphPhrase.EmptyText, GraphSurfaceView.EmptyText);
         Assert.Equal(GraphPhrase.ErrorAccessiblePrefix, GraphSurfaceView.ErrorAccessiblePrefix);
+        // W6-2 PR D (D-12): the diagram's names — the mac's byte for byte
+        // (T61–T64, T67, T68, T19, T20) and the Windows-authored prefix.
+        Assert.Equal(["Laying out graph…", "Laying out graph.", "Graph diagram error: "], [GraphPhrase.LoadingDiagramText, GraphPhrase.LoadingDiagramAccessibleName, GraphPhrase.DiagramErrorPrefix]);
+        Assert.Equal(["Graph, visual diagram", "Switch to Table", "pinned", "Pin", "Unpin"], [GraphPhrase.DiagramName, GraphPhrase.SwitchToTable, GraphPhrase.PinnedStatus, GraphPhrase.PinLabel, GraphPhrase.UnpinLabel]);
+        Assert.Equal([" — ", " in / ", " out", "Connects to: "], [GraphPhrase.TooltipSeparator, GraphPhrase.TooltipInSuffix, GraphPhrase.TooltipOutSuffix, GraphPhrase.ConnectsToPrefix]);
         // The chord rows' labels and hints.
         foreach ((string id, string label, string hint) in new[]
         {

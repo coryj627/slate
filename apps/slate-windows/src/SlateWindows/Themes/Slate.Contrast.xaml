@@ -74,4 +74,24 @@
     <SolidColorBrush x:Key="Slate.Canvas.TextBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
     <SolidColorBrush x:Key="Slate.Canvas.EdgeBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
     <SolidColorBrush x:Key="Slate.Canvas.SelectionRingBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
+    <!-- Graph diagram (W6-2 PR D, Term T5; the canvas's table): the fills
+         collapse to the window surface, the outline, edge, label and ring
+         to window text, the accent to the highlight. The group's MEANING
+         stays in the ring's weight and pattern (WCAG 1.4.1). -->
+    <SolidColorBrush x:Key="Slate.Graph.Group1Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group2Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group3Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group4Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group5Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group6Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group7Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group8Brush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.NoteBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.AttachmentBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.SurfaceBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.OutlineBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.EdgeBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.LabelBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.RingBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.Graph.AccentBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
 </ResourceDictionary>

@@ -1074,6 +1074,105 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// comparison — the four terminal paths' facts drive it.</summary>
     internal void RefreshDiagramForTests() => RefreshDiagram();
 
+    /// <summary>Test seam (D-9): the epoch's landing raised over a topology a
+    /// fact installed through the model's own seams.</summary>
+    internal void RaiseDiagramTopologyChangedForTests() => DiagramTopologyChanged?.Invoke();
+
+    // --- W6-2 PR D, the renderer's readings and Term N5 through the document ----
+
+    /// <summary>Term T4/T5: the display the renderer draws under (PR E edits it).</summary>
+    internal GraphDisplay DiagramDisplay => CurrentConfig.Display;
+
+    /// <summary>The row copy from the topology entry (the mac's <c>rowCopy</c>):
+    /// the SAME fields the table speaks — references = in-links, embed false.</summary>
+    internal static GraphRowCopy RowCopyOf(GraphTopologyNode entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        return new GraphRowCopy(entry.Label, entry.Kind, entry.InLinks, entry.OutLinks, entry.InLinks, false);
+    }
+
+    /// <summary>Term T2's RemoveFromSelection: the shared key set null under
+    /// <see cref="SelectRow"/>'s guard — a retired or unseated document
+    /// refuses (the writers census names this arm).</summary>
+    internal bool ClearSelectionFromSurface()
+    {
+        if (_retired || !_isSeated())
+        {
+            return false;
+        }
+        ViewState.SelectedKey = null;
+        return true;
+    }
+
+    /// <summary>Term N5's currency: the node's id in the LIVE model's visible
+    /// set — the accepted topology's, among the ids the model knows.</summary>
+    internal bool IsNodeCurrent(ulong id) =>
+        _diagramModel is { Topology: { } topology } model
+        && model.NodesById.ContainsKey(id)
+        && topology.Nodes.Any(node => node.Id == id);
+
+    /// <summary>Term N5's admission for a topology entry — <see cref="IsActionEnabled"/>'s
+    /// rule addressed by the node's path, the create admission for a ghost.</summary>
+    internal bool IsDiagramActionEnabled(GraphRowAction action, GraphTopologyNode node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        return action switch
+        {
+            GraphRowAction.Open or GraphRowAction.OpenInNewTab => node.Path is not null && OpenRowFromSurface is not null,
+            GraphRowAction.Reveal => node.Path is not null && RevealRowFromSurface is not null,
+            GraphRowAction.ShowConnections => node.Path is not null && ShowConnectionsFromSurface is not null,
+            GraphRowAction.CreateNote => node.Kind == GraphNodeKind.Ghost && CreateNoteFromSurface is not null && CreateAdmissionReason?.Invoke() is null,
+            _ => false,
+        };
+    }
+
+    /// <summary>Term N5: the actions are the table's, through the document —
+    /// the same admission as <see cref="Execute"/> (live, the node current,
+    /// the action in core's vector for its kind and enabled) and the same
+    /// four workspace seams, addressed by the node's path or its label.</summary>
+    internal bool ExecuteFromDiagram(GraphRowAction action, GraphTopologyNode node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        if (_retired || !IsNodeCurrent(node.Id) || !ActionAppliesTo(action, node.Kind) || !IsDiagramActionEnabled(action, node))
+        {
+            return false;
+        }
+        GraphTableRow row = RowOf(node);
+        switch (action)
+        {
+            case GraphRowAction.Open:
+                OpenRowFromSurface!(row, WorkspaceOpenTarget.CurrentTab);
+                return true;
+            case GraphRowAction.OpenInNewTab:
+                OpenRowFromSurface!(row, WorkspaceOpenTarget.NewTab);
+                return true;
+            case GraphRowAction.Reveal:
+                RevealRowFromSurface!(node.Path!);
+                return true;
+            case GraphRowAction.ShowConnections:
+                ShowConnectionsFromSurface!(row);
+                return true;
+            case GraphRowAction.CreateNote:
+                CreateNoteFromSurface!(SlateUniffiMethods.GraphGhostNotePath(node.Label));
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>Term N5: Enter and Invoke — a ghost creates, else Open
+    /// (<see cref="Activate"/>'s rule).</summary>
+    internal bool ActivateFromDiagram(GraphTopologyNode node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        return ExecuteFromDiagram(node.Kind == GraphNodeKind.Ghost ? GraphRowAction.CreateNote : GraphRowAction.Open, node);
+    }
+
+    /// <summary>The seams take the table's row shape: the topology entry's
+    /// fields, no cells (the seams read the path, the label and the kind).</summary>
+    private static GraphTableRow RowOf(GraphTopologyNode node) =>
+        new(node.StableKey, node.Id, node.Label, node.Path, node.Kind, [], node.InLinks, node.OutLinks, node.InEmbeds, node.OutEmbeds, node.Component, null);
+
     /// <summary>Term G6's apply: adopts ONLY when the answer's generation is
     /// NEWER than the model's (monotonic), pruning the pins the topology
     /// lost, restarting the settle and opening a new epoch; an unchanged, a

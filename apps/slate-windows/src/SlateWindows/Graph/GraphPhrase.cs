@@ -70,4 +70,27 @@ internal static class GraphPhrase
     /// <summary>The diagram state host's accessible-name prefix over a failed
     /// build's message — the mac's T19 (`GraphTableView.swift:134`).</summary>
     public const string DiagramErrorPrefix = "Graph diagram error: ";
+
+    /// <summary>T61: the renderer's container peer name (the mac's).</summary>
+    public const string DiagramName = "Graph, visual diagram";
+
+    /// <summary>T62/T63: the tier-B summary's action name (the mac's).</summary>
+    public const string SwitchToTable = "Switch to Table";
+
+    /// <summary>T64: a pinned node's ItemStatus (the mac's value).</summary>
+    public const string PinnedStatus = "pinned";
+
+    /// <summary>T67: the diagram-only menu item, by state (the mac's).</summary>
+    public const string PinLabel = "Pin";
+    public const string UnpinLabel = "Unpin";
+
+    /// <summary>T68: the tooltip's composed shape — label, " — ", in, " in / ",
+    /// out, " out" (the inventory's; a visual 1.4.13 tooltip, never announced).</summary>
+    public const string TooltipSeparator = " — ";
+    public const string TooltipInSuffix = " in / ";
+    public const string TooltipOutSuffix = " out";
+
+    /// <summary>The Windows-authored prefix over core's neighbour render — the
+    /// node peer's HelpText (Term T2; the mac's AXCustomContent label).</summary>
+    public const string ConnectsToPrefix = "Connects to: ";
 }

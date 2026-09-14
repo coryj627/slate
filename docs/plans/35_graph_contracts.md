@@ -13620,6 +13620,156 @@ table's raw `exception.Message` — Term G2 asks for the humanised
 message. MUTATIONS, each restored byte for byte, each caught by the
 named fact: the gate admitting a retired model, the handle freed with a call in flight, the count never freeing, the install ignoring the sequence, the registration dropped, the forces not re-read at the install, the epoch key ignoring the groups, the topology apply accepting another generation, the frame currency dropped, Reduce Motion ignored, the settle line spoken unarmed, the probe refreshing on every generation, RefreshAgain not consumed on the null path, the pin prune dropped, the teardown skipping the run's stop, a planted bare call on the session field, a planted catch of the disposal, a held session local in the build, a planted Task.Run under Graph/, a second model construction, a load starter outside the closed list — twenty-one of twenty-one caught (`gD-mutations.py`, the T2 entries).
 
+**TGD-3 — T3: rules T and V in the renderer — the three visuals, the
+visible set and the tier, tier A's complete peers, tier B's summary, the
+labels, the tokens in three dictionaries, the hit grid, the viewport verbs
+on the presenter seam, the fit, the scroll into view, the derived
+selection (D-8, D-9, D-10, D-13's renderer half, D-3's visible-set facts,
+D-4's fit fact; Terms T1–T7, V1, V2, V5, V6, N1, N2, N4's core; D-15 ii,
+iv, vii, x).** THE RENDERER: `Graph/GraphDiagramView.cs` — a focusable
+FrameworkElement (Term N2: the ONE focus stop after the switcher,
+KeyboardNavigationMode None; AutomationId GraphDiagram) with three
+DrawingVisuals (the edges, the nodes or the tier-B dots, the ring)
+redrawn from the model's positions and the accepted topology on every
+frame, epoch, viewport, size or text-scale change (Term T6); the view
+transform `view = p × zoom + pan` applied at draw. It reads the document
+(rule G's owner): bound to the live model on `HasLiveDiagram`'s edges,
+subscribed to DiagramTopologyChanged, the driver's FrameApplied and the
+view state's `SelectedKey`; the viewport (`CanvasViewportState`, Term V1)
+reset with the model, the tier latch and the peers per model. VisibleIds
+= the accepted topology's ids in its order filtered to ids the model
+knows (Term T1); tier B iff the VISIBLE count exceeds
+`GraphCoreConstants.Once.TierBThreshold` (inclusive at 1,500). Tier A
+mints one GraphNodeAutomationPeer per visible id once per (model, id)
+and drops the ids that left; tier B holds one summary peer;
+`GraphTierEntered` on the A→B edge through the document's seam, the
+latch reset with the model (Term T3). Term G5's renderer half: the first
+non-empty frame fits once; every frame rebuilds the 64-unit hit grid over
+the visible positions (Term T7: the 3×3 scan, the nearest centre within
+the scaled radius plus two) and redraws. Term T4: a label iff the entry
+is `labeled` and the zoom is at or above `Display.TextFadeZoom`, 11 units
+× the text-scale factor (`CanvasTextScaleService`, one per renderer,
+disposed at Shutdown) × the zoom, in the label token. Term T5: a grouped
+node fills with `Slate.Graph.Group⟨n⟩Brush` in core's token order and is
+ringed at 3 (Double 4) in the ring token with the style's dash (Dashed
+4-2, Dotted 1-2); an ungrouped note, attachment or hollow dashed ghost
+(the surface token, 3-2) is ringed at 1.5 in the outline token; edges in
+the edge token at `max(0.5, Display.LinkThickness)` layout units with
+arrowheads under `Display.Arrows`; the selection ring screen-space at 3
+in the ring token plus 1.5 in the accent token, four units outside the
+node. Term N1: SelectedId is DERIVED — the visible id whose entry's
+`stable_key` equals the shared key, else none. Term N4's core: SelectNode
+(the entry's key through `SelectRow` — refused, the ring does not move
+— the scroll into view, then `GraphRow` through the document's
+AnnounceRow when announced); ClearSelection through the document's new
+ClearSelectionFromSurface. Term V2: `ViewportCommand(GraphViewportVerb)`
+→ GraphViewportOutcome (Zoomed(percent, fit) | Refused): the zoom verbs
+centre-preserving on the view's centre through the canvas's transitions;
+FitGraph fits the VISIBLE bounds (a zero-size bounds inflated by 100,
+the padding 60) and yields Zoomed(fit: true) in every case — an empty set
+is a no-op with the unchanged percent (IGQ-4); Refused with no live
+model. Term V5's pan and scroll into view (the 48-unit margin, silent).
+Term V6: the container's Value "Zoom N percent" over `ZoomPercent`,
+raised as a property change on every zoom. THE PEERS:
+`Graph/GraphDiagramPeers.cs` — GraphDiagramAutomationPeer (Group, T61,
+children only while visible, Selection single/not required over the
+selected node's peer, the read-only Value), GraphNodeAutomationPeer
+(Button; Name = `RenderLabel(GraphRow{live verbosity, rowCopy})`;
+HelpText = "Connects to: " over `RenderLabel(GraphNeighborsContent)` and
+EMPTY when core renders nothing; ItemStatus "pinned"; AutomationId
+"GraphNode:" + key; the rectangle at READ time through the viewport in
+screen coordinates; IsOffscreen = outside the view; NOT
+keyboard-focusable; Invoke = the document's ActivateFromDiagram; Select
+= the announced select; AddToSelection the single-selection matrix —
+throws with another selected; RemoveFromSelection clears through the
+document), GraphTierSummaryAutomationPeer (Button; Name =
+`RenderLabel(GraphTierSummary{count})`; HelpText "Switch to Table";
+Invoke = `SetMode(Table)`; the renderer's rectangle). THE DOCUMENT:
+ClearSelectionFromSurface (the writers census's new owner, D-15 v),
+RowCopyOf(entry) (references = in-links, embed false — the mac's
+rowCopy), DiagramDisplay, IsNodeCurrent (the id in the live model's
+visible set), IsDiagramActionEnabled, ExecuteFromDiagram and
+ActivateFromDiagram (Term N5's document half: the same admission as
+`Execute` — live, current, in core's vector for its kind, enabled — and
+the same four seams, addressed by the node's path or its label; the
+menu and the keyboard are T4's), RaiseDiagramTopologyChangedForTests.
+THE SURFACE: `_diagram` hosted beside the table in a Grid (one in the
+tree per mode — the state host and the table collapse under a live
+model, the renderer collapses under every other state); the renderer's
+Model follows the surface's (and Loaded/Unloaded — Shutdown drops the
+document and disposes the text-scale service); FocusDiagramProjection
+= the renderer's Focus (Term M4's live arm); ProjectionHasFocus includes
+the renderer; the presenter gains `ViewportCommand` (Refused unless
+Diagram is effective, Term M3); DiagramForTests. THE INTERFACE:
+`IGraphSurfacePresenter.ViewportCommand`; the navigator tests' fake
+answers Refused. THE PHRASES: T61 "Graph, visual diagram", T62/T63
+"Switch to Table", T64 "pinned", T67 "Pin"/"Unpin", T68's three parts,
+the Windows-authored "Connects to: " — the label theory extended. THE
+TOKENS: sixteen `Slate.Graph.*` colours and brushes in Light and Dark
+(the eight group tints, the note, attachment, surface, outline, edge,
+label, ring and accent), the Contrast dictionary's mapping (fills →
+WindowColorKey; outline, edge, label, ring → WindowTextColorKey; accent →
+HighlightColorKey); `ThemeTokenContrastTests` gains
+TheGraphTokensMeetTheMatrixInBothAppearances (label and ring > 75;
+outline, note, attachment and the eight groups > 15; edge > 3; the
+ghost's surface IS the window). FACTS (GraphDiagramTests, the Renderer
+partial — twenty-seven): D-8's ten —
+EveryVisibleNodeHasAButtonPeerNamedByTheRowCopyWithItsNeighboursAsHelpText,
+APanNeverDropsAPeer, APeersRectangleFollowsTheViewportAtReadTime,
+AVerbosityChangeRenamesEveryPeerWithoutALoad,
+ThePeerIsIdentityStableAcrossEpochsRefreshesAndViewportChangesWithinAModel,
+AModelReplacementRecreatesThePeers, ItemStatusReadsPinnedWhilePinned,
+TheContainerExposesSelectionAndTheZoomValue,
+SelectThroughThePatternSelectsAndAnnouncesAndRemoveClears,
+AddToSelectionWithAnotherSelectedThrows; D-9's five over a synthetic
+1,501-node topology installed through the model's own seams (Adopt,
+AdoptFrame, the Topology, the epoch's landing seam) —
+TheTierBoundaryIsInclusiveAt1500AndSwitchesAt1501,
+TierBExposesOneSummaryPeerNamedByCoresRenderWhoseInvokeSwitchesToTable,
+TierEnteredSpeaksOnceOnTheEdgeAndNeverOnBToA,
+ANameFilterCollapsesTierBToTheVisibleSet,
+TierBDrawsOneVisualAndKeepsTheRingAndTheHitTest; D-10's seven —
+ALabelDrawsOnlyForACoreLabeledNodeAtOrAboveTheFadeZoom,
+TheNodeSizeMultiplierScalesTheDrawnDiameter,
+AGroupedNodeTakesTheTokenBrushAndItsRingStyle,
+AGroupedRingIsHeavierThanUngroupedEvenWhenSolid,
+UngroupingClearsTheDashAndTheWidth, TheDiameterIsTheTopologyEntrys,
+TheGridHitTestFindsTheNodeUnderAPoint; D-3's two —
+TheNeedleAndTheKindOverlayNarrowTheVisibleSetToTheTables (the visible
+ids equal core's `GraphVisibility(query).Ids` and the table's rows'
+keys), NeighbourContentExcludesFilteredOutNodes; D-4's
+TheFirstNonEmptyFrameFitsOnceAndLaterFramesDoNot; D-13's renderer half
+— ZoomInOutAndActualSizeAreCentrePreservingAndClampedAndSpeakTheZoom
+(the outcome's percent; the navigator's line is T5's),
+FitFramesTheVisibleNodesAndSpeaksTheFitLine,
+FitOnAnEmptySetSpeaksTheUnchangedPercent, AVerbInTableModeIsRefusedOnTheSurface,
+ScrollIntoViewKeepsTheSelectionInsideTheMargin. CENSUSES
+(`GraphNavigatorCensus`): ExactlyOneRendererIsConstructedInTheSurfaceConstructor
+(D-15 ii: the renderer in the surface's constructor, the two peer types
+minted in RebuildVisibleSet alone), TheRendererThePeersTheDriverAndTheModelPostNothing
+(D-15 iv: no announcer member invoked in the four files but the static
+`RenderLabel`), EveryGraphTokenTheRendererLooksUpIsDeclaredInEveryDictionaryAndViceVersa
+(D-15 x: the renderer's literal list equals each dictionary's declared
+graph brushes and is the ONLY `Slate.Graph.` literal set under Graph/),
+the label theory extended (D-12's names), the SetMode callers gain the
+summary peer's SwitchToTable; `GraphAnnouncerCensus`'s shared-key
+writers gain ClearSelectionFromSurface (D-15 v). DEVIATIONS: (i) the
+group query is core's `label_matches` — a case-folded substring of the
+LABEL — so the facts group by "note"; (ii) the peers' bounding rectangle
+is read through `PointToScreen`, which rounds to device pixels — the
+rectangle fact allows one pixel; (iii) a synthetic node is not in the
+table's snapshot, so `SelectRow` refuses it (DR-4) — the tier-B ring
+fact writes the shared key directly and reads the derived selection;
+(iv) the container's children cache resets on the renderer's
+IsVisibleChanged (the peer caches children until reset); (v) the fit's
+"a hidden node excluded" arm asserts the single node's fit at a zoom no
+smaller than the five's (the exact padding is not observable through
+the percent alone); (vi) Term V2's announcement (`AnnounceZoom` from
+the navigator) and Terms V3/V4 are T5's; Term V5's wheel, drag and
+Ctrl+wheel input and Terms N3, N5's menu, N6, N7's toggle UI are T4's —
+the renderer exposes PanBy and ZoomStepAt for them. MUTATIONS, each
+restored byte for byte, each caught by the named fact: the tier boundary made exclusive, the peers minted per rebuild, the stale peers kept (it SURVIVED the first sweep — the tier-B fact's B→A path clears every peer, so the drop of an id that leaves tier A was unpinned; TheNeedleAndTheKindOverlayNarrowTheVisibleSetToTheTables now asserts the hidden ids' peers are gone and catches it), GraphTierEntered on every rebuild in B, the Name at a fixed verbosity, the HelpText without the prefix, IsOffscreen never true, labels drawn below the fade zoom, the grouped ring thin, the Dashed pattern dropped, the empty-set fit moving the zoom, ZoomIn about the origin, the scroll into view dropped, the hit radius negative, the container's children exposed while collapsed, a planted `Slate.Graph.` literal, a second renderer constructed, the light edge token below the floor, the prefix retyped, the pattern's Select silent, AddToSelection replacing silently, the summary's Invoke inert, the fit on every frame — twenty-three of twenty-three caught (`gD-mutations.py`, the T3 entries).
+
 ### Tests that pin PR D (revision 5's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14

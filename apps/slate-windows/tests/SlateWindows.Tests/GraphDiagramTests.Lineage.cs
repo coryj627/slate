@@ -410,7 +410,7 @@ public sealed partial class GraphDiagramTests
             Assert.Equal(4, topologies);
             // A VERBOSITY change crosses nothing (the peers re-name locally).
             GraphVerbositySpec other = host.Workspace.GraphPreferences.Choices.First(c => c.Spec.Verbosity != host.Workspace.GraphPreferences.Verbosity).Spec;
-            host.Workspace.GraphPreferences.SetVerbosityCommand.Execute(other);
+            host.Workspace.GraphPreferences.SetVerbosityCommand.Execute(other.Tag);
             host.Settle(document);
             Assert.Equal(4, document.CrossingsForTests["graph_topology"]);
             // The same key again: nothing.

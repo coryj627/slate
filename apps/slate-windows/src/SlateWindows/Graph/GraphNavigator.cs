@@ -43,6 +43,11 @@ internal interface IGraphSurfacePresenter
     /// — the canvas presenter's <c>Projection</c>.</summary>
     GraphSurfaceMode ProjectionKind { get; }
 
+    /// <summary>W6-2 PR D, Term V2: a viewport verb on the active projection —
+    /// Zoomed(percent, fit) the navigator speaks through the document's
+    /// seam, or Refused (no live model, Table mode) which speaks nothing.</summary>
+    GraphViewportOutcome ViewportCommand(GraphViewportVerb verb);
+
     /// <summary>The current native table seat, only when this presenter
     /// displays the requested document and publication. This reads currency
     /// without selecting a row or moving focus.</summary>

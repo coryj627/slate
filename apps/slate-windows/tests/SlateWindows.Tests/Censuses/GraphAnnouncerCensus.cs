@@ -452,6 +452,9 @@ public sealed class GraphAnnouncerCensus
         [
             "Graph/GraphDocumentViewModel.cs:SelectRow",
             "Graph/GraphDocumentViewModel.cs:RevalidateSelection",
+            // W6-2 PR D (D-15 v, Term T2): the diagram's RemoveFromSelection
+            // clears through the document under SelectRow's guard.
+            "Graph/GraphDocumentViewModel.cs:ClearSelectionFromSurface",
             // The leaf's three, all through its one FFI-backed writer
             // (Term 15): the pin, the pop, the key-moving retarget.
             "Graph/ConnectionsLeafViewModel.cs:WriteSharedKey",
