@@ -14384,8 +14384,10 @@ to ready on this landing; CI and codoki arbitrate the head.
 
 ## PR E — the inspector: filters, groups, display, forces
 
-Revision 1, 2026-09-14 — OPEN for round 1, branch `feat/w6-2-e` on the
-merged A, B1, B2, C and D (`main` at 6f58dc07). The spec is
+Revision 2, 2026-09-14 — OPEN for round 2 (revision 1 = 39e2303f;
+round 1's findings IGU-1..8 discharged in the text below and ledgered
+at the end), branch `feat/w6-2-e` on the merged A, B1, B2, C and D
+(`main` at 6f58dc07). The spec is
 `w6_2_graph_spec.md` §PR E (its Goal, Consumes, Builds, Behavior,
 Tests, Evidence and Hand-off lines; amended in place where ED-8 says
 so), consuming §1's rules R-A..R-I, §2's rows D, H, J, L, M, N and P,
@@ -14423,9 +14425,14 @@ reports the text's application of its default, never the choice.
   `Filter by name`, `GraphInspectorView.swift:33–34`) beside the
   header's field PR C built?** Default: YES, bound to the ONE writer the
   header's field uses — the navigator's `SetNameQuery` (C-6; C-15 v's
-  wall unchanged) — so the two fields are two views of one needle;
-  the mac shows both (its table header carries the field and the three
-  toggles too, `GraphTableView.swift:170–176`). Alternative: omit it.
+  wall unchanged) — so the two fields are two views of one needle.
+  The mac's header field is TABLE-MODE ONLY (`GraphTableView.swift:
+  160–169`: "in Diagram mode it (and Groups) live in the P2-4
+  inspector") while its inspector's field serves both modes; on Windows
+  the header's field is in both modes already (Term M5's cluster keeps
+  the header, PR C's field with it), so the inspector's is a second view
+  of the one needle, not the diagram's only one (IGU-6). Alternative:
+  omit it.
 - **ED-Q3 — What is a slider's accessible VALUE?** Default: WPF's
   RangeValue pattern (the numeric value, its minimum and maximum) with
   the visible `%.2f` text beside the slider as the mac's
@@ -14518,7 +14525,22 @@ never typed (0bD-12).
   restores as every leaf does (`WorkspaceViewModel.Persistence.cs:44`);
   a restored `inspector` leaf with the pane visible shows the inspector
   on launch and speaks nothing of its own (the restore is silent as the
-  shell's is). No new persistence key.
+  shell's is). No new persistence key. THE NO-DOCUMENT ARM (IGU-3): the
+  pane can be restored — and stays open after the graph tab closes —
+  with NO graph document (`Func<GraphDocumentViewModel?>` answering
+  null); every route is defined for it: the filter route writes the
+  view state and the preferences and REQUESTS NOTHING (Term X4 — the
+  next graph open's re-apply reads the persisted flags, C-10); the
+  needle route calls the navigator's `SetNameQuery`, which needs no
+  document (C-6's write reaches the view state and the preferences; its
+  token is issued only by a seated document); the groups and display
+  routes write their sources as always; the forces route updates the
+  preferences ONLY (Term K2's no-model arm) and speaks the changed
+  control (the relay is the workspace's, `AnnounceIfEffective` refusing
+  outside an effective graph — so with no document the line is
+  refused, as every graph line is). No control is disabled; nothing
+  dereferences a document that is not there. A fact restores the leaf
+  with no graph tab and drives every route.
 - **Term I5 — the keys inside the pane.** Every control is a standard
   WPF control with its own peer (CheckBox, TextBox, ComboBox, Slider,
   Button): Tab walks the sections in order; the pane's first stop is the
@@ -14563,11 +14585,15 @@ never typed (0bD-12).
   persistence are PR C's; the header's field and the inspector's are two
   views of one needle (ED-Q2), and the writers census's list for
   `NameQuery` is unchanged (`ApplyQuery` and `SetNameQuery`).
-- **Term X4 — refusals.** A filter change on a retired document is a
-  no-op (`ChangeFilter` refuses under the `SelectRow` guard's shape:
-  retired or unseated); the same flags re-asserted (the CheckBox's
-  value equal to the view state's) write nothing, request nothing and
-  schedule nothing.
+- **Term X4 — refusals and the no-document arm.** With NO document
+  (Term I4's arm) the inspector's SetBackendFilter writes the view
+  state through `ApplyQuery` and the preferences through `SetFilters`
+  and requests nothing; with a RETIRED or UNSEATED document
+  `ChangeFilter` refuses (the `SelectRow` guard's shape) and the
+  inspector still writes the preferences (the persisted flags are the
+  user's; the next seat re-applies them); the same flags re-asserted
+  (the CheckBox's value equal to the view state's) write nothing,
+  request nothing and schedule nothing.
 - **Term X5 — equivalence.** Table and diagram read ONE predicate —
   the view state's `Filter` through core's query — so the inspector's
   flags narrow both projections identically; a preset's overlay
@@ -14609,11 +14635,20 @@ never typed (0bD-12).
 - **Term Y5 — remove.** The row's button removes its index and writes
   the list (Term Y2); the keys move to the previous row's query field,
   or to `Add Group` when the list empties.
-- **Term Y6 — silent.** No group edit speaks (ED-Q4); the fresh open
-  restores the groups from `CurrentConfig.Groups` (the seed, frozen
-  C-10); a load failure's read-only config keeps the seeded defaults
-  and refuses every save (Term W7's decode arms) — the inspector shows
-  the rows and its writes reach the view state but never the file.
+- **Term Y6 — silent, and the read-only state shown.** No group edit
+  speaks (ED-Q4); the fresh open restores the groups from
+  `CurrentConfig.Groups` (the seed, frozen C-10). A load failure's
+  read-only config keeps the seeded defaults and refuses every save
+  (Term W7's decode arms) — the inspector's edits stay LIVE (the view
+  state, the diagram's epoch, the forces' re-heat: the mac's
+  `scheduleGraphConfigSave` returns silently when not writable and its
+  inspector keeps editing, `AppState+GraphConfig.swift:98–99`) and never
+  reach the file; the pane SAYS SO (IGU-7): a read-only notice at the
+  pane's top — a Text, AutomationId GraphInspectorReadOnly, its text
+  `Graph settings are read-only: ` + the store's reason
+  (`GraphConfigStore.Reason`, C-10's decode arms), a Windows-only
+  string (E-D6) — visible iff `!IsWritable`, never announced (the
+  reader meets it as the pane's first text); no control is disabled.
 
 #### Rule Z — the display, in four terms
 
@@ -14624,13 +14659,20 @@ never typed (0bD-12).
   `SetDisplay(GraphDisplay)` — a new Term W7 trigger updating `display`
   and no other field before the schedule; equal values are a no-op.
 - **Term Z2 — the redraw.** The preferences raise `DisplayChanged`
-  after the field's update; the document forwards it as its own
-  `PropertyChanged(nameof(DiagramDisplay))`; the renderer's
-  `OnDocumentChanged` (`GraphDiagramView.cs:236`) redraws on that name
-  — the three visuals repainted under the new display (Term T6's list
-  gains "display" as its fifth trigger by this record); the hit radius
-  reads `NodeSizeMultiplier` live (`ScaledDiameter`, `:720`), so no
-  grid rebuild. No epoch (ED-Q6).
+  after a REAL change of the field; the document forwards it as its
+  own `PropertyChanged(nameof(DiagramDisplay))`; the renderer's
+  `OnDocumentChanged` (`GraphDiagramView.cs:236–250`, today handling
+  `HasLiveDiagram` and `Verbosity`) GAINS ONE BRANCH — `DiagramDisplay`
+  → `Redraw()` — the one edit this PR makes to the renderer (IGU-1;
+  E-1), the three visuals repainted under the new display (Term T6's
+  list gains "display" as its fifth trigger by this record). The hit
+  grid needs no rebuild (IGU-8): `BuildGrid` buckets POSITIONS alone
+  (`:846–864`, cells of 64 layout units) and `HitTest` reads
+  `ScaledDiameter(id)` LIVE for every candidate's radius (`:889`) over
+  the 3×3 neighbourhood, and the largest radius the display can make
+  is `node_diameter_max` 28 × the multiplier's maximum 2.0 / 2 + 2 =
+  30 < 64, so every hit stays inside the neighbourhood; the tooltip's
+  hover radius reads the same function. No epoch (ED-Q6).
 - **Term Z3 — the value text.** Each slider shows its value as `%.2f`
   beside its title (the mac's `labeledSlider`, T60), the text's own
   peer; the slider's Name is the title, its HelpText the hint, its
@@ -14646,7 +14688,14 @@ never typed (0bD-12).
 - **Term K2 — three seams, one order.** `SetForces` (i) calls the
   preferences' `SetForces(forces)` (Term W7's trigger as built:
   `GraphPreferencesViewModel.cs:212–221`, a no-op for equal forces);
-  (ii) calls the document's `ApplyForces(forces)`: with a LIVE model,
+  (ii) SPEAKS the changed control (Term K3) — BEFORE the arm and the
+  restart, so the value's post precedes the settle's under every
+  scheduler, a synchronous test scheduler and Reduce Motion's one-shot
+  convergence included (IGU-2: `StartSettle` converges through the
+  scheduler, `GraphLayoutDriver.cs:84–98`, and `Converged` posts the
+  settle line, `:154–159`, `:202–205` — the order must not depend on
+  the apply landing on a later dispatcher turn); (iii) calls the
+  document's `ApplyForces(forces)`: with a LIVE model,
   `model.SetForces(ForcesOf(forces))` through the gate (Term G7 — the
   synchronous mutator rule D already names for PR E's forces,
   `GraphDiagramModel.cs:330`; refused, not thrown, after a teardown),
@@ -14658,8 +14707,9 @@ never typed (0bD-12).
   otherwise never converge again); with NO live model (Table mode, a
   build in flight, a failed build) nothing is armed and nothing is
   ticked — the build's install re-reads `CurrentConfig.Forces` (Term
-  G2, frozen: the forces re-read at the install); (iii) speaks the
-  CHANGED control.
+  G2, frozen: the forces re-read at the install). With NO document
+  (Term I4's arm) step (iii) is skipped and step (ii) is refused by the
+  relay's effectiveness gate.
 - **Term K3 — the changed control.** `ChangedForce(old, new)` — a pure
   static on the inspector's view model, the mac's `changedForce`
   (`AppState+GraphConfig.swift:146–157`): the FIRST of `Center`,
@@ -14697,8 +14747,12 @@ The surface gains the header's toggle (Term I2). The preferences gain
 (Terms X1, Y2, Z1, Z2). The document gains `ChangeFilter(GraphFilter)`
 (Term X1), `ApplyForces(GraphForcesConfig)` (Term K2), AnnounceForceValue
 (Term K3) and the `DiagramDisplay` forward (Term Z2). `GraphPhrase`
-gains the inventory's strings (E-11). No other file in the shell
-changes; core and the mac are untouched.
+gains the inventory's strings (E-11) and the read-only notice's prefix
+(E-D6). The preferences raise `DisplayChanged` and `ForcesChanged`
+after a REAL change of the field (`SetForces`'s no-op raises nothing;
+IGU-4). The renderer gains the ONE `DiagramDisplay` branch (Term Z2;
+IGU-1). `MainWindow.xaml` gains the leaf's host (Term I1). No other
+file in the shell changes; core and the mac are untouched.
 
 **E-2 — The view model's surface.** Bound properties, each a read
 through to its source: `IncludeAttachments`, `IncludeGhosts`,
@@ -14715,7 +14769,8 @@ subscribes to the view state's `PropertyChanged` (Filter, NameQuery,
 Groups) and the preferences' `DisplayChanged` / `ForcesChanged` and
 raises its own properties, so an outside write (a preset's overlay
 clear, the fresh open's re-apply, a forces edit landing from the build)
-re-renders the pane.
+re-renders the pane; `ForcesChanged` is the preferences' event E-1
+names (IGU-4).
 
 **E-3 — The pane and the toggle** are rule I. The leaf's title
 `Graph inspector` is the shell's panel line's text on every switch to
@@ -14753,7 +14808,8 @@ posts nothing itself.
 extended by amendment (ED-2): `SetFilters` → the three backend flags,
 `SetGroups` → `groups`, `SetDisplay` → `display`, `SetForces` →
 `forces` (built); each updates its field and no other before the
-schedule; the debounce, the hand-off, the flush and the read-only gate
+schedule, and `SetDisplay` and `SetForces` raise `DisplayChanged` and
+`ForcesChanged` after a real change (IGU-4); the debounce, the hand-off, the flush and the read-only gate
 are C's (`GraphPreferencesViewModel.cs:241–300`). The fresh open's
 re-apply restores the filters and the groups (C-10's seed,
 `WorkspaceViewModel.cs:1620–1621`); the display and the forces are read
@@ -14771,10 +14827,14 @@ one constant), T40–T42's toggles and hints, T43 `Groups`, T44's empty
 text, T45's `Add Group` and hint, T46–T49's composed labels (`Group {0}
 query`, `Group {0} colour`, `Group {0} ring style`, `Remove group {0}`
 — composed by `string.Format` with the 1-based index), T50 `Display`,
-T51–T54's titles and hints, T55 `Forces`, T56–T59's titles and hints;
-the pickers' titles are core's (T71, T72), never in `GraphPhrase`. A
-`MacCatalogParityTests` fact reads every shipped string against
-`GraphInspectorView.swift` and `GraphTableView.swift:179–182`.
+T51–T54's titles and hints, T55 `Forces`, T56–T59's titles and hints; T60 — the slider builder's
+three parts: the title as the slider's Name, the value as a sibling
+Text formatted `{0:F2}` under the invariant culture (the mac's
+`String(format: "%.2f")`, a dot), the hint as the slider's HelpText
+(IGU-5); the pickers' titles are core's (T71, T72), never in
+`GraphPhrase`. A `MacCatalogParityTests` fact reads every shipped
+string — T29–T60 — against `GraphInspectorView.swift` and
+`GraphTableView.swift:179–182`, T60's format among them.
 
 **E-12 — The censuses, falsifiable, bound semantically** (C-15's shape,
 its closed lists amended under C-15 iv's provision; ED-9): (i) the
@@ -14795,7 +14855,9 @@ the shell (the eight and the four are core's `Title`); (vi) D-15 iii's
 wall stands: the forces cross the gate in `GraphDiagramModel.SetForces`
 alone; (vii) the no-shadow census: the inspector holds no mutable
 `GraphFilter`, `GraphVisibilityQuery`, `IReadOnlyList<GraphGroup>`,
-`GraphDisplay` or `GraphForcesConfig` field.
+`GraphDisplay` or `GraphForcesConfig` field; (viii) the renderer's
+`OnDocumentChanged` handles exactly three names — `HasLiveDiagram`,
+`Verbosity`, `DiagramDisplay` — the third redrawing (IGU-1).
 
 **E-13 — §W-C: the journey and the axe scan.** The FlaUI journey
 GraphInspector_FiltersGroupsAndForces_AreClean beside the four graph
@@ -14898,6 +14960,9 @@ GraphInspectorLinkDistance.
   spec's hand-off line said otherwise and is amended.
 - **E-D5 — The pane's hide returns the keys to the projection** through
   rule F's request; the mac's toggle leaves the keys where they were.
+- **E-D6 — A read-only config is SHOWN in the pane** (Term Y6; IGU-7):
+  the mac edits live and saves nothing without a word; Windows edits
+  live and says the file will not take it, in a Windows-only string.
 
 ### Risks (PR E)
 
@@ -14916,18 +14981,35 @@ GraphInspectorLinkDistance.
   and the leaf `inspector` shows nothing until toggled — the mac's
   hidden panel likewise.
 
-### Tests that pin PR E (revision 1's list; the task loop records what lands)
+### Round 1 ledger (PR E)
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| IGU-1 | BLOCKER | taken — E-1 and Term Z2: the renderer's `OnDocumentChanged` gains the `DiagramDisplay` branch, the one renderer edit; E-12 viii walls the three names; a mutation drops the branch |
+| IGU-2 | BLOCKER | taken — Term K2 reordered: the changed control is spoken BEFORE the arm and the restart, so the value precedes the settle under every scheduler; a fact under Reduce Motion and one under the pumped scheduler |
+| IGU-3 | BLOCKER | taken — Terms I4, X4 and K2 gain the no-document arm: every route writes its sources and requests nothing, the forces route updates the preferences only, the relay's effectiveness gate refuses the line; a restore-with-no-graph fact |
+| IGU-4 | MAJOR | taken — `ForcesChanged` added to E-1, E-2 and E-10, raised after a real change |
+| IGU-5 | MAJOR | taken — T60 mapped in E-11: the title as Name, `{0:F2}` invariant as the sibling text, the hint as HelpText; the parity fact reads it |
+| IGU-6 | MINOR | taken — ED-Q2 restated: the mac's header field is Table-mode only, its inspector's serves both; Windows's header field is in both modes and the inspector's is a second view |
+| IGU-7 | MAJOR | taken — Term Y6: a read-only notice at the pane's top (GraphInspectorReadOnly, the store's reason), controls live as the mac's, recorded as E-D6 |
+| IGU-8 | MAJOR | taken — Term Z2 states the grid's law: positions bucketed, the radius read live, the largest radius 30 under a 64 cell; a hit fact after a node-size change |
+
+### Tests that pin PR E (revision 2's list; the task loop records what lands)
 
 - GraphInspectorTests (new): the view model's reads and writes per rule
   (I6, X1–X5, Y1–Y6, Z1–Z4, K1–K6), the changed-control table, the
-  refusals, the notifications from outside writes.
+  refusals, the notifications from outside writes, the no-document arm
+  (a restored leaf with no graph tab drives every route; IGU-3), the
+  read-only notice (IGU-7).
 - `GraphTableTests`: the header's toggle, the pane's show and hide, the
   keys' landing (Terms I2, I5).
 - `GraphPreferencesTests`: the three new triggers by field, the no-ops,
   the read-only gate.
 - `GraphDiagramTests`: the forces' arm and restart through the gate, the
-  settle line once, the display's redraw, the groups' epoch (Terms K2,
-  K4, Z2, Y2).
+  settle line once, the value BEFORE the settle under Reduce Motion's
+  one-shot convergence and under the pumped scheduler (IGU-2), the
+  display's redraw and a hit at the enlarged radius after a node-size
+  change (IGU-8), the groups' epoch (Terms K2, K4, Z2, Y2).
 - `GraphDocumentTests`: `ChangeFilter`'s route (the overlay cleared, the
   pair under FilterCount, the pending sort carried).
 - `GraphConfigStoreTests`, `GraphConfigWriterTests`: the four fields'
