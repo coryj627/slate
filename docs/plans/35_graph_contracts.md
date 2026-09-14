@@ -12844,7 +12844,7 @@ its own return.
 **D-7 — The mode switch (rule M).** Pinned by facts (GraphDiagramTests,
 `GraphTableTests`, GraphPreferencesTests): TheSwitcherWritesModeThroughTheDocumentAndPersistsIt
 (`SetMode` → the view state, `CurrentConfig.Mode`, a scheduled save;
-`ADiagramModeSeedsTable` REPLACED by APersistedDiagramSeedsDiagram —
+ADiagramModeSeedsTable REPLACED by APersistedDiagramSeedsDiagram —
 C-D6 closed); ASwitchSpeaksTheModeLineOnceAndNothingElse (Table →
 Diagram: `GraphMode{Diagram}` alone — no summary, no count; back:
 `GraphMode{Table}` alone); ASwitchWhenRetiredOrUnseatedWritesNothing;
@@ -13370,6 +13370,79 @@ contracts. The five owner questions DD-Q1..DD-Q5 stay PENDING, the
 section written to their defaults; DD-Q5's amendment of Term F4 is
 applied in place under PR C when the owner answers. Precedent applied;
 the owner may overrule.
+
+### Task loop — records (PR D)
+
+**TGD-1 — T1: rule M's document side and the surface's cluster — `SetMode`,
+the seed of Mode, the six announcement seams, the switcher enabled, one
+projection per mode, the diagram's state names (D-1, D-7, D-12; Terms
+M1–M5; DD-18).** THE SEED: `WorkspaceViewModel.cs`'s constructor gains
+the one line after the groups' seed — `_graphViewState.Mode =
+_graphPreferences.CurrentConfig.Mode` — so a persisted `diagram` is
+restored (C-D6 closed). THE DOCUMENT: `GraphDocumentViewModel` gains
+DiagramLoading, DiagramError and HasLiveDiagram (bindable), IsDiagramEffective
+(Term M3's predicate — seated, effective, Diagram, a model live), the
+event DiagramAvailabilityChanged with NotifyDiagramAvailabilityChanged,
+`SetMode(GraphSurfaceMode)` (Term M1: refused when retired or unseated —
+the `SelectRow` guard — or for the current mode; else the field,
+`GraphPreferences.SetMode` (Term W7), the mode line, Term M2's entry or
+teardown, then the two availability edges), EnterDiagram (T2 lands the
+build; until then DiagramLoading stands), TeardownDiagram (Term G7's
+document part: the readback seam cleared through `InstallDiagramReadback(null)`
+before the model drops, the diagram's states cleared, the availability
+re-evaluated; `Retire()` calls it first), and the six seams AnnounceMode,
+AnnounceRow, AnnounceZoom, AnnouncePinned, AnnounceTierEntered,
+AnnounceLayoutSettled — each a thin call into the effective-gated
+boundary `AnnounceIfEffective`, which the announcement-seam census keeps as
+the ONE boundary (the seams themselves reach the relay through it, as
+`AnnounceWhereAmI` does). THE WORKSPACE: `GraphFollowActiveTab`'s
+effectiveness edge also raises the document's diagram availability (Term
+M3). THE SURFACE: `IGraphSurfacePresenter` gains ProjectionKind (the
+view state's Mode); `GraphSurfaceView.BuildSwitcher` enables both
+`RadioButton`s (A-11's admission lifted, as A-11 says) and wires `Checked`
+→ OnModeChosen under a `_synchronizingSwitcher` guard — a USER switch with
+the keys inside the surface calls the document's `SetMode` and, when it
+wrote, `RequestProjectionFocus` (Term M4); a programmatic re-check (the
+view state's change, the restore's path) raises nothing; `OnViewStateChanged`
+re-checks the switcher under the guard, re-applies the cluster and re-asks
+the landing; `OnModelPropertyChanged` re-applies the cluster and re-asks
+on the three diagram states (the build's terminal state as a trigger);
+`ApplyState` branches on Mode first — ApplyDiagramState shows the failed
+build's message under the T19 prefix, else the T20 names while no model is
+live, else (T3) collapses the state host and the table; `TryDeliverFocus`
+gains the Diagram arm (DD-Q5's amendment applied as written: under a
+build the state host is a provisional seat for a SHELL route alone, a
+presenter's request waits — Term F3; quiescent with a model → the renderer
+(T3), else the state host). `GraphPhrase` gains "Laying out graph…" /
+"Laying out graph." (T20) and the "Graph diagram error: " prefix (T19).
+THE TESTS: `GraphTableTests`' TheModeSwitcherIsCoresVectorWithTheDiagramDisabled
+becomes TheModeSwitcherIsCoresVectorWithBothModesEnabled; `GraphPreferencesTests`'
+ADiagramModeSeedsTable becomes APersistedDiagramSeedsDiagram and gains
+TheSeedWritesModeFromCurrentConfig (no file → core's default Table; a
+persisted table; a persisted diagram); the table journey's A-11 step asserts
+both items enabled; `GraphNavigatorTests`' fake presenter gains
+ProjectionKind. FACTS (GraphDiagramTests, new, an STA host over a
+fixture vault and a hidden window): TheSwitcherWritesModeThroughTheDocumentAndPersistsIt
+(the view state, `CurrentConfig.Mode`, a scheduled save; the switcher
+re-checked under the guard on a document-driven change; the current mode
+refused); ASwitchSpeaksTheModeLineOnceAndNothingElse (the rendered
+`GraphMode{Diagram}` alone, then `GraphMode{Table}` alone, then nothing for
+a no-op); ASwitchWhenRetiredOrUnseatedWritesNothing (a closed tab's
+retired document; a bare document seated false); ExactlyOneProjectionIsInTheTreePerMode
+(the table visible under Table; collapsed with the state host named T20
+under Diagram; back); TheHeaderStaysInBothModes (C-D15);
+AUserSwitchRaisesTheLandingAndAProgrammaticReCheckRaisesNone (no
+request on a document-driven change; the presenter's request with its
+owner the tab on a user switch with the keys inside; no provisional seat
+under the build for a presenter's request); DiagramAvailabilityChangedIsRaisedAtTheSwitchAndTheEffectiveEdge
+(Term M3; IsDiagramEffective false with no model). CENSUSES:
+`GraphAnnouncerCensus` gains TheModeIsWrittenByTheSeedAndSetModeAlone
+(the two writers of Mode, `_mode` written by the setter alone; D-15 v);
+`GraphNavigatorCensus`' boundary fact lists the six seams among
+`AnnounceIfEffective`'s callers (D-15 iv). DEVIATIONS: none — the
+persisted seat's build (Term M1's second half) is T2's, since it needs
+the build. MUTATIONS, each restored byte for byte, each caught by the
+named fact: the save skipped by `SetMode`, the mode line spoken twice, the mode line dropped, the seed line dropped, a planted second writer of Mode (the census), the retirement guard dropped, the table left visible under Diagram mode, a user switch raising no landing, the effective edge raising no availability, the Diagram item disabled — ten of ten caught (`gD-mutations.py`, the T1 entries).
 
 ### Tests that pin PR D (revision 5's list; the task loop records what lands)
 

@@ -39,6 +39,10 @@ internal interface IGraphSurfacePresenter
     /// a live document — a verb that moves focus asks first.</summary>
     bool IsLive { get; }
 
+    /// <summary>The ACTIVE projection (W6-2 PR D, rule M): Table or Diagram
+    /// — the canvas presenter's <c>Projection</c>.</summary>
+    GraphSurfaceMode ProjectionKind { get; }
+
     /// <summary>The current native table seat, only when this presenter
     /// displays the requested document and publication. This reads currency
     /// without selecting a row or moving focus.</summary>

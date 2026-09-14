@@ -581,13 +581,22 @@ public sealed class GraphNavigatorCensus
     /// the bound callers of AnnounceIfEffective are the receiver's three lines
     /// and the Where-am-I seam, that seam's one outside caller is the
     /// navigator's verb, and the navigator posts nothing itself: no
-    /// invocation in GraphNavigator.cs binds to a relay instance method.</summary>
+    /// invocation in GraphNavigator.cs binds to a relay instance method.
+    /// W6-2 PR D (D-1, D-15 iv): the diagram's six seams — the mode line,
+    /// the row line, the zoom, the pin, the tier's entry, the settle — ride
+    /// the same boundary and are its only other callers.</summary>
     [Fact]
     public void TheAnnouncementBoundaryGainsWhereAmIAndTheNavigatorPostsNothing()
     {
         Assert.Equal(
             [
+                "Graph/GraphDocumentViewModel.cs:AnnounceLayoutSettled",
+                "Graph/GraphDocumentViewModel.cs:AnnounceMode",
+                "Graph/GraphDocumentViewModel.cs:AnnouncePinned",
+                "Graph/GraphDocumentViewModel.cs:AnnounceRow",
+                "Graph/GraphDocumentViewModel.cs:AnnounceTierEntered",
                 "Graph/GraphDocumentViewModel.cs:AnnounceWhereAmI",
+                "Graph/GraphDocumentViewModel.cs:AnnounceZoom",
                 "Graph/GraphDocumentViewModel.cs:Receive",
                 "Graph/GraphDocumentViewModel.cs:Receive",
                 "Graph/GraphDocumentViewModel.cs:Receive",

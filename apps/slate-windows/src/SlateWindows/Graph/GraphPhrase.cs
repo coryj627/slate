@@ -59,4 +59,15 @@ internal static class GraphPhrase
     public const string LoadingAccessibleName = "Loading graph.";
     public const string EmptyText = "No notes match the current filters.";
     public const string ErrorAccessiblePrefix = "Graph error: ";
+
+    // --- W6-2 PR D (the diagram; contract D-12) ---------------------------------
+
+    /// <summary>The diagram state host's text and accessible name while a
+    /// layout builds — the mac's T20 (`GraphTableView.swift:138`, `:142`).</summary>
+    public const string LoadingDiagramText = "Laying out graph…";
+    public const string LoadingDiagramAccessibleName = "Laying out graph.";
+
+    /// <summary>The diagram state host's accessible-name prefix over a failed
+    /// build's message — the mac's T19 (`GraphTableView.swift:134`).</summary>
+    public const string DiagramErrorPrefix = "Graph diagram error: ";
 }

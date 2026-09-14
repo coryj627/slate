@@ -149,6 +149,8 @@ public sealed class GraphNavigatorTests
 
         public bool IsLive { get; set; } = true;
 
+        public GraphSurfaceMode ProjectionKind { get; set; } = GraphSurfaceMode.Table;
+
         public void RequestProjectionFocus() => ProjectionRequests++;
 
         public void FocusFilterField() => FieldRequests++;

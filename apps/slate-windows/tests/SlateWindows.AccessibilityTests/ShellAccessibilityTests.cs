@@ -8513,11 +8513,12 @@ public sealed class ShellAccessibilityTests
             Assert.True(grid.Patterns.Table.IsSupported, "the graph table must expose Table");
             Assert.Equal("Graph, data grid", grid.Properties.Name.Value);
 
-            // Contract A-11: the switcher, Table live and Diagram disabled.
+            // Contract A-11 as W6-2 PR D lifts it (rule M, Term M2): the
+            // switcher, both items live.
             AutomationElement tableChoice = WaitForElement(window, "GraphMode.table", TimeSpan.FromSeconds(10));
             AutomationElement diagramChoice = WaitForElement(window, "GraphMode.diagram", TimeSpan.FromSeconds(10));
             Assert.True(tableChoice.Properties.IsEnabled.Value, "the Table item must be enabled");
-            Assert.False(diagramChoice.Properties.IsEnabled.Value, "the Diagram item must be disabled until PR D");
+            Assert.True(diagramChoice.Properties.IsEnabled.Value, "the Diagram item must be enabled (W6-2 PR D)");
 
             // Contract A-5: core's nine headers in core's order.
             string[] expectedHeaders = ["Note", "Links in", "Links out", "Embeds in", "Embeds out", "Component", "Modified", "Folder", "Kind"];

@@ -575,7 +575,7 @@ public sealed class GraphPreferencesTests : IDisposable
     }
 
     [Fact]
-    public void ADiagramModeSeedsTable()
+    public void APersistedDiagramSeedsDiagram()
     {
         string vault = CopyGraphVault("diagram-mode");
         try
@@ -584,17 +584,53 @@ public sealed class GraphPreferencesTests : IDisposable
             PumpedDispatcher.Run(() =>
             {
                 using var host = new Host(vault);
-                // C-D6: the file keeps diagram — CurrentConfig holds it — while
-                // the view state seeds Table, the one mode reachable in this PR.
-                Assert.Equal(GraphSurfaceMode.Table, host.State.Mode);
+                // W6-2 PR D (rule M, Term M1; C-D6 closed): the persisted
+                // diagram seeds the view state's Mode — CurrentConfig holds it
+                // and the seed line copies it.
+                Assert.Equal(GraphSurfaceMode.Diagram, host.State.Mode);
                 Assert.Equal(GraphSurfaceMode.Diagram, host.Preferences.CurrentConfig.Mode);
-                // A save under it persists the file's diagram, never the Table seed.
+                // A save under it persists the file's diagram.
                 host.Preferences.SetVerbosityCommand.Execute("terse");
                 host.Preferences.FireTickForTests();
                 Drain(host.Preferences);
             });
             Assert.Equal(GraphSurfaceMode.Diagram, OnDisk(vault).Mode);
             Assert.Equal(GraphVerbosity.Terse, OnDisk(vault).Verbosity);
+        }
+        finally
+        {
+            DeleteVault(vault);
+        }
+    }
+
+    /// <summary>W6-2 PR D (Term M1; D-7): the seed reads
+    /// <c>CurrentConfig.Mode</c> — a persisted table seeds Table, a persisted
+    /// diagram seeds Diagram — and a fresh vault (no file) seeds core's
+    /// default, Table.</summary>
+    [Fact]
+    public void TheSeedWritesModeFromCurrentConfig()
+    {
+        string vault = CopyGraphVault("seed-mode");
+        try
+        {
+            PumpedDispatcher.Run(() =>
+            {
+                using var host = new Host(vault);
+                Assert.Equal(GraphSurfaceMode.Table, host.State.Mode);
+                Assert.Equal(SlateUniffiMethods.GraphConfigDefault().Mode, host.State.Mode);
+            });
+            new GraphConfigStore(vault).Write(Persisted() with { Mode = GraphSurfaceMode.Table });
+            PumpedDispatcher.Run(() =>
+            {
+                using var host = new Host(vault);
+                Assert.Equal(GraphSurfaceMode.Table, host.State.Mode);
+            });
+            new GraphConfigStore(vault).Write(Persisted() with { Mode = GraphSurfaceMode.Diagram });
+            PumpedDispatcher.Run(() =>
+            {
+                using var host = new Host(vault);
+                Assert.Equal(GraphSurfaceMode.Diagram, host.State.Mode);
+            });
         }
         finally
         {

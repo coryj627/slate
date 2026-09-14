@@ -622,6 +622,130 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         private set => SetField(ref _filterCountText, value);
     }
 
+    // --- W6-2 PR D, rule M: the mode switch (Terms M1–M3) ---------------------
+
+    private bool _diagramLoading;
+    private string? _diagramError;
+    private bool _hasLiveDiagram;
+
+    /// <summary>Rule G, Term G2: a build in flight — the projection cluster
+    /// shows the diagram's state host named "Laying out graph." (T20)
+    /// meanwhile; Term M4 reads "quiescent" as "not building".</summary>
+    public bool DiagramLoading
+    {
+        get => _diagramLoading;
+        private set => SetField(ref _diagramLoading, value);
+    }
+
+    /// <summary>Term G2: a failed build's humanised message; the state host
+    /// reads "Graph diagram error: ⟨e⟩" (T19).</summary>
+    public string? DiagramError
+    {
+        get => _diagramError;
+        private set => SetField(ref _diagramError, value);
+    }
+
+    /// <summary>Term M3: a model is live — installed by Term G2's apply,
+    /// dropped by Term G7 — so the renderer shows and the four viewport
+    /// verbs admit.</summary>
+    public bool HasLiveDiagram
+    {
+        get => _hasLiveDiagram;
+        private set => SetField(ref _hasLiveDiagram, value);
+    }
+
+    /// <summary>Term M3's "Diagram effective": the seated document effective,
+    /// Diagram mode, a model live — the mac's <c>graphDiagramZoomActive</c>.</summary>
+    internal bool IsDiagramEffective =>
+        !_retired && _isSeated() && _isEffectiveActive() && ViewState.Mode == GraphSurfaceMode.Diagram && HasLiveDiagram;
+
+    /// <summary>Term M3: raised at the model's install, at teardown and at
+    /// every effectiveness edge (the workspace forwards its own); the four
+    /// viewport commands' <c>CanExecute</c> re-evaluates through it.</summary>
+    internal event Action? DiagramAvailabilityChanged;
+
+    internal void NotifyDiagramAvailabilityChanged() => DiagramAvailabilityChanged?.Invoke();
+
+    /// <summary>Term M1: the ONE writer of Mode beside the workspace's seed —
+    /// refused when retired or unseated (the <see cref="SelectRow"/> guard),
+    /// a no-op for the current mode; otherwise the field, the persisted mode
+    /// (Term W7, the mac's <c>setGraphMode</c>), the mode line, Term M2's
+    /// effects, then the two availability edges.</summary>
+    public bool SetMode(GraphSurfaceMode mode)
+    {
+        if (_retired || !_isSeated() || ViewState.Mode == mode)
+        {
+            return false;
+        }
+        ViewState.Mode = mode;
+        _preferences?.SetMode(mode);
+        AnnounceMode(mode);
+        if (mode == GraphSurfaceMode.Diagram)
+        {
+            EnterDiagram();
+        }
+        else
+        {
+            TeardownDiagram();
+        }
+        Navigator?.NotifyWhereAmIAvailabilityChanged();
+        NotifyDiagramAvailabilityChanged();
+        return true;
+    }
+
+    /// <summary>Term M2 / Term G2: entering Diagram starts the build; the
+    /// state host shows "Laying out graph." until a model lands.</summary>
+    internal void EnterDiagram()
+    {
+        DiagramError = null;
+        DiagramLoading = true;
+    }
+
+    /// <summary>Term G7's order, the document's part — the readback seam
+    /// cleared before the model drops (Term M3), the model dropped, the
+    /// diagram's states cleared, the availability re-evaluated; the switch to
+    /// Table, the rebuild and the retirement call it.</summary>
+    internal void TeardownDiagram()
+    {
+        Navigator?.InstallDiagramReadback(null);
+        HasLiveDiagram = false;
+        DiagramLoading = false;
+        DiagramError = null;
+        NotifyDiagramAvailabilityChanged();
+    }
+
+    // --- The six announcement seams of the diagram (D-1): each rides the
+    // effective-gated boundary AnnounceIfEffective ------------------------------
+
+    /// <summary>Term M1: the switch's line — <c>GraphMode{mode}</c>, immediate.</summary>
+    internal void AnnounceMode(GraphSurfaceMode mode) =>
+        AnnounceIfEffective(new GraphA11yEvent.GraphMode(mode));
+
+    /// <summary>Term N4: a keyboard move's or a click's line — the row copy at
+    /// the live verbosity, the navigation class (DD-Q2's default).</summary>
+    internal void AnnounceRow(GraphRowCopy row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        AnnounceIfEffective(new GraphA11yEvent.GraphRow(_verbosity(), row));
+    }
+
+    /// <summary>Term V2: a Zoomed outcome's line, spoken by the navigator
+    /// through this seam (the navigator posts nothing itself).</summary>
+    internal void AnnounceZoom(bool fit, uint percent) =>
+        AnnounceIfEffective(new GraphA11yEvent.GraphZoom(fit, percent));
+
+    /// <summary>Term N7: the pin's line.</summary>
+    internal void AnnouncePinned(bool pinned) =>
+        AnnounceIfEffective(new GraphA11yEvent.GraphPinned(pinned));
+
+    /// <summary>Term T3: the tier latch's one line on the A→B edge.</summary>
+    internal void AnnounceTierEntered() =>
+        AnnounceIfEffective(new GraphA11yEvent.GraphTierEntered());
+
+    /// <summary>Term G4: the settle line, spoken only when armed.</summary>
+    internal void AnnounceLayoutSettled() =>
+        AnnounceIfEffective(new GraphA11yEvent.GraphLayoutSettled());
+
     private void RefreshFilterCountText()
     {
         GraphPublication publication = Publication;
@@ -1210,6 +1334,8 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         _seq++;
         _request = null;
         SetCurrent(null);
+        // W6-2 PR D (Term G7): the diagram torn down with the document.
+        TeardownDiagram();
         // C-8: the table's seam cleared — Where-am-I is refused with no seated
         // document — and the availability re-evaluated.
         Navigator?.ClearTableReadback(_tableReadback);

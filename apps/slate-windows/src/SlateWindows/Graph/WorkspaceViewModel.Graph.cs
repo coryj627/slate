@@ -304,6 +304,8 @@ internal sealed partial class WorkspaceViewModel
             // Pane activation can change admission without a load: a ready
             // graph remains visible while another pane receives the keys.
             _graphNavigator.NotifyWhereAmIAvailabilityChanged();
+            // W6-2 PR D (Term M3): the diagram's verbs follow the same edge.
+            _graphDocument?.NotifyDiagramAvailabilityChanged();
         }
         if (effective is null || _graphDocument is null || _graphDocument.IsRetired)
         {

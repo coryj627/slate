@@ -262,7 +262,7 @@ public sealed partial class GraphTableTests
     }
 
     [Fact]
-    public void TheModeSwitcherIsCoresVectorWithTheDiagramDisabled()
+    public void TheModeSwitcherIsCoresVectorWithBothModesEnabled()
     {
         RunSta(() =>
         {
@@ -276,7 +276,9 @@ public sealed partial class GraphTableTests
             RadioButton diagram = surface.ModeChoicesForTests.First(c => (GraphSurfaceMode)c.Tag == GraphSurfaceMode.Diagram);
             Assert.True(table.IsChecked);
             Assert.True(table.IsEnabled);
-            Assert.False(diagram.IsEnabled);
+            // W6-2 PR D (rule M, Term M2): A-11's admission lifted — the
+            // Diagram item is live.
+            Assert.True(diagram.IsEnabled);
             Assert.Equal(GraphSurfaceMode.Table, document.ViewState.Mode);
         });
     }

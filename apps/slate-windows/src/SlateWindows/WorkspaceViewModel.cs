@@ -1619,6 +1619,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         _graphPreferences.VerbosityChanged += () => _graphRelay.DropPendingNavigation();
         _graphViewState.ApplyQuery(GraphPreferencesViewModel.VisibilityQueryOf(_graphPreferences.CurrentConfig.Filters));
         _graphViewState.Groups = _graphPreferences.CurrentConfig.Groups;
+        // W6-2 PR D (rule M, Term M1; C-D6 closed): the persisted mode seeds
+        // the view state — a persisted `diagram` is restored; the writers
+        // census names this line and the document's SetMode alone.
+        _graphViewState.Mode = _graphPreferences.CurrentConfig.Mode;
         // W6-2 PR C (C-1): the ONE navigator, after the view state and the
         // preferences and before the first document and the leaf — the
         // instance census counts this one construction.
