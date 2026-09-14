@@ -11752,16 +11752,22 @@ three journeys re-run.
 
 ## PR D — the diagram: the renderer, the per-node peers, the tiers, the layout driver, zoom
 
-Revision 1, 2026-09-14, branch `feat/w6-2-d` on the merged A, B1, B2
-and C (`main` at 9a8028a7). The spec is `w6_2_graph_spec.md` §PR D
+Revision 2, 2026-09-14 (revision 1 = 095ecb0f; round 1's nine findings
+IGQ-1..9 discharged in the text below), branch `feat/w6-2-d` on the
+merged A, B1, B2 and C (`main` at 9a8028a7). The spec is `w6_2_graph_spec.md` §PR D
 (amended in place by this revision where DD-14 says so), consuming §1's
 rules R-A..R-I, §2's rows D, H, J, L, M, N and P, §5 and §7. Every
 neighbouring section of this document — 0a, 0b, A (rule L), B (rule C),
 B2 (rule D), C (rules P, Q, F, W) — is FROZEN; this section consumes
-their seams and amends nothing. Round numbering: IGQ-n (round 1), the
-post-implementation passes IPH-n.
+their seams and touches frozen text in exactly two places, each named
+as what it is (IGQ-5, IGQ-8): rule F's Term F4 gains the diagram's arm
+by an owner amendment PENDING at DD-Q5 (the text is given there and is
+applied in place when the owner answers), and C-15 iv's closed census
+lists are amended under the provision C-15 iv itself makes for later PRs
+("by amendment of this list"; DD-16). Round numbering: IGQ-n (round 1),
+IGR-n (round 2), the post-implementation passes IPH-n.
 
-**Four owner questions at the head (DD-Q1..DD-Q4).** Each is written to
+**Five owner questions at the head (DD-Q1..DD-Q5).** Each is written to
 its stated DEFAULT below, the alternative recorded beside it; a round
 reports the text's application of its default, never the choice.
 
@@ -11806,6 +11812,21 @@ reports the text's application of its default, never the choice.
   the seven-node vault keep cross-platform libm drift far below the
   quantum. Alternative: `run_to_convergence` at the same quantum (three
   hundred iterations; the drift risk DR-2 names grows with the count).
+- **DD-Q5 — Rule F's Term F4 (frozen, PR C) names the TABLE projection's
+  landing arms; the diagram needs one. Amend F4 in place, or keep F
+  frozen?** Default: AMEND — the owner's amendment, applied in place
+  under C's Term F4 when the owner answers, reads: "Amended by the owner
+  on ⟨date⟩ (W6-2 PR D, DD-6): the arms are the ACTIVE projection's —
+  in Table mode as written; in Diagram mode (§PR D, Term M4) quiescent
+  with a model live → the renderer, one focus stop; the build in flight
+  or failed → the diagram's state host, provisional while building —
+  quiescence in Diagram mode reads 'no build in flight' beside Term
+  Q2's; completion on the document only on a delivered quiescent
+  landing." C-17's pin list gains the diagram facts of D-7. Alternative:
+  rule F untouched and the diagram's landing a D-owned rule reached from
+  F4's table arm by delegation — the same behaviour, the frozen text
+  unchanged, the census walling it weaker (IGQ-5 named the silence, not
+  the arm).
 
 ### What stands today (A, B1, B2, C merged)
 
@@ -11925,16 +11946,24 @@ reports the text's application of its default, never the choice.
   off-main-callable; `LayoutFrame { positions: Vec<f32> interleaved,
   iteration, converged, generation }` (`:4930+`). `LayoutConfig`'s
   defaults are 300 cold and 60 warm iterations (`graph_layout.rs:67–84`;
-  `lib.rs:4905–4925`). The C# binding: `LayoutSession` at
-  `slate_uniffi.cs:11441` (`IDisposable`), `LayoutFrame` `:20506`
-  (`float[] Positions`), `CancelToken` `:10334`. Two censuses already
+  `lib.rs:4905–4925`). The C# binding (the git-ignored generated
+  `slate_uniffi.cs`; the numbers are the 2026-09-14 regeneration's and
+  move with every regeneration): `LayoutSession` at `:11831`
+  (`IDisposable`), `LayoutFrame` `:21058` (`float[] Positions`),
+  `CancelToken` `:10724`, `GraphTopology` `:20589`. Every generated
+  object keeps a CALL COUNTER: `CallWithPointer` increments it around
+  each native call and `Destroy` decrements the creation count, so a
+  `Dispose` while a call is in flight defers the native free to that
+  call's return, and a call AFTER `Dispose` throws
+  ObjectDisposedException (the `CancelToken` template, `:10740–10790`). Two censuses already
   count the handle: `HandleLifetimeCensus` starts, ticks and disposes
   layouts and asserts the live count returns to baseline
   (`HandleLifetimeCensus.cs:103–152`, `:230–240`) and
   `BindingSurfaceCensus` names `LayoutSession` among the five object
   types (`BindingSurfaceCensus.cs:24–27`, `:69–71`).
 - **Core's queries this PR consumes** (0b, frozen): `graph_topology(q,
-  config) → GraphTopology { generation, total, nodes, edges }` with
+  config) → GraphTopology { generation, total, nodes, edges }` (the C#
+  record at `:20589`) with
   `GraphTopologyNode { id, stable_key, label, path, kind, in_links,
   out_links, in_embeds, out_embeds, component, is_orphan, diameter,
   group, labeled, neighbors }` (0b-6b; `graph_queries.rs:423–457`;
@@ -11945,7 +11974,8 @@ reports the text's application of its default, never the choice.
   `graph_spatial_step(points, neighbors, from, dx, dy)` and
   `graph_structural_step(visible, from, forward)` (0b-10;
   `graph_queries.rs:1003–1058`; `SlateUniffiMethods.GraphSpatialStep`
-  `slate_uniffi.cs:43035`, `GraphStructuralStep` `:43057`);
+  `slate_uniffi.cs:43748`, `GraphStructuralStep` `:43770`,
+  `GraphConstants` `:43650`);
   `graph_row_actions(kind)` (A-8's vectors, cached per document);
   `graph_surface_modes()` (A-11). The 0a events: `GraphRow`, `GraphMode`,
   `GraphZoom { fit, percent }`, `GraphPinned { pinned }`,
@@ -12151,9 +12181,17 @@ a diagram arm named in Term M4; rules L, P, Q and W are untouched.
   forces, config)` then `NodeIds()`, `Edges()`, `NodeMetadata()` and
   `Generation()` — the mac's one atomic build (`:47–64`), the three
   vectors read under the session's own lock; the apply installs the
-  model ONLY when the document is live, seated, still in Diagram mode
-  and the sequence is the captured one (the mac's `:66–68`), else
-  disposes the session it was handed; a failure — `VaultException`, or
+  model ONLY when the document is live, seated, still in Diagram mode,
+  the sequence is the captured one (the mac's `:66–68`) AND the captured
+  filter equals `ViewState.Filter` NOW (IGQ-2: a preset or a filter
+  change during the build has no live model for Term G6 to tear down,
+  so the guard, not the trigger, refuses the stale build) — else
+  disposes the session it was handed and, when the refusal was the
+  filter's and the mode is still Diagram, runs this term again under the
+  current filter (one rebuild, its own sequence); at the install the
+  model's forces are re-read from `CurrentConfig.Forces` and applied
+  through `SetForces` when they differ from the captured ones (PR E's
+  edit during a build is not lost); a failure — `VaultException`, or
   an InvalidOperationException / `IOException` (`Fetch`'s two catches,
   `:876–882`) — installs DiagramError (the humanised message) and no
   model. While the build is in flight DiagramLoading is true. The
@@ -12214,26 +12252,39 @@ a diagram arm named in Term M4; rules L, P, Q and W are untouched.
   nothing adopted), an apply that adopts ONLY when the frame's generation
   is NEWER than the model's (monotonic, the mac's `:180`), replacing the
   ids, the metadata, the edges and the generation, pruning pins the
-  topology lost, restarting the settle and opening a new epoch; one
-  refresh in flight per model, a probe during it setting RefreshAgain
-  consumed at the adopt (the mac chains, `:156–158`). The BACKEND FILTER
-  changing under a live model — `ViewState.Filter`'s change while
-  `Mode == Diagram` (the preset's `ApplyQuery`, the fresh open's
-  re-apply, PR E's toggles) — is a REBUILD: the model torn down (Term G7)
-  and Term G2 run again (the mac's `:113–115`). The selection is never
+  topology lost, restarting the settle and opening a new epoch; a probe
+  whose generation EQUALS the model's issues no refresh (zero `Refresh`
+  crossings — the probe's own comparison, IGQ-6); one refresh in flight
+  per model, a probe during it setting RefreshAgain, which EVERY terminal
+  path of the refresh consumes by issuing one more refresh — an adopt, an
+  unchanged (null) answer, a non-monotonic or stale drop, and a FAILURE
+  (`VaultException` caught in the compute and returned as a value, logged
+  through `HostLog` with a new `HostDiagnosticEvent` GraphLayoutRefreshFailed;
+  IGQ-3: a mutation after the first refresh's read is never stranded).
+  The BACKEND FILTER changing while `Mode == Diagram` — `ViewState.Filter`'s
+  change (the preset's `ApplyQuery`, the fresh open's re-apply, PR E's
+  toggles), whether a model is LIVE or a build is IN FLIGHT — is a
+  REBUILD: the live model torn down (Term G7) or the in-flight build
+  superseded (its sequence bumped; Term G2's guard refuses it) and Term
+  G2 run again under the new filter (the mac's `:113–115`). The selection is never
   stored on the model: Term N1 derives it, so no remap is needed.
 - **Term G7 — teardown, in order, to a disposed handle.** TeardownDiagram
   — on the switch to Table (Term M2), on the rebuild (Term G6), on
   `Retire()` (A-1's retirement) and on the workspace's drain — cancels
-  the settle run, disarms the settle announcement, clears the diagram's
-  readback seam (Term M3), drops the model from the document, and
-  DISPOSES the `LayoutSession` after the run's in-flight compute has
-  returned (the apply of that compute, or immediately when none is in
-  flight) — never while a `Tick`, `RunToConvergence` or `Refresh` is
-  executing on the pool. `WhenAllWorkDrained` covers every step, so the
-  workspace's bounded drain (`ShutdownGraphDocument`'s,
-  `WorkspaceViewModel.Graph.cs:392–410`) covers the disposal. Pinned by
-  the lifetime census's baseline (D-15 xiv).
+  the settle run's `CancelToken`, disarms the settle announcement, clears
+  the diagram's readback seam (Term M3), drops the model from the
+  document and DISPOSES the `LayoutSession` AT ONCE: the binding's call
+  counter defers the native free until an in-flight `Tick`,
+  `RunToConvergence` or `Refresh` returns ("What stands today"), and a
+  compute that reaches a disposed session (ObjectDisposedException)
+  returns a REFUSED step — the scheduler's no-throw rule — whose apply
+  applies nothing; an apply that finds its run cancelled applies nothing
+  either. Disposal never waits for an apply, because `Retire()`'s
+  `Shutdown` skips every later apply (the scheduler's admission,
+  `PanelWorkScheduler.cs:320–360`). `WhenAllWorkDrained` covers every
+  step's compute, so the workspace's bounded drain (`ShutdownGraphDocument`'s,
+  `WorkspaceViewModel.Graph.cs:392–410`) covers the last call's return.
+  Pinned by the lifetime census's baseline (D-15 xiv).
 - **Term G8 — the crossings, per path.** A build: one `StartGraphLayout`,
   one `NodeIds`, one `Edges`, one `NodeMetadata`, one `Generation`. A
   settle step: one `Tick`; a Reduce Motion settle: one `RunToConvergence`.
@@ -12251,10 +12302,20 @@ a diagram arm named in Term M4; rules L, P, Q and W are untouched.
 #### Rule M — the mode switch, in five terms
 
 - **Term M1 — one writer of `Mode`.** `GraphViewState.Mode` is written by
-  exactly two sites: the SEED (C-10's construction, `WorkspaceViewModel.cs:
-  1621–1622`, which now seeds `CurrentConfig.Mode` — C-D6 closed) and the
-  document's `SetMode(GraphSurfaceMode)`; a writers census (C-15 v's
-  shape) walls it. `SetMode` refuses when retired or unseated (the
+  exactly two sites: the SEED — ONE LINE THIS PR ADDS after the groups'
+  seed (`WorkspaceViewModel.cs:1621–1622`): the view state's `Mode` set
+  from `CurrentConfig.Mode`, so a persisted `diagram` is restored (C-D6
+  closed; IGQ-1: the code seeds nothing today and nothing else speaks)
+  — and the document's `SetMode(GraphSurfaceMode)`; a writers census
+  (C-15 v's shape) walls it. THE PERSISTED DIAGRAM'S SEAT: `AttachGraphDocumentTo`
+  (`WorkspaceViewModel.Graph.cs:118–133`), when it CREATES the document
+  and `Mode == Diagram`, calls EnterDiagram after the fresh open's
+  re-apply (Term G2 builds; the model lands through the scheduler; rule
+  L's transition and its pair run as frozen) — and speaks NO mode line:
+  `GraphMode` is the SWITCH's line alone (the mac's restore-driven
+  `onChange` speaks it, `GraphTableView.swift:104–105` — a Windows
+  silence recorded as D-D12, taken so that rule L's Term 6 sequences
+  stay a projection onto the family as frozen). `SetMode` refuses when retired or unseated (the
   `SelectRow` guard) and is a no-op for the current mode; otherwise it
   writes the field, calls `GraphPreferences.SetMode(mode)` (Term W7 — the
   persisted mode, the mac's `setGraphMode`), speaks `GraphMode{mode}`
@@ -12290,9 +12351,8 @@ a diagram arm named in Term M4; rules L, P, Q and W are untouched.
   the diagram's state host; the delivery waits for the build's terminal
   state as it waits for the lineage's (Term F3's quiescence read as "no
   build in flight" while in Diagram mode). Delivery is Term F5's silence.
-  DD-6 records this as rule F's diagram arm — F4's "grid" is the table
-  projection's element and this PR supplies the diagram's; the owner may
-  record it as an amendment of F4's text instead.
+  This IS an amendment of frozen Term F4 (IGQ-5), pending the owner at
+  DD-Q5, whose text it applies; DD-6.
 - **Term M5 — the projection cluster.** Exactly ONE projection is in the
   UIA tree: `Mode == Table` → the table and A-4's state host as today;
   `Mode == Diagram` → the renderer when a model is live, else the
@@ -12505,14 +12565,19 @@ a diagram arm named in Term M4; rules L, P, Q and W are untouched.
   percent}`; FitGraph fits the VISIBLE nodes' bounds — a zero-size bounds
   inflated by 100 layout units before the fit (the mac's `:77–85`), the
   padding GraphFitPadding = 60 (the mac's; the canvas's `FitPadding` is
-  40 — recorded D-D8) — and yields `GraphZoom{fit: true, percent}`; an
-  EMPTY visible set makes FitGraph silent (the mac's `guard nodeCount > 0`).
-  The verbs reach the renderer through the presenter's ViewportCommand
-  (GraphViewportVerb) → GraphViewportOutcome (Zoomed(percent, fit) |
-  Silent | Refused — the canvas's shape) and the NAVIGATOR speaks the
-  outcome through the document's AnnounceZoom seam (the navigator posts
-  nothing itself, C-15 ix); Refused speaks nothing (the mac's inactive
-  router is a no-op).
+  40 — recorded D-D8) — and yields `GraphZoom{fit: true, percent}` in
+  EVERY case: over an EMPTY visible set the fit is a no-op inside the
+  model (the mac's `fitToContent` guard, `GraphDiagramModel.swift:78`)
+  and the line still speaks the UNCHANGED percent — the mac's
+  `graphDiagramFit` announces after the call regardless
+  (`AppState+GraphDiagram.swift:451–456`; IGQ-4 corrected: revision 1 had
+  it silent). The verbs reach the renderer through the presenter's
+  ViewportCommand(GraphViewportVerb) → GraphViewportOutcome — Zoomed(percent,
+  fit) | Refused, two arms (the canvas's Silent arm has no graph use) —
+  and the NAVIGATOR speaks a Zoomed outcome through the document's
+  AnnounceZoom seam (the navigator posts nothing itself, C-15 ix);
+  Refused — no live model, Table mode — speaks nothing (the mac's
+  inactive router is a no-op).
 - **Term V3 — the rows and the chords.** `ChordTable`'s `GraphRows`
   gains `Ids.GraphZoomIn` = `slate.graph.zoomIn` "Graph: Zoom In"
   (⌘=, `Ctrl+=`), `Ids.GraphZoomOut` = `slate.graph.zoomOut` "Graph:
@@ -12589,7 +12654,11 @@ during the build disposes the landed session; a second Enter supersedes
 the first's build); AFailedBuildInstallsTheErrorStateAndNoModel (the
 fetch gate throws `VaultException`; the state host reads T19's name);
 TheBuildReadsNoTableSnapshot (a table under ERROR still builds a diagram
-— the layout snapshots the graph itself); NoCrossingHappensPerFrameOrPan
+— the layout snapshots the graph itself); AFilterChangeDuringTheBuildRefusesItAndRebuildsOnce
+(a preset run while the first build is parked on the fetch gate: the
+landed session disposed, one more `StartGraphLayout` under the preset's
+filter, the model's filter the preset's — IGQ-2);
+AForcesEditDuringTheBuildIsAppliedAtTheInstall; NoCrossingHappensPerFrameOrPan
 (a settle of N steps costs N ticks and one topology).
 
 **D-3 — The epoch and the topology (Term G3).** Pinned by facts:
@@ -12624,15 +12693,19 @@ TheSettledLineSpeaksOnlyWhenArmedAndTeardownDisarms
 (`testSettleAnnouncementNotArmedWithoutADiagramAndClearedOnTeardown`:
 armed then converged → one `GraphLayoutSettled`; the build's own
 convergence → none; armed then torn down then rebuilt → none);
-ACancelledRunAppliesNothingAndItsTokenIsDisposedAfterTheCompute (the
-compute parked on the fetch gate, the teardown issued, the gate released
-— no frame, the handle disposed after).
+ACancelledRunAppliesNothingAndTheSessionIsFreedWhenTheInFlightCallReturns
+(the compute parked on the fetch gate, the teardown issued — the session
+`Dispose`d at once — the gate released: no frame, the handle count back
+to baseline after the call); AStepAfterDisposalIsRefusedNotThrown.
 
 **D-5 — The refresh and the rebuild (Term G6).** Pinned by facts:
 AProbeThatMovedTheGenerationRefreshesTheLayoutAndAdoptsMonotonically
 (a note added: `Refresh` once, the ids gained the node, the generation
-moved up; a second probe with nothing changed: `Refresh` once, nothing
-adopted); AProbeDuringARefreshRunsOneMoreRefreshAfterTheAdopt;
+moved up); AProbeWhoseGenerationEqualsTheModelsIssuesNoRefresh (zero
+`Refresh` crossings — IGQ-6); AProbeDuringARefreshRunsOneMoreRefreshAfterEveryTerminalPath
+(after an adopt, after a null answer, after a stale drop and after a
+failure injected through the fetch gate — four arrangements, one more
+`Refresh` each; IGQ-3); ARefreshFailureIsLoggedAndTheModelStands;
 ARefreshPrunesAPinTheTopologyLost;
 AGenerationChurnKeepsTheSelectionByStableKey
 (`testGenerationRefreshRemapsSelectionByStableKey`: the shared key
@@ -12643,8 +12716,10 @@ alone — `testPresetFromDiagramModeSpeaksTheHeadlineAlone`'s Windows
 twin, the `GraphMode` line absent).
 
 **D-6 — Teardown, disposal, the drain (Term G7).** Pinned by facts:
-TheSwitchToTableTearsDownAndDisposesAfterTheInFlightTick;
-RetirementTearsDownTheDiagram; TheWorkspaceDrainCoversTheDisposal;
+TheSwitchToTableTearsDownAndDisposesAtOnce (an in-flight tick returns
+harmlessly); RetirementTearsDownTheDiagram (the retired scheduler's
+skipped apply cannot be the disposal's owner);
+TheWorkspaceDrainCoversTheLastCallsReturn;
 TheLayoutSessionCountReturnsToBaseline (`HandleLifetimeCensus`'s
 counter, the graph document's diagrams built and torn down twenty
 times); a seam-parked compute that outlives the teardown disposes on
@@ -12659,10 +12734,12 @@ Diagram: `GraphMode{Diagram}` alone — no summary, no count; back:
 `GraphMode{Table}` alone); ASwitchWhenRetiredOrUnseatedWritesNothing;
 ExactlyOneProjectionIsInTheTreePerMode (the table collapsed and the
 renderer visible, and back; the state host named by the active
-projection's state); ThePersistedDiagramModeBuildsAtTheSeatAndSpeaksTheModeLineAfterTheCause
-(an explicit open: `GraphStatus{Opened}`, `GraphMode{Diagram}`, then
-the pair's summary — the mac's order; a restore: the mode line then
-the summary); TheSummarysInvokeSwitchesToTable
+projection's state); TheSeedWritesModeFromCurrentConfig (a persisted
+`diagram` → `Mode == Diagram` at the workspace's construction; the
+writers census names the seed line); ThePersistedDiagramModeBuildsAtTheSeatAndSpeaksNoModeLine
+(an explicit open over a persisted diagram: one `StartGraphLayout` from
+the seat, `GraphStatus{Opened}` then the pair's summary and NO
+`GraphMode` — D-D12; a restore: the summary alone); TheSummarysInvokeSwitchesToTable
 (`testTierBSummaryElementSwitchesToTable`); TheModeWritersAreTheSeedAndSetModeAlone
 (the census, a planted writer caught); TheDiagramSeamIsInstalledAtTheModelsInstallAndClearedBeforeTheModelDrops
 (Term M3; `InstallDiagramReadback` null while building — the mac's
@@ -12761,7 +12838,8 @@ ZoomInOutAndActualSizeAreCentrePreservingAndClampedAndSpeakTheZoom
 equals `ZoomPercent`); FitFramesTheVisibleNodesAndSpeaksTheFitLine
 (`testSingleNodeFitFramesTheNode`: a single node's inflated bounds; the
 padding 60; a hidden node excluded from the bounds — the mac's finding 5);
-FitOnAnEmptySetIsSilent; TheFourRowsTheirScopeLabelsAndChords (the mac's
+FitOnAnEmptySetSpeaksTheUnchangedPercent (the mac's; IGQ-4);
+TheFourRowsTheirScopeLabelsAndChords (the mac's
 labels byte for byte, `ChordScope.Graph`, the accelerators);
 TheScrapeInBothDirectionsHoldsSixChords (C-11's scrape: Escape,
 Ctrl+Alt+Shift+I, the four); TheSharedChordDispositionsNameTheThreeCanvasPairs;
@@ -12787,11 +12865,15 @@ production twin).
 `GraphContractsCitationCensus` gains the "D" tuple, its floor one below
 the population; (ii) the INSTANCE census: at most one GraphDiagramModel
 per document, constructed in BuildDiagram's apply alone, and exactly
-one GraphLayoutDriver per model; (iii) the LOAD-STARTING census's closed
-list gains BuildDiagram, RefreshDiagram, FetchTopology and the driver's
-step and converge members, each with its named callers (EnterDiagram and
-the rebuild; the probe's apply; the epoch derivation; the driver alone),
-and the CROSSINGS census gains the layout names — `StartGraphLayout`
+one GraphLayoutDriver per model; (iii) C-15 iv's two CLOSED LISTS are
+AMENDED — the provision C-15 iv itself makes ("PR E's inspector filter
+handler as the FOURTH by amendment of this list"), recorded here as
+DD-16 and not silently (IGQ-8): the LOAD-STARTING list (`GraphNavigatorCensus.cs:
+241–259`) gains BuildDiagram, RefreshDiagram, FetchTopology and the
+driver's step and converge members, each with its named callers
+(EnterDiagram and the rebuild; the probe's apply; the epoch derivation;
+the driver alone), and the CROSSINGS list (`:322–334`) gains the layout
+names — `StartGraphLayout`
 inside BuildDiagram's compute alone; `GraphTopology` inside FetchTopology's
 compute alone; `Tick` and `RunToConvergence` inside the driver's computes
 alone; `Refresh` inside RefreshDiagram's compute alone; `NodeIds`, `Edges`,
@@ -12813,8 +12895,12 @@ census: no second mutable selection, viewport or mode under `Graph/`
 gains the row of D-17; (x) the token-drift census (D-10); (xi)
 `MacCatalogParityTests`: the four ids are the mac's with its labels; (xii)
 the delivery-evidence census and `chords.json` through the projection;
-(xiii) `A11yCorpusCensus` unchanged — every diagram witness now has a
-posting site, pinned by the seam facts; (xiv) `HandleLifetimeCensus`'s
+(xiii) `A11yCorpusCensus` unchanged — every NON-LABEL diagram witness
+(`GraphMode`, `GraphZoom`, `GraphPinned`, `GraphTierEntered`,
+`GraphLayoutSettled`, the diagram's `GraphRow` and `GraphWhereAmI`) now
+has a posting site, pinned by the seam facts, and the two LABEL-class
+witnesses (`GraphTierSummary`, `GraphNeighborsContent`) have RENDER
+sites only — never posted (0a-14; IGQ-7); (xiv) `HandleLifetimeCensus`'s
 baseline over the document's diagrams (D-6); (xv) the parity harness
 census gains the `layout` section's facts (D-18). Each census lands with
 the mutation it kills, named in the task-loop record.
@@ -12921,12 +13007,11 @@ before every push; CI's shell accessibility lane arbitrates.
   the canvas visual board's shape; the platform speaks nothing for a
   non-focusable peer, so the relay's line is the ONLY speech and there is
   no double.
-- **DD-6 — Rule F gains a diagram arm without an amendment** (Term M4):
-  F4's arms name the table projection's elements; the active projection
-  in Diagram mode has the renderer and the diagram's state host; the
+- **DD-6 — Rule F's Term F4 is AMENDED to name the active projection's
+  arms** (Term M4; DD-Q5's default, pending the owner — IGQ-5): the
   request, the triggers, the quiescence wait, the departure and the
-  silence are F1–F3, F5 and F6 as frozen — the owner may record F4 as
-  amended instead.
+  silence are F1–F3, F5 and F6 as frozen; F4's table arms stand as
+  written and the diagram's arms are added by the amendment's text.
 - **DD-7 — The four verbs get Graph-menu items** (DD-Q3's default):
   C-12's enrichment, `CanExecute` on Diagram effective.
 - **DD-8 — The viewport is the canvas's state, the graph's fit padding
@@ -12947,6 +13032,19 @@ before every push; CI's shell accessibility lane arbitrates.
 - **DD-15 — The mac's "Laying out graph" and "Graph diagram error" are
   the diagram state host's names** (Term M5, T19/T20), the same host
   element as A-4's with the active projection's text.
+- **DD-16 — C-15 iv's closed lists are amended, as C-15 iv provides**
+  (D-15 iii; IGQ-8): the load-starting members and their callers, the
+  crossings and their roots, the one named timer — each addition named
+  in D-15 and pinned by the census's literal lists.
+- **DD-17 — FitGraph always speaks** (Term V2; IGQ-4): the mac's
+  `graphDiagramFit` announces after a no-op fit too.
+- **DD-18 — A persisted Diagram mode builds at the seat and speaks no
+  mode line** (Term M1; IGQ-1): `GraphMode` is the switch's line; rule
+  L's Term 6 sequences stay a projection onto the family as frozen.
+- **DD-19 — The layout session is disposed at once at teardown** (Term
+  G7): the binding's call counter makes an in-flight call harmless and a
+  later call a refused step; disposal never depends on an apply the
+  retired scheduler would skip.
 
 ### Recorded divergences (PR D)
 
@@ -12992,6 +13090,11 @@ before every push; CI's shell accessibility lane arbitrates.
 - **D-D10 — The Where-am-I panel shows the diagram's readback too**
   (C-D16's enrichment, extended): the mac speaks only.
 - **D-D11 — The drag pans**; the mac has no drag-to-pan (its wheel pans).
+- **D-D12 — A persisted Diagram mode's seat speaks no mode line** (DD-18);
+  the mac's restore-driven `onChange(of: mode)` speaks `GraphMode{Diagram}`
+  after the open's status (`GraphTableView.swift:104–105`). The reader
+  lands on the renderer named "Graph, visual diagram" (T61) and asks
+  Where-am-I for the zoom.
 
 ### Accepted risks (PR D)
 
@@ -12999,12 +13102,15 @@ before every push; CI's shell accessibility lane arbitrates.
   box** (CR-3's arbitration: the swift CI lane is the oracle); a mac
   regeneration is a `ParityHarnessTests.swift` edit simulated against the
   frozen facts before the push (the lesson of TGC-9's mac change).
-- **DR-2 — Cross-platform float drift in the position golden.** §P-C
-  promises bit-identity PER platform; sixty iterations on seven nodes at a
-  thousandth are far below any libm drift, but a divergence on the mac
-  lane is answered by widening the quantum or moving the section to a
-  per-host golden — the owner's call, recorded here so a red mac lane is
-  read as this risk and not as a product defect.
+- **DR-2 — Cross-platform float drift in the position golden is a GATE
+  FAILURE, not an accepted drift** (IGQ-9): §W-A requires one golden
+  byte-identical on both twins and D-18 keeps it so — a red mac lane on
+  the `layout` section FAILS the gate and is repaired by a correction
+  applied to BOTH twins (a coarser quantum or a fixture change,
+  regenerated once), never by a per-host golden. §P-C promises
+  bit-identity PER platform; the risk recorded is only that the failure
+  is found on the mac lane (DR-1's cost), because sixty iterations on
+  seven nodes at a thousandth sit far below any libm drift.
 - **DR-3 — A complete peer set of 1,500 Buttons.** UIA clients that walk
   the whole tree (axe, a scan-mode reader) pay for it once per rebuild;
   the benchmark's first-rebuild budget (D-18) is the guard; the windowed
@@ -13042,7 +13148,32 @@ before every push; CI's shell accessibility lane arbitrates.
   (`:1037`), the layout's current coordinates — Windows passes the
   installed frame's.
 
-### Tests that pin PR D (revision 1's list; the task loop records what lands)
+### Round 1 — nine findings (IGQ-1..IGQ-9), dispositions
+
+Run 2026-09-14 on revision 1 (095ecb0f) with `codex exec` on gpt-5.5 at
+medium effort (the account refuses gpt-5.6; the protocol's tier is
+recorded as not met — the findings stand), read-only over the local
+tree; 4 blockers, 5 majors, 0 minors. Every finding is discharged in
+revision 2's text.
+
+| # | Severity | Disposition |
+|---|---|---|
+| IGQ-1 | BLOCKER | taken — Term M1: the seed of `Mode` is a line THIS PR adds (the code seeds nothing today); the persisted seat builds through `AttachGraphDocumentTo` and speaks no line (DD-18, D-D12); D-7's facts renamed |
+| IGQ-2 | BLOCKER | taken — Term G2's apply guard compares the captured filter with the view state's now and rebuilds once on a mismatch; Term G6's rebuild trigger covers a build in flight (the sequence bump); the forces re-read at the install; D-2's two new facts |
+| IGQ-3 | BLOCKER | taken — Term G6: RefreshAgain is consumed on EVERY terminal path (adopt, null, drop, failure); the failure path logged (GraphLayoutRefreshFailed); D-5's four-arrangement fact |
+| IGQ-4 | BLOCKER | taken — Term V2: FitGraph speaks the unchanged percent over an empty set (the mac's); the Silent outcome dropped; DD-17; D-13's fact renamed |
+| IGQ-5 | MAJOR | taken — DD-Q5: Term F4's amendment written and put to the owner; DD-6 rewritten; the head says what the section touches |
+| IGQ-6 | MAJOR | taken — Term G6 and D-5: a probe whose generation equals the model's issues zero `Refresh` crossings |
+| IGQ-7 | MAJOR | taken — D-15 xiii names the non-LABEL witnesses' posting sites and the two LABEL witnesses' render sites |
+| IGQ-8 | MAJOR | taken — DD-16: C-15 iv's lists amended under its own provision, the additions named against the census's literal lists |
+| IGQ-9 | MAJOR | taken — DR-2 rewritten: a mac mismatch fails the gate; the remedy is applied to both twins, never a per-host golden |
+
+Two corrections of the author's own ride the same revision: the
+generated bindings' line numbers (regenerated on 2026-09-14) and Term
+G7's disposal rule, which now rests on the binding's call counter
+rather than on an apply the retired scheduler would skip (DD-19).
+
+### Tests that pin PR D (revision 2's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14
   — the model's lifecycle, the build, the epoch, the driver, the refresh,
