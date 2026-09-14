@@ -29,6 +29,8 @@ public sealed class GraphNavigatorCensus
     private const string TheLeafType = "SlateWindows.Graph.ConnectionsLeafViewModel";
     private const string TheWriterType = "SlateWindows.Graph.GraphConfigWriter";
     private const string TheStoreType = "SlateWindows.Graph.GraphConfigStore";
+    private const string TheModelType = "SlateWindows.Graph.GraphDiagramModel";
+    private const string TheDriverType = "SlateWindows.Graph.GraphLayoutDriver";
 
     private static string OwnerOf(SyntaxNode node)
     {
@@ -229,16 +231,35 @@ public sealed class GraphNavigatorCensus
             }
             foreach (ExpressionSyntax reference in member.DescendantNodes().OfType<ExpressionSyntax>().Where(GraphAnnouncerCensus.IsAMethodGroupReference))
             {
+                // An UNSUBSCRIPTION's operand wires no path (W6-2 PR D: the
+                // retirement drops the view-state handler it subscribed).
+                if (reference.Parent is AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.SubtractAssignmentExpression } unsubscribe
+                    && ReferenceEquals(unsubscribe.Right, reference))
+                {
+                    continue;
+                }
                 foreach (ISymbol candidate in Candidates(model.GetSymbolInfo(reference)))
                 {
-                    if (candidate is IMethodSymbol callee && callee.ContainingType.ToDisplayString() == TheDocumentType)
+                    if (candidate is not IMethodSymbol callee)
+                    {
+                        continue;
+                    }
+                    if (callee.Name == "StartWorkAlwaysAsync")
+                    {
+                        // W6-2 PR D (Term G4): the scheduler handed to the
+                        // driver as a method group is a start too.
+                        _ = starters.Add(name);
+                    }
+                    else if (callee.ContainingType.ToDisplayString() == TheDocumentType)
                     {
                         _ = callees.Add(callee.Name);
                     }
                 }
             }
         }
-        Assert.Equal(["Issue", "Probe"], starters.Order(StringComparer.Ordinal));
+        // W6-2 PR D (D-15 iii, DD-16): C-15 iv's closed list AMENDED — the
+        // build, the epoch's fetch and the refresh join the two.
+        Assert.Equal(["BuildDiagram", "FetchTopology", "Issue", "Probe", "RefreshDiagram"], starters.Order(StringComparer.Ordinal));
         // Transitive closure: every member reaching a starter.
         var reaching = new HashSet<string>(starters, StringComparer.Ordinal);
         bool grew = true;
@@ -254,8 +275,34 @@ public sealed class GraphNavigatorCensus
                 }
             }
         }
+        // W6-2 PR D: the constructor reaches through the view-state handler it
+        // subscribes (a filter change under Diagram mode rebuilds — Term G6);
+        // SetMode, EnsureDiagram and the rebuild reach the build; the install
+        // reaches the rebuild-once and the epoch; the refresh's apply reaches
+        // the epoch and RefreshAgain's one more refresh.
         Assert.Equal(
-            ["Issue", "IssueReplacing", "Load", "Probe", "Receive", "ReceiveForTests", "Request"],
+            [
+                "<ctor>",
+                "ApplyRefresh",
+                "BuildDiagram",
+                "EnsureDiagram",
+                "EnterDiagram",
+                "FetchTopology",
+                "InstallBuild",
+                "Issue",
+                "IssueReplacing",
+                "Load",
+                "OnViewStateChanged",
+                "OpenEpoch",
+                "Probe",
+                "RebuildDiagram",
+                "Receive",
+                "ReceiveForTests",
+                "RefreshDiagram",
+                "RefreshDiagramForTests",
+                "Request",
+                "SetMode",
+            ],
             reaching.Order(StringComparer.Ordinal));
         // The outside callers of each entry, bound across the shell.
         Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:GraphFollowActiveTab"], CallersOf(TheDocumentType, "Load", includeInsideType: false));
@@ -263,10 +310,37 @@ public sealed class GraphNavigatorCensus
             ["Graph/GraphNavigator.cs:RunPreset", "Graph/GraphNavigator.cs:SetNameQuery", "Graph/GraphTableView.cs:OnExternalSort"],
             CallersOf(TheDocumentType, "Request", includeInsideType: false));
         Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:NotifyGraphOfVaultChange"], CallersOf(TheDocumentType, "Probe", includeInsideType: false));
-        foreach (string arm in new[] { "Issue", "IssueReplacing", "Receive", "ReceiveForTests" })
+        // W6-2 PR D (D-15 iii): the switch from the surface's choice alone; the
+        // seat's build from the attach funnel alone; the rest from nowhere.
+        Assert.Equal(["Graph/GraphSurfaceView.cs:OnModeChosen"], CallersOf(TheDocumentType, "SetMode", includeInsideType: false));
+        Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:AttachGraphDocumentTo"], CallersOf(TheDocumentType, "EnsureDiagram", includeInsideType: false));
+        foreach (string arm in new[]
+        {
+            "Issue", "IssueReplacing", "Receive", "ReceiveForTests",
+            "ApplyRefresh", "BuildDiagram", "EnterDiagram", "FetchTopology", "InstallBuild", "OnViewStateChanged", "OpenEpoch", "RebuildDiagram", "RefreshDiagram", "RefreshDiagramForTests",
+        })
         {
             Assert.Empty(CallersOf(TheDocumentType, arm, includeInsideType: false));
         }
+        // The driver (Term G4): the scheduler it was handed is invoked in its
+        // step and its converge members alone, and those are the driver's own
+        // — the settle's start and the cadence's tick.
+        (string Relative, CSharpSource Source) driverFile = ShellCompilation.Sources.Single(s => s.Relative == "Graph/GraphLayoutDriver.cs");
+        SemanticModel driverModel = ShellCompilation.ModelFor(driverFile.Source);
+        var schedulerInvocations = new List<string>();
+        foreach (InvocationExpressionSyntax call in driverFile.Source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (Candidates(driverModel.GetSymbolInfo(call)).Any(s => s is IMethodSymbol { ContainingType.Name: "Scheduler" }))
+            {
+                schedulerInvocations.Add(OwnerOf(call));
+            }
+        }
+        Assert.Equal(["Converge", "Step"], schedulerInvocations.Order(StringComparer.Ordinal));
+        Assert.Equal(["Graph/GraphLayoutDriver.cs:StartSettle"], CallersOf(TheDriverType, "Converge"));
+        Assert.Equal(["Graph/GraphLayoutDriver.cs:OnCadence", "Graph/GraphLayoutDriver.cs:StartSettle"], CallersOf(TheDriverType, "Step"));
+        Assert.Equal(
+            ["Graph/GraphDocumentViewModel.cs:ApplyRefresh", "Graph/GraphDocumentViewModel.cs:InstallBuild", "Graph/GraphDocumentViewModel.cs:OnMotionChanged"],
+            CallersOf(TheDriverType, "StartSettle"));
     }
 
     /// <summary>C-15 (iv), IGP-23: the census is rooted at the crossings too —
@@ -287,10 +361,19 @@ public sealed class GraphNavigatorCensus
             {
                 foreach (ISymbol candidate in Candidates(model.GetSymbolInfo(call)))
                 {
-                    if (candidate is IMethodSymbol { Name: "GraphSnapshot" or "GraphTableRows" or "GraphGeneration" } method
+                    if (candidate is IMethodSymbol { Name: "GraphSnapshot" or "GraphTableRows" or "GraphGeneration" or "StartGraphLayout" or "GraphTopology" } method
                         && method.ContainingType.Name == "VaultSession")
                     {
                         crossings.Add($"{relative}:{OwnerOf(call)}:{method.Name}");
+                    }
+                    // W6-2 PR D (D-15 iii): the layout session's own crossings.
+                    if (candidate is IMethodSymbol
+                        {
+                            Name: "Tick" or "RunToConvergence" or "Refresh" or "NodeIds" or "Edges" or "NodeMetadata" or "Generation" or "PinNode" or "UnpinNode" or "SetForces",
+                        } layout
+                        && layout.ContainingType.Name is "LayoutSession" or "ILayoutSession")
+                    {
+                        crossings.Add($"{relative}:{OwnerOf(call)}:{layout.Name}");
                     }
                 }
                 if (!relative.StartsWith("Graph/", StringComparison.Ordinal))
@@ -317,21 +400,187 @@ public sealed class GraphNavigatorCensus
                 {
                     schedulers.Add($"{relative}:{OwnerOf(creation)} (new Thread)");
                 }
+                // W6-2 PR D (DD-10, D-15 iii): every timer under Graph/ is named
+                // — the driver's cadence is the ONE that issues a scheduler step.
+                if (relative.StartsWith("Graph/", StringComparison.Ordinal) && creation.Type.ToString() is "DispatcherTimer" or "System.Windows.Threading.DispatcherTimer")
+                {
+                    schedulers.Add($"{relative}:{OwnerOf(creation)} (new DispatcherTimer)");
+                }
             }
         }
+        // W6-2 PR D (D-15 iii, Term G8): the layout names — StartGraphLayout and
+        // the build's four reads inside BuildDiagram's compute; GraphTopology
+        // inside FetchTopology's; Refresh and its three reads inside
+        // RefreshDiagram's; Tick and RunToConvergence inside the driver's two
+        // computes; PinNode/UnpinNode inside the model's TogglePin; SetForces
+        // inside the model's SetForces — every receiver the gate's lambda
+        // parameter (the gate fact).
         Assert.Equal(
             [
                 "Graph/ConnectionsLeafViewModel.cs:Probe:GraphGeneration",
+                "Graph/GraphDiagramModel.cs:SetForces:SetForces",
+                "Graph/GraphDiagramModel.cs:TogglePin:PinNode",
+                "Graph/GraphDiagramModel.cs:TogglePin:UnpinNode",
+                "Graph/GraphDocumentViewModel.cs:BuildDiagram:Edges",
+                "Graph/GraphDocumentViewModel.cs:BuildDiagram:Generation",
+                "Graph/GraphDocumentViewModel.cs:BuildDiagram:NodeIds",
+                "Graph/GraphDocumentViewModel.cs:BuildDiagram:NodeMetadata",
+                "Graph/GraphDocumentViewModel.cs:BuildDiagram:StartGraphLayout",
                 "Graph/GraphDocumentViewModel.cs:Fetch:GraphSnapshot",
                 "Graph/GraphDocumentViewModel.cs:Fetch:GraphTableRows",
+                "Graph/GraphDocumentViewModel.cs:FetchTopology:GraphTopology",
                 "Graph/GraphDocumentViewModel.cs:Probe:GraphGeneration",
+                "Graph/GraphDocumentViewModel.cs:RefreshDiagram:Edges",
+                "Graph/GraphDocumentViewModel.cs:RefreshDiagram:NodeIds",
+                "Graph/GraphDocumentViewModel.cs:RefreshDiagram:NodeMetadata",
+                "Graph/GraphDocumentViewModel.cs:RefreshDiagram:Refresh",
+                "Graph/GraphLayoutDriver.cs:Converge:RunToConvergence",
+                "Graph/GraphLayoutDriver.cs:Step:Tick",
             ],
             crossings.Order(StringComparer.Ordinal));
-        // The named sites — the leaf view's focus retries and the relay's
-        // marshalling — none reaching a load.
+        // The named sites — the leaf view's focus retries, the relay's
+        // marshalling and the three timers (the relay's window, the
+        // preferences' save, the driver's cadence) — none reaching a load.
         Assert.Equal(
-            ["Graph/ConnectionsLeafView.cs:<ctor>", "Graph/ConnectionsLeafView.cs:RetryFocusInside", "Graph/GraphAnnouncer.cs:Emit"],
+            [
+                "Graph/ConnectionsLeafView.cs:<ctor>",
+                "Graph/ConnectionsLeafView.cs:RetryFocusInside",
+                "Graph/GraphAnnouncer.cs:<ctor> (new DispatcherTimer)",
+                "Graph/GraphAnnouncer.cs:Emit",
+                "Graph/GraphLayoutDriver.cs:NewTimer (new DispatcherTimer)",
+                "Graph/GraphPreferencesViewModel.cs:<ctor> (new DispatcherTimer)",
+            ],
             schedulers.Order(StringComparer.Ordinal));
+    }
+
+    // --- W6-2 PR D (D-15 ii, iii): the instance census and the gate's wall ------
+
+    /// <summary>D-15 (ii): at most one GraphDiagramModel per document —
+    /// constructed in BuildDiagram's compute alone, outside any repeatable
+    /// construct but the compute's own lambda — and exactly one
+    /// GraphLayoutDriver per model, born in the model's constructor.</summary>
+    [Fact]
+    public void ExactlyOneDiagramModelIsConstructedInTheBuildAndOneDriverPerModel()
+    {
+        Assert.Equal(["Graph/GraphDocumentViewModel.cs:BuildDiagram"], CreationsOf(TheModelType));
+        Assert.Equal(["Graph/GraphDiagramModel.cs:<ctor>"], CreationsOf(TheDriverType));
+        (string Relative, CSharpSource Source) documentFile = ShellCompilation.Sources.Single(s => s.Relative == "Graph/GraphDocumentViewModel.cs");
+        SemanticModel model = ShellCompilation.ModelFor(documentFile.Source);
+        ObjectCreationExpressionSyntax creation = documentFile.Source.Root.DescendantNodes().OfType<ObjectCreationExpressionSyntax>()
+            .Single(c => DeclaredTypeOf(model, c) == TheModelType);
+        // Inside the compute lambda and nothing else that repeats: no loop, no
+        // local function, no conditional around the construction.
+        Assert.DoesNotContain(
+            creation.Ancestors().TakeWhile(ancestor => ancestor is not MethodDeclarationSyntax),
+            ancestor => ancestor is ForStatementSyntax or ForEachStatementSyntax or WhileStatementSyntax or DoStatementSyntax
+                or IfStatementSyntax or ConditionalExpressionSyntax or SwitchStatementSyntax or SwitchExpressionSyntax
+                or LocalFunctionStatementSyntax);
+        Assert.Single(creation.Ancestors().OfType<AnonymousFunctionExpressionSyntax>());
+    }
+
+    /// <summary>D-15 (iii), the GATE arm (Term G7; IGR-1, IGS-1, IGS-2, IGT-2):
+    /// the model's session field is private and referenced by the constructor's
+    /// assignment, WithSession and the one disposal site FreeHandle alone,
+    /// whose callers are WithSession and Retire; every layout-session
+    /// invocation's receiver is the lambda parameter of a WithSession call; the
+    /// ONE LayoutSession-typed expression outside the model is
+    /// StartGraphLayout's result in the build's compute, used as the model
+    /// constructor's argument and nowhere else; no other LayoutSession-typed
+    /// field, property, parameter or local exists under Graph/; and no
+    /// handler under Graph/ names ObjectDisposedException.</summary>
+    [Fact]
+    public void TheLayoutSessionIsReachableThroughTheGateAloneAndNothingCatchesItsDisposal()
+    {
+        (string Relative, CSharpSource Source) modelFile = ShellCompilation.Sources.Single(s => s.Relative == "Graph/GraphDiagramModel.cs");
+        SemanticModel modelModel = ShellCompilation.ModelFor(modelFile.Source);
+        ClassDeclarationSyntax modelClass = modelFile.Source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>()
+            .Single(c => c.Identifier.ValueText == "GraphDiagramModel");
+        FieldDeclarationSyntax sessionField = modelClass.Members.OfType<FieldDeclarationSyntax>()
+            .Single(f => f.Declaration.Type.ToString() == "LayoutSession");
+        Assert.Contains(sessionField.Modifiers, m => m.IsKind(SyntaxKind.PrivateKeyword));
+        Assert.Contains(sessionField.Modifiers, m => m.IsKind(SyntaxKind.ReadOnlyKeyword));
+        string fieldName = sessionField.Declaration.Variables.Single().Identifier.ValueText;
+        IFieldSymbol fieldSymbol = (IFieldSymbol)modelModel.GetDeclaredSymbol(sessionField.Declaration.Variables.Single())!;
+        var fieldReaders = new List<string>();
+        foreach (IdentifierNameSyntax identifier in modelClass.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (identifier.Identifier.ValueText == fieldName
+                && SymbolEqualityComparer.Default.Equals(modelModel.GetSymbolInfo(identifier).Symbol, fieldSymbol))
+            {
+                fieldReaders.Add(OwnerOf(identifier));
+            }
+        }
+        Assert.Equal(["<ctor>", "FreeHandle", "WithSession"], fieldReaders.Order(StringComparer.Ordinal));
+        Assert.Equal(["Graph/GraphDiagramModel.cs:Retire", "Graph/GraphDiagramModel.cs:WithSession"], CallersOf(TheModelType, "FreeHandle"));
+        // Every session invocation anywhere under Graph/: its receiver is the
+        // parameter of a lambda that is WithSession's first argument.
+        var outsideTheGate = new List<string>();
+        var sessionTyped = new List<string>();
+        var disposalHandlers = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            if (!relative.StartsWith("Graph/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (!Candidates(model.GetSymbolInfo(call)).Any(s => s is IMethodSymbol m && m.ContainingType.Name is "LayoutSession" or "ILayoutSession" && m.Name != "Dispose"))
+                {
+                    continue;
+                }
+                bool throughTheGate = call.Expression is MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax receiver }
+                    && model.GetSymbolInfo(receiver).Symbol is IParameterSymbol parameter
+                    && parameter.ContainingSymbol is IMethodSymbol { MethodKind: MethodKind.AnonymousFunction }
+                    && receiver.Ancestors().OfType<AnonymousFunctionExpressionSyntax>().Any(lambda =>
+                        lambda.Parent is ArgumentSyntax { Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax gateCall } } argument
+                        && ReferenceEquals(gateCall.ArgumentList.Arguments[0], argument)
+                        && Candidates(model.GetSymbolInfo(gateCall)).Any(s => IsMethodOf(s, TheModelType, "WithSession")));
+                if (!throughTheGate)
+                {
+                    outsideTheGate.Add($"{relative}:{OwnerOf(call)}:{call.Expression}");
+                }
+            }
+            // The LayoutSession-typed declarations and expressions outside the model.
+            foreach (SyntaxNode node in source.Root.DescendantNodes())
+            {
+                switch (node)
+                {
+                    case VariableDeclarationSyntax declaration when model.GetTypeInfo(declaration.Type).Type?.Name == "LayoutSession":
+                        // The model's own field is the one allowed declaration.
+                        if (!(relative == "Graph/GraphDiagramModel.cs" && declaration.Parent is FieldDeclarationSyntax))
+                        {
+                            sessionTyped.Add($"{relative}:{OwnerOf(declaration)} (a declaration)");
+                        }
+                        break;
+                    case PropertyDeclarationSyntax property when model.GetTypeInfo(property.Type).Type?.Name == "LayoutSession":
+                        sessionTyped.Add($"{relative}:{property.Identifier.ValueText} (a property)");
+                        break;
+                    case ParameterSyntax parameter when parameter.Type is not null && model.GetTypeInfo(parameter.Type).Type?.Name == "LayoutSession"
+                        && !(relative == "Graph/GraphDiagramModel.cs" && parameter.Parent?.Parent is ConstructorDeclarationSyntax):
+                        sessionTyped.Add($"{relative}:{OwnerOf(parameter)} (a parameter {parameter.Identifier.ValueText})");
+                        break;
+                    case InvocationExpressionSyntax invocation when Candidates(model.GetSymbolInfo(invocation)).Any(s => s is IMethodSymbol { Name: "StartGraphLayout" }):
+                        // The dataflow arm: the result is the model constructor's argument.
+                        bool intoTheConstructor = invocation.Parent is ArgumentSyntax { Parent: ArgumentListSyntax { Parent: ObjectCreationExpressionSyntax creation } }
+                            && DeclaredTypeOf(model, creation) == TheModelType;
+                        sessionTyped.Add($"{relative}:{OwnerOf(invocation)} (StartGraphLayout{(intoTheConstructor ? " into the model constructor" : " HELD")})");
+                        break;
+                    case CatchDeclarationSyntax catchDeclaration when catchDeclaration.Type.ToString().Contains("ObjectDisposedException", StringComparison.Ordinal):
+                        disposalHandlers.Add($"{relative}:{OwnerOf(catchDeclaration)}");
+                        break;
+                    case IdentifierNameSyntax identifier when identifier.Identifier.ValueText == "ObjectDisposedException":
+                        disposalHandlers.Add($"{relative}:{OwnerOf(identifier)} (named)");
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+        Assert.Empty(outsideTheGate);
+        Assert.Equal(["Graph/GraphDocumentViewModel.cs:BuildDiagram (StartGraphLayout into the model constructor)"], sessionTyped);
+        Assert.Empty(disposalHandlers);
     }
 
     // --- (v) the preset's argument ------------------------------------------------

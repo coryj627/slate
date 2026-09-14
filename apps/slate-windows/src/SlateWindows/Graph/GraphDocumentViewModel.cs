@@ -142,6 +142,19 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     // by a fact's release barrier; written by Retire on the owner's thread.
     private volatile bool _retired;
     private GraphPublication _publication;
+    // W6-2 PR D, rule G (Terms G1–G7): the diagram lineage — at most one
+    // model, the builds not yet seated (IGT-1), the build sequence, the
+    // epoch key, the refresh's in-flight pair, the motion policy.
+    private readonly GraphMotionPolicy _motion;
+    private readonly bool _ownsMotion;
+    private readonly object _diagramLock = new();
+    private readonly HashSet<GraphDiagramModel> _unseatedBuilds = [];
+    private GraphDiagramModel? _diagramModel;
+    private ulong _diagramSeq;
+    private ulong _epochSeq;
+    private (GraphDiagramModel Model, ulong Generation, GraphVisibilityQuery Query, GraphGroup[] Groups)? _epoch;
+    private bool _refreshRunning;
+    private bool _refreshAgain;
 
     public GraphDocumentViewModel(
         VaultSession session,
@@ -153,7 +166,8 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         Func<int>? lifecycleGeneration = null,
         Func<bool>? isSeated = null,
         GraphNavigator? navigator = null,
-        GraphPreferencesViewModel? preferences = null)
+        GraphPreferencesViewModel? preferences = null,
+        GraphMotionPolicy? motionPolicy = null)
         : base(
             synchronousForTests: false,
             ownerContext
@@ -217,6 +231,13 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         // Mode; a bare document (a fact's) has no navigator and no seam.
         _tableReadback = TableWhereAmI;
         navigator?.InstallTableReadback(_tableReadback);
+        // W6-2 PR D (Term G4, DD-9): the motion policy — the system's unless a
+        // fact injects one — observed for the flip; the view state observed
+        // for the rebuild (Term G6) and the epoch (Term G3).
+        _motion = motionPolicy ?? GraphMotionPolicy.OfTheSystem();
+        _ownsMotion = motionPolicy is null;
+        _motion.Changed += OnMotionChanged;
+        ViewState.PropertyChanged += OnViewStateChanged;
     }
 
     // --- The fetched-once inventories (design B) ------------------------
@@ -467,7 +488,26 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         ["graph_generation"] = 0,
         ["graph_row_actions"] = 0,
         ["graph_preset_outcome"] = 0,
+        // W6-2 PR D (Term G8): the layout's crossings, per path.
+        ["start_graph_layout"] = 0,
+        ["layout_node_ids"] = 0,
+        ["layout_edges"] = 0,
+        ["layout_node_metadata"] = 0,
+        ["layout_generation"] = 0,
+        ["layout_tick"] = 0,
+        ["layout_run_to_convergence"] = 0,
+        ["layout_refresh"] = 0,
+        ["layout_pin_node"] = 0,
+        ["layout_unpin_node"] = 0,
+        ["layout_set_forces"] = 0,
+        ["graph_topology"] = 0,
     };
+
+    /// <summary>Test seam (IGT-1): runs inside the build's compute AFTER the
+    /// model's registration in the unseated set and before the compute
+    /// returns — a fact parks here, retires the workspace, and proves the
+    /// withdrawn apply leaves no handle.</summary>
+    internal Action? DiagramRegisteredGateForTests { get; set; }
 
     /// <summary>The per-kind action vector, fetched ONCE per kind at
     /// construction and COUNTED (IPC-5).</summary>
@@ -695,24 +735,432 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
 
     /// <summary>Term M2 / Term G2: entering Diagram starts the build; the
     /// state host shows "Laying out graph." until a model lands.</summary>
-    internal void EnterDiagram()
+    internal void EnterDiagram() => BuildDiagram();
+
+    /// <summary>Term M1's second half (DD-18): a persisted Diagram mode builds
+    /// at the SEAT and speaks no mode line — the workspace's attach funnel
+    /// calls it once the persisted query is re-applied; nothing when a build
+    /// is in flight or a model is live (the mac's <c>ensureGraphDiagram</c>).</summary>
+    internal void EnsureDiagram()
     {
-        DiagramError = null;
-        DiagramLoading = true;
+        if (_retired || ViewState.Mode != GraphSurfaceMode.Diagram || DiagramLoading || HasLiveDiagram)
+        {
+            return;
+        }
+        EnterDiagram();
     }
 
-    /// <summary>Term G7's order, the document's part — the readback seam
-    /// cleared before the model drops (Term M3), the model dropped, the
-    /// diagram's states cleared, the availability re-evaluated; the switch to
-    /// Table, the rebuild and the retirement call it.</summary>
+    /// <summary>Term G7's order, the document's part, then the mode's states:
+    /// a build in flight superseded (the sequence), the live model dropped in
+    /// the gate's order, the readback seam cleared (Term M3), the diagram's
+    /// states cleared, the availability re-evaluated; the switch to Table and
+    /// the retirement call it.</summary>
     internal void TeardownDiagram()
     {
+        _diagramSeq++;
+        DropModel();
         Navigator?.InstallDiagramReadback(null);
+        SettleAnnouncementArmed = false;
         HasLiveDiagram = false;
         DiagramLoading = false;
         DiagramError = null;
         NotifyDiagramAvailabilityChanged();
     }
+
+    // --- W6-2 PR D, rule G: the diagram lineage (Terms G1–G8) -----------------------
+
+    /// <summary>Term G1: the ONE model, null when no diagram is live; the
+    /// navigator, the surface and the facts reach it here.</summary>
+    internal GraphDiagramModel? DiagramModel => _diagramModel;
+
+    /// <summary>Term G3: an epoch's topology landed on the model — the
+    /// renderer rebuilds its visible set from <see cref="GraphDiagramModel.Topology"/>.</summary>
+    internal event Action? DiagramTopologyChanged;
+
+    /// <summary>Term G4: PR E's forces edit arms it; the build's and the
+    /// refresh's convergence speak nothing; the teardown disarms it.</summary>
+    internal bool SettleAnnouncementArmed { get; set; }
+
+    /// <summary>The build's carrier from the compute to the apply: the
+    /// sequence and the filter captured, the forces the layout was seeded
+    /// with, the model (null on a failure or a retirement at registration)
+    /// and the failure's humanised message.</summary>
+    private sealed record GraphDiagramBuild(ulong Sequence, GraphFilter Filter, LayoutForces Forces, GraphDiagramModel? Model, string? Error);
+
+    /// <summary>The refresh's answer (Term G6): null when the gate refused;
+    /// a null frame when the generation is unchanged; else the frame and the
+    /// three reads; a failure carried as a value (IGQ-3).</summary>
+    private sealed record GraphDiagramRefresh(LayoutFrame? Frame, GraphDiagramTopologyRead? Read, Exception? Failure);
+
+    private static readonly Lazy<GraphConfig> DefaultConfig = new(SlateUniffiMethods.GraphConfigDefault);
+
+    /// <summary>The mac's <c>layoutForces</c>: the persisted forces onto the
+    /// kernel's.</summary>
+    internal static LayoutForces ForcesOf(GraphForcesConfig forces)
+    {
+        ArgumentNullException.ThrowIfNull(forces);
+        return new LayoutForces((float)forces.Center, (float)forces.Repel, (float)forces.Link, (float)forces.LinkDistance);
+    }
+
+    private GraphConfig CurrentConfig => _preferences?.CurrentConfig ?? DefaultConfig.Value;
+
+    private LayoutForces CurrentForces() => ForcesOf(CurrentConfig.Forces);
+
+    /// <summary>
+    /// Term G2 — the build is a load through the scheduler: the sequence
+    /// bumped and captured; the filter, the forces and core's defaults
+    /// captured on the dispatcher; ONE compute crossing <c>StartGraphLayout</c>
+    /// then the four reads THROUGH the gate — the model constructed ON THE
+    /// POOL around the fresh handle, so the gate is born with it (IGT-1,
+    /// IGT-2) — and REGISTERED in the unseated set under the document's lock,
+    /// or retired at once when the document is already retired under it; a
+    /// failure returns the humanised message and no model.
+    /// </summary>
+    private void BuildDiagram()
+    {
+        ulong sequence = ++_diagramSeq;
+        GraphFilter filter = ViewState.Filter;
+        LayoutForces forces = CurrentForces();
+        var config = new LayoutConfig();
+        DiagramError = null;
+        DiagramLoading = true;
+        StartWorkAlwaysAsync(
+            () =>
+            {
+                GraphDiagramModel? model = null;
+                try
+                {
+                    lock (CrossingsForTests)
+                    {
+                        CrossingsForTests["start_graph_layout"]++;
+                    }
+                    // The fresh handle flows straight into the model's constructor:
+                    // no raw session exists outside a model at any instant.
+                    model = new GraphDiagramModel(
+                        _session.StartGraphLayout(filter, forces, config),
+                        filter,
+                        forces,
+                        sequence,
+                        StartWorkAlwaysAsync,
+                        () => _motion.ReduceMotion,
+                        CrossingsForTests);
+                    GraphDiagramTopologyRead? read = model.WithSession(
+                        session =>
+                        {
+                            model.Count("layout_node_ids");
+                            model.Count("layout_edges");
+                            model.Count("layout_node_metadata");
+                            model.Count("layout_generation");
+                            return new GraphDiagramTopologyRead(session.NodeIds(), session.Edges(), session.NodeMetadata(), session.Generation());
+                        },
+                        null);
+                    model.Adopt(read ?? throw new InvalidOperationException("a fresh model refused its own build"));
+                    FetchGateForTests?.Invoke();
+                }
+                catch (VaultException exception)
+                {
+                    model?.Retire();
+                    return new GraphDiagramBuild(sequence, filter, forces, null, HumanReadable(exception));
+                }
+                catch (Exception exception) when (exception is InvalidOperationException or System.IO.IOException)
+                {
+                    model?.Retire();
+                    return new GraphDiagramBuild(sequence, filter, forces, null, HumanReadable(exception));
+                }
+                lock (_diagramLock)
+                {
+                    if (_retired)
+                    {
+                        // Retired at once: the gate frees the handle, nothing admitted.
+                        model.Retire();
+                        return new GraphDiagramBuild(sequence, filter, forces, null, null);
+                    }
+                    _ = _unseatedBuilds.Add(model);
+                }
+                DiagramRegisteredGateForTests?.Invoke();
+                return new GraphDiagramBuild(sequence, filter, forces, model, null);
+            },
+            InstallBuild);
+    }
+
+    /// <summary>Term G2's apply: the model out of the set; installed ONLY when
+    /// the document is live, seated, still in Diagram mode, the sequence the
+    /// captured one AND the captured filter the view state's NOW (IGQ-2) —
+    /// else retired, and on a filter refusal built once more under the
+    /// current filter; the forces re-read at the install; a failure installs
+    /// the error state and no model.</summary>
+    private void InstallBuild(GraphDiagramBuild build)
+    {
+        GraphDiagramModel? model = build.Model;
+        if (model is not null)
+        {
+            lock (_diagramLock)
+            {
+                _ = _unseatedBuilds.Remove(model);
+            }
+        }
+        if (_retired || build.Sequence != _diagramSeq || !_isSeated() || ViewState.Mode != GraphSurfaceMode.Diagram)
+        {
+            // Superseded, torn down, retired or unseated: the gate frees the handle.
+            model?.Retire();
+            return;
+        }
+        if (model is null)
+        {
+            DiagramLoading = false;
+            DiagramError = build.Error;
+            NotifyDiagramAvailabilityChanged();
+            return;
+        }
+        if (build.Filter != ViewState.Filter)
+        {
+            // IGQ-2: the guard, not the trigger, refuses the stale build — one
+            // rebuild under the current filter, its own sequence.
+            model.Retire();
+            BuildDiagram();
+            return;
+        }
+        LayoutForces forces = CurrentForces();
+        if (forces != build.Forces)
+        {
+            // PR E's edit during the build is not lost.
+            _ = model.SetForces(forces);
+        }
+        _diagramModel = model;
+        model.Driver.Converged += OnSettleConverged;
+        DiagramLoading = false;
+        HasLiveDiagram = true;
+        OpenEpoch();
+        model.Driver.StartSettle();
+        NotifyDiagramAvailabilityChanged();
+    }
+
+    /// <summary>Term G6's rebuild: the live model torn down (Term G7) or the
+    /// build in flight superseded, then Term G2 under the current filter.</summary>
+    private void RebuildDiagram()
+    {
+        DropModel();
+        BuildDiagram();
+    }
+
+    /// <summary>Term G7 in order: the settle run's token cancelled, the settle
+    /// announcement disarmed, the readback seam cleared, the model dropped
+    /// from the document, then the gate RETIRED — the handle freed at the
+    /// count's zero, at once when nothing is in flight.</summary>
+    private void DropModel()
+    {
+        if (_diagramModel is not { } model)
+        {
+            return;
+        }
+        model.Driver.Stop();
+        SettleAnnouncementArmed = false;
+        Navigator?.InstallDiagramReadback(null);
+        model.Driver.Converged -= OnSettleConverged;
+        _diagramModel = null;
+        _epoch = null;
+        _refreshRunning = false;
+        _refreshAgain = false;
+        HasLiveDiagram = false;
+        model.Retire();
+    }
+
+    /// <summary>Term G3: the epoch key — the model, its generation, the view
+    /// state's query and the topology-relevant config (its groups; IGT-4) —
+    /// compared by value; a new key fetches the topology ONCE through the
+    /// scheduler. A display change and a verbosity change never reach here.</summary>
+    private void OpenEpoch()
+    {
+        if (_diagramModel is not { } model)
+        {
+            return;
+        }
+        var query = new GraphVisibilityQuery(ViewState.Filter, ViewState.NameQuery, ViewState.KindOnly);
+        GraphGroup[] groups = [.. ViewState.Groups];
+        if (_epoch is { } current
+            && ReferenceEquals(current.Model, model)
+            && current.Generation == model.Generation
+            && current.Query == query
+            && current.Groups.AsSpan().SequenceEqual(groups))
+        {
+            return;
+        }
+        _epoch = (model, model.Generation, query, groups);
+        FetchTopology(model, ++_epochSeq, query, CurrentConfig with { Groups = groups });
+    }
+
+    /// <summary>Term G3's compute crosses <c>GraphTopology</c>; the apply
+    /// accepts the record only when its generation equals the model's
+    /// (design A) and the epoch is still current — else drops it and leaves
+    /// the previous epoch's set standing until the refresh adopts.</summary>
+    private void FetchTopology(GraphDiagramModel model, ulong epoch, GraphVisibilityQuery query, GraphConfig config)
+    {
+        StartWorkAlwaysAsync(
+            () =>
+            {
+                try
+                {
+                    lock (CrossingsForTests)
+                    {
+                        CrossingsForTests["graph_topology"]++;
+                    }
+                    return (GraphTopology?)_session.GraphTopology(query, config);
+                }
+                catch (VaultException)
+                {
+                    return null;
+                }
+            },
+            topology =>
+            {
+                if (topology is null || _retired || !ReferenceEquals(_diagramModel, model) || epoch != _epochSeq || topology.Generation != model.Generation)
+                {
+                    return;
+                }
+                model.Topology = topology;
+                DiagramTopologyChanged?.Invoke();
+            });
+    }
+
+    /// <summary>Term G6's refresh, from the probe's one line: ONE in flight per
+    /// model — a probe during it sets RefreshAgain, which every terminal path
+    /// consumes; the compute crosses <c>Refresh</c> then, on a non-null
+    /// answer, the three reads (IGS-3), a failure caught and returned as a
+    /// value (IGQ-3).</summary>
+    private void RefreshDiagram()
+    {
+        if (_retired || _diagramModel is not { } model)
+        {
+            return;
+        }
+        if (_refreshRunning)
+        {
+            _refreshAgain = true;
+            return;
+        }
+        _refreshRunning = true;
+        StartWorkAlwaysAsync(
+            () => model.WithSession(
+                session =>
+                {
+                    try
+                    {
+                        // The fetch gate's throw is the injected failure (D-5).
+                        FetchGateForTests?.Invoke();
+                        model.Count("layout_refresh");
+                        LayoutFrame? frame = session.Refresh();
+                        if (frame is null)
+                        {
+                            return new GraphDiagramRefresh(null, null, null);
+                        }
+                        model.Count("layout_node_ids");
+                        model.Count("layout_edges");
+                        model.Count("layout_node_metadata");
+                        return new GraphDiagramRefresh(
+                            frame,
+                            new GraphDiagramTopologyRead(session.NodeIds(), session.Edges(), session.NodeMetadata(), frame.Generation),
+                            null);
+                    }
+                    catch (VaultException exception)
+                    {
+                        return new GraphDiagramRefresh(null, null, exception);
+                    }
+                },
+                null),
+            answer => ApplyRefresh(model, answer));
+    }
+
+    /// <summary>Test seam (D-5): a refresh issued without the probe's
+    /// comparison — the four terminal paths' facts drive it.</summary>
+    internal void RefreshDiagramForTests() => RefreshDiagram();
+
+    /// <summary>Term G6's apply: adopts ONLY when the answer's generation is
+    /// NEWER than the model's (monotonic), pruning the pins the topology
+    /// lost, restarting the settle and opening a new epoch; an unchanged, a
+    /// non-monotonic, a refused or a failed answer adopts nothing — the
+    /// failure logged; then RefreshAgain consumed on EVERY path.</summary>
+    private void ApplyRefresh(GraphDiagramModel model, GraphDiagramRefresh? answer)
+    {
+        if (_retired || !ReferenceEquals(_diagramModel, model))
+        {
+            // Torn down meanwhile: the drop reset the refresh's pair.
+            return;
+        }
+        _refreshRunning = false;
+        if (answer is { Failure: { } failure })
+        {
+            HostLog.Write(HostDiagnosticEvent.GraphLayoutRefreshFailed, failure);
+        }
+        else if (answer is { Frame: { } frame, Read: { } read } && frame.Generation > model.Generation)
+        {
+            model.Adopt(read);
+            OpenEpoch();
+            model.Driver.StartSettle();
+        }
+        if (_refreshAgain)
+        {
+            _refreshAgain = false;
+            RefreshDiagram();
+        }
+    }
+
+    /// <summary>Term G4's settle line: spoken at convergence ONLY when armed.</summary>
+    private void OnSettleConverged()
+    {
+        if (!SettleAnnouncementArmed)
+        {
+            return;
+        }
+        SettleAnnouncementArmed = false;
+        AnnounceLayoutSettled();
+    }
+
+    /// <summary>Term G4: a flip while settling restarts the settle (the mac's
+    /// <c>motionFlip</c>) — on the owner context, the channel's thread being
+    /// the system's.</summary>
+    private void OnMotionChanged() =>
+        Post(() =>
+        {
+            if (!_retired && _diagramModel is { Driver.IsSettling: true } model)
+            {
+                model.Driver.StartSettle();
+            }
+        });
+
+    /// <summary>Term G6: the backend filter's change while in Diagram mode is
+    /// a REBUILD, whether a model is live or a build is in flight; Term G3: a
+    /// needle, a kind overlay or a groups change is a new epoch.</summary>
+    private void OnViewStateChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (_retired || ViewState.Mode != GraphSurfaceMode.Diagram)
+        {
+            return;
+        }
+        switch (e.PropertyName)
+        {
+            case nameof(GraphViewState.Filter):
+                RebuildDiagram();
+                break;
+            case nameof(GraphViewState.NameQuery):
+            case nameof(GraphViewState.KindOnly):
+            case nameof(GraphViewState.Groups):
+                OpenEpoch();
+                break;
+            default:
+                break;
+        }
+    }
+
+    /// <summary>The mac's <c>humanReadable</c> arms reachable from the build
+    /// (the search overlay's twin): the vault messages pass through.</summary>
+    private static string HumanReadable(Exception failure) => failure switch
+    {
+        VaultException.Io io => io.message,
+        VaultException.Db db => db.message,
+        VaultException.InvalidQuery invalid => $"Search query is invalid: {invalid.message}",
+        VaultException.Unsupported unsupported => $"{unsupported.feature} is not implemented yet.",
+        _ => failure.Message,
+    };
 
     // --- The six announcement seams of the diagram (D-1): each rides the
     // effective-gated boundary AnnounceIfEffective ------------------------------
@@ -1230,6 +1678,13 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
                 {
                     return;
                 }
+                // W6-2 PR D (Term G6, IGQ-6): the probe's own comparison — a
+                // generation the live model lacks refreshes the layout; an
+                // equal one issues no Refresh crossing.
+                if (_diagramModel is { } diagram && generation != diagram.Generation)
+                {
+                    RefreshDiagram();
+                }
                 GraphPublication held = Publication;
                 if (held.HoldsSnapshot)
                 {
@@ -1330,12 +1785,34 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// announcer drops its pending lines, the view state resets.</summary>
     internal void Retire()
     {
-        _retired = true;
+        // W6-2 PR D (Term G2, IGT-1): the flip and the sweep of the unseated
+        // builds are ONE transition under the diagram lock — a build's compute
+        // registers before it (and is swept) or reads the flag after it (and
+        // retires itself); an apply the retired scheduler withdraws leaves
+        // nothing behind.
+        GraphDiagramModel[] unseated;
+        lock (_diagramLock)
+        {
+            _retired = true;
+            unseated = [.. _unseatedBuilds];
+            _unseatedBuilds.Clear();
+        }
         _seq++;
         _request = null;
         SetCurrent(null);
-        // W6-2 PR D (Term G7): the diagram torn down with the document.
+        // W6-2 PR D (Term G7): the diagram torn down with the document, the
+        // unseated builds retired, the channels released.
         TeardownDiagram();
+        foreach (GraphDiagramModel build in unseated)
+        {
+            build.Retire();
+        }
+        ViewState.PropertyChanged -= OnViewStateChanged;
+        _motion.Changed -= OnMotionChanged;
+        if (_ownsMotion)
+        {
+            _motion.Dispose();
+        }
         // C-8: the table's seam cleared — Where-am-I is refused with no seated
         // document — and the availability re-evaluated.
         Navigator?.ClearTableReadback(_tableReadback);

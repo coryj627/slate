@@ -104,6 +104,11 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>Test seam: how many funnel calls started a graph load.</summary>
     internal int GraphLoadsForTests { get; private set; }
 
+    /// <summary>Test seam (W6-2 PR D, D-4): the motion policy the next seated
+    /// document reads — null seats the system's (the animation-effects
+    /// preference, which a test host cannot assume).</summary>
+    internal GraphMotionPolicy? GraphMotionPolicyForTests { get; set; }
+
     private RelayCommand? _openGraphCommand;
 
     /// <summary>`slate.graph.openTab` (contract A-12): the palette's and the
@@ -129,6 +134,9 @@ internal sealed partial class WorkspaceViewModel
             {
                 _graphViewState.ApplyQuery(GraphPreferencesViewModel.VisibilityQueryOf(_graphPreferences.CurrentConfig.Filters));
             }
+            // W6-2 PR D (Term M1, DD-18): a persisted Diagram mode builds at
+            // the seat, under the re-applied query, and speaks no mode line.
+            _graphDocument.EnsureDiagram();
         }
         tab.AttachGraphDocument(_graphDocument);
     }
@@ -231,7 +239,10 @@ internal sealed partial class WorkspaceViewModel
             // the document, as the canvas surface does.
             navigator: _graphNavigator,
             // C-9: the live level and its change.
-            preferences: _graphPreferences);
+            preferences: _graphPreferences,
+            // W6-2 PR D (Term G4, DD-9): the system's motion policy unless a
+            // fact injected one before the seat.
+            motionPolicy: GraphMotionPolicyForTests);
         created = document;
         document.OpenRowFromSurface = (row, target) => OpenGraphRowFromSurface(row.Path!, target);
         document.ShowConnectionsFromSurface = row => ReRootGraphRowFromSurface(row);

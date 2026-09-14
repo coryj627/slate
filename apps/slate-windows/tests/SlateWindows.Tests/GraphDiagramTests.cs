@@ -23,7 +23,7 @@ namespace SlateWindows.Tests;
 /// </summary>
 public sealed partial class GraphDiagramTests
 {
-    private sealed class Host : IDisposable
+    internal sealed class Host : IDisposable
     {
         public FixtureVault Vault { get; }
         public VaultSession Session { get; }
@@ -43,6 +43,9 @@ public sealed partial class GraphDiagramTests
                 _ => { },
                 startInteractionBackgroundWork: false,
                 announceRendered: line => GraphLines.Add(line.Text));
+            // D-4: animation ON unless a fact says otherwise — the system's
+            // preference on a test box is not the facts' to assume.
+            Workspace.GraphMotionPolicyForTests = new GraphMotionPolicy(() => false);
         }
 
         public GraphDocumentViewModel Open()
@@ -70,7 +73,7 @@ public sealed partial class GraphDiagramTests
         }
     }
 
-    private static void RunSta(Action body)
+    internal static void RunSta(Action body)
     {
         Exception? failure = null;
         var thread = new Thread(() =>

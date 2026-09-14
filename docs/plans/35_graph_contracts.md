@@ -13444,6 +13444,182 @@ persisted seat's build (Term M1's second half) is T2's, since it needs
 the build. MUTATIONS, each restored byte for byte, each caught by the
 named fact: the save skipped by `SetMode`, the mode line spoken twice, the mode line dropped, the seed line dropped, a planted second writer of Mode (the census), the retirement guard dropped, the table left visible under Diagram mode, a user switch raising no landing, the effective edge raising no availability, the Diagram item disabled — ten of ten caught (`gD-mutations.py`, the T1 entries).
 
+**TGD-2 — T2: rule G's lineage — the model on the pool behind ONE gate,
+the build through the scheduler, the epoch, the driver, Reduce Motion, the
+refresh through the probe, the rebuild, the teardown (D-2..D-6; Terms
+G1–G8; D-15 ii, iii, xiv; DD-2, DD-3, DD-9, DD-10, DD-16, DD-19).** THE
+MODEL: `Graph/GraphDiagramModel.cs` — the private `LayoutSession`, the
+filter, the forces, the build sequence, the ids in slot order, the
+metadata by id, the edges, the generation, the pins, the accepted
+`Topology`, the position map of the last frame; `WithSession<T>(call,
+refused)` the ONE gate (Term G7: refused under the lock once retired,
+the count incremented, the call outside the lock, the handle freed at
+the count's zero when retired); `Retire()` (idempotent — the refusal,
+the sweep and the teardown may each reach it); FreeHandle the ONE
+disposal site; Adopt (the build's seed and the refresh's adoption, the
+lost pins pruned); AdoptFrame (Term G5's map); TogglePin and SetForces
+(the synchronous mutators THROUGH the gate — false once retired, IGS-2).
+THE DRIVER: `Graph/GraphLayoutDriver.cs` — born in the model's
+constructor (D-15 ii), handed the document's StartWorkAlwaysAsync as its
+Scheduler delegate; each step ONE compute `Tick(20)` through the gate
+whose apply installs the frame iff its generation is the model's and its
+buffer pairs with the ids (Term G5), then restarts the one-shot
+`DispatcherTimer` at 16 ms (built on the owner dispatcher in the first
+apply, the ONE named timer, DD-10); under Reduce Motion ONE
+`RunToConvergence(cancel)` and one frame; every run a `CancelToken`
+cancelled at stop and disposed after its last compute returns (the Run
+record's bookkeeping); an apply that finds its run cancelled or replaced
+applies nothing; the Converged event the document's settle line rides.
+THE MOTION POLICY: `Graph/GraphMotionPolicy.cs` — the system's
+`SystemParameters.ClientAreaAnimation` false, observed through the
+static channel until the document's retirement disposes it; a fact
+injects its own read and flips it. THE DOCUMENT: `EnterDiagram` calls
+BuildDiagram — the sequence bumped and captured, the filter, the forces
+(`CurrentConfig.Forces` onto the kernel's through ForcesOf) and core's
+`LayoutConfig` captured on the dispatcher; ONE compute crossing
+`StartGraphLayout` whose result flows STRAIGHT into the model's
+constructor (IGT-1, IGT-2: no raw session outside a model at any
+instant), the four reads through the gate, the fetch-gate seam, then the
+REGISTRATION in the unseated set under the diagram lock — or the
+retirement at once when the document is already retired under it; the
+failures (`VaultException`, InvalidOperationException, IOException)
+retire the model and carry the humanised message (the search overlay's
+`HumanReadable` arms). InstallBuild: the model out of the set; refused —
+retired through the gate — unless live, seated, still Diagram and the
+captured sequence; a failure installs DiagramError and no model; a
+captured filter that differs from the view state's NOW retires the model
+and builds once more (IGQ-2); the forces re-read at the install and
+applied through `SetForces` when they differ; the install (the model
+seated, `HasLiveDiagram`, the Converged subscription, the first epoch,
+the settle started, the availability edge). RebuildDiagram (Term G6's
+rebuild) and the ONE teardown order DropModel (the token cancelled, the
+arm cleared, the readback seam cleared, the model dropped, the epoch and
+the refresh pair reset, the gate RETIRED). `TeardownDiagram` bumps the
+sequence first (an in-flight build superseded). `Retire()` flips
+`_retired` and sweeps the unseated set under the diagram lock in ONE
+transition, tears down, retires the swept builds, unsubscribes the view
+state and the motion channel. OpenEpoch: the key (the model, its
+generation, the view state's query, the view state's `Groups` — a
+`GraphGroup[]` compared by value, IGT-4); FetchTopology's compute
+crosses `GraphTopology(query, config with the view state's groups)`; the
+apply accepts only when the generation equals the model's and the epoch
+is current, raising DiagramTopologyChanged; else drops. The document
+observes the view state (Term G6: `Filter` under Diagram → the rebuild,
+live model or build in flight; Term G3: `NameQuery`, `KindOnly`,
+`Groups` → a new epoch). The probe's apply gains ITS ONE LINE: a
+generation the live model lacks → RefreshDiagram; equal → nothing
+(IGQ-6). RefreshDiagram: one in flight per model, a second request sets
+RefreshAgain; the compute through the gate: the fetch-gate seam, then
+`Refresh()`, then on a non-null frame the three reads (IGS-3), a
+`VaultException` caught and returned as a value; ApplyRefresh adopts
+only a NEWER generation (monotonic), restarts the settle, opens the
+epoch; a failure is logged through `HostLog` as the new
+HostDiagnosticEvent GraphLayoutRefreshFailed; RefreshAgain consumed on
+every terminal path. SettleAnnouncementArmed (PR E's flag) and
+OnSettleConverged (spoken when armed, disarmed after); OnMotionChanged
+posts a restart while settling. THE WORKSPACE: `AttachGraphDocumentTo`
+calls EnsureDiagram after the persisted query's re-apply (Term M1's
+second half, DD-18: a persisted Diagram mode builds at the seat and
+speaks no mode line — the C-10 re-apply's own filter change may start
+the build first; EnsureDiagram then does nothing); the seam
+GraphMotionPolicyForTests the next seated document reads. THE
+PREFERENCES: `SetForces(GraphForcesConfig)` (Term W7's trigger for PR
+E's edit; a no-op for the current forces) — landed here because Term
+G2's install re-read needs an edit to observe. CROSSINGS: the counter
+gains start_graph_layout, layout_node_ids, layout_edges,
+layout_node_metadata, layout_generation, layout_tick,
+layout_run_to_convergence, layout_refresh, layout_pin_node,
+layout_unpin_node, layout_set_forces, graph_topology; the model counts
+through the document's one dictionary. FACTS (GraphDiagramTests, the
+Lineage partial — twenty-eight): D-2's nine —
+EnteringDiagramBuildsOneLayoutFromTheViewStatesFilterAndThePersistedForces,
+ABuildLandsOnlyForItsSequenceAndDiagramMode,
+AFailedBuildInstallsTheErrorStateAndNoModel, TheBuildReadsNoTableSnapshot,
+AFilterChangeDuringTheBuildRefusesItAndRebuildsOnce,
+AForcesEditDuringTheBuildIsAppliedAtTheInstall,
+AWithdrawnBuildApplyLeavesNoHandle,
+ABuildThatReturnsIntoARetiredDocumentRetiresItself,
+NoCrossingHappensPerFrameOrPan; D-3's three —
+TheTopologyIsFetchedOncePerEpochWhileSettling,
+ATopologyFromAnotherGenerationIsDroppedAndTheSetEmptiesUntilTheRefreshAdopts,
+AQueryUnderAnotherFilterIsNeverIssuedAgainstTheModel; D-4's nine —
+ASettleIsOneTickPerStepThroughTheSchedulerUntilConverged,
+AFrameFromAnotherGenerationOrLengthIsDropped,
+ReduceMotionAppliesOneConvergedFrame,
+AMotionFlipWhileSettlingRestartsTheSettle,
+TheSettledLineSpeaksOnlyWhenArmedAndTeardownDisarms,
+ACancelledRunAppliesNothingAndTheSessionIsFreedWhenTheInFlightCallReturns,
+AStepQueuedBeforeTeardownThatStartsAfterItIsRefusedAtTheGateAndTheDrainCompletes,
+AnAdmittedCallOutlivesTheTeardownAndFreesTheHandleOnReturn,
+EachRefusedShapeIsItsOwn, APinOrAForcesEditOnARetiredModelIsRefusedSilently;
+D-5's six — AProbeThatMovedTheGenerationRefreshesTheLayoutAndAdoptsMonotonically,
+AProbeWhoseGenerationEqualsTheModelsIssuesNoRefresh,
+AProbeDuringARefreshRunsOneMoreRefreshAfterEveryTerminalPath,
+ARefreshFailureIsLoggedAndTheModelStands, ARefreshPrunesAPinTheTopologyLost,
+ABackendFilterChangeUnderALiveModelRebuildsIt; D-6's four —
+TheSwitchToTableRetiresTheGateAndFreesTheHandle,
+RetirementTearsDownTheDiagram, TheWorkspaceDrainCoversTheLastAdmittedCallsReturn,
+and TheLayoutSessionCountReturnsToBaseline in `HandleLifetimeCensus`
+(twenty rounds against the FFI's live-object counter, D-15 xiv).
+CENSUSES (`GraphNavigatorCensus`): the load-starting fact's starters are
+now BuildDiagram, FetchTopology, Issue, Probe, RefreshDiagram (a
+method-group reference to the scheduler counts as a start; an
+unsubscription's operand no longer wires a path), the reaching closure
+pinned (the constructor reaches through the view-state handler it
+subscribes — a filter change under Diagram rebuilds), the outside
+callers pinned (`SetMode` from the surface's choice alone, EnsureDiagram
+from the attach funnel alone, the rest from nowhere) and the driver's
+Scheduler invoked in Step and Converge alone, Step from StartSettle and
+the cadence's tick, Converge from StartSettle, StartSettle from the
+install, the refresh's adoption and the motion flip; the crossings fact
+lists the layout names by site — `StartGraphLayout` and the four reads
+in BuildDiagram, `GraphTopology` in FetchTopology, `Refresh` and its
+three reads in RefreshDiagram, `Tick` in Step, `RunToConvergence` in
+Converge, `PinNode`/`UnpinNode` in the model's TogglePin, `SetForces` in
+the model's SetForces — and the three timers under Graph/ by site (the
+relay's window, the preferences' save, the driver's cadence); NEW:
+ExactlyOneDiagramModelIsConstructedInTheBuildAndOneDriverPerModel (D-15
+ii: the model in BuildDiagram's compute lambda outside any repeatable
+construct, the driver in the model's constructor) and
+TheLayoutSessionIsReachableThroughTheGateAloneAndNothingCatchesItsDisposal
+(D-15 iii's gate arm: the field private and readonly, referenced by the
+constructor, WithSession and FreeHandle alone, FreeHandle called by
+WithSession and Retire alone; every layout-session invocation under
+Graph/ has as receiver the parameter of a lambda that is WithSession's
+first argument; the ONE session-typed expression outside the model is
+StartGraphLayout's result as the model constructor's argument; no other
+session-typed declaration, property or parameter under Graph/; no
+handler names ObjectDisposedException). DEVIATIONS: (i) Term G4 gains
+a fifth ending — the tick loop ends at the kernel's own ceiling
+(`LayoutConfig.MaxIterations`, the one `RunToConvergence` honours),
+counted per run: a multi-node graph may jitter at the temperature floor
+and never meet the predicate (graph_layout.rs's own note beside its
+convergence test), and an unbounded 16 ms loop would tick forever; the
+Converged event fires at either ending, so an armed settle line speaks
+once either way. (ii) Term G8's synchronous mutators sit on the MODEL
+(TogglePin, SetForces) so the crossings census names the model's members
+as their sites; Term N7's renderer action (T4) calls TogglePin. (iii)
+D-5's "stale drop" arrangement is unreachable by construction — one
+refresh in flight per model and a monotonic kernel refresh — and is
+pinned by the adopt's `>` guard and the teardown's reset; the fact
+drives three arrangements (adopt, null, failure) through the new
+RefreshDiagramForTests seam. (iv) D-3's display-change arm waits for PR
+E's display API; the fact pins the verbosity arm and the same-key
+no-op. (v) The visible-set facts
+(TheNeedleAndTheKindOverlayNarrowTheVisibleSetToTheTables,
+NeighbourContentExcludesFilteredOutNodes,
+TheFirstNonEmptyFrameFitsOnceAndLaterFramesDoNot) are T3's (the
+renderer's set and fit) and AGenerationChurnKeepsTheSelectionByStableKey
+is T4's (Term N1). (vi) The settle-line fact re-settles through the
+driver directly (PR E's forces edit lands the shell caller). (vii) This
+box reports ClientAreaAnimation false, so the workspace host injects
+animation ON through GraphMotionPolicyForTests; the system policy's
+reading is a fact of its own (Reduce Motion injected true). (viii) The
+document's HumanReadable is the search overlay's twin rather than the
+table's raw `exception.Message` — Term G2 asks for the humanised
+message. MUTATIONS, each restored byte for byte, each caught by the
+named fact: the gate admitting a retired model, the handle freed with a call in flight, the count never freeing, the install ignoring the sequence, the registration dropped, the forces not re-read at the install, the epoch key ignoring the groups, the topology apply accepting another generation, the frame currency dropped, Reduce Motion ignored, the settle line spoken unarmed, the probe refreshing on every generation, RefreshAgain not consumed on the null path, the pin prune dropped, the teardown skipping the run's stop, a planted bare call on the session field, a planted catch of the disposal, a held session local in the build, a planted Task.Run under Graph/, a second model construction, a load starter outside the closed list — twenty-one of twenty-one caught (`gD-mutations.py`, the T2 entries).
+
 ### Tests that pin PR D (revision 5's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14
