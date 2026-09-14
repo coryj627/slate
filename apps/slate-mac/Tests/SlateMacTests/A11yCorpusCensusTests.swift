@@ -588,6 +588,9 @@ final class A11yCorpusCensusTests: XCTestCase {
             .graph(event: .graphBlocked(reason: .loadFailed(message: "io error"))),
             .graph(event: .graphBlocked(reason: .connectionsLoadFailed(message: "io error"))),
             .graph(event: .graphBlocked(reason: .noteCreateFailed(message: "exists"))),
+            .canvas(event: .canvasLoadedReadOnly(available: 3)),
+            .canvas(event: .canvasLoadedReadOnly(available: 1)),
+            .canvas(event: .canvasLoadedReadOnly(available: 0)),
         ]
     }
 

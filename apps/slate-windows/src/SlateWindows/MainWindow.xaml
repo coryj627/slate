@@ -3838,20 +3838,28 @@
                     KeyboardNavigation.TabNavigation="Cycle"
                     KeyboardNavigation.ControlTabNavigation="Cycle"
                     AutomationProperties.AutomationId="CanvasCardEditorSheet"
-                    AutomationProperties.Name="Card editor"
+                    AutomationProperties.Name="{Binding SheetName}"
                     AutomationProperties.IsDialog="True">
                 <StackPanel>
                     <TextBlock Text="{Binding Title}"
                                FontWeight="SemiBold"
                                Margin="0,0,0,8" />
                     <TextBox Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
+                             IsReadOnly="{Binding InspectionOnly}"
                              AcceptsReturn="True"
                              MinHeight="120"
                              TextWrapping="Wrap"
                              VerticalScrollBarVisibility="Auto"
                              AutomationProperties.AutomationId="CanvasCardEditorText"
-                             AutomationProperties.Name="Card text. Escape saves and returns to the canvas."
-                             AutomationProperties.HelpText="Escape commits; discard with the editor's own undo first." />
+                             AutomationProperties.Name="{Binding TextName}"
+                             AutomationProperties.HelpText="{Binding EditorHint}" />
+                    <Button Content="Close"
+                            HorizontalAlignment="Right"
+                            Margin="0,8,0,0"
+                            Visibility="{Binding InspectionOnly, Converter={StaticResource BooleanToVisibilityConverter}}"
+                            Command="{Binding DataContext.Workspace.CloseCanvasInspectionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                            AutomationProperties.AutomationId="CanvasInspectionClose"
+                            AutomationProperties.Name="Close card text" />
                 </StackPanel>
             </local:AutomationLandmarkBorder>
             <local:AutomationLandmarkBorder x:Name="CanvasCardPickerOverlay"

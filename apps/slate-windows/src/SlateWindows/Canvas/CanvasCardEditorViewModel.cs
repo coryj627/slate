@@ -26,7 +26,7 @@ internal sealed class CanvasCardEditorViewModel
         CanvasDocumentViewModel document,
         string nodeId,
         string title,
-        CanvasEditorSeed seed)
+        CanvasEditorSeed seed, bool inspectionOnly = false)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(nodeId);
@@ -34,6 +34,7 @@ internal sealed class CanvasCardEditorViewModel
         ArgumentNullException.ThrowIfNull(seed);
         _document = document;
         _seed = seed;
+        InspectionOnly = inspectionOnly;
         NodeId = nodeId;
         Title = title;
         Draft = seed.Text;
@@ -47,6 +48,18 @@ internal sealed class CanvasCardEditorViewModel
     /// held the seed, and Escape's no-changes arm closed over the
     /// difference. The authoring journey caught it.</summary>
     public string Title { get; }
+
+    public bool InspectionOnly { get; }
+
+    public string SheetName => InspectionOnly ? "Card text, read-only" : "Card editor";
+
+    public string TextName => InspectionOnly
+        ? "Card text, read-only. Escape closes and returns to the canvas."
+        : "Card text. Escape saves and returns to the canvas.";
+
+    public string EditorHint => InspectionOnly
+        ? "Select and copy text. Escape closes without changing the file."
+        : "Escape commits; discard with the editor's own undo first.";
 
     /// <summary>The working text. The real sheet binds the buffer
     /// session's document here; the model-level facts drive it
@@ -68,6 +81,16 @@ internal sealed class CanvasCardEditorViewModel
     /// never sees it.</summary>
     internal bool CommitOnEscape()
     {
+        if (InspectionOnly)
+        {
+            return true;
+        }
+        if (!string.Equals(Draft, _seed.Text, StringComparison.Ordinal) && _document.IsReadOnly)
+        {
+            // A recovered reload must not close over an existing draft.
+            _document.SpeakForEditor(new CanvasA11yEvent.CanvasMutationRefused(CanvasMutationRefusal.ReadOnly));
+            return false;
+        }
         if (string.Equals(Draft, _seed.Text, StringComparison.Ordinal))
         {
             _document.SpeakForEditor(
@@ -84,7 +107,6 @@ internal sealed class CanvasCardEditorViewModel
             _document.SpeakForEditor(new CanvasA11yEvent.CanvasSaveConflict());
             return false;
         }
-        _document.CanvasCommitCardEdit(NodeId, Draft);
-        return true;
+        return _document.CanvasCommitCardEdit(NodeId, Draft);
     }
 }

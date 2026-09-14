@@ -143,6 +143,10 @@ def mac_scan() -> dict[str, set[str]]:
         arms = family_arms(binding, fam) if kind == "record" else enum_arms(binding, fam)
         inner_arms[outer] = arms
     for path in sorted(MAC_SRC.rglob("*.swift")):
+        # Generated codec cases spell every event but are not host triggers.
+        # Their local presence must not change the committed evidence ledger.
+        if path.name == "slate_uniffi.swift" or "generated" in path.relative_to(MAC_SRC).parts:
+            continue
         text = path.read_text(encoding="utf-8", errors="replace")
         lines = text.split("\n")
         offsets = []

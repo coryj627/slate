@@ -57,9 +57,11 @@ internal sealed class CanvasPopulation
         IEnumerable<CanvasLoadWarning>? warnings,
         string? lastActivatedNode,
         CanvasScene? scene = null,
-        string contentHash = "")
+        string contentHash = "",
+        CanvasLoadDisposition disposition = CanvasLoadDisposition.Editable)
     {
         ContentHash = contentHash;
+        Disposition = disposition;
         Outline = CanvasModelCopy.Rows(outline);
         Table = CanvasModelCopy.Rows(table);
         Warnings = CanvasModelCopy.Ordered(warnings);
@@ -152,6 +154,11 @@ internal sealed class CanvasPopulation
     /// whose activation opened a card belongs to the graph it was found
     /// in, so a reload does not carry it forward.</summary>
     internal string? LastActivatedNode { get; }
+
+    /// <summary>The capability belongs to this exact loaded snapshot.</summary>
+    internal CanvasLoadDisposition Disposition { get; }
+
+    internal bool IsEditable => Disposition == CanvasLoadDisposition.Editable;
 
     /// <summary>The revision this load parsed — core's CAS basis from
     /// <c>CanvasOpenInfo.contentHash</c> (W6-1 §E TE-0). One load, one

@@ -95,7 +95,8 @@ internal sealed class CanvasMutationFunnel(
     private CanvasMutationAdmission AdmitAndAcquire(CanvasMutationOperation operation)
     {
         CanvasPublication now = slot.Current;
-        if (now.Retired || now.LoadState != CanvasLoadState.Ready)
+        if (now.Retired || now.LoadState != CanvasLoadState.Ready
+            || now.Loaded?.Population.IsEditable != true)
         {
             return CanvasMutationAdmission.NotReady;
         }
@@ -390,6 +391,8 @@ internal sealed class CanvasMutationFunnel(
         {
             CanvasLoadState.Loading => CanvasMutationRefusal.Opening,
             CanvasLoadState.ParseError => CanvasMutationRefusal.ReadOnly,
+            CanvasLoadState.Ready when now.Loaded?.Population.IsEditable == false =>
+                CanvasMutationRefusal.ReadOnly,
             CanvasLoadState.RetargetAbsent => CanvasMutationRefusal.RetargetFailed,
             _ => CanvasMutationRefusal.Unavailable,
         };

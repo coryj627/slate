@@ -933,3 +933,23 @@ fn apply_detached_refuses_a_degraded_parse() {
     .unwrap_err();
     assert!(matches!(err, ApplyError::NotACanvas(_)));
 }
+
+#[test]
+fn apply_detached_refuses_recovered_content_even_for_an_empty_action() {
+    let text = include_str!("../../tests/fixtures/canvas/recovered-readonly.canvas");
+    for ops in [
+        vec![],
+        vec![CanvasOp::DeleteNode {
+            id: "recovered-text".into(),
+        }],
+    ] {
+        let action = CanvasAction {
+            name: "must refuse".into(),
+            ops,
+        };
+        assert!(matches!(
+            apply_detached(text, &action),
+            Err(ApplyError::NotACanvas(_))
+        ));
+    }
+}

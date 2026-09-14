@@ -25,6 +25,8 @@ internal sealed class CanvasFakeLoadSource : ICanvasLoadSource
 
     internal bool Degraded { get; init; }
 
+    internal CanvasLoadDisposition Disposition { get; init; } = CanvasLoadDisposition.Editable;
+
     internal Exception? OpenFault { get; set; }
 
     internal Exception? ReadFault { get; set; }
@@ -74,7 +76,8 @@ internal sealed class CanvasFakeLoadSource : ICanvasLoadSource
         _ = Interlocked.Increment(ref _opens);
         Record($"open:{handle}");
         return new CanvasOpenInfo(
-            handle, (uint)Rows.Length, 0, Degraded, [], $"fake-basis-{handle}");
+            handle, (uint)Rows.Length, 0,
+            Degraded ? CanvasLoadDisposition.Unavailable : Disposition, [], $"fake-basis-{handle}");
     }
 
     public void Close(ulong handle)

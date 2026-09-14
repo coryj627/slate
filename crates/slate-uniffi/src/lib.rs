@@ -9466,6 +9466,9 @@ pub enum CanvasA11yEvent {
     CanvasLoadedDegraded {
         skipped: u32,
     },
+    CanvasLoadedReadOnly {
+        available: u32,
+    },
     CanvasEmptyOnboarding {
         new_card_chord: String,
         palette_chord: String,
@@ -9684,6 +9687,7 @@ impl From<CanvasA11yEvent> for core::a11y::CanvasA11yEvent {
                 reason: reason.into(),
             },
             F::CanvasLoadedDegraded { skipped } => C::CanvasLoadedDegraded { skipped },
+            F::CanvasLoadedReadOnly { available } => C::CanvasLoadedReadOnly { available },
             F::CanvasEmptyOnboarding {
                 new_card_chord,
                 palette_chord,
@@ -11564,13 +11568,31 @@ impl From<core::CanvasLoadWarning> for CanvasLoadWarning {
     }
 }
 
-/// Result of `open_canvas`. A `degraded` canvas is read-only (t0 §5).
+/// Capability of the opened canvas snapshot (t0 §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CanvasLoadDisposition {
+    Editable,
+    RecoveredReadOnly,
+    Unavailable,
+}
+
+impl From<core::CanvasLoadDisposition> for CanvasLoadDisposition {
+    fn from(disposition: core::CanvasLoadDisposition) -> Self {
+        match disposition {
+            core::CanvasLoadDisposition::Editable => Self::Editable,
+            core::CanvasLoadDisposition::RecoveredReadOnly => Self::RecoveredReadOnly,
+            core::CanvasLoadDisposition::Unavailable => Self::Unavailable,
+        }
+    }
+}
+
+/// Result of `open_canvas`. Only an Editable disposition permits writes.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct CanvasOpenInfo {
     pub handle: u64,
     pub node_count: u32,
     pub edge_count: u32,
-    pub degraded: bool,
+    pub disposition: CanvasLoadDisposition,
     pub warnings: Vec<CanvasLoadWarning>,
     /// The opened bytes' hash — the handle's CAS basis (W6-1 §E TE-0).
     pub content_hash: String,
@@ -11582,7 +11604,7 @@ impl From<core::CanvasOpenInfo> for CanvasOpenInfo {
             handle: i.handle,
             node_count: i.node_count,
             edge_count: i.edge_count,
-            degraded: i.degraded,
+            disposition: i.disposition.into(),
             warnings: i.warnings.into_iter().map(Into::into).collect(),
             content_hash: i.content_hash,
         }
@@ -15862,6 +15884,72 @@ mod canvas_mirror_tests {
     }
 
     #[test]
+    fn recovered_canvas_ffi_exposes_read_capability_and_refuses_editor_writes() {
+        for (core_disposition, ffi_disposition) in [
+            (
+                core::CanvasLoadDisposition::Editable,
+                CanvasLoadDisposition::Editable,
+            ),
+            (
+                core::CanvasLoadDisposition::RecoveredReadOnly,
+                CanvasLoadDisposition::RecoveredReadOnly,
+            ),
+            (
+                core::CanvasLoadDisposition::Unavailable,
+                CanvasLoadDisposition::Unavailable,
+            ),
+        ] {
+            assert_eq!(
+                CanvasLoadDisposition::from(core_disposition),
+                ffi_disposition
+            );
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let source =
+            include_str!("../../slate-core/tests/fixtures/canvas/recovered-readonly.canvas");
+        std::fs::write(tmp.path().join("recovered.canvas"), source).unwrap();
+        let session =
+            VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned()).unwrap();
+        let info = session.open_canvas("recovered.canvas".into()).unwrap();
+        assert_eq!(info.disposition, CanvasLoadDisposition::RecoveredReadOnly);
+        assert_eq!((info.node_count, info.edge_count), (3, 0));
+        assert_eq!(session.canvas_outline(info.handle).unwrap().len(), 3);
+        assert_eq!(session.canvas_table_rows(info.handle).unwrap().len(), 3);
+        assert_eq!(
+            session
+                .canvas_node_text(info.handle, "recovered-text".into())
+                .unwrap()
+                .as_deref(),
+            Some("Readable original text")
+        );
+        assert!(
+            session
+                .canvas_editor_seed(info.handle, "recovered-text".into())
+                .is_err()
+        );
+        assert!(
+            session
+                .canvas_apply(
+                    info.handle,
+                    CanvasAction {
+                        name: "No-op must refuse".into(),
+                        ops: vec![]
+                    }
+                )
+                .is_err()
+        );
+        let snapshot = session.canvas_current_text(info.handle).unwrap();
+        assert_eq!(snapshot.text, source);
+        assert_eq!(snapshot.content_hash, info.content_hash);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("recovered.canvas")).unwrap(),
+            source
+        );
+        session.close_canvas(info.handle);
+        assert!(session.canvas_outline(info.handle).is_err());
+    }
+
+    #[test]
     fn read_api_drives_over_the_ffi_wrapper() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -15873,7 +15961,7 @@ mod canvas_mirror_tests {
             .expect("open vault");
 
         let info = session.open_canvas("b.canvas".into()).expect("open canvas");
-        assert!(!info.degraded);
+        assert_eq!(info.disposition, CanvasLoadDisposition::Editable);
         assert_eq!(info.node_count, 9);
 
         let outline = session.canvas_outline(info.handle).unwrap();

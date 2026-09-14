@@ -32,6 +32,7 @@ enum CanvasNewFileThreadProbe {
 enum CanvasPreparedLoad: @unchecked Sendable {
     case ready(
         handle: UInt64,
+        disposition: CanvasLoadDisposition,
         warnings: [CanvasLoadWarning],
         outline: [CanvasOutlineRow],
         tableRows: [CanvasTableRow],
@@ -42,7 +43,7 @@ enum CanvasPreparedLoad: @unchecked Sendable {
     case failed(String)
 
     var retainedHandle: UInt64? {
-        guard case .ready(let handle, _, _, _, _, _) = self else { return nil }
+        guard case .ready(let handle, _, _, _, _, _, _) = self else { return nil }
         return handle
     }
 }
@@ -86,7 +87,7 @@ enum CanvasPreparedLoader {
             observe(.open, observer: observer)
             let info = try session.openCanvas(path: path)
             openedHandle = info.handle
-            if info.degraded {
+            if info.disposition == .unavailable {
                 let detail =
                     info.warnings.first { $0.kind == .parseFailed }?.detail
                     ?? "the file is not valid JSON Canvas"
@@ -102,6 +103,7 @@ enum CanvasPreparedLoader {
             transferredHandle = true
             return .ready(
                 handle: info.handle,
+                disposition: info.disposition,
                 warnings: info.warnings,
                 outline: outline,
                 tableRows: tableRows,
@@ -218,6 +220,29 @@ final class CanvasDocument: ObservableObject {
     }
 
     @Published private(set) var state: LoadState = .loading
+    /// Read capability and write capability are distinct. This value is fixed
+    /// for the installed native handle and changes only with a new load.
+    @Published private(set) var disposition: CanvasLoadDisposition = .unavailable
+    @Published private(set) var loadRevision: UInt64 = 0
+    private var announcedLoadRevision: UInt64?
+
+    var loadAnnouncement: CanvasA11yEvent? {
+        guard case .ready = state else { return nil }
+        if disposition == .recoveredReadOnly {
+            return .canvasLoadedReadOnly(available: UInt32(clamping: outline.count))
+        }
+        guard preservedItemCount > 0 else { return nil }
+        return .canvasLoadedDegraded(skipped: UInt32(clamping: preservedItemCount))
+    }
+
+    /// One announcement per installed snapshot, shared by split-pane views.
+    func takeLoadAnnouncement() -> CanvasA11yEvent? {
+        guard announcedLoadRevision != loadRevision, let event = loadAnnouncement else {
+            return nil
+        }
+        announcedLoadRevision = loadRevision
+        return event
+    }
     /// Depth-first outline rows in reading order (the structured
     /// equivalent every surface starts from).
     @Published private(set) var outline: [CanvasOutlineRow] = []
@@ -388,6 +413,8 @@ final class CanvasDocument: ObservableObject {
     /// place while a live document prepares off-main; parked documents keep
     /// this reservation until their next activation.
     private var retargetGeneration: UInt64 = 0
+    private var recoveryRetryBasis: String?
+    @Published private(set) var recoverySourceChanged = false
     @Published private var retargetPreparationPending = false
     @Published private var retargetPreparationInFlight = false
 
@@ -421,6 +448,7 @@ final class CanvasDocument: ObservableObject {
     /// snapshot, selection, viewport, mode, filter, and undo stacks remain
     /// visible and stable until an immutable prepared replacement is ready.
     func beginBatchRetarget(to path: String) -> CanvasRetargetReservation {
+        recoveryRetryBasis = nil
         retargetGeneration &+= 1
         let reservation = CanvasRetargetReservation(
             generation: retargetGeneration,
@@ -429,6 +457,14 @@ final class CanvasDocument: ObservableObject {
         self.path = path
         retargetPreparationPending = true
         retargetPreparationInFlight = false
+        return reservation
+    }
+
+    /// Retry the same file without changing the document's interaction identity.
+    func beginRecoveryRetry() -> CanvasRetargetReservation {
+        let basis = contentHash
+        let reservation = beginBatchRetarget(to: path)
+        recoveryRetryBasis = basis
         return reservation
     }
 
@@ -464,29 +500,20 @@ final class CanvasDocument: ObservableObject {
         }
         retargetPreparationInFlight = false
 
-        switch prepared {
-        case .ready(let preparedHandle, let preparedWarnings, let preparedOutline,
-            let preparedTableRows, let preparedScene, let preparedHash):
-            handle = preparedHandle
-            warnings = preparedWarnings
-            outline = preparedOutline
-            tableRows = preparedTableRows
-            scene = preparedScene
-            contentHash = preparedHash
-            targets = Dictionary(
-                uniqueKeysWithValues: preparedTableRows.map { ($0.nodeId, $0.target) })
-            neighborsCache = [:]
-            filterMatchCache = nil
-            state = .ready
+        if case .ready(_, _, _, _, _, _, let hash) = prepared,
+            let basis = recoveryRetryBasis, hash != basis
+        {
+            // Repair created a new source revision. Old inverses and drafts
+            // must never silently become edits against that repaired source.
+            undoStack = []
+            redoStack = []
+            recoverySourceChanged = true
+        }
+        installPreparedSnapshot(prepared, retainingSnapshotOnFailure: true)
+        if case .ready = prepared {
+            recoveryRetryBasis = nil
             retargetPreparationPending = false
-        case .degraded(_, let message):
-            // Keep the last good content visible and read-only. Activation can
-            // retry; no stale path handle is restored.
-            state = .retargetFailed(
-                "\(displayName) could not be read as a canvas. \(message)")
-            retargetPreparationPending = true
-        case .failed(let message):
-            state = .retargetFailed(message)
+        } else {
             retargetPreparationPending = true
         }
         return true
@@ -509,43 +536,10 @@ final class CanvasDocument: ObservableObject {
             session.closeCanvas(handle: stale)
             handle = nil
         }
-        do {
-            let info = try session.openCanvas(path: path)
-            warnings = info.warnings
-            if info.degraded {
-                // Degraded = read-only error state: nothing will use
-                // the handle, so release it immediately rather than
-                // retaining native resources until teardown (Codoki
-                // #608).
-                session.closeCanvas(handle: info.handle)
-                handle = nil
-                let detail =
-                    info.warnings.first { $0.kind == .parseFailed }?.detail
-                    ?? "the file is not valid JSON Canvas"
-                state = .degraded(detail)
-                outline = []
-                return
-            }
-            handle = info.handle
-            outline = try session.canvasOutline(handle: info.handle)
-            tableRows = try session.canvasTableRows(handle: info.handle)
-            scene = try session.canvasScene(handle: info.handle)
-            targets = Dictionary(
-                uniqueKeysWithValues: tableRows.map { ($0.nodeId, $0.target) })
-            neighborsCache = [:]
-            filterMatchCache = nil
-            state = .ready
-        } catch {
-            handle = nil
-            warnings = []
-            outline = []
-            tableRows = []
-            scene = CanvasScene(nodes: [], edges: [])
-            targets = [:]
-            neighborsCache = [:]
-            filterMatchCache = nil
-            state = .failed(Self.friendlyMessage(path: path, for: error))
-        }
+        // The loader owns the newly opened handle until all projections have
+        // succeeded. Failed projection reads therefore close exactly once.
+        let prepared = CanvasPreparedLoader.prepare(session: session, path: path, observer: nil)
+        installPreparedSnapshot(prepared)
     }
 
     /// Reserve this object for a prepared New Canvas result. The object stays
@@ -576,11 +570,22 @@ final class CanvasDocument: ObservableObject {
         awaitingPreparedLoad = false
         preparedActivationPending = true
         resetForNewDocumentIdentity()
+        recoverySourceChanged = false
 
+        installPreparedSnapshot(prepared)
+    }
+
+    /// Publish one complete readable snapshot, or a truthful failure. New-file
+    /// identity reset and retarget interaction preservation stay at the callers.
+    private func installPreparedSnapshot(
+        _ prepared: CanvasPreparedLoad, retainingSnapshotOnFailure: Bool = false
+    ) {
         switch prepared {
-        case .ready(let preparedHandle, let preparedWarnings, let preparedOutline,
-            let preparedTableRows, let preparedScene, let preparedHash):
+        case .ready(
+            let preparedHandle, let preparedDisposition, let preparedWarnings,
+            let preparedOutline, let preparedTableRows, let preparedScene, let preparedHash):
             handle = preparedHandle
+            disposition = preparedDisposition
             warnings = preparedWarnings
             outline = preparedOutline
             tableRows = preparedTableRows
@@ -589,27 +594,38 @@ final class CanvasDocument: ObservableObject {
             targets = Dictionary(
                 uniqueKeysWithValues: preparedTableRows.map { ($0.nodeId, $0.target) })
             state = .ready
+            loadRevision &+= 1
         case .degraded(let preparedWarnings, let message):
             handle = nil
-            contentHash = nil
-            warnings = preparedWarnings
-            outline = []
-            tableRows = []
-            scene = CanvasScene(nodes: [], edges: [])
-            targets = [:]
-            state = .degraded(message)
+            if retainingSnapshotOnFailure {
+                state = .retargetFailed(
+                    "\(displayName) could not be read as a canvas. \(message)")
+            } else {
+                clearUnavailableSnapshot()
+                warnings = preparedWarnings
+                state = .degraded(message)
+            }
         case .failed(let message):
             handle = nil
-            contentHash = nil
-            warnings = []
-            outline = []
-            tableRows = []
-            scene = CanvasScene(nodes: [], edges: [])
-            targets = [:]
-            state = .failed(message)
+            if retainingSnapshotOnFailure {
+                state = .retargetFailed(message)
+            } else {
+                clearUnavailableSnapshot()
+                state = .failed(message)
+            }
         }
         neighborsCache = [:]
         filterMatchCache = nil
+    }
+
+    private func clearUnavailableSnapshot() {
+        disposition = .unavailable
+        contentHash = nil
+        warnings = []
+        outline = []
+        tableRows = []
+        scene = CanvasScene(nodes: [], edges: [])
+        targets = [:]
     }
 
     /// Returns true while activation must trust the background-prepared state.

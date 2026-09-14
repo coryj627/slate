@@ -35,7 +35,7 @@ final class CanvasFFITests: XCTestCase {
         let session = try VaultSession.openFilesystem(rootPath: vault.path)
 
         let info = try session.openCanvas(path: "t.canvas")
-        XCTAssertFalse(info.degraded)
+        XCTAssertEqual(info.disposition, .editable)
         XCTAssertEqual(info.nodeCount, 3)
         XCTAssertEqual(info.edgeCount, 1)
         // W6-1 §E TE-0 (IE-3): the open exposes the CAS basis, and a

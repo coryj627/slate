@@ -296,6 +296,88 @@ fn empty_and_degenerate_inputs() {
 }
 
 #[test]
+fn top_level_section_failure_recovers_nodes_without_granting_editability() {
+    let source = include_str!("../../tests/fixtures/canvas/recovered-readonly.canvas");
+    let (canvas, warnings) = parse(source);
+    assert_eq!(
+        load_disposition(&canvas, &warnings),
+        CanvasLoadDisposition::RecoveredReadOnly
+    );
+    assert_eq!(canvas.nodes.len(), 3);
+    assert!(canvas.edges.is_empty());
+    assert_eq!(canvas.skipped.len(), 1);
+    assert!(matches!(&canvas.nodes[0].kind, NodeKind::Group { .. }));
+    assert!(
+        matches!(&canvas.nodes[1].kind, NodeKind::Text { text } if text == "Readable original text")
+    );
+    assert!(matches!(&canvas.nodes[2].kind, NodeKind::File { .. }));
+    assert!(
+        matches!(&warnings[0], CanvasWarning::ParseFailed { reason } if reason == "\"edges\" is not an array")
+    );
+    assert!(matches!(
+        &warnings[1],
+        CanvasWarning::UnknownNodeType { .. }
+    ));
+    assert!(is_load_degraded(&warnings));
+    assert_eq!(canvas.unknown["opaqueRoot"]["preserve"][1], 7);
+}
+
+#[test]
+fn load_disposition_keeps_empty_tolerant_and_unavailable_inputs_distinct() {
+    for input in [
+        "",
+        " \r\n",
+        "{}",
+        "{\"nodes\":[]}",
+        "{\"edges\":[]}",
+        "{\"nodes\":[42]}",
+        "{\"nodes\":[{\"id\":\"unknown\",\"type\":\"future\"}]}",
+    ] {
+        let (canvas, warnings) = parse(input);
+        assert_eq!(
+            load_disposition(&canvas, &warnings),
+            CanvasLoadDisposition::Editable,
+            "{input}"
+        );
+    }
+    for input in [
+        "not json",
+        "null",
+        "[]",
+        "{\"nodes\":1e999}",
+        "{\"nodes\":{},\"edges\":[]}",
+        "{\"nodes\":[],\"edges\":42}",
+        "{\"nodes\":[42],\"edges\":null}",
+        "{\"nodes\":{},\"edges\":{}}",
+        "{\"nodes\":null,\"edges\":[{\"id\":\"e\",\"fromNode\":\"a\",\"toNode\":\"b\"}]}",
+    ] {
+        let (canvas, warnings) = parse(input);
+        assert_eq!(
+            load_disposition(&canvas, &warnings),
+            CanvasLoadDisposition::Unavailable,
+            "{input}"
+        );
+        assert!(
+            canvas.nodes.is_empty() && canvas.edges.is_empty(),
+            "{input}"
+        );
+        assert!(is_load_degraded(&warnings));
+    }
+    for edges in ["null", "42", "\"bad\"", "{}"] {
+        let input = format!(
+            r#"{{"nodes":[{{"id":"g","type":"group","x":0,"y":0,"width":10,"height":10}}],"edges":{edges}}}"#
+        );
+        let (canvas, warnings) = parse(&input);
+        assert_eq!(
+            load_disposition(&canvas, &warnings),
+            CanvasLoadDisposition::RecoveredReadOnly,
+            "{input}"
+        );
+        assert_eq!(canvas.nodes.len(), 1, "an empty group is still navigable");
+    }
+}
+
+#[test]
 fn color_names_are_pinned() {
     let expected = [
         (1, "red"),

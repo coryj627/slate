@@ -117,9 +117,18 @@ final class PreparedFailureRecoveryTests: XCTestCase {
         XCTAssertTrue(
             source.contains("scheduleCanvasRetargetPreparationIfNeeded("),
             "Retry must re-enter the existing guarded background preparation scheduler")
+        // Recovered snapshots with a live handle keep reader navigation.
+        // A missing handle or Trash quarantine must still disable the body.
+        let readerGuard = """
+            .disabled(
+                readOnly && !(document.disposition == .recoveredReadOnly
+                    && document.handle != nil
+                    && !appState.isBatchTrashPathQuarantined(document.path))
+            )
+            """
         XCTAssertTrue(
-            source.contains(".disabled(readOnly)"),
-            "the retained snapshot must not expose writable controls without a native handle")
+            source.filter { !$0.isWhitespace }.contains(readerGuard.filter { !$0.isWhitespace }),
+            "only live, non-quarantined recovered snapshots may keep reader controls enabled")
         XCTAssertTrue(source.contains("The previous snapshot is read-only."), source)
         XCTAssertTrue(
             source.contains("announceCanvasRetargetFailure(message)"),
@@ -253,6 +262,7 @@ final class PreparedFailureRecoveryTests: XCTestCase {
     private func preparedCanvas(handle: UInt64) -> CanvasPreparedLoad {
         .ready(
             handle: handle,
+            disposition: .editable,
             warnings: [],
             outline: [
                 CanvasOutlineRow(

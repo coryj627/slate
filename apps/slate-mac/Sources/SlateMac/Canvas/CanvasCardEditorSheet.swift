@@ -26,18 +26,24 @@ struct CanvasCardEditorSheet: View {
     }
 
     private var disabledReason: String? {
-        appState.activeCanvasCardEditorDisabledReason
+        request.inspectionOnly
+            ? "This is a read-only view of the card text."
+            : appState.activeCanvasCardEditorDisabledReason
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
-            Text("Edit \"\(request.title)\"")
+            Text("\(request.inspectionOnly ? "View" : "Edit") \"\(request.title)\"")
                 .font(Tokens.Typography.body.weight(.semibold))
             NoteEditorView(
                 text: $appState.canvasCardEditorDraft,
                 headings: [],
                 accessibilityLabel:
-                    "Editor for card \(request.title). Escape saves and returns to the canvas.",
+                    disabledReason == nil
+                    ? "Editor for card \(request.title). Escape saves and returns to the canvas."
+                    : request.inspectionOnly
+                        ? "Read-only text for card \(request.title). Escape closes and returns to the canvas."
+                        : "Read-only draft for card \(request.title). Escape asks before closing.",
                 isEditable: disabledReason == nil,
                 readOnlyReason: disabledReason,
                 onSave: commit,
@@ -67,9 +73,11 @@ struct CanvasCardEditorSheet: View {
             }
             HStack {
                 Text(
-                    disabledReason == nil
-                        ? "Escape or Done saves the card."
-                        : "The draft remains selectable and copyable while editing is unavailable."
+                    request.inspectionOnly
+                        ? "The card text is selectable and copyable."
+                        : disabledReason == nil
+                            ? "Escape or Done saves the card."
+                            : "The draft remains selectable and copyable while editing is unavailable."
                 )
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.ColorRole.textSecondary)
@@ -82,7 +90,10 @@ struct CanvasCardEditorSheet: View {
                     .accessibilityHint("Rescan the vault and check whether this canvas is still present.")
                     .help("Check whether this canvas is still present")
                 }
-                if disabledReason == nil {
+                if request.inspectionOnly {
+                    Button("Close") { appState.dismissCanvasCardEditor() }
+                        .keyboardShortcut(.cancelAction)
+                } else if disabledReason == nil {
                     Button("Discard…") { pendingDiscard = true }
                         .accessibilityFocused($draftDialogFocusReturn, equals: .dismiss)
                     Button("Done", action: commit)
@@ -102,8 +113,10 @@ struct CanvasCardEditorSheet: View {
         }
         .padding(Tokens.Spacing.lg)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Editing card \(request.title)")
-        .interactiveDismissDisabled(disabledReason != nil)
+        .accessibilityLabel(
+            "\(request.inspectionOnly ? "Viewing" : "Editing") card \(request.title)"
+        )
+        .interactiveDismissDisabled(disabledReason != nil && !request.inspectionOnly)
         .confirmationDialog(
             "Discard the unsaved card draft?",
             isPresented: $pendingDiscard,

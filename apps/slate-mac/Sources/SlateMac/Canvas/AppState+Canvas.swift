@@ -408,6 +408,9 @@ extension AppState {
             return .quarantine(reason)
         }
 
+        if document.handle != nil, document.disposition != .editable {
+            return .canvas(.readOnly)
+        }
         if document.handle != nil { return nil }
         if document.hasPendingRetargetPreparation {
             if case .retargetFailed = document.state {
@@ -477,7 +480,8 @@ extension AppState {
     /// proves the file absent. Keep the editor useful for selection/copy/close,
     /// but never re-enable Done merely because the unknown ledger cleared.
     var activeCanvasCardEditorRefusal: CanvasMutationRefusalReason? {
-        guard canvasCardEditor != nil else { return nil }
+        guard let editor = canvasCardEditor else { return nil }
+        if editor.inspectionOnly { return .canvas(.readOnly) }
         guard let document = activeCanvasRecoveryDocument else {
             return .canvas(.cardEditorUnavailable)
         }
@@ -485,6 +489,9 @@ extension AppState {
             return refusal
         }
         guard document.handle != nil else {
+            return .canvas(.cardEditorUnavailable)
+        }
+        if document.recoverySourceChanged, editor.basis != document.contentHash {
             return .canvas(.cardEditorUnavailable)
         }
         return nil
@@ -555,8 +562,8 @@ extension AppState {
         if isBatchTrashPathQuarantined(document.path) {
             return BatchTrashCopy.checkAgainLabel
         }
-        if document.hasPendingRetargetPreparation,
-            !document.isRetargetPreparationInFlight
+        if document.disposition == .recoveredReadOnly
+            || (document.hasPendingRetargetPreparation && !document.isRetargetPreparationInFlight)
         {
             return "Retry"
         }
@@ -567,10 +574,11 @@ extension AppState {
         if isBatchTrashPathQuarantined(document.path) {
             return BatchTrashCopy.checkAgainHint
         }
-        if document.hasPendingRetargetPreparation,
-            !document.isRetargetPreparationInFlight
+        if document.disposition == .recoveredReadOnly
+            || (document.hasPendingRetargetPreparation && !document.isRetargetPreparationInFlight)
         {
-            return "Attempts to reopen the canvas at its current path."
+            return
+                "Rereads the canvas at its current path. Repair the file before retrying to edit."
         }
         return nil
     }
@@ -580,10 +588,27 @@ extension AppState {
         if isBatchTrashPathQuarantined(document.path) {
             return retryBatchTrashUnknownReconciliation()
         }
-        guard document.hasPendingRetargetPreparation,
-            let session = currentSession,
+        guard let session = currentSession,
             canvasDocuments[document.path] === document
         else { return nil }
+        if document.disposition == .recoveredReadOnly, document.handle != nil {
+            let reservation = document.beginRecoveryRetry()
+            guard document.claimRetargetPreparation() == reservation.generation else { return nil }
+            scheduleNativeDocumentRetargets([
+                .canvas(
+                    path: document.path, generation: reservation.generation,
+                    replacedHandle: reservation.replacedHandle, prepare: true)
+            ])
+            guard let pending = nativeDocumentRetargetTask else { return nil }
+            return Task { @MainActor [weak self] in
+                await pending.value
+                guard let self, self.currentSession === session,
+                    self.canvasDocuments[document.path] === document
+                else { return }
+                self.noteUndoStacksChanged()
+            }
+        }
+        guard document.hasPendingRetargetPreparation else { return nil }
         scheduleCanvasRetargetPreparationIfNeeded(
             document: document,
             path: document.path,
@@ -670,6 +695,7 @@ extension AppState {
             canvasApplyObserverForTesting?(entry.inverse)
             let result = try session.canvasApply(handle: handle, action: entry.inverse)
             doc.redoStack.append((name: entry.name, inverse: result.inverse))
+            doc.noteApplySucceeded(newContentHash: result.newContentHash)
             doc.reloadAfterMutation(session: session)
             noteUndoStacksChanged()  // #867 menu-title pulse
             canvasAnnouncer.announce(
@@ -699,6 +725,7 @@ extension AppState {
             canvasApplyObserverForTesting?(entry.inverse)
             let result = try session.canvasApply(handle: handle, action: entry.inverse)
             doc.undoStack.append((name: entry.name, inverse: result.inverse))
+            doc.noteApplySucceeded(newContentHash: result.newContentHash)
             doc.reloadAfterMutation(session: session)
             noteUndoStacksChanged()  // #867 menu-title pulse
             canvasAnnouncer.announce(

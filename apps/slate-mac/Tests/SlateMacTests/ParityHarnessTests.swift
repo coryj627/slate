@@ -1420,7 +1420,7 @@ final class ParityHarnessTests: XCTestCase {
             defer { session.closeCanvas(handle: info.handle) }
 
             j.raw("{\"file\":").str(slash(rel))
-                .raw(",\"degraded\":").bool(info.degraded)
+                .raw(",\"disposition\":").str(canvasDispositionName(info.disposition))
                 .raw(",\"bounds\":")
             if let bounds = try session.canvasBounds(handle: info.handle) {
                 appendCanvasRect(j, bounds)
@@ -1511,6 +1511,14 @@ final class ParityHarnessTests: XCTestCase {
     /// same order; the committed golden arbitrates, and a drift in
     /// either direction fails `testHarnessArtifactsMatchCommittedGoldensByteForByte`
     /// on whichever lane runs second.
+    private static func canvasDispositionName(_ disposition: CanvasLoadDisposition) -> String {
+        switch disposition {
+        case .editable: return "editable"
+        case .recoveredReadOnly: return "recovered_read_only"
+        case .unavailable: return "unavailable"
+        }
+    }
+
     private static func canvasReadArtifact() throws -> String {
         let fm = FileManager.default
         let canvasFiles = try fm.contentsOfDirectory(atPath: canvasFixturesDir.path)
@@ -1542,7 +1550,7 @@ final class ParityHarnessTests: XCTestCase {
             j.raw("{\"file\":").str(slash(rel))
                 .raw(",\"node_count\":").num(UInt64(info.nodeCount))
                 .raw(",\"edge_count\":").num(UInt64(info.edgeCount))
-                .raw(",\"degraded\":").bool(info.degraded)
+                .raw(",\"disposition\":").str(canvasDispositionName(info.disposition))
                 .raw(",\"warnings\":[")
             for (w, warning) in info.warnings.enumerated() {
                 if w > 0 { j.raw(",") }
@@ -1552,15 +1560,12 @@ final class ParityHarnessTests: XCTestCase {
             }
             j.raw("]")
 
-            // A degraded open has nothing worth reading: core returns an
-            // empty canvas and the host releases the handle at once
-            // (contract A3, CD-28). The sections stay present and EMPTY
-            // rather than absent, so the artifact's shape never varies
-            // with the fixture.
+            // Recovered handles expose their retained readable snapshot;
+            // unavailable loads keep these artifact sections empty.
             var outline: [CanvasOutlineRow] = []
             var tableRows: [CanvasTableRow] = []
             var scene = CanvasScene(nodes: [], edges: [])
-            if !info.degraded {
+            if info.disposition != .unavailable {
                 outline = try session.canvasOutline(handle: info.handle)
                 tableRows = try session.canvasTableRows(handle: info.handle)
                 scene = try session.canvasScene(handle: info.handle)

@@ -1609,6 +1609,11 @@ pub enum CanvasA11yEvent {
     CanvasLoadedDegraded {
         skipped: u32,
     },
+    /// Read-only recovery notice. Available counts modeled nodes,
+    /// including groups, never unreadable source entries or warnings.
+    CanvasLoadedReadOnly {
+        available: u32,
+    },
     /// The empty-canvas onboarding region — LABEL grade (region text,
     /// never spoken). Renders the spelled-out AX form, which is the
     /// one a screen reader gets; the glyph form stays a host label.
@@ -2793,6 +2798,11 @@ impl CanvasA11yEvent {
                 "Canvas loaded. {skipped} unsupported {} are preserved in the file but \
                  not shown.",
                 plural(*skipped, "item", "items")
+            ),
+            CanvasLoadedReadOnly { available } => format!(
+                "Canvas opened read-only. {} available to inspect. \
+                 Repair the file and retry to edit.",
+                counted(*available, "card", "cards")
             ),
             CanvasEmptyOnboarding {
                 new_card_chord,
@@ -4116,6 +4126,10 @@ pub fn corpus() -> Vec<A11yEvent> {
     // The graph family (W6-2 0a, #746) follows the same discipline —
     // one appended block, no pre-existing index moves.
     events.extend(graph_corpus().into_iter().map(|event| Graph { event }));
+    // #1173 preserves every prior corpus index, including the graph block.
+    events.extend([3, 1, 0].map(|available| Canvas {
+        event: CanvasA11yEvent::CanvasLoadedReadOnly { available },
+    }));
     events
 }
 
@@ -6137,6 +6151,18 @@ mod tests {
             (High, "Couldn't load the graph: io error"),
             (High, "Couldn't load connections: io error"),
             (High, "Couldn't create note: exists"),
+            (
+                Medium,
+                "Canvas opened read-only. 3 cards available to inspect. Repair the file and retry to edit.",
+            ),
+            (
+                Medium,
+                "Canvas opened read-only. 1 card available to inspect. Repair the file and retry to edit.",
+            ),
+            (
+                Medium,
+                "Canvas opened read-only. 0 cards available to inspect. Repair the file and retry to edit.",
+            ),
         ];
 
         let corpus = corpus();
@@ -7718,6 +7744,7 @@ mod tests {
             CanvasFilterCount { matched } => Some(Count(*matched)),
             CanvasFilterCleared { total } => Some(Count(*total)),
             CanvasLoadedDegraded { skipped } => Some(Count(*skipped)),
+            CanvasLoadedReadOnly { available } => Some(Count(*available)),
 
             // --- speaks no count --------------------------------------
             // Each closed parameter set is still matched arm by arm, so
@@ -7946,6 +7973,7 @@ mod tests {
             "CanvasGroupEntered",
             "CanvasGrouped",
             "CanvasLoadedDegraded",
+            "CanvasLoadedReadOnly",
             "CanvasMarkToggled",
             "CanvasMarksCleared",
             "CanvasModeCancelled",

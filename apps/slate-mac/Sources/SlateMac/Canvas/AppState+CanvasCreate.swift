@@ -22,6 +22,7 @@ struct CanvasCardEditorRequest: Identifiable, Equatable {
     /// them (W6-1 §E TE-0: `canvas_editor_seed`), so a commit can know
     /// the exact revision this draft grew from.
     let basis: String
+    var inspectionOnly = false
     var id: String { nodeId }
 }
 
@@ -38,6 +39,31 @@ extension AppState {
             return
         }
         canvasEditCard(nodeId: selected)
+    }
+
+    /// Recovered text remains inspectable without requesting a writable editor
+    /// seed. This request stays read-only even after a successful file repair.
+    func canvasInspectCard(nodeId: String) {
+        guard let doc = activeCanvasDocument else { return }
+        guard doc.disposition == .recoveredReadOnly else {
+            canvasEditCard(nodeId: nodeId)
+            return
+        }
+        guard canvasCardEditor == nil,
+            let row = doc.outline.first(where: { $0.nodeId == nodeId }), row.kind == "text",
+            let context = canvasReadContext(for: doc)
+        else { return }
+        do {
+            guard
+                let text = try context.session.canvasNodeText(
+                    handle: context.handle, nodeId: nodeId)
+            else { return }
+            canvasCardEditor = CanvasCardEditorRequest(
+                nodeId: nodeId, title: row.title, initialText: text,
+                basis: doc.contentHash ?? "", inspectionOnly: true)
+        } catch {
+            canvasAnnouncer.announce(.canvasBlocked(reason: .cardTextUnreadable))
+        }
     }
 
     /// Open the editor for a specific text card (activation path).

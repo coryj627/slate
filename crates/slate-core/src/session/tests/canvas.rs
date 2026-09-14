@@ -6,9 +6,11 @@
 
 use super::common::*;
 use super::*;
+use crate::CanvasLoadDisposition;
 
 const SAMPLE: &str = include_str!("../../../tests/fixtures/canvas/sample.canvas");
 const MALFORMED: &str = include_str!("../../../tests/fixtures/canvas/malformed.canvas");
+const RECOVERED: &str = include_str!("../../../tests/fixtures/canvas/recovered-readonly.canvas");
 
 fn canvas_vault() -> (tempfile::TempDir, VaultSession) {
     make_vault(|p| {
@@ -109,7 +111,7 @@ fn open_canvas_reads_and_navigates() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let info = session.open_canvas("board.canvas").unwrap();
-    assert!(!info.degraded);
+    assert_eq!(info.disposition, CanvasLoadDisposition::Editable);
     assert!(info.warnings.is_empty());
     assert_eq!((info.node_count, info.edge_count), (9, 5));
 
@@ -252,7 +254,7 @@ fn malformed_canvas_surfaces_warnings_not_failure() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
     let info = session.open_canvas("broken.canvas").unwrap();
-    assert!(!info.degraded);
+    assert_eq!(info.disposition, CanvasLoadDisposition::Editable);
     assert_eq!(info.node_count, 2);
     assert!(
         info.warnings
@@ -273,7 +275,7 @@ fn degraded_canvas_is_flagged_and_unindexed() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
     let info = session.open_canvas("bad.canvas").unwrap();
-    assert!(info.degraded);
+    assert_eq!(info.disposition, CanvasLoadDisposition::Unavailable);
     assert_eq!(info.node_count, 0);
     assert!(
         info.warnings
@@ -281,6 +283,278 @@ fn degraded_canvas_is_flagged_and_unindexed() {
             .any(|w| w.kind == CanvasLoadWarningKind::ParseFailed)
     );
     assert!(session.canvas_outline(info.handle).unwrap().is_empty());
+}
+
+#[test]
+fn recovered_canvas_retains_one_readable_snapshot_across_repair_and_rescan() {
+    let source = RECOVERED.replace('\n', "\r\n");
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("board.canvas", source.as_bytes()).unwrap();
+        p.write_file(
+            "notes/canvas research.md",
+            b"---\ntitle: Original title\n---\n",
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+    assert_eq!(info.disposition, CanvasLoadDisposition::RecoveredReadOnly);
+    assert_eq!((info.node_count, info.edge_count), (3, 0));
+    assert_eq!(
+        info.warnings
+            .iter()
+            .filter(|w| w.kind == CanvasLoadWarningKind::SkippedEntry)
+            .count(),
+        1
+    );
+    let h = info.handle;
+    let rows = session.canvas_outline(h).unwrap();
+    let table = session.canvas_table_rows(h).unwrap();
+    let scene = session.canvas_scene(h).unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.node_id.as_str()).collect::<Vec<_>>(),
+        ["recovered-group", "recovered-text", "recovered-file"]
+    );
+    assert_eq!(
+        table.iter().map(|r| &r.node_id).collect::<Vec<_>>(),
+        rows.iter().map(|r| &r.node_id).collect::<Vec<_>>()
+    );
+    assert_eq!(scene.0.len(), rows.len());
+    assert!(scene.1.is_empty());
+    assert_eq!(rows[2].title, "Original title › Notes");
+    assert_eq!(rows[1].group_path, ["Recovered"]);
+    assert_eq!(
+        (rows[1].depth, rows[1].ordinal_n, rows[1].total_m),
+        (1, 1, 2)
+    );
+    assert!(rows.iter().all(|r| r.connection_count == 0));
+    let context = session.canvas_where_am_i(h, "recovered-text").unwrap();
+    let bounds = session.canvas_bounds(h).unwrap();
+    let snapshot = session.canvas_current_text(h).unwrap();
+    assert_eq!(snapshot.text, source);
+    assert_eq!(snapshot.content_hash, info.content_hash);
+    assert_eq!(
+        snapshot.content_hash,
+        crate::vault::content_hash(source.as_bytes())
+    );
+    assert_eq!(session.read_text("board.canvas").unwrap(), source);
+
+    // A second open and a later rescan replace the shared DB rows. An
+    // existing recovery handle must never borrow that newer revision.
+    let second = session.open_canvas("board.canvas").unwrap();
+    session
+        .provider
+        .write_file("board.canvas", SAMPLE.as_bytes())
+        .unwrap();
+    session
+        .provider
+        .write_file("notes/canvas research.md", b"---\ntitle: New title\n---\n")
+        .unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    for handle in [h, second.handle] {
+        assert_eq!(session.canvas_outline(handle).unwrap(), rows);
+        assert_eq!(session.canvas_table_rows(handle).unwrap(), table);
+        assert_eq!(session.canvas_scene(handle).unwrap(), scene);
+        assert_eq!(session.canvas_current_text(handle).unwrap(), snapshot);
+        assert_eq!(
+            session.canvas_where_am_i(handle, "recovered-text").unwrap(),
+            context
+        );
+        assert_eq!(
+            session
+                .canvas_node_text(handle, "recovered-text")
+                .unwrap()
+                .as_deref(),
+            Some("Readable original text")
+        );
+        assert_eq!(
+            session.canvas_filter(handle, "Readable").unwrap(),
+            ["recovered-text"]
+        );
+        assert_eq!(
+            session
+                .canvas_parent_of(handle, "recovered-text")
+                .unwrap()
+                .as_deref(),
+            Some("recovered-group")
+        );
+        assert_eq!(
+            session
+                .canvas_children_of(handle, "recovered-group")
+                .unwrap(),
+            ["recovered-text", "recovered-file"]
+        );
+        assert_eq!(
+            session
+                .canvas_order_nodes(
+                    handle,
+                    vec!["recovered-file".into(), "recovered-text".into()]
+                )
+                .unwrap(),
+            ["recovered-text", "recovered-file"]
+        );
+        assert!(
+            session
+                .canvas_neighbors(handle, "recovered-text")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            session
+                .canvas_trace_path(handle, "recovered-text")
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(session.canvas_bounds(handle).unwrap(), bounds);
+    }
+    let repaired = session.open_canvas("board.canvas").unwrap();
+    assert_eq!(repaired.disposition, CanvasLoadDisposition::Editable);
+    assert_eq!(session.canvas_outline(repaired.handle).unwrap().len(), 9);
+    assert_eq!(session.canvas_current_text(h).unwrap(), snapshot);
+    session.close_canvas(h);
+    session.close_canvas(h);
+    assert!(session.canvas_outline(h).is_err());
+    assert!(session.canvas_current_text(h).is_err());
+    assert_eq!(session.canvas_outline(second.handle).unwrap(), rows);
+}
+
+#[test]
+fn unavailable_handle_does_not_gain_rows_from_a_repaired_file() {
+    for source in ["not json", "{\"nodes\":[],\"edges\":{}}"] {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("board.canvas", source.as_bytes()).unwrap();
+        });
+        let info = session.open_canvas("board.canvas").unwrap();
+        assert_eq!(info.disposition, CanvasLoadDisposition::Unavailable);
+        assert_eq!((info.node_count, info.edge_count), (0, 0));
+        session
+            .provider
+            .write_file("board.canvas", SAMPLE.as_bytes())
+            .unwrap();
+        session.scan_initial(&CancelToken::new()).unwrap();
+        assert!(session.canvas_outline(info.handle).unwrap().is_empty());
+        assert!(session.canvas_table_rows(info.handle).unwrap().is_empty());
+        assert!(session.canvas_scene(info.handle).unwrap().0.is_empty());
+        let snapshot = session.canvas_current_text(info.handle).unwrap();
+        assert_eq!(snapshot.text, source);
+        assert_eq!(
+            snapshot.content_hash,
+            crate::vault::content_hash(source.as_bytes())
+        );
+        assert_eq!(
+            session.open_canvas("board.canvas").unwrap().disposition,
+            CanvasLoadDisposition::Editable
+        );
+    }
+}
+
+#[test]
+fn read_only_canvas_rejects_editor_mutation_and_history_without_side_effects() {
+    use crate::canvas::apply::{CanvasAction, CanvasOp};
+    let restore =
+        r#"{"id":"restored","type":"text","text":"history","x":0,"y":0,"width":10,"height":10}"#;
+    for source in [RECOVERED, "not json", "{\"nodes\":[],\"edges\":42}"] {
+        let (_tmp, session) = make_vault(|p| {
+            p.write_file("board.canvas", source.as_bytes()).unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        let info = session.open_canvas("board.canvas").unwrap();
+        let rows = session.canvas_outline(info.handle).unwrap();
+        let snapshot = session.canvas_current_text(info.handle).unwrap();
+        let journal = || -> (Option<String>, usize) {
+            let name: Option<String> = session
+                .conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT oplog_name FROM files WHERE path = 'board.canvas'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let count = name
+                .as_ref()
+                .map(|name| {
+                    crate::oplog::read_oplog(&session.config.cache_dir, name)
+                        .unwrap()
+                        .len()
+                })
+                .unwrap_or(0);
+            (name, count)
+        };
+        let journal_before = journal();
+        for ops in [
+            vec![],
+            vec![CanvasOp::DeleteNode {
+                id: "recovered-text".into(),
+            }],
+            vec![CanvasOp::CloneNode {
+                source_id: "recovered-text".into(),
+                id: "copy".into(),
+                x: 800.0,
+                y: 0.0,
+            }],
+            vec![CanvasOp::RestoreNode {
+                node_json: restore.into(),
+                position: 0,
+            }],
+            vec![CanvasOp::RestoreNodeInPlace {
+                node_json: restore.into(),
+            }],
+        ] {
+            let action = CanvasAction {
+                name: "must refuse".into(),
+                ops,
+            };
+            let error = session.canvas_apply(info.handle, action).unwrap_err();
+            assert!(
+                matches!(error, VaultError::InvalidArgument { ref message } if message.contains("read-only"))
+            );
+        }
+        for node_id in ["recovered-text", "missing"] {
+            let error = session
+                .canvas_editor_seed(info.handle, node_id)
+                .unwrap_err();
+            assert!(
+                matches!(error, VaultError::InvalidArgument { ref message } if message.contains("read-only"))
+            );
+        }
+        assert_eq!(session.read_text("board.canvas").unwrap(), source);
+        assert_eq!(session.canvas_outline(info.handle).unwrap(), rows);
+        assert_eq!(session.canvas_current_text(info.handle).unwrap(), snapshot);
+        assert_eq!(journal(), journal_before);
+        let count: i64 = session
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM canvas_nodes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count as usize, rows.len());
+    }
+}
+
+#[test]
+fn structural_rewrite_preserves_recovered_canvas_source() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("board.canvas", RECOVERED.as_bytes()).unwrap();
+        p.write_file("notes/canvas research.md", b"# Notes")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+    let report = session
+        .rename_file("notes/canvas research.md", "renamed.md")
+        .unwrap();
+    assert!(!report.rewritten.iter().any(|r| r.path == "board.canvas"));
+    assert_eq!(session.read_text("board.canvas").unwrap(), RECOVERED);
+    assert_eq!(
+        session.canvas_current_text(info.handle).unwrap().text,
+        RECOVERED
+    );
+    assert_eq!(
+        session.canvas_table_rows(info.handle).unwrap()[2].target,
+        "notes/canvas research.md"
+    );
 }
 
 #[test]
@@ -613,7 +887,7 @@ fn canvas_apply_refuses_degraded_canvas() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
     let info = session.open_canvas("bad.canvas").unwrap();
-    assert!(info.degraded);
+    assert_eq!(info.disposition, CanvasLoadDisposition::Unavailable);
     let err = session
         .canvas_apply(
             info.handle,

@@ -28,7 +28,7 @@
 //!
 //! **Degraded loads are unwritable:** callers must never serialize a
 //! canvas whose parse produced [`CanvasWarning::ParseFailed`] — that
-//! would replace the user's file with an empty one. The session save
+//! would replace unreadable source data with a partial model. The session save
 //! path (#361/#366) enforces this with [`is_load_degraded`].
 //!
 //! Atomic temp+rename writes, content-hash conflict detection, and

@@ -87,7 +87,15 @@ struct CanvasTableView: View {
                     appState.canvasSelect(nodeId: row.id, in: document, announce: false)
                     appState.canvasToggleMark()
                 },
-                .init("Delete") { [appState, document] row in
+                .init(
+                    "Delete", isVisible: { _ in true },
+                    isEnabled: { [appState, document] _ in
+                        appState.canvasMutationDisabledReason(for: document) == nil
+                    },
+                    disabledReason: { [appState, document] _ in
+                        appState.canvasMutationDisabledReason(for: document)
+                    }
+                ) { [appState, document] row in
                     appState.canvasSelect(nodeId: row.id, in: document, announce: false)
                     appState.canvasDeleteSelection()
                 },
