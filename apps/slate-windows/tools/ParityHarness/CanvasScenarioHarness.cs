@@ -214,6 +214,11 @@ public static class CanvasScenarioDriver
                 op.GetProperty("width").GetDouble(),
                 op.GetProperty("height").GetDouble(),
                 Optional(op, "color")),
+            "cloneNode" => new CanvasOp.CloneNode(
+                op.GetProperty("sourceId").GetString()!,
+                op.GetProperty("id").GetString()!,
+                op.GetProperty("x").GetDouble(),
+                op.GetProperty("y").GetDouble()),
             "createGroup" => new CanvasOp.CreateGroup(
                 op.GetProperty("id").GetString()!,
                 Optional(op, "label"),

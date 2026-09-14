@@ -3,6 +3,23 @@
 
 import Foundation
 
+private enum CanvasDuplicateError: LocalizedError {
+    case incompleteSelection
+    case incompleteSnapshot
+    case incompletePlacement
+
+    var errorDescription: String? {
+        switch self {
+        case .incompleteSelection:
+            return "The complete selection is no longer available. Try again."
+        case .incompleteSnapshot:
+            return "Geometry is unavailable for part of the selection. Try again."
+        case .incompletePlacement:
+            return "Placement is unavailable for part of the selection. Try again."
+        }
+    }
+}
+
 private enum CanvasConvertThreadProbe {
     nonisolated static func isMainThread() -> Bool {
         Thread.isMainThread
@@ -128,71 +145,55 @@ extension AppState {
             let session = currentSession,
             let handle = doc.handle
         else { return }
-        let seed = canvasMovingSet(in: doc)
+        // Keep the raw request: the general moving-set helper deliberately
+        // drops stale marks, but duplication must not silently copy a subset.
+        let seed =
+            doc.selection.marked.isEmpty
+            ? doc.selection.selected.map { [$0] } ?? []
+            : Array(doc.selection.marked)
         guard !seed.isEmpty else {
             canvasAnnouncer.announce(.canvasStatus(note: .nothingSelected))
             return
         }
-        let nodesById = Dictionary(
-            uniqueKeysWithValues: doc.scene.nodes.map { ($0.nodeId, $0) })
-        // §W-G row D: a picked group brings its members, and membership
-        // is core's `GroupTree` (`canvas_children_of`, contract 0b-8)
-        // rather than a centre-in-rect test written out again here.
-        // Walked transitively, because a picked group's members include
-        // the contents of the groups it contains. `children_of` answers
-        // `[]` for a card, so the walk needs no kind test of its own.
-        var members = Set(seed)
-        var pending = seed
-        while let id = pending.popLast() {
-            let children =
-                (try? session.canvasChildrenOf(handle: handle, groupId: id)) ?? []
-            for child in children where !members.contains(child) {
-                members.insert(child)
-                pending.append(child)
-            }
-        }
-        // Reading order, from the one projection (§W-G row F).
-        let expanded = canvasInReadingOrder(Array(members), in: doc)
         do {
-            let boxes = expanded.compactMap { id -> CanvasRect? in
-                nodesById[id].map {
-                    CanvasRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+            // §W-G row D: expand transitively through core's GroupTree.
+            // A query failure refuses the entire action, including its frame.
+            var members = Set(seed)
+            var pending = seed
+            while let id = pending.popLast() {
+                let children = try session.canvasChildrenOf(handle: handle, groupId: id)
+                for child in children where members.insert(child).inserted {
+                    pending.append(child)
                 }
+            }
+            let expanded = try session.canvasOrderNodes(handle: handle, ids: Array(members))
+            guard expanded.count == members.count, Set(expanded) == members else {
+                throw CanvasDuplicateError.incompleteSelection
+            }
+            var nodesById: [String: CanvasSceneNode] = [:]
+            for node in doc.scene.nodes {
+                guard nodesById.updateValue(node, forKey: node.nodeId) == nil else {
+                    throw CanvasDuplicateError.incompleteSnapshot
+                }
+            }
+            let boxes = try expanded.map { id -> CanvasRect in
+                guard let node = nodesById[id] else {
+                    throw CanvasDuplicateError.incompleteSnapshot
+                }
+                return CanvasRect(x: node.x, y: node.y, width: node.width, height: node.height)
             }
             let placement = try session.canvasPlaceSet(
                 handle: handle, anchor: expanded.first, boxes: boxes,
                 directionHint: nil, exclude: [])
-            var ops: [CanvasOp] = []
-            for (id, origin) in zip(expanded, placement.origins) {
-                guard let node = nodesById[id] else { continue }
-                if node.kind == "group" {
-                    ops.append(
-                        .createGroup(
-                            id: canvasNewId(),
-                            label: node.title,
-                            x: origin.x, y: origin.y,
-                            width: node.width, height: node.height,
-                            color: node.color))
-                } else {
-                    let content: CanvasNodeContent
-                    switch node.kind {
-                    case "file", "image":
-                        content = .file(
-                            file: doc.target(of: id), subpath: node.subpath)
-                    case "link":
-                        content = .link(url: doc.target(of: id))
-                    default:
-                        let fetched = try? session.canvasNodeText(
-                            handle: handle, nodeId: id)
-                        content = .text(text: fetched ?? "")
-                    }
-                    ops.append(
-                        .createNode(
-                            id: canvasNewId(), content: content,
-                            x: origin.x, y: origin.y,
-                            width: node.width, height: node.height,
-                            color: node.color))
-                }
+            guard placement.origins.count == expanded.count else {
+                throw CanvasDuplicateError.incompletePlacement
+            }
+            // Core clones the complete saved payload, including extension
+            // fields and raw group labels. Hosts supply only identity/origin.
+            let ops: [CanvasOp] = expanded.indices.map { index in
+                let origin = placement.origins[index]
+                return .cloneNode(
+                    sourceId: expanded[index], id: canvasNewId(), x: origin.x, y: origin.y)
             }
             let single = expanded.count == 1
             // Deliberately UNGROUPED (CD-6): `CanvasBulkDuplicated`

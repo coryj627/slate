@@ -3623,11 +3623,10 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// equality demanded (a marked store whose projection is empty is
     /// NoMarks; any other mismatch is the typed failure — nothing
     /// partial), places the members as one rigid set with the origins'
-    /// count checked, and mints one CreateGroup or CreateNode per member
-    /// with content by kind; edges are never copied; the marks are kept;
-    /// the first copy is seated; one inverse undoes every copy. A group's
-    /// DERIVED title stands in for its raw label and unknown fields are
-    /// not carried (G2D-7 and its sibling, recorded).</summary>
+    /// count checked, and mints one core CloneNode per member. Core
+    /// preserves the complete stored payload, including unknown fields
+    /// and raw group labels; edges are never copied; the marks are kept;
+    /// the first copy is seated; one inverse undoes every copy.</summary>
     public CanvasMutationOperation? CanvasDuplicate(
         object? owner = null, Action<CanvasOperationOutcome>? completion = null)
     {
@@ -3737,28 +3736,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                     var ops = new List<CanvasOp>(ordered.Length);
                     for (int i = 0; i < ordered.Length; i++)
                     {
-                        CanvasSceneNode node = nodes[i];
                         CanvasPoint origin = placement.Origins[i];
                         string id = SlateUniffiMethods.CanvasNewId();
                         if (i == 0)
                         {
                             operation.CreatedId = id;
                         }
-                        if (node.Kind == "group")
-                        {
-                            ops.Add(new CanvasOp.CreateGroup(
-                                id, node.Title, origin.X, origin.Y, node.Width, node.Height, node.Color));
-                            continue;
-                        }
-                        CanvasNodeContent content = node.Kind switch
-                        {
-                            "file" or "image" => new CanvasNodeContent.File(TargetOf(node.NodeId), node.Subpath),
-                            "link" => new CanvasNodeContent.Link(TargetOf(node.NodeId)),
-                            _ => new CanvasNodeContent.Text(
-                                _session.CanvasNodeText(handle, node.NodeId) ?? string.Empty),
-                        };
-                        ops.Add(new CanvasOp.CreateNode(
-                            id, content, origin.X, origin.Y, node.Width, node.Height, node.Color));
+                        ops.Add(new CanvasOp.CloneNode(
+                            ordered[i], id, origin.X, origin.Y));
                     }
                     copied = ordered.Length;
                     singleTitle = nodes[0].Title;

@@ -2,6 +2,7 @@ using System.Windows.Input;
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Text.Json.Nodes;
 using SlateWindows.Canvas;
 using SlateWindows.Tests.Support;
 using uniffi.slate_uniffi;
@@ -2269,6 +2270,84 @@ public sealed class CanvasMutationTests : IDisposable
 
         Assert.Equal(before, DiskBytes());
         document.Shutdown();
+    }
+
+    /// <summary>#1172: the real Duplicate verb carries opaque ordered
+    /// payloads and raw optional fields through core, without rebuilding
+    /// them from the scene's display title. One undo/redo restores exact
+    /// canonical bytes and leaves the original node untouched.</summary>
+    [Theory]
+    [InlineData("text")]
+    [InlineData("file")]
+    [InlineData("image")]
+    [InlineData("link")]
+    [InlineData("group-absent")]
+    [InlineData("group-null")]
+    [InlineData("group-empty")]
+    public void DuplicatePreservesStoredPayloadAndExactUndoRedo(string kind)
+    {
+        string payload = kind switch
+        {
+            "text" => "\"type\":\"text\",\"text\":\"Full body\\nsecond line\",\"color\":null",
+            "file" => "\"type\":\"file\",\"file\":\"notes/topic.md\",\"subpath\":\"#Heading\"",
+            "image" => "\"type\":\"file\",\"file\":\"images/photo.png\",\"subpath\":null",
+            "link" => "\"type\":\"link\",\"url\":\"https://example.com/path?q=1\"",
+            "group-absent" => "\"type\":\"group\"",
+            "group-null" => "\"type\":\"group\",\"label\":null",
+            _ => "\"type\":\"group\",\"label\":\"\"",
+        };
+        string original = "{\"rootOpaque\":[3,2,1],\"nodes\":[{\"id\":\"source\"," + payload
+            + ",\"x\":0,\"y\":0,\"width\":260,\"height\":140,"
+            + "\"background\":\"images/back.png\",\"backgroundStyle\":\"cover\","
+            + "\"extension\":{\"z\":[null,{\"b\":true,\"a\":9}],\"a\":\"source\"}}],\"edges\":[]}";
+        string before = SlateUniffiMethods.CanvasApplyDetached(
+            original, new CanvasAction("canonicalize", []));
+        File.WriteAllText(Path.Combine(_fixture.Root, "board.canvas"), before);
+        using (var cancel = new CancelToken())
+        {
+            _session.ScanInitial(cancel);
+        }
+        CanvasDocumentViewModel document = Open();
+        try
+        {
+            document.SeatSelectionSilently("source");
+            Assert.Null(document.UndoStack.OfferedUndo);
+
+            Assert.NotNull(document.CanvasDuplicate());
+
+            string after = DiskBytes();
+            string copyId = Assert.IsType<string>(document.Selection.Selected);
+            Assert.NotEqual("source", copyId);
+            JsonObject expected = JsonNode.Parse(before)!.AsObject();
+            JsonObject actual = JsonNode.Parse(after)!.AsObject();
+            JsonObject source = expected["nodes"]!.AsArray()[0]!.AsObject();
+            JsonObject unchanged = Assert.Single(actual["nodes"]!.AsArray(),
+                node => (string?)node!["id"] == "source")!.AsObject();
+            JsonObject copy = Assert.Single(actual["nodes"]!.AsArray(),
+                node => (string?)node!["id"] == copyId)!.AsObject();
+            Assert.Equal(source.ToJsonString(), unchanged.ToJsonString());
+            Assert.Equal(expected["rootOpaque"]!.ToJsonString(), actual["rootOpaque"]!.ToJsonString());
+            Assert.Empty(actual["edges"]!.AsArray());
+            Assert.True((double)copy["x"]! != (double)source["x"]!
+                || (double)copy["y"]! != (double)source["y"]!);
+            foreach (string property in (string[])["id", "x", "y"])
+            {
+                source.Remove(property);
+                copy.Remove(property);
+            }
+            // Order matters too: nested opaque values retain their key order.
+            Assert.Equal(source.ToJsonString(), copy.ToJsonString());
+
+            document.CanvasUndo();
+            Assert.Equal(before, DiskBytes());
+            Assert.Null(document.UndoStack.OfferedUndo);
+            document.CanvasRedo();
+            Assert.Equal(after, DiskBytes());
+        }
+        finally
+        {
+            document.Shutdown();
+        }
     }
 
     /// <summary>§G2 TG2-5 (G2-10, G2D-4, IG2-25): Duplicate of the MARKED set

@@ -280,6 +280,12 @@ enum CanvasScenarioDriver {
                 width: try double(op, "width"),
                 height: try double(op, "height"),
                 color: optional(op, "color"))
+        case "cloneNode":
+            return .cloneNode(
+                sourceId: try string(op, "sourceId"),
+                id: try string(op, "id"),
+                x: try double(op, "x"),
+                y: try double(op, "y"))
         case "createGroup":
             return .createGroup(
                 id: try string(op, "id"),

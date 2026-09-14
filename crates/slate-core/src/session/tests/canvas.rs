@@ -469,6 +469,96 @@ fn canvas_apply_writes_reindexes_and_returns_inverse() {
 }
 
 #[test]
+fn canvas_clone_persists_opaque_payload_as_one_journaled_undoable_action() {
+    use crate::canvas::apply::{CanvasAction, CanvasOp, action_from_json};
+
+    let input = include_str!("../../../tests/fixtures/canvas/unknown_fields.canvas");
+    let (parsed, _) = crate::canvas::parse(input);
+    let canonical = crate::canvas::serialize::serialize(&parsed);
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("board.canvas", canonical.as_bytes()).unwrap();
+        p.write_file("a.md", b"# A note\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let info = session.open_canvas("board.canvas").unwrap();
+    let action = CanvasAction {
+        name: "duplicate 2 cards".into(),
+        ops: vec![
+            CanvasOp::CloneNode {
+                source_id: "n1".into(),
+                id: "copy-text".into(),
+                x: 400.0,
+                y: 0.0,
+            },
+            CanvasOp::CloneNode {
+                source_id: "n2".into(),
+                id: "copy-file".into(),
+                x: 400.0,
+                y: 100.0,
+            },
+        ],
+    };
+    let result = session.canvas_apply(info.handle, action.clone()).unwrap();
+    let disk = session.read_text("board.canvas").unwrap();
+    let persisted: serde_json::Value = serde_json::from_str(&disk).unwrap();
+    let nodes = persisted["nodes"].as_array().unwrap();
+    for (source_id, copy_id) in [("n1", "copy-text"), ("n2", "copy-file")] {
+        let source = nodes.iter().find(|node| node["id"] == source_id).unwrap();
+        let copy = nodes.iter().find(|node| node["id"] == copy_id).unwrap();
+        let mut expected = source.clone();
+        expected["id"] = serde_json::json!(copy_id);
+        expected["x"] = serde_json::json!(400);
+        assert_eq!(copy, &expected, "persisted payload drifted for {copy_id}");
+        assert!(
+            session
+                .canvas_outline(info.handle)
+                .unwrap()
+                .iter()
+                .any(|row| row.node_id == copy_id)
+        );
+        assert!(
+            session
+                .canvas_neighbors(info.handle, copy_id)
+                .unwrap()
+                .is_empty()
+        );
+    }
+    let before: serde_json::Value = serde_json::from_str(&canonical).unwrap();
+    assert_eq!(persisted["edges"], before["edges"]);
+    assert_eq!(persisted["slateMeta"], before["slateMeta"]);
+    assert_eq!(persisted["trailingRootKey"], before["trailingRootKey"]);
+
+    let conn = session.conn.lock().unwrap();
+    let log_name: String = conn
+        .query_row(
+            "SELECT oplog_name FROM files WHERE path = 'board.canvas'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    drop(conn);
+    let entries = crate::oplog::read_oplog(&session.config.cache_dir, &log_name).unwrap();
+    let semantic: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.op_kind == crate::oplog::OpKind::CanvasApply)
+        .collect();
+    assert_eq!(semantic.len(), 1, "the pair is one semantic action");
+    let payload: serde_json::Value = serde_json::from_slice(&semantic[0].payload_bytes).unwrap();
+    assert_eq!(action_from_json(&payload["action"]).unwrap(), action);
+    assert_eq!(
+        action_from_json(&payload["inverse"]).unwrap(),
+        result.inverse
+    );
+    assert_eq!(semantic[0].content_hash_after, result.new_content_hash);
+    assert_eq!(crate::oplog::reconstruct_at_tail(&entries).unwrap(), disk);
+
+    let undo = session.canvas_apply(info.handle, result.inverse).unwrap();
+    assert_eq!(session.read_text("board.canvas").unwrap(), canonical);
+    session.canvas_apply(info.handle, undo.inverse).unwrap();
+    assert_eq!(session.read_text("board.canvas").unwrap(), disk);
+}
+
+#[test]
 fn canvas_apply_conflicts_on_external_change_and_rejects_bad_ops() {
     use crate::canvas::apply::{CanvasAction, CanvasOp};
 
