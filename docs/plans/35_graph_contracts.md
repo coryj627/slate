@@ -11752,14 +11752,21 @@ three journeys re-run.
 
 ## PR D — the diagram: the renderer, the per-node peers, the tiers, the layout driver, zoom
 
-Revision 4, 2026-09-14 (revision 1 = 095ecb0f, revision 2 = 8d0a85f3,
-revision 3 = 826ff113; rounds 1–3's findings IGQ-1..9, IGR-1 and
-IGS-1..5 discharged in the text below), branch `feat/w6-2-d` on the
-merged A, B1, B2 and C (`main` at 9a8028a7). Revision 4 is the DESIGN
-PASS the protocol's rule 4 requires — rule G carried a blocker in three
-consecutive rounds, every one the disposed-handle class — and it removes
-the class rather than its sites: the layout session lives behind ONE
-admission gate ("Design pass II" below; Term G7). The spec is `w6_2_graph_spec.md` §PR D
+Revision 5, 2026-09-14 — FROZEN (revision 1 = 095ecb0f, revision 2 =
+8d0a85f3, revision 3 = 826ff113, revision 4 = 1d37a03e; rounds 1–4's
+findings IGQ-1..9, IGR-1, IGS-1..5 and IGT-1..5 discharged in the text
+below), branch `feat/w6-2-d` on the merged A, B1, B2 and C (`main` at
+9a8028a7). Revision 4 was the DESIGN PASS the protocol's rule 4
+required — rule G carried a blocker in three consecutive rounds, every
+one the disposed-handle class — and it removed the class rather than
+its sites: the layout session lives behind ONE admission gate ("Design
+pass II" below; Term G7). Round 4 returned one more blocker CREATED by
+that pass (the build's fresh handle outside the gate), which is rule
+5's THIRD instance (rounds 2, 3, 4): revision 5 corrects it — the gate
+is born with the handle (Term G2) — and FREEZES under the PR 0b, B and
+C precedent ("THE FREEZE" below): no round 5; the four ledgers are
+carried into the task loop, which discharges them by code and by the
+post-implementation passes; precedent applied; the owner may overrule. The spec is `w6_2_graph_spec.md` §PR D
 (amended in place by this revision where DD-14 says so), consuming §1's
 rules R-A..R-I, §2's rows D, H, J, L, M, N and P, §5 and §7. Every
 neighbouring section of this document — 0a, 0b, A (rule L), B (rule C),
@@ -11770,7 +11777,8 @@ by an owner amendment PENDING at DD-Q5 (the text is given there and is
 applied in place when the owner answers), and C-15 iv's closed census
 lists are amended under the provision C-15 iv itself makes for later PRs
 ("by amendment of this list"; DD-16). Round numbering: IGQ-n (round 1),
-IGR-n (round 2), IGS-n (round 3), IGT-n (round 4), the post-implementation passes IPH-n.
+IGR-n (round 2), IGS-n (round 3), IGT-n (round 4); no round 5; the post-implementation
+passes IPH-n.
 
 **Five owner questions at the head (DD-Q1..DD-Q5).** Each is written to
 its stated DEFAULT below, the alternative recorded beside it; a round
@@ -11828,7 +11836,8 @@ reports the text's application of its default, never the choice.
   or failed → the diagram's state host, provisional while building —
   quiescence in Diagram mode reads 'no build in flight' beside Term
   Q2's; completion on the document only on a delivered quiescent
-  landing." C-17's pin list gains the diagram facts of D-7. Alternative:
+  landing." C-17 is NOT touched — the diagram's landing facts are D-7's
+  own (IGT-3). Alternative:
   rule F untouched and the diagram's landing a D-owned rule reached from
   F4's table arm by delegation — the same behaviour, the frozen text
   unchanged, the census walling it weaker (IGQ-5 named the silence, not
@@ -12186,18 +12195,32 @@ a diagram arm named in Term M4; rules L, P, Q and W are untouched.
   `StartWorkAlwaysAsync` compute crosses `StartGraphLayout(filter,
   forces, config)` then `NodeIds()`, `Edges()`, `NodeMetadata()` and
   `Generation()` — the mac's one atomic build (`:47–64`), the three
-  vectors read under the session's own lock; the apply installs the
-  model ONLY when the document is live, seated, still in Diagram mode,
-  the sequence is the captured one (the mac's `:66–68`) AND the captured
+  vectors read under the session's own lock — and CONSTRUCTS THE MODEL
+  ON THE POOL, the fresh handle flowing straight into the model's
+  constructor so the gate (Term G7) is born WITH the handle and no raw
+  session exists outside a model at any instant (IGT-1, IGT-2: the model
+  IS the build's carrier); before the compute returns, the new model is
+  REGISTERED in the document's unseated-builds set under the document's
+  lock — or, when the document is already retired under that lock,
+  RETIRED at once (its gate frees the handle: nothing is admitted). The
+  apply — when it runs — takes the model out of the set and installs it
+  ONLY when the document is live, seated, still in Diagram mode, the
+  sequence is the captured one (the mac's `:66–68`) AND the captured
   filter equals `ViewState.Filter` NOW (IGQ-2: a preset or a filter
   change during the build has no live model for Term G6 to tear down,
-  so the guard, not the trigger, refuses the stale build) — else
-  disposes the session it was handed and, when the refusal was the
-  filter's and the mode is still Diagram, runs this term again under the
-  current filter (one rebuild, its own sequence); at the install the
-  model's forces are re-read from `CurrentConfig.Forces` and applied
-  through `SetForces` when they differ from the captured ones (PR E's
-  edit during a build is not lost); a failure — `VaultException`, or
+  so the guard, not the trigger, refuses the stale build) — else RETIRES
+  it (the gate frees the handle) and, when the refusal was the filter's
+  and the mode is still Diagram, runs this term again under the current
+  filter (one rebuild, its own sequence); an apply the retired
+  scheduler WITHDRAWS (`Shutdown` after the compute, before the apply —
+  `PanelWorkScheduler.cs:430–493`) leaves the model in the set, and
+  `Retire()` retires every unseated build under the same lock (Term G7)
+  — so every fresh handle is freed by exactly one of: the apply's
+  install (later, by teardown), the apply's refusal, the compute's own
+  retirement, or the document's retirement sweep (IGT-1). At the
+  install the model's forces are re-read from `CurrentConfig.Forces`
+  and applied through `SetForces` (through the gate) when they differ
+  from the captured ones (PR E's edit during a build is not lost); a failure — `VaultException`, or
   an InvalidOperationException / `IOException` (`Fetch`'s two catches,
   `:876–882`) — installs DiagramError (the humanised message) and no
   model. While the build is in flight DiagramLoading is true. The
@@ -12208,8 +12231,11 @@ a diagram arm named in Term M4; rules L, P, Q and W are untouched.
 - **Term G3 — the semantic epoch and the topology.** The renderer's
   visible set, per-node record and edges come from `GraphTopology(query,
   config)` fetched ONCE per epoch — (the model's identity, the model's
-  generation, the view state's `GraphVisibilityQuery`, `CurrentConfig`)
-  compared by value — through the document's scheduler
+  generation, the view state's `GraphVisibilityQuery`, and the
+  TOPOLOGY-RELEVANT part of `CurrentConfig` — its `Groups`, the only
+  config core's `topology` reads, through `matching_group`;
+  `graph_queries.rs:463–520`, `graph_config.rs:257–283`; IGT-4) compared
+  by value — through the document's scheduler
   (FetchTopology: the compute crosses `GraphTopology`, the apply accepts
   the record only when its `Generation` equals the model's — design A —
   and the epoch is still current, else drops it and leaves the previous
@@ -12217,8 +12243,10 @@ a diagram arm named in Term M4; rules L, P, Q and W are untouched.
   model shows nothing until it lands). A query whose FILTER differs from
   the model's is never issued against it — it is Term G6's rebuild. The
   frames between two epochs paint the accepted set; a needle, a kind
-  overlay, a config change (groups, display, verbosity) or an adopted
-  generation is a new epoch. The topology entry is the ONE per-node
+  overlay, a GROUPS change or an adopted generation is a new epoch; a
+  DISPLAY change (arrows, the fade zoom, the size multiplier, the
+  thickness) redraws locally and a VERBOSITY change re-names the peers
+  locally (Term T2) — neither crosses (IGT-4). The topology entry is the ONE per-node
   source for the label, the kind, the path, the degrees, the component,
   the diameter, the group, the label slot and the neighbours (0b-6b, R-D);
   the model's node metadata serves the actions and the row copy only
@@ -12290,12 +12318,11 @@ a diagram arm named in Term M4; rules L, P, Q and W are untouched.
   pin's `PinNode`/`UnpinNode` (Term N7) and PR E's `SetForces` → false
   (IGS-2: the synchronous mutators are inside the gate too — a stale
   menu item, a peer action or a forces edit after a teardown is
-  refused and changes nothing). The BUILD is the one exception by
-  construction: its compute creates the fresh handle and reads
-  `NodeIds`/`Edges`/`NodeMetadata`/`Generation` over it BEFORE any
-  model owns it — a private scope no other code can reach — and its
-  apply either seats it in the new model or disposes it (Term G2); no
-  call follows a refused build. No site anywhere catches
+  refused and changes nothing). The BUILD is no exception: its compute
+  constructs the model around the fresh handle before it returns (Term
+  G2), so the gate exists from the handle's first instant, the reads of
+  the build are calls THROUGH that gate, and a refused, withdrawn or
+  retired build is retired through it (IGT-1). No site anywhere catches
   ObjectDisposedException: the throw is UNREACHABLE — a call is
   admitted only while the model is live and the handle is disposed only
   after the last admitted call returns — and a catch would only hide a
@@ -12728,14 +12755,21 @@ TheBuildReadsNoTableSnapshot (a table under ERROR still builds a diagram
 (a preset run while the first build is parked on the fetch gate: the
 landed session disposed, one more `StartGraphLayout` under the preset's
 filter, the model's filter the preset's — IGQ-2);
-AForcesEditDuringTheBuildIsAppliedAtTheInstall; NoCrossingHappensPerFrameOrPan
+AForcesEditDuringTheBuildIsAppliedAtTheInstall;
+AWithdrawnBuildApplyLeavesNoHandle (the compute parked after its
+registration, the workspace retired and drained — the apply withdrawn —
+the park released: the model retired by the sweep, the count at
+baseline; IGT-1); ABuildThatReturnsIntoARetiredDocumentRetiresItself
+(parked before its registration, the document retired, released: the
+gate frees the handle in the compute; IGT-1); NoCrossingHappensPerFrameOrPan
 (a settle of N steps costs N ticks and one topology).
 
 **D-3 — The epoch and the topology (Term G3).** Pinned by facts:
 TheTopologyIsFetchedOncePerEpochWhileSettling
 (`testTopologyIsFetchedOncePerEpochWhileSettling`'s twin: five steps,
-one crossing; a needle, a kind overlay, a groups change, a display
-change and a verbosity change each a new epoch — five more);
+one crossing; a needle, a kind overlay and a groups change each a new
+epoch — three more; a DISPLAY change and a VERBOSITY change cross NOTHING
+and the peers are re-named or the visuals redrawn — IGT-4);
 ATopologyFromAnotherGenerationIsDroppedAndTheSetEmptiesUntilTheRefreshAdopts
 (`testMutationBetweenAdoptionAndQueryEmptiesTheVisibleSet`'s twin: a note
 saved between the build and the epoch's fetch);
@@ -12840,7 +12874,9 @@ the prefix over core's render, empty for an isolated node);
 APanNeverDropsAPeer (`testTierARemainsCompleteAfterAPan`);
 APeersRectangleFollowsTheViewportAtReadTime (a zoom moves it; the
 canvas journey's classic in-process); AVerbosityChangeRenamesEveryPeerWithoutALoad
-(C-9); ThePeerIsIdentityStableAcrossRebuildsWithinAModel;
+(C-9); ThePeerIsIdentityStableAcrossEpochsRefreshesAndViewportChangesWithinAModel
+(IGT-5); AModelReplacementRecreatesThePeers (a rebuild: new peers, the
+old ones gone);
 ItemStatusReadsPinnedWhilePinned; TheContainerExposesSelectionAndTheZoomValue
 (single, not required, the selected peer; "Zoom 100 percent" at actual
 size — the canvas's `TheZoomValueIsCoresRenderMinusItsPeriod` shape:
@@ -12969,10 +13005,13 @@ scheduler step, not a body); and the GATE arm (Term G7; IGR-1, IGS-1, IGS-2): th
 field is private and read by WithSession alone; every `Tick`,
 `RunToConvergence`, `Refresh`, `NodeIds`, `Edges`, `NodeMetadata`,
 `Generation`, `PinNode`, `UnpinNode` and `SetForces` invocation's
-receiver is WithSession's lambda parameter, or the build compute's
-fresh handle (`StartGraphLayout`'s result before a model owns it); no
-`LayoutSession`-typed field, property or local exists under `Graph/`
-outside the model and the build's compute; no handler names
+receiver is WithSession's lambda parameter; the ONE `LayoutSession`-typed
+expression outside the model is `StartGraphLayout`'s result in the
+build's compute, whose only use is the model constructor's argument (a
+dataflow arm: no local holds it past the constructor call, no second
+use) — the model is the one carrier, its disposal paths the gate's
+(IGT-2); no other `LayoutSession`-typed field, property or local exists
+under `Graph/`; no handler names
 ObjectDisposedException under `Graph/` — a bare call on the field, a
 second reader of the field, a `LayoutSession` held elsewhere and a
 planted catch are the named mutations; (iv) the announcement-seam census: the
@@ -13299,7 +13338,40 @@ disposed-handle class removed by one gate rather than a fourth site.
 | IGS-4 | MAJOR | taken — DD-Q4 and DR-2 name the graph vault's twelve nodes (eleven under the default filter), not seven |
 | IGS-5 | MAJOR | taken — the spec's §PR F §K line amended in place ("first windowed rebuild" → "first rebuild") and listed under D-17 |
 
-### Tests that pin PR D (revision 4's list; the task loop records what lands)
+### Round 4 — five findings (IGT-1..IGT-5), dispositions; rule 5 the third time → THE FREEZE
+
+Run 2026-09-14 on revision 4 (1d37a03e, the design pass) with `codex
+exec` on gpt-5.5 at medium effort, read-only over the local tree; 1
+blocker (CREATED by revision 4's IGS-1 discharge — the build's fresh
+handle outside the gate), 4 majors, 0 minors. Findings per round
+9 / 1 / 5 / 5, blockers 4 / 1 / 2 / 1; every blocker after round 1
+descends from the previous revision's fix in rule G's lifecycle — the
+loop repairing its own repairs (the PR C convergence signal) — and rule
+5 has now applied in rounds 2, 3 and 4.
+
+| # | Severity | Disposition |
+|---|---|---|
+| IGT-1 | BLOCKER (created by IGS-1's discharge) | taken — Term G2: the model is constructed on the pool around the fresh handle (the gate born with it) and registered as an unseated build under the document's lock, or retired at once when the document is already retired; the apply seats or retires it; `Retire()` sweeps the set; every handle freed by exactly one path; D-2's two facts |
+| IGT-2 | MAJOR (created by IGS-1's discharge) | taken — D-15 iii: the model is the one carrier; the one `LayoutSession`-typed expression outside it is the build compute's constructor argument, walled by a dataflow arm |
+| IGT-3 | MAJOR | taken — DD-Q5 keeps to Term F4; C-17 is untouched (the diagram's landing facts are D-7's) |
+| IGT-4 | MAJOR | taken — Term G3's epoch key is (model, generation, query, `Groups`); display redraws and verbosity re-names locally; D-3's facts assert the zero crossings |
+| IGT-5 | MAJOR | taken — D-8's fact renamed to the lifetime that exists (within one model, across epochs, refreshes and viewport changes); a model replacement recreates the peers |
+
+### THE FREEZE — revision 5 stands
+
+Rule 5 for the third time (rounds 2, 3, 4) — the PR 0b precedent, applied
+by PR B at revision 8 and PR C at revision 5: the text is corrected for
+every finding of every round as the discharge; the four ledgers
+(IGQ, IGR, IGS, IGT) are carried into the task loop, which discharges
+them by code — one TGD record per task naming the facts and the
+mutations that pin each — and the post-implementation codex passes
+(IPH-n) verify the code against this frozen text; no round 5 runs on the
+contracts. The five owner questions DD-Q1..DD-Q5 stay PENDING, the
+section written to their defaults; DD-Q5's amendment of Term F4 is
+applied in place under PR C when the owner answers. Precedent applied;
+the owner may overrule.
+
+### Tests that pin PR D (revision 5's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14
   — the model's lifecycle, the build, the epoch, the driver, the refresh,
