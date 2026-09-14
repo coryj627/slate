@@ -14384,11 +14384,16 @@ to ready on this landing; CI and codoki arbitrate the head.
 
 ## PR E — the inspector: filters, groups, display, forces
 
-Revision 4, 2026-09-14 — OPEN for round 4 (revision 1 = 39e2303f,
-revision 2 = b6858329, revision 3 = ac6c8bea; rounds 1–3's findings
-IGU-1..8, IGV-1..6 and IGW-1..5 discharged in the text below and
-ledgered at the end), branch `feat/w6-2-e` on the merged A, B1, B2, C
-and D (`main` at 6f58dc07). The spec is
+Revision 5, 2026-09-14 — OPEN for round 5 (revision 1 = 39e2303f,
+revision 2 = b6858329, revision 3 = ac6c8bea, revision 4 = 694d0d56;
+rounds 1–4's findings IGU-1..8, IGV-1..6, IGW-1..5 and IGX-1..3
+discharged in the text below and ledgered at the end), branch
+`feat/w6-2-e` on the merged A, B1, B2, C and D (`main` at 6f58dc07).
+The protocol's rule 5 (blockers CREATED by a revision's own changes)
+has two instances so far: round 2 (IGV-1..3, created by revision 2)
+and round 4 (IGX-1..2, created by revision 3's build-in-flight arm); a
+third freezes under the PR 0b, B and D precedent, with the ledger
+carried into the task loop. The spec is
 `w6_2_graph_spec.md` §PR E (its Goal, Consumes, Builds, Behavior,
 Tests, Evidence and Hand-off lines; amended in place where ED-8 says
 so), consuming §1's rules R-A..R-I, §2's rows D, H, J, L, M, N and P,
@@ -14560,8 +14565,10 @@ never typed (0bD-12).
   sections is disabled (`IsEnabled` bound to IsGraphEffective) and a
   notice at the pane's top says `Open the graph to change these
   settings.` (a Text, AutomationId GraphInspectorInactive, a
-  Windows-only string, E-D8; never announced); the mac's inspector is
-  unreachable outside its graph tab, so this is its reachability. The
+  Windows-only string, E-D8; never announced; when the read-only notice
+  of Term Y6 shows too, the inactive notice is FIRST — IGX-3); the mac's
+  inspector is unreachable outside its graph tab, so this is its
+  reachability. The
   workspace recomputes IsGraphEffective from the one funnel that
   moves the graph's effectiveness (rule L's `SyncPanels`, beside the
   document's NotifyDiagramAvailabilityChanged) and at the document's
@@ -14668,8 +14675,12 @@ never typed (0bD-12).
   pane's top — a Text, AutomationId GraphInspectorReadOnly, its text
   `Graph settings are read-only: ` + the preferences' `LoadFailure`
   (the store's reason as loaded, `GraphPreferencesViewModel.cs:98–131`;
-  C-10's decode arms; IGV-5), a Windows-only string (E-D6) — visible iff `!IsWritable`, never announced (the
-  reader meets it as the pane's first text); no control is disabled.
+  C-10's decode arms; IGV-5), a Windows-only string (E-D6) — visible
+  iff `!IsWritable`, never announced; the
+  READ-ONLY state alone disables nothing, and the EFFECTIVENESS gate
+  (Term I7) disables the controls whatever the writability; when both
+  notices show, the inactive notice is first and the read-only notice
+  second, both at the pane's top above the sections (IGX-3).
 
 #### Rule Z — the display, in four terms
 
@@ -14730,13 +14741,16 @@ never typed (0bD-12).
   the kernel at the INSTALL — D's install re-reads `CurrentConfig.Forces`
   and applies it when it differs from the build's captured forces
   ("PR E's edit during the build is not lost",
-  `GraphDocumentViewModel.cs:932–937`) — and THAT re-apply ARMS the
-  settle line (`SettleAnnouncementArmed = true` at the install, before
-  its `StartSettle`, `:946`), so the run the install starts speaks
-  `GraphLayoutSettled` for the edit (IGV-2; the mac arms only over a
-  live session and stays silent for an edit under its build — a
-  Windows improvement recorded as E-D7); an edit that returns the
-  forces to the captured ones arms nothing (nothing re-heats). In Table
+  `GraphDocumentViewModel.cs:932–937`) — and PR E ADDS THE ARM THERE
+  (IGX-1: main's install re-applies and starts the settle, `:939–946`,
+  and arms nothing): ONE edit to the install — when `forces !=
+  build.Forces` and the re-apply is admitted (`model.SetForces` true),
+  `SettleAnnouncementArmed = true` before the install's `StartSettle`
+  — so the run the install starts speaks `GraphLayoutSettled` for the
+  edit (IGV-2; the mac arms only over a live session and stays silent
+  for an edit under its build — a Windows improvement recorded as
+  E-D7); an edit that returns the forces to the captured ones arms
+  nothing (nothing re-heats). E-1 lists the edit; a mutation drops it. In Table
   mode or after a failed build nothing is armed and nothing is ticked.
   The sliders are enabled only while the graph is effective (Term I7),
   so every edit finds a seated, effective document and the line it
@@ -14760,7 +14774,17 @@ never typed (0bD-12).
   (`GraphDocumentViewModel.cs:1325–1333`) speaks `GraphLayoutSettled`
   once and disarms — Term G4 as frozen: two events in the mac's order,
   the force value then the settle (0a-D5). A second edit before the
-  settle re-arms and restarts; the line speaks once for the last.
+  settle re-arms and restarts; the line speaks once for the LAST run:
+  the relay's settle class is a 200 ms latest-wins window
+  (`GraphAnnouncer.cs:151`, `:246–251`), so a settle QUEUED by the
+  first run's convergence would speak while the second run settles —
+  the document's `ApplyForces`, on every ADMITTED edit over a live
+  model, calls the relay's new `DropPendingSettle()` (the twin of
+  `DropPendingNavigation()`, `:206–211`, C-12's shape) BEFORE re-arming
+  and restarting (IGX-2); a queued settle of a run that is no longer
+  the last is dropped, never spoken. The relay's seam census gains the
+  drop; a fact converges a run, queues its settle, edits again inside
+  the window and hears one settle for the second run alone.
 - **Term K5 — a run at the ceiling.** The driver ends a run at
   `MaxIterationsPerRun` when the predicate never holds (TGD-2's
   deviation); the settle line speaks at that end too (`Converged` is
@@ -14779,7 +14803,9 @@ model), IsGraphInspectorShown and `ToggleGraphInspector()` (Term I2).
 The surface gains the header's toggle (Term I2). The preferences gain
 `SetFilters`, `SetGroups`, `SetDisplay` and the `DisplayChanged` event
 (Terms X1, Y2, Z1, Z2). The document gains `ChangeFilter(GraphFilter)`
-(Term X1), `ApplyForces(GraphForcesConfig)` (Term K2), AnnounceForceValue
+(Term X1), `ApplyForces(GraphForcesConfig)` (Term K2) with the install's one-line
+arm for an edit under the build (Term K2; IGX-1) and the relay's
+`DropPendingSettle()` (the announcer's, Term K4; IGX-2), AnnounceForceValue
 (Term K3) and the `DiagramDisplay` forward (Term Z2). `GraphPhrase`
 gains the inventory's strings (E-11) and the read-only notice's prefix
 (E-D6). The preferences raise `DisplayChanged` and `ForcesChanged`
@@ -15018,8 +15044,9 @@ GraphInspectorInactive (Term I7).
   the mac edits live and saves nothing without a word; Windows edits
   live and says the file will not take it, in a Windows-only string.
 - **E-D7 — A forces edit under a build in flight speaks the settle**
-  (Term K2; IGV-2): the install's re-apply arms the line; the mac arms
-  only over a live session and stays silent for that edit.
+  (Term K2; IGV-2): PR E's install edit arms the line beside main's
+  re-apply; the mac arms only over a live session and stays silent for
+  that edit.
 - **E-D8 — The pane is disabled outside an effective graph, with a
   notice** (Term I7; IGW-1): the mac's panel is unreachable outside its
   graph tab; Windows's leaf can be visible anywhere, so it says why it
@@ -15076,7 +15103,15 @@ GraphInspectorInactive (Term I7).
 | IGW-4 | MAJOR | taken — E-13 reaches the switcher through the toggle's hide (rule F's request lands the grid's row), never a Shift+Tab from the pane |
 | IGW-5 | MAJOR | taken — E-13 scans last, with the pane shown; the readback taken with the pane hidden and the keys on the renderer |
 
-### Tests that pin PR E (revision 4's list; the task loop records what lands)
+### Round 4 ledger (PR E)
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| IGX-1 | BLOCKER (created by revision 3, IGV-2) | taken — Term K2 names the install's arm as PR E's ONE edit to InstallBuild (main arms nothing there); E-1 lists it; a mutation drops it |
+| IGX-2 | BLOCKER (created by revision 3, IGV-2) | taken — Term K4: `ApplyForces` drops the relay's pending settle on every admitted edit before re-arming (DropPendingSettle, the navigation drop's twin); a fact edits twice inside the window |
+| IGX-3 | MAJOR | taken — Terms I7 and Y6 ordered: the effectiveness gate disables whatever the writability, read-only alone disables nothing, the inactive notice first when both show |
+
+### Tests that pin PR E (revision 5's list; the task loop records what lands)
 
 - GraphInspectorTests (new): the view model's reads and writes per rule
   (I6, X1–X5, Y1–Y6, Z1–Z4, K1–K6), the changed-control table, the
@@ -15090,13 +15125,16 @@ GraphInspectorInactive (Term I7).
   sink (Terms I2, I5; IGV-1).
 - `GraphPreferencesTests`: the three new triggers by field, the no-ops,
   the read-only gate.
+- `GraphAnnouncerTests`: DropPendingSettle drops a queued settle and
+  nothing else (Term K4).
 - `GraphDiagramTests`: the forces' arm and restart through the gate, the
   settle line once, the value BEFORE the settle under Reduce Motion's
   one-shot convergence and under the pumped scheduler (IGU-2), the
   display's redraw and a hit at the enlarged radius after a node-size
   change (IGU-8), the groups' epoch (Terms K2, K4, Z2, Y2), a forces
   edit under a build in flight armed at the install and spoken at its
-  run's end (IGV-2).
+  run's end (IGV-2), a second edit inside the settle window dropping the
+  first run's queued line and speaking once for the last (IGX-2).
 - `GraphDocumentTests`: `ChangeFilter`'s route (the overlay cleared, the
   pair under FilterCount, the pending sort carried).
 - `GraphConfigStoreTests`, `GraphConfigWriterTests`: the four fields'
