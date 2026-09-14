@@ -116,6 +116,12 @@ public sealed partial class GraphDiagramTests
             window.Dispose();
             Assert.True(PumpedDispatcher.PumpUntil(() => !diagram.IsLoaded, TimeSpan.FromSeconds(5)), "the window's close never unloaded the renderer");
             Assert.False(diagram.IsSubscribedToThemeForTests, "an unloaded renderer must be released from the theme's change");
+            // The seam models the manager's raise: it refuses an unsubscribed
+            // renderer rather than driving the handler in a state production
+            // never reaches.
+            int released = diagram.RedrawsForTests;
+            _ = Assert.Throws<InvalidOperationException>(diagram.RaiseThemeChangedForTests);
+            Assert.Equal(released, diagram.RedrawsForTests);
         });
     }
 

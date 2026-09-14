@@ -198,7 +198,16 @@ internal sealed class GraphDiagramView : FrameworkElement
     /// renderer and its subscription read — never the manager's static
     /// event raised, whose audience in a test process is every subscriber
     /// every other fact left behind on its own thread.</summary>
-    internal void RaiseThemeChangedForTests() => OnThemeChanged(this, EventArgs.Empty);
+    internal void RaiseThemeChangedForTests()
+    {
+        // Fail fast when misused (codoki's inline on a3a9419f): a raise reaches
+        // this renderer only while it is subscribed, as the manager's would.
+        if (!_themeSubscribed)
+        {
+            throw new InvalidOperationException("the renderer is not subscribed to the theme's change; a raise would not reach it.");
+        }
+        OnThemeChanged(this, EventArgs.Empty);
+    }
 
     internal bool IsSubscribedToThemeForTests => _themeSubscribed;
 

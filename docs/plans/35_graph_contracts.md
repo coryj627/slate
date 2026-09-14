@@ -14330,6 +14330,34 @@ dropped; Unloaded keeping it — two of two caught. The lesson,
 recorded for the loop: a test seam that raises a static event is a
 test of the whole process; a seam drives the subject.
 
+**TGD-13 — codoki's inline on a3a9419f: the theme seam fails fast.**
+THE REVIEW (codoki's sixth, on a3a9419f): "Safe to merge", one inline
+Medium on `GraphDiagramView.RaiseThemeChangedForTests` — calling the
+handler unconditionally lets a test exercise the theme arm on a
+renderer that is not subscribed, a state the manager's raise never
+reaches, so a fact could pass on a handler that ran without a
+subscription. TAKEN: the seam now refuses an unsubscribed renderer
+(an InvalidOperationException, "a raise would not reach it"), so it
+models the manager's raise — it reaches this renderer only while
+subscribed — and
+AThemeChangeRedrawsTheDiagramAndUnloadReleasesIt asserts the refusal
+after the window's close unloaded the renderer (the redraw count
+unchanged). FACTS: the CI-shaped regression green, 2,852 of 2,852. MUTATIONS (T10's two, re-verified):
+two of two caught. The thread is answered with this landing's
+hash. THE LOOP'S CLOSE — post-implementation pass IPH-5 (gpt-5.5
+medium, read-only, over a3a9419f) returned NO findings and "safe to
+continue": the stop rule is met — the standing gate met on a head
+(every lane green on 6d36eb99 and 28472d4e, codoki approving each; the
+theme fact's process-wide raiser that failed CI on the later head
+replaced in TGD-12, the CI-shaped regression 2,852 of 2,852) and two
+consecutive passes without a blocker (IPH-4's one major taken, IPH-5
+nothing). The precedent applied is PR A's (six passes, the last two
+without a blocker); PR D ran five — findings 3, 4, 1, 1, 0; blockers 1
+(rejected in mechanism, its gap closed), 2, 1, 0, 0 — every blocker
+after the first a real defect against the frozen terms or core's id
+contract; the owner may overrule and ask for a sixth. The PR converts
+to ready on this landing; CI and codoki arbitrate the head.
+
 ### Tests that pin PR D (revision 5's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14
