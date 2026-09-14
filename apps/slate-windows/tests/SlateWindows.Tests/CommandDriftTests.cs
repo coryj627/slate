@@ -473,6 +473,28 @@ public sealed class CommandDriftTests
 
             yield return (id.Name.Identifier.ValueText, lambda.ExpressionBody);
         }
+
+        // W6-2 PR D (Term V3): the viewport records — the canvas's and the
+        // graph's — are registration sites too: each row is a tuple whose
+        // first element is the id and whose last is the resolver the table
+        // is built from (`BuildResolvers`), so a menu item bound to a
+        // record's command is backed by that row. Read as tuple syntax for
+        // the same reason the table is read as initializer syntax.
+        foreach (TupleExpressionSyntax row in registrar.Root
+            .DescendantNodes()
+            .OfType<TupleExpressionSyntax>())
+        {
+            if (row.Arguments.Count < 2
+                || row.Arguments[0].Expression is not MemberAccessExpressionSyntax rowId
+                || CSharpSource.Normalize(rowId.Expression) != "ChordTable.Ids"
+                || row.Arguments[^1].Expression is not LambdaExpressionSyntax rowLambda
+                || rowLambda.ExpressionBody is null)
+            {
+                continue;
+            }
+
+            yield return (rowId.Name.Identifier.ValueText, rowLambda.ExpressionBody);
+        }
     }
 
     /// <summary>

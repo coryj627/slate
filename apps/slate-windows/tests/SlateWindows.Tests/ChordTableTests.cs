@@ -301,6 +301,17 @@ public sealed class ChordTableTests
             ["slate.canvas.whereAmI | slate.graph.whereAmI"] =
                 "Ctrl+Alt+Shift+I. Disjoint by DELIVERY: the canvas surface's and the "
                 + "graph surface's tunnelling handlers, never focused at once.",
+            // W6-2 PR D (Term V3, C-11): the three viewport chords the graph
+            // shares with the canvas rows — the same reason, C-8's.
+            ["slate.canvas.zoomIn | slate.graph.zoomIn"] =
+                "Ctrl+=. Disjoint by DELIVERY: the canvas surface's and the graph "
+                + "surface's tunnelling handlers, never focused at once.",
+            ["slate.canvas.zoomOut | slate.graph.zoomOut"] =
+                "Ctrl+-. Disjoint by DELIVERY: the canvas surface's and the graph "
+                + "surface's tunnelling handlers, never focused at once.",
+            ["slate.canvas.actualSize | slate.graph.actualSize"] =
+                "Ctrl+0. Disjoint by DELIVERY: the canvas surface's and the graph "
+                + "surface's tunnelling handlers, never focused at once.",
         };
 
     [Fact]

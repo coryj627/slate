@@ -167,6 +167,41 @@ public sealed class ThemeTokenContrastTests
         }
     }
 
+    /// <summary>W6-2 PR D (Term T5, D-10): the graph matrix in both
+    /// appearances — the label against the window > 75 (text); each of the
+    /// eight group fills, the note and the attachment fill against the window
+    /// > 15 (a graphical mark, the mac's bar); the edge against the window
+    /// > 3; the ring carrier against the window > 75. The group's MEANING is
+    /// never colour alone — the ring's weight and pattern carry it — so the
+    /// fills' floor is the mark's, not text's.</summary>
+    [Theory]
+    [InlineData("Slate.Light.xaml")]
+    [InlineData("Slate.Dark.xaml")]
+    public void TheGraphTokensMeetTheMatrixInBothAppearances(string fileName)
+    {
+        IReadOnlyDictionary<string, Rgb> colors = ReadColors(fileName);
+        var rows = new List<(string Name, string Key, double Floor)>
+        {
+            ("graph-label/window", "Slate.Graph.LabelColor", 75),
+            ("graph-ring/window", "Slate.Graph.RingColor", 75),
+            ("graph-outline/window", "Slate.Graph.OutlineColor", 15),
+            ("graph-note/window", "Slate.Graph.NoteColor", 15),
+            ("graph-attachment/window", "Slate.Graph.AttachmentColor", 15),
+            ("graph-edge/window", "Slate.Graph.EdgeColor", 3),
+        };
+        for (int group = 1; group <= 8; group++)
+        {
+            rows.Add(($"graph-group{group}/window", $"Slate.Graph.Group{group}Color", 15));
+        }
+        foreach ((string name, string key, double floor) in rows)
+        {
+            double contrast = Math.Abs(ApcaLc(colors[key], colors["Slate.WindowBackgroundColor"]));
+            Assert.True(contrast > floor, $"{fileName} {name} measured |Lc| {contrast:F2}; expected > {floor}.");
+        }
+        // The hollow ghost's surface IS the window: the outline carries it.
+        Assert.Equal(colors["Slate.WindowBackgroundColor"], colors["Slate.Graph.SurfaceColor"]);
+    }
+
     private static IReadOnlyDictionary<string, Rgb> ReadColors(string fileName)
     {
         string filePath = Path.GetFullPath(Path.Combine(

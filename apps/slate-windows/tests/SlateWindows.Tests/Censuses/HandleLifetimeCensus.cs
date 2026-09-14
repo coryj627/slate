@@ -14,7 +14,7 @@ using uniffi.slate_uniffi;
 namespace SlateWindows.Tests.Censuses;
 
 [Trait("census", "handle-lifetime")]
-public class HandleLifetimeCensus
+public partial class HandleLifetimeCensus
 {
     [Fact]
     public void SessionLifecycle_DisposeReopenFinalizerAndUseAfterDispose()

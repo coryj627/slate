@@ -219,6 +219,24 @@ internal static class SlateCommandRegistrar
                 host => host.Workspace?.CanvasZoomToSelectionCommand),
         ];
 
+    /// <summary>W6-2 PR D (Term V3, DD-7): the graph's four viewport verbs —
+    /// the canvas record's shape, ONE authority for registration, resolution
+    /// and the census: each row names the navigator member that delivers it
+    /// and the workspace command that resolves it.</summary>
+    internal static readonly
+        (string Id, string NavigatorMember, Func<ISlateCommandHost, ICommand?> Resolve)[]
+        GraphViewportBindings =
+        [
+            (ChordTable.Ids.GraphZoomIn, "ZoomIn",
+                host => host.Workspace?.GraphZoomInCommand),
+            (ChordTable.Ids.GraphZoomOut, "ZoomOut",
+                host => host.Workspace?.GraphZoomOutCommand),
+            (ChordTable.Ids.GraphActualSize, "ActualSize",
+                host => host.Workspace?.GraphActualSizeCommand),
+            (ChordTable.Ids.GraphFitGraph, "FitGraph",
+                host => host.Workspace?.GraphFitGraphCommand),
+        ];
+
     private static readonly Dictionary<string, Func<ISlateCommandHost, ICommand?>> Resolvers =
         BuildResolvers();
 
@@ -672,6 +690,12 @@ internal static class SlateCommandRegistrar
         // the census, never a literal entry that can drift from it.
         foreach ((string id, _, Func<ISlateCommandHost, ICommand?> resolve)
             in CanvasViewportBindings)
+        {
+            map[id] = resolve;
+        }
+        // W6-2 PR D (Term V3): the graph's four verbs from their own record.
+        foreach ((string id, _, Func<ISlateCommandHost, ICommand?> resolve)
+            in GraphViewportBindings)
         {
             map[id] = resolve;
         }

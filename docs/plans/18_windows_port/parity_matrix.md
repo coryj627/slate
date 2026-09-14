@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-09-09 at `64229842` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-09-14 at `9969226a` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -136,18 +136,18 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.file.printNote` | Print… | ⌘P | Command P | #728 (W3-1) | **§W-F waiver** — out of W3-1 (owner, 2026-07-25); a second composition path, as mac shows by routing print through a separate `ReadingPrintComposer` that re-segments through core. Needs its own unit; tracked, not unshipped. |
 | `slate.file.rename` | Rename… | ⌥⌘R | Option Command R | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
 | `slate.file.revealInFinder` | Reveal in Finder | — | — | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending |
-| `slate.graph.actualSize` | Graph: Actual Size | ⌘0 | Command 0 | #746 (W6-2) | pending |
+| `slate.graph.actualSize` | Graph: Actual Size | ⌘0 | Command 0 | #746 (W6-2) | implemented; local gates green 2026-09-14; interactive CI + human AT pending |
 | `slate.graph.connectionsDeeper` | Connections: Deeper | — | — | #746 (W6-2) | implemented; local gates green 2026-09-05; interactive CI + human AT pending |
 | `slate.graph.connectionsShallower` | Connections: Shallower | — | — | #746 (W6-2) | implemented; local gates green 2026-09-05; interactive CI + human AT pending |
-| `slate.graph.fitGraph` | Graph: Fit Graph | ⌥⌘0 | Option Command 0 | #746 (W6-2) | pending |
+| `slate.graph.fitGraph` | Graph: Fit Graph | ⌥⌘0 | Option Command 0 | #746 (W6-2) | implemented; local gates green 2026-09-14; interactive CI + human AT pending |
 | `slate.graph.mostLinked` | Graph: Most Linked Notes | — | — | #746 (W6-2) | implemented; local gates green 2026-09-09; interactive CI + human AT pending |
 | `slate.graph.openTab` | Open Graph | — | — | #746 (W6-2) | implemented; local gates green 2026-09-05; interactive CI + human AT pending |
 | `slate.graph.orphans` | Graph: Orphaned Notes | — | — | #746 (W6-2) | implemented; local gates green 2026-09-09; interactive CI + human AT pending |
 | `slate.graph.showConnections` | Show Connections | — | — | #746 (W6-2) | implemented; local gates green 2026-09-05; interactive CI + human AT pending |
 | `slate.graph.unresolved` | Graph: Unresolved Links | — | — | #746 (W6-2) | implemented; local gates green 2026-09-09; interactive CI + human AT pending |
 | `slate.graph.whereAmI` | Graph: Where Am I? | ⌃⌘I | Control Command I | #746 (W6-2) | implemented; local gates green 2026-09-09; interactive CI + human AT pending |
-| `slate.graph.zoomIn` | Graph: Zoom In | ⌘= | Command Equals | #746 (W6-2) | pending |
-| `slate.graph.zoomOut` | Graph: Zoom Out | ⌘- | Command Minus | #746 (W6-2) | pending |
+| `slate.graph.zoomIn` | Graph: Zoom In | ⌘= | Command Equals | #746 (W6-2) | implemented; local gates green 2026-09-14; interactive CI + human AT pending |
+| `slate.graph.zoomOut` | Graph: Zoom Out | ⌘- | Command Minus | #746 (W6-2) | implemented; local gates green 2026-09-14; interactive CI + human AT pending |
 | `slate.help.open` | Help | — | — | #756 (W8-6) | pending |
 | `slate.history.showPanel` | Show History Panel | — | — | #739 (W4-7) | implemented; local gates green 2026-08-09; interactive CI + human AT pending |
 | `slate.navigation.jumpToBibliography` | Jump to Bibliography | ⌘J | Command J | #737 (W4-5) | implemented; local gates green 2026-08-04; interactive CI + human AT pending |

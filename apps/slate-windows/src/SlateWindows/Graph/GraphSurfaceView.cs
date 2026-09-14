@@ -55,7 +55,10 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     private readonly TextBlock _stateText;
     private readonly GraphStateHost _stateHost;
     private readonly GraphTableView _table;
+    // W6-2 PR D (Term M5): the second projection, exactly one in the tree.
+    private readonly GraphDiagramView _diagram;
     private bool _synchronizingFilter;
+    private bool _synchronizingSwitcher;
     private bool _detached;
     private readonly AutomationNamedGroupPanel _whereAmIPanel;
     private readonly TextBox _whereAmIReadback;
@@ -155,6 +158,10 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         KeyboardNavigation.SetTabIndex(_stateHost, 5);
         AutomationProperties.SetAutomationId(_stateHost, "GraphStateHost");
         _table = new GraphTableView { TabIndex = 5 };
+        // W6-2 PR D (Term N2): the diagram's ONE focus stop after the switcher,
+        // collapsed until a model is live (Term M5).
+        _diagram = new GraphDiagramView { Visibility = Visibility.Collapsed };
+        KeyboardNavigation.SetTabIndex(_diagram, 5);
 
         // C-8: the Where-am-I PANEL below the projection — the pull-based
         // twin of the announcement (the canvas's construction): a read-only
@@ -218,7 +225,12 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         layout.Children.Add(_stateHost);
         DockPanel.SetDock(_whereAmIPanel, Dock.Bottom);
         layout.Children.Add(_whereAmIPanel);
-        layout.Children.Add(_table);
+        // Term M5: the projection cluster — the table and the diagram share
+        // the fill; the mode collapses all but one.
+        var projections = new Grid();
+        projections.Children.Add(_diagram);
+        projections.Children.Add(_table);
+        layout.Children.Add(projections);
         Content = layout;
 
         // C-1: attachment on the false→true edge of the keys; detachment on
@@ -236,6 +248,9 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             // that re-realises the template adds another one every time —
             // each stale grid rendering every later publication (IPG-12).
             StopObservingModel();
+            // W6-2 PR D: the renderer drops the document and its owned
+            // text-scale service with the element (Term T4).
+            _diagram.Shutdown();
         };
         Loaded += (_, _) =>
         {
@@ -243,6 +258,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             // Re-observe what Unloaded dropped, and re-render from the record
             // as it is NOW: nothing reached this view while it was out.
             ObserveModel(Model);
+            _diagram.Model = Model;
             if (Model is { } model)
             {
                 // Nothing reached this view while it was out of the tree:
@@ -340,18 +356,31 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     {
         if (_whereAmIPanel.Visibility != Visibility.Visible)
         {
-            return false;
+            // W6-2 PR D (T68): the diagram's open tooltip is the next most
+            // transient region inside the rung; false with neither open.
+            return _diagram.DismissTooltip();
         }
         CloseWhereAmI();
         return true;
     }
 
-    public bool ProjectionHasFocus => _table.IsKeyboardFocusWithin || _stateHost.IsKeyboardFocused;
+    public bool ProjectionHasFocus => _table.IsKeyboardFocusWithin || _stateHost.IsKeyboardFocused || _diagram.IsKeyboardFocused;
 
     public bool FilterRegionHasKeys =>
         _filterField.IsKeyboardFocusWithin || _filterSummary.IsKeyboardFocused || _clearFilter.IsKeyboardFocusWithin;
 
     public bool IsLive => !_detached && Model is { IsRetired: false };
+
+    /// <summary>W6-2 PR D (rule M): the active projection, the view state's.</summary>
+    public GraphSurfaceMode ProjectionKind => Model?.ViewState.Mode ?? GraphSurfaceMode.Table;
+
+    /// <summary>Term V2: the verb on the renderer while Diagram is effective
+    /// (Term M3); Refused otherwise — Table mode, no live model — and the
+    /// navigator speaks nothing for it.</summary>
+    public GraphViewportOutcome ViewportCommand(GraphViewportVerb verb) =>
+        Model is { IsDiagramEffective: true } ? _diagram.ViewportCommand(verb) : GraphViewportOutcome.Refused;
+
+    internal GraphDiagramView DiagramForTests => _diagram;
 
     public GraphTableRow? ReadTableSeat(GraphDocumentViewModel document, GraphPublication publication)
     {
@@ -420,6 +449,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         // invisible surface. Loaded re-observes whatever the model is then.
         view.ObserveNavigator(view._detached ? null : (e.NewValue as GraphDocumentViewModel)?.Navigator);
         view._table.Model = e.NewValue as GraphDocumentViewModel;
+        view._diagram.Model = view._detached ? null : e.NewValue as GraphDocumentViewModel;
         if (e.NewValue is GraphDocumentViewModel model)
         {
             view.ObserveModel(model);
@@ -495,23 +525,53 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     /// in order; only Table is selectable in PR A.</summary>
     private void BuildSwitcher(GraphDocumentViewModel model)
     {
-        _switcher.Children.Clear();
-        _modeChoices.Clear();
-        foreach (GraphSurfaceModeSpec spec in model.SurfaceModes)
+        _synchronizingSwitcher = true;
+        try
         {
-            var choice = new RadioButton
+            _switcher.Children.Clear();
+            _modeChoices.Clear();
+            foreach (GraphSurfaceModeSpec spec in model.SurfaceModes)
             {
-                Content = spec.Title,
-                GroupName = "GraphSurfaceMode",
-                Margin = new Thickness(0, 0, 8, 0),
-                IsChecked = spec.Mode == model.ViewState.Mode,
-                IsEnabled = spec.Mode == GraphSurfaceMode.Table,
-                Tag = spec.Mode,
-            };
-            AutomationProperties.SetAutomationId(choice, "GraphMode." + spec.Tag);
-            AutomationProperties.SetName(choice, spec.Title);
-            _switcher.Children.Add(choice);
-            _modeChoices.Add(choice);
+                var choice = new RadioButton
+                {
+                    Content = spec.Title,
+                    GroupName = "GraphSurfaceMode",
+                    Margin = new Thickness(0, 0, 8, 0),
+                    IsChecked = spec.Mode == model.ViewState.Mode,
+                    // W6-2 PR D (rule M, Term M2): both modes live — A-11's
+                    // admission lifted, as A-11 says.
+                    IsEnabled = true,
+                    Tag = spec.Mode,
+                };
+                AutomationProperties.SetAutomationId(choice, "GraphMode." + spec.Tag);
+                AutomationProperties.SetName(choice, spec.Title);
+                GraphSurfaceMode mode = spec.Mode;
+                choice.Checked += (_, _) => OnModeChosen(mode);
+                _switcher.Children.Add(choice);
+                _modeChoices.Add(choice);
+            }
+        }
+        finally
+        {
+            _synchronizingSwitcher = false;
+        }
+    }
+
+    /// <summary>Terms M1 and M2: the switcher's choice writes Mode through the
+    /// document's ONE writer; Term M4: a USER switch with the keys inside the
+    /// surface raises the landing — a programmatic re-check under the syncing
+    /// guard (the persisted restore's path, a document-driven change) raises
+    /// nothing.</summary>
+    private void OnModeChosen(GraphSurfaceMode mode)
+    {
+        if (_synchronizingSwitcher || Model is not { } model)
+        {
+            return;
+        }
+        bool hadTheKeys = IsKeyboardFocusWithin;
+        if (model.SetMode(mode) && hadTheKeys)
+        {
+            RequestProjectionFocus();
         }
     }
 
@@ -523,10 +583,22 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         }
         if (e.PropertyName == nameof(GraphViewState.Mode))
         {
-            foreach (RadioButton choice in _modeChoices)
+            _synchronizingSwitcher = true;
+            try
             {
-                choice.IsChecked = (GraphSurfaceMode)choice.Tag == model.ViewState.Mode;
+                foreach (RadioButton choice in _modeChoices)
+                {
+                    choice.IsChecked = (GraphSurfaceMode)choice.Tag == model.ViewState.Mode;
+                }
             }
+            finally
+            {
+                _synchronizingSwitcher = false;
+            }
+            // Term M5: the projection cluster follows the mode; Term M4: a
+            // pending landing re-asks against the active projection.
+            ApplyState(model.Publication);
+            TryDeliverFocus();
         }
         if (e.PropertyName is nameof(GraphViewState.NameQuery) or nameof(GraphViewState.Filter) or nameof(GraphViewState.KindOnly))
         {
@@ -549,6 +621,16 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             or nameof(GraphDocumentViewModel.FilterCountText))
         {
             RenderFilter(model);
+        }
+        if (e.PropertyName is nameof(GraphDocumentViewModel.DiagramLoading)
+            or nameof(GraphDocumentViewModel.DiagramError)
+            or nameof(GraphDocumentViewModel.HasLiveDiagram))
+        {
+            // W6-2 PR D, Term M5: the diagram's own states; Term M4: the
+            // build's terminal state re-asks the landing (the diagram's
+            // twin of Term F2's terminal-state trigger).
+            ApplyState(model.Publication);
+            TryDeliverFocus();
         }
         // Term F2's trigger here is the REQUEST's own change — a request
         // raised with no load to follow is delivered at once. NOT the
@@ -732,6 +814,44 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         bool restoration = _raisingRestoration || ReferenceEquals(_deferredRestoration, request);
         if (restoration && RestorationMustWait())
         {
+            return;
+        }
+        if (model.ViewState.Mode == GraphSurfaceMode.Diagram)
+        {
+            // W6-2 PR D, Term M4 (DD-Q5's amendment of Term F4): the ACTIVE
+            // projection's arms; quiescence in Diagram mode is "no build in
+            // flight". Under a build the state host is a PROVISIONAL seat for
+            // a SHELL route alone (Term F3's rule for a presenter's request),
+            // the request pending until the build's terminal state.
+            if (model.DiagramLoading)
+            {
+                if (!restoration)
+                {
+                    _ = _stateHost.Focus();
+                }
+                return;
+            }
+            // The build's two terminal states, each read by its own flag: a
+            // model live → the renderer; failed → the state host. The install
+            // notifies one property at a time, so a "not loading, not live,
+            // no error" read between its notifications is a TRANSIENT, never
+            // the failed arm — a request seated on the state host there was
+            // completed against a host the next notification collapsed, and
+            // WPF dropped the keys on the tab strip (the journey's finding,
+            // TGD-7). The request waits for a terminal flag.
+            if (!model.HasLiveDiagram && model.DiagramError is null)
+            {
+                return;
+            }
+            bool landed = model.HasLiveDiagram ? FocusDiagramProjection() : _stateHost.Focus();
+            if (landed)
+            {
+                model.CompleteFocus(request);
+                if (restoration)
+                {
+                    _deferredRestoration = null;
+                }
+            }
             return;
         }
         GraphPublication publication = model.Publication;
@@ -960,6 +1080,11 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     /// precedence — the label visible, the accessible name the mac's.</summary>
     private void ApplyState(GraphPublication publication)
     {
+        if (Model is { ViewState.Mode: GraphSurfaceMode.Diagram } model)
+        {
+            ApplyDiagramState(model);
+            return;
+        }
         switch (publication.State)
         {
             case GraphLoadState.Loading:
@@ -976,9 +1101,35 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
                 _stateText.Visibility = Visibility.Collapsed;
                 _stateHost.Visibility = Visibility.Collapsed;
                 _table.Visibility = Visibility.Visible;
+                _diagram.Visibility = Visibility.Collapsed;
                 break;
         }
     }
+
+    /// <summary>W6-2 PR D, Term M5: in Diagram mode the cluster shows the
+    /// DIAGRAM's own state — a failed build (T19), the build (T20), else the
+    /// renderer — and never the table's A-4 states; exactly one projection
+    /// stays in the tree.</summary>
+    private void ApplyDiagramState(GraphDocumentViewModel model)
+    {
+        if (model.DiagramError is { } error)
+        {
+            ShowState(error, GraphPhrase.DiagramErrorPrefix + error);
+            return;
+        }
+        if (!model.HasLiveDiagram)
+        {
+            ShowState(GraphPhrase.LoadingDiagramText, GraphPhrase.LoadingDiagramAccessibleName);
+            return;
+        }
+        _stateText.Visibility = Visibility.Collapsed;
+        _stateHost.Visibility = Visibility.Collapsed;
+        _table.Visibility = Visibility.Collapsed;
+        _diagram.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>Term M4's live-model arm: the renderer, one focus stop (Term N2).</summary>
+    private bool FocusDiagramProjection() => _diagram.Visibility == Visibility.Visible && _diagram.Focus();
 
     private void ShowState(string text, string accessibleName)
     {
@@ -988,6 +1139,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         _stateText.Visibility = Visibility.Visible;
         _stateHost.Visibility = Visibility.Visible;
         _table.Visibility = Visibility.Collapsed;
+        _diagram.Visibility = Visibility.Collapsed;
     }
 }
 

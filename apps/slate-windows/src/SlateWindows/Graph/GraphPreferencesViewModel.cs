@@ -206,6 +206,20 @@ internal sealed class GraphPreferencesViewModel : BindableBase
         ScheduleSave();
     }
 
+    /// <summary>PR E's forces edit → <c>forces</c> (the mac's slider commit);
+    /// W6-2 PR D reads it at the build's capture and again at the install
+    /// (Term G2). A no-op for the current forces.</summary>
+    public void SetForces(GraphForcesConfig forces)
+    {
+        ArgumentNullException.ThrowIfNull(forces);
+        if (forces == _current.Forces)
+        {
+            return;
+        }
+        _current = _current with { Forces = forces };
+        ScheduleSave();
+    }
+
     /// <summary>The ONE structural mapper from the persisted filters onto
     /// core's query (C-10; IGP-14): the seed and the fresh open's re-apply
     /// are bound to it; the overlay is never persisted.</summary>

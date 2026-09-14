@@ -295,6 +295,11 @@ internal static class ChordTable
         public const string GraphUnresolved = "slate.graph.unresolved";
         public const string GraphMostLinked = "slate.graph.mostLinked";
         public const string GraphWhereAmI = "slate.graph.whereAmI";
+        // W6-2 PR D (Term V3): the four viewport verbs — the mac's ids.
+        public const string GraphZoomIn = "slate.graph.zoomIn";
+        public const string GraphZoomOut = "slate.graph.zoomOut";
+        public const string GraphActualSize = "slate.graph.actualSize";
+        public const string GraphFitGraph = "slate.graph.fitGraph";
 
         // Canvas (W6-1 #745). Ids are byte-identical to mac's.
         public const string CanvasShowOutline = "slate.canvas.showOutline";
@@ -1001,6 +1006,22 @@ internal static class ChordTable
             GraphPhrase.WhereAmIHint,
             "⌃⌘I", "Ctrl+Alt+Shift+I", ChordScope.Graph,
             divergence: WhereAmIShiftDisambiguation),
+        // W6-2 PR D (Term V3): the four viewport verbs — the mac's ids, labels,
+        // hints and chords (⌘→Ctrl), ChordScope.Graph, delivered by
+        // GraphSurfaceView's tunnelling handler through the navigator's map;
+        // each resolves to a workspace command whose body is the navigator's
+        // verb and whose CanExecute is Term M3's "Diagram effective". The
+        // three shared with the canvas rows are disjoint by DELIVERY
+        // (SharedCommandChords records the pairs); Ctrl+Alt+0 is free in every
+        // other scope (the table's own facts).
+        Reg(Ids.GraphZoomIn, GraphPhrase.ZoomInLabel, CommandSection.Graph, GraphPhrase.ZoomInHint,
+            "⌘=", "Ctrl+=", ChordScope.Graph),
+        Reg(Ids.GraphZoomOut, GraphPhrase.ZoomOutLabel, CommandSection.Graph, GraphPhrase.ZoomOutHint,
+            "⌘-", "Ctrl+-", ChordScope.Graph),
+        Reg(Ids.GraphActualSize, GraphPhrase.ActualSizeLabel, CommandSection.Graph, GraphPhrase.ActualSizeHint,
+            "⌘0", "Ctrl+0", ChordScope.Graph),
+        Reg(Ids.GraphFitGraph, GraphPhrase.FitGraphLabel, CommandSection.Graph, GraphPhrase.FitGraphHint,
+            "⌥⌘0", "Ctrl+Alt+0", ChordScope.Graph),
         // W6-2 PR C (C-7): the Escape ladder — a Windows-authored
         // disposition in the graph's scope, delivered by GraphSurfaceView's
         // tunnelling handler through the navigator's map; not a command id

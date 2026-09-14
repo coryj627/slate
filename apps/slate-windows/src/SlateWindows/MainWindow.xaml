@@ -557,6 +557,23 @@
                           InputGestureText="{cmd:ChordText slate.graph.whereAmI}"
                           Command="{Binding Workspace.GraphWhereAmICommand}" />
                 <Separator />
+                <MenuItem Header="Zoom _In"
+                          AutomationProperties.AutomationId="GraphZoomInMenuItem"
+                          InputGestureText="{cmd:ChordText slate.graph.zoomIn}"
+                          Command="{Binding Workspace.GraphZoomInCommand}" />
+                <MenuItem Header="Zoom _Out"
+                          AutomationProperties.AutomationId="GraphZoomOutMenuItem"
+                          InputGestureText="{cmd:ChordText slate.graph.zoomOut}"
+                          Command="{Binding Workspace.GraphZoomOutCommand}" />
+                <MenuItem Header="_Actual Size"
+                          AutomationProperties.AutomationId="GraphActualSizeMenuItem"
+                          InputGestureText="{cmd:ChordText slate.graph.actualSize}"
+                          Command="{Binding Workspace.GraphActualSizeCommand}" />
+                <MenuItem Header="_Fit Graph"
+                          AutomationProperties.AutomationId="GraphFitGraphMenuItem"
+                          InputGestureText="{cmd:ChordText slate.graph.fitGraph}"
+                          Command="{Binding Workspace.GraphFitGraphCommand}" />
+                <Separator />
                 <MenuItem x:Name="GraphVerbosityMenuItem"
                           Header="_Verbosity"
                           AutomationProperties.AutomationId="GraphVerbosityMenu" />

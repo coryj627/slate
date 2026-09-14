@@ -139,13 +139,21 @@ public sealed class GraphMenuTests
                 ("GraphUnresolvedMenuItem", "_Unresolved Links", "{Binding Workspace.GraphUnresolvedCommand}", null),
                 ("GraphMostLinkedMenuItem", "_Most Linked Notes", "{Binding Workspace.GraphMostLinkedCommand}", null),
                 ("GraphWhereAmIMenuItem", "_Where Am I?", "{Binding Workspace.GraphWhereAmICommand}", "{cmd:ChordText slate.graph.whereAmI}"),
+                // W6-2 PR D (DD-Q3's default, DD-7): the four viewport verbs.
+                ("GraphZoomInMenuItem", "Zoom _In", "{Binding Workspace.GraphZoomInCommand}", "{cmd:ChordText slate.graph.zoomIn}"),
+                ("GraphZoomOutMenuItem", "Zoom _Out", "{Binding Workspace.GraphZoomOutCommand}", "{cmd:ChordText slate.graph.zoomOut}"),
+                ("GraphActualSizeMenuItem", "_Actual Size", "{Binding Workspace.GraphActualSizeCommand}", "{cmd:ChordText slate.graph.actualSize}"),
+                ("GraphFitGraphMenuItem", "_Fit Graph", "{Binding Workspace.GraphFitGraphCommand}", "{cmd:ChordText slate.graph.fitGraph}"),
                 ("GraphVerbosityMenu", "_Verbosity", string.Empty, null),
             ],
             items);
-        // Two separators: after Open Graph and before Verbosity.
+        // Three separators: after Open Graph, after Where Am I?, and before Verbosity.
         string[] order = menu.Elements().Select(e => e.Name.LocalName == "Separator" ? "-" : AutomationIdOf(e) ?? "?").ToArray();
         Assert.Equal(
-            ["GraphOpenTabMenuItem", "-", "GraphOrphansMenuItem", "GraphUnresolvedMenuItem", "GraphMostLinkedMenuItem", "GraphWhereAmIMenuItem", "-", "GraphVerbosityMenu"],
+            [
+                "GraphOpenTabMenuItem", "-", "GraphOrphansMenuItem", "GraphUnresolvedMenuItem", "GraphMostLinkedMenuItem", "GraphWhereAmIMenuItem", "-",
+                "GraphZoomInMenuItem", "GraphZoomOutMenuItem", "GraphActualSizeMenuItem", "GraphFitGraphMenuItem", "-", "GraphVerbosityMenu",
+            ],
             order);
         // Every command is the registrar's for the same id (drift test 2's
         // shape): the resolver text names the same workspace member.
@@ -162,6 +170,16 @@ public sealed class GraphMenuTests
         {
             string constant = "ChordTable.Ids." + typeof(ChordTable.Ids).GetFields().Single(f => Equals(f.GetValue(null), id)).Name;
             Assert.Contains($"[{constant}] = host => host.Workspace?.{member}", registrar, StringComparison.Ordinal);
+        }
+        // W6-2 PR D (Term V3): the four verbs resolve through the registrar's
+        // GraphViewportBindings record — the canvas record's shape, one
+        // authority — to the workspace commands the menu binds.
+        foreach ((string id, string member, _) in SlateCommandRegistrar.GraphViewportBindings)
+        {
+            string constant = "ChordTable.Ids." + typeof(ChordTable.Ids).GetFields().Single(f => Equals(f.GetValue(null), id)).Name;
+            Assert.Contains($"({constant}, \"{member}\",", registrar, StringComparison.Ordinal);
+            Assert.Contains($"host => host.Workspace?.Graph{member}Command", registrar, StringComparison.Ordinal);
+            Assert.Contains($"{{Binding Workspace.Graph{member}Command}}", items.Select(i => i.Command));
         }
     }
 

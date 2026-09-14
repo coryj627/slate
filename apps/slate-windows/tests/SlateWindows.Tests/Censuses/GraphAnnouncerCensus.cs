@@ -452,6 +452,9 @@ public sealed class GraphAnnouncerCensus
         [
             "Graph/GraphDocumentViewModel.cs:SelectRow",
             "Graph/GraphDocumentViewModel.cs:RevalidateSelection",
+            // W6-2 PR D (D-15 v, Term T2): the diagram's RemoveFromSelection
+            // clears through the document under SelectRow's guard.
+            "Graph/GraphDocumentViewModel.cs:ClearSelectionFromSurface",
             // The leaf's three, all through its one FFI-backed writer
             // (Term 15): the pin, the pop, the key-moving retarget.
             "Graph/ConnectionsLeafViewModel.cs:WriteSharedKey",
@@ -860,6 +863,46 @@ public sealed class GraphAnnouncerCensus
         Assert.Equal(
             ["Graph/GraphViewState.cs:Filter:_filter", "Graph/GraphViewState.cs:KindOnly:_kindOnly", "Graph/GraphViewState.cs:NameQuery:_nameQuery"],
             fieldWriters.OrderBy(w => w, StringComparer.Ordinal));
+    }
+
+    /// <summary>W6-2 PR D (rule M, Term M1; D-15 v): <c>Mode</c> is written by
+    /// exactly two sites — the workspace constructor's seed from the
+    /// persisted config and the document's <c>SetMode</c> — and its backing
+    /// field by the setter alone; a planted third writer fails here.</summary>
+    [Fact]
+    public void TheModeIsWrittenByTheSeedAndSetModeAlone()
+    {
+        var writers = new List<string>();
+        var fieldWriters = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (AssignmentExpressionSyntax assignment in source.Root.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                ISymbol? target = model.GetSymbolInfo(assignment.Left).Symbol;
+                if (target is IPropertySymbol { Name: "Mode" } property && property.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    writers.Add($"{relative}:{OwnerOf(assignment)}:{property.Name}");
+                }
+                if (target is IFieldSymbol { Name: "_mode" } field && field.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    fieldWriters.Add($"{relative}:{OwnerOf(assignment)}:{field.Name}");
+                }
+            }
+            foreach (ArgumentSyntax argument in source.Root.DescendantNodes().OfType<ArgumentSyntax>())
+            {
+                if (argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword)
+                    && model.GetSymbolInfo(argument.Expression).Symbol is IFieldSymbol { Name: "_mode" } field
+                    && field.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    fieldWriters.Add($"{relative}:{OwnerOf(argument)}:{field.Name}");
+                }
+            }
+        }
+        Assert.Equal(
+            ["Graph/GraphDocumentViewModel.cs:SetMode:Mode", "WorkspaceViewModel.cs:<ctor>:Mode"],
+            writers.OrderBy(w => w, StringComparer.Ordinal));
+        Assert.Equal(["Graph/GraphViewState.cs:Mode:_mode"], fieldWriters);
     }
 
     /// <summary>The filter, the mode, or a list of the config's groups.</summary>

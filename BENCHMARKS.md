@@ -1001,3 +1001,38 @@ open adds the token, the envelope and the dispatcher hop on top of the
 pair — under 20 ms of overhead at 10k. Nothing here measures the grid's
 realization; the 10k virtualisation fact (`GraphTableTests`) pins that
 the live containers stay bounded.
+
+## Milestone W6-2 PR D — the diagram renderer — 2026-09-14 (#746)
+
+The diagram's host-side budgets (contract D-18, §K) over a synthetic
+1,500-note vault at tier A's ceiling (`tier_b_threshold`; PR A's linked
+generator without its ghost arm, so the visible count sits exactly at
+the threshold and every node has a peer), the surface hosted in a hidden
+1600×1200 window on its own STA dispatcher thread — the shell's shape:
+the workspace, the graph opened, Diagram mode, the build landed, the
+settle ended, the first epoch on the renderer, one node selected.
+`GraphRendererBenchmarks`, `dotnet run --project
+apps/slate-windows/benchmarks/SlateWindows.Benchmarks --configuration
+Release -- --graph-renderer --validate-budgets`; the runner walks a
+pinned inventory of four workloads and asserts the four budgets by exit
+code. This box: .NET 10.0.11, x64, 15 iterations after 3 warm-ups,
+medians.
+
+| Workload | Median | Budget | Result |
+|---|---:|---:|---|
+| `WarmTick` (`Tick(20)` through the model's admission gate — the driver's compute) | **83.146 ms** | 100 ms | PASS |
+| `FirstRebuild` (the standing epoch cleared; the topology fetch, its landing, the renderer's rebuild with 1,500 peers and the hit grid, the UIA children materialised with every name read) | **19.982 ms** | 500 ms | PASS |
+| `PanHop` (the viewport committed, the three visuals redrawn, every peer's screen rectangle read) | **3.269 ms** | 100 ms | PASS |
+| `SpatialStep` (core's `spatial_step` over the visible positions, the selection, the scroll, the row line) | **0.231 ms** | 50 ms | PASS |
+
+**Scope, honestly.** The warm tick is the kernel's own O(n²) repulsion at
+1,500 nodes — P's 2 ms was measured at 300 — and the gate adds nothing
+visible; the budget is the host's, and the shell ticks off the
+dispatcher. The first pan hop MISSED at 104.9 ms: the redraw carried a
+live `Pen` and two resource walks per node, so 1,500 unfrozen freezables
+were registered with the drawing context on every pass. The renderer now
+builds one frozen style set per redraw (`RedrawStyles`: one lookup per
+token, one frozen pen per token/width/dash) and the hop fell to 3.269 ms
+— 1.6 ms of it the redraw, the rest the 1,500 `PointToScreen`
+rectangles. The first rebuild fell with it. Nothing here measures the
+composition thread's frame; the numbers are the UI thread's.

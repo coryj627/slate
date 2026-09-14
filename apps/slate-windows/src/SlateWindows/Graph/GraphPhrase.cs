@@ -59,4 +59,49 @@ internal static class GraphPhrase
     public const string LoadingAccessibleName = "Loading graph.";
     public const string EmptyText = "No notes match the current filters.";
     public const string ErrorAccessiblePrefix = "Graph error: ";
+
+    // --- W6-2 PR D (the diagram; contract D-12) ---------------------------------
+
+    /// <summary>The diagram state host's text and accessible name while a
+    /// layout builds — the mac's T20 (`GraphTableView.swift:138`, `:142`).</summary>
+    public const string LoadingDiagramText = "Laying out graph…";
+    public const string LoadingDiagramAccessibleName = "Laying out graph.";
+
+    /// <summary>The diagram state host's accessible-name prefix over a failed
+    /// build's message — the mac's T19 (`GraphTableView.swift:134`).</summary>
+    public const string DiagramErrorPrefix = "Graph diagram error: ";
+
+    /// <summary>T61: the renderer's container peer name (the mac's).</summary>
+    public const string DiagramName = "Graph, visual diagram";
+
+    /// <summary>T62/T63: the tier-B summary's action name (the mac's).</summary>
+    public const string SwitchToTable = "Switch to Table";
+
+    /// <summary>T64: a pinned node's ItemStatus (the mac's value).</summary>
+    public const string PinnedStatus = "pinned";
+
+    /// <summary>T67: the diagram-only menu item, by state (the mac's).</summary>
+    public const string PinLabel = "Pin";
+    public const string UnpinLabel = "Unpin";
+
+    /// <summary>T68: the tooltip's composed shape — label, " — ", in, " in / ",
+    /// out, " out" (the inventory's; a visual 1.4.13 tooltip, never announced).</summary>
+    public const string TooltipSeparator = " — ";
+    public const string TooltipInSuffix = " in / ";
+    public const string TooltipOutSuffix = " out";
+
+    /// <summary>The Windows-authored prefix over core's neighbour render — the
+    /// node peer's HelpText (Term T2; the mac's AXCustomContent label).</summary>
+    public const string ConnectsToPrefix = "Connects to: ";
+
+    /// <summary>Term V3: the four viewport verbs' labels and hints — the mac's
+    /// byte for byte (`SlateCommands.swift:1583–1611`; MacCatalogParityTests' P3).</summary>
+    public const string ZoomInLabel = "Graph: Zoom In";
+    public const string ZoomInHint = "Zoom the visual diagram in. The zoom level is announced.";
+    public const string ZoomOutLabel = "Graph: Zoom Out";
+    public const string ZoomOutHint = "Zoom the visual diagram out.";
+    public const string ActualSizeLabel = "Graph: Actual Size";
+    public const string ActualSizeHint = "Reset the visual diagram zoom to 100 percent.";
+    public const string FitGraphLabel = "Graph: Fit Graph";
+    public const string FitGraphHint = "Zoom so every node is visible. Option-Command-0 on the diagram.";
 }

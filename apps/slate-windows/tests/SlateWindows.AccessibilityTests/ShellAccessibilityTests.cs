@@ -8513,11 +8513,12 @@ public sealed class ShellAccessibilityTests
             Assert.True(grid.Patterns.Table.IsSupported, "the graph table must expose Table");
             Assert.Equal("Graph, data grid", grid.Properties.Name.Value);
 
-            // Contract A-11: the switcher, Table live and Diagram disabled.
+            // Contract A-11 as W6-2 PR D lifts it (rule M, Term M2): the
+            // switcher, both items live.
             AutomationElement tableChoice = WaitForElement(window, "GraphMode.table", TimeSpan.FromSeconds(10));
             AutomationElement diagramChoice = WaitForElement(window, "GraphMode.diagram", TimeSpan.FromSeconds(10));
             Assert.True(tableChoice.Properties.IsEnabled.Value, "the Table item must be enabled");
-            Assert.False(diagramChoice.Properties.IsEnabled.Value, "the Diagram item must be disabled until PR D");
+            Assert.True(diagramChoice.Properties.IsEnabled.Value, "the Diagram item must be enabled (W6-2 PR D)");
 
             // Contract A-5: core's nine headers in core's order.
             string[] expectedHeaders = ["Note", "Links in", "Links out", "Embeds in", "Embeds out", "Component", "Modified", "Folder", "Kind"];
@@ -8943,6 +8944,374 @@ public sealed class ShellAccessibilityTests
             {
             }
         }
+    }
+
+    /// <summary>
+    /// W6-2 PR D (#746), contract D-19 (§W-C): the diagram journey — open
+    /// the graph through the palette and land on the grid (Term F6's arm);
+    /// Shift+Tab to the switcher and Right to the Diagram item (the
+    /// RadioButton group); wait for the GraphDiagram container and for its
+    /// Button children to equal the fixture's visible node count (four notes
+    /// and one ghost under the default filter); read the first peer's Name
+    /// and HelpText against core's renders computed BEFORE the app opened
+    /// (the PR C journey's oracle discipline, IPG-24/25); Ctrl+0 → the
+    /// container's Value reads the actual-size percent (the first frame
+    /// FITS, D-4, so the verb states the size); Right → the first peer
+    /// reports IsSelected; Ctrl+= → the Value changed and the selected
+    /// peer's rectangle changed (the canvas journey's stale-frame classic);
+    /// Ctrl+Alt+0 → the Value changed again; the Menu key → the row-actions
+    /// menu's items equal core's note actions plus Pin; Escape; Enter → the
+    /// note opened in the graph's pane (the tab's title); back to the graph
+    /// through the palette (the persisted Diagram mode builds at the seat,
+    /// DD-18); Right; Ctrl+Alt+Shift+I → the readback's text equals the
+    /// render of the expected event WITH the zoom clause the container's
+    /// Value carries; Left to the Table item → the grid returns and the
+    /// ring's node is the grid's current row; axe with the scan id
+    /// `graph-diagram`. Tier B is pinned in process only (a 1,501-note vault
+    /// is not a journey).
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void GraphSurfaces_DiagramPeersTiersAndZoom_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-graph-diagram-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Diagram Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(Path.Combine(vaultRoot, "Alpha.md"), "# Alpha\n\nLinks to [[Beta]] and [[Gamma]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Beta.md"), "# Beta\n\nLinks to [[Alpha]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Gamma.md"), "# Gamma\n\nLinks to [[Alpha]] and [[Missing Note]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Solo.md"), "# Solo\n\nNo links at all.\n");
+
+        // The expected strings are core's renders over the same vault, read
+        // BEFORE the app opens it (no second session while the app runs).
+        int visibleCount;
+        uniffi.slate_uniffi.GraphTopologyNode first;
+        string firstName;
+        string firstHelp;
+        string[] noteActions;
+        uniffi.slate_uniffi.GraphFilterConfig defaults =
+            uniffi.slate_uniffi.SlateUniffiMethods.GraphConfigDefault().Filters;
+        using (uniffi.slate_uniffi.VaultSession session = uniffi.slate_uniffi.VaultSession.OpenFilesystem(vaultRoot))
+        {
+            using var cancel = new uniffi.slate_uniffi.CancelToken();
+            session.ScanInitial(cancel);
+            // The epoch's query and config are the fresh open's: the default
+            // filters through the preferences' one mapper (C-10), no needle,
+            // no kind overlay, the default config (rule G, Term G3).
+            var query = new uniffi.slate_uniffi.GraphVisibilityQuery(
+                new uniffi.slate_uniffi.GraphFilter(defaults.IncludeAttachments, defaults.IncludeGhosts, defaults.OrphansOnly),
+                string.Empty, null);
+            uniffi.slate_uniffi.GraphTopology topology = session.GraphTopology(
+                query, uniffi.slate_uniffi.SlateUniffiMethods.GraphConfigDefault());
+            // Core's default filters show ghosts: the four notes AND the one
+            // unresolved target are the diagram's peers.
+            visibleCount = topology.Nodes.Length;
+            Assert.Equal(5, visibleCount);
+            // The renderer's visible order is the topology's, so the first
+            // peer is the first node, and the first arrow from no selection
+            // selects it (Term N3). The fixture's first node is a NOTE —
+            // stated, so Enter opens it rather than creating a ghost's file.
+            first = topology.Nodes[0];
+            Assert.Equal(uniffi.slate_uniffi.GraphNodeKind.Note, first.Kind);
+            firstName = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphRow(
+                uniffi.slate_uniffi.GraphVerbosity.Standard, DiagramRowCopyOf(first)));
+            string neighbours = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphNeighborsContent(
+                [.. first.Neighbors.Select(n => n.Label)]));
+            // The mac's prefix (`GraphPhrase.ConnectsToPrefix`) over core's
+            // neighbours render — the peer's HelpText (D-8).
+            firstHelp = neighbours.Length == 0 ? string.Empty : "Connects to: " + neighbours;
+            noteActions = [.. uniffi.slate_uniffi.SlateUniffiMethods.GraphRowActions(uniffi.slate_uniffi.GraphNodeKind.Note).Select(a => a.Title)];
+            Assert.NotEmpty(noteActions);
+        }
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-graph-diagram-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "Graph diagram"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+            WaitForVaultOpen(window);
+
+            // Rule F, Term F6: the palette's close routes to the graph arm and
+            // the landing seats the grid's row.
+            RunPaletteCommand(window, automation, "Open Graph");
+            AutomationElement grid = WaitForElement(window, "GraphTableGrid", TimeSpan.FromSeconds(20));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => FocusIsInside(automation, "GraphTableGrid")
+                        && automation.FocusedElement().Properties.ClassName.ValueOrDefault == "DataGridCell",
+                    TimeSpan.FromSeconds(10)),
+                $"the open did not land focus on a realised row cell; focus is {DescribeFocusedElement(automation)}");
+
+            // Rule M, Term M1: Shift+Tab to the switcher (the checked Table
+            // choice), Right to the Diagram choice — the USER's switch, which
+            // raises rule F's landing on the renderer once the build lands
+            // (Term M4, DD-Q5's amended F4).
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.TAB);
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphMode.table"), TimeSpan.FromSeconds(10)),
+                $"Shift+Tab from the grid did not reach the switcher; focus is {DescribeFocusedElement(automation)}");
+            AutomationElement diagramChoice = WaitForElement(window, "GraphMode.diagram", TimeSpan.FromSeconds(10));
+            ChooseRadio(diagramChoice, VirtualKeyShort.RIGHT);
+            Assert.True(
+                SpinWait.SpinUntil(() => diagramChoice.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault, TimeSpan.FromSeconds(10)),
+                "Right on the switcher did not choose the Diagram item");
+
+            // D-8: the container, its complete peers (tier A), the landing.
+            AutomationElement diagram = WaitForElement(window, "GraphDiagram", TimeSpan.FromSeconds(20));
+            AutomationElement[] Peers() =>
+                diagram.FindAllChildren(automation.ConditionFactory.ByControlType(ControlType.Button));
+            Assert.True(
+                SpinWait.SpinUntil(() => Peers().Length == visibleCount, TimeSpan.FromSeconds(20)),
+                $"the diagram never exposed {visibleCount} node peers; it exposes {Peers().Length}");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphDiagram"), TimeSpan.FromSeconds(10)),
+                $"the switch did not land the keys on the renderer; focus is {DescribeFocusedElement(automation)}");
+            // GraphPhrase.DiagramName, the mac's (T61).
+            Assert.Equal("Graph, visual diagram", diagram.Properties.Name.Value);
+            AutomationElement firstPeer = Peers()[0];
+            Assert.Equal("GraphNode:" + first.StableKey, firstPeer.Properties.AutomationId.Value);
+            Assert.Equal(firstName, firstPeer.Properties.Name.Value);
+            Assert.Equal(firstHelp, firstPeer.Properties.HelpText.Value);
+            Assert.False(firstPeer.Properties.IsKeyboardFocusable.Value, "a node peer takes no keyboard focus (DD-Q2)");
+
+            // Rule V, Term V6: the container's Value is the zoom. The first
+            // frame FITS (D-4), so Actual Size first — then the actual-size
+            // percent is what the Value reads.
+            string ValueOf() => diagram.Patterns.Value.Pattern.Value.ValueOrDefault ?? string.Empty;
+            Assert.Matches("^Zoom [0-9]+ percent$", ValueOf());
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_0);
+            Assert.True(
+                SpinWait.SpinUntil(() => ValueOf() == "Zoom 100 percent", TimeSpan.FromSeconds(10)),
+                $"Ctrl+0 did not read the actual-size percent; the Value is '{ValueOf()}'");
+
+            // Rule N, Term N3: Right from no selection selects the first
+            // visible node; its peer reports the selection (Term N2).
+            PressKey(VirtualKeyShort.RIGHT);
+            Assert.True(
+                SpinWait.SpinUntil(() => firstPeer.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault, TimeSpan.FromSeconds(10)),
+                "Right did not select the first node's peer");
+
+            // Rule V: Ctrl+= zooms in — the Value changed and the selected
+            // peer's rectangle changed (the canvas journey's stale-frame
+            // classic: a peer whose rectangle is computed at read time moves
+            // with the transform).
+            System.Drawing.Rectangle before = firstPeer.Properties.BoundingRectangle.Value;
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_PLUS);
+            Assert.True(
+                SpinWait.SpinUntil(() => ValueOf() != "Zoom 100 percent", TimeSpan.FromSeconds(10)),
+                "Ctrl+= did not change the zoom");
+            string zoomedIn = ValueOf();
+            Assert.True(
+                SpinWait.SpinUntil(() => firstPeer.Properties.BoundingRectangle.Value != before, TimeSpan.FromSeconds(10)),
+                "the selected peer's rectangle did not move with the zoom");
+            // Ctrl+Alt+0 fits the graph — the Value changed again.
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_0);
+            Assert.True(
+                SpinWait.SpinUntil(() => ValueOf() != zoomedIn, TimeSpan.FromSeconds(10)),
+                $"Ctrl+Alt+0 did not change the zoom from '{zoomedIn}'");
+
+            // Rule N, Term N5: the Menu key opens the row-actions menu on the
+            // selected node — core's note actions in order, then Pin (Term N7).
+            PressKey(VirtualKeyShort.APPS);
+            AutomationElement[] rowActions = WaitForRowActionItems(automation, process.Id);
+            string[] expectedMenu = [.. noteActions, "Pin"];
+            Assert.Equal(expectedMenu, rowActions.Select(item => item.Properties.Name.Value).ToArray());
+            PressKey(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(() => FindRowActionItems(automation, process.Id).Length == 0, TimeSpan.FromSeconds(10)),
+                "Escape did not close the row-actions menu");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphDiagram"), TimeSpan.FromSeconds(10)),
+                $"the menu's close did not return the keys to the renderer; focus is {DescribeFocusedElement(automation)}");
+
+            // Term N5's POINTER request (IPH-1-1, IPH-1-3): a right-click on
+            // the SECOND peer's rectangle opens the row-actions menu for the
+            // HIT node, not the selection — Pin through that menu marks the
+            // second peer's ItemStatus and no other's (GraphPhrase.PinnedStatus).
+            AutomationElement secondPeer = Peers()[1];
+            System.Drawing.Rectangle secondRect = secondPeer.Properties.BoundingRectangle.Value;
+            Mouse.RightClick(new System.Drawing.Point(secondRect.X + (secondRect.Width / 2), secondRect.Y + (secondRect.Height / 2)));
+            rowActions = WaitForRowActionItems(automation, process.Id);
+            Assert.Equal(expectedMenu, rowActions.Select(item => item.Properties.Name.Value).ToArray());
+            rowActions[^1].Patterns.Invoke.Pattern.Invoke();
+            Assert.True(
+                SpinWait.SpinUntil(() => secondPeer.Properties.ItemStatus.ValueOrDefault == "pinned", TimeSpan.FromSeconds(10)),
+                $"Pin through the pointer's menu did not pin the hit node; its status reads '{secondPeer.Properties.ItemStatus.ValueOrDefault}'");
+            Assert.Equal(string.Empty, firstPeer.Properties.ItemStatus.ValueOrDefault ?? string.Empty);
+            Assert.True(
+                SpinWait.SpinUntil(() => FindRowActionItems(automation, process.Id).Length == 0, TimeSpan.FromSeconds(10)),
+                "the row-actions menu did not close after Pin");
+            Assert.True(
+                SpinWait.SpinUntil(() => firstPeer.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault, TimeSpan.FromSeconds(10)),
+                "the right-click moved the selection off the first node");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphDiagram"), TimeSpan.FromSeconds(10)),
+                $"the pointer menu's close did not return the keys to the renderer; focus is {DescribeFocusedElement(automation)}");
+
+            // Rule N, Term N6 (A-9's route): Enter opens the selected note in
+            // the graph's own pane.
+            ReassertForegroundForAChord(window);
+            PressKey(VirtualKeyShort.ENTER);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphDiagram")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "Enter on the selected node did not replace the graph tab with the note");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.Properties.Name.Value.Contains(first.Label, StringComparison.Ordinal)
+                        || window.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.TabItem))
+                            .Any(tab => tab.Name.StartsWith(first.Label, StringComparison.Ordinal)),
+                    TimeSpan.FromSeconds(10)),
+                $"the {first.Label} note never opened");
+
+            // Back to the graph through the palette: the persisted Diagram
+            // mode builds at the seat and speaks no mode line (DD-18); the
+            // landing hands the keys to the renderer.
+            RunPaletteCommand(window, automation, "Open Graph");
+            diagram = WaitForElement(window, "GraphDiagram", TimeSpan.FromSeconds(20));
+            Assert.True(
+                SpinWait.SpinUntil(() => Peers().Length == visibleCount, TimeSpan.FromSeconds(20)),
+                $"the reopened diagram never exposed {visibleCount} node peers; it exposes {Peers().Length}");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphDiagram"), TimeSpan.FromSeconds(10)),
+                $"the reopened graph did not land the keys on the renderer; focus is {DescribeFocusedElement(automation)}");
+            firstPeer = Peers()[0];
+            // Term N1: the selection is DERIVED from the shared key the one
+            // document keeps — the first node, selected before the note's
+            // detour, reports selected again on the reopen with no key
+            // pressed (a Right here would STEP away from it).
+            Assert.True(
+                SpinWait.SpinUntil(() => firstPeer.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault, TimeSpan.FromSeconds(10)),
+                "the shared key did not survive the reopen: the first node's peer is not selected");
+            ReassertForegroundForAChord(window);
+
+            // D-11 (C-8's verb on the diagram): Ctrl+Alt+Shift+I opens the
+            // panel with the readback — core's render of the selected node,
+            // the default filter prose and the ZOOM clause the container's
+            // Value carries at the moment of the verb (the table's readback
+            // has none, CD-24).
+            string zoomValue = ValueOf();
+            Assert.Matches("^Zoom [0-9]+ percent$", zoomValue);
+            uint zoomPercent = uint.Parse(
+                zoomValue["Zoom ".Length..^" percent".Length], System.Globalization.CultureInfo.InvariantCulture);
+            var filterProse = new uniffi.slate_uniffi.GraphWhereAmIFilter.Normal(
+                defaults.OrphansOnly, defaults.IncludeAttachments, defaults.IncludeGhosts);
+            var selection = new uniffi.slate_uniffi.GraphWhereAmISelection.Node(DiagramRowCopyOf(first), first.Component);
+            string expectedReadback = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphWhereAmI(
+                selection, zoomPercent, filterProse, string.Empty));
+            string withoutZoom = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphWhereAmI(
+                selection, null, filterProse, string.Empty));
+            Assert.NotEqual(withoutZoom, expectedReadback);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_I);
+            AutomationElement readback = WaitForElement(window, "GraphWhereAmIReadback", TimeSpan.FromSeconds(10));
+            Assert.Equal("Where am I?", readback.Properties.Name.Value);
+            Assert.Equal(expectedReadback, readback.Patterns.Value.Pattern.Value.Value);
+            AssertEventuallyFocused(readback, "the panel did not take the keys from the renderer");
+            PressKey(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is null
+                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")).Properties.IsOffscreen.ValueOrDefault,
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not close the panel");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphDiagram"), TimeSpan.FromSeconds(10)),
+                $"the panel's close did not return the keys to the renderer; focus is {DescribeFocusedElement(automation)}");
+
+            // Rule M and rule F's table arm. Term N3 consumes Tab and
+            // Shift+Tab inside a non-empty diagram (P2-3's normative Tab, the
+            // mac's keyDown 48): the reader leaves by the shell's chords, the
+            // palette, or — a screen reader's object navigation — the
+            // switcher's SelectionItem pattern. Table chosen through the
+            // pattern with the keys on the renderer is a USER switch: the
+            // grid returns and the ring's node is the grid's current row
+            // (the shared key, Term N1).
+            AutomationElement tableChoice = WaitForElement(window, "GraphMode.table", TimeSpan.FromSeconds(10));
+            tableChoice.Patterns.SelectionItem.Pattern.Select();
+            Assert.True(
+                SpinWait.SpinUntil(() => tableChoice.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault, TimeSpan.FromSeconds(10)),
+                "the Table choice's Select did not check it");
+            grid = WaitForElement(window, "GraphTableGrid", TimeSpan.FromSeconds(20));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => FocusIsInside(automation, "GraphTableGrid")
+                        && automation.FocusedElement().Properties.ClassName.ValueOrDefault == "DataGridCell",
+                    TimeSpan.FromSeconds(10)),
+                $"the switch back did not seat the reader on a grid row; focus is {DescribeFocusedElement(automation)}");
+            AutomationElement currentRow = automation.FocusedElement().Parent;
+            Assert.StartsWith(first.Label, currentRow.Properties.Name.Value, StringComparison.Ordinal);
+
+            AssertAxeClean(process, "graph-diagram");
+        }
+        finally
+        {
+            if (process is { HasExited: false })
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(5000);
+            }
+            process?.Dispose();
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>The diagram's row copy over a topology entry —
+    /// <c>GraphDocumentViewModel.RowCopyOf</c>'s mapping (rule T, T2),
+    /// restated for the oracle: the label, the kind, the degrees, the
+    /// in-degree as the ghost's references, never pinned.</summary>
+    private static uniffi.slate_uniffi.GraphRowCopy DiagramRowCopyOf(uniffi.slate_uniffi.GraphTopologyNode entry) =>
+        new(entry.Label, entry.Kind, entry.InLinks, entry.OutLinks, entry.InLinks, false);
+
+    /// <summary>Choose a RadioButton of the switcher with an arrow from its
+    /// focused sibling: WPF's directional navigation moves the keys to the
+    /// choice; the choice checks on the arrow or, failing that within a
+    /// beat, on Space (the group's two keyboard idioms).</summary>
+    private static void ChooseRadio(AutomationElement choice, VirtualKeyShort arrow)
+    {
+        PressKey(arrow);
+        if (!SpinWait.SpinUntil(() => choice.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault, TimeSpan.FromSeconds(2)))
+        {
+            PressKey(VirtualKeyShort.SPACE);
+        }
+        Assert.True(
+            SpinWait.SpinUntil(() => choice.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault, TimeSpan.FromSeconds(10)),
+            $"the arrow did not choose {choice.Properties.AutomationId.ValueOrDefault}");
     }
 
     /// <summary>Whether the focused element is the named element or inside it.</summary>

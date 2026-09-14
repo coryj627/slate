@@ -104,6 +104,11 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>Test seam: how many funnel calls started a graph load.</summary>
     internal int GraphLoadsForTests { get; private set; }
 
+    /// <summary>Test seam (W6-2 PR D, D-4): the motion policy the next seated
+    /// document reads — null seats the system's (the animation-effects
+    /// preference, which a test host cannot assume).</summary>
+    internal GraphMotionPolicy? GraphMotionPolicyForTests { get; set; }
+
     private RelayCommand? _openGraphCommand;
 
     /// <summary>`slate.graph.openTab` (contract A-12): the palette's and the
@@ -129,6 +134,9 @@ internal sealed partial class WorkspaceViewModel
             {
                 _graphViewState.ApplyQuery(GraphPreferencesViewModel.VisibilityQueryOf(_graphPreferences.CurrentConfig.Filters));
             }
+            // W6-2 PR D (Term M1, DD-18): a persisted Diagram mode builds at
+            // the seat, under the re-applied query, and speaks no mode line.
+            _graphDocument.EnsureDiagram();
         }
         tab.AttachGraphDocument(_graphDocument);
     }
@@ -214,6 +222,36 @@ internal sealed partial class WorkspaceViewModel
         return command;
     }
 
+    private RelayCommand? _graphZoomInCommand;
+    private RelayCommand? _graphZoomOutCommand;
+    private RelayCommand? _graphActualSizeCommand;
+    private RelayCommand? _graphFitGraphCommand;
+
+    /// <summary>W6-2 PR D (Term V3, DD-7): `slate.graph.zoomIn` — the
+    /// navigator's verb; enabled exactly while Diagram is effective (Term
+    /// M3), re-evaluated on the navigator's DiagramAvailabilityChanged.</summary>
+    public System.Windows.Input.ICommand GraphZoomInCommand =>
+        _graphZoomInCommand ??= NewGraphViewportCommand(_ => _graphNavigator.ZoomIn());
+
+    /// <summary>`slate.graph.zoomOut` (Term V3).</summary>
+    public System.Windows.Input.ICommand GraphZoomOutCommand =>
+        _graphZoomOutCommand ??= NewGraphViewportCommand(_ => _graphNavigator.ZoomOut());
+
+    /// <summary>`slate.graph.actualSize` (Term V3).</summary>
+    public System.Windows.Input.ICommand GraphActualSizeCommand =>
+        _graphActualSizeCommand ??= NewGraphViewportCommand(_ => _graphNavigator.ActualSize());
+
+    /// <summary>`slate.graph.fitGraph` (Term V3).</summary>
+    public System.Windows.Input.ICommand GraphFitGraphCommand =>
+        _graphFitGraphCommand ??= NewGraphViewportCommand(_ => _graphNavigator.FitGraph());
+
+    private RelayCommand NewGraphViewportCommand(Action<object?> verb)
+    {
+        var command = new RelayCommand(verb, _ => _graphNavigator.CanZoom);
+        _graphNavigator.DiagramAvailabilityChanged += command.RaiseCanExecuteChanged;
+        return command;
+    }
+
     private GraphDocumentViewModel NewGraphDocument()
     {
         GraphDocumentViewModel? created = null;
@@ -231,7 +269,10 @@ internal sealed partial class WorkspaceViewModel
             // the document, as the canvas surface does.
             navigator: _graphNavigator,
             // C-9: the live level and its change.
-            preferences: _graphPreferences);
+            preferences: _graphPreferences,
+            // W6-2 PR D (Term G4, DD-9): the system's motion policy unless a
+            // fact injected one before the seat.
+            motionPolicy: GraphMotionPolicyForTests);
         created = document;
         document.OpenRowFromSurface = (row, target) => OpenGraphRowFromSurface(row.Path!, target);
         document.ShowConnectionsFromSurface = row => ReRootGraphRowFromSurface(row);
@@ -304,6 +345,8 @@ internal sealed partial class WorkspaceViewModel
             // Pane activation can change admission without a load: a ready
             // graph remains visible while another pane receives the keys.
             _graphNavigator.NotifyWhereAmIAvailabilityChanged();
+            // W6-2 PR D (Term M3): the diagram's verbs follow the same edge.
+            _graphDocument?.NotifyDiagramAvailabilityChanged();
         }
         if (effective is null || _graphDocument is null || _graphDocument.IsRetired)
         {

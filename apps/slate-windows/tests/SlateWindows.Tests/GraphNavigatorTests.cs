@@ -149,6 +149,10 @@ public sealed class GraphNavigatorTests
 
         public bool IsLive { get; set; } = true;
 
+        public GraphSurfaceMode ProjectionKind { get; set; } = GraphSurfaceMode.Table;
+
+        public GraphViewportOutcome ViewportCommand(GraphViewportVerb verb) => GraphViewportOutcome.Refused;
+
         public void RequestProjectionFocus() => ProjectionRequests++;
 
         public void FocusFilterField() => FieldRequests++;
@@ -598,7 +602,12 @@ public sealed class GraphNavigatorTests
             Assert.Equal(
                 [
                     (Key.Escape, ModifierKeys.None),
+                    // W6-2 PR D (Term V3, C-11's scrape at six): the four viewport chords.
+                    (Key.D0, ModifierKeys.Control),
+                    (Key.D0, ModifierKeys.Control | ModifierKeys.Alt),
                     (Key.I, ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift),
+                    (Key.OemPlus, ModifierKeys.Control),
+                    (Key.OemMinus, ModifierKeys.Control),
                 ],
                 chords.OrderBy(c => c.Key).ThenBy(c => c.Modifiers).ToArray());
         });

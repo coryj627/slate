@@ -38,6 +38,26 @@
     <Color x:Key="Slate.Canvas.GroupFillColor">#FF292929</Color>
     <Color x:Key="Slate.Canvas.EdgeColor">#FFAAAAAA</Color>
     <Color x:Key="Slate.Canvas.SelectionRingColor">#FFF5F5F5</Color>
+
+    <!-- Graph diagram tokens (W6-2 PR D, Term T5): the dark appearance's
+         group tints (the canvas's solid tints where they exist), the kind
+         fills, the outline, the edge, the label and the ring carriers. -->
+    <Color x:Key="Slate.Graph.Group1Color">#FFFB464C</Color>
+    <Color x:Key="Slate.Graph.Group2Color">#FFE9973F</Color>
+    <Color x:Key="Slate.Graph.Group3Color">#FFE0DE71</Color>
+    <Color x:Key="Slate.Graph.Group4Color">#FF44CF6E</Color>
+    <Color x:Key="Slate.Graph.Group5Color">#FF53DFDD</Color>
+    <Color x:Key="Slate.Graph.Group6Color">#FF6FA8FF</Color>
+    <Color x:Key="Slate.Graph.Group7Color">#FFA882FF</Color>
+    <Color x:Key="Slate.Graph.Group8Color">#FFFF7AC6</Color>
+    <Color x:Key="Slate.Graph.NoteColor">#FF6FA8FF</Color>
+    <Color x:Key="Slate.Graph.AttachmentColor">#FF9A9A9A</Color>
+    <Color x:Key="Slate.Graph.SurfaceColor">#FF121212</Color>
+    <Color x:Key="Slate.Graph.OutlineColor">#FFB0B0B0</Color>
+    <Color x:Key="Slate.Graph.EdgeColor">#FFAAAAAA</Color>
+    <Color x:Key="Slate.Graph.LabelColor">#FFF5F5F5</Color>
+    <Color x:Key="Slate.Graph.RingColor">#FFF5F5F5</Color>
+    <Color x:Key="Slate.Graph.AccentColor">#FFB9D9FF</Color>
     <Color x:Key="Slate.CodeKeywordColor">#FFE6CCF2</Color>
     <Color x:Key="Slate.CodeStringColor">#FFFFCDD2</Color>
     <Color x:Key="Slate.CodeNumberColor">#FF9CDCFE</Color>
@@ -108,4 +128,20 @@
     <SolidColorBrush x:Key="Slate.Canvas.GroupFillBrush" Color="{StaticResource Slate.Canvas.GroupFillColor}" />
     <SolidColorBrush x:Key="Slate.Canvas.EdgeBrush" Color="{StaticResource Slate.Canvas.EdgeColor}" />
     <SolidColorBrush x:Key="Slate.Canvas.SelectionRingBrush" Color="{StaticResource Slate.Canvas.SelectionRingColor}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group1Brush" Color="{StaticResource Slate.Graph.Group1Color}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group2Brush" Color="{StaticResource Slate.Graph.Group2Color}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group3Brush" Color="{StaticResource Slate.Graph.Group3Color}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group4Brush" Color="{StaticResource Slate.Graph.Group4Color}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group5Brush" Color="{StaticResource Slate.Graph.Group5Color}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group6Brush" Color="{StaticResource Slate.Graph.Group6Color}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group7Brush" Color="{StaticResource Slate.Graph.Group7Color}" />
+    <SolidColorBrush x:Key="Slate.Graph.Group8Brush" Color="{StaticResource Slate.Graph.Group8Color}" />
+    <SolidColorBrush x:Key="Slate.Graph.NoteBrush" Color="{StaticResource Slate.Graph.NoteColor}" />
+    <SolidColorBrush x:Key="Slate.Graph.AttachmentBrush" Color="{StaticResource Slate.Graph.AttachmentColor}" />
+    <SolidColorBrush x:Key="Slate.Graph.SurfaceBrush" Color="{StaticResource Slate.Graph.SurfaceColor}" />
+    <SolidColorBrush x:Key="Slate.Graph.OutlineBrush" Color="{StaticResource Slate.Graph.OutlineColor}" />
+    <SolidColorBrush x:Key="Slate.Graph.EdgeBrush" Color="{StaticResource Slate.Graph.EdgeColor}" />
+    <SolidColorBrush x:Key="Slate.Graph.LabelBrush" Color="{StaticResource Slate.Graph.LabelColor}" />
+    <SolidColorBrush x:Key="Slate.Graph.RingBrush" Color="{StaticResource Slate.Graph.RingColor}" />
+    <SolidColorBrush x:Key="Slate.Graph.AccentBrush" Color="{StaticResource Slate.Graph.AccentColor}" />
 </ResourceDictionary>

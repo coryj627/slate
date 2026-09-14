@@ -575,9 +575,36 @@ final class ParityHarnessTests: XCTestCase {
             .raw(",\"encoded_fresh\":").str(try graphConfigEncode(config: graphConfigDefault(), existingJson: nil))
             .raw("}")
 
+        // W6-2 PR D (contract D-18, DD-Q4): the position golden — the layout
+        // under core's DEFAULT filter with LayoutForces and LayoutConfig
+        // defaults, the slots in order as { key, x_x1000, y_x1000 } after
+        // exactly tick(60) from the seeded placement, each coordinate rounded
+        // ×1000 to an integer (schoolbook, the Windows twin's AwayFromZero).
+        let layout = try session.startGraphLayout(
+            filter: graphDefaultFilter, forces: LayoutForces(), config: LayoutConfig())
+        let frame = layout.tick(iterations: pinnedLayoutTicks)
+        let slots = layout.nodeIds()
+        j.raw(",\"layout\":[")
+        for (i, id) in slots.enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"key\":").str(keyOf[id] ?? "")
+                .raw(",\"x_x1000\":").num(Int64((Double(frame.positions[2 * i]) * 1000.0).rounded()))
+                .raw(",\"y_x1000\":").num(Int64((Double(frame.positions[2 * i + 1]) * 1000.0).rounded()))
+                .raw("}")
+        }
+        j.raw("]")
+
         j.raw("}")
         return j.output + "\n"
     }
+
+    /// Core's default filter (`GraphFilter::default()`): attachments out,
+    /// ghosts in, every node — the layout golden's filter (D-18).
+    private static let graphDefaultFilter = GraphFilter(
+        includeAttachments: false, includeGhosts: true, orphansOnly: false)
+
+    /// D-18 (DD-Q4): the sixtieth tick.
+    private static let pinnedLayoutTicks: UInt32 = 60
 
     // MARK: - Surfaces (mirror SurfaceSerializer.cs)
 

@@ -11750,4 +11750,2636 @@ three journeys re-run.
 - The censuses of C-15, with a mutation for each shape they name.
 - The journey (C-14), run to its last step locally before every push.
 
+## PR D — the diagram: the renderer, the per-node peers, the tiers, the layout driver, zoom
+
+Revision 5, 2026-09-14 — FROZEN (revision 1 = 095ecb0f, revision 2 =
+8d0a85f3, revision 3 = 826ff113, revision 4 = 1d37a03e; rounds 1–4's
+findings IGQ-1..9, IGR-1, IGS-1..5 and IGT-1..5 discharged in the text
+below), branch `feat/w6-2-d` on the merged A, B1, B2 and C (`main` at
+9a8028a7). Revision 4 was the DESIGN PASS the protocol's rule 4
+required — rule G carried a blocker in three consecutive rounds, every
+one the disposed-handle class — and it removed the class rather than
+its sites: the layout session lives behind ONE admission gate ("Design
+pass II" below; Term G7). Round 4 returned one more blocker CREATED by
+that pass (the build's fresh handle outside the gate), which is rule
+5's THIRD instance (rounds 2, 3, 4): revision 5 corrects it — the gate
+is born with the handle (Term G2) — and FREEZES under the PR 0b, B and
+C precedent ("THE FREEZE" below): no round 5; the four ledgers are
+carried into the task loop, which discharges them by code and by the
+post-implementation passes; precedent applied; the owner may overrule. The spec is `w6_2_graph_spec.md` §PR D
+(amended in place by this revision where DD-14 says so), consuming §1's
+rules R-A..R-I, §2's rows D, H, J, L, M, N and P, §5 and §7. Every
+neighbouring section of this document — 0a, 0b, A (rule L), B (rule C),
+B2 (rule D), C (rules P, Q, F, W) — is FROZEN; this section consumes
+their seams and touches frozen text in exactly two places, each named
+as what it is (IGQ-5, IGQ-8): rule F's Term F4 gains the diagram's arm
+by an owner amendment PENDING at DD-Q5 (the text is given there and is
+applied in place when the owner answers), and C-15 iv's closed census
+lists are amended under the provision C-15 iv itself makes for later PRs
+("by amendment of this list"; DD-16). Round numbering: IGQ-n (round 1),
+IGR-n (round 2), IGS-n (round 3), IGT-n (round 4); no round 5; the post-implementation
+passes IPH-n.
+
+**Five owner questions at the head (DD-Q1..DD-Q5).** Each is written to
+its stated DEFAULT below, the alternative recorded beside it; a round
+reports the text's application of its default, never the choice.
+
+- **DD-Q1 — Are the tier-A node peers COMPLETE (every visible node, the
+  mac's rule and P2-3's normative text) or WINDOWED to the viewport (the
+  spec's §PR D line and the canvas's D3/D4 machinery)?** Default:
+  COMPLETE — `GraphDiagramView.swift:534–539` materialises every visible
+  node "regardless of the viewport, so the AX tree is always complete"
+  and `testTierARemainsCompleteAfterAPan` pins it; the visible set is at
+  most `tier_b_threshold` (1,500) nodes, a UIA tree of that size is the
+  table's own order of magnitude, and the windowed cells (placeholder,
+  virtualized, item-container search) exist for a canvas whose card count
+  has no ceiling. The spec's "windowed to the viewport" is amended to
+  "complete" (DD-14). Alternative: the canvas's windowing over the same
+  peers (D-8 would gain the three cells and their facts).
+- **DD-Q2 — On a KEYBOARD selection move, who speaks the node?** Default:
+  the relay's `GraphRow` line at the live verbosity (the mac's
+  `graphDiagramSelect(announce: true)`, `AppState+GraphDiagram.swift:
+  226–228`; the canvas visual board's shape — one focus stop, the
+  selection announced through the door, `w_c_matrix.md:51`), the node
+  peers NOT keyboard-focusable (`CanvasCardAutomationPeer`'s
+  `IsKeyboardFocusableCore`, `CanvasRendererPeers.cs:234`). Alternative:
+  keyboard-focusable node peers raising the focus-changed event on every
+  selection move and NO relay line (the reader hears the peer's Name from
+  the platform) — the grid's idiom; it would make rule F's diagram arm a
+  peer landing and D-D3 a parity instead of a divergence.
+- **DD-Q3 — Do the four viewport verbs get Graph-menu items?** Default:
+  YES, four items after Where Am I? in the Graph menu (C-12's enrichment
+  shape, InputGestureText from the table — drift tests 2 and 3), so a
+  menu reader finds the chords; the editor's zoom items
+  (`MainWindow.xaml:422–430`) are the editor's and unrelated. Alternative:
+  palette and chord only, the canvas viewport rows' shape (no menu item
+  exists for `slate.canvas.zoomIn`).
+- **DD-Q4 — The §W-A position golden: what does it pin?** Default: the
+  `layout` section of the `graph_queries` artifact carries the layout's
+  stable keys in slot order and the positions after exactly `tick(60)`
+  from the seeded placement under the default filter, forces and config,
+  each coordinate rounded to an integer thousandth (`x_x1000`, the
+  artifact's `diameter_x100` idiom, `SurfaceSerializer.cs:1399`) — the
+  BINDING's determinism on the twin's own platform (§P-C promises
+  bit-identity per platform, `graph_layout.rs:8–17`); sixty iterations on
+  the graph vault's twelve nodes (eleven under the default filter — the
+  committed `parity_golden/graph_queries.json`; IGS-4) keep cross-platform
+  libm drift far below the quantum. Alternative: `run_to_convergence` at the same quantum (three
+  hundred iterations; the drift risk DR-2 names grows with the count).
+- **DD-Q5 — Rule F's Term F4 (frozen, PR C) names the TABLE projection's
+  landing arms; the diagram needs one. Amend F4 in place, or keep F
+  frozen?** Default: AMEND — the owner's amendment, applied in place
+  under C's Term F4 when the owner answers, reads: "Amended by the owner
+  on ⟨date⟩ (W6-2 PR D, DD-6): the arms are the ACTIVE projection's —
+  in Table mode as written; in Diagram mode (§PR D, Term M4) quiescent
+  with a model live → the renderer, one focus stop; the build in flight
+  or failed → the diagram's state host, provisional while building —
+  quiescence in Diagram mode reads 'no build in flight' beside Term
+  Q2's; completion on the document only on a delivered quiescent
+  landing." C-17 is NOT touched — the diagram's landing facts are D-7's
+  own (IGT-3). Alternative:
+  rule F untouched and the diagram's landing a D-owned rule reached from
+  F4's table arm by delegation — the same behaviour, the frozen text
+  unchanged, the census walling it weaker (IGQ-5 named the silence, not
+  the arm).
+
+### What stands today (A, B1, B2, C merged)
+
+- **The surface and its projection cluster.** `GraphSurfaceView`
+  (`GraphSurfaceView.cs:70–266`) docks a header (the title, the filter
+  region — C-5 — and the mode switcher, `:124–131`), the state host
+  (`:151–159`, rule F's Term F4 host with a Group peer), the Where-am-I
+  panel at the bottom (`:163–195`) and the table (`:160`, `:225`) as its
+  content. The switcher is `BuildSwitcher` (`:495–515`): one
+  `RadioButton` per `GraphSurfaceModes()` entry, `IsEnabled` only for
+  Table (`:508`) — A-11's "the Diagram waits for PR D". `ApplyState`
+  (`:960–980`) shows the state host under LOADING, ERROR and EMPTY and
+  the table otherwise; no second projection exists in the tree.
+- **The view state's `Mode`.** `GraphViewState.Mode` (`GraphViewState.cs:
+  91–95`) is Table by construction; C-10's seed leaves it Table while
+  `CurrentConfig` keeps a persisted `diagram` (C-D6: "PR D restores it");
+  `GraphPreferencesViewModel.SetMode` (`GraphPreferencesViewModel.cs:
+  202–206`) writes `mode` into `CurrentConfig` and schedules the save
+  (Term W7) — built for this PR's switch and invoked by nobody yet. The
+  no-shadow census (`GraphAnnouncerCensus.cs`,
+  `NoMutableShadowOfTheViewStateExistsInTheShell`) walls a second mutable
+  `Mode`; nothing writes the view state's field today.
+- **The navigator's diagram seam.** `GraphNavigator.InstallDiagramReadback`
+  (`GraphNavigator.cs:319–323`) stores the diagram's `Func<GraphWhereAmI?>`
+  and raises `WhereAmIAvailabilityChanged`; `ActiveReadback` (`:330–331`)
+  chooses by `Mode`; `ReadWhereAmI` (`:337–340`) requires the seated
+  document effective. `InstallingTheDiagramsSeamRaisesAvailabilityAndTheRowEnables`
+  (`GraphNavigatorTests.cs:716–745`) pins the seam with a witness; no
+  production site installs it. `HandleKey` (`:132–137`) is the four
+  statements; `Bind` (`:110–121`) holds Escape and Ctrl+Alt+Shift+I;
+  `GraphChords()` (`ChordTableTests.cs:757–790`) scrapes `Bind`'s
+  three-argument `AddChord` calls and expects PR D's four viewport chords
+  "by the same mechanism".
+- **The presenter.** `IGraphSurfacePresenter` (`GraphNavigator.cs:15–45`):
+  `RequestProjectionFocus`, `FocusFilterField`, `DismissTransientRegion`,
+  `ProjectionHasFocus`, `FilterRegionHasKeys`, `IsLive`, `ReadTableSeat`.
+  No viewport verb reaches it; the canvas's presenter has
+  `ViewportCommand(CanvasViewportVerb) → CanvasViewportOutcome`
+  (`CanvasNavigator.cs:69`, `CanvasSurfaceView.cs:431–432`) and the
+  canvas navigator speaks the outcome (`:1400–1430`).
+- **The document.** `GraphDocumentViewModel` owns the publication, the
+  lineage (rule Q), the focus request (rule F: `RequestFocusLanding`,
+  `CompleteFocus`, `FocusRequest`, `GraphDocumentViewModel.cs:370–406`),
+  the table's readback (`TableWhereAmI`, `:514–574`), the announcement
+  boundary (`AnnounceIfEffective` `:594–600`, `AnnounceWhereAmI`
+  `:579–583`, `AnnounceStatus`, `AnnounceFilterCountIfEffective`) and the
+  actions (`Execute(GraphRowAction, GraphTableRow)` `:1159–1186`,
+  `Activate` `:1190–1199`, `IsRowCurrent` `:1153–1157`, `IsActionEnabled`
+  `:1131–1142`) over the workspace's four seams (`OpenRowFromSurface`,
+  `ShowConnectionsFromSurface`, `RevealRowFromSurface`,
+  `CreateNoteFromSurface`, wired at `WorkspaceViewModel.Graph.cs:
+  235–238`). `SelectRow` (`:308–322`) is the ONE guarded writer of the
+  shared key from a surface (seated, live, the key in the held
+  snapshot). `Retire` (`:1206–1229`) clears the table's seam, drops the
+  relay's pending classes and shuts the scheduler. The load-starting
+  census (`GraphNavigatorCensus.cs`,
+  `TheLoadStartingMembersAreTheClosedListAndTheirOutsideCallersTheNamedSets`)
+  closes the members that reach `StartWorkAlwaysAsync` — `Load`,
+  `Request`, `Probe`, `Fetch`/`Receive`'s re-fetch arms, the create —
+  and `TheCrossingsAreRootedInFetchAndProbeAndNoSchedulerUnderGraphReachesALoad`
+  roots every `GraphSnapshot`, `GraphTableRows` and `GraphGeneration`
+  invocation in `Fetch` or `Probe` and forbids a second scheduler under
+  `Graph/`. Both lists are this PR's to EXTEND by contract (D-15), as
+  C-15 iv extended them for PR E.
+- **The probe.** `NotifyGraphOfVaultChange` (`WorkspaceViewModel.Graph.cs:
+  416–424`) probes the document while the graph is VISIBLE; `Probe`
+  (`GraphDocumentViewModel.cs:1087–1127`) reads `GraphGeneration()` off
+  the dispatcher and issues a silent pair (or a replacing pair) when it
+  moved. Nothing refreshes a layout.
+- **The relay.** `GraphAnnouncer` classifies `GraphRow` navigation,
+  `GraphFilterCount` filter, `GraphForceValue` forceValue and
+  `GraphLayoutSettled` settle (`GraphAnnouncer.cs:143–150`); `GraphZoom`,
+  `GraphPinned`, `GraphMode`, `GraphTierEntered` are immediate;
+  `GraphTierSummary` and `GraphNeighborsContent` are LABEL class (0a-14)
+  and are never posted — `RenderLabel` renders them (`:82–86`). The
+  Windows corpus census already lists every diagram witness
+  (`A11yCorpusCensus.cs:544–563`); no site reaches them.
+- **The canvas's machinery this PR reuses by shape.** `CanvasViewportState`
+  (`CanvasViewportState.cs`): the constants (`MinZoom` 0.1, `MaxZoom` 4.0,
+  `ZoomStep` 1.25, `FitPadding` 40, `:17–21`), the one zoom arithmetic
+  `WithZoom` (`:79–90`, centre-preserving, clamped), `ZoomPercent`
+  (`:46`, `Math.Round(Zoom × 100)`), `PannedTo`, `WithViewSize`.
+  `CanvasRendererView` (`CanvasRendererView.cs`): a focusable
+  FrameworkElement over `DrawingVisual`s (`:27–71`), `Viewport(verb)`
+  (`:330–356`) and `FitTo` (`:385–406`), `PanToContain` (`:541–566`, the
+  scroll-into-view rule), the hoverable, dismissable tooltip
+  (`:585–700`), `Shutdown` (`:413–423`, the owned text-scale service
+  disposed). `CanvasRendererAutomationPeer` (`CanvasRendererPeers.cs:
+  20–104`): Group, `Value` = the zoom percent (`:62–68`), Selection
+  (single), children from the installed state. `CanvasCardAutomationPeer`
+  (`:117–265`): Button, Invoke = the announced select, SelectionItem,
+  rectangles computed at read time from the installed state
+  (`:151–165`), not keyboard-focusable. `CanvasTextScaleService`
+  (`CanvasTextScaleService.cs`): the registry factor, the preference
+  change marshalled, disposable. The benchmark shape
+  (`CanvasRendererBenchmarks.cs`: 500 / 100 / 50 ms medians over a
+  2,000-node fixture) and the journey shape
+  (`CanvasSurfaces_VisualBoardPeersAndZoom_AreClean`,
+  `ShellAccessibilityTests.cs:8284+`: the peers' Names, a rectangle that
+  moves on Ctrl+=, a select through the pattern, axe).
+- **The theme tokens.** The canvas's colour tokens per dictionary
+  (`Slate.Light.xaml:18–35`, `Slate.Dark.xaml:21–40`; the brushes at
+  `:90–102`), the Contrast dictionary binding fills to the window colour,
+  structure to window text and the ring to Highlight
+  (`Slate.Contrast.xaml:56–76`); `ThemeTokenContrastTests` gates the
+  canvas pairs at |Lc| > 75 (`ThemeTokenContrastTests.cs:72–98`);
+  `ThemeManager` swaps the dictionaries on `SystemParameters.HighContrast`
+  through `SystemParameters.StaticPropertyChanged` (`ThemeManager.cs:
+  168–200`). No graph token exists.
+- **The layout FFI.** `start_graph_layout(filter, forces, config)`
+  (`lib.rs:1642–1660`) builds the topology and the node metadata under one
+  graph lock; `LayoutSession` (`:5041–5180`): `node_ids`, `edges`,
+  `node_metadata`, `generation`, `tick(iterations)`,
+  `run_to_convergence(cancel)`, `set_forces`, `pin_node(id, x, y)`,
+  `unpin_node`, `refresh() → Option<LayoutFrame>` (None when the
+  generation is unchanged); every method internally synchronised and
+  off-main-callable; `LayoutFrame { positions: Vec<f32> interleaved,
+  iteration, converged, generation }` (`:4930+`). `LayoutConfig`'s
+  defaults are 300 cold and 60 warm iterations (`graph_layout.rs:67–84`;
+  `lib.rs:4905–4925`). The C# binding (the git-ignored generated
+  `slate_uniffi.cs`; the numbers are the 2026-09-14 regeneration's and
+  move with every regeneration): `LayoutSession` at `:11831`
+  (`IDisposable`), `LayoutFrame` `:21058` (`float[] Positions`),
+  `CancelToken` `:10724`, `GraphTopology` `:20589`. Every generated
+  object keeps a CALL COUNTER: `CallWithPointer` increments it around
+  each native call and `Destroy` decrements the creation count, so a
+  `Dispose` while a call is in flight defers the native free to that
+  call's return, and a call AFTER `Dispose` throws
+  ObjectDisposedException (the `CancelToken` template, `:10740–10790`). Two censuses already
+  count the handle: `HandleLifetimeCensus` starts, ticks and disposes
+  layouts and asserts the live count returns to baseline
+  (`HandleLifetimeCensus.cs:103–152`, `:230–240`) and
+  `BindingSurfaceCensus` names `LayoutSession` among the five object
+  types (`BindingSurfaceCensus.cs:24–27`, `:69–71`).
+- **Core's queries this PR consumes** (0b, frozen): `graph_topology(q,
+  config) → GraphTopology { generation, total, nodes, edges }` (the C#
+  record at `:20589`) with
+  `GraphTopologyNode { id, stable_key, label, path, kind, in_links,
+  out_links, in_embeds, out_embeds, component, is_orphan, diameter,
+  group, labeled, neighbors }` (0b-6b; `graph_queries.rs:423–457`;
+  `lib.rs:1583–1594`); `graph_constants()` (0b-8; `tier_b_threshold`
+  1500, `label_cap` 200, `neighbor_label_cap` 10, the diameter bounds;
+  `GraphCoreConstants.Once` fetches it once, `GraphCoreConstants.cs`);
+  `graph_node_diameter` (the topology carries it per node);
+  `graph_spatial_step(points, neighbors, from, dx, dy)` and
+  `graph_structural_step(visible, from, forward)` (0b-10;
+  `graph_queries.rs:1003–1058`; `SlateUniffiMethods.GraphSpatialStep`
+  `slate_uniffi.cs:43748`, `GraphStructuralStep` `:43770`,
+  `GraphConstants` `:43650`);
+  `graph_row_actions(kind)` (A-8's vectors, cached per document);
+  `graph_surface_modes()` (A-11). The 0a events: `GraphRow`, `GraphMode`,
+  `GraphZoom { fit, percent }`, `GraphPinned { pinned }`,
+  `GraphLayoutSettled`, `GraphTierEntered`, `GraphTierSummary { count }`,
+  `GraphNeighborsContent { labels }`, `GraphWhereAmI` with its optional
+  `zoom_percent` (`a11y.rs:3120–3222`, the renders `:3292–3305`,
+  `:3361–3378`).
+
+### The mac, traced site by site
+
+The diagram on the mac is three files: `AppState+GraphDiagram.swift`
+(the model's lifecycle, the selection, the readback, the zoom router),
+`GraphDiagramModel.swift` (the model) and `GraphDiagramView.swift` (the
+renderer and the AX surface), with the mode seam in
+`GraphTableView.swift`'s container. Sites, in the order a reader meets
+them:
+
+1. **The mode switch** — GraphContainerView (`GraphTableView.swift:
+   9–118`): `@State mode` (`:15`); `onAppear` restores the persisted mode
+   (`:70–82`, `suppressFocusBumpOnce` set when the restore CHANGES the
+   mode, `:76–77`) and calls `ensureGraphDiagram` for a persisted Diagram
+   (`:81`); `onChange(of: mode)` (`:85–110`) persists through
+   `setGraphMode` (`AppState+GraphConfig.swift:193–196`: `graphConfig.mode`
+   and the save), bumps `focusToken` only on a user switch with a shared
+   key present (`:96–101`), then per mode: Diagram → `ensureGraphDiagram`
+   and `GraphMode{Diagram}`; Table → `resetGraphDiagramState` and
+   `GraphMode{Table}` (`:102–109`). The restore-driven change speaks the
+   mode line too — only the focus bump is suppressed. A backend-filter
+   change rebuilds a live diagram (`:113–115`); `onDisappear` tears it
+   down (`:116–118`); the graph tab's release tears it down
+   (`AppState+GraphTable.swift:110–115`). The diagram body (`:123–144`):
+   the view while a model is live, the error text with AX label
+   "Graph diagram error: ⟨e⟩" (T19, `:129–134`), else the progress row
+   "Laying out graph…" with AX label "Laying out graph." (T20,
+   `:136–143`). The picker's AX label "Graph view mode" and hint
+   (`:150–158`) are the mac's segmented control's; Windows's switcher is
+   A-11's named group (frozen), so they are recorded and not carried.
+2. **The build** — `ensureGraphDiagram` (`AppState+GraphDiagram.swift:
+   18–21`: only when no model and no build in flight); `buildGraphDiagram`
+   (`:27–92`): a build sequence bumped (`:32–33`), the filter and the
+   PERSISTED forces captured on the main actor (`:34–40`), ONE detached
+   crossing — `startGraphLayout(filter:forces:config:)` then `nodeIds()`,
+   `edges()`, `nodeMetadata()`, `generation()` (`:47–64`, "ONE atomic
+   build … under a single graph lock"), the result guarded by the session
+   identity and the sequence (`:66–68`), the model built with the
+   LAYOUT's generation (`:75–79`) and its selection seeded from the shared
+   key by stable key (`:80–85`, `graphDiagramNodeID` `:235–240`); a
+   failure sets `graphDiagramError` (`:87–89`).
+3. **The teardown** — `resetGraphDiagramState` (`:127–138`): the sequence
+   bumped, the refresh task cancelled, the model dropped, the error
+   cleared, the armed settle announcement disarmed (`:134–137`, finding 8).
+4. **The refresh** — `refreshGraphDiagramIfGraphChanged` (`:144–197`),
+   chained after any in-flight refresh (`:156–158`): `layout.refresh()`
+   off the actor (`:163–174`, nil = unchanged), adopted only when the
+   generation is NEWER than the model's (`:180`, monotonic), the model's
+   ids, metadata, edges and generation replaced (`adopt`,
+   `GraphDiagramModel.swift:106–118`, which drops a selection or a pin
+   whose node is gone), then the selection REMAPPED by stable key
+   (`:187–195`).
+5. **The topology** — `graphTopologyForDiagram(heldGeneration:heldFilter:)`
+   (`:103–116`): the query's filter must equal the layout's (`:107`,
+   design A), then `graphTopology(query:config:)` accepted only under the
+   held generation (`acceptGraphTopology`, `:121–125`); the renderer's
+   `refreshVisibleSet` (`GraphDiagramView.swift:392–426`) fetches it ONCE
+   per semantic epoch — `GraphTopologyEpoch { layout identity, generation,
+   query, config }` (`GraphDiagramModel.swift:122–127`; `:404–407`) — and
+   publishes `visibleIDs` (the topology's ids that the model knows,
+   `:422`), the per-node record and the edges; a dropped fetch empties the
+   set until the refresh path adopts (`:413–418`).
+6. **The settle loop** — `startSettling` (`:298–330`): under Reduce Motion
+   one `runToConvergence(cancel:)` and one frame (`:305–312`); otherwise
+   `tick(iterations: 20)` per ~16 ms until `converged` (`:314–328`);
+   `graphDiagramDidConverge` (`AppState+GraphDiagram.swift:204–208`)
+   speaks `GraphLayoutSettled` only when a forces edit armed it. `applyFrame`
+   (`:339–368`) drops a frame whose generation or length disagrees with
+   the model (`:348–350`), stores the positions, refreshes the visible set
+   BEFORE measuring bounds (`:358–361`), fits once on the first non-empty
+   frame (`:362–365`), rebuilds and applies the transform. A topology
+   change restarts the settle (`topologyChanged`, `:372–376`).
+7. **The tiers** — `rebuildTopology` (`:490–521`): the visible set first
+   (`:495–500`), a selection the filter hid dropped from the MODEL
+   (`:503`, the shared key untouched), the grid rebuilt (`:504`), tier B
+   iff the VISIBLE count exceeds `tierBThreshold` (`:505`; `GraphDiagramModel.swift:58`,
+   core's constant), `GraphTierEntered` once on the A→B edge (`:512–517`),
+   a pending focus landing consumed (`:520`). Tier A (`rebuildTierA`,
+   `:523–582`): every visible node's layer and label — labels only at or
+   above `display.textFadeZoom` and only for the topology's `labeled`
+   nodes (`:527–530`, `:555–567`) — and every visible node's AX element
+   (`:569`, complete regardless of the viewport, `:534–539`). Tier B
+   (`rebuildTierB`, `:601–659`): per-node layers and labels dropped,
+   dots batched per 512-unit tile (`:607–640`), ONE summary element — a
+   button named by `GraphTierSummary{count}`'s LABEL render (`:648–650`),
+   its press and its "Switch to Table" custom action switching the mode
+   (`:651–656`) — as the only AX child (`:657–658`); no group tinting at
+   this scale (`:594–600`).
+8. **The styling** — `styleNode` (`:683–711`): a grouped node fills with
+   the token's colour, rings with the style's dash pattern, always
+   heavier (3, or 4 for double) and full-contrast (`:686–695`); an
+   ungrouped node rings at 1.5 in the secondary (or, under Increase
+   Contrast, the label) colour, hollow-and-dashed for a ghost, gray for
+   an attachment, accent for a note (`:697–710`). Edges (`rebuildEdges`,
+   `:713–731`): the topology's edges as one path, width `max(0.5,
+   linkThickness)`, arrowheads under the Arrows toggle. The selection ring
+   (`updateSelectionIndicator`, `:943–961`): screen-space, the label
+   colour at 3 and the accent at 1.5, 4 units outside the node. The
+   diameter: the topology entry's, times `display.nodeSizeMultiplier`
+   (`scaledDiameter`, `:431–434`).
+9. **The AX element** — `axElement` (`:768–789`): role button, label =
+   the `GraphRow` render at the announcer's verbosity over the topology
+   entry's row copy (`axLabel` `:860–866`, `rowCopy` `:853–858`:
+   references = in-links, embed false), value "pinned" or "" (`:776`,
+   T64), custom content "Connects to" = `GraphNeighborsContent{labels}`'s
+   render over the topology entry's neighbours, attached only when
+   non-empty (`neighborCustomContent`, `:875–888`), VO focus → a silent
+   select and a scroll into view (`:778–786`); `configureActionsAndHelp`
+   (`:791–826`): press = activate unless a busy ghost, help = the busy
+   reason or T65's two strings, the custom actions = core's per-kind
+   action set (Create note omitted while busy) plus Pin/Unpin (`:809–825`,
+   diagram-only, exempt from parity). `updateAXFrames` (`:923–939`): the
+   frames from the positions and the viewport, the summary's the whole
+   view.
+10. **The keyboard** — `keyDown` (`:1187–1214`): arrows → `spatialMove`
+    (`:1219–1242`: no selection → the first visible node; else core's
+    `graphSpatialStep` over the visible points with the topology entry's
+    neighbours first); Tab / Shift+Tab → `structuralMove` (`:1246–1251`,
+    core's wrapping step); Return / Enter → activate the selection;
+    a bare letter or digit → `typeAhead` (`:1253–1266`: a one-second
+    buffer, a case-folded prefix over the visible set in order). The zoom
+    and Where-am-I chords are NOT handled here — the focus-routed menu
+    owners deliver them (`:1191–1194`; `zoomRouteTarget`
+    `AppState+GraphDiagram.swift:380–384`, `whereAmIRouteTarget`
+    `:421–426`).
+11. **The selection** — `select` (`:1042–1046`): `graphDiagramSelect`
+    (`AppState+GraphDiagram.swift:216–229`: the model's selection, the
+    shared key written by stable key, the `GraphRow` line when announced),
+    a scroll into view (`:1108–1121`, a 48-unit margin, silent), the ring.
+    `syncSelectionFromSharedKey` (`:1052–1060`): an OUTSIDE write of the
+    key (a re-root) mirrored onto the model, equality-guarded. The
+    mode-switch landing (`requestSelectionFocus` `:1067–1072`,
+    `focusSelectedElementIfPending` `:1077–1105`): deferred until the
+    elements exist, the target resolved from the CURRENT shared key at
+    consumption (tier B: the summary), first responder taken and VO focus
+    posted; no target, no steal.
+12. **The mouse** — hover → the tooltip "⟨label⟩ — ⟨in⟩ in / ⟨out⟩ out"
+    (`:1135–1143`, T68); click → select, double-click → select silently
+    then activate (`:1145–1155`); the wheel pans (`:1157–1162`); magnify
+    zooms (`:1164–1168`); the hit test is the 64-unit grid over the
+    visible positions, the nearest centre within its radius plus two
+    (`hitTest` `:968–987`; `buildGrid` `:747–755`).
+13. **The viewport** — `GraphDiagramModel.viewport` is the canvas's
+    `CanvasViewport` verbatim (`GraphDiagramModel.swift:22–25`);
+    `fitToContent` (`:77–85`): a zero-size bounds inflated by 100 before
+    the fit, padding 60; `graphDiagramZoomIn/Out/ActualSize`
+    (`AppState+GraphDiagram.swift:437–446`) change the viewport and speak
+    `GraphZoom{fit: false, percent}`; `graphDiagramFit` (`:451–456`) fits
+    and speaks `GraphZoom{fit: true, percent}`; `graphDiagramZoomActive`
+    (`:371–373`) — the graph tab active AND a model live — gates the
+    routed chords and the palette rows (`SlateCommands.swift:1583–1611`:
+    the four ids, their labels and hints).
+14. **The pin** — `togglePin` (`:1035–1040`) → `graphDiagramTogglePin`
+    (`:256–267`): the model's set and the session's `pinNode(id, x, y)` /
+    `unpinNode`, `GraphPinned{pinned}` spoken.
+15. **Where-am-I** — `graphDiagramWhereAmIEvent` (`:293–363`): with a
+    model, the selection clause from the model's selection over the
+    TOPOLOGY entry's component (`:298–305`), the backend filter the
+    model's, `zoomPercent` the viewport's (`:307`); the filter clause and
+    the needle as the table's.
+16. **The tests** — `GraphDiagramTests.swift`'s thirty-eight facts
+    (`:154–963`), each mapped in D-16 to its Windows twin or its recorded
+    non-twin.
+
+### Design pass — the diagram as five rules, written before round 1
+
+PR C's lesson (CD-17, CD-18): four subsystems written as site lists
+produced created blockers every round until they were rules. This
+section is written as rules from revision 1. Three lifetimes stand: the
+workspace's navigator and preferences (C); the DOCUMENT's diagram model
+and its driver (new — the document owns the snapshot and the lineage,
+and R-A names the layout session beside them); the SURFACE's renderer,
+peers and viewport (new). The rules: **G** (the diagram lineage), **M**
+(the mode switch), **T** (the tiers and the peers), **N** (the selection
+and the keyboard), **V** (the viewport). Rule F (the focus landing) gains
+a diagram arm named in Term M4; rules L, P, Q and W are untouched.
+
+#### Rule G — the diagram lineage, in eight terms
+
+- **Term G1 — one model, owned by the document, keyed by the build
+  sequence.** A GraphDiagramModel (`Graph/GraphDiagramModel.cs`, the mac's
+  GraphDiagramModel) holds ONE `LayoutSession`, the backend filter it
+  was built under, the layout's node ids in slot order, the node metadata
+  by id, the collapsed edges, the layout's generation, the pinned ids and
+  the build sequence that created it. The document holds AT MOST ONE
+  (DiagramModel, null when no diagram is live); the navigator, the
+  surface and the tests reach it through the document. A model is CREATED
+  by Term G2, REPLACED by Term G6 and DISPOSED by Term G7 — never mutated
+  into another filter's.
+- **Term G2 — the build is a load through the document's scheduler.**
+  `EnterDiagram()` (Term M2) and the rebuild (Term G6) call BuildDiagram:
+  the build sequence is bumped and captured; the filter (the view
+  state's), the forces (`CurrentConfig.Forces`, the mac's `:40`) and
+  `LayoutConfig`'s defaults are captured on the dispatcher; ONE
+  `StartWorkAlwaysAsync` compute crosses `StartGraphLayout(filter,
+  forces, config)` then `NodeIds()`, `Edges()`, `NodeMetadata()` and
+  `Generation()` — the mac's one atomic build (`:47–64`), the three
+  vectors read under the session's own lock — and CONSTRUCTS THE MODEL
+  ON THE POOL, the fresh handle flowing straight into the model's
+  constructor so the gate (Term G7) is born WITH the handle and no raw
+  session exists outside a model at any instant (IGT-1, IGT-2: the model
+  IS the build's carrier); before the compute returns, the new model is
+  REGISTERED in the document's unseated-builds set under the document's
+  lock — or, when the document is already retired under that lock,
+  RETIRED at once (its gate frees the handle: nothing is admitted). The
+  apply — when it runs — takes the model out of the set and installs it
+  ONLY when the document is live, seated, still in Diagram mode, the
+  sequence is the captured one (the mac's `:66–68`) AND the captured
+  filter equals `ViewState.Filter` NOW (IGQ-2: a preset or a filter
+  change during the build has no live model for Term G6 to tear down,
+  so the guard, not the trigger, refuses the stale build) — else RETIRES
+  it (the gate frees the handle) and, when the refusal was the filter's
+  and the mode is still Diagram, runs this term again under the current
+  filter (one rebuild, its own sequence); an apply the retired
+  scheduler WITHDRAWS (`Shutdown` after the compute, before the apply —
+  `PanelWorkScheduler.cs:430–493`) leaves the model in the set, and
+  `Retire()` retires every unseated build under the same lock (Term G7)
+  — so every fresh handle is freed by exactly one of: the apply's
+  install (later, by teardown), the apply's refusal, the compute's own
+  retirement, or the document's retirement sweep (IGT-1). At the
+  install the model's forces are re-read from `CurrentConfig.Forces`
+  and applied through `SetForces` (through the gate) when they differ
+  from the captured ones (PR E's edit during a build is not lost); a failure — `VaultException`, or
+  an InvalidOperationException / `IOException` (`Fetch`'s two catches,
+  `:876–882`) — installs DiagramError (the humanised message) and no
+  model. While the build is in flight DiagramLoading is true. The
+  publication's own LOADING / READY / EMPTY / ERROR (A-4) are the
+  TABLE's states and are not consulted: the layout snapshots the graph
+  itself (`start_graph_layout`), as the mac's build reads no table
+  snapshot.
+- **Term G3 — the semantic epoch and the topology.** The renderer's
+  visible set, per-node record and edges come from `GraphTopology(query,
+  config)` fetched ONCE per epoch — (the model's identity, the model's
+  generation, the view state's `GraphVisibilityQuery`, and the
+  TOPOLOGY-RELEVANT part of `CurrentConfig` — its `Groups`, the only
+  config core's `topology` reads, through `matching_group`;
+  `graph_queries.rs:463–520`, `graph_config.rs:257–283`; IGT-4) compared
+  by value — through the document's scheduler
+  (FetchTopology: the compute crosses `GraphTopology`, the apply accepts
+  the record only when its `Generation` equals the model's — design A —
+  and the epoch is still current, else drops it and leaves the previous
+  epoch's set standing until the refresh adopts; the first epoch of a
+  model shows nothing until it lands). A query whose FILTER differs from
+  the model's is never issued against it — it is Term G6's rebuild. The
+  frames between two epochs paint the accepted set; a needle, a kind
+  overlay, a GROUPS change or an adopted generation is a new epoch; a
+  DISPLAY change (arrows, the fade zoom, the size multiplier, the
+  thickness) redraws locally and a VERBOSITY change re-names the peers
+  locally (Term T2) — neither crosses (IGT-4). The topology entry is the ONE per-node
+  source for the label, the kind, the path, the degrees, the component,
+  the diameter, the group, the label slot and the neighbours (0b-6b, R-D);
+  the model's node metadata serves the actions and the row copy only
+  BEFORE the first epoch lands (the mac's `rowCopy` fallback, `:853–858`).
+- **Term G4 — the driver.** GraphLayoutDriver (`Graph/GraphLayoutDriver.cs`)
+  runs the settle over the document's scheduler and nothing else: each
+  step is ONE `StartWorkAlwaysAsync` whose compute is `Tick(20)` (the
+  mac's cadence, `:316`) and whose apply installs the frame (Term G5) and
+  restarts a one-shot `DispatcherTimer` at 16 ms (a host constant, R-G)
+  that issues the next step — one step in flight at a time, the loop
+  ending at `Converged`, a cancel, a retirement or a replacement; under
+  REDUCE MOTION the one compute is `RunToConvergence(cancel)` and one
+  frame is applied (the mac's `:305–312`; `docs/help/graph.md:73`).
+  Reduce Motion is `SystemParameters.ClientAreaAnimation == false` — the
+  "animation effects" preference — read at every settle start and
+  observed through `SystemParameters.StaticPropertyChanged` (the
+  `ThemeManager` shape, `:168–185`); a flip while settling restarts the
+  settle (the mac's `motionFlip`, `:211`, `:291–293`). Every settle run
+  carries a `CancelToken` cancelled at stop and disposed after its last
+  compute returns; a step's apply that finds its run cancelled applies
+  nothing. The settle announcement: `GraphLayoutSettled` is spoken at
+  convergence ONLY when SettleAnnouncementArmed is set — PR E's forces
+  edit arms it (this PR builds the flag and its facts); the build and
+  the refresh converge silently (the mac's `:204–208`); teardown
+  disarms it.
+- **Term G5 — a frame's currency.** A frame is applied iff its
+  `Generation` equals the model's and `Positions.Length` equals twice the
+  id count (the mac's `:348–350`); an applied frame replaces the position
+  map, refreshes the visible set's bounds, fits the viewport ONCE on the
+  first non-empty frame of a model (the mac's `didInitialFit`,
+  `:362–365`), rebuilds the tiers (rule T) and applies the transform.
+- **Term G6 — the refresh and the rebuild.** The document's `Probe` (A-3,
+  frozen) reads `GraphGeneration()`; its apply gains ONE line: when a
+  model is live and the probed generation differs from the model's,
+  RefreshDiagram — a compute crossing `Refresh()` then `NodeIds()`,
+  `Edges()`, `NodeMetadata()` (the mac's `:163–174`; null = unchanged,
+  nothing adopted), an apply that adopts ONLY when the frame's generation
+  is NEWER than the model's (monotonic, the mac's `:180`), replacing the
+  ids, the metadata, the edges and the generation, pruning pins the
+  topology lost, restarting the settle and opening a new epoch; a probe
+  whose generation EQUALS the model's issues no refresh (zero `Refresh`
+  crossings — the probe's own comparison, IGQ-6); one refresh in flight
+  per model, a probe during it setting RefreshAgain, which EVERY terminal
+  path of the refresh consumes by issuing one more refresh — an adopt, an
+  unchanged (null) answer, a non-monotonic or stale drop, and a FAILURE
+  (`VaultException` caught in the compute and returned as a value, logged
+  through `HostLog` with a new `HostDiagnosticEvent` GraphLayoutRefreshFailed;
+  IGQ-3: a mutation after the first refresh's read is never stranded).
+  The BACKEND FILTER changing while `Mode == Diagram` — `ViewState.Filter`'s
+  change (the preset's `ApplyQuery`, the fresh open's re-apply, PR E's
+  toggles), whether a model is LIVE or a build is IN FLIGHT — is a
+  REBUILD: the live model torn down (Term G7) or the in-flight build
+  superseded (its sequence bumped; Term G2's guard refuses it) and Term
+  G2 run again under the new filter (the mac's `:113–115`). The selection is never
+  stored on the model: Term N1 derives it, so no remap is needed.
+- **Term G7 — teardown, in order, behind ONE gate.** The `LayoutSession`
+  is PRIVATE to the model and reachable through exactly ONE member,
+  WithSession — `T WithSession<T>(Func<LayoutSession, T> call, T refused)`
+  — which keeps the model's own ADMISSION COUNT (the binding's
+  `CallWithPointer` pattern, one level up): under the model's lock it
+  REFUSES when the model is retired — returns `refused` and touches no
+  handle — else increments the in-flight count; it runs `call` outside
+  the lock; on return it decrements and, when the count reaches zero
+  AND the model is retired, DISPOSES the handle. Every session call in
+  the shell is a `call` handed to WithSession with a typed refused value
+  OF ITS OWN SHAPE (IGS-1: one step-shaped result cannot serve every
+  shape): the driver's `Tick` and `RunToConvergence` → a null frame;
+  the refresh's `Refresh` and its three reads → a null answer; the
+  pin's `PinNode`/`UnpinNode` (Term N7) and PR E's `SetForces` → false
+  (IGS-2: the synchronous mutators are inside the gate too — a stale
+  menu item, a peer action or a forces edit after a teardown is
+  refused and changes nothing). The BUILD is no exception: its compute
+  constructs the model around the fresh handle before it returns (Term
+  G2), so the gate exists from the handle's first instant, the reads of
+  the build are calls THROUGH that gate, and a refused, withdrawn or
+  retired build is retired through it (IGT-1). No site anywhere catches
+  ObjectDisposedException: the throw is UNREACHABLE — a call is
+  admitted only while the model is live and the handle is disposed only
+  after the last admitted call returns — and a catch would only hide a
+  bypass, so the census forbids one (D-15 iii). TeardownDiagram — on
+  the switch to Table (Term M2), on the rebuild (Term G6), on `Retire()`
+  (A-1's retirement) and on the workspace's drain — in this order:
+  cancels the settle run's `CancelToken`, disarms the settle
+  announcement, clears the diagram's readback seam (Term M3), drops the
+  model from the document, then RETIRES the gate — later calls are
+  refused; the handle is freed at the count's zero, at once when
+  nothing is in flight. A compute queued before the teardown that
+  starts after it is refused at the gate and its apply applies nothing;
+  a compute admitted before the teardown returns normally and its apply
+  finds the run cancelled and applies nothing; the scheduler is never
+  faulted (`RunAlwaysAsync` faults the tracked task on a throwing
+  compute, `PanelWorkScheduler.cs:387`, and `WhenAllWorkDrained`, `:526`,
+  would fault the drain with it — the gate keeps that path unreachable).
+  Disposal never depends on an apply (`Retire()`'s `Shutdown` skips every
+  later apply, `:320–360`). `WhenAllWorkDrained` covers every admitted
+  call's return, so the workspace's bounded drain (`ShutdownGraphDocument`'s,
+  `WorkspaceViewModel.Graph.cs:392–410`) covers the handle's free. The
+  gate's WALL is a census (D-15 iii). Pinned by the lifetime census's
+  baseline (D-15 xiv) and D-4's and D-6's facts.
+- **Term G8 — the crossings, per path.** A build: one `StartGraphLayout`,
+  one `NodeIds`, one `Edges`, one `NodeMetadata`, one `Generation`. A
+  settle step: one `Tick`; a Reduce Motion settle: one `RunToConvergence`.
+  An epoch: one `GraphTopology`. A refresh: one `Refresh` and — on every
+  NON-NULL answer, adopted or dropped, because the compute reads before
+  the apply judges (the mac's `:171–173`; IGS-3) — one each of `NodeIds`,
+  `Edges`, `NodeMetadata`; a null answer costs the `Refresh` alone. A pin: one
+  `PinNode` or `UnpinNode`. A spatial move: one `GraphSpatialStep`; a
+  structural move: one `GraphStructuralStep`; nothing per frame, nothing
+  per pan, nothing per zoom (the mac's "no crossing here", `:878–880`).
+  Every crossing is on the pool through the scheduler EXCEPT the three
+  free functions (`GraphSpatialStep`, `GraphStructuralStep`,
+  `GraphConstants`) and the session's `PinNode`/`UnpinNode` (and PR E's `SetForces`),
+  synchronous calls the renderer makes on the dispatcher THROUGH the gate
+  (Term G7; the mac's `:260`, `:264`; internally synchronised,
+  `lib.rs:5136–5160`).
+
+#### Design pass II — the session behind one gate (rule 4 invoked at round 3)
+
+Rounds 1, 2 and 3 each returned a blocker in rule G, and each was the
+SAME class seen at another site: revision 1 disposed the handle after an
+apply the retired scheduler would never run; revision 2 disposed at once
+and let the binding's throw be "refused" by a scheduler that converts
+nothing (IGR-1); revision 3 wrapped the driver's computes in a catch and
+left the build's and the refresh's shapes and the synchronous mutators
+outside it (IGS-1, IGS-2). Three rounds, one class: a handle that can be
+disposed while some path can still reach it. The protocol's rule 4 says
+to write the design instead of the next site.
+
+**The design.** The handle is unreachable except through one member of
+the model, WithSession, which is an ADMISSION GATE with a count — the
+binding's own `CallWithPointer`/`Destroy` pattern (`slate_uniffi.cs:
+10740–10790`), lifted one level so the shell's retirement, not the GC's
+finalizer, decides the free: (1) a call is admitted only while the model
+is live, and every admitted call runs over a handle that cannot be freed
+until it returns; (2) a retired model refuses every later call with a
+value of the call's own shape, so no caller needs to know the model was
+torn down; (3) the handle is freed exactly once, by whichever comes last
+— the retirement or the last admitted call's return. Consequences that
+close the class: no ObjectDisposedException can be thrown (nothing
+calls a freed handle), so no catch exists and the scheduler's faulting
+path is never entered; the build's fresh handle is the one object outside
+the gate, and it is private to the build's compute and apply; the
+synchronous mutators — the pin, PR E's forces — go through the same gate
+and are refused, not thrown, after a teardown. The census wall (D-15
+iii) makes the gate the ONLY reader of the handle, so a future site
+cannot reopen the class by holding a `LayoutSession` of its own.
+
+#### Rule M — the mode switch, in five terms
+
+- **Term M1 — one writer of `Mode`.** `GraphViewState.Mode` is written by
+  exactly two sites: the SEED — ONE LINE THIS PR ADDS after the groups'
+  seed (`WorkspaceViewModel.cs:1621–1622`): the view state's `Mode` set
+  from `CurrentConfig.Mode`, so a persisted `diagram` is restored (C-D6
+  closed; IGQ-1: the code seeds nothing today and nothing else speaks)
+  — and the document's `SetMode(GraphSurfaceMode)`; a writers census
+  (C-15 v's shape) walls it. THE PERSISTED DIAGRAM'S SEAT: `AttachGraphDocumentTo`
+  (`WorkspaceViewModel.Graph.cs:118–133`), when it CREATES the document
+  and `Mode == Diagram`, calls EnterDiagram after the fresh open's
+  re-apply (Term G2 builds; the model lands through the scheduler; rule
+  L's transition and its pair run as frozen) — and speaks NO mode line:
+  `GraphMode` is the SWITCH's line alone (the mac's restore-driven
+  `onChange` speaks it, `GraphTableView.swift:104–105` — a Windows
+  silence recorded as D-D12, taken so that rule L's Term 6 sequences
+  stay a projection onto the family as frozen). `SetMode` refuses when retired or unseated (the
+  `SelectRow` guard) and is a no-op for the current mode; otherwise it
+  writes the field, calls `GraphPreferences.SetMode(mode)` (Term W7 — the
+  persisted mode, the mac's `setGraphMode`), speaks `GraphMode{mode}`
+  through `AnnounceIfEffective` (the mac's `:104–108`), runs Term M2, and
+  raises `NotifyWhereAmIAvailabilityChanged` (C-1's hand-off: "PR D's
+  obligation on every Table↔Diagram transition").
+- **Term M2 — the switch's effects.** Table → Diagram: EnterDiagram (Term
+  G2) and the projection cluster shows the diagram (Term M5). Diagram →
+  Table: TeardownDiagram (Term G7) and the cluster shows the table. The
+  switcher's `RadioButton`s both ENABLED (A-11's admission lifted here,
+  as A-11 says), each `Checked` calling `SetMode` under a syncing guard
+  (`BuildSwitcher`'s `IsChecked` follows the view state, `:517–534`), the
+  Tier-B summary's Invoke calling `SetMode(Table)` (Term T3).
+- **Term M3 — the seams per transition.** Entering Diagram installs the
+  diagram's Where-am-I readback (Term N6) through
+  `InstallDiagramReadback` when the model LANDS (not at the switch: a
+  building diagram answers nothing, the mac's `:308–311`); leaving Diagram
+  clears it (null) BEFORE the model is dropped. The four viewport verbs'
+  `CanExecute` and the chord arms read "Diagram effective": the seated
+  document effective, `Mode == Diagram`, a model live (the mac's
+  `graphDiagramZoomActive`), re-evaluated through ONE event on the
+  document, DiagramAvailabilityChanged, raised at the model's install,
+  at teardown and at every `GraphFollowActiveTab` effectiveness edge
+  (the workspace forwards its `NotifyWhereAmIAvailabilityChanged` site's
+  edge, `WorkspaceViewModel.Graph.cs:302–306`).
+- **Term M4 — the landing.** A USER switch raises the presenter's
+  `RequestProjectionFocus` (Term F1's request, no provisional seat) when
+  the switch came from the switcher WITH the keys in the surface (the
+  mac's user-switch condition; the persisted restore raises none —
+  `suppressFocusBumpOnce`). Rule F's Term F4 names the TABLE's arms; in
+  Diagram mode the ACTIVE projection's landing target is: a model live →
+  the renderer (one focus stop, Term N2); the build in flight or failed →
+  the diagram's state host; the delivery waits for the build's terminal
+  state as it waits for the lineage's (Term F3's quiescence read as "no
+  build in flight" while in Diagram mode). Delivery is Term F5's silence.
+  This IS an amendment of frozen Term F4 (IGQ-5), pending the owner at
+  DD-Q5, whose text it applies; DD-6.
+- **Term M5 — the projection cluster.** Exactly ONE projection is in the
+  UIA tree: `Mode == Table` → the table and A-4's state host as today;
+  `Mode == Diagram` → the renderer when a model is live, else the
+  diagram's state host named "Laying out graph." (T20; the visible text
+  "Laying out graph…") while building and "Graph diagram error: ⟨e⟩"
+  (T19) after a failure — the SAME `GraphStateHost` element, its text and
+  accessible name the active projection's (the state names join
+  `GraphPhrase`, D-12). The header — the title, the filter region, the
+  switcher — stays in both modes (C-D15); the Where-am-I panel too.
+  `ApplyState` branches on `Mode` first: in Diagram mode the table's
+  A-4 states do not show (the diagram has its own load; a table ERROR is
+  still spoken by its own `GraphBlocked`, and the count region reads the
+  table's publication as C-5 says).
+
+#### Rule T — the tiers and the peers, in seven terms
+
+- **Term T1 — the visible set and the tier.** VisibleIds = the accepted
+  topology's node ids, in its order, filtered to ids the model knows (the
+  mac's `:422`); Tier B iff `VisibleIds.Count > GraphCoreConstants.Once.TierBThreshold`
+  (inclusive at 1,500, 0b-8; the mac's `:505`). The tier is decided on the
+  VISIBLE count, never the raw node count (a 1,501-node graph filtered to
+  three is tier A — `testNameFilterCollapsesTierBToTheVisibleSet`).
+- **Term T2 — tier A's peers are COMPLETE (DD-Q1).** The renderer's
+  container peer (Group, Name "Graph, visual diagram" — T61; `AutomationId`
+  GraphDiagram) exposes ONE child peer per visible node in VisibleIds
+  order, whatever the viewport (the mac's `:534–539`); a node peer is
+  minted once per (model, id) and reused across rebuilds (identity-stable
+  within a model), dropped when its id leaves the visible set or the
+  model is torn down. Node peer: `AutomationControlType.Button`; Name =
+  `GraphAnnouncer.RenderLabel(GraphRow{verbosity, row})` over the
+  topology entry's row copy (label, kind, in-links, out-links, references
+  = in-links, embed = false — the mac's `rowCopy`, one construction with
+  the table's readback, C-8) at the LIVE verbosity (C-9: a verbosity
+  change re-names every peer without a load); HelpText = the label prefix
+  "Connects to: " over `RenderLabel(GraphNeighborsContent{labels})` with
+  the topology entry's neighbour labels in order, and EMPTY when core
+  renders nothing (0a-14: the cap is core's); ItemStatus = "pinned" while
+  the id is pinned, else empty (T64; the canvas's "marked" precedent);
+  `AutomationId` = "GraphNode:" + the stable key; bounding rectangle =
+  the node's circle (the scaled diameter) through the viewport, in screen
+  coordinates, computed at READ time (`CanvasCardAutomationPeer`'s rule,
+  `:151–165`); patterns Invoke (= Term N5's activation of that node) and
+  SelectionItem (`IsSelected` = the derived selection is this id;
+  `Select` = Term N4's announced select; `AddToSelection` the canvas's
+  single-selection matrix, `:196–212`; `RemoveFromSelection` clears
+  through the document — `SelectRow` has no clearing arm, so the
+  document gains ClearSelectionFromSurface: the shared key set null
+  under the same guard); NOT keyboard-focusable (DD-Q2's default),
+  IsOffscreen = the rectangle outside the view. The container's patterns:
+  Selection (single, not required, the selected node's peer) and a
+  read-only Value = "Zoom N percent" over the viewport's `ZoomPercent`
+  (the canvas's DD-5; the Where-am-I clause reads the same percent).
+- **Term T3 — tier B is one summary peer.** In tier B the container's
+  ONE child is the summary peer: Button, Name =
+  `RenderLabel(GraphTierSummary{count = VisibleIds.Count})` (LABEL class,
+  never posted), HelpText "Switch to Table" (T62/T63's action name),
+  Invoke = `SetMode(Table)` (Term M1), rectangle = the renderer's;
+  `GraphTierEntered` is spoken ONCE on the A→B edge of a model (the
+  mac's `lastTierB` latch, `:512–517`), never on B→A, never on a rebuild
+  that stays in B, and the latch resets with the model. Tier B draws the
+  visible dots batched into ONE visual (no per-node visuals, no labels,
+  no group tint — the mac's `:594–600`); the hit test and the selection
+  ring still work (Term T7), so a pointer user keeps the tooltip and the
+  ring.
+- **Term T4 — labels.** A label is drawn for a node iff the topology
+  entry is `labeled` (core's cap, 0b-6b) AND `Viewport.Zoom ≥
+  CurrentConfig.Display.TextFadeZoom` (the mac's `:527–530`); the font is
+  11 units × the text-scale factor × the zoom (the canvas's
+  `CanvasTextScaleService`, D11's owner, one instance per renderer,
+  disposed at `Shutdown`); a zoom crossing the fade threshold re-labels
+  (the mac's `:904–908`). Labels are visuals, not peers.
+- **Term T5 — styling is tokens, never colour alone.** Node fills: a
+  grouped node the group's token brush `Slate.Graph.Group⟨n⟩Brush`
+  (n = 1..8 in core's `graph_color_tokens()` order — Red, Orange, Yellow,
+  Green, Teal, Blue, Purple, Pink) with the ring style's dash pattern
+  (Solid none, Dashed 4-2, Dotted 1-2, Double none at width 4) at width 3
+  in `Slate.Graph.RingBrush`; an ungrouped note `Slate.Graph.NoteBrush`,
+  an attachment `Slate.Graph.AttachmentBrush`, a ghost hollow
+  (`Slate.Graph.SurfaceBrush`) dashed 3-2, each ringed at 1.5 in
+  `Slate.Graph.OutlineBrush` (the mac's `:697–710`; Increase Contrast is
+  the Contrast dictionary's business); edges `Slate.Graph.EdgeBrush` at
+  `max(0.5, Display.LinkThickness)` layout units with arrowheads under
+  `Display.Arrows`; labels `Slate.Graph.LabelBrush`; the selection ring
+  screen-space at 3 in `Slate.Graph.RingBrush` plus 1.5 in
+  `Slate.Graph.AccentBrush`, four units outside the node (the mac's
+  `:943–961`; the canvas's D8 minimum). The tokens join the three
+  dictionaries (Light, Dark: literal colours; Contrast: the fills to
+  `SystemColors.WindowColorKey`, the outline, edge, label and ring to
+  WindowTextColorKey, the accent to HighlightColorKey — the canvas's
+  table, `Slate.Contrast.xaml:56–76`) and `ThemeTokenContrastTests`
+  gains the graph matrix in both dictionaries: the label against the
+  window > 75; each of the eight group fills, the note and the
+  attachment fill against the window > 15 (a graphical mark — the mac's
+  bar, `testDiagramColorsMeetAPCAInBothAppearances`); the edge against
+  the window > 3; the ring against the window > 75. The group's MEANING
+  is never colour alone: the ring is heavier and patterned (WCAG 1.4.1,
+  the mac's finding 7a).
+- **Term T6 — the drawing.** Three `DrawingVisual`s in the renderer —
+  edges, nodes (or the tier-B dots), the ring — redrawn from the
+  installed positions and the accepted topology on every frame, epoch,
+  viewport or theme change; positions are layout space, the transform is
+  `view = (p − offset) × zoom` applied at draw (the mac's `:436–447`,
+  `:900–921`); nothing re-layouts on pan or zoom (P2-3).
+- **Term T7 — the hit test.** A uniform grid of 64 layout units over the
+  VISIBLE positions, rebuilt with the visible set (the mac's `:747–755`);
+  a point maps to layout space, the 3×3 block is scanned, the nearest
+  centre within its scaled radius plus two wins (`:968–987`); both tiers.
+
+#### Rule N — the selection and the keyboard, in seven terms
+
+- **Term N1 — the selection is DERIVED from the shared key.** The
+  diagram stores no selection of its own: Selection = the layout id whose
+  topology entry's `stable_key` equals `ViewState.SelectedKey`, if that
+  id is in VisibleIds; else none. A key the needle or the overlay hides
+  yields no ring and no navigation origin while the key survives (A-7:
+  the key is never cleared by a hiding; the mac drops its MODEL selection
+  at `:503` and keeps the key — the same observable). A key whose node is
+  gone from the topology after an adopt yields none until A-7's
+  revalidation clears it at the next pair. The mac's remap by stable key
+  after a generation churn (`:187–195`) is therefore free.
+- **Term N2 — one focus stop.** The renderer is focusable and is the
+  projection's ONE focus stop after the switcher (the canvas visual
+  board's, `w_c_matrix.md:51`); the node peers take no keyboard focus
+  (DD-Q2). `ProjectionHasFocus` is true while the renderer or the
+  diagram's state host has the keys.
+- **Term N3 — the moves, all through core.** With the renderer focused:
+  Down/Up/Right/Left → the spatial step — no selection → the first
+  visible node; else `GraphSpatialStep(points = every visible id's
+  position, neighbors = the topology entry's neighbour ids, from, dx, dy)`
+  with the unit axis (the mac's `:1219–1242`; 0b-10) — a null step moves
+  nothing; Tab / Shift+Tab → `GraphStructuralStep(VisibleIds, from,
+  forward)` (wrapping; the mac's `:1246–1251`), CONSUMED while the visible
+  set is non-empty (the renderer is a `KeyboardNavigationMode.None`
+  scope; P2-3's normative Tab), the reader leaving the diagram by the
+  shell's pane and tab chords (`slate.workspace.focusPaneLeft` and its
+  siblings, the palette) or Shift+Tab from an EMPTY diagram; Enter →
+  Term N5 on the selection; a bare letter or digit (no Ctrl/Alt) → the
+  type-ahead: a one-second buffer, the first visible id in order whose
+  topology label starts with the buffer under `string.StartsWith` with
+  OrdinalIgnoreCase (the mac's `lowercased().hasPrefix`, `:1253–1266`;
+  a host list search over core's labels, §2 row J, recorded D-D6);
+  Escape → the surface's ladder (C-7, unchanged: rung 3 bubbles from the
+  renderer). The four viewport chords and Ctrl+Alt+Shift+I are the
+  NAVIGATOR's (rule V; C-8), delivered by the surface's tunnelling
+  handler before the renderer's own `KeyDown` — the renderer handles
+  none of them (the mac's `:1191–1194`).
+- **Term N4 — a select, announced or silent.** SelectNode(id, announce):
+  the topology entry's key written through the document's `SelectRow`
+  (A-7's ONE guarded writer: seated, live, the key in the held snapshot
+  — a node the table's snapshot does not yet know is refused and the
+  ring does not move; the next pair re-seats, recorded DR-4), then a
+  scroll into view (Term V5), then — when announced — `GraphRow{verbosity,
+  row}` through the document's AnnounceRow seam (`AnnounceIfEffective`;
+  the navigation class, 200 ms latest-wins; the mac's `:226–228`).
+  ANNOUNCED: a keyboard move (Term N3), a single click, and the
+  SelectionItem pattern's `Select` (the reader's own act on a peer the
+  platform speaks nothing for). SILENT: a double-click's select (the
+  activation follows it, the mac's `:1149–1153`) and the landing (Term
+  M4). An OUTSIDE write of the key (a re-root, the table in the other
+  pane) moves the ring and scrolls into view with no line (the mac's
+  `syncSelectionFromSharedKey`; the view state's `PropertyChanged` is the
+  trigger).
+- **Term N5 — the actions are the table's, through the document.** The
+  document gains ExecuteFromDiagram(GraphRowAction, GraphTopologyNode)
+  and ActivateFromDiagram(node): the same admission as `Execute`
+  (`:1159–1186`) — live, the node CURRENT (its id in the live model's
+  visible set), the action in core's vector for its kind and enabled
+  (`IsActionEnabled`'s create admission for a ghost) — and the same four
+  workspace seams, addressed by the node's path (Open, OpenInNewTab,
+  Reveal, ShowConnections) or its label (CreateNote through
+  `GraphGhostNotePath`); Enter and Invoke are ActivateFromDiagram (a
+  ghost creates, else Open — `Activate`'s rule). Menu / Shift+F10 / the
+  Apps key on the renderer open the node's actions menu — ONE persistent
+  `ContextMenu` on the renderer from construction, rebuilt per opening
+  (the leaf's rule, `ConnectionsLeafView.cs:334–337`, TGB2-6): core's
+  per-kind action titles in `GraphRowAction::ALL`'s order with a
+  disabled item's `DisabledReason` (A-8's shape), then a separator and
+  "Pin" or "Unpin" (T67; diagram-only, exempt from §P-B parity as the
+  mac's is, `:817–818`). The drift fact enumerates the diagram's menu
+  against the table's row-actions menu for each kind: equal, plus Pin
+  (`testDiagramNodeActionsMatchTheCanonicalSetPlusPin`'s twin).
+- **Term N6 — Where-am-I's diagram readback.** DiagramWhereAmI(): null
+  while no model is live (the seam is uninstalled then — Term M3), else
+  ONE `GraphWhereAmI { selection, zoom_percent = Some(ZoomPercent),
+  filter, name_filter }` with `selection` = the derived selection's
+  topology entry rendered the row copy's way with its `component`
+  (`GraphWhereAmISelection.Node`), else `NoSelection`; the filter clause
+  and the needle exactly `TableWhereAmI`'s (`:565–574`). Installed at the
+  model's install, cleared at teardown, chosen by `Mode` (C-8's
+  `ActiveReadback`); answered whatever the layout's settle state (a
+  settling diagram has a position for every node).
+- **Term N7 — the pin.** TogglePin(id): the model's set and the session's
+  `PinNode(id, x, y)` at the node's CURRENT layout position or
+  `UnpinNode(id)` (the mac's `:256–267`) THROUGH the gate (Term G7 — a
+  retired model refuses the call and the toggle changes nothing, no line
+  spoken; IGS-2), `GraphPinned{pinned}` through
+  the document's AnnouncePinned seam, the peer's ItemStatus and the menu
+  item re-read; a refresh prunes a pinned id the topology lost (Term G6);
+  a rebuild forgets every pin (a new session; the mac's model is new too).
+
+#### Rule V — the viewport, in six terms
+
+- **Term V1 — one viewport policy.** The diagram's viewport IS
+  `CanvasViewportState` (the mac reuses `CanvasViewport` verbatim,
+  `GraphDiagramModel.swift:22–25`): the clamp 0.1–4.0, the step 1.25,
+  the centre-preserving `WithZoom`, `ZoomPercent`; the renderer holds the
+  committed state and applies it at draw (no engine: the diagram has no
+  windowed topology to derive, DD-Q1). Held by the RENDERER, reset with
+  the model (a rebuild fits anew).
+- **Term V2 — the four verbs and their lines.** ZoomIn, ZoomOut and
+  ActualSize act on the view's centre and yield `GraphZoom{fit: false,
+  percent}`; FitGraph fits the VISIBLE nodes' bounds — a zero-size bounds
+  inflated by 100 layout units before the fit (the mac's `:77–85`), the
+  padding GraphFitPadding = 60 (the mac's; the canvas's `FitPadding` is
+  40 — recorded D-D8) — and yields `GraphZoom{fit: true, percent}` in
+  EVERY case: over an EMPTY visible set the fit is a no-op inside the
+  model (the mac's `fitToContent` guard, `GraphDiagramModel.swift:78`)
+  and the line still speaks the UNCHANGED percent — the mac's
+  `graphDiagramFit` announces after the call regardless
+  (`AppState+GraphDiagram.swift:451–456`; IGQ-4 corrected: revision 1 had
+  it silent). The verbs reach the renderer through the presenter's
+  ViewportCommand(GraphViewportVerb) → GraphViewportOutcome — Zoomed(percent,
+  fit) | Refused, two arms (the canvas's Silent arm has no graph use) —
+  and the NAVIGATOR speaks a Zoomed outcome through the document's
+  AnnounceZoom seam (the navigator posts nothing itself, C-15 ix);
+  Refused — no live model, Table mode — speaks nothing (the mac's
+  inactive router is a no-op).
+- **Term V3 — the rows and the chords.** `ChordTable`'s `GraphRows`
+  gains `Ids.GraphZoomIn` = `slate.graph.zoomIn` "Graph: Zoom In"
+  (⌘=, `Ctrl+=`), `Ids.GraphZoomOut` = `slate.graph.zoomOut` "Graph:
+  Zoom Out" (⌘-, `Ctrl+-`), `Ids.GraphActualSize` = `slate.graph.actualSize`
+  "Graph: Actual Size" (⌘0, `Ctrl+0`), `Ids.GraphFitGraph` =
+  `slate.graph.fitGraph` "Graph: Fit Graph" (⌥⌘0, `Ctrl+Alt+0`) — the
+  labels and hints the mac's byte for byte (`SlateCommands.swift:1583–1611`;
+  `MacCatalogParityTests`' P3), `CommandSection.Graph`, `ChordScope.Graph`,
+  each resolved in `BuildResolvers()` to a workspace command whose body
+  is the navigator's verb and whose `CanExecute` is Term M3's "Diagram
+  effective" (re-raised on DiagramAvailabilityChanged); the four chords
+  join `GraphNavigator.Bind` as three-argument `AddChord` calls
+  (`Key.OemPlus` Control, `Key.OemMinus` Control, `Key.D0` Control,
+  `Key.D0` Control|Alt) and the scrape (C-11); the three shared with the
+  canvas rows join `SharedCommandChords` with C-8's reason (disjoint by
+  DELIVERY: the two surfaces' tunnelling handlers); `Ctrl+Alt+0` is
+  verified free in every scope by the table's own facts (D-2 of the
+  spec's §6). The editor's zoom rows are chordless (`ChordTable.cs:789–792`)
+  and untouched.
+- **Term V4 — delivery and admission.** The chord arms return false
+  (unconsumed, the press bubbling) unless Diagram is effective (Term M3)
+  — in Table mode Ctrl+= reaches nothing (the mac's router falls to the
+  editor; Windows's editor zoom is chordless, so the press is inert),
+  the four palette rows and menu items are DISABLED (AD-3's
+  listed-and-disabled shape). While the FILTER FIELD has the keys inside
+  a Diagram-mode surface the chords still act (they carry Control; no
+  typed character is eaten — the canvas's R2 concern is its bare Shift
+  chords, `CanvasNavigator.cs:1750–1762`, and the graph has none).
+- **Term V5 — pan and scroll-into-view.** The wheel pans by the delta
+  over the zoom; Ctrl+wheel zooms one step per notch, centre-preserving
+  on the pointer; a left-button drag on empty space pans (the canvas has
+  no drag; the mac's wheel pans, `:1157–1162`, and its magnify zooms —
+  Windows's pinch is not routed, recorded D-D7). A node selected ON the
+  surface, or by the outside key, scrolls into view: the pan that keeps
+  its centre inside a 48-unit margin (the mac's `:1108–1121`), silent
+  (WCAG 2.4.11). The viewport's changes are instant (no animation; DD-7's
+  precedent).
+- **Term V6 — the value and the clause.** The container peer's Value and
+  the Where-am-I clause read the SAME `ZoomPercent` (the canvas's TH-5),
+  so a reader polling the value and one asking Where-am-I hear one
+  number; both update in the same draw.
+
+### The contracts (PR D)
+
+**D-1 — The files, the owners, the lifetimes.** `Graph/` gains
+GraphDiagramModel.cs (Term G1; the document's), GraphLayoutDriver.cs
+(Term G4; the model's driver over the document's scheduler),
+GraphDiagramView.cs (the renderer: the visuals, the viewport, the hit
+grid, the keyboard and the mouse, the tooltip, the actions menu, the
+peer registry — the surface's), GraphDiagramPeers.cs (the container,
+node and summary peers), GraphMotionPolicy.cs (Reduce Motion: the read
+and the change event, the `CanvasTextScaleService` shape) — the spec's
+§1 lines amended (DD-14). The document gains DiagramModel,
+DiagramLoading, DiagramError, EnterDiagram, TeardownDiagram,
+BuildDiagram, RefreshDiagram, FetchTopology, SetMode, ExecuteFromDiagram,
+ActivateFromDiagram, ClearSelectionFromSurface, DiagramWhereAmI,
+DiagramAvailabilityChanged, SettleAnnouncementArmed and the four
+announcement seams AnnounceRow, AnnounceZoom, AnnouncePinned,
+AnnounceTierEntered plus AnnounceLayoutSettled and AnnounceMode. The
+navigator gains the four verbs (`ZoomIn()`, `ZoomOut()`, `ActualSize()`,
+`FitGraph()`) and their chord arms; `IGraphSurfacePresenter` gains
+ViewportCommand and ProjectionKind (Table | Diagram — the canvas's
+`Projection`); `GraphSurfaceView` hosts the renderer beside the table
+under Term M5. Pinned by facts: the instance census (D-15 ii); the
+lifetimes (GraphDiagramTests: a model lives with the document, is torn
+down by the switch to Table, the tab's close and the retirement, and its
+handle count returns to baseline).
+
+**D-2 — The build, the states, the crossings (Terms G2, G8).** Pinned by
+facts (GraphDiagramTests, under the pumped dispatcher): EnteringDiagramBuildsOneLayoutFromTheViewStatesFilterAndThePersistedForces
+(the five crossings once; `CrossingsForTests` gains the layout names);
+ABuildLandsOnlyForItsSequenceAndDiagramMode (a switch back to Table
+during the build disposes the landed session; a second Enter supersedes
+the first's build); AFailedBuildInstallsTheErrorStateAndNoModel (the
+fetch gate throws `VaultException`; the state host reads T19's name);
+TheBuildReadsNoTableSnapshot (a table under ERROR still builds a diagram
+— the layout snapshots the graph itself); AFilterChangeDuringTheBuildRefusesItAndRebuildsOnce
+(a preset run while the first build is parked on the fetch gate: the
+landed session disposed, one more `StartGraphLayout` under the preset's
+filter, the model's filter the preset's — IGQ-2);
+AForcesEditDuringTheBuildIsAppliedAtTheInstall;
+AWithdrawnBuildApplyLeavesNoHandle (the compute parked after its
+registration, the workspace retired and drained — the apply withdrawn —
+the park released: the model retired by the sweep, the count at
+baseline; IGT-1); ABuildThatReturnsIntoARetiredDocumentRetiresItself
+(parked before its registration, the document retired, released: the
+gate frees the handle in the compute; IGT-1); NoCrossingHappensPerFrameOrPan
+(a settle of N steps costs N ticks and one topology).
+
+**D-3 — The epoch and the topology (Term G3).** Pinned by facts:
+TheTopologyIsFetchedOncePerEpochWhileSettling
+(`testTopologyIsFetchedOncePerEpochWhileSettling`'s twin: five steps,
+one crossing; a needle, a kind overlay and a groups change each a new
+epoch — three more; a DISPLAY change and a VERBOSITY change cross NOTHING
+and the peers are re-named or the visuals redrawn — IGT-4);
+ATopologyFromAnotherGenerationIsDroppedAndTheSetEmptiesUntilTheRefreshAdopts
+(`testMutationBetweenAdoptionAndQueryEmptiesTheVisibleSet`'s twin: a note
+saved between the build and the epoch's fetch);
+AQueryUnderAnotherFilterIsNeverIssuedAgainstTheModel (the preset's
+`ApplyQuery` rebuilds; zero `GraphTopology` crossings against the old
+model); TheNeedleAndTheKindOverlayNarrowTheVisibleSetToTheTables
+(`testFilterEquivalenceTableAndDiagramShareOnePredicate`,
+`testNameFilterHidesNonMatchingNodesInDiagram`,
+`testDiagramHonoursThePresetKindFilterLikeTheTable`: the visible ids
+equal `GraphVisibility(query).Ids` and the table's rows' keys);
+NeighbourContentExcludesFilteredOutNodes
+(`testNeighborContentExcludesFilteredOutNodes`).
+
+**D-4 — The driver, the frames, Reduce Motion, the settle line (Terms
+G4, G5).** Pinned by facts: ASettleIsOneTickPerStepThroughTheSchedulerUntilConverged
+(the step count equals the tick crossings; no `Task.Run`, no second
+scheduler — the census); AFrameFromAnotherGenerationOrLengthIsDropped
+(`testApplyFrameDropsMismatchedGenerationFrame`'s twin over the driver's
+apply seam); ReduceMotionAppliesOneConvergedFrame
+(`testReduceMotionAppliesASingleConvergedFrame`: the policy injected;
+one `RunToConvergence`, zero `Tick`s, the peers complete after it);
+AMotionFlipWhileSettlingRestartsTheSettle;
+TheFirstNonEmptyFrameFitsOnceAndLaterFramesDoNot;
+TheSettledLineSpeaksOnlyWhenArmedAndTeardownDisarms
+(`testSettleAnnouncementNotArmedWithoutADiagramAndClearedOnTeardown`:
+armed then converged → one `GraphLayoutSettled`; the build's own
+convergence → none; armed then torn down then rebuilt → none);
+ACancelledRunAppliesNothingAndTheSessionIsFreedWhenTheInFlightCallReturns
+(the compute parked on the fetch gate, the teardown issued — the gate
+retired — the park released: no frame, the handle freed when the call
+returns, the count back to baseline after it);
+AStepQueuedBeforeTeardownThatStartsAfterItIsRefusedAtTheGateAndTheDrainCompletes
+(the step's compute parked BEFORE its gate call through the scheduler's
+`BeforeComputeForTests`, the teardown run — the gate retired, the handle
+freed at once since nothing is admitted — then the park released: the
+call is refused, the apply applies nothing, `WhenAllWorkDrained`
+completes WITHOUT a fault — IGR-1, IGS-1; a planted bare `Tick` on the
+field faults it); AnAdmittedCallOutlivesTheTeardownAndFreesTheHandleOnReturn
+(parked INSIDE the gate's call: the teardown retires the gate with the
+count at one; the handle is freed when the call returns; the lifetime
+census's baseline holds after); EachRefusedShapeIsItsOwn (a null frame,
+a null refresh, a false pin, a false forces edit — IGS-1);
+APinOrAForcesEditOnARetiredModelIsRefusedSilently (IGS-2).
+
+**D-5 — The refresh and the rebuild (Term G6).** Pinned by facts:
+AProbeThatMovedTheGenerationRefreshesTheLayoutAndAdoptsMonotonically
+(a note added: `Refresh` once, the ids gained the node, the generation
+moved up); AProbeWhoseGenerationEqualsTheModelsIssuesNoRefresh (zero
+`Refresh` crossings — IGQ-6); AProbeDuringARefreshRunsOneMoreRefreshAfterEveryTerminalPath
+(after an adopt, after a null answer, after a stale drop and after a
+failure injected through the fetch gate — four arrangements, one more
+`Refresh` each; IGQ-3); ARefreshFailureIsLoggedAndTheModelStands;
+ARefreshPrunesAPinTheTopologyLost;
+AGenerationChurnKeepsTheSelectionByStableKey
+(`testGenerationRefreshRemapsSelectionByStableKey`: the shared key
+unchanged, the ring on the node's new id);
+ABackendFilterChangeUnderALiveModelRebuildsIt (the preset from Diagram
+mode: one teardown, one build under the preset's filter, the headline
+alone — `testPresetFromDiagramModeSpeaksTheHeadlineAlone`'s Windows
+twin, the `GraphMode` line absent).
+
+**D-6 — Teardown, disposal, the drain (Term G7).** Pinned by facts:
+TheSwitchToTableRetiresTheGateAndFreesTheHandle (nothing in flight: at
+once; an admitted tick: on its return); RetirementTearsDownTheDiagram
+(the retired scheduler's skipped apply plays no part in the disposal);
+TheWorkspaceDrainCoversTheLastAdmittedCallsReturn;
+TheLayoutSessionCountReturnsToBaseline (`HandleLifetimeCensus`'s
+counter, the graph document's diagrams built and torn down twenty
+times); a seam-parked compute that outlives the teardown disposes on
+its own return.
+
+**D-7 — The mode switch (rule M).** Pinned by facts (GraphDiagramTests,
+`GraphTableTests`, GraphPreferencesTests): TheSwitcherWritesModeThroughTheDocumentAndPersistsIt
+(`SetMode` → the view state, `CurrentConfig.Mode`, a scheduled save;
+ADiagramModeSeedsTable REPLACED by APersistedDiagramSeedsDiagram —
+C-D6 closed); ASwitchSpeaksTheModeLineOnceAndNothingElse (Table →
+Diagram: `GraphMode{Diagram}` alone — no summary, no count; back:
+`GraphMode{Table}` alone); ASwitchWhenRetiredOrUnseatedWritesNothing;
+ExactlyOneProjectionIsInTheTreePerMode (the table collapsed and the
+renderer visible, and back; the state host named by the active
+projection's state); TheSeedWritesModeFromCurrentConfig (a persisted
+`diagram` → `Mode == Diagram` at the workspace's construction; the
+writers census names the seed line); ThePersistedDiagramModeBuildsAtTheSeatAndSpeaksNoModeLine
+(an explicit open over a persisted diagram: one `StartGraphLayout` from
+the seat, `GraphStatus{Opened}` then the pair's summary and NO
+`GraphMode` — D-D12; a restore: the summary alone); TheSummarysInvokeSwitchesToTable
+(`testTierBSummaryElementSwitchesToTable`); TheModeWritersAreTheSeedAndSetModeAlone
+(the census, a planted writer caught); TheDiagramSeamIsInstalledAtTheModelsInstallAndClearedBeforeTheModelDrops
+(Term M3; `InstallDiagramReadback` null while building — the mac's
+`:308–311`); TheVerbsAvailabilityFollowsTheModelAndTheEffectiveEdge
+(DiagramAvailabilityChanged raised at install, teardown and the pane
+switch; the four commands' `CanExecute`); AUserSwitchLandsTheRendererAndARestoreLandsNothing
+(Term M4: the request raised only from the switcher with the keys
+inside; delivered on the model's install, silent; the state host while
+building); TheHeaderStaysInBothModes.
+
+**D-8 — Tier A's complete peers (Term T2).** Pinned by facts
+(GraphDiagramTests, in a hosted window): EveryVisibleNodeHasAButtonPeerNamedByTheRowCopyWithItsNeighboursAsHelpText
+(`testTierAMaterializesEveryNodeWithRowCopyRoleAndActions`: the count,
+the control type, two Names equal to core's renders, HelpText equal to
+the prefix over core's render, empty for an isolated node);
+APanNeverDropsAPeer (`testTierARemainsCompleteAfterAPan`);
+APeersRectangleFollowsTheViewportAtReadTime (a zoom moves it; the
+canvas journey's classic in-process); AVerbosityChangeRenamesEveryPeerWithoutALoad
+(C-9); ThePeerIsIdentityStableAcrossEpochsRefreshesAndViewportChangesWithinAModel
+(IGT-5); AModelReplacementRecreatesThePeers (a rebuild: new peers, the
+old ones gone);
+ItemStatusReadsPinnedWhilePinned; TheContainerExposesSelectionAndTheZoomValue
+(single, not required, the selected peer; "Zoom 100 percent" at actual
+size — the canvas's `TheZoomValueIsCoresRenderMinusItsPeriod` shape:
+the Value is the percent the clause carries);
+SelectThroughThePatternSelectsAndAnnouncesAndRemoveClears (the shared
+key written and cleared through the document);
+AddToSelectionWithAnotherSelectedThrows.
+
+**D-9 — Tier B (Term T3).** Pinned by facts over a synthetic topology
+(the fixture's shape, `GraphDiagramTests.swift:75–121`: 1,501 nodes
+through the model's own seams, no vault): TheTierBoundaryIsInclusiveAt1500AndSwitchesAt1501;
+TierBExposesOneSummaryPeerNamedByCoresRenderWhoseInvokeSwitchesToTable
+(`testTierBSummaryElementSwitchesToTable`); TierEnteredSpeaksOnceOnTheEdgeAndNeverOnBToA;
+ANameFilterCollapsesTierBToTheVisibleSet
+(`testNameFilterCollapsesTierBToTheVisibleSet`: three peers, not a
+summary); TierBDrawsOneVisualAndKeepsTheRingAndTheHitTest.
+
+**D-10 — Labels, styling, edges, the hit test (Terms T4–T7).** Pinned by
+facts: ALabelDrawsOnlyForACoreLabeledNodeAtOrAboveTheFadeZoom;
+TheNodeSizeMultiplierScalesTheDrawnDiameter
+(`testNodeSizeMultiplierScalesTheDrawnDiameter`);
+AGroupedNodeTakesTheTokenBrushAndItsRingStyle
+(`testGroupColoursMatchingNodesWithADistinctRing`);
+AGroupedRingIsHeavierThanUngroupedEvenWhenSolid
+(`testGroupedNodeRingIsThickerThanUngroupedEvenWhenSolid`);
+UngroupingClearsTheDashAndTheWidth (`testUngroupingANodeClearsItsRingDashAndWidth`);
+TheDiameterIsTheTopologyEntrys (`testNodeDiameterMatchesTheSpec` — core's
+curve through the record); TheGridHitTestFindsTheNodeUnderAPoint
+(`testGridHitTestFindsTheNodeUnderAPoint`); TheThemeTokensExistInEveryDictionaryAndMeetTheMatrix
+(`ThemeTokenContrastTests`'s graph rows; the token-drift census: every
+`Slate.Graph.*` key the renderer looks up is declared in the three
+dictionaries, and every declared key is looked up).
+
+**D-11 — The selection and the keyboard (rule N).** Pinned by facts
+(GraphDiagramTests, `GraphNavigatorTests`): TheSelectionIsTheSharedKeysVisibleNode
+(`testSharedKeySeedsTheDiagramSelectionAndMissesGracefully`: present →
+its id; hidden by the needle → none, the key kept; absent → none);
+ASelectWritesTheSharedKeyThroughTheDocumentsGuard
+(`testDiagramSelectionMirrorsToTheSharedKey`; a retired or unseated
+document refused; a node the table's snapshot lacks refused — DR-4);
+ArrowsStepSpatiallyNeighboursFirstThenFallBack
+(`testSpatialMoveNeighborsFirstThenFallbackOnAFixedLayout` over injected
+positions; one `GraphSpatialStep` per press); TabWrapsStructurallyAndIsConsumedOnlyWithAVisibleSet;
+TypeAheadJumpsByPrefixWithinASecond; EnterActivatesTheSelection;
+AKeyboardMoveSpeaksOneRowLineAndTheLandingSpeaksNothing (the relay's
+`GraphRow` at the live verbosity, coalesced; Term F5);
+AnOutsideKeyWriteMovesTheRingSilently (a re-root while the diagram is
+on screen); ClickSelectsAndDoubleClickActivates; TheWheelPansAndCtrlWheelZooms;
+TheEscapeLadderBubblesFromTheRenderer (rung 3);
+TheTooltipIsTheInventorysComposedLabel (T68 over the topology entry;
+hoverable and dismissable — the canvas's 1.4.13 facts' shape).
+
+**D-12 — The actions and the menu (Term N5); the label inventory.**
+Pinned by facts: TheDiagramsActionsEqualTheTablesPlusPin
+(`testDiagramNodeActionsMatchTheCanonicalSetPlusPin`: per kind, the
+menu's titles equal the table's row-actions menu's titles plus Pin);
+AGhostWithoutCreateAdmissionShowsTheReasonAndInvokeDoesNothing
+(`testBusyGhostAXPressIsUnavailableWhileNotePressAndPinRemainAvailable`:
+the menu item disabled with A-8's reason, Invoke inert, a note's Invoke
+opens); AGhostOmitsShowConnections
+(`testGhostNodeOmitsShowConnectionsButANoteHasIt`); EachActionReachesTheTablesSeam
+(Open, OpenInNewTab, Reveal, ShowConnections, CreateNote — each once,
+addressed by the node's path or label); AStaleNodeIsRefused (an id gone
+from the visible set). `GraphPhrase` gains: "Graph, visual diagram"
+(T61), "Switch to Table" (T62/T63), "pinned" (T64), "Pin" / "Unpin"
+(T67), the tooltip's composed shape (T68: label, " — ", in, " in / ",
+out, " out"), "Laying out graph…" / "Laying out graph." (T20), "Graph
+diagram error: " (T19's prefix), and the Windows-authored "Connects to: "
+prefix and the four verbs' labels and hints (the mac's); the label theory
+(`EveryLabelIsTheInventorys`) extends over the renderer, the peers and
+the menu.
+
+**D-13 — The viewport, the verbs, the rows (rule V).** Pinned by facts
+(GraphDiagramTests, `GraphNavigatorTests`, `ChordTableTests`):
+ZoomInOutAndActualSizeAreCentrePreservingAndClampedAndSpeakTheZoom
+(`GraphZoom{false, percent}` through the document's seam; the percent
+equals `ZoomPercent`); FitFramesTheVisibleNodesAndSpeaksTheFitLine
+(`testSingleNodeFitFramesTheNode`: a single node's inflated bounds; the
+padding 60; a hidden node excluded from the bounds — the mac's finding 5);
+FitOnAnEmptySetSpeaksTheUnchangedPercent (the mac's; IGQ-4);
+TheFourRowsTheirScopeLabelsAndChords (the mac's
+labels byte for byte, `ChordScope.Graph`, the accelerators);
+TheScrapeInBothDirectionsHoldsSixChords (C-11's scrape: Escape,
+Ctrl+Alt+Shift+I, the four); TheSharedChordDispositionsNameTheThreeCanvasPairs;
+CtrlAltZeroIsFreeInEveryOtherScope; AVerbInTableModeIsRefusedAndTheChordFallsThrough
+(unconsumed; the commands disabled); AVerbFromTheFilterFieldInDiagramModeActs;
+TheMenuItemsFollowTheAvailability (DD-Q3's default: `GraphMenuTests`'s
+ids, commands and accelerators extended); ScrollIntoViewKeepsTheSelectionInsideTheMargin;
+TheValueAndTheClauseReadOneNumber (Term V6).
+
+**D-14 — Where-am-I on the diagram (Term N6; C-8's hand-off).** Pinned
+by facts (`GraphNavigatorTests`, GraphDiagramTests):
+TheDiagramReadbackNamesTheSelectionsTopologyEntryWithTheZoomClause
+(the ninth witness's inverse: a node, the component from the topology,
+`zoom_percent` present); TheDiagramReadbackReadsNoSelectionWithoutAVisibleKey;
+TheDiagramReadbackCarriesTheNeedleAndTheOverlay
+(`testWhereAmIReadbackIncludesClientFilters`: the clause and the needle,
+verbosity-free); TheReadbackIsRefusedWhileTheDiagramBuildsAndAnswersAtInstall;
+TheChordOpensThePanelWithTheSameTextItSpoke (C-8's one event rendered
+twice); TheRowEnablesWhenTheDiagramSeamInstalls (the existing fact's
+production twin).
+
+**D-15 — The censuses, falsifiable, bound semantically.** (i)
+`GraphContractsCitationCensus` gains the "D" tuple, its floor one below
+the population; (ii) the INSTANCE census: at most one GraphDiagramModel
+per document, constructed in BuildDiagram's apply alone, and exactly
+one GraphLayoutDriver per model; (iii) C-15 iv's two CLOSED LISTS are
+AMENDED — the provision C-15 iv itself makes ("PR E's inspector filter
+handler as the FOURTH by amendment of this list"), recorded here as
+DD-16 and not silently (IGQ-8): the LOAD-STARTING list (`GraphNavigatorCensus.cs:
+241–259`) gains BuildDiagram, RefreshDiagram, FetchTopology and the
+driver's step and converge members, each with its named callers
+(EnterDiagram and the rebuild; the probe's apply; the epoch derivation;
+the driver alone), and the CROSSINGS list (`:322–334`) gains the layout
+names — `StartGraphLayout`
+inside BuildDiagram's compute alone; `GraphTopology` inside FetchTopology's
+compute alone; `Tick` and `RunToConvergence` inside the driver's computes
+alone; `Refresh` inside RefreshDiagram's compute alone; `NodeIds`, `Edges`,
+`NodeMetadata`, `Generation` inside the build's and the refresh's
+computes alone; `PinNode` / `UnpinNode` inside TogglePin alone;
+`GraphSpatialStep` / `GraphStructuralStep` inside the renderer's two move
+members alone — and keeps its "no `Task.Run`, `ThreadPool`, `Thread`,
+`Dispatcher.BeginInvoke` or second scheduler under `Graph/`" arm, the
+driver's `DispatcherTimer` the ONE named exception (a timer that issues a
+scheduler step, not a body); and the GATE arm (Term G7; IGR-1, IGS-1, IGS-2): the model's session
+field is private and read by WithSession alone; every `Tick`,
+`RunToConvergence`, `Refresh`, `NodeIds`, `Edges`, `NodeMetadata`,
+`Generation`, `PinNode`, `UnpinNode` and `SetForces` invocation's
+receiver is WithSession's lambda parameter; the ONE `LayoutSession`-typed
+expression outside the model is `StartGraphLayout`'s result in the
+build's compute, whose only use is the model constructor's argument (a
+dataflow arm: no local holds it past the constructor call, no second
+use) — the model is the one carrier, its disposal paths the gate's
+(IGT-2); no other `LayoutSession`-typed field, property or local exists
+under `Graph/`; no handler names
+ObjectDisposedException under `Graph/` — a bare call on the field, a
+second reader of the field, a `LayoutSession` held elsewhere and a
+planted catch are the named mutations; (iv) the announcement-seam census: the
+document's boundary gains the six seams and the renderer, the peers, the
+driver and the model post nothing; (v) the writers census: `Mode` (Term
+M1) and `SelectedKey`'s writers unchanged (the diagram writes through
+`SelectRow` and ClearSelectionFromSurface — the latter joins the named
+owners); (vi) the chord scrape at six and the three shared pairs (C-11);
+(vii) the label theory over the new files (D-12); (viii) the no-shadow
+census: no second mutable selection, viewport or mode under `Graph/`
+(the derived Selection is a read); (ix) `WcMatrixGraphEvidenceCensus`
+gains the row of D-17; (x) the token-drift census (D-10); (xi)
+`MacCatalogParityTests`: the four ids are the mac's with its labels; (xii)
+the delivery-evidence census and `chords.json` through the projection;
+(xiii) `A11yCorpusCensus` unchanged — every NON-LABEL diagram witness
+(`GraphMode`, `GraphZoom`, `GraphPinned`, `GraphTierEntered`,
+`GraphLayoutSettled`, the diagram's `GraphRow` and `GraphWhereAmI`) now
+has a posting site, pinned by the seam facts, and the two LABEL-class
+witnesses (`GraphTierSummary`, `GraphNeighborsContent`) have RENDER
+sites only — never posted (0a-14; IGQ-7); (xiv) `HandleLifetimeCensus`'s
+baseline over the document's diagrams (D-6); (xv) the parity harness
+census gains the `layout` section's facts (D-18). Each census lands with
+the mutation it kills, named in the task-loop record.
+
+**D-16 — The mac's thirty-eight facts, mapped.** Each `GraphDiagramTests.swift`
+fact has a Windows twin named in D-2..D-14 EXCEPT: `testZoomRouterInactiveWithoutADiagram`,
+`testZoomRoutePriorityGraphVsEditor`, `testZoomRoutePrefersCanvasOverGraph`,
+`testWhereAmIRoutePriorityGraphReachable`, `testWhereAmIRoutePrefersCanvasOverGraph`
+— the mac's focus-routed menu owner has no Windows twin: the chords are
+delivered by the FOCUSED surface's handler (C-11, the canvas's precedent),
+so the priority IS the focus (D-D1); `testAdoptDropsStaleSelectionAndPins`
+— the selection is derived (Term N1) and the pin pruning is D-5's;
+`testTopologyFromAnotherGenerationOrFilterIsDropped` — D-3's dropped
+fetch and D-5's rebuild; `testSetGraphForcesUpdatesConfigAndTheLiveLayoutStaysFinite`
+— PR E's (this PR pins the seam: `SetForces` through the gate on a live model
+re-heats and the next tick is finite; on a retired model it is refused); `testDiagramColorsMeetAPCAInBothAppearances` —
+D-10's token matrix.
+
+**D-17 — The matrix rows, the projection, the spec's amendments.**
+`parity_matrix.md`: the four zoom ids move to a W6_2_PR_D_STATUS through
+W6_2_PR_D_DELIVERED_COMMANDS (`generate-parity-matrix.py:656–693`'s
+shape, the date their gates went green); `w_c_matrix.md` gains "Graph
+diagram (W6-2 PR D)" on the canvas visual row's shape (`:51`): the Group
+container with a Button peer per visible node (complete) or one summary
+Button, Value on the container, Selection / SelectionItem / Invoke, the
+renderer one focus stop after the switcher, arrows / Tab / Enter /
+type-ahead / the four chords, the announcements (`GraphMode`, `GraphRow`
+on a keyboard move, `GraphZoom`, `GraphPinned`, `GraphTierEntered`,
+`GraphLayoutSettled` when armed), the evidence cell naming the suites,
+the journey and the axe label `graph-diagram`; `chords.json` through the
+projection with the four rows' delivery evidence. The spec's lines are
+amended in place (DD-14): §1's `GraphDiagramView.cs` line (the five
+files), §PR D's Goal ("windowed to the viewport" → "complete, every
+visible node — DD-Q1"), Builds (the five files; the settle seam; DD-Q3's
+items), Tests (the suites and censuses D-15 names), Hand-off (the
+SetForces seam and the settle arm for PR E, the readback seam installed);
+and §PR F's §K line — "first windowed rebuild" → "first rebuild", the
+peers being complete (IGS-5).
+
+**D-18 — §W-A: the position golden (DD-Q4); §K: the benchmarks.**
+`SurfaceSerializer.GraphQueriesArtifact` (`SurfaceSerializer.cs:1327+`)
+and its mac twin (`ParityHarnessTests.swift:177–390`) gain a `layout`
+section after `config`: for `start_graph_layout` under the default
+filter, `LayoutForces` and `LayoutConfig` defaults, the slots in order
+as `{ key: stable_key, x_x1000, y_x1000 }` after exactly `tick(60)` from
+the seeded placement — each coordinate `Math.Round(v × 1000)` as an
+integer (the artifact's integer idiom) — the golden
+`parity_golden/graph_queries.json` regenerated once by the Windows twin
+and matched byte for byte by both (0b-13's rule); `ParityHarnessCensus`
+gains TheLayoutSectionIsTheSessionsSixtiethTickQuantised (the section
+re-derived in process from a fresh session equals the golden's) and
+TwoLayoutsOverOneVaultAreBitIdentical (the binding's own determinism:
+two sessions, `run_to_convergence`, equal buffers — §P-C on this
+platform). §K: GraphRendererBenchmarks (`SlateWindows.Benchmarks`, the
+canvas's shape): over a synthetic 1,500-note vault (tier A's ceiling;
+`GraphOpenBenchmarks`' generator) — a warm `Tick(20)` ≤ 100 ms median
+(the host's budget; P's 2 ms is core's own at 300 nodes), the first
+rebuild (one topology fetch plus the complete peer materialisation) ≤
+500 ms, a pan hop (the transform, the visuals, the peer rectangles) ≤
+100 ms, a spatial step ≤ 50 ms — the medians recorded in `BENCHMARKS.md`
+under "Milestone W6-2 — graph through the C# binding" beside A's.
+
+**D-19 — §W-C: the journey and the axe scan.** The FlaUI journey
+GraphSurfaces_DiagramPeersTiersAndZoom_AreClean beside the three graph
+journeys: `WaitForVaultOpen`, open the graph from the palette and land
+on the grid (Term F6's arm); Shift+Tab twice to the switcher and Right
+to the Diagram item (the RadioButton group); wait for the GraphDiagram
+container and for its Button children to equal the fixture's visible
+node count (four notes and one ghost under the default filter); read one
+peer's Name and HelpText against core's renders computed BEFORE the app
+opened (the PR C journey's oracle discipline, IPG-24/25); assert the
+container's Value reads the actual-size percent; focus the container;
+Right → a peer reports IsSelected; Ctrl+= → the Value changed and the
+selected peer's rectangle changed (the canvas journey's stale-frame
+classic); Ctrl+Alt+0 → the Value changed again; the Menu key → the
+row-actions menu's items equal core's note actions plus Pin; Escape;
+Enter → the note opened in the graph's pane (the tab's title); Back to
+the graph tab; Ctrl+Alt+Shift+I → GraphWhereAmIReadback's text equals
+the render of the expected event with a zoom clause; Right to the Table
+item → the grid returns and the ring's node is the grid's current row;
+axe with the scan id `graph-diagram`. Tier B is pinned in process only
+(a 1,501-note vault is not a journey). Run locally to its last step
+before every push; CI's shell accessibility lane arbitrates.
+
+### Decisions (PR D)
+
+- **DD-1 — Five rules, three lifetimes** (the design pass, before round
+  1): the document owns the diagram lineage (rule G) and the mode (rule
+  M), the surface owns the renderer, the peers and the viewport (rules
+  T, N, V); the navigator owns the verbs; no new workspace-level object.
+- **DD-2 — The layout session is the document's, built through its
+  scheduler, disposed after its last compute** (Terms G2, G7): R-A names
+  the layout session beside the snapshot; A-1's owner of the snapshot
+  owns it; the lifetime census's baseline is the proof.
+- **DD-3 — The topology is one crossing per epoch, off the dispatcher**
+  (Term G3): the mac fetches it synchronously on the actor; Windows's
+  FFI is off-dispatcher by A-2's rule, so the epoch's fetch is a
+  scheduler compute and the frames between two epochs paint the accepted
+  set — the mac's "dropped fetch empties the set until the refresh
+  adopts" holds identically.
+- **DD-4 — The selection is derived from the shared key** (Term N1): no
+  second selection under `Graph/` (the no-shadow census); the mac's model
+  selection and its three sync sites collapse to one read.
+- **DD-5 — The peers are complete and not keyboard-focusable; the keyboard
+  move speaks the row line through the relay** (DD-Q1, DD-Q2 defaults):
+  the canvas visual board's shape; the platform speaks nothing for a
+  non-focusable peer, so the relay's line is the ONLY speech and there is
+  no double.
+- **DD-6 — Rule F's Term F4 is AMENDED to name the active projection's
+  arms** (Term M4; DD-Q5's default, pending the owner — IGQ-5): the
+  request, the triggers, the quiescence wait, the departure and the
+  silence are F1–F3, F5 and F6 as frozen; F4's table arms stand as
+  written and the diagram's arms are added by the amendment's text.
+- **DD-7 — The four verbs get Graph-menu items** (DD-Q3's default):
+  C-12's enrichment, `CanExecute` on Diagram effective.
+- **DD-8 — The viewport is the canvas's state, the graph's fit padding
+  the mac's** (Term V1, V2; D-D8).
+- **DD-9 — Reduce Motion is the system's animation preference** (Term
+  G4): `SystemParameters.ClientAreaAnimation`, observed through the
+  theme manager's channel; no app setting.
+- **DD-10 — The driver's cadence is a dispatcher timer issuing scheduler
+  steps** (Term G4): no `Task.Run`, no second scheduler, one step in
+  flight, the crossing census's one named timer.
+- **DD-11 — `GraphTierEntered` is a latch per model** (Term T3).
+- **DD-12 — The tooltip is the inventory's composed label** (T68), a
+  visual 1.4.13 tooltip as the canvas's, never announced.
+- **DD-13 — The position golden is the sixtieth tick quantised to a
+  thousandth** (DD-Q4's default).
+- **DD-14 — The spec's lines are amended in place** (D-17): §1's
+  diagram line, §PR D's Goal, Builds, Tests and Hand-off.
+- **DD-15 — The mac's "Laying out graph" and "Graph diagram error" are
+  the diagram state host's names** (Term M5, T19/T20), the same host
+  element as A-4's with the active projection's text.
+- **DD-16 — C-15 iv's closed lists are amended, as C-15 iv provides**
+  (D-15 iii; IGQ-8): the load-starting members and their callers, the
+  crossings and their roots, the one named timer — each addition named
+  in D-15 and pinned by the census's literal lists.
+- **DD-17 — FitGraph always speaks** (Term V2; IGQ-4): the mac's
+  `graphDiagramFit` announces after a no-op fit too.
+- **DD-18 — A persisted Diagram mode builds at the seat and speaks no
+  mode line** (Term M1; IGQ-1): `GraphMode` is the switch's line; rule
+  L's Term 6 sequences stay a projection onto the family as frozen.
+- **DD-19 — The layout session lives behind ONE admission gate** (Term
+  G7; revision 4's design pass under the protocol's rule 4): counted
+  like the binding's own object, refused once the model is retired,
+  freed at the last admitted call's return; no catch anywhere, the
+  throw unreachable; disposal never depends on an apply the retired
+  scheduler would skip.
+
+### Recorded divergences (PR D)
+
+- **D-D1 — No focus-routed menu owner.** The mac routes ⌘= / ⌘- / ⌘0 and
+  ⌃⌘I by tab kind (`zoomRouteTarget`, `whereAmIRouteTarget`); Windows
+  delivers `ChordScope.Graph` from the graph surface's tunnelling handler
+  and `ChordScope.Canvas` from the canvas's — disjoint by delivery (C-11),
+  the editor's zoom rows chordless. The five routing facts have no twin
+  (D-16).
+- **D-D2 — The node peer's HelpText is the neighbour content; T65's
+  activation help is not carried.** The mac's `accessibilityHelp` ("Graph
+  node. Press to open." / "Unresolved. Press to create note." / the busy
+  reason) and its custom content are two channels; UIA's on-demand
+  channel is one (HelpText), and the spec assigns it to the "Connects to"
+  content. The activation's meaning is the Invoke pattern's; a busy
+  ghost's reason is the actions menu's disabled item (A-8's shape).
+- **D-D3 — A keyboard selection move is the relay's `GraphRow` line, the
+  peers taking no focus** (DD-5); the mac ALSO moves VoiceOver focus at a
+  mode switch (`focusSelectedElementIfPending`) — Windows's switch lands
+  the renderer (one stop) silently (Term F5) and the reader arrows or
+  asks Where-am-I; recorded, and reversible by DD-Q2's alternative.
+- **D-D4 — Tab and Shift+Tab are consumed by the renderer as the
+  structural step whenever a node is visible** (P2-3's normative, the
+  mac's `:1200`): the exits are the shell's pane chords, the palette and
+  Escape's bubbling rung; the AT checklist (PR F) records the route.
+- **D-D5 — No restore-time focus suppression flag**: the landing request
+  is raised by the switcher's handler alone (Term M4), so a persisted
+  mode's seat raises none by construction — the mac's
+  `suppressFocusBumpOnce` has no twin because the mac's `onChange` cannot
+  tell a user switch from a restore.
+- **D-D6 — Type-ahead folds with OrdinalIgnoreCase**, the mac with
+  `lowercased()`; §2 row J designates it host (a list search over core's
+  labels), the fold recorded.
+- **D-D7 — Ctrl+wheel zooms; no pinch.** The mac's `magnify` gesture has
+  no routed Windows twin in this PR (touch and precision-touchpad pinch
+  arrive as Ctrl+wheel on most drivers, which IS routed).
+- **D-D8 — The fit padding is 60 layout units** (the mac's
+  `GraphDiagramModel.swift:85`), the canvas's `FitPadding` is 40: one
+  clamp, one step, one arithmetic; the padding is each surface's.
+- **D-D9 — The diagram's peers are complete, the canvas's windowed**
+  (DD-Q1): the graph's ceiling is core's tier boundary; the canvas has
+  none.
+- **D-D10 — The Where-am-I panel shows the diagram's readback too**
+  (C-D16's enrichment, extended): the mac speaks only.
+- **D-D11 — The drag pans**; the mac has no drag-to-pan (its wheel pans).
+- **D-D12 — A persisted Diagram mode's seat speaks no mode line** (DD-18);
+  the mac's restore-driven `onChange(of: mode)` speaks `GraphMode{Diagram}`
+  after the open's status (`GraphTableView.swift:104–105`). The reader
+  lands on the renderer named "Graph, visual diagram" (T61) and asks
+  Where-am-I for the zoom.
+
+### Accepted risks (PR D)
+
+- **DR-1 — The mac twin of the `layout` artifact section is unrun on this
+  box** (CR-3's arbitration: the swift CI lane is the oracle); a mac
+  regeneration is a `ParityHarnessTests.swift` edit simulated against the
+  frozen facts before the push (the lesson of TGC-9's mac change).
+- **DR-2 — Cross-platform float drift in the position golden is a GATE
+  FAILURE, not an accepted drift** (IGQ-9): §W-A requires one golden
+  byte-identical on both twins and D-18 keeps it so — a red mac lane on
+  the `layout` section FAILS the gate and is repaired by a correction
+  applied to BOTH twins (a coarser quantum or a fixture change,
+  regenerated once), never by a per-host golden. §P-C promises
+  bit-identity PER platform; the risk recorded is only that the failure
+  is found on the mac lane (DR-1's cost), because sixty iterations over
+  the vault's twelve nodes at a thousandth sit far below any libm drift
+  (IGS-4).
+- **DR-3 — A complete peer set of 1,500 Buttons.** UIA clients that walk
+  the whole tree (axe, a scan-mode reader) pay for it once per rebuild;
+  the benchmark's first-rebuild budget (D-18) is the guard; the windowed
+  alternative (DD-Q1) is the remedy if the budget fails.
+- **DR-4 — A diagram select of a node the table's snapshot lacks is
+  refused** (Term N4): the layout and the table snapshot the graph
+  separately, so a note created between the two loads is selectable in
+  the diagram before the table knows it; `SelectRow`'s guard refuses and
+  the ring stays; the table's next pair (the probe's) re-seats. The
+  window is one probe; the alternative — a diagram writer with its own
+  guard — is a second writer of the shared key.
+- **DR-5 — The warm-tick budget is the host's** (100 ms at 1,500 nodes);
+  a slower tick lowers the frame rate and never blocks the dispatcher
+  (the step is a pool compute); P's own budget is core's criterion bench.
+- **DR-6 — `SystemParameters.ClientAreaAnimation` is the animation
+  preference on Windows 10 and 11 ("Animation effects")**; a policy that
+  disables animations without touching it is not observed.
+
+### Mac details recorded while reading (not this issue's to fix)
+
+- `labelFadeZoom = 0.55` (`GraphDiagramView.swift:174`) is declared and
+  unused; the label decision reads `display.textFadeZoom` (`:527`).
+- The picker's accessibility label "Graph view mode" and hint (`GraphTableView.swift:
+  157–158`) name a segmented control; Windows's switcher is A-11's named
+  group and RadioButtons — the names are not carried.
+- The restore-driven `onChange(of: mode)` speaks the mode line on a
+  persisted Diagram (`:104–105`); only the focus bump is suppressed.
+- `rebuildTierB` tints no group and draws no labels; a pointer user in
+  tier B keeps the hit test and the ring (`:601–659`, `:968–987`).
+- `spatialMove` with no selection selects the first VISIBLE id
+  (`:1223–1225`) and announces it — Windows does the same.
+- The tooltip (`:1142`) is composed in Swift — T68's composed label class,
+  carried as an inventory item on Windows.
+- `graphDiagramTogglePin` pins at the position the RENDERER passes
+  (`:1037`), the layout's current coordinates — Windows passes the
+  installed frame's.
+
+### Round 1 — nine findings (IGQ-1..IGQ-9), dispositions
+
+Run 2026-09-14 on revision 1 (095ecb0f) with `codex exec` on gpt-5.5 at
+medium effort (the account refuses gpt-5.6; the protocol's tier is
+recorded as not met — the findings stand), read-only over the local
+tree; 4 blockers, 5 majors, 0 minors. Every finding is discharged in
+revision 2's text.
+
+| # | Severity | Disposition |
+|---|---|---|
+| IGQ-1 | BLOCKER | taken — Term M1: the seed of `Mode` is a line THIS PR adds (the code seeds nothing today); the persisted seat builds through `AttachGraphDocumentTo` and speaks no line (DD-18, D-D12); D-7's facts renamed |
+| IGQ-2 | BLOCKER | taken — Term G2's apply guard compares the captured filter with the view state's now and rebuilds once on a mismatch; Term G6's rebuild trigger covers a build in flight (the sequence bump); the forces re-read at the install; D-2's two new facts |
+| IGQ-3 | BLOCKER | taken — Term G6: RefreshAgain is consumed on EVERY terminal path (adopt, null, drop, failure); the failure path logged (GraphLayoutRefreshFailed); D-5's four-arrangement fact |
+| IGQ-4 | BLOCKER | taken — Term V2: FitGraph speaks the unchanged percent over an empty set (the mac's); the Silent outcome dropped; DD-17; D-13's fact renamed |
+| IGQ-5 | MAJOR | taken — DD-Q5: Term F4's amendment written and put to the owner; DD-6 rewritten; the head says what the section touches |
+| IGQ-6 | MAJOR | taken — Term G6 and D-5: a probe whose generation equals the model's issues zero `Refresh` crossings |
+| IGQ-7 | MAJOR | taken — D-15 xiii names the non-LABEL witnesses' posting sites and the two LABEL witnesses' render sites |
+| IGQ-8 | MAJOR | taken — DD-16: C-15 iv's lists amended under its own provision, the additions named against the census's literal lists |
+| IGQ-9 | MAJOR | taken — DR-2 rewritten: a mac mismatch fails the gate; the remedy is applied to both twins, never a per-host golden |
+
+Two corrections of the author's own ride the same revision: the
+generated bindings' line numbers (regenerated on 2026-09-14) and Term
+G7's disposal rule, which now rests on the binding's call counter
+rather than on an apply the retired scheduler would skip (DD-19).
+
+### Round 2 — one finding (IGR-1), disposition
+
+Run 2026-09-14 on revision 2 (8d0a85f3) with `codex exec` on gpt-5.5 at
+medium effort, read-only over the local tree; 1 blocker, 0 majors, 0
+minors — CREATED by revision 2's DD-19 (the protocol's rule 5 counts it
+double; rule G has now carried a blocker in two rounds, so a third in
+round 3 invokes rule 4).
+
+| # | Severity | Disposition |
+|---|---|---|
+| IGR-1 | BLOCKER (created by revision 2, DD-19) | taken — Term G7: the driver's computes catch ObjectDisposedException (and the refresh's `VaultException`) and return a typed refused result; the scheduler converts nothing and its drain would fault with a throwing compute; the wrapper arm joins the crossings census (D-15 iii); the fact codex named pins it (D-4); DD-19 corrected |
+
+### Round 3 — five findings (IGS-1..IGS-5), dispositions; rule 4 invoked
+
+Run 2026-09-14 on revision 3 (826ff113) with `codex exec` on gpt-5.5 at
+medium effort, read-only over the local tree; 2 blockers (both CREATED
+by revision 3's IGR-1 fix — rule 5 counts them double), 3 majors, 0
+minors. Rule G has carried a blocker in rounds 1, 2 and 3 — the
+protocol's rule 4: revision 4 is a DESIGN PASS ("Design pass II"), the
+disposed-handle class removed by one gate rather than a fourth site.
+
+| # | Severity | Disposition |
+|---|---|---|
+| IGS-1 | BLOCKER (created by IGR-1) | taken by the design pass — Term G7: one gate with a refused value of each call's own shape; no catch anywhere; D-4's facts EachRefusedShapeIsItsOwn and the drain fact |
+| IGS-2 | BLOCKER (created by IGR-1) | taken by the design pass — the pin's and PR E's synchronous mutators go through the gate (Terms G7, G8, N7; D-16's seam); APinOrAForcesEditOnARetiredModelIsRefusedSilently |
+| IGS-3 | MAJOR | taken — Term G8: the refresh's three reads happen on every non-null answer, adopted or dropped (the mac's `:171–173`) |
+| IGS-4 | MAJOR | taken — DD-Q4 and DR-2 name the graph vault's twelve nodes (eleven under the default filter), not seven |
+| IGS-5 | MAJOR | taken — the spec's §PR F §K line amended in place ("first windowed rebuild" → "first rebuild") and listed under D-17 |
+
+### Round 4 — five findings (IGT-1..IGT-5), dispositions; rule 5 the third time → THE FREEZE
+
+Run 2026-09-14 on revision 4 (1d37a03e, the design pass) with `codex
+exec` on gpt-5.5 at medium effort, read-only over the local tree; 1
+blocker (CREATED by revision 4's IGS-1 discharge — the build's fresh
+handle outside the gate), 4 majors, 0 minors. Findings per round
+9 / 1 / 5 / 5, blockers 4 / 1 / 2 / 1; every blocker after round 1
+descends from the previous revision's fix in rule G's lifecycle — the
+loop repairing its own repairs (the PR C convergence signal) — and rule
+5 has now applied in rounds 2, 3 and 4.
+
+| # | Severity | Disposition |
+|---|---|---|
+| IGT-1 | BLOCKER (created by IGS-1's discharge) | taken — Term G2: the model is constructed on the pool around the fresh handle (the gate born with it) and registered as an unseated build under the document's lock, or retired at once when the document is already retired; the apply seats or retires it; `Retire()` sweeps the set; every handle freed by exactly one path; D-2's two facts |
+| IGT-2 | MAJOR (created by IGS-1's discharge) | taken — D-15 iii: the model is the one carrier; the one `LayoutSession`-typed expression outside it is the build compute's constructor argument, walled by a dataflow arm |
+| IGT-3 | MAJOR | taken — DD-Q5 keeps to Term F4; C-17 is untouched (the diagram's landing facts are D-7's) |
+| IGT-4 | MAJOR | taken — Term G3's epoch key is (model, generation, query, `Groups`); display redraws and verbosity re-names locally; D-3's facts assert the zero crossings |
+| IGT-5 | MAJOR | taken — D-8's fact renamed to the lifetime that exists (within one model, across epochs, refreshes and viewport changes); a model replacement recreates the peers |
+
+### THE FREEZE — revision 5 stands
+
+Rule 5 for the third time (rounds 2, 3, 4) — the PR 0b precedent, applied
+by PR B at revision 8 and PR C at revision 5: the text is corrected for
+every finding of every round as the discharge; the four ledgers
+(IGQ, IGR, IGS, IGT) are carried into the task loop, which discharges
+them by code — one TGD record per task naming the facts and the
+mutations that pin each — and the post-implementation codex passes
+(IPH-n) verify the code against this frozen text; no round 5 runs on the
+contracts. The five owner questions DD-Q1..DD-Q5 stay PENDING, the
+section written to their defaults; DD-Q5's amendment of Term F4 is
+applied in place under PR C when the owner answers. Precedent applied;
+the owner may overrule.
+
+### Task loop — records (PR D)
+
+**TGD-1 — T1: rule M's document side and the surface's cluster — `SetMode`,
+the seed of Mode, the six announcement seams, the switcher enabled, one
+projection per mode, the diagram's state names (D-1, D-7, D-12; Terms
+M1–M5; DD-18).** THE SEED: `WorkspaceViewModel.cs`'s constructor gains
+the one line after the groups' seed — `_graphViewState.Mode =
+_graphPreferences.CurrentConfig.Mode` — so a persisted `diagram` is
+restored (C-D6 closed). THE DOCUMENT: `GraphDocumentViewModel` gains
+DiagramLoading, DiagramError and HasLiveDiagram (bindable), IsDiagramEffective
+(Term M3's predicate — seated, effective, Diagram, a model live), the
+event DiagramAvailabilityChanged with NotifyDiagramAvailabilityChanged,
+`SetMode(GraphSurfaceMode)` (Term M1: refused when retired or unseated —
+the `SelectRow` guard — or for the current mode; else the field,
+`GraphPreferences.SetMode` (Term W7), the mode line, Term M2's entry or
+teardown, then the two availability edges), EnterDiagram (T2 lands the
+build; until then DiagramLoading stands), TeardownDiagram (Term G7's
+document part: the readback seam cleared through `InstallDiagramReadback(null)`
+before the model drops, the diagram's states cleared, the availability
+re-evaluated; `Retire()` calls it first), and the six seams AnnounceMode,
+AnnounceRow, AnnounceZoom, AnnouncePinned, AnnounceTierEntered,
+AnnounceLayoutSettled — each a thin call into the effective-gated
+boundary `AnnounceIfEffective`, which the announcement-seam census keeps as
+the ONE boundary (the seams themselves reach the relay through it, as
+`AnnounceWhereAmI` does). THE WORKSPACE: `GraphFollowActiveTab`'s
+effectiveness edge also raises the document's diagram availability (Term
+M3). THE SURFACE: `IGraphSurfacePresenter` gains ProjectionKind (the
+view state's Mode); `GraphSurfaceView.BuildSwitcher` enables both
+`RadioButton`s (A-11's admission lifted, as A-11 says) and wires `Checked`
+→ OnModeChosen under a `_synchronizingSwitcher` guard — a USER switch with
+the keys inside the surface calls the document's `SetMode` and, when it
+wrote, `RequestProjectionFocus` (Term M4); a programmatic re-check (the
+view state's change, the restore's path) raises nothing; `OnViewStateChanged`
+re-checks the switcher under the guard, re-applies the cluster and re-asks
+the landing; `OnModelPropertyChanged` re-applies the cluster and re-asks
+on the three diagram states (the build's terminal state as a trigger);
+`ApplyState` branches on Mode first — ApplyDiagramState shows the failed
+build's message under the T19 prefix, else the T20 names while no model is
+live, else (T3) collapses the state host and the table; `TryDeliverFocus`
+gains the Diagram arm (DD-Q5's amendment applied as written: under a
+build the state host is a provisional seat for a SHELL route alone, a
+presenter's request waits — Term F3; quiescent with a model → the renderer
+(T3), else the state host). `GraphPhrase` gains "Laying out graph…" /
+"Laying out graph." (T20) and the "Graph diagram error: " prefix (T19).
+THE TESTS: `GraphTableTests`' TheModeSwitcherIsCoresVectorWithTheDiagramDisabled
+becomes TheModeSwitcherIsCoresVectorWithBothModesEnabled; `GraphPreferencesTests`'
+ADiagramModeSeedsTable becomes APersistedDiagramSeedsDiagram and gains
+TheSeedWritesModeFromCurrentConfig (no file → core's default Table; a
+persisted table; a persisted diagram); the table journey's A-11 step asserts
+both items enabled; `GraphNavigatorTests`' fake presenter gains
+ProjectionKind. FACTS (GraphDiagramTests, new, an STA host over a
+fixture vault and a hidden window): TheSwitcherWritesModeThroughTheDocumentAndPersistsIt
+(the view state, `CurrentConfig.Mode`, a scheduled save; the switcher
+re-checked under the guard on a document-driven change; the current mode
+refused); ASwitchSpeaksTheModeLineOnceAndNothingElse (the rendered
+`GraphMode{Diagram}` alone, then `GraphMode{Table}` alone, then nothing for
+a no-op); ASwitchWhenRetiredOrUnseatedWritesNothing (a closed tab's
+retired document; a bare document seated false); ExactlyOneProjectionIsInTheTreePerMode
+(the table visible under Table; collapsed with the state host named T20
+under Diagram; back); TheHeaderStaysInBothModes (C-D15);
+AUserSwitchRaisesTheLandingAndAProgrammaticReCheckRaisesNone (no
+request on a document-driven change; the presenter's request with its
+owner the tab on a user switch with the keys inside; no provisional seat
+under the build for a presenter's request); DiagramAvailabilityChangedIsRaisedAtTheSwitchAndTheEffectiveEdge
+(Term M3; IsDiagramEffective false with no model). CENSUSES:
+`GraphAnnouncerCensus` gains TheModeIsWrittenByTheSeedAndSetModeAlone
+(the two writers of Mode, `_mode` written by the setter alone; D-15 v);
+`GraphNavigatorCensus`' boundary fact lists the six seams among
+`AnnounceIfEffective`'s callers (D-15 iv). DEVIATIONS: none — the
+persisted seat's build (Term M1's second half) is T2's, since it needs
+the build. MUTATIONS, each restored byte for byte, each caught by the
+named fact: the save skipped by `SetMode`, the mode line spoken twice, the mode line dropped, the seed line dropped, a planted second writer of Mode (the census), the retirement guard dropped, the table left visible under Diagram mode, a user switch raising no landing, the effective edge raising no availability, the Diagram item disabled — ten of ten caught (`gD-mutations.py`, the T1 entries).
+
+**TGD-2 — T2: rule G's lineage — the model on the pool behind ONE gate,
+the build through the scheduler, the epoch, the driver, Reduce Motion, the
+refresh through the probe, the rebuild, the teardown (D-2..D-6; Terms
+G1–G8; D-15 ii, iii, xiv; DD-2, DD-3, DD-9, DD-10, DD-16, DD-19).** THE
+MODEL: `Graph/GraphDiagramModel.cs` — the private `LayoutSession`, the
+filter, the forces, the build sequence, the ids in slot order, the
+metadata by id, the edges, the generation, the pins, the accepted
+`Topology`, the position map of the last frame; `WithSession<T>(call,
+refused)` the ONE gate (Term G7: refused under the lock once retired,
+the count incremented, the call outside the lock, the handle freed at
+the count's zero when retired); `Retire()` (idempotent — the refusal,
+the sweep and the teardown may each reach it); FreeHandle the ONE
+disposal site; Adopt (the build's seed and the refresh's adoption, the
+lost pins pruned); AdoptFrame (Term G5's map); TogglePin and SetForces
+(the synchronous mutators THROUGH the gate — false once retired, IGS-2).
+THE DRIVER: `Graph/GraphLayoutDriver.cs` — born in the model's
+constructor (D-15 ii), handed the document's StartWorkAlwaysAsync as its
+Scheduler delegate; each step ONE compute `Tick(20)` through the gate
+whose apply installs the frame iff its generation is the model's and its
+buffer pairs with the ids (Term G5), then restarts the one-shot
+`DispatcherTimer` at 16 ms (built on the owner dispatcher in the first
+apply, the ONE named timer, DD-10); under Reduce Motion ONE
+`RunToConvergence(cancel)` and one frame; every run a `CancelToken`
+cancelled at stop and disposed after its last compute returns (the Run
+record's bookkeeping); an apply that finds its run cancelled or replaced
+applies nothing; the Converged event the document's settle line rides.
+THE MOTION POLICY: `Graph/GraphMotionPolicy.cs` — the system's
+`SystemParameters.ClientAreaAnimation` false, observed through the
+static channel until the document's retirement disposes it; a fact
+injects its own read and flips it. THE DOCUMENT: `EnterDiagram` calls
+BuildDiagram — the sequence bumped and captured, the filter, the forces
+(`CurrentConfig.Forces` onto the kernel's through ForcesOf) and core's
+`LayoutConfig` captured on the dispatcher; ONE compute crossing
+`StartGraphLayout` whose result flows STRAIGHT into the model's
+constructor (IGT-1, IGT-2: no raw session outside a model at any
+instant), the four reads through the gate, the fetch-gate seam, then the
+REGISTRATION in the unseated set under the diagram lock — or the
+retirement at once when the document is already retired under it; the
+failures (`VaultException`, InvalidOperationException, IOException)
+retire the model and carry the humanised message (the search overlay's
+`HumanReadable` arms). InstallBuild: the model out of the set; refused —
+retired through the gate — unless live, seated, still Diagram and the
+captured sequence; a failure installs DiagramError and no model; a
+captured filter that differs from the view state's NOW retires the model
+and builds once more (IGQ-2); the forces re-read at the install and
+applied through `SetForces` when they differ; the install (the model
+seated, `HasLiveDiagram`, the Converged subscription, the first epoch,
+the settle started, the availability edge). RebuildDiagram (Term G6's
+rebuild) and the ONE teardown order DropModel (the token cancelled, the
+arm cleared, the readback seam cleared, the model dropped, the epoch and
+the refresh pair reset, the gate RETIRED). `TeardownDiagram` bumps the
+sequence first (an in-flight build superseded). `Retire()` flips
+`_retired` and sweeps the unseated set under the diagram lock in ONE
+transition, tears down, retires the swept builds, unsubscribes the view
+state and the motion channel. OpenEpoch: the key (the model, its
+generation, the view state's query, the view state's `Groups` — a
+`GraphGroup[]` compared by value, IGT-4); FetchTopology's compute
+crosses `GraphTopology(query, config with the view state's groups)`; the
+apply accepts only when the generation equals the model's and the epoch
+is current, raising DiagramTopologyChanged; else drops. The document
+observes the view state (Term G6: `Filter` under Diagram → the rebuild,
+live model or build in flight; Term G3: `NameQuery`, `KindOnly`,
+`Groups` → a new epoch). The probe's apply gains ITS ONE LINE: a
+generation the live model lacks → RefreshDiagram; equal → nothing
+(IGQ-6). RefreshDiagram: one in flight per model, a second request sets
+RefreshAgain; the compute through the gate: the fetch-gate seam, then
+`Refresh()`, then on a non-null frame the three reads (IGS-3), a
+`VaultException` caught and returned as a value; ApplyRefresh adopts
+only a NEWER generation (monotonic), restarts the settle, opens the
+epoch; a failure is logged through `HostLog` as the new
+HostDiagnosticEvent GraphLayoutRefreshFailed; RefreshAgain consumed on
+every terminal path. SettleAnnouncementArmed (PR E's flag) and
+OnSettleConverged (spoken when armed, disarmed after); OnMotionChanged
+posts a restart while settling. THE WORKSPACE: `AttachGraphDocumentTo`
+calls EnsureDiagram after the persisted query's re-apply (Term M1's
+second half, DD-18: a persisted Diagram mode builds at the seat and
+speaks no mode line — the C-10 re-apply's own filter change may start
+the build first; EnsureDiagram then does nothing); the seam
+GraphMotionPolicyForTests the next seated document reads. THE
+PREFERENCES: `SetForces(GraphForcesConfig)` (Term W7's trigger for PR
+E's edit; a no-op for the current forces) — landed here because Term
+G2's install re-read needs an edit to observe. CROSSINGS: the counter
+gains start_graph_layout, layout_node_ids, layout_edges,
+layout_node_metadata, layout_generation, layout_tick,
+layout_run_to_convergence, layout_refresh, layout_pin_node,
+layout_unpin_node, layout_set_forces, graph_topology; the model counts
+through the document's one dictionary. FACTS (GraphDiagramTests, the
+Lineage partial — twenty-eight): D-2's nine —
+EnteringDiagramBuildsOneLayoutFromTheViewStatesFilterAndThePersistedForces,
+ABuildLandsOnlyForItsSequenceAndDiagramMode,
+AFailedBuildInstallsTheErrorStateAndNoModel, TheBuildReadsNoTableSnapshot,
+AFilterChangeDuringTheBuildRefusesItAndRebuildsOnce,
+AForcesEditDuringTheBuildIsAppliedAtTheInstall,
+AWithdrawnBuildApplyLeavesNoHandle,
+ABuildThatReturnsIntoARetiredDocumentRetiresItself,
+NoCrossingHappensPerFrameOrPan; D-3's three —
+TheTopologyIsFetchedOncePerEpochWhileSettling,
+ATopologyFromAnotherGenerationIsDroppedAndTheSetEmptiesUntilTheRefreshAdopts,
+AQueryUnderAnotherFilterIsNeverIssuedAgainstTheModel; D-4's nine —
+ASettleIsOneTickPerStepThroughTheSchedulerUntilConverged,
+AFrameFromAnotherGenerationOrLengthIsDropped,
+ReduceMotionAppliesOneConvergedFrame,
+AMotionFlipWhileSettlingRestartsTheSettle,
+TheSettledLineSpeaksOnlyWhenArmedAndTeardownDisarms,
+ACancelledRunAppliesNothingAndTheSessionIsFreedWhenTheInFlightCallReturns,
+AStepQueuedBeforeTeardownThatStartsAfterItIsRefusedAtTheGateAndTheDrainCompletes,
+AnAdmittedCallOutlivesTheTeardownAndFreesTheHandleOnReturn,
+EachRefusedShapeIsItsOwn, APinOrAForcesEditOnARetiredModelIsRefusedSilently;
+D-5's six — AProbeThatMovedTheGenerationRefreshesTheLayoutAndAdoptsMonotonically,
+AProbeWhoseGenerationEqualsTheModelsIssuesNoRefresh,
+AProbeDuringARefreshRunsOneMoreRefreshAfterEveryTerminalPath,
+ARefreshFailureIsLoggedAndTheModelStands, ARefreshPrunesAPinTheTopologyLost,
+ABackendFilterChangeUnderALiveModelRebuildsIt; D-6's four —
+TheSwitchToTableRetiresTheGateAndFreesTheHandle,
+RetirementTearsDownTheDiagram, TheWorkspaceDrainCoversTheLastAdmittedCallsReturn,
+and TheLayoutSessionCountReturnsToBaseline in `HandleLifetimeCensus`
+(twenty rounds against the FFI's live-object counter, D-15 xiv).
+CENSUSES (`GraphNavigatorCensus`): the load-starting fact's starters are
+now BuildDiagram, FetchTopology, Issue, Probe, RefreshDiagram (a
+method-group reference to the scheduler counts as a start; an
+unsubscription's operand no longer wires a path), the reaching closure
+pinned (the constructor reaches through the view-state handler it
+subscribes — a filter change under Diagram rebuilds), the outside
+callers pinned (`SetMode` from the surface's choice alone, EnsureDiagram
+from the attach funnel alone, the rest from nowhere) and the driver's
+Scheduler invoked in Step and Converge alone, Step from StartSettle and
+the cadence's tick, Converge from StartSettle, StartSettle from the
+install, the refresh's adoption and the motion flip; the crossings fact
+lists the layout names by site — `StartGraphLayout` and the four reads
+in BuildDiagram, `GraphTopology` in FetchTopology, `Refresh` and its
+three reads in RefreshDiagram, `Tick` in Step, `RunToConvergence` in
+Converge, `PinNode`/`UnpinNode` in the model's TogglePin, `SetForces` in
+the model's SetForces — and the three timers under Graph/ by site (the
+relay's window, the preferences' save, the driver's cadence); NEW:
+ExactlyOneDiagramModelIsConstructedInTheBuildAndOneDriverPerModel (D-15
+ii: the model in BuildDiagram's compute lambda outside any repeatable
+construct, the driver in the model's constructor) and
+TheLayoutSessionIsReachableThroughTheGateAloneAndNothingCatchesItsDisposal
+(D-15 iii's gate arm: the field private and readonly, referenced by the
+constructor, WithSession and FreeHandle alone, FreeHandle called by
+WithSession and Retire alone; every layout-session invocation under
+Graph/ has as receiver the parameter of a lambda that is WithSession's
+first argument; the ONE session-typed expression outside the model is
+StartGraphLayout's result as the model constructor's argument; no other
+session-typed declaration, property or parameter under Graph/; no
+handler names ObjectDisposedException). DEVIATIONS: (i) Term G4 gains
+a fifth ending — the tick loop ends at the kernel's own ceiling
+(`LayoutConfig.MaxIterations`, the one `RunToConvergence` honours),
+counted per run: a multi-node graph may jitter at the temperature floor
+and never meet the predicate (graph_layout.rs's own note beside its
+convergence test), and an unbounded 16 ms loop would tick forever; the
+Converged event fires at either ending, so an armed settle line speaks
+once either way. (ii) Term G8's synchronous mutators sit on the MODEL
+(TogglePin, SetForces) so the crossings census names the model's members
+as their sites; Term N7's renderer action (T4) calls TogglePin. (iii)
+D-5's "stale drop" arrangement is unreachable by construction — one
+refresh in flight per model and a monotonic kernel refresh — and is
+pinned by the adopt's `>` guard and the teardown's reset; the fact
+drives three arrangements (adopt, null, failure) through the new
+RefreshDiagramForTests seam. (iv) D-3's display-change arm waits for PR
+E's display API; the fact pins the verbosity arm and the same-key
+no-op. (v) The visible-set facts
+(TheNeedleAndTheKindOverlayNarrowTheVisibleSetToTheTables,
+NeighbourContentExcludesFilteredOutNodes,
+TheFirstNonEmptyFrameFitsOnceAndLaterFramesDoNot) are T3's (the
+renderer's set and fit) and AGenerationChurnKeepsTheSelectionByStableKey
+is T4's (Term N1). (vi) The settle-line fact re-settles through the
+driver directly (PR E's forces edit lands the shell caller). (vii) This
+box reports ClientAreaAnimation false, so the workspace host injects
+animation ON through GraphMotionPolicyForTests; the system policy's
+reading is a fact of its own (Reduce Motion injected true). (viii) The
+document's HumanReadable is the search overlay's twin rather than the
+table's raw `exception.Message` — Term G2 asks for the humanised
+message. MUTATIONS, each restored byte for byte, each caught by the
+named fact: the gate admitting a retired model, the handle freed with a call in flight, the count never freeing, the install ignoring the sequence, the registration dropped, the forces not re-read at the install, the epoch key ignoring the groups, the topology apply accepting another generation, the frame currency dropped, Reduce Motion ignored, the settle line spoken unarmed, the probe refreshing on every generation, RefreshAgain not consumed on the null path, the pin prune dropped, the teardown skipping the run's stop, a planted bare call on the session field, a planted catch of the disposal, a held session local in the build, a planted Task.Run under Graph/, a second model construction, a load starter outside the closed list — twenty-one of twenty-one caught (`gD-mutations.py`, the T2 entries).
+
+**TGD-3 — T3: rules T and V in the renderer — the three visuals, the
+visible set and the tier, tier A's complete peers, tier B's summary, the
+labels, the tokens in three dictionaries, the hit grid, the viewport verbs
+on the presenter seam, the fit, the scroll into view, the derived
+selection (D-8, D-9, D-10, D-13's renderer half, D-3's visible-set facts,
+D-4's fit fact; Terms T1–T7, V1, V2, V5, V6, N1, N2, N4's core; D-15 ii,
+iv, vii, x).** THE RENDERER: `Graph/GraphDiagramView.cs` — a focusable
+FrameworkElement (Term N2: the ONE focus stop after the switcher,
+KeyboardNavigationMode None; AutomationId GraphDiagram) with three
+DrawingVisuals (the edges, the nodes or the tier-B dots, the ring)
+redrawn from the model's positions and the accepted topology on every
+frame, epoch, viewport, size or text-scale change (Term T6); the view
+transform `view = p × zoom + pan` applied at draw. It reads the document
+(rule G's owner): bound to the live model on `HasLiveDiagram`'s edges,
+subscribed to DiagramTopologyChanged, the driver's FrameApplied and the
+view state's `SelectedKey`; the viewport (`CanvasViewportState`, Term V1)
+reset with the model, the tier latch and the peers per model. VisibleIds
+= the accepted topology's ids in its order filtered to ids the model
+knows (Term T1); tier B iff the VISIBLE count exceeds
+`GraphCoreConstants.Once.TierBThreshold` (inclusive at 1,500). Tier A
+mints one GraphNodeAutomationPeer per visible id once per (model, id)
+and drops the ids that left; tier B holds one summary peer;
+`GraphTierEntered` on the A→B edge through the document's seam, the
+latch reset with the model (Term T3). Term G5's renderer half: the first
+non-empty frame fits once; every frame rebuilds the 64-unit hit grid over
+the visible positions (Term T7: the 3×3 scan, the nearest centre within
+the scaled radius plus two) and redraws. Term T4: a label iff the entry
+is `labeled` and the zoom is at or above `Display.TextFadeZoom`, 11 units
+× the text-scale factor (`CanvasTextScaleService`, one per renderer,
+disposed at Shutdown) × the zoom, in the label token. Term T5: a grouped
+node fills with `Slate.Graph.Group⟨n⟩Brush` in core's token order and is
+ringed at 3 (Double 4) in the ring token with the style's dash (Dashed
+4-2, Dotted 1-2); an ungrouped note, attachment or hollow dashed ghost
+(the surface token, 3-2) is ringed at 1.5 in the outline token; edges in
+the edge token at `max(0.5, Display.LinkThickness)` layout units with
+arrowheads under `Display.Arrows`; the selection ring screen-space at 3
+in the ring token plus 1.5 in the accent token, four units outside the
+node. Term N1: SelectedId is DERIVED — the visible id whose entry's
+`stable_key` equals the shared key, else none. Term N4's core: SelectNode
+(the entry's key through `SelectRow` — refused, the ring does not move
+— the scroll into view, then `GraphRow` through the document's
+AnnounceRow when announced); ClearSelection through the document's new
+ClearSelectionFromSurface. Term V2: `ViewportCommand(GraphViewportVerb)`
+→ GraphViewportOutcome (Zoomed(percent, fit) | Refused): the zoom verbs
+centre-preserving on the view's centre through the canvas's transitions;
+FitGraph fits the VISIBLE bounds (a zero-size bounds inflated by 100,
+the padding 60) and yields Zoomed(fit: true) in every case — an empty set
+is a no-op with the unchanged percent (IGQ-4); Refused with no live
+model. Term V5's pan and scroll into view (the 48-unit margin, silent).
+Term V6: the container's Value "Zoom N percent" over `ZoomPercent`,
+raised as a property change on every zoom. THE PEERS:
+`Graph/GraphDiagramPeers.cs` — GraphDiagramAutomationPeer (Group, T61,
+children only while visible, Selection single/not required over the
+selected node's peer, the read-only Value), GraphNodeAutomationPeer
+(Button; Name = `RenderLabel(GraphRow{live verbosity, rowCopy})`;
+HelpText = "Connects to: " over `RenderLabel(GraphNeighborsContent)` and
+EMPTY when core renders nothing; ItemStatus "pinned"; AutomationId
+"GraphNode:" + key; the rectangle at READ time through the viewport in
+screen coordinates; IsOffscreen = outside the view; NOT
+keyboard-focusable; Invoke = the document's ActivateFromDiagram; Select
+= the announced select; AddToSelection the single-selection matrix —
+throws with another selected; RemoveFromSelection clears through the
+document), GraphTierSummaryAutomationPeer (Button; Name =
+`RenderLabel(GraphTierSummary{count})`; HelpText "Switch to Table";
+Invoke = `SetMode(Table)`; the renderer's rectangle). THE DOCUMENT:
+ClearSelectionFromSurface (the writers census's new owner, D-15 v),
+RowCopyOf(entry) (references = in-links, embed false — the mac's
+rowCopy), DiagramDisplay, IsNodeCurrent (the id in the live model's
+visible set), IsDiagramActionEnabled, ExecuteFromDiagram and
+ActivateFromDiagram (Term N5's document half: the same admission as
+`Execute` — live, current, in core's vector for its kind, enabled — and
+the same four seams, addressed by the node's path or its label; the
+menu and the keyboard are T4's), RaiseDiagramTopologyChangedForTests.
+THE SURFACE: `_diagram` hosted beside the table in a Grid (one in the
+tree per mode — the state host and the table collapse under a live
+model, the renderer collapses under every other state); the renderer's
+Model follows the surface's (and Loaded/Unloaded — Shutdown drops the
+document and disposes the text-scale service); FocusDiagramProjection
+= the renderer's Focus (Term M4's live arm); ProjectionHasFocus includes
+the renderer; the presenter gains `ViewportCommand` (Refused unless
+Diagram is effective, Term M3); DiagramForTests. THE INTERFACE:
+`IGraphSurfacePresenter.ViewportCommand`; the navigator tests' fake
+answers Refused. THE PHRASES: T61 "Graph, visual diagram", T62/T63
+"Switch to Table", T64 "pinned", T67 "Pin"/"Unpin", T68's three parts,
+the Windows-authored "Connects to: " — the label theory extended. THE
+TOKENS: sixteen `Slate.Graph.*` colours and brushes in Light and Dark
+(the eight group tints, the note, attachment, surface, outline, edge,
+label, ring and accent), the Contrast dictionary's mapping (fills →
+WindowColorKey; outline, edge, label, ring → WindowTextColorKey; accent →
+HighlightColorKey); `ThemeTokenContrastTests` gains
+TheGraphTokensMeetTheMatrixInBothAppearances (label and ring > 75;
+outline, note, attachment and the eight groups > 15; edge > 3; the
+ghost's surface IS the window). FACTS (GraphDiagramTests, the Renderer
+partial — twenty-seven): D-8's ten —
+EveryVisibleNodeHasAButtonPeerNamedByTheRowCopyWithItsNeighboursAsHelpText,
+APanNeverDropsAPeer, APeersRectangleFollowsTheViewportAtReadTime,
+AVerbosityChangeRenamesEveryPeerWithoutALoad,
+ThePeerIsIdentityStableAcrossEpochsRefreshesAndViewportChangesWithinAModel,
+AModelReplacementRecreatesThePeers, ItemStatusReadsPinnedWhilePinned,
+TheContainerExposesSelectionAndTheZoomValue,
+SelectThroughThePatternSelectsAndAnnouncesAndRemoveClears,
+AddToSelectionWithAnotherSelectedThrows; D-9's five over a synthetic
+1,501-node topology installed through the model's own seams (Adopt,
+AdoptFrame, the Topology, the epoch's landing seam) —
+TheTierBoundaryIsInclusiveAt1500AndSwitchesAt1501,
+TierBExposesOneSummaryPeerNamedByCoresRenderWhoseInvokeSwitchesToTable,
+TierEnteredSpeaksOnceOnTheEdgeAndNeverOnBToA,
+ANameFilterCollapsesTierBToTheVisibleSet,
+TierBDrawsOneVisualAndKeepsTheRingAndTheHitTest; D-10's seven —
+ALabelDrawsOnlyForACoreLabeledNodeAtOrAboveTheFadeZoom,
+TheNodeSizeMultiplierScalesTheDrawnDiameter,
+AGroupedNodeTakesTheTokenBrushAndItsRingStyle,
+AGroupedRingIsHeavierThanUngroupedEvenWhenSolid,
+UngroupingClearsTheDashAndTheWidth, TheDiameterIsTheTopologyEntrys,
+TheGridHitTestFindsTheNodeUnderAPoint; D-3's two —
+TheNeedleAndTheKindOverlayNarrowTheVisibleSetToTheTables (the visible
+ids equal core's `GraphVisibility(query).Ids` and the table's rows'
+keys), NeighbourContentExcludesFilteredOutNodes; D-4's
+TheFirstNonEmptyFrameFitsOnceAndLaterFramesDoNot; D-13's renderer half
+— ZoomInOutAndActualSizeAreCentrePreservingAndClampedAndSpeakTheZoom
+(the outcome's percent; the navigator's line is T5's),
+FitFramesTheVisibleNodesAndSpeaksTheFitLine,
+FitOnAnEmptySetSpeaksTheUnchangedPercent, AVerbInTableModeIsRefusedOnTheSurface,
+ScrollIntoViewKeepsTheSelectionInsideTheMargin. CENSUSES
+(`GraphNavigatorCensus`): ExactlyOneRendererIsConstructedInTheSurfaceConstructor
+(D-15 ii: the renderer in the surface's constructor, the two peer types
+minted in RebuildVisibleSet alone), TheRendererThePeersTheDriverAndTheModelPostNothing
+(D-15 iv: no announcer member invoked in the four files but the static
+`RenderLabel`), EveryGraphTokenTheRendererLooksUpIsDeclaredInEveryDictionaryAndViceVersa
+(D-15 x: the renderer's literal list equals each dictionary's declared
+graph brushes and is the ONLY `Slate.Graph.` literal set under Graph/),
+the label theory extended (D-12's names), the SetMode callers gain the
+summary peer's SwitchToTable; `GraphAnnouncerCensus`'s shared-key
+writers gain ClearSelectionFromSurface (D-15 v). DEVIATIONS: (i) the
+group query is core's `label_matches` — a case-folded substring of the
+LABEL — so the facts group by "note"; (ii) the peers' bounding rectangle
+is read through `PointToScreen`, which rounds to device pixels — the
+rectangle fact allows one pixel; (iii) a synthetic node is not in the
+table's snapshot, so `SelectRow` refuses it (DR-4) — the tier-B ring
+fact writes the shared key directly and reads the derived selection;
+(iv) the container's children cache resets on the renderer's
+IsVisibleChanged (the peer caches children until reset); (v) the fit's
+"a hidden node excluded" arm asserts the single node's fit at a zoom no
+smaller than the five's (the exact padding is not observable through
+the percent alone); (vi) Term V2's announcement (`AnnounceZoom` from
+the navigator) and Terms V3/V4 are T5's; Term V5's wheel, drag and
+Ctrl+wheel input and Terms N3, N5's menu, N6, N7's toggle UI are T4's —
+the renderer exposes PanBy and ZoomStepAt for them. MUTATIONS, each
+restored byte for byte, each caught by the named fact: the tier boundary made exclusive, the peers minted per rebuild, the stale peers kept (it SURVIVED the first sweep — the tier-B fact's B→A path clears every peer, so the drop of an id that leaves tier A was unpinned; TheNeedleAndTheKindOverlayNarrowTheVisibleSetToTheTables now asserts the hidden ids' peers are gone and catches it), GraphTierEntered on every rebuild in B, the Name at a fixed verbosity, the HelpText without the prefix, IsOffscreen never true, labels drawn below the fade zoom, the grouped ring thin, the Dashed pattern dropped, the empty-set fit moving the zoom, ZoomIn about the origin, the scroll into view dropped, the hit radius negative, the container's children exposed while collapsed, a planted `Slate.Graph.` literal, a second renderer constructed, the light edge token below the floor, the prefix retyped, the pattern's Select silent, AddToSelection replacing silently, the summary's Invoke inert, the fit on every frame — twenty-three of twenty-three caught (`gD-mutations.py`, the T3 entries).
+
+**TGD-4 — T4: rule N in the renderer and the document — the keyboard
+through core's steps, the type-ahead, the pointer, the wheel, the Escape
+ladder's rung 3, the tooltip, the actions menu, the pin, the diagram's
+Where-am-I readback (D-11, D-12, D-14; D-13's Term V6 fact; D-5's
+stable-key fact; Terms N1, N3–N7, V5).** THE RENDERER
+(`Graph/GraphDiagramView.cs`): Term N3 — `OnKeyDown`: Down/Up/Right/Left →
+SpatialMove (no selection → the first visible node, no crossing; else
+ONE `GraphSpatialStep` over every visible id's position with the entry's
+neighbour ids and the unit axis; a null step moves nothing); Tab /
+Shift+Tab → StructuralMove (ONE `GraphStructuralStep` over VisibleIds,
+wrapping; consumed only while the visible set is non-empty); Enter →
+Term N5's activation of the selection; `OnTextInput` → TypeAhead (a bare
+letter or digit without Ctrl/Alt; the one-second buffer; the first
+visible id whose label starts with it, OrdinalIgnoreCase); Escape is
+not handled here and bubbles to the shell (rung 3); the four viewport
+chords and Ctrl+Alt+Shift+I are the navigator's through the surface's
+tunnelling handler; Menu / Shift+F10 are WPF's route to the persistent
+context menu. Term N4 / V5 — PointerPressed: a click selects announced,
+a double-click selects silently and activates, empty space begins a drag
+pan (the mouse captured; OnMouseMove pans by the delta); OnMouseWheel →
+Wheel: the delta pans, Shift pans across, Ctrl zooms one step
+centre-preserving on the pointer. T68 — the tooltip: a Popup over the
+hovered node with the composed label (label, " — ", in, " in / ", out, "
+out"), HOVERABLE (the pointer travelling onto it keeps it), DISMISSABLE
+(DismissTooltip; the surface's DismissTransientRegion reaches it after
+the Where-am-I panel — Escape's rung 0), closed when the pointer leaves
+both; never announced. Term N5 — ONE persistent `ContextMenu` from
+construction, MUTATED per opening (the grid's and the leaf's rule): a
+pointer request targets the hit node (none → no menu), a keyboard
+request the selection; the items are core's per-kind action titles in
+core's order with a disabled item's reason as its HelpText and ToolTip,
+each Click through the document's ExecuteFromDiagram, then a separator
+and Pin / Unpin (T67). Term N7 — TogglePin: the model's TogglePin at the
+node's CURRENT position through the gate (a retired model refuses,
+nothing spoken), `GraphPinned` through the document's AnnouncePinned,
+the peer's ItemStatus change raised. Term N1 — SelectedId now DELEGATES
+to the document's ONE rule (DiagramSelectedEntry) within the renderer's
+visible set. Term V6 — the renderer installs DiagramZoomPercent on the
+document at bind (cleared at unbind). THE DOCUMENT: DiagramSelectedEntry
+(the accepted topology's entry whose key is the shared key, among the
+ids the model knows); DiagramZoomPercent (the renderer's seam; 100 with
+none); DiagramWhereAmI (Term N6: null while no model is live, else ONE
+`GraphWhereAmI` — the derived selection's entry as the row copy with its
+component else NoSelection, `zoom_percent` present, the filter clause
+and the needle exactly `TableWhereAmI`'s); InstallBuild installs the seam
+through `InstallDiagramReadback` at the model's install (DropModel and
+the teardown clear it). THE SURFACE: DismissTransientRegion's second
+arm. THE CENSUS: the crossings fact names Term G8's two free functions
+by site — `GraphSpatialStep` in SpatialMove, `GraphStructuralStep` in
+StructuralMove. FACTS (GraphDiagramTests, the Keyboard partial —
+twenty-three): D-11's twelve — TheSelectionIsTheSharedKeysVisibleNode
+(present, hidden by the needle with the key kept, absent),
+ASelectWritesTheSharedKeyThroughTheDocumentsGuard (a node the table's
+snapshot lacks refused — DR-4; a retired document refused),
+ArrowsStepSpatiallyNeighboursFirstThenFallBack (over injected positions:
+the neighbour at 100 beats the nearer non-neighbour at 50; back; the
+fallback over every visible node; a direction with nothing — one
+crossing per press), TabWrapsStructurallyAndIsConsumedOnlyWithAVisibleSet,
+TypeAheadJumpsByPrefixWithinASecond, EnterActivatesTheSelection,
+AKeyboardMoveSpeaksOneRowLineAndTheLandingSpeaksNothing,
+AnOutsideKeyWriteMovesTheRingSilently, ClickSelectsAndDoubleClickActivates,
+TheWheelPansAndCtrlWheelZooms, TheEscapeLadderBubblesFromTheRenderer (the
+press unconsumed with rungs 0–2 empty; an open tooltip is the rung's
+most transient region), TheTooltipIsTheInventorysComposedLabel; D-12's
+five — TheDiagramsActionsEqualTheTablesPlusPin (per kind the diagram's
+titles equal the grid's row-actions menu's plus Pin, and core's vector),
+AGhostWithoutCreateAdmissionShowsTheReasonAndInvokeDoesNothing,
+AGhostOmitsShowConnections, EachActionReachesTheTablesSeam (Open,
+OpenInNewTab, Reveal, ShowConnections, CreateNote — each once by the
+node's path or label; a menu item's Click reaches the same seam),
+AStaleNodeIsRefused; ThePinTogglesThroughTheGateAndSpeaksPinned (Term
+N7; a retired model refused silently); D-14's four —
+TheDiagramReadbackNamesTheSelectionsTopologyEntryWithTheZoomClause (with
+TheChordOpensThePanelWithTheSameTextItSpoke's arm: the panel's text and
+ONE post render the one event), TheDiagramReadbackReadsNoSelectionWithoutAVisibleKey,
+TheDiagramReadbackCarriesTheNeedleAndTheOverlay,
+TheReadbackIsRefusedWhileTheDiagramBuildsAndAnswersAtInstall (with
+TheRowEnablesWhenTheDiagramSeamInstalls's arm: `CanWhereAmI` false under
+the build, true at the install, the table's again after the teardown);
+Term V6's TheValueAndTheClauseReadOneNumber; D-5's
+AGenerationChurnKeepsTheSelectionByStableKey (two notes added, the
+generation moved, the key unchanged, the ring on the node's id after the
+adopt). DEVIATIONS: (i) the fixture's every note links back to note0, so
+note0 neighbours everything and a note may neighbour itself — the arrows
+fact chooses an origin with a non-neighbour and the non-hub neighbour;
+(ii) the tooltip's dismissal rides the surface's DismissTransientRegion
+after the Where-am-I panel (the canvas's DD-3 shape: the most transient
+region first inside the rung); (iii) TheChordOpensThePanelWithTheSameTextItSpoke
+and TheRowEnablesWhenTheDiagramSeamInstalls are arms of two facts rather
+than facts of their own; (iv) Term N5's "focusOwningGroup" (the mac's)
+has no Windows twin — the seams address the workspace's own group
+rules. MUTATIONS, each restored byte for byte, each caught by the named
+fact: no selection stepping to the last visible node, the neighbours not passed to the step, Tab consumed over an empty set, the type-ahead buffer never resetting, Enter without a selection activating, a keyboard move silent, the double-click announced, the wheel zooming without Ctrl, the tooltip's separator retyped, the tooltip not hoverable, the menu without Pin, the disabled reason not the HelpText, the create admission ignored, the currency ignored, a ghost's activation opening, the pin silent, the zoom clause dropped, the readback seam never installed, the readback answering without a model, a planted step crossing outside the two move members, the ladder skipping the tooltip — twenty-one of twenty-one caught (`gD-mutations.py`, the T4 entries).
+
+**TGD-5 — T5: rule V's verbs, rows, chords, commands and menu items —
+the navigator's four verbs through the presenter's seam, the zoom line
+through the document, the four chord rows in the Graph scope, the three
+shared pairs, the registrar's binding record, the Graph-menu items
+(D-13's navigator half; Terms V2–V4; D-15 vi, xii; DD-7).** THE
+NAVIGATOR (`Graph/GraphNavigator.cs`): ZoomIn, ZoomOut, ActualSize,
+FitGraph — each reaches the attached presenter's `ViewportCommand`
+(refused without a live presenter); a Zoomed outcome is spoken through
+the document's AnnounceZoom seam (`GraphZoom{fit, percent}`; the
+navigator posts nothing itself, C-15 ix); a Refused outcome speaks
+nothing and is UNCONSUMED (Term V4: the press bubbles); the four chord
+arms join Bind as three-argument `AddChord` calls — `Key.OemPlus`
+Control, `Key.OemMinus` Control, `Key.D0` Control, `Key.D0` Control|Alt
+— the scrape at six with Escape and Where-am-I (C-11); CanZoom (Term
+M3's "Diagram effective") and DiagramAvailabilityChanged, raised by the
+document's NotifyDiagramAvailabilityChanged forward. THE WORKSPACE: the
+four commands GraphZoomInCommand, GraphZoomOutCommand,
+GraphActualSizeCommand, GraphFitGraphCommand — the navigator's verb,
+CanExecute = CanZoom, re-raised on the navigator's edge (the Where-am-I
+command's shape). THE TABLE (`Commands/ChordTable.cs`): the ids
+`slate.graph.zoomIn`, `slate.graph.zoomOut`, `slate.graph.actualSize`,
+`slate.graph.fitGraph` — the mac's; four Reg rows with the mac's labels
+and hints byte for byte (`GraphPhrase.ZoomInLabel` … FitGraphHint;
+`SlateCommands.swift:1583–1611`), ⌘= / ⌘- / ⌘0 / ⌥⌘0 → Ctrl+= / Ctrl+- /
+Ctrl+0 / Ctrl+Alt+0, `ChordScope.Graph`, `CommandSection.Graph`. THE
+REGISTRAR: GraphViewportBindings — the canvas record's shape, ONE
+authority naming each row's navigator member and workspace command —
+consumed by `BuildResolvers()`. THE MENU: four items after Where Am I?
+(Zoom In, Zoom Out, Actual Size, Fit Graph) with `ChordText` gestures
+and the workspace commands (DD-Q3's default). `chords.json` regenerated
+through the projection (SLATE_CHORDS_UPDATE=1; never by hand). FACTS
+(GraphDiagramTests, the Verbs partial — seven):
+TheFourRowsTheirScopeLabelsAndChords (the mac's ids, labels, hints and
+chords, the scope, the section, no divergence);
+TheScrapeInBothDirectionsHoldsSixChords (the navigator's six, the
+table's six Graph-scoped chorded rows);
+TheSharedChordDispositionsNameTheThreeCanvasPairsAndCtrlAltZeroIsFree
+(the three canvas pairs share the chord in another scope; Ctrl+Alt+0 is
+the fit row's alone); AVerbInTableModeIsRefusedAndTheChordFallsThrough
+(refused, unconsumed, the commands disabled, nothing spoken; then
+consumed on the SAME surface with the zoom line);
+AVerbFromTheFilterFieldInDiagramModeActs (the field keeps the keys, the
+zoom moves, the line); TheMenuItemsFollowTheAvailability (disabled in
+Table and under the build, enabled at the install with CanExecuteChanged
+raised, the lines through the commands, disabled at the teardown);
+TheGraphViewportBindingRecordIsTheOneAuthority. `GraphMenuTests`' shape
+fact gains the four items, the third separator and the binding record's
+resolution; `ChordTableTests`' SharedCommandChords gains the three pairs
+with C-8's reason; the census's chord-map fact and the navigator tests'
+chord list count six; `MacCatalogParityTests` passes as the P3 gate
+over the four shared ids unchanged. DEVIATIONS: (i) the fit row's hint
+carries the mac's prose "Option-Command-0 on the diagram" byte for byte
+(Term V3's rule over the canvas's precedent) — the Windows chord is the
+row's own column; (ii) a menu or palette verb acts on the ATTACHED
+presenter (the surface the reader was in — attached on the keys' edge
+and on every chord), so a verb before any surface ever held the keys is
+refused; the facts give the renderer the keys first (rule F's landing
+does the same in the shell). MUTATIONS, each restored byte for byte,
+each caught by the named fact: the fit chord dropped from the map, the zoom line dropped, CanZoom ignoring effectiveness, a refused verb consuming the chord, a label retyped, the fit chord rebound to Ctrl+Shift+0, a menu item bound to the wrong command, a binding dropped from the record, the availability not forwarded to the navigator, two verbs on one chord — ten of ten caught (`gD-mutations.py`, the T5 entries).
+
+**TGD-6 — T6: §W-A the position golden and §K the renderer benchmarks
+(D-18; DD-Q4, DD-13).** THE GOLDEN (`SurfaceSerializer.GraphQueriesArtifact`
+and the mac twin's `graphQueriesArtifact` in `ParityHarnessTests.swift`):
+a `layout` section after `config` — `start_graph_layout` under core's
+DEFAULT filter (`GraphFilter::default()`: attachments out, ghosts in,
+every node; `SurfaceSerializer.GraphDefaultFilter`) with `LayoutForces`
+and `LayoutConfig` defaults, the slots in the layout's order as
+`{ key: stable_key, x_x1000, y_x1000 }` after exactly `tick(60)` from
+the seeded placement (`SurfaceSerializer.PinnedLayoutTicks`), each
+coordinate `Math.Round(v × 1000, AwayFromZero)` as an integer — the
+mac's `.rounded()` (to-nearest-or-away-from-zero) over the same double
+arithmetic, byte for byte. The golden `parity_golden/graph_queries.json`
+regenerated ONCE by the Windows twin (the harness tool; one line, the
+old bytes a strict prefix): eleven slots, the graph vault's twelve minus
+`p:pic.png` (IGS-4). The example fixture `graph_queries.example.json`
+carries the section. THE CENSUS (`ParityHarnessCensus`):
+`GraphArtifactSections` at twelve (the pinned-vectors fact over the
+golden AND the example); the layout's key SET equals the snapshot's
+non-attachment keys (the default filter's law) and each entry's fields
+are exactly `GraphLayoutFields`; `GraphNumericNames` gains `x_x1000`,
+`y_x1000` (the schema walk: a number under any other name is an id in
+disguise); TheLayoutSectionIsTheSessionsSixtiethTickQuantised — the
+section re-derived IN PROCESS from a fresh session over the graph vault
+(the census's temp-corpus shape) equals the golden's entry for entry in
+slot order; the constant is sixty, the filter is core's default, and
+sixty is three of the driver's `IterationsPerStep` — a second session
+ticked in the driver's chunks reaches the SAME buffer (the kernel's
+`step` breaks early only on convergence, which the frame denies), so
+the golden is what the Windows renderer shows after its third step;
+TwoLayoutsOverOneVaultAreBitIdentical — two sessions over two copies of
+the vault, `run_to_convergence` each, bit-identical position buffers and
+one iteration count (§P-C on this platform, DR-2). THE BENCHMARKS
+(`GraphRendererBenchmarks`, `SlateWindows.Benchmarks`, the graph suite's
+inventory shape; the runner's `--graph-renderer` arm with
+`--validate-budgets` asserting by exit code): over a synthetic
+1,500-note vault — tier A's ceiling, `GraphOpenBenchmarks`' generator
+WITHOUT its ghost arm so the visible count sits exactly at
+`tier_b_threshold` and every node has a peer — the surface hosted in a
+hidden 1600×1200 window on its own STA dispatcher thread (the shell's
+shape: the workspace, `OpenGraph`, `SetMode(Diagram)`, the build landed,
+the settle ended, the first epoch on the renderer, one node selected;
+animation ON through `GraphMotionPolicyForTests`); four workloads, each
+invoked on the host thread — WarmTick: `Tick(20)` through the model's
+`WithSession` gate, 83.146 ms median (≤ 100; the kernel's own O(n²)
+cost at 1,500 nodes — P's 2 ms was 300); FirstRebuild: the standing
+epoch cleared, then the topology fetch through the binding, its landing,
+the renderer's rebuild (the visible set, 1,500 peers, the hit grid) and
+the UIA children materialised with every name read, 19.982 ms
+(≤ 500); PanHop: `PanBy` (the transform, the three visuals redrawn) and
+every peer's screen rectangle read, 3.269 ms (≤ 100); SpatialStep:
+core's `spatial_step` over the visible positions, the selection through
+the document, the scroll and the row line, 0.231 ms (≤ 50);
+BENCHMARKS.md's "Milestone W6-2 PR D" section records them. THE
+RENDERER: the first pan hop MISSED its budget at 104.9 ms — the redraw
+carried a LIVE `Pen` and two TryFindResource walks per node (1,500
+unfrozen freezables registered with the drawing context per pass); the
+renderer gained `RedrawStyles`, one per redraw: each token looked up
+once per pass (the theme's brush, or a frozen copy), each (token, width,
+dash) pen built once and frozen — the same tokens, the same fill and
+ring tables (`FillKeyForTests`, `RingStyleForTests` unchanged), a pass
+never outliving its redraw so a theme swap is seen on the next; the pan
+hop fell to 3.269 ms (1.6 ms the redraw alone, the rectangle
+walk the rest). DEVIATIONS: (i) the mac twin is unrun here (DR-1) —
+simulated: no Swift fact pins a section count, the twin's bytes are
+matched against the committed golden on the mac lane, the twin's
+`keyOf[id] ?? ""` is the file's own idiom; (ii) D-18's
+TwoLayoutsOverOneVaultAreBitIdentical runs two sessions over two COPIES
+of the vault (each its own temp root, RunGraphQueries' shape) rather
+than one root opened twice; (iii) the sixtieth-tick fact carries the
+driver's cadence beyond D-18's text (60 = 3 × `IterationsPerStep`, the
+chunked buffer equal, the frame not converged); (iv) FirstRebuild
+clears the standing epoch INSIDE the measured method (a first rebuild
+over a cleared renderer, never a peer reuse) and counts the name reads;
+PanHop reads every rectangle in screen coordinates (the peers'
+read-time law); (v) a renderer change (`RedrawStyles`) lands in T6, not
+T3 — rule T's facts are unchanged and pass; (vi) `--graph-renderer` is
+its own runner arm because the graph suite's inventory walk reads a
+`Notes` parameter the renderer's reports lack; (vii) the benchmark is
+not test-covered (the canvas's precedent) — its guards fail the run
+instead: tier A at the ceiling, 1,500 named peers, 1,500 placed
+rectangles, a step that finds no node. MUTATIONS, each restored byte
+for byte, each caught by the named fact: the tick count off by one, the
+filter admitting attachments, the rounding truncating, x reading the
+y slot, the key emitted as the id (five golden mismatches,
+HarnessArtifacts_MatchCommittedGoldensByteForByte); the golden carrying
+an id as a key (the schema walk), dropping a slot and carrying a fourth
+field (the pinned vectors), carrying a stale position (the sixtieth-tick
+fact); the census dropping the `layout` section and dropping `x_x1000`
+from the numeric names; the driver's cadence no longer dividing sixty
+(the sixtieth-tick fact); the example fixture dropping the section —
+thirteen of thirteen caught (`gD-mutations.py`, the T6 entries).
+
+**TGD-7 — T7: §W-C the journey, the matrices, the evidence (D-19;
+D-13's rows).** THE JOURNEY (`ShellAccessibilityTests`,
+GraphSurfaces_DiagramPeersTiersAndZoom_AreClean, gate W-C): over a
+four-note vault with one unresolved target (Alpha ↔ Beta, Gamma → Alpha
+and a missing note, Solo alone — five nodes under the default filter);
+the oracles are core's renders over the same vault read BEFORE the app
+opens (the PR C journey's discipline, IPG-24/25): the epoch's
+`graph_topology` under the fresh open's query and config, the first
+node's row copy (the diagram's `RowCopyOf` mapping restated as
+DiagramRowCopyOf: label, kind, degrees, the in-degree as the ghost's
+references, never pinned) rendered as `GraphRow` at Standard, its
+neighbours as `GraphNeighborsContent` behind the mac's "Connects to: "
+prefix, core's note actions from `GraphRowActions`. The walk: `Open
+Graph` from the palette and the grid's realised cell (Term F6);
+Shift+Tab to the switcher and Right to the Diagram choice (ChooseRadio:
+WPF's directional navigation moves the keys; the choice checks on the
+arrow or, within a beat, on Space); the GraphDiagram container, five
+Button children, the keys ON the renderer (Term M4's live arm), the
+container's Name "Graph, visual diagram"; the first peer's AutomationId
+"GraphNode:" + the stable key, its Name and HelpText the oracles, not
+keyboard-focusable (DD-Q2); the Value "Zoom N percent" — Ctrl+0 → "Zoom
+100 percent"; Right → the first peer IsSelected (Term N3); Ctrl+= → the
+Value changed and the selected peer's BoundingRectangle changed (the
+canvas journey's stale-frame classic; the peers' read-time rectangles);
+Ctrl+Alt+0 → the Value changed again; the Menu key → the row-actions
+menu's items equal core's note actions then Pin; Escape and the keys
+back on the renderer; Enter → the note opened in the graph's pane; `Open
+Graph` again → the persisted Diagram mode built at the seat (DD-18),
+five peers, the keys on the renderer, the first peer ALREADY selected (Term N1: the selection is derived from the shared key the one document keeps across the note's detour); Ctrl+Alt+Shift+I → the
+readback equals the render of `GraphWhereAmI` over the first node with
+the ZOOM CLAUSE the container's Value carries at that moment (and
+differs from the render without it), the panel takes the keys, Escape
+returns them; Table chosen through the switcher's SelectionItem
+pattern (a screen reader's object navigation; Term N3 consumes Tab in a
+non-empty diagram) with the keys on the renderer → a USER switch: the
+grid returns with the ring's node as the current row (the shared key,
+Term N1); axe
+`graph-diagram`. Run locally to its last step with NVDA stopped:
+passed on 2026-09-14 (18 s, the axe scan clean) after two runs that each found a shell or a journey defect — the landing transient below, then the reopen's kept selection and the Tab consumption Term N3 names. THE FINDING (the journey's, fixed in this task): the
+install notifies `DiagramLoading` false BEFORE `HasLiveDiagram` true,
+and the surface's Term M4 arm read the "not loading, not live, no
+error" transient as the FAILED arm — it seated the state host,
+completed the request, and the next notification collapsed the host, so
+WPF dropped the keys on the workspace tab strip (the journey's first
+failure: "focus is Tab name='Workspace tabs'"); T1's landing fact
+stopped at "waits under a build" and never saw the arrival. The arm now
+waits for a terminal flag (a model live → the renderer; `DiagramError`
+set → the state host) and
+TheUserSwitchsLandingArrivesOnTheRendererWhenTheBuildLands pins the
+arrival (GraphDiagramTests). THE MATRICES: `w_c_matrix.md` gains the
+row "Graph diagram (W6-2 PR D)" — the container, the node peers, the
+tier-B summary and the four menu items by automation id, the control
+types, the Name sources, the patterns, the keys, the announcements and
+the evidence — and PR A's staged claim ("Diagram present and disabled
+until the graph's diagram slice") is retired in place;
+`WcMatrixGraphEvidenceCensus`' manifest gains the surface (the ids the
+shell sets, the types, the patterns, the sources, the evidence names
+that resolve, the axe label a journey scans); the parity generator
+gains W6_2_PR_D_STATUS and the four zoom ids as delivered, the matrix
+regenerated (the four rows at the PR D status, dated 2026-09-14);
+`chords.json`'s delivery evidence maps the four ids to the graph group
+and the group gains the diagram's anchors (`GraphDiagramView`,
+`GraphLayoutDriver`, GraphZoomInCommand; `GraphDiagramTests`, the
+journey); `GraphNavigatorCensus` gains
+TheParityMatrixCarriesTheFourZoomRowsAtThePrDStatus (the generator's
+own string read from its source, the four rows, the w_c row, the staged
+claim gone). DEVIATIONS: (i) D-19 reads the actual-size percent from
+the container; the first frame FITS (D-4), so the journey states the
+size with Ctrl+0 first and reads "Zoom 100 percent" after it; (ii) the
+readback's zoom is read at run time from the container's Value (a pure
+render, no second session), not pinned before the app opens; (iii) the
+oracle's subject is the topology's FIRST node — the visible order and
+the first arrow's target — with its kind asserted a note so Enter opens
+rather than creates; (iv) the reopen presses no Right — a Right would STEP away from the kept selection; (v) the switcher's Right is ChooseRadio's two
+idioms (arrow, then Space within a beat) — WPF's RadioButton group
+moves the keys on an arrow and checks on Space or on the arrow by
+theme; and the RETURN is not a Shift+Tab — Term N3 (P2-3's normative
+Tab, the mac's keyDown 48) consumes Tab inside a non-empty diagram, the
+reader leaving by the shell's pane and tab chords, the palette, or an
+object navigation's Select on the switcher's item, which the journey
+uses (D-19's "Right to the Table item" read through the term); (vi) `HandleLifetimeCensus` is the evidence name (the partial's
+class), not its graph file; (vii) a shell fix (the surface's arm) lands
+in T7, not T1 — rule M's frozen facts pass unchanged and the new fact
+is the arrival's; (viii) the delivery evidence's command set is guarded
+by the generator at regeneration (no CI step runs it) and by the
+census mirror's marker and scope checks. MUTATIONS, each restored byte
+for byte, each caught by the named fact: the transient read as the
+failed arm again (the arrival fact); the manifest naming another row
+(the ten-cells fact); the row dropping an id's backticks (the sources
+fact); the evidence cell dropping the journey (the evidence fact); the
+generator's status retyped and the staged claim returning (the parity
+fact); the journey's anchor retyped in the delivery evidence (the
+census mirror) — seven of seven caught (`gD-mutations.py`, the T7
+entries).
+
+**TGD-8 — post-implementation pass IPH-1 (gpt-5.5 medium, read-only,
+over 15ccce8a): three findings, the dispositions, codoki's first
+review.** THE PASS returned one blocker and two majors and the verdict
+"not safe to continue" on the blocker. IPH-1-1 [BLOCKER], "the pointer
+menu hit-tests in the wrong coordinate space" — REJECTED in mechanism,
+its test gap TAKEN: WPF's PopupControlService raises the opening
+event on the element under the pointer with the cursor RELATIVE to
+that element (`e.GetPosition(OriginalSource)`), and the renderer hosts
+no child elements, so `ContextMenuEventArgs.CursorLeft/CursorTop` ARE
+the view's coordinates — the hit grid's; the handler's comment now
+says so, and the journey proves it on a real right-click (below).
+IPH-1-2 [MAJOR], "a removed node peer still reports the selection from
+a cached provider" — TAKEN: a peer held across the tier edge answered
+`IsSelected` from the selected id alone while the container exposed
+the summary; the peer now reports the selection only while it IS the
+renderer's current peer for its id (`GraphNodeAutomationPeer`:
+`_view.SelectedId == Id && ReferenceEquals(_view.PeerFor(Id), this)`);
+AStalePeerHeldAcrossTheTierEdgeReportsNoSelection pins it (five
+synthetic nodes, the key written, the peer held, 1,501 installed → tier
+B, the id still the selection, the peer no longer exposed, no
+selection reported). IPH-1-3 [MAJOR], "the menu oracle bypasses the
+opening path that owns targeting" — TAKEN: the handler's target rule
+is a seam, `MenuTargetFor(pointerRequest, left, top)` (a pointer
+request → the node HIT at the view point, none over empty space; a
+keyboard request → the selection), the handler calls it, and
+APointerMenuRequestTargetsTheHitNodeAndAKeyboardRequestTheSelection
+drives it (the other node at its view centre, the selection at -1,-1,
+an empty corner); the journey gains the POINTER leg — a right-click on
+the SECOND peer's screen rectangle opens the row-actions menu, its
+items core's note actions then Pin, Pin invoked through the menu marks
+the second peer's ItemStatus "pinned" and no other's, the selection
+stays on the first, the keys return to the renderer
+(the journey passed to its last step on 2026-09-14, 19 s, the axe scan clean). CODOKI's first review (18:45Z): APPROVED,
+"auto-approved (no issues found)", "Safe to merge"; its key feedback,
+dispositioned: the pen cache's key formatted the dash's numbers
+through the current culture — TAKEN: the dash patterns are the
+renderer's shared statics (`DashedDash`, `DottedDash`, `GhostDash`)
+and `RedrawStyles` keys its pens by the array's identity through a
+comparer that formats nothing; the arrow spreads allocated per edge —
+TAKEN (one static array); the `||` in the pointer-request read —
+commented, not changed (the sentinel is -1 on both axes); caching the
+Typeface and the DPI across redraws and a square-distance hit test —
+DECLINED for now: the redraw measures 1.6 ms and the step 0.23 ms
+against 100 and 50 ms budgets (TGD-6), no budget pressure to buy
+complexity against; the type-ahead buffering facts exist (TGD-4's
+"the buffer never resetting" mutation is caught) and the menu's two
+paths are this record's. THE GATE'S FINDING (the CI-shaped regression on 15ccce8a, 2,842 of
+2,844): `CommandDriftTests`' two menu facts failed on the four Graph-menu
+items — the drift scrape read the registrar's resolver TABLE as
+initializer syntax and never the tuple RECORDS the table is built from
+(the canvas's viewport record never met the scrape because its verbs
+have no menu items); the scrape now reads a record's rows as
+registration sites (the id first, the resolver last), so the four items
+are backed by their rows and their accelerators check against what they
+invoke; T5's graph regression had not included the drift suite — the
+CI-shaped run is the gate, as the regression note says.
+MUTATIONS, each restored byte for byte, each
+caught by the named fact: the currency check dropped (the stale-peer
+fact); the pointer request opening on the selection and the keyboard
+request hit-testing at -1,-1 (the target-rule fact) — three of
+three caught; the pen key's dash identity is not test-covered (its
+observable is pixels), recorded. The stop rule (the standing gate met
+on a head AND a pass with no blocker twice running) is not met: IPH-2
+runs on this landing.
+
+**TGD-9 — post-implementation pass IPH-2 (gpt-5.5 medium, read-only,
+over da842e5d): four findings, all TAKEN.** THE PASS returned two
+blockers and two majors and the verdict "not safe to continue" on the
+blockers; every finding held against the frozen terms and core's id
+contract (`graph.rs`: an id is the StableGraph index, stable while the
+generation is unchanged, and a generation change MAY reassign ids).
+IPH-2-1 [BLOCKER], "pins are tracked by generation-local node id" —
+TAKEN: the model kept `Pinned` as a set of ids pruned by id on every
+adopt, so a refresh that reassigned ids could drop a surviving node's
+pin or hand it to the node that inherited the id, while the kernel
+keeps its own pins by key through warm_update; the pins are now the
+NODES' stable keys (`GraphDiagramModel.PinnedKeys`), pruned to the keys
+a read still carries, and `Pinned` is the ids' view rebuilt under each
+read; `TogglePin` resolves the id's key first and refuses an id the
+model does not know; APinSurvivesAnIdReassignmentByItsStableKey adopts
+a read whose every id is shifted one slot (the other node inherits the
+pinned node's old id) and finds the pin on the node's NEW id alone;
+ARefreshPrunesAPinTheTopologyLost now asserts the kept pin SURVIVES
+under whatever id the refresh gave its note (its earlier "unless the
+refresh reassigned it" clause was the defect, stated). IPH-2-2
+[BLOCKER], "diagram menu actions execute a stale topology record" —
+TAKEN: the menu's items captured a `GraphTopologyNode` and the click
+checked only that its id was current; the currency for a captured
+entry is now its id AND its stable key against the live model and the
+accepted topology (IsNodeCurrent's entry overload; `ExecuteFromDiagram`
+refuses a stale entry), and the Pin item captures the id with its key
+and toggles only while that id still names that key
+(`GraphDiagramView.TogglePin(id, key)`); AMenuActionOverAStaleEntryIsRefused
+pins both (the live entry admitted, a re-keyed copy refused, the pin
+too). IPH-2-3 [MAJOR], "a topology fetch failure permanently
+suppresses retry for the same epoch" — TAKEN: OpenEpoch marked the
+epoch current before its fetch, so a fetch that threw left the key
+"fetched" and the next OpenEpoch for the same key returned early with
+no accepted topology; the failure is now logged
+(`HostDiagnosticEvent.GraphTopologyFetchFailed`) and the apply's null
+arm clears the epoch record when it is still this epoch's, so the next
+request for the same key fetches again (the seams
+`TopologyGateForTests` — the refresh gate's twin — and
+`ReopenEpochForTests`); AFailedTopologyFetchIsRetriedOnTheNextEpochRequest
+fails one fetch under a changed needle, sees the log line and the
+previous set standing, re-asks the same key and counts the fetch, then
+re-asks a fetched key and counts none. IPH-2-4 [MAJOR], "the refresh
+adopts the new topology before adopting the refresh frame" — TAKEN:
+ApplyRefresh adopted the read and restarted the settle, leaving the new
+generation's ids without positions until the settle's first apply; the
+refresh's frame is now adopted with its read (under the length guard)
+before the epoch opens and the settle restarts; ARefreshAdoptsItsFrameWithItsRead
+applies a synthetic answer through `ApplyRefreshForTests` and finds the
+added id's position synchronously, before any tick. FACTS: the diagram, document, drift, lifetime and announcer facts green (221 of 222 on the first run, the one failure the census below).
+CENSUSES: the navigator census's closed list of load-starting members gains the two seams (ApplyRefreshForTests, ReopenEpochForTests) — both reach the scheduler through ApplyRefresh and OpenEpoch — and its no-outside-callers arms the same; green on the re-run. MUTATIONS, each restored byte for byte, each
+caught by the named fact: the pins pruned by id (the reassignment
+fact); the entry's currency ignoring the key (the stale-entry fact); a
+failed epoch staying "fetched" (the retry fact); the refresh's frame not
+adopted (the frame fact) — four of four caught. CI on da842e5d:
+every lane green (the Windows app lane after T8's drift fix; the Swift
+suite matching the `layout` golden); codoki's second review approved,
+"Safe to merge", no actionable item. The stop rule is not met (IPH-2
+carried blockers): IPH-3 runs on this landing.
+
+**TGD-10 — post-implementation pass IPH-3 (gpt-5.5 medium, read-only,
+over 6d36eb99): one finding, TAKEN.** THE PASS returned one blocker and
+the verdict "not safe to continue" on it. IPH-3-1 [BLOCKER], "the
+diagram's drawing does not invalidate on theme changes" — TAKEN against
+frozen Term T6 / D-10, which says the three visuals are redrawn on
+every frame, epoch, viewport OR THEME change: the renderer read its
+brushes from the theme's dictionaries per redraw (`RedrawStyles`) but
+never subscribed to the theme manager's change, so a Light/Dark/Contrast
+swap after the settle left the visuals painted under the old tokens
+until an unrelated redraw (the editor's highlighter subscribes to the
+same event; the canvas board binds its brushes dynamically); the
+renderer now subscribes to `ThemeManager.ResourcesChanged` for its
+time in the TREE — Loaded to Unloaded, once — and repaints the three
+visuals on it (the manager raises on the dispatcher that swapped the
+dictionaries; the handler posts nothing, the census's rule); the event
+is static, so the subscription is the tree's lifetime and not the
+bound model's: a first cut tied it to the Model setter and the suite
+caught it — facts that build a surface without a window left renderers
+subscribed from dead STA threads, and the next raise reached them
+cross-thread — and a second cut showed the suite's own leak too: the
+renderer facts never close their hosted windows, so their renderers
+stay Loaded and subscribed on finished threads, and `RenderOpen`
+refused the cross-thread call; the handler acts only on its own
+dispatcher (Dispatcher.CheckAccess), a renderer on another dispatcher
+not being the raise's audience; `ThemeManager` gains RaiseResourcesChangedForTests (the
+change raised without a swap);
+AThemeChangeRedrawsTheDiagramAndUnloadReleasesIt pins it (the redraw
+count advances on the raise with no frame, epoch, size or viewport
+change — the fit count not — twice, and not after the window's close
+unloaded the renderer). FACTS: the diagram facts and the navigator census green (127) once the fact pumped the asynchronous Unloaded before its release check. MUTATIONS, each restored
+byte for byte, each caught by the named fact: the Loaded subscription
+dropped; Unloaded keeping it — two of two caught. CI on 6d36eb99: every lane green, the shell accessibility gate with the four graph journeys among them; codoki's third review approved, "Safe to merge" — its one note, the layout facts' exact float and property-order equality, DECLINED: that equality is the frozen contract (DD-Q4, §P-C's per-platform bit-identity; the census re-derives on the same platform; DR-2 records the drift risk and the quantum). The stop rule is not met (IPH-3
+carried a blocker): IPH-4 runs on this landing.
+
+**TGD-11 — post-implementation pass IPH-4 (gpt-5.5 medium, read-only,
+over 28472d4e): one finding, TAKEN; the first pass without a blocker.**
+THE PASS returned one major and the verdict "safe to continue" — the
+first of the loop. IPH-4-1 [MAJOR], "the refresh's length guard sits
+after the mutation" — TAKEN against Terms G5/G6 and TGD-9's own words
+("adopted with the read under the length guard"): ApplyRefresh adopted
+the read, then guarded only the FRAME by its length, so a malformed
+answer (a frame that is not two floats per id) still advanced the ids,
+the nodes, the edges and the generation, opened an epoch and restarted
+the settle with no positions for the new ids — IPH-2-4's window
+re-created for a malformed buffer; the adoption is now ATOMIC behind
+the guard: a malformed answer is logged
+(`HostDiagnosticEvent.GraphLayoutRefreshFailed`, the refresh's failure
+event, with the counts) and nothing is adopted, the model standing for
+the next probe's refresh;
+AMalformedRefreshAnswerIsLoggedAndLeavesTheModelStanding applies a
+newer-generation answer one float short and finds the generation, the
+ids, the positions and the last frame unchanged, no epoch opened, the
+settle not restarted, the line logged. CODOKI's fourth review
+(28472d4e): APPROVED, "Safe to merge"; its notes, dispositioned: the
+handler's own-dispatcher rule documented more explicitly — the
+handler's remark already states it (a renderer on another dispatcher is
+not the raise's audience), no change; a weak event or a further guard
+for subscriptions without an Unloaded — the subscription is paired
+with WPF's Loaded/Unloaded contract, the tree's own lifetime, no
+change; the fact's pump determinism — the fact raises the change on the
+STA thread that hosts the diagram and pumps the asynchronous Unloaded
+under a bounded wait, no change. FACTS: the diagram facts and the navigator census green (128). MUTATIONS, each
+restored byte for byte, each caught by the named fact: the read adopted
+before the guard (the malformed-answer fact) — one of one caught.
+CI on 28472d4e: the mac, rust, lint, bench and scan lanes green and codoki approving when this landed, the Windows app lanes still in flight — CI arbitrates them on this head. THE STOP RULE: the standing gate is met on a
+head (every lane green on 6d36eb99 and on 28472d4e, codoki approving
+each) and IPH-4 carried no blocker; the rule asks for two such passes
+running — IPH-5 runs on this landing and, without a blocker, closes the
+loop with its findings posted as the owner's ledger.
+
+**TGD-12 — CI's finding on 28472d4e: the theme fact's raiser reached
+every subscriber in the process.** THE FINDING: CI's Windows app lane
+failed AThemeChangeRedrawsTheDiagramAndUnloadReleasesIt (2,850 of
+2,851) with "the calling thread cannot access this object" thrown not
+by the renderer but by `AvalonHighlightingCoordinator`'s handler
+(`EditorHighlighting.cs`, its `TextView.Redraw`): the fact raised
+`ThemeManager.ResourcesChanged` through a test seam, and the event is
+STATIC and process-wide — in the full suite its audience is every
+subscriber other test classes left behind on their own threads (the
+editor's coordinators among them), and each verifies its own
+dispatcher. The local diagram suite never had such a subscriber, so the
+fact passed there — the CI-shaped regression, the gate the regression
+note names, was not re-run after T9 and T10 (TGD-10 had run the diagram
+suite alone) and is this landing's gate again. THE FIX: the fact drives
+the theme arm on THIS renderer (`RaiseThemeChangedForTests` calls the
+handler) and reads its subscription through a seam
+(IsSubscribedToThemeForTests: true while hosted, false once the window's
+close unloaded it); the manager's process-wide raiser is removed; the
+shell's arm — the Loaded/Unloaded subscription and the own-dispatcher
+guard — is unchanged. FACTS: the CI-shaped regression green, 2,852 of 2,852. MUTATIONS (T10's two,
+re-verified against the rewritten fact): the Loaded subscription
+dropped; Unloaded keeping it — two of two caught. The lesson,
+recorded for the loop: a test seam that raises a static event is a
+test of the whole process; a seam drives the subject.
+
+**TGD-13 — codoki's inline on a3a9419f: the theme seam fails fast.**
+THE REVIEW (codoki's sixth, on a3a9419f): "Safe to merge", one inline
+Medium on `GraphDiagramView.RaiseThemeChangedForTests` — calling the
+handler unconditionally lets a test exercise the theme arm on a
+renderer that is not subscribed, a state the manager's raise never
+reaches, so a fact could pass on a handler that ran without a
+subscription. TAKEN: the seam now refuses an unsubscribed renderer
+(an InvalidOperationException, "a raise would not reach it"), so it
+models the manager's raise — it reaches this renderer only while
+subscribed — and
+AThemeChangeRedrawsTheDiagramAndUnloadReleasesIt asserts the refusal
+after the window's close unloaded the renderer (the redraw count
+unchanged). FACTS: the CI-shaped regression green, 2,852 of 2,852. MUTATIONS (T10's two, re-verified):
+two of two caught. The thread is answered with this landing's
+hash. THE LOOP'S CLOSE — post-implementation pass IPH-5 (gpt-5.5
+medium, read-only, over a3a9419f) returned NO findings and "safe to
+continue": the stop rule is met — the standing gate met on a head
+(every lane green on 6d36eb99 and 28472d4e, codoki approving each; the
+theme fact's process-wide raiser that failed CI on the later head
+replaced in TGD-12, the CI-shaped regression 2,852 of 2,852) and two
+consecutive passes without a blocker (IPH-4's one major taken, IPH-5
+nothing). The precedent applied is PR A's (six passes, the last two
+without a blocker); PR D ran five — findings 3, 4, 1, 1, 0; blockers 1
+(rejected in mechanism, its gap closed), 2, 1, 0, 0 — every blocker
+after the first a real defect against the frozen terms or core's id
+contract; the owner may overrule and ask for a sixth. The PR converts
+to ready on this landing; CI and codoki arbitrate the head.
+
+### Tests that pin PR D (revision 5's list; the task loop records what lands)
+
+- GraphDiagramTests (new, partial classes): the facts named under D-1..D-14
+  — the model's lifecycle, the build, the epoch, the driver, the refresh,
+  the teardown, the switch, the peers (in a hosted window), the tiers over
+  a synthetic topology, the styling and the tokens, the selection and the
+  keyboard, the actions, the viewport, the readback.
+- `GraphNavigatorTests`: the four verbs' admission and chord arms, the
+  diagram readback's production installation, the availability edges.
+- `GraphTableTests`: the switcher enabled and writing through the
+  document, the projection cluster per mode, the header in both modes,
+  rule F's diagram arm.
+- GraphPreferencesTests: the persisted mode's seed and `SetMode`'s save.
+- `ChordTableTests`: the four rows, the scrape at six, the three shared
+  pairs, Ctrl+Alt+0 free; `GraphMenuTests`: the four items (DD-Q3).
+- `ThemeTokenContrastTests`: the graph matrix and the token-drift census.
+- The censuses of D-15, each with a mutation.
+- `ParityHarnessCensus`: the `layout` section's two facts (D-18); the
+  golden regenerated.
+- GraphRendererBenchmarks: the four §K budgets (D-18).
+- The journey (D-19), run to its last step locally before every push.
+- The mac lane (unrun here, DR-1): `ParityHarnessTests.swift`'s `layout`
+  section.
+
 <!-- end of the graph contracts document -->

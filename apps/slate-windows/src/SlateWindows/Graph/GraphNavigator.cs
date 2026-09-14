@@ -39,6 +39,15 @@ internal interface IGraphSurfacePresenter
     /// a live document — a verb that moves focus asks first.</summary>
     bool IsLive { get; }
 
+    /// <summary>The ACTIVE projection (W6-2 PR D, rule M): Table or Diagram
+    /// — the canvas presenter's <c>Projection</c>.</summary>
+    GraphSurfaceMode ProjectionKind { get; }
+
+    /// <summary>W6-2 PR D, Term V2: a viewport verb on the active projection —
+    /// Zoomed(percent, fit) the navigator speaks through the document's
+    /// seam, or Refused (no live model, Table mode) which speaks nothing.</summary>
+    GraphViewportOutcome ViewportCommand(GraphViewportVerb verb);
+
     /// <summary>The current native table seat, only when this presenter
     /// displays the requested document and publication. This reads currency
     /// without selecting a row or moving focus.</summary>
@@ -118,6 +127,13 @@ internal sealed class GraphNavigator : BindableBase
             Key.I,
             ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift,
             WhereAmIFromKey);
+        // W6-2 PR D (Term V3): the four viewport chords — ⌘→Ctrl; the three
+        // shared with the canvas rows are disjoint by DELIVERY (C-11);
+        // unconsumed unless Diagram is effective (Term V4).
+        AddChord(Key.OemPlus, ModifierKeys.Control, ZoomInFromKey);
+        AddChord(Key.OemMinus, ModifierKeys.Control, ZoomOutFromKey);
+        AddChord(Key.D0, ModifierKeys.Control, ActualSizeFromKey);
+        AddChord(Key.D0, ModifierKeys.Control | ModifierKeys.Alt, FitGraphFromKey);
     }
 
     private void AddChord(Key key, ModifierKeys modifiers, Func<bool> handler) =>
@@ -359,6 +375,55 @@ internal sealed class GraphNavigator : BindableBase
     /// seam does not answer, so the press falls through while the graph
     /// is inactive or the lineage is not quiescent (C-8).</summary>
     private bool WhereAmIFromKey() => WhereAmI();
+
+    // --- W6-2 PR D, rule V: the four viewport verbs (Terms V2–V4) -----------------
+
+    /// <summary>Term M3's "Diagram effective" — the four commands' CanExecute,
+    /// re-evaluated on <see cref="DiagramAvailabilityChanged"/>.</summary>
+    public bool CanZoom => _document() is { IsDiagramEffective: true };
+
+    /// <summary>Raised by the document at the model's install, the teardown
+    /// and every effectiveness edge (Term M3): the four commands re-evaluate.</summary>
+    internal event Action? DiagramAvailabilityChanged;
+
+    internal void NotifyDiagramAvailabilityChanged() => DiagramAvailabilityChanged?.Invoke();
+
+    public bool ZoomIn() => Viewport(GraphViewportVerb.ZoomIn);
+
+    public bool ZoomOut() => Viewport(GraphViewportVerb.ZoomOut);
+
+    public bool ActualSize() => Viewport(GraphViewportVerb.ActualSize);
+
+    public bool FitGraph() => Viewport(GraphViewportVerb.FitGraph);
+
+    /// <summary>Term V2: the verb reaches the renderer through the presenter's
+    /// ViewportCommand; a Zoomed outcome is spoken through the document's
+    /// AnnounceZoom seam (the navigator posts nothing itself, C-15 ix); a
+    /// Refused outcome — no live model, Table mode, no live presenter —
+    /// speaks nothing and is unconsumed (Term V4).</summary>
+    private bool Viewport(GraphViewportVerb verb)
+    {
+        if (_presenter is not { IsLive: true } presenter)
+        {
+            return false;
+        }
+        switch (presenter.ViewportCommand(verb))
+        {
+            case GraphViewportOutcome.Zoomed zoomed:
+                _document()?.AnnounceZoom(zoomed.Fit, zoomed.Percent);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private bool ZoomInFromKey() => ZoomIn();
+
+    private bool ZoomOutFromKey() => ZoomOut();
+
+    private bool ActualSizeFromKey() => ActualSize();
+
+    private bool FitGraphFromKey() => FitGraph();
 
     /// <summary>The panel's Close and Escape's rung 0: the text cleared, every
     /// pane's panel collapsing with it.</summary>

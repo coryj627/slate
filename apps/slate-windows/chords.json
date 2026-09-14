@@ -1607,6 +1607,54 @@
       "divergence": "D-2: the rule predicts Ctrl+Alt+I, which slate.view.toggleRightPane holds at Global scope — live at the same moment as a focused canvas, so this is a collision and not a disjoint pair. Disambiguated with Shift per the G18 precedent."
     },
     {
+      "id": "slate.graph.zoomIn",
+      "label": "Graph: Zoom In",
+      "section": "Graph",
+      "hint": "Zoom the visual diagram in. The zoom level is announced.",
+      "macChord": "⌘=",
+      "mac": "Command Equals",
+      "windows": "Ctrl+=",
+      "windowsSpoken": "Control Equals",
+      "scope": "Graph",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.zoomOut",
+      "label": "Graph: Zoom Out",
+      "section": "Graph",
+      "hint": "Zoom the visual diagram out.",
+      "macChord": "⌘-",
+      "mac": "Command Minus",
+      "windows": "Ctrl+-",
+      "windowsSpoken": "Control Minus",
+      "scope": "Graph",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.actualSize",
+      "label": "Graph: Actual Size",
+      "section": "Graph",
+      "hint": "Reset the visual diagram zoom to 100 percent.",
+      "macChord": "⌘0",
+      "mac": "Command 0",
+      "windows": "Ctrl+0",
+      "windowsSpoken": "Control 0",
+      "scope": "Graph",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.fitGraph",
+      "label": "Graph: Fit Graph",
+      "section": "Graph",
+      "hint": "Zoom so every node is visible. Option-Command-0 on the diagram.",
+      "macChord": "⌥⌘0",
+      "mac": "Option Command 0",
+      "windows": "Ctrl+Alt+0",
+      "windowsSpoken": "Control Alt 0",
+      "scope": "Graph",
+      "registered": true
+    },
+    {
       "id": "slate.sidebar.open",
       "label": "Open",
       "section": "Sidebar",
@@ -2597,7 +2645,10 @@
           "apps/slate-windows/src/SlateWindows/Graph/GraphNavigator.cs#GraphNavigator",
           "apps/slate-windows/src/SlateWindows/Graph/GraphPreferencesViewModel.cs#GraphPreferencesViewModel",
           "apps/slate-windows/src/SlateWindows/Graph/GraphSurfaceView.cs#GraphSurfaceView",
-          "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphWhereAmICommand"
+          "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphWhereAmICommand",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphDiagramView.cs#GraphDiagramView",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphLayoutDriver.cs#GraphLayoutDriver",
+          "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphZoomInCommand"
         ],
         "tests": [
           "apps/slate-windows/tests/SlateWindows.Tests/GraphDocumentTests.cs#GraphDocumentTests",
@@ -2607,7 +2658,9 @@
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphConnections_LeafWalkDepthAndReRoot_AreClean",
           "apps/slate-windows/tests/SlateWindows.Tests/GraphNavigatorTests.cs#GraphNavigatorTests",
           "apps/slate-windows/tests/SlateWindows.Tests/GraphPreferencesTests.cs#GraphPreferencesTests",
-          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean"
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphDiagramTests.cs#GraphDiagramTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_DiagramPeersTiersAndZoom_AreClean"
         ]
       }
     },
@@ -2786,7 +2839,11 @@
       "slate.graph.orphans": "graph",
       "slate.graph.unresolved": "graph",
       "slate.graph.mostLinked": "graph",
-      "slate.graph.whereAmI": "graph"
+      "slate.graph.whereAmI": "graph",
+      "slate.graph.zoomIn": "graph",
+      "slate.graph.zoomOut": "graph",
+      "slate.graph.actualSize": "graph",
+      "slate.graph.fitGraph": "graph"
     },
     "issues": {
       "#720": "vault",
