@@ -13924,6 +13924,98 @@ refused; the facts give the renderer the keys first (rule F's landing
 does the same in the shell). MUTATIONS, each restored byte for byte,
 each caught by the named fact: the fit chord dropped from the map, the zoom line dropped, CanZoom ignoring effectiveness, a refused verb consuming the chord, a label retyped, the fit chord rebound to Ctrl+Shift+0, a menu item bound to the wrong command, a binding dropped from the record, the availability not forwarded to the navigator, two verbs on one chord — ten of ten caught (`gD-mutations.py`, the T5 entries).
 
+**TGD-6 — T6: §W-A the position golden and §K the renderer benchmarks
+(D-18; DD-Q4, DD-13).** THE GOLDEN (`SurfaceSerializer.GraphQueriesArtifact`
+and the mac twin's `graphQueriesArtifact` in `ParityHarnessTests.swift`):
+a `layout` section after `config` — `start_graph_layout` under core's
+DEFAULT filter (`GraphFilter::default()`: attachments out, ghosts in,
+every node; `SurfaceSerializer.GraphDefaultFilter`) with `LayoutForces`
+and `LayoutConfig` defaults, the slots in the layout's order as
+`{ key: stable_key, x_x1000, y_x1000 }` after exactly `tick(60)` from
+the seeded placement (`SurfaceSerializer.PinnedLayoutTicks`), each
+coordinate `Math.Round(v × 1000, AwayFromZero)` as an integer — the
+mac's `.rounded()` (to-nearest-or-away-from-zero) over the same double
+arithmetic, byte for byte. The golden `parity_golden/graph_queries.json`
+regenerated ONCE by the Windows twin (the harness tool; one line, the
+old bytes a strict prefix): eleven slots, the graph vault's twelve minus
+`p:pic.png` (IGS-4). The example fixture `graph_queries.example.json`
+carries the section. THE CENSUS (`ParityHarnessCensus`):
+`GraphArtifactSections` at twelve (the pinned-vectors fact over the
+golden AND the example); the layout's key SET equals the snapshot's
+non-attachment keys (the default filter's law) and each entry's fields
+are exactly `GraphLayoutFields`; `GraphNumericNames` gains `x_x1000`,
+`y_x1000` (the schema walk: a number under any other name is an id in
+disguise); TheLayoutSectionIsTheSessionsSixtiethTickQuantised — the
+section re-derived IN PROCESS from a fresh session over the graph vault
+(the census's temp-corpus shape) equals the golden's entry for entry in
+slot order; the constant is sixty, the filter is core's default, and
+sixty is three of the driver's `IterationsPerStep` — a second session
+ticked in the driver's chunks reaches the SAME buffer (the kernel's
+`step` breaks early only on convergence, which the frame denies), so
+the golden is what the Windows renderer shows after its third step;
+TwoLayoutsOverOneVaultAreBitIdentical — two sessions over two copies of
+the vault, `run_to_convergence` each, bit-identical position buffers and
+one iteration count (§P-C on this platform, DR-2). THE BENCHMARKS
+(`GraphRendererBenchmarks`, `SlateWindows.Benchmarks`, the graph suite's
+inventory shape; the runner's `--graph-renderer` arm with
+`--validate-budgets` asserting by exit code): over a synthetic
+1,500-note vault — tier A's ceiling, `GraphOpenBenchmarks`' generator
+WITHOUT its ghost arm so the visible count sits exactly at
+`tier_b_threshold` and every node has a peer — the surface hosted in a
+hidden 1600×1200 window on its own STA dispatcher thread (the shell's
+shape: the workspace, `OpenGraph`, `SetMode(Diagram)`, the build landed,
+the settle ended, the first epoch on the renderer, one node selected;
+animation ON through `GraphMotionPolicyForTests`); four workloads, each
+invoked on the host thread — WarmTick: `Tick(20)` through the model's
+`WithSession` gate, 83.146 ms median (≤ 100; the kernel's own O(n²)
+cost at 1,500 nodes — P's 2 ms was 300); FirstRebuild: the standing
+epoch cleared, then the topology fetch through the binding, its landing,
+the renderer's rebuild (the visible set, 1,500 peers, the hit grid) and
+the UIA children materialised with every name read, 19.982 ms
+(≤ 500); PanHop: `PanBy` (the transform, the three visuals redrawn) and
+every peer's screen rectangle read, 3.269 ms (≤ 100); SpatialStep:
+core's `spatial_step` over the visible positions, the selection through
+the document, the scroll and the row line, 0.231 ms (≤ 50);
+BENCHMARKS.md's "Milestone W6-2 PR D" section records them. THE
+RENDERER: the first pan hop MISSED its budget at 104.9 ms — the redraw
+carried a LIVE `Pen` and two TryFindResource walks per node (1,500
+unfrozen freezables registered with the drawing context per pass); the
+renderer gained `RedrawStyles`, one per redraw: each token looked up
+once per pass (the theme's brush, or a frozen copy), each (token, width,
+dash) pen built once and frozen — the same tokens, the same fill and
+ring tables (`FillKeyForTests`, `RingStyleForTests` unchanged), a pass
+never outliving its redraw so a theme swap is seen on the next; the pan
+hop fell to 3.269 ms (1.6 ms the redraw alone, the rectangle
+walk the rest). DEVIATIONS: (i) the mac twin is unrun here (DR-1) —
+simulated: no Swift fact pins a section count, the twin's bytes are
+matched against the committed golden on the mac lane, the twin's
+`keyOf[id] ?? ""` is the file's own idiom; (ii) D-18's
+TwoLayoutsOverOneVaultAreBitIdentical runs two sessions over two COPIES
+of the vault (each its own temp root, RunGraphQueries' shape) rather
+than one root opened twice; (iii) the sixtieth-tick fact carries the
+driver's cadence beyond D-18's text (60 = 3 × `IterationsPerStep`, the
+chunked buffer equal, the frame not converged); (iv) FirstRebuild
+clears the standing epoch INSIDE the measured method (a first rebuild
+over a cleared renderer, never a peer reuse) and counts the name reads;
+PanHop reads every rectangle in screen coordinates (the peers'
+read-time law); (v) a renderer change (`RedrawStyles`) lands in T6, not
+T3 — rule T's facts are unchanged and pass; (vi) `--graph-renderer` is
+its own runner arm because the graph suite's inventory walk reads a
+`Notes` parameter the renderer's reports lack; (vii) the benchmark is
+not test-covered (the canvas's precedent) — its guards fail the run
+instead: tier A at the ceiling, 1,500 named peers, 1,500 placed
+rectangles, a step that finds no node. MUTATIONS, each restored byte
+for byte, each caught by the named fact: the tick count off by one, the
+filter admitting attachments, the rounding truncating, x reading the
+y slot, the key emitted as the id (five golden mismatches,
+HarnessArtifacts_MatchCommittedGoldensByteForByte); the golden carrying
+an id as a key (the schema walk), dropping a slot and carrying a fourth
+field (the pinned vectors), carrying a stale position (the sixtieth-tick
+fact); the census dropping the `layout` section and dropping `x_x1000`
+from the numeric names; the driver's cadence no longer dividing sixty
+(the sixtieth-tick fact); the example fixture dropping the section —
+thirteen of thirteen caught (`gD-mutations.py`, the T6 entries).
+
 ### Tests that pin PR D (revision 5's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14

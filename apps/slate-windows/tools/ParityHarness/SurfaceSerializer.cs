@@ -1677,9 +1677,42 @@ public static class SurfaceSerializer
          .Raw(",\"encoded_fresh\":").Str(SlateUniffiMethods.GraphConfigEncode(SlateUniffiMethods.GraphConfigDefault(), null))
          .Raw("}");
 
+        // W6-2 PR D (contract D-18, DD-Q4): the position golden — the layout
+        // under core's DEFAULT filter with LayoutForces and LayoutConfig
+        // defaults, the slots in order as { key, x_x1000, y_x1000 } after
+        // exactly tick(60) from the seeded placement, each coordinate rounded
+        // ×1000 to an integer (the artifact's integer idiom; away-from-zero,
+        // the mac's `.rounded()`). Every id is a key: the layout's ids are the
+        // inclusive snapshot's.
+        j.Raw(",\"layout\":[");
+        using (LayoutSession layout = session.StartGraphLayout(GraphDefaultFilter, new LayoutForces(), new LayoutConfig()))
+        {
+            LayoutFrame frame = layout.Tick(PinnedLayoutTicks);
+            ulong[] slots = layout.NodeIds();
+            for (int i = 0; i < slots.Length; i++)
+            {
+                if (i > 0)
+                {
+                    j.Raw(",");
+                }
+                j.Raw("{\"key\":").Str(keyOf[slots[i]])
+                 .Raw(",\"x_x1000\":").Num((long)Math.Round(frame.Positions[2 * i] * 1000.0, MidpointRounding.AwayFromZero))
+                 .Raw(",\"y_x1000\":").Num((long)Math.Round(frame.Positions[(2 * i) + 1] * 1000.0, MidpointRounding.AwayFromZero))
+                 .Raw("}");
+            }
+        }
+        j.Raw("]");
+
         j.Raw("}");
         return j + "\n";
     }
+
+    /// <summary>Core's default filter (`GraphFilter::default()`): attachments
+    /// out, ghosts in, every node — the layout golden's filter (D-18).</summary>
+    public static readonly GraphFilter GraphDefaultFilter = new GraphFilter(false, true, false);
+
+    /// <summary>D-18 (DD-Q4): the sixtieth tick.</summary>
+    public const uint PinnedLayoutTicks = 60;
 
     // --- W6-1 PR 0b: the canvas_queries section (contract 0b-15) ----------
     //

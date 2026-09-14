@@ -18,14 +18,28 @@ bool canvasSuite = args.Contains("--canvas", StringComparer.Ordinal);
 // W6-2 PR A (§K, contract A-15): the graph suite is its own runner
 // selection for the same reason the canvas's is.
 bool graphSuite = args.Contains("--graph", StringComparer.Ordinal);
+// W6-2 PR D (§K, contract D-18): the renderer suite hosts the diagram on
+// its own STA thread and carries no `Notes` parameter — its own selection,
+// its own inventory walk.
+bool graphRendererSuite = args.Contains("--graph-renderer", StringComparer.Ordinal);
 string[] benchmarkArgs = args
     .Where(argument =>
         !string.Equals(argument, "--validate-budgets", StringComparison.Ordinal)
         && !string.Equals(argument, "--canvas", StringComparison.Ordinal)
-        && !string.Equals(argument, "--graph", StringComparison.Ordinal))
+        && !string.Equals(argument, "--graph", StringComparison.Ordinal)
+        && !string.Equals(argument, "--graph-renderer", StringComparison.Ordinal))
     .ToArray();
 ManualConfig benchmarkConfig = ManualConfig.Create(DefaultConfig.Instance)
     .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "BenchmarkDotNet.Artifacts"));
+if (graphRendererSuite)
+{
+    Summary graphRendererSummary = BenchmarkRunner.Run<GraphRendererBenchmarks>(benchmarkConfig, benchmarkArgs);
+    if (!validateBudgets)
+    {
+        return 0;
+    }
+    return GraphRendererBenchmarks.ValidateInventory(graphRendererSummary) ? 0 : 1;
+}
 if (graphSuite)
 {
     // Contract A-15 (the round-3 ledger's IGA-50): the suite's Summary is

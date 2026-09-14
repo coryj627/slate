@@ -686,30 +686,71 @@ internal sealed class GraphDiagramView : FrameworkElement
     /// node takes the group's token and a heavier, patterned ring; an
     /// ungrouped note, attachment or hollow dashed ghost is ringed thin in
     /// the outline token.</summary>
-    private (Brush Fill, Pen Ring, string FillKey, double Width, double[]? Dash) StyleOf(GraphTopologyNode entry)
+    private (Brush Fill, Pen Ring, string FillKey, double Width, double[]? Dash) StyleOf(GraphTopologyNode entry, RedrawStyles styles)
     {
         if (GroupOf(entry) is { } group)
         {
             string key = GroupBrushKeys[(int)group.ColorToken];
             double width = group.RingStyle == GraphRingStyle.Double ? 4 : 3;
             double[]? dash = DashOf(group.RingStyle);
-            var pen = new Pen(BrushOf(RingBrushKey), width);
-            if (dash is not null)
-            {
-                pen.DashStyle = new DashStyle(dash, 0);
-            }
-            return (BrushOf(key), pen, key, width, dash);
+            return (styles.Brush(key), styles.Pen(RingBrushKey, width, dash), key, width, dash);
         }
-        var outline = new Pen(BrushOf(OutlineBrushKey), 1.5);
         switch (entry.Kind)
         {
             case GraphNodeKind.Ghost:
-                outline.DashStyle = new DashStyle([3, 2], 0);
-                return (BrushOf(SurfaceBrushKey), outline, SurfaceBrushKey, 1.5, [3, 2]);
+                return (styles.Brush(SurfaceBrushKey), styles.Pen(OutlineBrushKey, 1.5, GhostDash), SurfaceBrushKey, 1.5, GhostDash);
             case GraphNodeKind.Attachment:
-                return (BrushOf(AttachmentBrushKey), outline, AttachmentBrushKey, 1.5, null);
+                return (styles.Brush(AttachmentBrushKey), styles.Pen(OutlineBrushKey, 1.5, null), AttachmentBrushKey, 1.5, null);
             default:
-                return (BrushOf(NoteBrushKey), outline, NoteBrushKey, 1.5, null);
+                return (styles.Brush(NoteBrushKey), styles.Pen(OutlineBrushKey, 1.5, null), NoteBrushKey, 1.5, null);
+        }
+    }
+
+    private static readonly double[] GhostDash = [3, 2];
+
+    /// <summary>One redraw's resources: each token looked up ONCE per pass
+    /// (the theme's brush, or a frozen copy of it), each (token, width,
+    /// dash) pen built once and frozen — so a tier-A pass over 1,500 nodes
+    /// shares a handful of frozen resources instead of carrying a live pen
+    /// and two dictionary walks per node (§K's pan budget, D-18). A pass
+    /// never outlives its redraw, so a theme swap is seen on the next one.</summary>
+    private sealed class RedrawStyles(GraphDiagramView view)
+    {
+        private readonly Dictionary<string, Brush> _brushes = new(StringComparer.Ordinal);
+        private readonly Dictionary<(string Key, double Width, string Dash), Pen> _pens = [];
+
+        public Brush Brush(string key)
+        {
+            if (!_brushes.TryGetValue(key, out Brush? brush))
+            {
+                Brush found = view.BrushOf(key);
+                brush = found.IsFrozen ? found : found.CloneCurrentValue();
+                if (!brush.IsFrozen && brush.CanFreeze)
+                {
+                    brush.Freeze();
+                }
+                _brushes[key] = brush;
+            }
+            return brush;
+        }
+
+        public Pen Pen(string key, double width, double[]? dash)
+        {
+            (string, double, string) id = (key, width, dash is null ? string.Empty : string.Join(',', dash));
+            if (!_pens.TryGetValue(id, out Pen? pen))
+            {
+                pen = new Pen(Brush(key), width);
+                if (dash is not null)
+                {
+                    pen.DashStyle = new DashStyle(dash, 0);
+                }
+                if (pen.CanFreeze)
+                {
+                    pen.Freeze();
+                }
+                _pens[id] = pen;
+            }
+            return pen;
         }
     }
 
@@ -717,13 +758,14 @@ internal sealed class GraphDiagramView : FrameworkElement
 
     private void Redraw()
     {
-        DrawEdges();
-        DrawNodes();
-        DrawRing();
+        var styles = new RedrawStyles(this);
+        DrawEdges(styles);
+        DrawNodes(styles);
+        DrawRing(styles);
         RedrawsForTests++;
     }
 
-    private void DrawEdges()
+    private void DrawEdges(RedrawStyles styles)
     {
         using DrawingContext dc = _edges.RenderOpen();
         if (_diagram is null || _visibleEdges.Length == 0)
@@ -732,7 +774,7 @@ internal sealed class GraphDiagramView : FrameworkElement
         }
         GraphDisplay display = Display;
         double thickness = Math.Max(0.5, display.LinkThickness) * _viewport.Zoom;
-        var pen = new Pen(BrushOf(EdgeBrushKey), thickness);
+        Pen pen = styles.Pen(EdgeBrushKey, thickness, null);
         double arrow = 6 * _viewport.Zoom;
         foreach (GraphEdge edge in _visibleEdges)
         {
@@ -754,7 +796,7 @@ internal sealed class GraphDiagramView : FrameworkElement
         }
     }
 
-    private void DrawNodes()
+    private void DrawNodes(RedrawStyles styles)
     {
         _labelled.Clear();
         _fillKeys.Clear();
@@ -768,7 +810,7 @@ internal sealed class GraphDiagramView : FrameworkElement
         {
             // Term T3: the visible dots batched into ONE visual — no labels, no
             // group tint (1.4.1: a sub-pixel dot cannot carry the ring).
-            Brush dots = BrushOf(NoteBrushKey);
+            Brush dots = styles.Brush(NoteBrushKey);
             var geometry = new StreamGeometry();
             using (StreamGeometryContext sgc = geometry.Open())
             {
@@ -792,7 +834,7 @@ internal sealed class GraphDiagramView : FrameworkElement
         bool showLabels = _viewport.Zoom >= display.TextFadeZoom;
         _labelsShown = showLabels;
         double fontSize = LabelFontSize * TextScale.Factor * _viewport.Zoom;
-        Brush labelBrush = BrushOf(LabelBrushKey);
+        Brush labelBrush = styles.Brush(LabelBrushKey);
         var typeface = new Typeface(SystemFonts.MessageFontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
         double dip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
         foreach (ulong id in _visibleIds)
@@ -803,7 +845,7 @@ internal sealed class GraphDiagramView : FrameworkElement
             }
             double diameter = ScaledDiameter(id) * _viewport.Zoom;
             Point centre = ToView(point);
-            (Brush fill, Pen ring, string fillKey, double width, double[]? dash) = StyleOf(entry);
+            (Brush fill, Pen ring, string fillKey, double width, double[]? dash) = StyleOf(entry, styles);
             _fillKeys[id] = fillKey;
             _ringStyles[id] = (width, dash);
             dc.DrawEllipse(fill, ring, centre, diameter / 2, diameter / 2);
@@ -822,17 +864,18 @@ internal sealed class GraphDiagramView : FrameworkElement
         }
     }
 
-    private void DrawRing()
+    private void DrawRing(RedrawStyles? styles = null)
     {
         using DrawingContext dc = _ring.RenderOpen();
         if (_diagram is null || SelectedId is not { } selected || !_diagram.Positions.TryGetValue(selected, out GraphPoint? point))
         {
             return;
         }
+        styles ??= new RedrawStyles(this);
         double radius = (ScaledDiameter(selected) * _viewport.Zoom / 2) + SelectionRingGap;
         Point centre = ToView(point);
-        dc.DrawEllipse(null, new Pen(BrushOf(RingBrushKey), 3), centre, radius, radius);
-        dc.DrawEllipse(null, new Pen(BrushOf(AccentBrushKey), 1.5), centre, radius, radius);
+        dc.DrawEllipse(null, styles.Pen(RingBrushKey, 3, null), centre, radius, radius);
+        dc.DrawEllipse(null, styles.Pen(AccentBrushKey, 1.5, null), centre, radius, radius);
     }
 
     protected override int VisualChildrenCount => _visuals.Count;

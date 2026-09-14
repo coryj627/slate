@@ -337,15 +337,16 @@ public class ParityHarnessCensus
         }
     }
 
-    /// <summary>The artifact's eleven sections, in order (contract 0b-13).</summary>
+    /// <summary>The artifact's twelve sections, in order (contract 0b-13; the
+    /// <c>layout</c> section is W6-2 PR D's, contract D-18).</summary>
     public static readonly string[] GraphArtifactSections =
     {
         "snapshot", "visibility", "topology", "table", "connections", "ghost_paths",
-        "spatial", "structural", "constants", "actions", "config",
+        "spatial", "structural", "constants", "actions", "config", "layout",
     };
 
     /// <summary>W6-2 PR 0b (contract 0b-13, design C): the top-level key set is
-    /// exactly the eleven sections, each section's length equals its pinned
+    /// exactly the twelve sections, each section's length equals its pinned
     /// vector's, and each entry's pin fields equal the pin in order — so a
     /// dropped section, a dropped vector entry or a reordered section fails
     /// here.</summary>
@@ -355,6 +356,7 @@ public class ParityHarnessCensus
         using var document = System.Text.Json.JsonDocument.Parse(
             File.ReadAllBytes(Path.Combine(GoldenDir, "graph_queries.json")));
         var root = document.RootElement;
+        var utf8 = Comparer<string>.Create(SurfaceSerializer.CompareUtf8);
         Assert.Equal(GraphArtifactSections, root.EnumerateObject().Select(p => p.Name).ToArray());
         // The committed example carries the same shape (0b-13).
         using var example = System.Text.Json.JsonDocument.Parse(
@@ -398,7 +400,26 @@ public class ParityHarnessCensus
         Assert.Equal(SurfaceSerializer.PinnedGraphConfigInput, root.GetProperty("config").GetProperty("input").GetString());
         Assert.Equal(GraphConfigFields,
             root.GetProperty("config").EnumerateObject().Select(p => p.Name).ToArray());
+
+        // D-18: the layout section's key SET is the snapshot's under core's
+        // default filter — attachments out, ghosts in (the graph vault's
+        // eleven of twelve, DD-Q4) — in the layout's own slot order; each
+        // entry is exactly { key, x_x1000, y_x1000 }.
+        var layout = root.GetProperty("layout").EnumerateArray().ToList();
+        var defaultFilterKeys = root.GetProperty("snapshot").EnumerateArray()
+            .Where(entry => entry.GetProperty("kind").GetString() != "attachment")
+            .Select(entry => entry.GetProperty("key").GetString()!)
+            .OrderBy(k => k, utf8)
+            .ToList();
+        Assert.Equal(GraphVaultInventory.Length - 1, defaultFilterKeys.Count);
+        Assert.Equal(defaultFilterKeys,
+            layout.Select(entry => entry.GetProperty("key").GetString()!).OrderBy(k => k, utf8).ToList());
+        Assert.All(layout, entry => Assert.Equal(
+            GraphLayoutFields, entry.EnumerateObject().Select(p => p.Name).ToArray()));
     }
+
+    /// <summary>The layout section's entry fields, pinned (D-18).</summary>
+    public static readonly string[] GraphLayoutFields = { "key", "x_x1000", "y_x1000" };
 
     /// <summary>The constants section's field names, pinned (0b-13).</summary>
     public static readonly string[] GraphConstantsFields =
@@ -425,6 +446,7 @@ public class ParityHarnessCensus
         "connections_depth", "repel_x100", "center_x100", "link_x100", "node_size_x100",
         "tier_b_threshold", "label_cap", "connections_depth_min", "connections_depth_max",
         "node_diameter_min", "node_diameter_max", "neighbor_label_cap", "diameter_at_0", "diameter_at_1000000",
+        "x_x1000", "y_x1000",
     };
 
     /// <summary>The names whose STRING value must be an inventory key, and the
@@ -573,6 +595,118 @@ public class ParityHarnessCensus
         }
         Assert.Contains("\"occurrence\":", text);
         Assert.Contains("\"parent\":", text);
+    }
+
+    /// <summary>W6-2 PR D (contract D-18, DD-Q4, DD-13): the golden's
+    /// <c>layout</c> section re-derived IN PROCESS from a fresh session over
+    /// the graph vault — <c>start_graph_layout</c> under core's default
+    /// filter with the kernel's default forces and config, exactly the
+    /// sixtieth tick from the seeded placement, each coordinate rounded
+    /// away from zero to a thousandth — equals the committed section entry
+    /// for entry, in slot order. The sixty are the driver's three steps of
+    /// <see cref="SlateWindows.Graph.GraphLayoutDriver.IterationsPerStep"/>: a second session
+    /// ticked in the driver's chunks reaches the same buffer (the kernel's
+    /// loop breaks early only on convergence, which the frame denies), so
+    /// the golden is what the Windows renderer shows after its third step.</summary>
+    [Fact]
+    public void TheLayoutSectionIsTheSessionsSixtiethTickQuantised()
+    {
+        Assert.Equal(60u, SurfaceSerializer.PinnedLayoutTicks);
+        Assert.Equal(new GraphFilter(false, true, false), SurfaceSerializer.GraphDefaultFilter);
+        Assert.Equal(0u, 60u % SlateWindows.Graph.GraphLayoutDriver.IterationsPerStep);
+        using var document = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllBytes(Path.Combine(GoldenDir, "graph_queries.json")));
+        var golden = document.RootElement.GetProperty("layout").EnumerateArray()
+            .Select(entry => (
+                Key: entry.GetProperty("key").GetString()!,
+                X: entry.GetProperty("x_x1000").GetInt64(),
+                Y: entry.GetProperty("y_x1000").GetInt64()))
+            .ToList();
+        Assert.NotEmpty(golden);
+        (List<(string Key, long X, long Y)> Derived, float[] Sixty, float[] Chunked, bool Converged) derived = OverTheGraphVault(session =>
+        {
+            var keyOf = session.GraphSnapshot(new GraphFilter(true, true, false)).Nodes
+                .ToDictionary(n => n.Id, n => n.StableKey);
+            using LayoutSession sixty = session.StartGraphLayout(
+                new GraphFilter(false, true, false), new LayoutForces(), new LayoutConfig());
+            LayoutFrame frame = sixty.Tick(60);
+            ulong[] slots = sixty.NodeIds();
+            Assert.Equal(slots.Length * 2, frame.Positions.Length);
+            var entries = new List<(string Key, long X, long Y)>(slots.Length);
+            for (int i = 0; i < slots.Length; i++)
+            {
+                entries.Add((
+                    keyOf[slots[i]],
+                    (long)Math.Round(frame.Positions[2 * i] * 1000.0, MidpointRounding.AwayFromZero),
+                    (long)Math.Round(frame.Positions[(2 * i) + 1] * 1000.0, MidpointRounding.AwayFromZero)));
+            }
+            using LayoutSession chunked = session.StartGraphLayout(
+                new GraphFilter(false, true, false), new LayoutForces(), new LayoutConfig());
+            LayoutFrame last = chunked.Tick(SlateWindows.Graph.GraphLayoutDriver.IterationsPerStep);
+            for (uint done = SlateWindows.Graph.GraphLayoutDriver.IterationsPerStep; done < 60; done += SlateWindows.Graph.GraphLayoutDriver.IterationsPerStep)
+            {
+                last = chunked.Tick(SlateWindows.Graph.GraphLayoutDriver.IterationsPerStep);
+            }
+            return (entries, frame.Positions, last.Positions, frame.Converged);
+        });
+        Assert.Equal(golden, derived.Derived);
+        Assert.False(derived.Converged, "the graph vault settles at the temperature floor, never on the predicate");
+        Assert.Equal(derived.Sixty, derived.Chunked);
+    }
+
+    /// <summary>W6-2 PR D (contract D-18; §P-C on this platform): the
+    /// binding's own determinism — two sessions over two copies of the graph
+    /// vault, each run to convergence under the default filter, forces and
+    /// config, produce bit-identical position buffers and the same
+    /// iteration count; the golden's cross-platform match rests on this
+    /// per-platform promise (DR-2).</summary>
+    [Fact]
+    public void TwoLayoutsOverOneVaultAreBitIdentical()
+    {
+        (float[] Positions, ulong Iteration, ulong[] Slots) Converged(VaultSession session)
+        {
+            using LayoutSession layout = session.StartGraphLayout(
+                new GraphFilter(false, true, false), new LayoutForces(), new LayoutConfig());
+            using var cancel = new CancelToken();
+            LayoutFrame frame = layout.RunToConvergence(cancel);
+            return (frame.Positions, frame.Iteration, layout.NodeIds());
+        }
+        (float[] Positions, ulong Iteration, ulong[] Slots) first = OverTheGraphVault(Converged);
+        (float[] Positions, ulong Iteration, ulong[] Slots) second = OverTheGraphVault(Converged);
+        Assert.NotEmpty(first.Positions);
+        Assert.Equal(first.Slots.Length * 2, first.Positions.Length);
+        Assert.Equal(first.Iteration, second.Iteration);
+        Assert.True(first.Iteration > 0);
+        Assert.Equal(first.Positions, second.Positions);
+        Assert.Equal(first.Slots.Length, second.Slots.Length);
+    }
+
+    /// <summary>The graph vault as its own temp corpus (RunGraphQueries'
+    /// shape): copied, opened, scanned, handed to the body, deleted.</summary>
+    private static T OverTheGraphVault<T>(Func<VaultSession, T> body)
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"parity-graph-layout-{Guid.NewGuid():N}");
+        try
+        {
+            SurfaceSerializer.CopyTree(GraphFixturesDir, root);
+            using var session = VaultSession.OpenFilesystem(root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+            return body(session);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     /// <summary>§H TH-3 (H3, IH-36): the read half of §W-A cannot skip a
