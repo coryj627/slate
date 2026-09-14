@@ -14384,10 +14384,11 @@ to ready on this landing; CI and codoki arbitrate the head.
 
 ## PR E — the inspector: filters, groups, display, forces
 
-Revision 3, 2026-09-14 — OPEN for round 3 (revision 1 = 39e2303f,
-revision 2 = b6858329; rounds 1 and 2's findings IGU-1..8 and IGV-1..6
-discharged in the text below and ledgered at the end), branch
-`feat/w6-2-e` on the merged A, B1, B2, C and D (`main` at 6f58dc07). The spec is
+Revision 4, 2026-09-14 — OPEN for round 4 (revision 1 = 39e2303f,
+revision 2 = b6858329, revision 3 = ac6c8bea; rounds 1–3's findings
+IGU-1..8, IGV-1..6 and IGW-1..5 discharged in the text below and
+ledgered at the end), branch `feat/w6-2-e` on the merged A, B1, B2, C
+and D (`main` at 6f58dc07). The spec is
 `w6_2_graph_spec.md` §PR E (its Goal, Consumes, Builds, Behavior,
 Tests, Evidence and Hand-off lines; amended in place where ED-8 says
 so), consuming §1's rules R-A..R-I, §2's rows D, H, J, L, M, N and P,
@@ -14535,26 +14536,39 @@ never typed (0bD-12).
   restores as every leaf does (`WorkspaceViewModel.Persistence.cs:44`);
   a restored `inspector` leaf with the pane visible shows the inspector
   on launch and speaks nothing of its own (the restore is silent as the
-  shell's is). No new persistence key. THE NO-DOCUMENT ARM (IGU-3): the
-  pane can be restored — and stays open after the graph tab closes —
-  with NO graph document (`Func<GraphDocumentViewModel?>` answering
-  null); every route is defined for it: the filter route writes the
-  view state and the preferences and REQUESTS NOTHING (Term X4 — the
-  next graph open's re-apply reads the persisted flags, C-10); the
-  needle route calls the navigator's `SetNameQuery`, which needs no
-  document (C-6's write reaches the view state and the preferences; its
-  token is issued only by a seated document); the groups and display
-  routes write their sources as always; the forces route updates the
-  preferences ONLY (Term K2's no-document arm) and speaks NOTHING —
-  the force line is the document's seam and there is no document
-  (IGV-3). No control is disabled; nothing dereferences a document that
-  is not there. A fact restores the leaf with no graph tab and drives
-  every route.
+  shell's is). No new persistence key. The pane can be restored — and
+  stays open after the graph tab closes — with NO graph document, or
+  stay visible while another tab is the active one: in both states its
+  controls are DISABLED under Term I7 (which supersedes revision 2's
+  no-document arm, IGU-3, and answers IGW-1), so no route runs and
+  nothing dereferences a document that is not there.
 - **Term I5 — the keys inside the pane.** Every control is a standard
   WPF control with its own peer (CheckBox, TextBox, ComboBox, Slider,
   Button): Tab walks the sections in order; the pane's first stop is the
   name field; Escape inside the pane bubbles to the shell (rule F's
   ladder is the graph tab's, not the pane's).
+- **Term I7 — the pane edits only while the graph is EFFECTIVE.** The
+  inspector's IsGraphEffective is true iff a graph document is seated
+  AND `document.IsEffective` (`GraphDocumentViewModel.cs:434`, the
+  workspace's `GraphTabIsEffective()` — rule L, Term 2: the active
+  group's active tab is the graph, `WorkspaceViewModel.Graph.cs:317–318`,
+  injected at `:262`) — the SAME predicate every graph line is gated on
+  (`AnnounceIfEffective`, `:639–645`; the count's gate, `:652–657`), so
+  a line the pane's edit earns is never refused (IGW-1). While false —
+  no graph tab, the graph tab in another group or behind another tab,
+  the pane restored before any graph opened — every control of the four
+  sections is disabled (`IsEnabled` bound to IsGraphEffective) and a
+  notice at the pane's top says `Open the graph to change these
+  settings.` (a Text, AutomationId GraphInspectorInactive, a
+  Windows-only string, E-D8; never announced); the mac's inspector is
+  unreachable outside its graph tab, so this is its reachability. The
+  workspace recomputes IsGraphEffective from the one funnel that
+  moves the graph's effectiveness (rule L's `SyncPanels`, beside the
+  document's NotifyDiagramAvailabilityChanged) and at the document's
+  seat and retirement; the view model raises IsGraphEffective and
+  the controls follow. A fact restores the leaf with no graph tab
+  (disabled, the notice), opens the graph (enabled, the notice gone),
+  activates another tab (disabled again).
 - **Term I6 — one view model, no copy.** GraphInspectorViewModel is
   constructed once in the workspace's constructor after
   `_graphPreferences` and `_graphViewState` and before the graph
@@ -14594,15 +14608,13 @@ never typed (0bD-12).
   persistence are PR C's; the header's field and the inspector's are two
   views of one needle (ED-Q2), and the writers census's list for
   `NameQuery` is unchanged (`ApplyQuery` and `SetNameQuery`).
-- **Term X4 — refusals and the no-document arm.** With NO document
-  (Term I4's arm) the inspector's SetBackendFilter writes the view
-  state through `ApplyQuery` and the preferences through `SetFilters`
-  and requests nothing; with a RETIRED or UNSEATED document
-  `ChangeFilter` refuses (the `SelectRow` guard's shape) and the
-  inspector still writes the preferences (the persisted flags are the
-  user's; the next seat re-applies them); the same flags re-asserted
-  (the CheckBox's value equal to the view state's) write nothing,
-  request nothing and schedule nothing.
+- **Term X4 — refusals.** The pane's controls are enabled only while
+  the graph is effective (Term I7), so a filter change always finds a
+  seated, effective document; should a write race a retirement,
+  `ChangeFilter` refuses (the `SelectRow` guard's shape: retired or
+  unseated) and the inspector writes nothing else; the same flags
+  re-asserted (the CheckBox's value equal to the view state's) write
+  nothing, request nothing and schedule nothing.
 - **Term X5 — equivalence.** Table and diagram read ONE predicate —
   the view state's `Filter` through core's query — so the inspector's
   flags narrow both projections identically; a preset's overlay
@@ -14726,14 +14738,17 @@ never typed (0bD-12).
   Windows improvement recorded as E-D7); an edit that returns the
   forces to the captured ones arms nothing (nothing re-heats). In Table
   mode or after a failed build nothing is armed and nothing is ticked.
-  With NO document (Term I4's arm) steps (ii) and (iii) are both
-  skipped: the force line is the DOCUMENT's seam and there is none to
-  call, so the edit is persisted and unspoken (IGV-3).
+  The sliders are enabled only while the graph is effective (Term I7),
+  so every edit finds a seated, effective document and the line it
+  earns is admitted (IGW-1 supersedes IGV-3's unspoken arm).
 - **Term K3 — the changed control.** `ChangedForce(old, new)` — a pure
   static on the inspector's view model, the mac's `changedForce`
   (`AppState+GraphConfig.swift:146–157`): the FIRST of `Center`,
   `Repel`, `Link`, `LinkDistance` whose value differs, its percent
-  `(uint)Math.Max(0, Math.Round(v × 100))`; null when none differs. The
+  `(uint)Math.Max(0, Math.Round(v × 100, MidpointRounding.AwayFromZero))`
+  — Swift's `rounded()` rounds a half AWAY from zero and .NET's default
+  is to even (IGW-2; a fact at 0.125 → 13, not 12); null when none
+  differs. The
   document's `AnnounceForceValue(control, percent)` posts
   `GraphForceValue{control, percent}` through `AnnounceIfEffective` —
   the relay's `forceValue` class, 200 ms latest-wins
@@ -14822,7 +14837,9 @@ on the switch to the inspector (the leaf setter's, not the graph
 family's). the shell's `RightPaneShown`, `LeafPanelShown` and `RightPaneHidden`
 on Term I2's four timelines (the shell's setters', not the graph
 family's; IGV-1). NOTHING for a group edit, a display edit, a refused
-write, a forces edit with no document (IGV-3). The announcement-seam
+write; the pane's controls are disabled outside an effective graph
+(Term I7), so no edit is ever silent for want of the gate. The
+announcement-seam
 census (C-15 iv's shape) gains AnnounceForceValue as the document's one
 force seam; the inspector posts nothing itself.
 
@@ -14863,8 +14880,11 @@ its closed lists amended under C-15 iv's provision; ED-9): (i) the
 inspector view model is constructed exactly once, in the workspace's
 constructor, after the preferences and before the graph document (the
 instance census's theory gains it); (ii) `ApplyQuery`'s callers gain
-`ChangeFilter` (four: the seed, the preset, the fresh open's re-apply,
-the inspector's route) and no other; `Groups`' writers are the seed and
+`ChangeFilter` — four ROUTES (the seed, the preset, the fresh open's
+re-apply, the inspector's) at FIVE invocation sites (`RunPreset` holds
+two, `GraphNavigator.cs:207–226`, as the announcer census's list
+already pins them twice, `GraphAnnouncerCensus.cs:804–814`), the census
+pinning the occurrences, not the owners (IGW-3), and no other; `Groups`' writers are the seed and
 `SetGroups`; `KindOnly`'s writer is `ApplyQuery` alone (unchanged);
 `NameQuery`'s unchanged; (iii) the preferences' Term W7 triggers are
 the closed list `SetNameQuery`, `SetVerbosity`, `SetConnectionsDepth`,
@@ -14897,25 +14917,32 @@ after the window); `Add Group` → one row whose colour
 picker reads core's `GraphConfigNextGroupStyle(0)` title and whose ring
 picker the matching ring title, the keys in its query field; type
 `note` → the row's query; the file carries the group; `Remove group 1`
-→ the empty text returns; Shift+Tab twice to the switcher, Right to
-Diagram; the `Repel` slider by Right (one `SmallChange`) → its RangeValue
-moved and, after the settle, the file carries the new `repel`;
-`Ctrl+Alt+Shift+I` on the renderer → the readback's filter clause
-reflects the flags (the render of `GraphWhereAmI` with the expected
-`Normal(orphansOnly: false, includeAttachments: false, includeGhosts:
-false)` clause); the toggle again → the pane
-hidden, the keys on the renderer; axe with the scan id
-`graph-inspector` while the pane is shown. Run locally to its last step
-before every push; CI's shell accessibility lane arbitrates. The
-announcements are not observable through UIA; the facts pin them.
+→ the empty text returns, the keys on `Add Group`; the toggle
+(GraphInspectorToggle, by its pattern) → the pane hidden, the keys on
+the grid's row (rule F's request; IGW-4: a Shift+Tab from the pane
+walks the pane, never the header); Shift+Tab to the switcher, Right to
+Diagram → the renderer takes the keys; the toggle → the pane shown
+(the leaf still the inspector: `RightPaneShown` alone), the keys in
+the pane; the `Repel` slider by Right (one `SmallChange`) → its
+RangeValue moved and, after the save window, the file carries the new
+`repel`; the toggle → the pane hidden, the keys on the renderer;
+`Ctrl+Alt+Shift+I` → the readback's filter clause reflects the flags
+(the render of `GraphWhereAmI` with the expected `Normal(orphansOnly:
+false, includeAttachments: false, includeGhosts: false)` clause);
+Escape; the toggle → the pane shown; axe with the scan id
+`graph-inspector` while the pane is shown (IGW-5: the scan is the
+last step, the pane open). Run locally to its last step before every
+push; CI's shell accessibility lane arbitrates. The announcements are
+not observable through UIA; the facts pin them.
 
 **E-14 — §W-A, §K, the matrices.** No golden changes (the `config`
 section already pins the codec both twins share; the inspector adds no
 artifact). No benchmark (the pane's work is the projections' and the
 preferences', already budgeted). `w_c_matrix.md` gains the row
 "Graph inspector (W6-2 PR E)" (ids GraphInspectorToggle,
-GraphInspectorBody, `GraphInspector`, GraphInspectorReadOnly, the
-sections' and controls' automation ids named in E-15); `WcMatrixGraphEvidenceCensus`' manifest
+GraphInspectorBody, `GraphInspector`, GraphInspectorReadOnly,
+GraphInspectorInactive, the sections' and controls' automation ids
+named in E-15); `WcMatrixGraphEvidenceCensus`' manifest
 gains the surface; no parity-matrix row changes (ED-Q5: no command).
 
 **E-15 — The automation ids.** The toggle GraphInspectorToggle; the
@@ -14930,7 +14957,8 @@ display GraphInspectorArrows, GraphInspectorTextFade,
 GraphInspectorNodeSize, GraphInspectorLinkThickness; the forces
 GraphInspectorCenter, GraphInspectorRepel, GraphInspectorLink,
 GraphInspectorLinkDistance; the read-only notice
-GraphInspectorReadOnly (IGV-6).
+GraphInspectorReadOnly (IGV-6); the inactive notice
+GraphInspectorInactive (Term I7).
 
 ### Decisions (PR E)
 
@@ -14992,6 +15020,10 @@ GraphInspectorReadOnly (IGV-6).
 - **E-D7 — A forces edit under a build in flight speaks the settle**
   (Term K2; IGV-2): the install's re-apply arms the line; the mac arms
   only over a live session and stays silent for that edit.
+- **E-D8 — The pane is disabled outside an effective graph, with a
+  notice** (Term I7; IGW-1): the mac's panel is unreachable outside its
+  graph tab; Windows's leaf can be visible anywhere, so it says why it
+  is inert, in a Windows-only string.
 
 ### Risks (PR E)
 
@@ -15034,13 +15066,25 @@ GraphInspectorReadOnly (IGV-6).
 | IGV-5 | MAJOR | taken — Term Y6's notice reads the preferences' `LoadFailure` |
 | IGV-6 | MAJOR | taken — GraphInspectorReadOnly in E-15 and E-14's row |
 
-### Tests that pin PR E (revision 3's list; the task loop records what lands)
+### Round 3 ledger (PR E)
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| IGW-1 | BLOCKER | taken — Term I7: the pane's controls are enabled only while the graph is effective (the one predicate the lines are gated on), a notice otherwise; SUPERSEDES revision 2's no-document arm (IGU-3) and IGV-3's unspoken edit; recorded as E-D8; a three-state fact |
+| IGW-2 | MAJOR | taken — Term K3 rounds a half away from zero (`MidpointRounding.AwayFromZero`); a fact at 0.125 |
+| IGW-3 | MAJOR | taken — E-12 ii states four routes at five invocation sites (`RunPreset`'s two) and pins occurrences |
+| IGW-4 | MAJOR | taken — E-13 reaches the switcher through the toggle's hide (rule F's request lands the grid's row), never a Shift+Tab from the pane |
+| IGW-5 | MAJOR | taken — E-13 scans last, with the pane shown; the readback taken with the pane hidden and the keys on the renderer |
+
+### Tests that pin PR E (revision 4's list; the task loop records what lands)
 
 - GraphInspectorTests (new): the view model's reads and writes per rule
   (I6, X1–X5, Y1–Y6, Z1–Z4, K1–K6), the changed-control table, the
-  refusals, the notifications from outside writes, the no-document arm
-  (a restored leaf with no graph tab drives every route; IGU-3), the
-  read-only notice (IGU-7).
+  refusals, the notifications from outside writes, the effectiveness
+  gate (a restored leaf with no graph tab disabled with its notice,
+  enabled when the graph opens, disabled behind another tab; Term I7),
+  the read-only notice (IGU-7), the changed control's rounding at a
+  half (IGW-2).
 - `GraphTableTests`: the header's toggle, the pane's show and hide, the
   keys' landing, the four announcement timelines against the workspace's
   sink (Terms I2, I5; IGV-1).
@@ -15052,7 +15096,7 @@ GraphInspectorReadOnly (IGV-6).
   display's redraw and a hit at the enlarged radius after a node-size
   change (IGU-8), the groups' epoch (Terms K2, K4, Z2, Y2), a forces
   edit under a build in flight armed at the install and spoken at its
-  run's end (IGV-2), the no-document edit unspoken (IGV-3).
+  run's end (IGV-2).
 - `GraphDocumentTests`: `ChangeFilter`'s route (the overlay cleared, the
   pair under FilterCount, the pending sort carried).
 - `GraphConfigStoreTests`, `GraphConfigWriterTests`: the four fields'
