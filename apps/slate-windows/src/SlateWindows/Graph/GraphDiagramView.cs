@@ -194,6 +194,14 @@ internal sealed class GraphDiagramView : FrameworkElement
         }
     }
 
+    /// <summary>Test seams (IPH-3-1, TGD-12): the theme arm driven on THIS
+    /// renderer and its subscription read — never the manager's static
+    /// event raised, whose audience in a test process is every subscriber
+    /// every other fact left behind on its own thread.</summary>
+    internal void RaiseThemeChangedForTests() => OnThemeChanged(this, EventArgs.Empty);
+
+    internal bool IsSubscribedToThemeForTests => _themeSubscribed;
+
     /// <summary>The surface's unload: the model dropped, the owned text-scale
     /// service disposed (Term T4: one per renderer, disposed at Shutdown).</summary>
     internal void Shutdown()

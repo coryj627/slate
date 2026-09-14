@@ -14305,6 +14305,31 @@ each) and IPH-4 carried no blocker; the rule asks for two such passes
 running — IPH-5 runs on this landing and, without a blocker, closes the
 loop with its findings posted as the owner's ledger.
 
+**TGD-12 — CI's finding on 28472d4e: the theme fact's raiser reached
+every subscriber in the process.** THE FINDING: CI's Windows app lane
+failed AThemeChangeRedrawsTheDiagramAndUnloadReleasesIt (2,850 of
+2,851) with "the calling thread cannot access this object" thrown not
+by the renderer but by `AvalonHighlightingCoordinator`'s handler
+(`EditorHighlighting.cs`, its `TextView.Redraw`): the fact raised
+`ThemeManager.ResourcesChanged` through a test seam, and the event is
+STATIC and process-wide — in the full suite its audience is every
+subscriber other test classes left behind on their own threads (the
+editor's coordinators among them), and each verifies its own
+dispatcher. The local diagram suite never had such a subscriber, so the
+fact passed there — the CI-shaped regression, the gate the regression
+note names, was not re-run after T9 and T10 (TGD-10 had run the diagram
+suite alone) and is this landing's gate again. THE FIX: the fact drives
+the theme arm on THIS renderer (`RaiseThemeChangedForTests` calls the
+handler) and reads its subscription through a seam
+(IsSubscribedToThemeForTests: true while hosted, false once the window's
+close unloaded it); the manager's process-wide raiser is removed; the
+shell's arm — the Loaded/Unloaded subscription and the own-dispatcher
+guard — is unchanged. FACTS: the CI-shaped regression green, 2,852 of 2,852. MUTATIONS (T10's two,
+re-verified against the rewritten fact): the Loaded subscription
+dropped; Unloaded keeping it — two of two caught. The lesson,
+recorded for the loop: a test seam that raises a static event is a
+test of the whole process; a seam drives the subject.
+
 ### Tests that pin PR D (revision 5's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14
