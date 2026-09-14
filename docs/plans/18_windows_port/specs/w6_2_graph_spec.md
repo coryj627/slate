@@ -47,8 +47,16 @@ apps/slate-windows/src/SlateWindows/Graph/
                                       needle's write and clear, the Escape ladder, the ChordScope.Graph map; PR D adds
                                       the four viewport verbs to the same map — the mode switch is A-11's control, not
                                       a chord (amended, §PR C CD-11; corrected IGO-26)
-  GraphDiagramView.cs          PR D   the visual projection (custom FrameworkElement + per-node peers, windowed;
-                                      tier B summary above core's threshold), the layout session driver
+  GraphDiagramModel.cs         PR D   the diagram lineage — the ONE layout session, its ids, metadata, edges,
+                                      generation and pins, owned by the DOCUMENT (§PR D rule G; amended W6-2 PR D DD-14)
+  GraphLayoutDriver.cs         PR D   the settle loop over the document's scheduler: the tick cadence, convergence,
+                                      cancellation, Reduce Motion (rule G, Term G4)
+  GraphDiagramView.cs          PR D   the visual projection (a custom FrameworkElement: the visuals, the viewport, the
+                                      hit grid, the keyboard, the actions menu; tier B summary above core's threshold),
+                                      the surface's
+  GraphDiagramPeers.cs         PR D   the container, node and summary peers — COMPLETE, one per visible node in
+                                      tier A whatever the viewport (§PR D DD-Q1; the canvas's windowing is not used)
+  GraphMotionPolicy.cs         PR D   Reduce Motion: the system animation preference, read and observed (Term G4)
   GraphInspectorView.xaml      PR E   filters / groups / display / forces (P2-4), sliders that announce once settled
   GraphAnnouncer.cs            PR A   thin relay: canonical A11yEvents (PR 0a vocabulary), the pinned coalescing classes,
                                       AccessibilityNotificationDispatcher — NO text
@@ -212,19 +220,19 @@ Each PR section lists: **Goal · Consumes · Builds · Behavior pinned · Tests 
 
 ### PR D — Diagram: renderer, per-node peers, tiers, the layout driver, zoom
 
-**Goal.** The second projection over the same model: a custom FrameworkElement drawing core's positions, per-node automation peers (Button, Invoke selects, Name = the row copy, HelpText = the "Connects to" content) windowed to the viewport, tier B above core's threshold (one summary element routing to Table), the layout session driven off-dispatcher with the settle announcement, spatial and structural keyboard navigation from core's step, pin/unpin, zoom in/out/actual/fit with the canvas's viewport policy, Reduce Motion.
+**Goal.** The second projection over the same model: a custom FrameworkElement drawing core's positions, per-node automation peers (Button; Invoke activates, SelectionItem selects; Name = the row copy, HelpText = the "Connects to" content) COMPLETE — one per visible node whatever the viewport (amended W6-2 PR D, DD-Q1's default, `35_graph_contracts.md` §PR D DD-14) — tier B above core's threshold (one summary element routing to Table), the layout session driven off-dispatcher with the settle announcement, spatial and structural keyboard navigation from core's step, pin/unpin, zoom in/out/actual/fit with the canvas's viewport policy, Reduce Motion.
 
 **Consumes.** `start_graph_layout` and the session API, 0b's `graph_topology` (one record per SEMANTIC EPOCH — the layout handle, its generation, the query, the config — cached across the settling frames: the visible nodes with their path, degrees, component, neighbours, diameters, groups and label slots, and the visible edges), `graph_constants`, `graph_spatial_step`, `graph_structural_step`, `graph_row_actions` (the action specs), `graph_surface_modes` (0bD-12); 0a's `GraphRow`, `GraphMode`, `GraphZoom`, `GraphPinned`, `GraphLayoutSettled`, `GraphTierEntered`, `GraphTierSummary`, `GraphNeighborsContent`; the canvas renderer's machinery (`CanvasRendererView.cs`, `CanvasRendererPeers.cs`, `CanvasPeerTopology.cs`, `CanvasViewportState.cs`, `CanvasTextScaleService.cs`); and PR C's navigator — the Where-am-I seams (the diagram's readback installed beside the table's, C-8) and the availability seam, the `ChordScope.Graph` map (`AddChord`) the four viewport chords join, the kind overlay `KindOnly` on the view state (CD-23), and the focus landing of rule F (§PR C, amended CD-11).
 
-**Builds.** `Graph/GraphDiagramView.cs`, `GraphDiagramPeers.cs`, the layout driver (`GraphLayoutDriver.cs`: tick cadence, run-to-convergence with cancellation, generation refresh, Reduce Motion = converge before first paint), `ChordTable` rows `zoomIn` (`Ctrl+=`), `zoomOut` (`Ctrl+-`), `actualSize` (`Ctrl+0`), `fitGraph` (`Ctrl+Alt+0`) in `ChordScope.Graph`; the theme keys for node fills and rings; text scaling as the canvas's.
+**Builds.** `Graph/GraphDiagramModel.cs` (the document's diagram lineage, rule G), `GraphLayoutDriver.cs` (the settle loop over the document's scheduler: tick cadence, run-to-convergence with cancellation, the generation refresh through the probe, Reduce Motion = converge before first paint), `GraphDiagramView.cs`, `GraphDiagramPeers.cs`, `GraphMotionPolicy.cs`; the document's `SetMode`, the diagram seams and the six announcement seams; `ChordTable` rows `zoomIn` (`Ctrl+=`), `zoomOut` (`Ctrl+-`), `actualSize` (`Ctrl+0`), `fitGraph` (`Ctrl+Alt+0`) in `ChordScope.Graph` with their Graph-menu items (DD-Q3's default); the `Slate.Graph.*` theme keys for node fills, rings, edges and labels in the three dictionaries with the APCA matrix; text scaling as the canvas's; the settle-announcement arm PR E's forces edit sets (amended W6-2 PR D, DD-14).
 
 **Behavior pinned.** One model, two projections: the diagram's node set, labels, selection and filter are the table's (the drift test enumerates diagram actions against the table's, §P-B); positions are core's (the §W-A golden over the quantised position buffer, §P-C); tier A per-node peers up to the threshold, tier B one summary element and the entry announcement; arrows = core's spatial step, Tab = structural order, type-ahead by label; zoom announced as `GraphZoom`; fit and actual size; pin/unpin announced; the settle announcement once, debounced; the diameter and label cap from core's constants.
 
-**Tests.** `GraphDiagramTests` (the mac suite's 35 cases as Windows facts where they concern behaviour), `GraphLayoutDriverTests` (determinism through the driver, cancellation, refresh), FlaUI `GraphSurfaces_DiagramPeersTiersAndZoom_AreClean` (axe `graph-diagram`). **§W-A:** the position golden. **§K:** `GraphRendererBenchmarks` — warm tick, first windowed rebuild, per-pan hop, spatial step against P's budgets.
+**Tests.** `GraphDiagramTests` (the mac suite's thirty-eight facts mapped one by one — `35_graph_contracts.md` §PR D D-16 — the driver's, the epoch's, the tiers', the peers', the selection's and the viewport's facts among them), `GraphNavigatorTests`, `GraphTableTests`, `GraphPreferencesTests`, `ChordTableTests`, `GraphMenuTests`, `ThemeTokenContrastTests`, `ParityHarnessCensus`, the censuses of D-15, FlaUI `GraphSurfaces_DiagramPeersTiersAndZoom_AreClean` (axe `graph-diagram`). **§W-A:** the position golden — the `layout` section of the `graph_queries` artifact, the sixtieth tick quantised to a thousandth (D-18, DD-Q4). **§K:** `GraphRendererBenchmarks` — warm tick, first rebuild, per-pan hop, spatial step against the host budgets D-18 records (amended W6-2 PR D, DD-14).
 
 **Evidence / acceptance.** The user switches to Diagram, hears `GraphMode{Diagram}`, moves node to node with arrows hearing each row's copy, zooms and fits, and on a 2,000-node vault hears the tier-B summary and is routed to Table. Matrix rows: the four zoom ids ✓; `w_c_matrix.md` "Graph diagram (W6-2 PR D)".
 
-**Hand-off.** The diagram's selection and viewport seams, read by E's display and forces.
+**Hand-off.** The diagram's selection and viewport seams, read by E's display and forces; the model's `SetForces` seam re-heats the live layout and PR E's forces edit ARMS the settle announcement (rule G, Term G4); a display or groups change is a new epoch (Term G3) — the diagram re-renders without a load (amended W6-2 PR D, DD-14).
 
 ### PR E — Inspector: filters, groups, display, forces
 
