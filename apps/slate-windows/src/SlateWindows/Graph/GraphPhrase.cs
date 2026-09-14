@@ -93,4 +93,15 @@ internal static class GraphPhrase
     /// <summary>The Windows-authored prefix over core's neighbour render — the
     /// node peer's HelpText (Term T2; the mac's AXCustomContent label).</summary>
     public const string ConnectsToPrefix = "Connects to: ";
+
+    /// <summary>Term V3: the four viewport verbs' labels and hints — the mac's
+    /// byte for byte (`SlateCommands.swift:1583–1611`; MacCatalogParityTests' P3).</summary>
+    public const string ZoomInLabel = "Graph: Zoom In";
+    public const string ZoomInHint = "Zoom the visual diagram in. The zoom level is announced.";
+    public const string ZoomOutLabel = "Graph: Zoom Out";
+    public const string ZoomOutHint = "Zoom the visual diagram out.";
+    public const string ActualSizeLabel = "Graph: Actual Size";
+    public const string ActualSizeHint = "Reset the visual diagram zoom to 100 percent.";
+    public const string FitGraphLabel = "Graph: Fit Graph";
+    public const string FitGraphHint = "Zoom so every node is visible. Option-Command-0 on the diagram.";
 }

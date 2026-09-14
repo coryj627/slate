@@ -222,6 +222,36 @@ internal sealed partial class WorkspaceViewModel
         return command;
     }
 
+    private RelayCommand? _graphZoomInCommand;
+    private RelayCommand? _graphZoomOutCommand;
+    private RelayCommand? _graphActualSizeCommand;
+    private RelayCommand? _graphFitGraphCommand;
+
+    /// <summary>W6-2 PR D (Term V3, DD-7): `slate.graph.zoomIn` — the
+    /// navigator's verb; enabled exactly while Diagram is effective (Term
+    /// M3), re-evaluated on the navigator's DiagramAvailabilityChanged.</summary>
+    public System.Windows.Input.ICommand GraphZoomInCommand =>
+        _graphZoomInCommand ??= NewGraphViewportCommand(_ => _graphNavigator.ZoomIn());
+
+    /// <summary>`slate.graph.zoomOut` (Term V3).</summary>
+    public System.Windows.Input.ICommand GraphZoomOutCommand =>
+        _graphZoomOutCommand ??= NewGraphViewportCommand(_ => _graphNavigator.ZoomOut());
+
+    /// <summary>`slate.graph.actualSize` (Term V3).</summary>
+    public System.Windows.Input.ICommand GraphActualSizeCommand =>
+        _graphActualSizeCommand ??= NewGraphViewportCommand(_ => _graphNavigator.ActualSize());
+
+    /// <summary>`slate.graph.fitGraph` (Term V3).</summary>
+    public System.Windows.Input.ICommand GraphFitGraphCommand =>
+        _graphFitGraphCommand ??= NewGraphViewportCommand(_ => _graphNavigator.FitGraph());
+
+    private RelayCommand NewGraphViewportCommand(Action<object?> verb)
+    {
+        var command = new RelayCommand(verb, _ => _graphNavigator.CanZoom);
+        _graphNavigator.DiagramAvailabilityChanged += command.RaiseCanExecuteChanged;
+        return command;
+    }
+
     private GraphDocumentViewModel NewGraphDocument()
     {
         GraphDocumentViewModel? created = null;

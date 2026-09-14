@@ -83,7 +83,7 @@ public sealed partial class GraphDiagramTests
             // synthetic entry seeded through the model's seams.
             InstallSyntheticTopology(document, model, 2);
             Assert.False(diagram.SelectNode(diagram.VisibleIds[0], announce: false));
-            Assert.False(diagram.Entries.Values.Any(e => e.StableKey == document.ViewState.SelectedKey));
+            Assert.DoesNotContain(diagram.Entries.Values, e => e.StableKey == document.ViewState.SelectedKey);
             // A retired document refuses.
             host.Workspace.CloseActiveTabCommand.Execute(null);
             Assert.True(document.IsRetired);

@@ -704,7 +704,12 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// viewport commands' <c>CanExecute</c> re-evaluates through it.</summary>
     internal event Action? DiagramAvailabilityChanged;
 
-    internal void NotifyDiagramAvailabilityChanged() => DiagramAvailabilityChanged?.Invoke();
+    internal void NotifyDiagramAvailabilityChanged()
+    {
+        DiagramAvailabilityChanged?.Invoke();
+        // Term V3: the four viewport commands' CanExecute follows the same edge.
+        Navigator?.NotifyDiagramAvailabilityChanged();
+    }
 
     /// <summary>Term M1: the ONE writer of Mode beside the workspace's seed —
     /// refused when retired or unseated (the <see cref="SelectRow"/> guard),

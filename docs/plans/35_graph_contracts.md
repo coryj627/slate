@@ -13864,6 +13864,66 @@ has no Windows twin — the seams address the workspace's own group
 rules. MUTATIONS, each restored byte for byte, each caught by the named
 fact: no selection stepping to the last visible node, the neighbours not passed to the step, Tab consumed over an empty set, the type-ahead buffer never resetting, Enter without a selection activating, a keyboard move silent, the double-click announced, the wheel zooming without Ctrl, the tooltip's separator retyped, the tooltip not hoverable, the menu without Pin, the disabled reason not the HelpText, the create admission ignored, the currency ignored, a ghost's activation opening, the pin silent, the zoom clause dropped, the readback seam never installed, the readback answering without a model, a planted step crossing outside the two move members, the ladder skipping the tooltip — twenty-one of twenty-one caught (`gD-mutations.py`, the T4 entries).
 
+**TGD-5 — T5: rule V's verbs, rows, chords, commands and menu items —
+the navigator's four verbs through the presenter's seam, the zoom line
+through the document, the four chord rows in the Graph scope, the three
+shared pairs, the registrar's binding record, the Graph-menu items
+(D-13's navigator half; Terms V2–V4; D-15 vi, xii; DD-7).** THE
+NAVIGATOR (`Graph/GraphNavigator.cs`): ZoomIn, ZoomOut, ActualSize,
+FitGraph — each reaches the attached presenter's `ViewportCommand`
+(refused without a live presenter); a Zoomed outcome is spoken through
+the document's AnnounceZoom seam (`GraphZoom{fit, percent}`; the
+navigator posts nothing itself, C-15 ix); a Refused outcome speaks
+nothing and is UNCONSUMED (Term V4: the press bubbles); the four chord
+arms join Bind as three-argument `AddChord` calls — `Key.OemPlus`
+Control, `Key.OemMinus` Control, `Key.D0` Control, `Key.D0` Control|Alt
+— the scrape at six with Escape and Where-am-I (C-11); CanZoom (Term
+M3's "Diagram effective") and DiagramAvailabilityChanged, raised by the
+document's NotifyDiagramAvailabilityChanged forward. THE WORKSPACE: the
+four commands GraphZoomInCommand, GraphZoomOutCommand,
+GraphActualSizeCommand, GraphFitGraphCommand — the navigator's verb,
+CanExecute = CanZoom, re-raised on the navigator's edge (the Where-am-I
+command's shape). THE TABLE (`Commands/ChordTable.cs`): the ids
+`slate.graph.zoomIn`, `slate.graph.zoomOut`, `slate.graph.actualSize`,
+`slate.graph.fitGraph` — the mac's; four Reg rows with the mac's labels
+and hints byte for byte (`GraphPhrase.ZoomInLabel` … FitGraphHint;
+`SlateCommands.swift:1583–1611`), ⌘= / ⌘- / ⌘0 / ⌥⌘0 → Ctrl+= / Ctrl+- /
+Ctrl+0 / Ctrl+Alt+0, `ChordScope.Graph`, `CommandSection.Graph`. THE
+REGISTRAR: GraphViewportBindings — the canvas record's shape, ONE
+authority naming each row's navigator member and workspace command —
+consumed by `BuildResolvers()`. THE MENU: four items after Where Am I?
+(Zoom In, Zoom Out, Actual Size, Fit Graph) with `ChordText` gestures
+and the workspace commands (DD-Q3's default). `chords.json` regenerated
+through the projection (SLATE_CHORDS_UPDATE=1; never by hand). FACTS
+(GraphDiagramTests, the Verbs partial — seven):
+TheFourRowsTheirScopeLabelsAndChords (the mac's ids, labels, hints and
+chords, the scope, the section, no divergence);
+TheScrapeInBothDirectionsHoldsSixChords (the navigator's six, the
+table's six Graph-scoped chorded rows);
+TheSharedChordDispositionsNameTheThreeCanvasPairsAndCtrlAltZeroIsFree
+(the three canvas pairs share the chord in another scope; Ctrl+Alt+0 is
+the fit row's alone); AVerbInTableModeIsRefusedAndTheChordFallsThrough
+(refused, unconsumed, the commands disabled, nothing spoken; then
+consumed on the SAME surface with the zoom line);
+AVerbFromTheFilterFieldInDiagramModeActs (the field keeps the keys, the
+zoom moves, the line); TheMenuItemsFollowTheAvailability (disabled in
+Table and under the build, enabled at the install with CanExecuteChanged
+raised, the lines through the commands, disabled at the teardown);
+TheGraphViewportBindingRecordIsTheOneAuthority. `GraphMenuTests`' shape
+fact gains the four items, the third separator and the binding record's
+resolution; `ChordTableTests`' SharedCommandChords gains the three pairs
+with C-8's reason; the census's chord-map fact and the navigator tests'
+chord list count six; `MacCatalogParityTests` passes as the P3 gate
+over the four shared ids unchanged. DEVIATIONS: (i) the fit row's hint
+carries the mac's prose "Option-Command-0 on the diagram" byte for byte
+(Term V3's rule over the canvas's precedent) — the Windows chord is the
+row's own column; (ii) a menu or palette verb acts on the ATTACHED
+presenter (the surface the reader was in — attached on the keys' edge
+and on every chord), so a verb before any surface ever held the keys is
+refused; the facts give the renderer the keys first (rule F's landing
+does the same in the shell). MUTATIONS, each restored byte for byte,
+each caught by the named fact: the fit chord dropped from the map, the zoom line dropped, CanZoom ignoring effectiveness, a refused verb consuming the chord, a label retyped, the fit chord rebound to Ctrl+Shift+0, a menu item bound to the wrong command, a binding dropped from the record, the availability not forwarded to the navigator, two verbs on one chord — ten of ten caught (`gD-mutations.py`, the T5 entries).
+
 ### Tests that pin PR D (revision 5's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14

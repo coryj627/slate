@@ -779,7 +779,8 @@ public sealed class GraphNavigatorCensus
             }
         }
         Assert.Equal(
-            ["Graph/GraphNavigator.cs:Bind", "Graph/GraphNavigator.cs:Bind"],
+            // W6-2 PR D (Term V3): the four viewport chords join the two.
+            ["Graph/GraphNavigator.cs:Bind", "Graph/GraphNavigator.cs:Bind", "Graph/GraphNavigator.cs:Bind", "Graph/GraphNavigator.cs:Bind", "Graph/GraphNavigator.cs:Bind", "Graph/GraphNavigator.cs:Bind"],
             callers.OrderBy(c => c, StringComparer.Ordinal));
 
         // (b) AddChord's body IS the map's Add — the throwing one, by name.

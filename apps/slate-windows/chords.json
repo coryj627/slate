@@ -1607,6 +1607,54 @@
       "divergence": "D-2: the rule predicts Ctrl+Alt+I, which slate.view.toggleRightPane holds at Global scope — live at the same moment as a focused canvas, so this is a collision and not a disjoint pair. Disambiguated with Shift per the G18 precedent."
     },
     {
+      "id": "slate.graph.zoomIn",
+      "label": "Graph: Zoom In",
+      "section": "Graph",
+      "hint": "Zoom the visual diagram in. The zoom level is announced.",
+      "macChord": "⌘=",
+      "mac": "Command Equals",
+      "windows": "Ctrl+=",
+      "windowsSpoken": "Control Equals",
+      "scope": "Graph",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.zoomOut",
+      "label": "Graph: Zoom Out",
+      "section": "Graph",
+      "hint": "Zoom the visual diagram out.",
+      "macChord": "⌘-",
+      "mac": "Command Minus",
+      "windows": "Ctrl+-",
+      "windowsSpoken": "Control Minus",
+      "scope": "Graph",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.actualSize",
+      "label": "Graph: Actual Size",
+      "section": "Graph",
+      "hint": "Reset the visual diagram zoom to 100 percent.",
+      "macChord": "⌘0",
+      "mac": "Command 0",
+      "windows": "Ctrl+0",
+      "windowsSpoken": "Control 0",
+      "scope": "Graph",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.fitGraph",
+      "label": "Graph: Fit Graph",
+      "section": "Graph",
+      "hint": "Zoom so every node is visible. Option-Command-0 on the diagram.",
+      "macChord": "⌥⌘0",
+      "mac": "Option Command 0",
+      "windows": "Ctrl+Alt+0",
+      "windowsSpoken": "Control Alt 0",
+      "scope": "Graph",
+      "registered": true
+    },
+    {
       "id": "slate.sidebar.open",
       "label": "Open",
       "section": "Sidebar",
