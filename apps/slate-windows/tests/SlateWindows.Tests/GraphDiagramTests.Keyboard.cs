@@ -400,6 +400,63 @@ public sealed partial class GraphDiagramTests
 
     // --- D-12: the actions and the menu (Term N5); Term N7's pin -------------------------
 
+    /// <summary>Term N5's target rule (IPH-1-3): a pointer request opens the
+    /// menu on the node HIT at the view point — not the selection — none
+    /// over empty space; a keyboard request (the Menu key, Shift+F10: -1, -1)
+    /// opens on the selection. The journey proves the event's coordinate
+    /// space on a real right-click; this fact pins the rule the handler
+    /// applies to it.</summary>
+    [Fact]
+    public void APointerMenuRequestTargetsTheHitNodeAndAKeyboardRequestTheSelection()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "diagram-menu-target");
+            GraphDocumentViewModel document = host.Open();
+            (_, HostedWindow window, GraphDiagramView diagram, GraphDiagramModel model) = LiveDiagram(host, document);
+            ulong selected = diagram.VisibleIds[0];
+            ulong other = diagram.VisibleIds[1];
+            Assert.True(diagram.SelectNode(selected, announce: false));
+            window.UpdateLayout();
+            Assert.Equal(selected, diagram.SelectedId);
+            Point centre = ViewCentre(diagram, model, other);
+            Assert.Equal(other, diagram.MenuTargetFor(true, centre.X, centre.Y));
+            Assert.Equal(selected, diagram.MenuTargetFor(false, -1, -1));
+            // Empty space: a corner the hit grid answers nothing for.
+            Point[] corners = [new(1, 1), new(diagram.ActualWidth - 2, 1), new(1, diagram.ActualHeight - 2), new(diagram.ActualWidth - 2, diagram.ActualHeight - 2)];
+            Point empty = corners.First(p => diagram.HitTest(p) is null);
+            Assert.Null(diagram.MenuTargetFor(true, empty.X, empty.Y));
+        });
+    }
+
+    /// <summary>Term T2 / D-8 (IPH-1-2): a node peer a client holds across
+    /// the tier edge reports NO selection once the container exposes the
+    /// summary alone — the selected id stands in the visible set, the peer
+    /// is no longer the renderer's peer for it.</summary>
+    [Fact]
+    public void AStalePeerHeldAcrossTheTierEdgeReportsNoSelection()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-stale-peer");
+            GraphDocumentViewModel document = host.Open();
+            (_, HostedWindow window, GraphDiagramView diagram, GraphDiagramModel model) = LiveDiagram(host, document);
+            InstallSyntheticTopology(document, model, 5);
+            window.UpdateLayout();
+            const ulong id = 100_002;
+            document.ViewState.SelectedKey = "p:synthetic2.md";
+            GraphNodeAutomationPeer held = Assert.IsType<GraphNodeAutomationPeer>(diagram.PeerFor(id));
+            Assert.Equal(id, diagram.SelectedId);
+            Assert.True(((ISelectionItemProvider)held).IsSelected);
+            InstallSyntheticTopology(document, model, 1501);
+            window.UpdateLayout();
+            Assert.True(diagram.IsTierB);
+            Assert.Equal(id, diagram.SelectedId);
+            Assert.Null(diagram.PeerFor(id));
+            Assert.False(((ISelectionItemProvider)held).IsSelected, "a peer the container no longer exposes reported the selection");
+        });
+    }
+
     [Fact]
     public void TheDiagramsActionsEqualTheTablesPlusPin()
     {

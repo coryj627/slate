@@ -9150,6 +9150,30 @@ public sealed class ShellAccessibilityTests
                 SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphDiagram"), TimeSpan.FromSeconds(10)),
                 $"the menu's close did not return the keys to the renderer; focus is {DescribeFocusedElement(automation)}");
 
+            // Term N5's POINTER request (IPH-1-1, IPH-1-3): a right-click on
+            // the SECOND peer's rectangle opens the row-actions menu for the
+            // HIT node, not the selection — Pin through that menu marks the
+            // second peer's ItemStatus and no other's (GraphPhrase.PinnedStatus).
+            AutomationElement secondPeer = Peers()[1];
+            System.Drawing.Rectangle secondRect = secondPeer.Properties.BoundingRectangle.Value;
+            Mouse.RightClick(new System.Drawing.Point(secondRect.X + (secondRect.Width / 2), secondRect.Y + (secondRect.Height / 2)));
+            rowActions = WaitForRowActionItems(automation, process.Id);
+            Assert.Equal(expectedMenu, rowActions.Select(item => item.Properties.Name.Value).ToArray());
+            rowActions[^1].Patterns.Invoke.Pattern.Invoke();
+            Assert.True(
+                SpinWait.SpinUntil(() => secondPeer.Properties.ItemStatus.ValueOrDefault == "pinned", TimeSpan.FromSeconds(10)),
+                $"Pin through the pointer's menu did not pin the hit node; its status reads '{secondPeer.Properties.ItemStatus.ValueOrDefault}'");
+            Assert.Equal(string.Empty, firstPeer.Properties.ItemStatus.ValueOrDefault ?? string.Empty);
+            Assert.True(
+                SpinWait.SpinUntil(() => FindRowActionItems(automation, process.Id).Length == 0, TimeSpan.FromSeconds(10)),
+                "the row-actions menu did not close after Pin");
+            Assert.True(
+                SpinWait.SpinUntil(() => firstPeer.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault, TimeSpan.FromSeconds(10)),
+                "the right-click moved the selection off the first node");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphDiagram"), TimeSpan.FromSeconds(10)),
+                $"the pointer menu's close did not return the keys to the renderer; focus is {DescribeFocusedElement(automation)}");
+
             // Rule N, Term N6 (A-9's route): Enter opens the selected note in
             // the graph's own pane.
             ReassertForegroundForAChord(window);

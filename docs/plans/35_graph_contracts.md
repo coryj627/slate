@@ -14111,6 +14111,71 @@ fact); the journey's anchor retyped in the delivery evidence (the
 census mirror) — seven of seven caught (`gD-mutations.py`, the T7
 entries).
 
+**TGD-8 — post-implementation pass IPH-1 (gpt-5.5 medium, read-only,
+over 15ccce8a): three findings, the dispositions, codoki's first
+review.** THE PASS returned one blocker and two majors and the verdict
+"not safe to continue" on the blocker. IPH-1-1 [BLOCKER], "the pointer
+menu hit-tests in the wrong coordinate space" — REJECTED in mechanism,
+its test gap TAKEN: WPF's PopupControlService raises the opening
+event on the element under the pointer with the cursor RELATIVE to
+that element (`e.GetPosition(OriginalSource)`), and the renderer hosts
+no child elements, so `ContextMenuEventArgs.CursorLeft/CursorTop` ARE
+the view's coordinates — the hit grid's; the handler's comment now
+says so, and the journey proves it on a real right-click (below).
+IPH-1-2 [MAJOR], "a removed node peer still reports the selection from
+a cached provider" — TAKEN: a peer held across the tier edge answered
+`IsSelected` from the selected id alone while the container exposed
+the summary; the peer now reports the selection only while it IS the
+renderer's current peer for its id (`GraphNodeAutomationPeer`:
+`_view.SelectedId == Id && ReferenceEquals(_view.PeerFor(Id), this)`);
+AStalePeerHeldAcrossTheTierEdgeReportsNoSelection pins it (five
+synthetic nodes, the key written, the peer held, 1,501 installed → tier
+B, the id still the selection, the peer no longer exposed, no
+selection reported). IPH-1-3 [MAJOR], "the menu oracle bypasses the
+opening path that owns targeting" — TAKEN: the handler's target rule
+is a seam, `MenuTargetFor(pointerRequest, left, top)` (a pointer
+request → the node HIT at the view point, none over empty space; a
+keyboard request → the selection), the handler calls it, and
+APointerMenuRequestTargetsTheHitNodeAndAKeyboardRequestTheSelection
+drives it (the other node at its view centre, the selection at -1,-1,
+an empty corner); the journey gains the POINTER leg — a right-click on
+the SECOND peer's screen rectangle opens the row-actions menu, its
+items core's note actions then Pin, Pin invoked through the menu marks
+the second peer's ItemStatus "pinned" and no other's, the selection
+stays on the first, the keys return to the renderer
+(the journey passed to its last step on 2026-09-14, 19 s, the axe scan clean). CODOKI's first review (18:45Z): APPROVED,
+"auto-approved (no issues found)", "Safe to merge"; its key feedback,
+dispositioned: the pen cache's key formatted the dash's numbers
+through the current culture — TAKEN: the dash patterns are the
+renderer's shared statics (`DashedDash`, `DottedDash`, `GhostDash`)
+and `RedrawStyles` keys its pens by the array's identity through a
+comparer that formats nothing; the arrow spreads allocated per edge —
+TAKEN (one static array); the `||` in the pointer-request read —
+commented, not changed (the sentinel is -1 on both axes); caching the
+Typeface and the DPI across redraws and a square-distance hit test —
+DECLINED for now: the redraw measures 1.6 ms and the step 0.23 ms
+against 100 and 50 ms budgets (TGD-6), no budget pressure to buy
+complexity against; the type-ahead buffering facts exist (TGD-4's
+"the buffer never resetting" mutation is caught) and the menu's two
+paths are this record's. THE GATE'S FINDING (the CI-shaped regression on 15ccce8a, 2,842 of
+2,844): `CommandDriftTests`' two menu facts failed on the four Graph-menu
+items — the drift scrape read the registrar's resolver TABLE as
+initializer syntax and never the tuple RECORDS the table is built from
+(the canvas's viewport record never met the scrape because its verbs
+have no menu items); the scrape now reads a record's rows as
+registration sites (the id first, the resolver last), so the four items
+are backed by their rows and their accelerators check against what they
+invoke; T5's graph regression had not included the drift suite — the
+CI-shaped run is the gate, as the regression note says.
+MUTATIONS, each restored byte for byte, each
+caught by the named fact: the currency check dropped (the stale-peer
+fact); the pointer request opening on the selection and the keyboard
+request hit-testing at -1,-1 (the target-rule fact) — three of
+three caught; the pen key's dash identity is not test-covered (its
+observable is pixels), recorded. The stop rule (the standing gate met
+on a head AND a pass with no blocker twice running) is not met: IPH-2
+runs on this landing.
+
 ### Tests that pin PR D (revision 5's list; the task loop records what lands)
 
 - GraphDiagramTests (new, partial classes): the facts named under D-1..D-14

@@ -95,7 +95,10 @@ internal sealed class GraphNodeAutomationPeer : AutomationPeer, IInvokeProvider,
 
     void IInvokeProvider.Invoke() => _ = _view.ActivateNode(Id);
 
-    bool ISelectionItemProvider.IsSelected => _view.SelectedId == Id;
+    // The selected id AND the renderer's current peer for it (IPH-1-2): a
+    // client holding this peer across the tier edge or the id's departure
+    // asks a peer the container no longer exposes — it reports nothing.
+    bool ISelectionItemProvider.IsSelected => _view.SelectedId == Id && ReferenceEquals(_view.PeerFor(Id), this);
 
     IRawElementProviderSimple? ISelectionItemProvider.SelectionContainer =>
         UIElementAutomationPeer.FromElement(_view) is { } container ? ProviderFromPeer(container) : null;

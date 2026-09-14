@@ -677,10 +677,15 @@ internal sealed class GraphDiagramView : FrameworkElement
 
     private static double[]? DashOf(GraphRingStyle style) => style switch
     {
-        GraphRingStyle.Dashed => [4, 2],
-        GraphRingStyle.Dotted => [1, 2],
+        GraphRingStyle.Dashed => DashedDash,
+        GraphRingStyle.Dotted => DottedDash,
         _ => null,
     };
+
+    // The dash patterns are SHARED instances: RedrawStyles keys its pens by
+    // the array's identity, never by a culture-bound rendering of its numbers.
+    private static readonly double[] DashedDash = [4, 2];
+    private static readonly double[] DottedDash = [1, 2];
 
     /// <summary>Term T5: the fill and the ring — never colour alone. A grouped
     /// node takes the group's token and a heavier, patterned ring; an
@@ -708,6 +713,20 @@ internal sealed class GraphDiagramView : FrameworkElement
 
     private static readonly double[] GhostDash = [3, 2];
 
+    /// <summary>The pen key's equality: the token by value, the width by
+    /// value, the dash by REFERENCE — the patterns are the renderer's shared
+    /// statics, so identity is exact and no number is ever formatted.</summary>
+    private sealed class PenKeyComparer : IEqualityComparer<(string Key, double Width, double[]? Dash)>
+    {
+        public static readonly PenKeyComparer Instance = new();
+
+        public bool Equals((string Key, double Width, double[]? Dash) x, (string Key, double Width, double[]? Dash) y) =>
+            string.Equals(x.Key, y.Key, StringComparison.Ordinal) && x.Width == y.Width && ReferenceEquals(x.Dash, y.Dash);
+
+        public int GetHashCode((string Key, double Width, double[]? Dash) obj) =>
+            HashCode.Combine(obj.Key, obj.Width, obj.Dash is null ? 0 : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj.Dash));
+    }
+
     /// <summary>One redraw's resources: each token looked up ONCE per pass
     /// (the theme's brush, or a frozen copy of it), each (token, width,
     /// dash) pen built once and frozen — so a tier-A pass over 1,500 nodes
@@ -717,7 +736,7 @@ internal sealed class GraphDiagramView : FrameworkElement
     private sealed class RedrawStyles(GraphDiagramView view)
     {
         private readonly Dictionary<string, Brush> _brushes = new(StringComparer.Ordinal);
-        private readonly Dictionary<(string Key, double Width, string Dash), Pen> _pens = [];
+        private readonly Dictionary<(string Key, double Width, double[]? Dash), Pen> _pens = new(PenKeyComparer.Instance);
 
         public Brush Brush(string key)
         {
@@ -736,7 +755,7 @@ internal sealed class GraphDiagramView : FrameworkElement
 
         public Pen Pen(string key, double width, double[]? dash)
         {
-            (string, double, string) id = (key, width, dash is null ? string.Empty : string.Join(',', dash));
+            (string, double, double[]?) id = (key, width, dash);
             if (!_pens.TryGetValue(id, out Pen? pen))
             {
                 pen = new Pen(Brush(key), width);
@@ -765,6 +784,8 @@ internal sealed class GraphDiagramView : FrameworkElement
         RedrawsForTests++;
     }
 
+    private static readonly double[] ArrowSpreads = [Math.PI * 0.85, -Math.PI * 0.85];
+
     private void DrawEdges(RedrawStyles styles)
     {
         using DrawingContext dc = _edges.RenderOpen();
@@ -788,7 +809,7 @@ internal sealed class GraphDiagramView : FrameworkElement
             if (display.Arrows)
             {
                 double angle = Math.Atan2(b.Y - a.Y, b.X - a.X);
-                foreach (double spread in new[] { Math.PI * 0.85, -Math.PI * 0.85 })
+                foreach (double spread in ArrowSpreads)
                 {
                     dc.DrawLine(pen, b, new Point(b.X + (arrow * Math.Cos(angle + spread)), b.Y + (arrow * Math.Sin(angle + spread))));
                 }
@@ -1296,13 +1317,23 @@ internal sealed class GraphDiagramView : FrameworkElement
 
     private void OnMenuOpening(object sender, System.Windows.Controls.ContextMenuEventArgs e)
     {
+        // WPF raises the opening event on the element under the pointer with
+        // the cursor RELATIVE to that element (PopupControlService:
+        // e.GetPosition(OriginalSource)); the renderer hosts no child elements,
+        // so the cursor is in the view's space — the hit grid's. A keyboard
+        // request carries -1, -1.
         bool pointerRequest = e.CursorLeft >= 0 || e.CursorTop >= 0;
-        ulong? target = pointerRequest ? HitTest(new Point(e.CursorLeft, e.CursorTop)) : SelectedId;
-        if (target is not { } id || !RebuildMenu(id))
+        if (MenuTargetFor(pointerRequest, e.CursorLeft, e.CursorTop) is not { } id || !RebuildMenu(id))
         {
             e.Handled = true;
         }
     }
+
+    /// <summary>Term N5's target rule (IPH-1-3): a pointer request opens on
+    /// the HIT node at the view point, none over empty space; a keyboard
+    /// request opens on the selection.</summary>
+    internal ulong? MenuTargetFor(bool pointerRequest, double left, double top) =>
+        pointerRequest ? HitTest(new Point(left, top)) : SelectedId;
 
     /// <summary>The persistent menu mutated to the node's actions: core's
     /// per-kind titles in core's order with a disabled item's reason as its
