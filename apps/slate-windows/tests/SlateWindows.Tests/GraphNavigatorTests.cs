@@ -154,6 +154,8 @@ public sealed class GraphNavigatorTests
         public void FocusFilterField() => FieldRequests++;
 
         public bool DismissTransientRegion() => false;
+
+        public GraphTableRow? ReadTableSeat(GraphDocumentViewModel document, GraphPublication publication) => null;
     }
 
     private static string Render(GraphA11yEvent @event) =>

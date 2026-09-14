@@ -321,9 +321,16 @@ extension AppState {
                 // then describe old rows under new filter prose.
                 graphTableRequest?.query == graphVisibilityQuery
             else { return nil }
-            if let key = graphSelectedNodeKey,
-                let row = graphTableRows.first(where: { $0.stableKey == key })
-            {
+            let row: GraphTableRow?
+            if let key = graphSelectedNodeKey {
+                // A present but hidden/missing shared key never falls back (IPG-3).
+                row = graphTableRows.first { $0.stableKey == key }
+            } else {
+                // The Mac grid deselects when its bound key is absent; it has no
+                // independent current seat. Only a sole shown row is unambiguous.
+                row = graphTableRows.count == 1 ? graphTableRows.first : nil
+            }
+            if let row {
                 // A SHOWN row obeys the query by construction (0a-2b's
                 // payload invariants); the copy as `GraphDiagramModel.rowCopy`
                 // builds it — the references are the in-links, never an embed.

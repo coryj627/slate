@@ -32,11 +32,14 @@ final class GraphTabRoutingTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    private func makeAppState() async throws -> AppState {
+    private func makeAppState(includeOrphan: Bool = false) async throws -> AppState {
         let vault = tempDir.appendingPathComponent("vault-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
         try Data("[[b]]".utf8).write(to: vault.appendingPathComponent("a.md"))
         try Data("[[a]]".utf8).write(to: vault.appendingPathComponent("b.md"))
+        if includeOrphan {
+            try Data("A lone note.".utf8).write(to: vault.appendingPathComponent("solo.md"))
+        }
         let store = RecentVaultsStore(
             fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json"))
         let state = AppState(recentsStore: store, externalOpener: { _ in true })
@@ -1016,8 +1019,8 @@ final class GraphTabRoutingTests: XCTestCase {
     }
 
     /// C-8: the table's readback names the shared key's shown row the
-    /// diagram's way, with no zoom clause; no key reads NoSelection; the
-    /// kind overlay reads as the closed Unresolved arm.
+    /// diagram's way, with no zoom clause; no key among multiple rows
+    /// reads NoSelection; the kind overlay reads as the closed Unresolved arm.
     func testTheTableReadbackNamesTheSelectedSnapshotNodeWithoutAZoomClause() async throws {
         let state = try await makeAppState()
         try await openQuiescentGraph(state)
@@ -1055,11 +1058,145 @@ final class GraphTabRoutingTests: XCTestCase {
             "No node selected, filters: unresolved shown, unresolved only.")
     }
 
+    /// F5 / #1193: the lone orphan is readable before any arrow movement,
+    /// without synthesizing a shared selection or a navigation announcement.
+    func testTheSoleOrphanReadbackKeepsTheSilentLandingUnselected() async throws {
+        let state = try await makeAppState(includeOrphan: true)
+        var posts: [String] = []
+        state.graphAnnouncer = GraphAnnouncer(post: { text, _ in posts.append(text) })
+        state.openGraphPreset(.orphans)
+        try await pollUntil {
+            !state.graphTableLoading && state.graphTableSnapshot != nil
+                && state.graphTableAnsweredSeq == state.graphTableSeq
+                && state.graphTablePublishedRequest == state.graphTableRequest
+        }
+        XCTAssertEqual(state.graphTableRows.map(\.label), ["solo"])
+        XCTAssertNil(state.graphSelectedNodeKey)
+        state.graphAnnouncer.flushForTests()
+        let landing = a11yRender(event: .graph(event: .graphPreset(outcome: .orphans(count: 1))))
+            .text
+        XCTAssertEqual(posts, [landing], "landing adds no movement announcement")
+        posts.removeAll()
+
+        let row = try XCTUnwrap(state.graphTableRows.first)
+        let event = try XCTUnwrap(state.graphDiagramWhereAmIEvent())
+        XCTAssertEqual(
+            event,
+            .graphWhereAmI(
+                selection: .node(
+                    row: GraphRowCopy(
+                        label: "solo", kind: .note, inLinks: 0, outLinks: 0,
+                        references: 0, embed: false), component: row.component),
+                zoomPercent: nil,
+                filter: .normal(orphansOnly: true, attachmentsShown: false, ghostsShown: false),
+                nameFilter: ""))
+        state.graphAnnouncer.flushForTests()
+        XCTAssertTrue(posts.isEmpty, "constructing the readback is silent")
+        state.graphDiagramWhereAmI()
+        state.graphAnnouncer.flushForTests()
+        XCTAssertEqual(posts, [a11yRender(event: .graph(event: event)).text])
+        XCTAssertNil(state.graphSelectedNodeKey, "readback must not invent selection")
+
+        // Clearing the name filter returns to the lone orphan under the
+        // same preset. This exercises query delivery, not a native key event.
+        try await publishReadbackNeedle("missing", in: state)
+        XCTAssertTrue(state.graphTableRows.isEmpty)
+        try await publishReadbackNeedle("", in: state)
+        XCTAssertEqual(state.graphDiagramWhereAmIEvent(), event)
+        XCTAssertNil(state.graphSelectedNodeKey)
+    }
+
+    func testANeedleCanReadTheSoleRowButClearingToMultipleRowsCannotPickOne() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        let noSelection = try XCTUnwrap(state.graphDiagramWhereAmIEvent())
+        try await publishReadbackNeedle("a", in: state)
+        XCTAssertEqual(state.graphTableRows.map(\.label), ["a"])
+        let event = try XCTUnwrap(state.graphDiagramWhereAmIEvent())
+        guard case .graphWhereAmI(let selection, let zoom, _, let needle) = event,
+            case .node(let row, _) = selection
+        else { return XCTFail("the sole shown row was not read") }
+        XCTAssertEqual(row.label, "a")
+        XCTAssertNil(zoom)
+        XCTAssertEqual(needle, "a")
+        XCTAssertNil(state.graphSelectedNodeKey)
+
+        try await publishReadbackNeedle("", in: state)
+        XCTAssertEqual(state.graphTableRows.count, 2)
+        XCTAssertEqual(state.graphDiagramWhereAmIEvent(), noSelection)
+        try await publishReadbackNeedle("missing", in: state)
+        XCTAssertTrue(state.graphTableRows.isEmpty)
+        XCTAssertEqual(
+            state.graphDiagramWhereAmIEvent(),
+            .graphWhereAmI(
+                selection: .noSelection, zoomPercent: nil,
+                filter: .normal(orphansOnly: false, attachmentsShown: false, ghostsShown: true),
+                nameFilter: "missing"))
+        XCTAssertNil(state.graphSelectedNodeKey)
+    }
+
+    func testASoleVisibleRowDoesNotReplaceAPresentHiddenOrMissingSharedKey() async throws {
+        let state = try await makeAppState()
+        try await openQuiescentGraph(state)
+        let a = try XCTUnwrap(state.graphTableRows.first { $0.label == "a" })
+        state.graphSelectedNodeKey = a.stableKey
+        try await publishReadbackNeedle("b", in: state)
+        XCTAssertEqual(state.graphTableRows.map(\.label), ["b"])
+        for key in [a.stableKey, "missing-node-key"] {
+            state.graphSelectedNodeKey = key
+            XCTAssertEqual(
+                state.graphDiagramWhereAmIEvent(),
+                .graphWhereAmI(
+                    selection: .noSelection, zoomPercent: nil,
+                    filter: .normal(orphansOnly: false, attachmentsShown: false, ghostsShown: true),
+                    nameFilter: "b"))
+            XCTAssertEqual(state.graphSelectedNodeKey, key)
+        }
+    }
+
+    func testTheSoleCachedRowCannotAnswerAChangedLiveQueryOrFailedRequest() async throws {
+        for failPair in [false, true] {
+            let state = try await makeAppState()
+            try await openQuiescentGraph(state)
+            try await publishReadbackNeedle("a", in: state)
+            XCTAssertEqual(state.graphTableRows.map(\.label), ["a"])
+            state.graphTableTextFilter = "b"
+            XCTAssertNil(state.graphDiagramWhereAmIEvent(), "the live query changed before issuing")
+            if failPair {
+                state.graphTableLoadFailureForTests = .Io(message: "disk gone")
+                state.loadGraphTable(announce: .silent)
+            } else {
+                state.graphTableRowsFailureForTests = .Io(message: "disk gone")
+                state.requestGraphTableRowsIfQueryChanged()
+            }
+            XCTAssertNil(state.graphDiagramWhereAmIEvent(), "the new request is pending")
+            try await pollUntil {
+                !state.graphTableLoading && state.graphTableAnsweredSeq == state.graphTableSeq
+            }
+            XCTAssertEqual(
+                state.graphTableRows.map(\.label), ["a"], "the old sole row remains cached")
+            XCTAssertNil(
+                state.graphDiagramWhereAmIEvent(), "a failure cannot authorize the cached row")
+            XCTAssertNil(state.graphSelectedNodeKey)
+        }
+    }
+
+    private func publishReadbackNeedle(_ needle: String, in state: AppState) async throws {
+        state.graphTableTextFilter = needle
+        state.requestGraphTableRowsIfQueryChanged()
+        try await pollUntil {
+            !state.graphTableLoading && state.graphTableAnsweredSeq == state.graphTableSeq
+                && state.graphTablePublishedRequest == state.graphTableRequest
+        }
+    }
+
     /// C-8: the table's readback is refused while a pair or a rows request
     /// is in flight (rule Q, Term Q7) and answers again at the install.
     func testTheTableReadbackIsUnavailableWhileALoadIsInFlight() async throws {
         let state = try await makeAppState()
         try await openQuiescentGraph(state)
+        try await publishReadbackNeedle("a", in: state)
+        XCTAssertEqual(state.graphTableRows.count, 1, "a sole cached row must obey the same guards")
         XCTAssertNotNil(state.graphDiagramWhereAmIEvent(), "quiescent: answers")
         let gate = AsyncGate()
         state.loadGraphTable(announce: .silent)
@@ -1085,6 +1222,8 @@ final class GraphTabRoutingTests: XCTestCase {
     func testTheTableReadbackWaitsWhenTheNeedleReturnsToItsAcceptedValue() async throws {
         let state = try await makeAppState()
         try await openQuiescentGraph(state)
+        try await publishReadbackNeedle("a", in: state)
+        XCTAssertEqual(state.graphTableRows.count, 1, "a sole cached row must obey the same guards")
         let acceptedNeedle = state.graphTableTextFilter
         let gate = AsyncGate()
         state.graphTableRowsPublishGate = { token in
@@ -1110,6 +1249,8 @@ final class GraphTabRoutingTests: XCTestCase {
     func testAnUnavailableDiagramDoesNotReadTheCachedTable() async throws {
         let state = try await makeAppState()
         try await openQuiescentGraph(state)
+        try await publishReadbackNeedle("a", in: state)
+        XCTAssertEqual(state.graphTableRows.count, 1, "a sole cached row must obey the same guards")
         state.graphSelectedNodeKey = try XCTUnwrap(state.graphTableRows.first).stableKey
         XCTAssertNotNil(state.graphDiagramWhereAmIEvent(), "the cached table can answer")
 

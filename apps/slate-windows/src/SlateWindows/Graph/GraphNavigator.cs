@@ -8,8 +8,8 @@ namespace SlateWindows.Graph;
 
 /// <summary>
 /// What the navigator needs from the graph surface the reader is in
-/// (W6-2 PR C, contract C-1): the presenter seam — three questions, two
-/// focus moves, one dismissal, one liveness — implemented by
+/// (W6-2 PR C, contract C-1): the presenter seam for focus, dismissal,
+/// liveness and native table currency — implemented by
 /// <see cref="GraphSurfaceView"/> and attached on the false→true edge of
 /// its keyboard focus and on every chord.
 /// </summary>
@@ -38,6 +38,11 @@ internal interface IGraphSurfacePresenter
     /// <summary>Whether this surface is still in the tree and attached to
     /// a live document — a verb that moves focus asks first.</summary>
     bool IsLive { get; }
+
+    /// <summary>The current native table seat, only when this presenter
+    /// displays the requested document and publication. This reads currency
+    /// without selecting a row or moving focus.</summary>
+    GraphTableRow? ReadTableSeat(GraphDocumentViewModel document, GraphPublication publication);
 }
 
 /// <summary>What the workspace's preset funnel reports after the open's
@@ -155,6 +160,13 @@ internal sealed class GraphNavigator : BindableBase
     }
 
     internal IGraphSurfacePresenter? PresenterForTests => _presenter;
+
+    internal GraphTableRow? ReadTableSeat(GraphDocumentViewModel document, GraphPublication publication) =>
+        ReferenceEquals(_document(), document)
+            && document is { IsRetired: false, IsEffective: true }
+            && _presenter is { IsLive: true } presenter
+            ? presenter.ReadTableSeat(document, publication)
+            : null;
 
     // --- The presets (contract C-3, rule P) --------------------------------
 

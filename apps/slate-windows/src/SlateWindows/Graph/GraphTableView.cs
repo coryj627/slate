@@ -99,6 +99,25 @@ internal sealed class GraphTableView : UserControl
     /// does and the order the initial bind guarantees is reversed.</summary>
     internal GraphPublication? BoundPublication { get; private set; }
 
+    /// <summary>A silent landing owns native currency without a shared key.
+    /// Only an item and column still displayed by this exact publication
+    /// can describe that seat; retained cells from an old bind cannot.</summary>
+    internal GraphTableRow? ReadSeat(GraphDocumentViewModel document, GraphPublication publication)
+    {
+        if (_detached || !IsLoaded || !IsVisible
+            || !ReferenceEquals(Model, document) || !ReferenceEquals(_observed, document)
+            || !ReferenceEquals(BoundPublication, publication) || !ReferenceEquals(document.Publication, publication)
+            || !_grid.Grid.CurrentCell.IsValid
+            || !_grid.Grid.Columns.Contains(_grid.Grid.CurrentCell.Column)
+            || _grid.Grid.CurrentCell.Item is not GraphTableRow row
+            || !_grid.Grid.Items.Cast<object>().Any(candidate => ReferenceEquals(candidate, row))
+            || !publication.Rows.Any(candidate => ReferenceEquals(candidate, row)))
+        {
+            return null;
+        }
+        return row;
+    }
+
     internal event Action? ContainersRealized
     {
         add => _grid.ContainersRealized += value;
