@@ -14384,16 +14384,23 @@ to ready on this landing; CI and codoki arbitrate the head.
 
 ## PR E — the inspector: filters, groups, display, forces
 
-Revision 5, 2026-09-14 — OPEN for round 5 (revision 1 = 39e2303f,
-revision 2 = b6858329, revision 3 = ac6c8bea, revision 4 = 694d0d56;
-rounds 1–4's findings IGU-1..8, IGV-1..6, IGW-1..5 and IGX-1..3
-discharged in the text below and ledgered at the end), branch
+Revision 6, 2026-09-14 — FROZEN (revision 1 = 39e2303f, revision 2 =
+b6858329, revision 3 = ac6c8bea, revision 4 = 694d0d56, revision 5 =
+835ce0f4; rounds 1–5's findings IGU-1..8, IGV-1..6, IGW-1..5, IGX-1..3
+and IGY-1 discharged in the text below and ledgered at the end), branch
 `feat/w6-2-e` on the merged A, B1, B2, C and D (`main` at 6f58dc07).
-The protocol's rule 5 (blockers CREATED by a revision's own changes)
-has two instances so far: round 2 (IGV-1..3, created by revision 2)
-and round 4 (IGX-1..2, created by revision 3's build-in-flight arm); a
-third freezes under the PR 0b, B and D precedent, with the ledger
-carried into the task loop. The spec is
+Round 5 returned ONE finding, a blocker CREATED by revision 5's Term K4
+(its "once for the LAST run" clause and the relay drop it introduced
+cover a second edit and not the model's teardown: a settle queued at a
+run's convergence survives a switch to Table or a filter rebuild landing
+inside the relay's window), which is the protocol's rule 5 for the
+THIRD time (rounds 2, 4, 5 — IGV-1..3 created by revision 2, IGX-1..2
+by revision 3, IGY-1 by revision 5): revision 6 takes it — the
+teardown's disarm drops the relay's pending settle (Term K4; IGY-1) —
+and FREEZES under the PR 0b, B, C and D precedent ("THE FREEZE" below):
+no round 6; the five ledgers are carried into the task loop, which
+discharges them by code and by the post-implementation passes IPI-n;
+precedent applied; the owner may overrule. The spec is
 `w6_2_graph_spec.md` §PR E (its Goal, Consumes, Builds, Behavior,
 Tests, Evidence and Hand-off lines; amended in place where ED-8 says
 so), consuming §1's rules R-A..R-I, §2's rows D, H, J, L, M, N and P,
@@ -14408,8 +14415,8 @@ are amended under the provision C-15 iv makes for later PRs ("by
 amendment of this list"; ED-9); rule Q's `Request(Filter)` arm and the
 view state's `ApplyQuery` name PR E as their fourth caller and this
 section is that caller (C-4, Term Q4). Round numbering: IGU-n (round
-1), IGV-n (round 2), IGW-n (round 3), IGX-n (round 4); the
-post-implementation passes IPI-n; the task-loop records TGE-n.
+1), IGV-n (round 2), IGW-n (round 3), IGX-n (round 4), IGY-n (round
+5); the post-implementation passes IPI-n; the task-loop records TGE-n.
 
 **Six owner questions at the head (ED-Q1..ED-Q6).** Each is written to
 its stated DEFAULT below, the alternative recorded beside it; a round
@@ -14784,7 +14791,24 @@ never typed (0bD-12).
   and restarting (IGX-2); a queued settle of a run that is no longer
   the last is dropped, never spoken. The relay's seam census gains the
   drop; a fact converges a run, queues its settle, edits again inside
-  the window and hears one settle for the second run alone.
+  the window and hears one settle for the second run alone. AND AT THE
+  TEARDOWN (IGY-1): the relay renders at enqueue and holds the settle
+  for its window with NO fire-time gate (`Announce` emits with a null
+  gate, `GraphAnnouncer.cs:53–58`; only the filter count is gated at
+  fire, `:177–184`), and D's teardown clears the armed flag alone
+  (`DropModel`, `GraphDocumentViewModel.cs:962–978`; `TeardownDiagram`,
+  `:767–776`), so a settle queued by a run's convergence would speak
+  after a switch to Table or a filter rebuild (Term G6) landing inside
+  the window, for a model that is gone — `DropModel` calls
+  `DropPendingSettle()` beside its `SettleAnnouncementArmed = false`:
+  the disarm and the drop are ONE step of Term G7's order (the order
+  itself unchanged — the run's token cancelled, the line disarmed and
+  dropped, the readback cleared, the model dropped, the gate retired),
+  PR E's second one-line edit to D's document (E-1 lists it; a mutation
+  drops the call). A fact converges a run, queues its settle and
+  switches to Table inside the window, hearing nothing; another
+  rebuilds by a filter change inside the window, hearing nothing for
+  the old model and, the new build's run unarmed, nothing at all.
 - **Term K5 — a run at the ceiling.** The driver ends a run at
   `MaxIterationsPerRun` when the predicate never holds (TGD-2's
   deviation); the settle line speaks at that end too (`Converged` is
@@ -14805,7 +14829,9 @@ The surface gains the header's toggle (Term I2). The preferences gain
 (Terms X1, Y2, Z1, Z2). The document gains `ChangeFilter(GraphFilter)`
 (Term X1), `ApplyForces(GraphForcesConfig)` (Term K2) with the install's one-line
 arm for an edit under the build (Term K2; IGX-1) and the relay's
-`DropPendingSettle()` (the announcer's, Term K4; IGX-2), AnnounceForceValue
+`DropPendingSettle()` (the announcer's, Term K4; IGX-2 — called by
+`ApplyForces` on an admitted edit and by `DropModel` at the teardown's
+disarm, PR E's second one-line edit to D's document; IGY-1), AnnounceForceValue
 (Term K3) and the `DiagramDisplay` forward (Term Z2). `GraphPhrase`
 gains the inventory's strings (E-11) and the read-only notice's prefix
 (E-D6). The preferences raise `DisplayChanged` and `ForcesChanged`
@@ -14863,7 +14889,8 @@ on the switch to the inspector (the leaf setter's, not the graph
 family's). the shell's `RightPaneShown`, `LeafPanelShown` and `RightPaneHidden`
 on Term I2's four timelines (the shell's setters', not the graph
 family's; IGV-1). NOTHING for a group edit, a display edit, a refused
-write; the pane's controls are disabled outside an effective graph
+write, a settle queued for a model torn down inside the relay's window
+(dropped at the disarm; IGY-1); the pane's controls are disabled outside an effective graph
 (Term I7), so no edit is ever silent for want of the gate. The
 announcement-seam
 census (C-15 iv's shape) gains AnnounceForceValue as the document's one
@@ -15111,7 +15138,26 @@ GraphInspectorInactive (Term I7).
 | IGX-2 | BLOCKER (created by revision 3, IGV-2) | taken — Term K4: `ApplyForces` drops the relay's pending settle on every admitted edit before re-arming (DropPendingSettle, the navigation drop's twin); a fact edits twice inside the window |
 | IGX-3 | MAJOR | taken — Terms I7 and Y6 ordered: the effectiveness gate disables whatever the writability, read-only alone disables nothing, the inactive notice first when both show |
 
-### Tests that pin PR E (revision 5's list; the task loop records what lands)
+### Round 5 ledger (PR E) — one finding; rule 5 the third time → THE FREEZE
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| IGY-1 | BLOCKER (created by revision 5, IGX-2) | taken — Term K4: `DropModel` drops the relay's pending settle beside its disarm (one step of Term G7's order), so a settle queued at convergence never speaks for a torn-down model; E-1 lists the second one-line edit; E-9 says so; two facts (a switch to Table, a filter rebuild) and a mutation |
+
+### THE FREEZE — revision 6 stands
+
+Rule 5 for the third time (rounds 2, 4, 5) — the PR 0b precedent, applied
+by PR B at revision 8, PR C at revision 5 and PR D at revision 5: the
+text is corrected for every finding of every round as the discharge;
+the five ledgers (IGU, IGV, IGW, IGX, IGY) are carried into the task
+loop, which discharges them by code — one TGE record per task naming
+the facts and the mutations that pin each — and the post-implementation
+codex passes (IPI-n) verify the code against this frozen text; no round
+6 runs on the contracts. The six owner questions ED-Q1..ED-Q6 stay
+PENDING, the section written to their defaults; ED-8's spec amendments
+are applied in the task loop. Precedent applied; the owner may overrule.
+
+### Tests that pin PR E (revision 6's list, frozen; the task loop records what lands)
 
 - GraphInspectorTests (new): the view model's reads and writes per rule
   (I6, X1–X5, Y1–Y6, Z1–Z4, K1–K6), the changed-control table, the
@@ -15134,7 +15180,9 @@ GraphInspectorInactive (Term I7).
   change (IGU-8), the groups' epoch (Terms K2, K4, Z2, Y2), a forces
   edit under a build in flight armed at the install and spoken at its
   run's end (IGV-2), a second edit inside the settle window dropping the
-  first run's queued line and speaking once for the last (IGX-2).
+  first run's queued line and speaking once for the last (IGX-2), a
+  settle queued at convergence and dropped by a switch to Table and by
+  a filter rebuild inside the window (IGY-1).
 - `GraphDocumentTests`: `ChangeFilter`'s route (the overlay cleared, the
   pair under FilterCount, the pending sort carried).
 - `GraphConfigStoreTests`, `GraphConfigWriterTests`: the four fields'
