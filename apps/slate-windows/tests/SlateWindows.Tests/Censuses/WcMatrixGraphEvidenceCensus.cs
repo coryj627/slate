@@ -154,9 +154,10 @@ public sealed class WcMatrixGraphEvidenceCensus
             string patternCell = row.Cells[3];
             foreach (string id in surface.Ids)
             {
-                bool composedValue = id.EndsWith("Value", StringComparison.Ordinal)
-                    && shell.Contains($"\"{id[..^5]}\"", StringComparison.Ordinal)
-                    && shell.Contains("id + \"Value\"", StringComparison.Ordinal);
+                // A `⟨slider id⟩Value` id is composed by SliderRow alone: the
+                // allowance is the set its calls compose, not any literal
+                // plus "Value" found anywhere in the shell (IPJ-1-6).
+                bool composedValue = SliderValueIds().Contains(id);
                 if (!shell.Contains($"\"{id}\"", StringComparison.Ordinal) && !composedValue)
                 {
                     failures.Add($"{surface.Title}: the shell sets no automation id {id}");
@@ -261,7 +262,7 @@ public sealed class WcMatrixGraphEvidenceCensus
         var literals = new HashSet<string>(StringComparer.Ordinal);
         var prefixes = new HashSet<string>(StringComparer.Ordinal);
         string graph = Path.Combine(RepoRoot, "apps", "slate-windows", "src", "SlateWindows", "Graph");
-        foreach (string path in Directory.GetFiles(graph, "*.cs"))
+        foreach (string path in GraphSources(graph))
         {
             string text = File.ReadAllText(path);
             foreach (Match m in SetterLiteral.Matches(text))
@@ -292,6 +293,39 @@ public sealed class WcMatrixGraphEvidenceCensus
             literals.Add(m.Groups[1].Value);
         }
         return (literals, prefixes);
+    }
+
+    /// <summary>The graph shell's sources, subfolders included and obj
+    /// excluded (codoki's note on 045bc23c: a subfolder refactor must not
+    /// hide an id from the census).</summary>
+    private static IEnumerable<string> GraphSources(string graph) =>
+        Directory.GetFiles(graph, "*.cs", SearchOption.AllDirectories)
+            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
+
+    /// <summary>The value peer's composition, <c>id + "Value"</c>, with or
+    /// without spaces around the plus (codoki's note on 045bc23c).</summary>
+    private static readonly Regex ComposesValue = new(@"\bid\s*\+\s*""Value""", RegexOptions.Compiled);
+
+    /// <summary>The value-peer ids the inspector's SliderRow calls compose
+    /// (<c>id + "Value"</c> inside the helper): one per
+    /// <c>SliderRow(section, "id", …)</c> call in a file that composes.</summary>
+    private static HashSet<string> SliderValueIds()
+    {
+        string graph = Path.Combine(RepoRoot, "apps", "slate-windows", "src", "SlateWindows", "Graph");
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string path in GraphSources(graph))
+        {
+            string text = File.ReadAllText(path);
+            if (!ComposesValue.IsMatch(text))
+            {
+                continue;
+            }
+            foreach (Match m in Regex.Matches(text, @"\bSliderRow\([^,]+,\s*""([^""]+)"""))
+            {
+                ids.Add(m.Groups[1].Value + "Value");
+            }
+        }
+        return ids;
     }
 
     [Fact]

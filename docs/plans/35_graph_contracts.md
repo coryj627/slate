@@ -17220,9 +17220,13 @@ navigator 19 s, the inspector 18 s, the diagram 19 s, the leaf 25 s;
 each passed) — CI's shell accessibility gate arbitrating them; the mac lane's twin arbitrated by CI (FR-1). THE WALL TIME: the
 CI-shaped regression ran 9 m 58 s, 9 m 46 s, 10 m 11 s and 9 m 57 s on this box; the end-to-end suite is 15 s of it, the two large
 vaults most of that (FR-5) — no other suite slowed. THE GATES: the parity
-matrix's generator exits zero (fourteen validations); the
-reconciliation's `--check` exits zero; every census of F10 green on
-the landing head. Then the draft PR, the post-implementation codex
+matrix's generator exits zero (fourteen validations), re-run on the
+landing head so its header names that head (IPJ-1-3); the
+reconciliation's `--check` exits zero — re-run on the landing head
+AFTER the citation pass, which edits the records the tables derive
+from (IPJ-1-1: 045bc23c carried tables one pass stale, and
+`GraphReconciliationCensus` caught it on that head); every census of
+F10 green on the landing head. Then the draft PR, the post-implementation codex
 passes IPJ-n until the stop rule, codoki's approval on the exact head,
 and the merge on the standing conditions — recorded below as they
 happen.
@@ -17245,6 +17249,83 @@ calls reads that property and holds the rendered text out of the
 announced lines. The performance and security notes changed nothing: the
 tree scans already exclude obj and the generated binding, and the git
 invocations take fixed arguments. Four mutations, in the table above.
+
+### Post-implementation passes (PR F)
+
+**IPJ-1 — codex post-implementation pass 1 (gpt-5.5 medium) on 045bc23c,
+the implementation against the frozen revision 5: SIX findings, two of
+them blockers, all six taken.** IPJ-1-1 [BLOCKER] — the reconciliation's
+generated tables on 045bc23c were one pass stale: the landing script ran
+`--write`/`--check` BEFORE the citation pass that de-backticks names the
+tree lacks, so TGF-9's record changed after the tables were derived from
+it (`--check` exit 1 on that head; the process record's "exits zero" was
+true when run and false on the head). Root cause: the process — the
+regeneration's place in the landing order. `GraphReconciliationCensus`
+CAUGHT it on that head (TheEvidenceTableCarriesOneRowPerKey, three cells;
+CI's Windows lane on 045bc23c the same), so the gate held; TAKEN: the
+landing scripts regenerate after the citation pass and fail the landing
+on a `--check` exit; the tables regenerated on this head; the TGF-9
+sentence amended to say so. IPJ-1-2 [BLOCKER] — F1's summary oracle was
+the SUT: the first fact rendered the expected snapshot summary from
+`publication.Snapshot.SummaryCounts` and held `Summary` only non-empty,
+while F1 says the summary "verbatim" against the golden. Root cause: the
+test. TAKEN: the counts are DERIVED FROM THE GOLDEN's snapshot entries
+(the notes; the ghosts as the unresolved targets; the orphans among the
+visible; the links as the visible nodes' incoming links and embeds, one
+per edge; the Filtered flag as the golden's own string says it), the
+derivation held to the golden's verbatim string under its inclusive
+filter (7 notes, 17 links, 1 orphan, 4 unresolved, Filtered) before it
+serves the default filter's open (16 links: the attachment's one
+incoming embed out) — the line once, `Summary` equal, `Total` the
+golden's `default` visibility total; and a new leg sets the golden's own
+filter through the inspector and holds the rows, the summary VERBATIM
+and the total to the golden entry under the accepted sort
+(CountsFromTheGolden, SummaryFromTheGolden; the open's line constructed
+inside the fact, since F4's census holds the observing fact to
+constructing the key — it caught the first draft, which had moved the
+construction into the helper). IPJ-1-3 [MAJOR] — the
+matrix's header named `f7b94e70`, the head the generator ran on with the
+TGF-6 changes uncommitted (the repository's convention: every earlier
+regeneration names the head of its run — 9969226a, 64229842, 148a339 —
+none its own commit); TAKEN as the sharper convention: regenerated on
+the landing head at every landing, so the header names that head's
+parent at most. IPJ-1-4 [MAJOR] — `Observed` asserted "exactly once" at
+the instant of the first sighting, so a duplicate posted inside the
+relay's window after it could escape; root cause: the test helper.
+TAKEN: one more relay window plus a margin is pumped after the first
+sighting before the count is held to one (20 s for the six
+facts, from 15). IPJ-1-5 [MAJOR] — the ledger's subject binding accepted
+"(#746)" as a fallback, so one #746 squash could stand in for another;
+root cause: the census. TAKEN: the fallback removed — every squash
+carries "(#N)" from GitHub's title and every merge "Merge pull request
+#N", the fourteen rows bound exactly; the mutation that names this
+branch's own TGF-6/7/8 squash for PR B1's row (an ancestor whose subject
+carries "(#746)") now FAILS the census where before it passed. IPJ-1-6
+[MAJOR] — the §W-C census's composed-Value allowance admitted any
+manifest id ending in Value whose base literal existed anywhere and
+whose composition `id + "Value"` existed anywhere; root cause: the
+census. TAKEN: the allowance is the set SliderRow's calls compose
+(SliderValueIds), the mutation adding GraphInspectorBodyValue to the
+manifest now caught. Verdict as returned: not safe to continue (IPJ-1-1,
+IPJ-1-2) — resolved here; four mutations caught of four
+(the attachment's degree altered in the golden; the derivation dropping
+the orphans; PR B1's row naming this branch's own #746 squash; a Value
+id no SliderRow composes);
+the CI-shaped regression twice more on this tree (10 m 11 s and 10 m 13 s; the
+first's one failure the trigger census's catch above, the second green,
+2,916 facts).
+IPJ-2 runs on the fixed head.
+
+**Codoki's second round, on 045bc23c: approved with two notes, both
+taken here** — the §W-C census's walk over the graph shell is recursive
+with obj excluded (a subfolder refactor cannot hide an id), and the
+value peer's composition `id + "Value"` is detected with or without
+spaces around the plus. Its testing note — a regression test that
+simulates a missing manifest entry — is the mutation ledger's TGF-4 row
+(a literal id set under the graph shell that no row lists; a XAML id
+renamed to one no row lists), run byte-restored rather than kept as a
+seam. CI's Windows lane on 045bc23c failed on the stale tables
+(IPJ-1-1), as the census here had.
 
 ### Tests that pin PR F (revision 5's list, frozen; the task loop records what lands)
 
@@ -17833,16 +17914,16 @@ that exists and is not keyed is not claimed as keyed.
 | §E | risk | ER-1 | unevidenced by id — §E's pinning list is not keyed per id | — |
 | §E | risk | ER-2 | unevidenced by id — §E's pinning list is not keyed per id | — |
 | §E | risk | ER-3 | unevidenced by id — §E's pinning list is not keyed per id | — |
-| §F | contract | F1 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `GraphStatusNote`, `GraphBlockedReason`, `GraphAnnouncerCensus`, `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, +21 more |
+| §F | contract | F1 | Task loop, Post-implementation passes (PR F), Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `GraphStatusNote`, `GraphBlockedReason`, `GraphAnnouncerCensus`, `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, +22 more |
 | §F | contract | F2 | Task loop | `GraphOpenBenchmarks`, `GraphRendererBenchmarks`, `LargeGraphOpensLaysOutPansAndStepsUnderBudget` |
 | §F | contract | F3 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `ParityHarnessCensus`, `TheLayoutSectionIsTheSessionsSixtiethTickQuantised`, `TwoLayoutsOverOneVaultAreBitIdentical`, `GraphVaultInventory`, `WcMatrixGraphEvidenceCensus`, `DeliveryEvidenceCensus`, `ChordTableTests`, `GraphContractsCitationCensus` |
-| §F | contract | F4 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `GraphStatusNote`, `GraphBlockedReason`, `GraphAnnouncerCensus`, `ParityHarnessCensus`, `WcMatrixGraphEvidenceCensus`, `DeliveryEvidenceCensus`, `ChordTableTests`, `GraphContractsCitationCensus` |
+| §F | contract | F4 | Task loop, Post-implementation passes (PR F), Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `GraphStatusNote`, `GraphBlockedReason`, `GraphAnnouncerCensus`, `GraphReconciliationCensus`, `ParityHarnessCensus`, `WcMatrixGraphEvidenceCensus`, `DeliveryEvidenceCensus`, `ChordTableTests`, +1 more |
 | §F | contract | F5 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `WcMatrixGraphEvidenceCensus`, `IsFluentCollapsedScrollBarPart`, `ParityHarnessCensus`, `DeliveryEvidenceCensus`, `ChordTableTests`, `GraphContractsCitationCensus` |
 | §F | contract | F6 | Task loop | `TheContainerExposesSelectionAndTheZoomValue`, `NoHostTrimTouchesTheNeedle`, `BundlePagingSpec`, `ConnectionsPhrase` |
 | §F | contract | F7 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `GraphDocumentTests`, `GraphTableTests`, `ShowConnections`, `ConnectionsLeafTests`, `GraphPreferencesViewModel`, `GraphNavigatorTests`, `GraphPreferencesTests`, `GraphDiagramView`, +8 more |
 | §F | contract | F8 | Task loop | `WcMatrixGraphEvidenceCensus`, `IsFluentCollapsedScrollBarPart` |
 | §F | contract | F9 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `GraphContractsCitationCensus`, `ParityHarnessCensus`, `WcMatrixGraphEvidenceCensus`, `DeliveryEvidenceCensus`, `ChordTableTests` |
-| §F | contract | F10 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | ImeCompositionLifecycleAndClipboardPaste (not in the tree), `NoHostTrimTouchesTheNeedle`, `ParityHarnessCensus`, `WcMatrixGraphEvidenceCensus`, `DeliveryEvidenceCensus`, `ChordTableTests`, `GraphContractsCitationCensus` |
+| §F | contract | F10 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `NoHostTrimTouchesTheNeedle`, `GraphReconciliationCensus`, `ParityHarnessCensus`, `WcMatrixGraphEvidenceCensus`, `DeliveryEvidenceCensus`, `ChordTableTests`, `GraphContractsCitationCensus` |
 | §F | decision | FD-1 | Task loop | `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, `NoteCreateFailed`, `IterationsPerStep`, `DiagramZoomPercent`, +4 more |
 | §F | decision | FD-2 | Task loop | `ParityHarnessCensus`, `TheLayoutSectionIsTheSessionsSixtiethTickQuantised`, `TwoLayoutsOverOneVaultAreBitIdentical`, `GraphVaultInventory` |
 | §F | decision | FD-3 | Task loop | `WcMatrixGraphEvidenceCensus`, `IsFluentCollapsedScrollBarPart` |
@@ -17859,7 +17940,7 @@ that exists and is not keyed is not claimed as keyed.
 | §F | divergence | FD-D3 | Task loop | `GraphStatusNote`, `GraphBlockedReason`, `GraphAnnouncerCensus` |
 | §F | divergence | FD-D4 | Task loop | `WcMatrixGraphEvidenceCensus`, `IsFluentCollapsedScrollBarPart` |
 | §F | divergence | FD-D5 | Task loop | `GraphContractsCitationCensus` |
-| §F | risk | FR-1 | Task loop | `ParityHarnessCensus`, `TheLayoutSectionIsTheSessionsSixtiethTickQuantised`, `TwoLayoutsOverOneVaultAreBitIdentical`, `GraphVaultInventory`, ImeCompositionLifecycleAndClipboardPaste (not in the tree), `NoHostTrimTouchesTheNeedle` |
+| §F | risk | FR-1 | Task loop | `ParityHarnessCensus`, `TheLayoutSectionIsTheSessionsSixtiethTickQuantised`, `TwoLayoutsOverOneVaultAreBitIdentical`, `GraphVaultInventory`, `NoHostTrimTouchesTheNeedle`, `GraphReconciliationCensus` |
 | §F | risk | FR-2 | Task loop | `GraphContractsCitationCensus` |
 | §F | risk | FR-3 | unevidenced by id — §F's pinning list is not keyed per id | — |
 | §F | risk | FR-4 | Task loop | `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, `NoteCreateFailed`, `IterationsPerStep`, `DiagramZoomPercent`, +7 more |

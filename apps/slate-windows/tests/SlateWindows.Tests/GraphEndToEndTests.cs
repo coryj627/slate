@@ -160,6 +160,10 @@ public sealed class GraphEndToEndTests
         public void Observed(string line)
         {
             _ = PumpedDispatcher.PumpUntil(() => Count(line) > 0, TimeSpan.FromSeconds(5));
+            // Then one more relay window with a margin, so a late duplicate
+            // or a straggler of the class cannot hide behind the first
+            // sighting (IPJ-1-4); then the line arrived exactly once.
+            _ = PumpedDispatcher.PumpUntil(() => false, GraphAnnouncer.DefaultWindow + TimeSpan.FromMilliseconds(100));
             Assert.True(Count(line) == 1, $"expected the line once, saw it {Count(line)} times: {line}\n{string.Join("\n", Lines)}");
         }
 
@@ -264,7 +268,16 @@ public sealed class GraphEndToEndTests
         Assert.Equal(1, host.Count(Status(new GraphStatusNote.Opened())));
         GraphPublication publication = document.Publication;
         Assert.Equal(new GraphVisibilityQuery(DefaultFilter, string.Empty, null), publication.Query);
-        Assert.Equal(1, host.Count(Render(new GraphA11yEvent.GraphSnapshotSummary(publication.Snapshot!.SummaryCounts))));
+        // The summary: the GOLDEN's — its counts derived from its snapshot
+        // under the default filter (the derivation validated against the
+        // golden's own verbatim string under its inclusive filter), the
+        // line once, the publication's string, the total (IPJ-1-2).
+        Assert.Equal(GoldenTableSummary(golden), SummaryFromTheGolden(golden, includeAttachments: true));
+        // The open line, constructed here so the trigger census sees this
+        // fact construct the key it observes (F4).
+        string openSummary = Render(new GraphA11yEvent.GraphSnapshotSummary(CountsFromTheGolden(golden, includeAttachments: false)));
+        Assert.True(host.Count(openSummary) == 1, $"expected the golden-derived summary once: {openSummary}\n{string.Join("\n", host.Lines)}");
+        Assert.Equal(GoldenEntry(golden.GetProperty("visibility"), "query", "default").GetProperty("total").GetUInt64(), publication.Total);
         // The initial rows are under the FETCHED default sort
         // (`graph_table_default_sort`, AD-1), one of the golden's sixteen.
         Assert.Equal(SlateUniffiMethods.GraphTableDefaultSort(), publication.AcceptedSort);
@@ -336,7 +349,48 @@ public sealed class GraphEndToEndTests
         string[] orphans = Keys(GoldenEntry(golden.GetProperty("visibility"), "query", "orphans").GetProperty("visible"));
         Assert.Equal(orphans, document.Publication.Rows.Select(r => r.StableKey).ToArray());
         host.Observed(Render(new GraphA11yEvent.GraphPreset(new GraphPresetOutcome.Orphans((ulong)orphans.Length))));
+
+        // The golden's own filter (attachments in) through the inspector:
+        // the rows, the summary VERBATIM and the total against the golden
+        // entry under the accepted sort (IPJ-1-2).
+        host.Workspace.ToggleGraphInspector();
+        host.Workspace.Inspector.SetBackendFilter(new GraphFilter(true, true, false));
+        Host.Settle(document);
+        Assert.Equal(new GraphFilter(true, true, false), document.Publication.Query.Filter);
+        AssertRowsEqualTheGoldenSort(golden, document.Publication, SortName(document.Publication.AcceptedSort), underTheGoldensFilter: true);
     });
+
+    /// <summary>The snapshot summary's counts derived from the golden's
+    /// snapshot entries under a filter: the notes; the ghosts as the
+    /// unresolved targets; the orphans among the visible; the links as the
+    /// visible nodes' incoming links and embeds, one per edge; the Filtered
+    /// flag for a filter other than the default. The derivation is held to
+    /// the golden's verbatim string under its inclusive filter before it
+    /// is used under the default one (IPJ-1-2).</summary>
+    private static GraphSnapshotCounts CountsFromTheGolden(JsonElement golden, bool includeAttachments)
+    {
+        var visible = golden.GetProperty("snapshot").EnumerateArray()
+            .Where(n => includeAttachments || n.GetProperty("kind").GetString() != "attachment")
+            .ToList();
+        ulong notes = (ulong)visible.Count(n => n.GetProperty("kind").GetString() == "note");
+        ulong unresolved = (ulong)visible.Count(n => n.GetProperty("kind").GetString() == "ghost");
+        ulong orphans = (ulong)visible.Count(n => n.GetProperty("is_orphan").GetBoolean());
+        ulong links = (ulong)visible.Sum(n => n.GetProperty("in_links").GetInt64() + n.GetProperty("in_embeds").GetInt64());
+        // The Filtered flag marks a filter other than the default one: the
+        // golden's string carries it under the inclusive filter (the
+        // self-check holds that), the default filter's open speaks none.
+        bool filtered = includeAttachments;
+        return new GraphSnapshotCounts(notes, links, orphans, unresolved, filtered);
+    }
+
+    /// <summary>The golden's one summary string: its sixteen table entries
+    /// (all under the query "all") agree on it, and Distinct().Single()
+    /// holds them to that.</summary>
+    private static string GoldenTableSummary(JsonElement golden) =>
+        golden.GetProperty("table").EnumerateArray().Select(e => e.GetProperty("summary").GetString()!).Distinct().Single();
+
+    private static string SummaryFromTheGolden(JsonElement golden, bool includeAttachments) =>
+        Render(new GraphA11yEvent.GraphSnapshotSummary(CountsFromTheGolden(golden, includeAttachments)));
 
     private static string SortName(GraphTableSort sort)
     {
@@ -397,10 +451,18 @@ public sealed class GraphEndToEndTests
             Assert.Equal(expected.GetProperty("folder").GetString(), actual.Cells[7].Replace('\\', '/'));
             Assert.Equal(expected.GetProperty("kind").GetString(), actual.Cells[8]);
         }
-        // The summary is the snapshot's under the document's filter; the
-        // golden's is under the inclusive one — equal when the filters
-        // agree, which the pin on the rows already settles.
-        Assert.False(string.IsNullOrWhiteSpace(publication.Summary));
+        // The summary verbatim (IPJ-1-2): under the golden's inclusive
+        // filter the golden's own string and total; under the default
+        // filter the string rendered from the golden's counts.
+        if (underTheGoldensFilter)
+        {
+            Assert.Equal(entry.GetProperty("summary").GetString(), publication.Summary);
+            Assert.Equal(entry.GetProperty("total").GetUInt64(), publication.Total);
+        }
+        else
+        {
+            Assert.Equal(SummaryFromTheGolden(golden, includeAttachments: false), publication.Summary);
+        }
     }
 
     /// <summary>The Note column, read through the Grid pattern of the grid's

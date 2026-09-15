@@ -71,12 +71,11 @@ public sealed class GraphReconciliationCensus
                 $"the ledger names {sha} as PR #{pr}'s merge commit, and it is not an ancestor of this head");
             string subject = Git("log", "-1", "--format=%s", sha).Trim();
             // A merge commit names its PR in the subject; a squash carries
-            // "(#N)" for the PR or "(#746)" for the issue — the series'
-            // squashes were titled by slice with the issue, and their PR
-            // binding is the API's mergeCommit recorded at generation.
+            // "(#N)" for the PR — GitHub appends it to the squash's title.
+            // The issue's "(#746)" in the series' titles is NOT a binding:
+            // with it, one #746 squash could stand in for another (IPJ-1-5).
             bool bound = subject.StartsWith($"Merge pull request #{pr} ", StringComparison.Ordinal)
-                || subject.Contains($"(#{pr})", StringComparison.Ordinal)
-                || subject.Contains("(#746)", StringComparison.Ordinal);
+                || subject.Contains($"(#{pr})", StringComparison.Ordinal);
             Assert.True(bound, $"the ledger's row for PR #{pr} names {sha}, whose subject is \"{subject}\"");
         }
         string baseSha = Regex.Match(section, @"E's\s+merge\s+commit\s+`([0-9a-f]{9,40})`\s+is\s+an\s+ancestor").Groups[1].Value;
