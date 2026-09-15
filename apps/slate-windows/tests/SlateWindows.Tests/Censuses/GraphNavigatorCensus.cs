@@ -892,6 +892,64 @@ public sealed class GraphNavigatorCensus
         Assert.Contains("UnwireWorkspaceGraph", calls);
     }
 
+    // --- W6-2 PR E: Term W7's triggers, the closed list (E-12 iii) -------------
+
+    /// <summary>W6-2 PR E, E-12 (iii), ED-2: Term W7's triggers are the
+    /// closed list — SetVerbosity, SetNameQuery, SetConnectionsDepth,
+    /// SetMode, SetForces, SetFilters, SetGroups, SetDisplay — and each
+    /// updates ITS field alone: every <c>with</c> over the config in the
+    /// preferences type sits in one of them, a trigger's outermost
+    /// <c>with</c> assigns exactly its one field and the trigger then
+    /// schedules, and the two that share <c>Filters</c> part it in a nested
+    /// <c>with</c> — the needle's <c>NameQuery</c>; the flags' three
+    /// booleans and never the needle.</summary>
+    [Fact]
+    public void TermW7sTriggersAreTheClosedListEachUpdatingItsFieldAlone()
+    {
+        (string Relative, CSharpSource Source) file = ShellCompilation.Sources.Single(s => s.Relative == "Graph/GraphPreferencesViewModel.cs");
+        SemanticModel model = ShellCompilation.ModelFor(file.Source);
+        var outer = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        var nested = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (WithExpressionSyntax with in file.Source.Root.DescendantNodes().OfType<WithExpressionSyntax>())
+        {
+            string owner = OwnerOf(with);
+            string fields = string.Join(",", with.Initializer.Expressions.OfType<AssignmentExpressionSyntax>().Select(a => CSharpSource.Normalize(a.Left)));
+            string type = model.GetTypeInfo(with).Type?.ToDisplayString() ?? "?";
+            if (with.Ancestors().OfType<WithExpressionSyntax>().Any())
+            {
+                Assert.Equal("uniffi.slate_uniffi.GraphFilterConfig", type);
+                Assert.False(nested.ContainsKey(owner), $"{owner} parts Filters twice");
+                nested[owner] = fields;
+                continue;
+            }
+            Assert.Equal("uniffi.slate_uniffi.GraphConfig", type);
+            Assert.False(outer.ContainsKey(owner), $"{owner} writes the config twice");
+            outer[owner] = fields;
+            MethodDeclarationSyntax trigger = with.Ancestors().OfType<MethodDeclarationSyntax>().First();
+            Assert.Contains(
+                trigger.DescendantNodes().OfType<InvocationExpressionSyntax>(),
+                call => CSharpSource.Normalize(call.Expression) == "ScheduleSave");
+        }
+        Assert.Equal(
+            [
+                "SetConnectionsDepth=ConnectionsDepth",
+                "SetDisplay=Display",
+                "SetFilters=Filters",
+                "SetForces=Forces",
+                "SetGroups=Groups",
+                "SetMode=Mode",
+                "SetNameQuery=Filters",
+                "SetVerbosity=Verbosity",
+            ],
+            outer.Select(pair => $"{pair.Key}={pair.Value}").ToArray());
+        Assert.Equal(
+            [
+                "SetFilters=IncludeAttachments,IncludeGhosts,OrphansOnly",
+                "SetNameQuery=NameQuery",
+            ],
+            nested.Select(pair => $"{pair.Key}={pair.Value}").ToArray());
+    }
+
     // --- (viii) the depth seam's one installer ---------------------------------
 
     /// <summary>C-10, C-15 (viii): the leaf's DepthChanged seam is installed

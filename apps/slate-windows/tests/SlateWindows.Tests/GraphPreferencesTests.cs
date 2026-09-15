@@ -870,6 +870,128 @@ public sealed class GraphPreferencesTests : IDisposable
         }
     }
 
+    /// <summary>W6-2 PR E (E-10, ED-2; Terms X1, Y2, Z1, Z2, K2): the
+    /// inspector's three triggers update THEIR field alone and schedule —
+    /// the flags keep the needle, the groups and the display touch nothing
+    /// else — the display's and the forces' change events fire once per
+    /// REAL change, the same value re-asserted schedules nothing and raises
+    /// nothing, and the four fields reach the file as written.</summary>
+    [Fact]
+    public void TheInspectorsTriggersUpdateTheirFieldAloneRaiseTheirEventsAndRoundTrip()
+    {
+        GraphConfig expected = GraphConfigs.WithTheInspectorsFields();
+        PumpedDispatcher.Run(() =>
+        {
+            var preferences = new GraphPreferencesViewModel(_root, new GraphConfigWriter());
+            int displayChanged = 0;
+            int forcesChanged = 0;
+            preferences.DisplayChanged += () => displayChanged++;
+            preferences.ForcesChanged += () => forcesChanged++;
+            GraphConfig loaded = preferences.CurrentConfig;
+            preferences.SetNameQuery(expected.Filters.NameQuery);
+            Assert.Equal(1UL, preferences.PendingGenerationForTests);
+            // The flags: the three booleans, the needle kept, nothing else.
+            preferences.SetFilters(new GraphFilter(expected.Filters.IncludeAttachments, expected.Filters.IncludeGhosts, expected.Filters.OrphansOnly));
+            Assert.Equal(2UL, preferences.PendingGenerationForTests);
+            Assert.Equal(expected.Filters, preferences.CurrentConfig.Filters);
+            Assert.Equal(loaded.Groups, preferences.CurrentConfig.Groups);
+            Assert.Equal(loaded.Display, preferences.CurrentConfig.Display);
+            Assert.Equal(loaded.Forces, preferences.CurrentConfig.Forces);
+            Assert.Equal(loaded.Mode, preferences.CurrentConfig.Mode);
+            Assert.Equal(loaded.ConnectionsDepth, preferences.CurrentConfig.ConnectionsDepth);
+            Assert.Equal(loaded.Verbosity, preferences.CurrentConfig.Verbosity);
+            // The groups: the list and nothing else.
+            preferences.SetGroups(expected.Groups);
+            Assert.Equal(3UL, preferences.PendingGenerationForTests);
+            Assert.Equal(expected.Groups, preferences.CurrentConfig.Groups);
+            Assert.Equal(expected.Filters, preferences.CurrentConfig.Filters);
+            Assert.Equal(loaded.Display, preferences.CurrentConfig.Display);
+            Assert.Equal(loaded.Forces, preferences.CurrentConfig.Forces);
+            Assert.Equal(loaded.Mode, preferences.CurrentConfig.Mode);
+            Assert.Equal(loaded.ConnectionsDepth, preferences.CurrentConfig.ConnectionsDepth);
+            Assert.Equal(loaded.Verbosity, preferences.CurrentConfig.Verbosity);
+            // The display, its event once.
+            preferences.SetDisplay(expected.Display);
+            Assert.Equal(4UL, preferences.PendingGenerationForTests);
+            Assert.Equal(expected.Display, preferences.CurrentConfig.Display);
+            Assert.Equal(expected.Groups, preferences.CurrentConfig.Groups);
+            Assert.Equal(loaded.Forces, preferences.CurrentConfig.Forces);
+            Assert.Equal(loaded.Mode, preferences.CurrentConfig.Mode);
+            Assert.Equal(loaded.ConnectionsDepth, preferences.CurrentConfig.ConnectionsDepth);
+            Assert.Equal(1, displayChanged);
+            Assert.Equal(0, forcesChanged);
+            // The forces (PR D's trigger), its event once (IGU-4).
+            preferences.SetForces(expected.Forces);
+            Assert.Equal(5UL, preferences.PendingGenerationForTests);
+            Assert.Equal(expected.Forces, preferences.CurrentConfig.Forces);
+            Assert.Equal(expected.Display, preferences.CurrentConfig.Display);
+            Assert.Equal(loaded.Mode, preferences.CurrentConfig.Mode);
+            Assert.Equal(loaded.ConnectionsDepth, preferences.CurrentConfig.ConnectionsDepth);
+            Assert.Equal(1, forcesChanged);
+            Assert.Equal(1, displayChanged);
+            // The pending aggregate IS CurrentConfig.
+            Assert.Same(preferences.CurrentConfig, preferences.PendingAggregateForTests);
+            preferences.FireTickForTests();
+            Drain(preferences);
+            Assert.False(preferences.HasPendingForTests);
+            // The same values re-asserted: nothing scheduled, nothing raised.
+            preferences.SetFilters(new GraphFilter(expected.Filters.IncludeAttachments, expected.Filters.IncludeGhosts, expected.Filters.OrphansOnly));
+            preferences.SetGroups([.. expected.Groups]);
+            preferences.SetDisplay(expected.Display with { });
+            preferences.SetForces(expected.Forces with { });
+            Assert.False(preferences.HasPendingForTests);
+            Assert.Equal(1, displayChanged);
+            Assert.Equal(1, forcesChanged);
+            preferences.Shutdown();
+            Drain(preferences);
+        });
+        GraphConfig written = OnDisk();
+        Assert.Equal(expected.Filters, written.Filters);
+        Assert.Equal(expected.Groups, written.Groups);
+        Assert.Equal(expected.Display, written.Display);
+        Assert.Equal(expected.Forces, written.Forces);
+    }
+
+    /// <summary>W6-2 PR E (Term Y6; E-D6): under a read-only config the
+    /// inspector's edits stay LIVE — each trigger updates CurrentConfig and
+    /// raises its event — and every save is refused; the file is untouched.</summary>
+    [Fact]
+    public void TheReadOnlyGateKeepsTheInspectorsEditsLiveAndRefusesTheirSaves()
+    {
+        string path = Path.Combine(_root, ".slate", GraphConfigStore.FileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        byte[] bytes = GraphConfigs.InvalidUtf8(withBom: false);
+        File.WriteAllBytes(path, bytes);
+        GraphConfig expected = GraphConfigs.WithTheInspectorsFields();
+        PumpedDispatcher.Run(() =>
+        {
+            var preferences = new GraphPreferencesViewModel(_root, new GraphConfigWriter());
+            Assert.False(preferences.IsWritable);
+            Assert.NotNull(preferences.LoadFailure);
+            int displayChanged = 0;
+            int forcesChanged = 0;
+            preferences.DisplayChanged += () => displayChanged++;
+            preferences.ForcesChanged += () => forcesChanged++;
+            preferences.SetFilters(new GraphFilter(expected.Filters.IncludeAttachments, expected.Filters.IncludeGhosts, expected.Filters.OrphansOnly));
+            preferences.SetGroups(expected.Groups);
+            preferences.SetDisplay(expected.Display);
+            preferences.SetForces(expected.Forces);
+            // Live: the default's needle is empty, the flags are the edit's.
+            Assert.Equal(expected.Filters with { NameQuery = string.Empty }, preferences.CurrentConfig.Filters);
+            Assert.Equal(expected.Groups, preferences.CurrentConfig.Groups);
+            Assert.Equal(expected.Display, preferences.CurrentConfig.Display);
+            Assert.Equal(expected.Forces, preferences.CurrentConfig.Forces);
+            Assert.Equal(1, displayChanged);
+            Assert.Equal(1, forcesChanged);
+            // Refused: four schedules, none pending.
+            Assert.Equal(4, preferences.RefusedForTests);
+            Assert.False(preferences.HasPendingForTests);
+            preferences.Shutdown();
+            Drain(preferences);
+        });
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+    }
+
     [Fact]
     public void AVerbosityChangeUnderAPresetPersistsThePrePresetFilter()
     {

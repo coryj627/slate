@@ -159,6 +159,17 @@ public sealed class GraphConfigWriterTests : IDisposable
         Assert.Null(writer.Newest(_root));
     }
 
+    /// <summary>W6-2 PR E (E-10): the inspector's four fields ride the
+    /// writer's queue to the file unchanged.</summary>
+    [Fact]
+    public void TheInspectorsFourFieldsRoundTripThroughTheWriter()
+    {
+        var writer = new GraphConfigWriter();
+        GraphConfig changed = GraphConfigs.WithTheInspectorsFields();
+        Assert.True(writer.Enqueue(_root, changed, writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+        GraphConfigs.AssertEqual(changed, OnDisk());
+    }
+
     private static GraphConfig WithDepth(uint depth) => SlateUniffiMethods.GraphConfigDefault() with { ConnectionsDepth = depth };
 
     private GraphConfig OnDisk() => new GraphConfigStore(_root).Read().Config;

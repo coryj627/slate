@@ -18,6 +18,22 @@ internal static class GraphConfigs
         return [.. preamble, .. "{\"version\":1,\"future\":\"private-config-detail-"u8.ToArray(), 0xFF, .. "\"}"u8.ToArray()];
     }
 
+    /// <summary>W6-2 PR E: a config with the inspector's four fields — the
+    /// flags with a needle, two groups in core's successive styles, the
+    /// display, the forces — set away from the default's.</summary>
+    public static GraphConfig WithTheInspectorsFields()
+    {
+        GraphGroupStyle first = SlateUniffiMethods.GraphConfigNextGroupStyle(0);
+        GraphGroupStyle second = SlateUniffiMethods.GraphConfigNextGroupStyle(1);
+        return SlateUniffiMethods.GraphConfigDefault() with
+        {
+            Filters = new GraphFilterConfig(IncludeAttachments: true, IncludeGhosts: false, OrphansOnly: true, NameQuery: "hub"),
+            Groups = [new GraphGroup("note", first.ColorToken, first.RingStyle), new GraphGroup("hub", second.ColorToken, second.RingStyle)],
+            Display = new GraphDisplay(Arrows: false, TextFadeZoom: 1.5, NodeSizeMultiplier: 2.0, LinkThickness: 3.0),
+            Forces = new GraphForcesConfig(Center: 0.25, Repel: 0.5, Link: 0.75, LinkDistance: 1.0),
+        };
+    }
+
     public static void AssertEqual(GraphConfig expected, GraphConfig actual)
     {
         Assert.Equal(expected.Filters, actual.Filters);
@@ -269,6 +285,19 @@ public sealed class GraphConfigStoreTests : IDisposable
         string written = File.ReadAllText(ConfigPath);
         Assert.Equal(SlateUniffiMethods.GraphConfigEncode(changed, existing), written);
         Assert.Contains("\"future\"", written, StringComparison.Ordinal);
+        GraphConfigs.AssertEqual(changed, store.Read().Config);
+    }
+
+    /// <summary>W6-2 PR E (E-10): the inspector's four fields — the flags,
+    /// the groups, the display, the forces — round-trip through the store
+    /// as core's canonical text.</summary>
+    [Fact]
+    public void TheInspectorsFourFieldsRoundTripThroughTheStore()
+    {
+        var store = new GraphConfigStore(_root);
+        GraphConfig changed = GraphConfigs.WithTheInspectorsFields();
+        store.Write(changed);
+        Assert.Equal(SlateUniffiMethods.GraphConfigEncode(changed, null), File.ReadAllText(ConfigPath));
         GraphConfigs.AssertEqual(changed, store.Read().Config);
     }
 

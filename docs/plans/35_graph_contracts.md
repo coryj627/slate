@@ -15157,6 +15157,59 @@ codex passes (IPI-n) verify the code against this frozen text; no round
 PENDING, the section written to their defaults; ED-8's spec amendments
 are applied in the task loop. Precedent applied; the owner may overrule.
 
+### Task loop — records (PR E)
+
+**TGE-1 — T1: rule W's three new triggers and the two events — `SetFilters`,
+`SetGroups`, `SetDisplay`, `DisplayChanged`, `ForcesChanged`; the four
+fields' round-trip; the Term W7 trigger census (E-1, E-10, E-12 iii; Terms
+X1, Y2, Z1, Z2, K2; ED-2).** THE PREFERENCES: `GraphPreferencesViewModel`
+gains `SetFilters(GraphFilter)` (the three backend flags into `filters`
+through a nested `with` that leaves the needle as `SetNameQuery` left it;
+a no-op for the current flags), `SetGroups(IReadOnlyList<GraphGroup>)`
+(the list copied into `groups`; a no-op for a sequence-equal list),
+`SetDisplay(GraphDisplay)` (the field; a no-op for the current display;
+`DisplayChanged` raised after the real change, before the schedule) and
+the two events `DisplayChanged` and `ForcesChanged` — `SetForces` (D's
+trigger) now raises `ForcesChanged` after its real change (IGU-4), its
+no-op raising nothing; every trigger schedules after its one write and
+the read-only gate stays the schedule's (Term Y6: the field moves, the
+save is refused). THE FACTS: `GraphPreferencesTests` gains
+TheInspectorsTriggersUpdateTheirFieldAloneRaiseTheirEventsAndRoundTrip
+(a bare preferences object over a private writer: the needle, then the
+flags with the needle kept and every other field untouched, the groups,
+the display with its event once, the forces with its event once, the
+pending aggregate IS `CurrentConfig`, the tick and the drain, the same
+values re-asserted scheduling nothing and raising nothing, the four
+fields on disk as written) and
+TheReadOnlyGateKeepsTheInspectorsEditsLiveAndRefusesTheirSaves (invalid
+UTF-8 on disk → `IsWritable` false with a `LoadFailure`; the four
+triggers move `CurrentConfig` and raise their events, four refusals,
+nothing pending, the bytes untouched); `GraphConfigStoreTests` gains
+TheInspectorsFourFieldsRoundTripThroughTheStore (core's canonical text
+and the read-back equal by field) and the shared helper
+`GraphConfigs.WithTheInspectorsFields()` (the flags with a needle, two
+groups in core's successive styles, the display, the forces);
+`GraphConfigWriterTests` gains TheInspectorsFourFieldsRoundTripThroughTheWriter.
+THE CENSUS: `GraphNavigatorCensus` gains
+TermW7sTriggersAreTheClosedListEachUpdatingItsFieldAlone (E-12 iii): every
+`with` over the config in the preferences type sits in a trigger, a
+trigger's outermost `with` assigns exactly its one field — the closed
+list `SetVerbosity`, `SetNameQuery`, `SetConnectionsDepth`, `SetMode`,
+`SetForces`, `SetFilters`, `SetGroups`, `SetDisplay` — and then
+schedules; the two that share `Filters` part it in a nested `with` (the
+needle's `NameQuery`; the flags' three booleans and never the needle).
+DEVIATIONS: none. MUTATIONS, each restored byte for byte, each caught by
+the named fact: the flags clobbering the needle (the fact, and the
+census), `SetGroups` touching `Mode` (the census, and the fact — the
+fact's "nothing else" checks widened to Mode, the depth and the level
+after the first sweep let it through), the display's event dropped, the
+forces' event dropped, the display's no-op scheduling and speaking, the
+groups' no-op scheduling, the flags' no-op scheduling, a planted
+two-field trigger, a trigger that never schedules, a read-only edit
+dropped instead of kept live, the store dropping the groups, the store
+dropping the display (through the writer) — fourteen of fourteen caught
+(`gE-mutations.py`, the T1 entries).
+
 ### Tests that pin PR E (revision 6's list, frozen; the task loop records what lands)
 
 - GraphInspectorTests (new): the view model's reads and writes per rule
