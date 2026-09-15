@@ -17578,6 +17578,20 @@ changed, so the unit regression stands as run for the reviewed head and
 is re-run once more on this one; the merge's own conditions (CI green
 on the exact head; codoki's approval) are read on this head.
 
+**Codoki's eighth round, on 2d1d227d: "requires changes" on a claim that
+is not one** — that `Assert.Fail` is not xUnit's API (it is: xunit.assert
+2.4.2 onward, this project on xunit 2.9.3 with twenty-nine other uses,
+the file compiled and run by the Windows lane on that head) — and a
+trade-off note on the STA runner's background thread, answered on the
+line and in the thread (the join precedes everything on the normal path;
+the flag matters only after the dispatcher shutdown on a timeout). Its
+four inline threads, three taken on earlier heads and this one answered,
+are resolved; a re-run was asked for on the tag and did not come, so
+this documents-only landing asks again by the push. No test or shell
+source changes here: the unit regression stands as run for 2d1d227d
+(the fourteenth, 2,924 facts), and the document-reading censuses are
+re-run on this tree before the push.
+
 ### Tests that pin PR F (revision 5's list, frozen; the task loop records what lands)
 
 - GraphEndToEndTests (new): F1's six facts.
