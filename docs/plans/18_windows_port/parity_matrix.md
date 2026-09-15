@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-09-14 at `9969226a` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-09-15 at `6669f442` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -26,7 +26,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 
 ## Command inventory
 
-182 stable command ids from the `SlateCommandID` catalog (drift-test-enforced), 52 carrying chords from the registration blocks and definition-table chord switches (blank chord = palette/menu-only or focus-scoped by design; the generator fails if a `hotkey:` literal goes unattributed). Spoken hotkeys derive from chords via the `HotkeySpoken` glyph walk (mirrored here); Windows chord mapping is by platform convention (⌘→Ctrl, ⌥→Alt; decision 12), declared in one table in W5-1 with spoken strings substituted per-platform through the canonical vocabulary.
+182 stable command ids from the `SlateCommandID` catalog (drift-test-enforced) plus 1 Windows-only (W6-2 PR B2, B2-D6: the mac's ⌘[ panel key delivered as the command `slate.graph.connectionsBack`, read from the Windows chord table's projection `chords.json`), 53 carrying chords from the registration blocks and definition-table chord switches (blank chord = palette/menu-only or focus-scoped by design; the generator fails if a `hotkey:` literal goes unattributed). Spoken hotkeys derive from chords via the `HotkeySpoken` glyph walk (mirrored here); Windows chord mapping is by platform convention (⌘→Ctrl, ⌥→Alt; decision 12), declared in one table in W5-1 with spoken strings substituted per-platform through the canonical vocabulary.
 
 | command id | capability (mac label) | mac chord | spoken hotkey | consuming W issue | status |
 |---|---|---|---|---|---|
@@ -212,6 +212,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.workspace.shrinkPane` | Shrink Pane | ⌥⌘- | Option Command Minus | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.workspace.splitDown` | Split Down | ⌥⌘\ | Option Command Backslash | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.workspace.splitRight` | Split Right | ⌘\ | Command Backslash | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.graph.connectionsBack` | Connections: Back | ⌘[ | Command Left Bracket | #746 (W6-2) | implemented; local gates green 2026-09-05; interactive CI + human AT pending |
 
 The palette surface itself (ranking via the W0.5-1 core engine, sections, recents, chord display) is **#741 (W5-1)**; the quick switcher is **#723 (W1-4)**.
 
@@ -273,7 +274,7 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Templates picker + prompt flow | template views | #743 (W5-3) | implemented; local gates green 2026-08-20; interactive CI + human AT pending |
 | File management + bulk rename | sidebar/file commands | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending (bulk PROPERTY rename shipped in W4-4; the W5-4 scope is the file verbs, the Move-To picker, structural undo, and the mutation harness) |
 | Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
-| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | pending |
+| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | implemented; local gates green 2026-09-15; interactive CI + human AT pending |
 
 ## Settings surface
 

@@ -2634,33 +2634,77 @@
           "apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanvasScenarioCensus.cs#CanvasScenarioArtifacts_MatchCommittedGoldensByteForByte"
         ]
       },
-      "graph": {
+      "graphTable": {
         "implementation": [
           "apps/slate-windows/src/SlateWindows/Graph/GraphDocumentViewModel.cs#GraphDocumentViewModel",
           "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphFollowActiveTab",
           "apps/slate-windows/src/SlateWindows/Graph/GraphTableView.cs#GraphTableView",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphSurfaceView.cs#GraphSurfaceView"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphDocumentTests.cs#GraphDocumentTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphTableTests.cs#GraphTableTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_TableSortSelectionAndActivation_AreClean"
+        ]
+      },
+      "graphConnections": {
+        "implementation": [
           "apps/slate-windows/src/SlateWindows/Graph/ConnectionsLeafViewModel.cs#ConnectionsLeafViewModel",
           "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Connections.cs#ShowConnections",
-          "apps/slate-windows/src/SlateWindows/Graph/ConnectionsLeafView.cs#ConnectionsLeafView",
+          "apps/slate-windows/src/SlateWindows/Graph/ConnectionsLeafView.cs#ConnectionsLeafView"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/ConnectionsLeafTests.cs#ConnectionsLeafTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphConnections_LeafWalkDepthAndReRoot_AreClean"
+        ]
+      },
+      "graphNavigator": {
+        "implementation": [
           "apps/slate-windows/src/SlateWindows/Graph/GraphNavigator.cs#GraphNavigator",
           "apps/slate-windows/src/SlateWindows/Graph/GraphPreferencesViewModel.cs#GraphPreferencesViewModel",
-          "apps/slate-windows/src/SlateWindows/Graph/GraphSurfaceView.cs#GraphSurfaceView",
-          "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphWhereAmICommand",
+          "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphWhereAmICommand"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphNavigatorTests.cs#GraphNavigatorTests",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphPreferencesTests.cs#GraphPreferencesTests",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean"
+        ]
+      },
+      "graphDiagram": {
+        "implementation": [
           "apps/slate-windows/src/SlateWindows/Graph/GraphDiagramView.cs#GraphDiagramView",
           "apps/slate-windows/src/SlateWindows/Graph/GraphLayoutDriver.cs#GraphLayoutDriver",
           "apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs#GraphZoomInCommand"
         ],
         "tests": [
-          "apps/slate-windows/tests/SlateWindows.Tests/GraphDocumentTests.cs#GraphDocumentTests",
-          "apps/slate-windows/tests/SlateWindows.Tests/GraphTableTests.cs#GraphTableTests",
-          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_TableSortSelectionAndActivation_AreClean",
-          "apps/slate-windows/tests/SlateWindows.Tests/ConnectionsLeafTests.cs#ConnectionsLeafTests",
-          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphConnections_LeafWalkDepthAndReRoot_AreClean",
-          "apps/slate-windows/tests/SlateWindows.Tests/GraphNavigatorTests.cs#GraphNavigatorTests",
-          "apps/slate-windows/tests/SlateWindows.Tests/GraphPreferencesTests.cs#GraphPreferencesTests",
-          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean",
           "apps/slate-windows/tests/SlateWindows.Tests/GraphDiagramTests.cs#GraphDiagramTests",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_DiagramPeersTiersAndZoom_AreClean"
+        ]
+      },
+      "graph": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Graph/GraphDocumentViewModel.cs#GraphDocumentViewModel",
+          "apps/slate-windows/src/SlateWindows/Graph/ConnectionsLeafViewModel.cs#ConnectionsLeafViewModel",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphNavigator.cs#GraphNavigator",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphDiagramView.cs#GraphDiagramView",
+          "apps/slate-windows/src/SlateWindows/Graph/GraphInspectorViewModel.cs#GraphInspectorViewModel"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphEndToEndTests.cs#OpenGraphVaultExposesTheTableTheSummaryAndTheSortAgainstTheGolden",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphEndToEndTests.cs#TheConnectionsLeafWalksReRootsAndCreatesAgainstTheGolden",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphEndToEndTests.cs#TheDiagramReproducesTheGoldensSixtiethTickThenConvergesStepsZoomsAndReadsBack",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphEndToEndTests.cs#TheConfigRoundTripsThroughTheInspectorAndTheStore",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphEndToEndTests.cs#LargeGraphOpensLaysOutPansAndStepsUnderBudget",
+          "apps/slate-windows/tests/SlateWindows.Tests/GraphEndToEndTests.cs#AnnouncementGrammarConformsPerVerbosity",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_TableSortSelectionAndActivation_AreClean",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphConnections_LeafWalkDepthAndReRoot_AreClean",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_NavigatorFilterAndWhereAmI_AreClean",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphSurfaces_DiagramPeersTiersAndZoom_AreClean",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#GraphInspector_FiltersGroupsAndForces_AreClean",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/GraphTriggerParityCensus.cs#GraphTriggerParityCensus",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/GraphReconciliationCensus.cs#GraphReconciliationCensus",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/ParityHarnessCensus.cs#EveryGraphVaultFileIsInTheArtifact",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/WcMatrixGraphEvidenceCensus.cs#EveryGraphAutomationIdIsInAManifestRow"
         ]
       }
     },
@@ -2831,19 +2875,19 @@
       "slate.canvas.deleteMarked": "canvasMarks",
       "slate.canvas.groupMarked": "canvasMarks",
       "slate.canvas.colorMarked": "canvasMarks",
-      "slate.graph.openTab": "graph",
-      "slate.graph.showConnections": "graph",
-      "slate.graph.connectionsDeeper": "graph",
-      "slate.graph.connectionsShallower": "graph",
-      "slate.graph.connectionsBack": "graph",
-      "slate.graph.orphans": "graph",
-      "slate.graph.unresolved": "graph",
-      "slate.graph.mostLinked": "graph",
-      "slate.graph.whereAmI": "graph",
-      "slate.graph.zoomIn": "graph",
-      "slate.graph.zoomOut": "graph",
-      "slate.graph.actualSize": "graph",
-      "slate.graph.fitGraph": "graph"
+      "slate.graph.openTab": "graphTable",
+      "slate.graph.showConnections": "graphConnections",
+      "slate.graph.connectionsDeeper": "graphConnections",
+      "slate.graph.connectionsShallower": "graphConnections",
+      "slate.graph.connectionsBack": "graphConnections",
+      "slate.graph.orphans": "graphNavigator",
+      "slate.graph.unresolved": "graphNavigator",
+      "slate.graph.mostLinked": "graphNavigator",
+      "slate.graph.whereAmI": "graphNavigator",
+      "slate.graph.zoomIn": "graphDiagram",
+      "slate.graph.zoomOut": "graphDiagram",
+      "slate.graph.actualSize": "graphDiagram",
+      "slate.graph.fitGraph": "graphDiagram"
     },
     "issues": {
       "#720": "vault",

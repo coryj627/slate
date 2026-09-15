@@ -1877,6 +1877,47 @@ final class ParityHarnessTests: XCTestCase {
         }
     }
 
+    /// W6-2 §F (F3, FD-2): the twin of the Windows census's
+    /// EveryGraphVaultFileIsInTheArtifact — the graph vault's directory
+    /// WALKED, every file a `p:` key of the golden's snapshot and every
+    /// `p:` key a file that exists; a fixture added without a
+    /// regeneration fails here.
+    func testEveryGraphVaultFileIsInTheArtifact() throws {
+        let root = Self.graphFixturesDir
+        guard let enumerator = FileManager.default.enumerator(atPath: root.path) else {
+            XCTFail("cannot enumerate \(root.path)")
+            return
+        }
+        var files: [String] = []
+        while let relative = enumerator.nextObject() as? String {
+            var isDirectory: ObjCBool = false
+            let full = root.appendingPathComponent(relative).path
+            if FileManager.default.fileExists(atPath: full, isDirectory: &isDirectory), !isDirectory.boolValue {
+                files.append(relative.replacingOccurrences(of: "\\", with: "/"))
+            }
+        }
+        files.sort { Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16)) }
+        XCTAssertFalse(files.isEmpty)
+        let data = try Data(contentsOf: Self.goldenDir.appendingPathComponent("graph_queries.json"))
+        guard let golden = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let snapshot = golden["snapshot"] as? [[String: Any]]
+        else {
+            XCTFail("graph_queries.json has no snapshot array")
+            return
+        }
+        let pathKeys = snapshot
+            .compactMap { $0["key"] as? String }
+            .filter { $0.hasPrefix("p:") }
+            .map { String($0.dropFirst(2)) }
+            .sorted { Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16)) }
+        XCTAssertEqual(files, pathKeys, "the golden's p: keys are not the fixture's files")
+        for key in pathKeys {
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: root.appendingPathComponent(key).path),
+                "the golden names \(key), which the fixture lacks")
+        }
+    }
+
 }
 
 /// Canonical JSON writer — the Swift half of the fixed serialization

@@ -307,6 +307,12 @@ public sealed partial class GraphDiagramTests
             Assert.True(value.IsReadOnly);
             Assert.IsType<GraphViewportOutcome.Zoomed>(surface.ViewportCommand(GraphViewportVerb.ActualSize));
             Assert.Equal("Zoom 100 percent", value.Value);
+            // W6-2 §F (F6, FD-7): the Value is core's render of GraphZoom
+            // minus its period — pinned against the render, not a literal.
+            Assert.Equal(
+                GraphAnnouncer.RenderLabel(new GraphA11yEvent.GraphZoom(false, 100)).TrimEnd('.'),
+                value.Value);
+            Assert.EndsWith(".", GraphAnnouncer.RenderLabel(new GraphA11yEvent.GraphZoom(false, 100)));
             Assert.Equal(100u, diagram.Viewport.ZoomPercent);
             ulong id = diagram.VisibleIds[0];
             Assert.True(diagram.SelectNode(id, announce: false));

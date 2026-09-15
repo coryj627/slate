@@ -116,7 +116,7 @@ public sealed class GraphContractsCitationCensus
             (
                 "E",
                 "## PR E — the inspector: filters, groups, display, forces",
-                "<!-- end of the graph contracts document -->",
+                "## PR F — the close-out: the end-to-end suite, the gates, the reconciliation",
                 // The inspector section: the design over two sources, five rules, fifteen
                 // contracts, the decisions, the divergences, the risks, the pins.
                 6_000,
@@ -125,6 +125,29 @@ public sealed class GraphContractsCitationCensus
                 // own names are unbackticked until they exist. The floor sits
                 // one below the measured population and rises with the records.
                 110),
+            (
+                "F",
+                "## PR F — the close-out: the end-to-end suite, the gates, the reconciliation",
+                "## Issue reconciliation (#746)",
+                // The close-out section: the end-to-end suite, the gates, the matrices,
+                // the AT checklist, the reconciliation.
+                6_000,
+                // Revision 5 cites existing identifiers only through the
+                // shell, its tests and the core and mac sources it names; F's
+                // own names are unbackticked until they exist. The floor sits
+                // one below the measured population and rises with the records.
+                119),
+            (
+                "R",
+                "## Issue reconciliation (#746)",
+                "<!-- end of the graph contracts document -->",
+                // The reconciliation (F9): the PR ledger, the generated evidence
+                // and register tables, the decisions, the issues, the residuals.
+                4_000,
+                // The section cites the shell's identifiers through its generated
+                // tables and its prose; the floor sits one below the measured
+                // population at TGF-8 and rises with the records.
+                140),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

@@ -174,4 +174,77 @@ public sealed class DeliveryEvidenceCensus
         Assert.Contains(tests, t => t.EndsWith("#TheLedgerHasARowForEveryStructuralKeyAndNoOther", StringComparison.Ordinal));
         Assert.Contains(tests, t => t.EndsWith("#EveryManifestSurfaceIsARowOfTenCellsAndNoCanvasRowIsUnknown", StringComparison.Ordinal));
     }
+
+    /// <summary>F7 (IPJ-2-2): every command chords.json maps to one of the
+    /// four graph surface groups has a row in the committed matrix — the
+    /// thirteen `slate.graph.*` ids, the mac catalogue's twelve and B2's
+    /// Windows-only `slate.graph.connectionsBack` (the mac's ⌘[ panel key as
+    /// a command, B2-D6), which the generator's Windows-only inventory
+    /// extension renders; the documents' "thirteen command rows" is held
+    /// here, not assumed.</summary>
+    [Fact]
+    public void EveryMappedGraphCommandHasAMatrixRow()
+    {
+        JsonElement commands = Evidence().GetProperty("commands");
+        string matrix = File.ReadAllText(Path.Combine(RepoRoot, "docs", "plans", "18_windows_port", "parity_matrix.md"));
+        string[] graphGroups = ["graphTable", "graphConnections", "graphNavigator", "graphDiagram"];
+        var mapped = commands.EnumerateObject()
+            .Where(c => graphGroups.Contains(c.Value.GetString()))
+            .Select(c => c.Name)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(13, mapped.Count);
+        Assert.Contains("slate.graph.connectionsBack", mapped);
+        var missing = mapped.Where(id => !matrix.Contains($"| `{id}` |", StringComparison.Ordinal)).ToList();
+        Assert.True(missing.Count == 0, "graph commands chords.json maps with no matrix row: " + string.Join(", ", missing));
+        // The thirteenth row's defining evidence, not just its presence
+        // (IPJ-3-1): the label, the mac chord the Windows command delivers,
+        // its spoken form and the issue — the cells chords.json's entry
+        // projects and the generator holds it to.
+        Assert.Contains("| `slate.graph.connectionsBack` | Connections: Back | ⌘[ | Command Left Bracket | #746 (W6-2) |", matrix);
+    }
+
+    /// <summary>W6-2 §F (F7, FD-10): the graph issue maps to the aggregate
+    /// that spans the four SURFACE command groups — an implementation
+    /// anchor and a test anchor from each — and the close-out's own gates
+    /// ride the aggregate: the six end-to-end facts and the censuses F
+    /// lands.</summary>
+    [Fact]
+    public void TheGraphIssueMapsToTheAggregateOverAllFourCommandGroups()
+    {
+        JsonElement evidence = Evidence();
+        Assert.Equal("graph", evidence.GetProperty("issues").GetProperty("#746").GetString());
+        JsonElement aggregate = evidence.GetProperty("groups").GetProperty("graph");
+        var implementation = aggregate.GetProperty("implementation").EnumerateArray().Select(e => e.GetString()!).ToHashSet(StringComparer.Ordinal);
+        var tests = aggregate.GetProperty("tests").EnumerateArray().Select(e => e.GetString()!).ToHashSet(StringComparer.Ordinal);
+        foreach (string commandGroup in (string[])["graphTable", "graphConnections", "graphNavigator", "graphDiagram"])
+        {
+            JsonElement group = evidence.GetProperty("groups").GetProperty(commandGroup);
+            Assert.Contains(group.GetProperty("implementation").EnumerateArray().Select(e => e.GetString()!), implementation.Contains);
+            Assert.Contains(group.GetProperty("tests").EnumerateArray().Select(e => e.GetString()!), tests.Contains);
+        }
+        // every slate.graph.* command maps to one of the four surface groups
+        JsonElement commands = evidence.GetProperty("commands");
+        foreach (JsonProperty command in commands.EnumerateObject().Where(p => p.Name.StartsWith("slate.graph.", StringComparison.Ordinal)))
+        {
+            Assert.Contains(command.Value.GetString(), (string[])["graphTable", "graphConnections", "graphNavigator", "graphDiagram"]);
+        }
+        // the close-out's own gates ride the aggregate too
+        foreach (string fact in (string[])
+        [
+            "#OpenGraphVaultExposesTheTableTheSummaryAndTheSortAgainstTheGolden",
+            "#TheConnectionsLeafWalksReRootsAndCreatesAgainstTheGolden",
+            "#TheDiagramReproducesTheGoldensSixtiethTickThenConvergesStepsZoomsAndReadsBack",
+            "#TheConfigRoundTripsThroughTheInspectorAndTheStore",
+            "#LargeGraphOpensLaysOutPansAndStepsUnderBudget",
+            "#AnnouncementGrammarConformsPerVerbosity",
+            "#GraphTriggerParityCensus",
+            "#GraphReconciliationCensus",
+            "#EveryGraphVaultFileIsInTheArtifact",
+            "#EveryGraphAutomationIdIsInAManifestRow",
+        ])
+        {
+            Assert.Contains(tests, t => t.EndsWith(fact, StringComparison.Ordinal));
+        }
+    }
 }

@@ -412,6 +412,46 @@ def commands() -> list[tuple[str, str, str, str, str]]:
     return rows
 
 
+# W6-2 PR B2 (#746, B2-D6; PR F IPJ-2-2): commands the Windows shell
+# delivers with no SlateCommandID twin — the mac's ⌘[ panel key delivered
+# as a command. The matrix's inventory is the mac catalogue; these rows
+# extend it from the Windows chord table's projection (chords.json), so
+# the documents' "thirteen graph command rows" is what the matrix shows.
+# id → (issue, the mac chord the row proves, its spoken form): the row's
+# defining evidence, held to chords.json's entry exactly (IPJ-3-1).
+WINDOWS_ONLY_COMMANDS: dict[str, tuple[str, str, str]] = {
+    "slate.graph.connectionsBack": ("#746 (W6-2)", "⌘[", "Command Left Bracket"),
+}
+
+
+def windows_only_commands() -> list[tuple[str, str, str, str, str]]:
+    """(id, label, mac chord, spoken, issue) for every Windows-only command,
+    read from chords.json's projection of the Windows chord table."""
+    try:
+        catalog = json.loads(WINDOWS_CHORDS.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exception:
+        fail(f"could not load Windows chord/evidence catalog: {exception}")
+    entries = {e.get("id"): e for e in catalog.get("commands", []) if isinstance(e, dict)}
+    rows = []
+    for cid, (issue, expected_chord, expected_spoken) in sorted(WINDOWS_ONLY_COMMANDS.items()):
+        entry = entries.get(cid)
+        if entry is None:
+            fail(f"Windows-only command {cid} is not in chords.json's commands")
+        label = entry.get("label") or ""
+        chord = entry.get("macChord") or ""
+        spoke = entry.get("mac") or ""
+        if not label:
+            fail(f"Windows-only command {cid} has no label in chords.json")
+        # The row exists to prove the mac chord the Windows command
+        # delivers; an entry that lost it (or its spoken form) is a
+        # drift, not a row (IPJ-3-1).
+        if chord != expected_chord or spoke != expected_spoken:
+            fail(f"Windows-only command {cid}: chords.json carries macChord {chord!r} / mac {spoke!r}, "
+                 f"the inventory expects {expected_chord!r} / {expected_spoken!r}")
+        rows.append((cid, label, chord, spoke, issue))
+    return rows
+
+
 def leaves() -> list[tuple[str, str]]:
     text = LEAF_SWIFT.read_text(encoding="utf-8")
     enum_body = re.search(r"enum Leaf: String, CaseIterable.*?\n(.*?)\n    var id",
@@ -690,6 +730,17 @@ W6_2_PR_D_DELIVERED_COMMANDS = {
     "slate.graph.fitGraph",
 }
 
+# W6-2 PR F (#746, contracts F7, FD-5): the ISSUE's surface row reads the
+# close-out's status — the date F's gates went green — evidenced by the
+# `graph` aggregate group over the four surface command groups; the
+# thirteen command rows keep the dates their own slices' gates went
+# green (IPA-13's rule, per slice). The human AT clause stays until the
+# named run recorded in reports/w6_2_graph_at_checklist.md (FD-3).
+W6_2_CLOSE_OUT_STATUS = (
+    "implemented; local gates green 2026-09-15; "
+    "interactive CI + human AT pending"
+)
+
 W6_2_DELIVERED_COMMANDS = {
     # W6-2 PR A (#746, contract A-12): the graph tab's one chordless row,
     # executable through the palette and the registrar; B–E add the leaf's,
@@ -927,7 +978,11 @@ def load_delivery_evidence(
         # aggregate group — anchors from every command group and the
         # close-out gates (validation 14 makes the aggregate complete).
         "#745",
-        # W6-2 PR A: the graph issue, evidenced by the `graph` group.
+        # W6-2 PR A: the graph issue; since W6-2 PR F (F7, FD-10) evidenced
+        # by the `graph` AGGREGATE group over the four surface command
+        # groups (graphTable, graphConnections, graphNavigator, graphDiagram),
+        # so validation 14 fails when the issue's evidence stops spanning a
+        # surface.
         "#746",
     }
     if set(issue_map) != expected_issues:
@@ -1012,12 +1067,14 @@ def issue_delivery_status(
     if issue_number == "#745":
         return W6_1_STATUS
     if issue_number == "#746":
-        return W6_2_STATUS
+        return W6_2_CLOSE_OUT_STATUS
     return IMPLEMENTED_STATUS
 
 
 def main() -> int:
-    cmd_rows = commands()
+    catalog_rows = commands()
+    extra_rows = windows_only_commands()
+    cmd_rows = catalog_rows + extra_rows
     delivery_evidence = load_delivery_evidence(cmd_rows)
     if "--validate-delivery-evidence" in sys.argv:
         print(
@@ -1037,7 +1094,10 @@ def main() -> int:
     a = lines.append
     a("# Milestone W parity matrix (§W-F row-level checklist)")
     a("")
-    a(f"Generated {today} at `{head}` by `scripts/generate-parity-matrix.py` "
+    a(f"Generated {today} at `{head}` (the head the run stood on; the commit "
+      "carrying this file is its child, and after a squash merge the head is a "
+      "branch commit outside main — `--check` holds the body, not this line) "
+      "by `scripts/generate-parity-matrix.py` "
       "(W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage "
       "(program §moving-target). Every row is burned down by its consuming W "
       "issue; §W-F gates close-out on zero unshipped/unwaived rows.")
@@ -1086,8 +1146,11 @@ def main() -> int:
     a("")
     a("## Command inventory")
     a("")
-    a(f"{len(cmd_rows)} stable command ids from the `SlateCommandID` catalog "
-      f"(drift-test-enforced), {with_chords} carrying chords from the "
+    a(f"{len(catalog_rows)} stable command ids from the `SlateCommandID` catalog "
+      f"(drift-test-enforced) plus {len(extra_rows)} Windows-only "
+      "(W6-2 PR B2, B2-D6: the mac's ⌘[ panel key delivered as the command "
+      "`slate.graph.connectionsBack`, read from the Windows chord table's "
+      f"projection `chords.json`), {with_chords} carrying chords from the "
       "registration blocks and definition-table chord switches (blank chord "
       "= palette/menu-only or focus-scoped by design; the generator fails if "
       "a `hotkey:` literal goes unattributed). Spoken hotkeys derive from "
@@ -1157,7 +1220,7 @@ def main() -> int:
         "harness) |"
     )
     a(f"| Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | {issue_delivery_status('#745 (W6-1)', delivery_evidence)} |")
-    a("| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | pending |")
+    a(f"| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | {issue_delivery_status('#746 (W6-2)', delivery_evidence)} |")
     a("")
     a("## Settings surface")
     a("")
@@ -1211,7 +1274,23 @@ def main() -> int:
     a("| Parity matrix + §W-B budgets + entry-criteria snapshot | #716 (W0-4) | **this document** |")
     a("")
 
-    OUT.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    rendered = "\n".join(lines)
+    if "--check" in sys.argv:
+        # W6-2 PR F (F7, IPJ-2-1): the committed matrix is this tree's
+        # output but for the Generated line, whose date and head are the
+        # run's own (the commit that carries the file is that head's child).
+        def body(text: str) -> str:
+            return "\n".join(l for l in text.split("\n") if not l.startswith("Generated "))
+
+        committed = OUT.read_text(encoding="utf-8") if OUT.is_file() else ""
+        if body(committed) != body(rendered):
+            fail("parity matrix drift — re-run scripts/generate-parity-matrix.py "
+                 f"and commit {OUT.relative_to(REPO)}")
+        print(f"parity matrix verified ({len(cmd_rows)} command rows, "
+              f"{with_chords} with chords; {len(leaf_rows)} leaves; the "
+              "committed file is the generator's output but for its Generated line)")
+        return 0
+    OUT.write_text(rendered, encoding="utf-8", newline="\n")
     print(f"wrote {OUT.relative_to(REPO)} "
           f"({len(cmd_rows)} command rows, {with_chords} with chords; "
           f"{len(leaf_rows)} leaves)")

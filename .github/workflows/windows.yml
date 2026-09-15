@@ -126,6 +126,17 @@ on:
       - '.github/workflows/windows.yml'
       - 'scripts/verify_windows_model_shards.py'
       - 'scripts/tests/test_windows_model_shards.py'
+      # W6-2 PR F (IPJ-5-1): the lane's censuses read the plan documents,
+      # the generators read the scripts, the help catalog and the mac
+      # sources — a change to any of them must run the lane.
+      - 'docs/plans/**'
+      - 'docs/help/**'
+      - 'scripts/**'
+      - 'apps/slate-mac/**'
+      # IPJ-6-1: the roll-up the §K census reads, and the corpus and
+      # parity fixtures the censuses read.
+      - 'BENCHMARKS.md'
+      - 'tests/fixtures/**'
   push:
     branches: [main]
     paths:
@@ -137,6 +148,17 @@ on:
       - '.github/workflows/windows.yml'
       - 'scripts/verify_windows_model_shards.py'
       - 'scripts/tests/test_windows_model_shards.py'
+      # W6-2 PR F (IPJ-5-1): the lane's censuses read the plan documents,
+      # the generators read the scripts, the help catalog and the mac
+      # sources — a change to any of them must run the lane.
+      - 'docs/plans/**'
+      - 'docs/help/**'
+      - 'scripts/**'
+      - 'apps/slate-mac/**'
+      # IPJ-6-1: the roll-up the §K census reads, and the corpus and
+      # parity fixtures the censuses read.
+      - 'BENCHMARKS.md'
+      - 'tests/fixtures/**'
   workflow_dispatch:
 
 concurrency:
@@ -660,6 +682,11 @@ jobs:
 
       - name: Test model coverage verifier
         run: python3 -m unittest discover -s scripts/tests -p test_windows_model_shards.py
+
+      # W6-2 PR F (F7, IPJ-2-1): the committed parity matrix is the
+      # generator's output for this tree — drift fails the lane.
+      - name: Verify the parity matrix is the generator's output
+        run: python3 scripts/generate-parity-matrix.py --check
 
       - name: Download every model shard report
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7

@@ -1172,7 +1172,7 @@ public sealed class GraphNavigatorCensus
     // --- (xiv) the no-host-trim census -------------------------------------------
 
     /// <summary>C-5, C-15 (xiv): no host trim touches the needle — under Graph/
-    /// the ONE Trim* invocation is the leaf's path normaliser; the navigator,
+    /// the Trim* invocations are the leaf's path normaliser and, since W6-2 §F, the diagram container's Value stripping core's period (TGF-5); the navigator,
     /// the surface, the document and the view state trim nothing. The writer's
     /// key trimmed here too until IPG-2: a bare TrimEnd made a drive root
     /// drive-RELATIVE, and the key is now Path.TrimEndingDirectorySeparator —
@@ -1195,7 +1195,11 @@ public sealed class GraphNavigatorCensus
                 }
             }
         }
-        Assert.Equal(["Graph/ConnectionsLeafViewModel.cs:Normalize"], trims.Order(StringComparer.Ordinal));
+        // W6-2 §F TGF-5 (F6, FD-7; C-15 xiv's list amended under iv's provision):
+        // the second Trim* is the diagram container's Value stripping the
+        // terminal period from core's GraphZoom render — a rendered label's
+        // punctuation, never the needle.
+        Assert.Equal(["Graph/ConnectionsLeafViewModel.cs:Normalize", "Graph/GraphDiagramPeers.cs:ZoomValue"], trims.Order(StringComparer.Ordinal));
     }
 
     // --- (xv) the writer census ------------------------------------------------------
