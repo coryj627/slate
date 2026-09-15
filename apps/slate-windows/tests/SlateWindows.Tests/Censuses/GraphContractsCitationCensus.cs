@@ -132,11 +132,11 @@ public sealed class GraphContractsCitationCensus
                 // The close-out section: the end-to-end suite, the gates, the matrices,
                 // the AT checklist, the reconciliation.
                 6_000,
-                // Revision 4 cites existing identifiers only through the
+                // Revision 5 cites existing identifiers only through the
                 // shell, its tests and the core and mac sources it names; F's
                 // own names are unbackticked until they exist. The floor sits
                 // one below the measured population and rises with the records.
-                75),
+                78),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

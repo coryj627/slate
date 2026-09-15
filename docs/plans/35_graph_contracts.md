@@ -15786,11 +15786,12 @@ unit regression stands as run for 041b6cf2.
 
 ## PR F — the close-out: the end-to-end suite, the gates, the reconciliation
 
-**Revision 4 — 2026-09-15** (revisions 1–3 the same day; round 1's
-eight findings IGZ-1..8, round 2's six IHA-1..6 and round 3's two
-IHB-1..2 taken in the text; rounds 2 and 3 were rule 5's first and
-second instances — a finding created by the previous revision's own
-change). The last slice of W6-2 (#746):
+**Revision 5 — 2026-09-15 — FROZEN** (revisions 1–4 the same day;
+round 1's eight findings IGZ-1..8, round 2's six IHA-1..6, round 3's
+two IHB-1..2 and round 4's five IHC-1..5 taken in the text; rounds 2,
+3 and 4 were rule 5's three instances — a finding created by the
+previous revision's own change — and the third froze the section, the
+standing precedent applied; see THE FREEZE below). The last slice of W6-2 (#746):
 the P analogue of the canvas's PR H, in that section's form — the
 end-to-end suite through the real session and the shell's own seams,
 the §K roll-up with re-measured numbers, the §W-A, §W-C, §W-D and
@@ -16176,7 +16177,11 @@ partials that own graph seams (`Graph`, `Connections`, `GraphCreate`),
 for the signatures of host derivation the register's pockets name:
 sorting and comparison (`OrderBy`, `Sort`, `CompareTo`, `string.Compare`),
 case folding and normalisation (ToLowerInvariant, ToUpperInvariant,
-`Normalize`), the diameter curve (`Math.Log`), string composition
+`ToLower`, `ToUpper`, `Normalize`, and every case-insensitive
+comparison form — OrdinalIgnoreCase, InvariantCultureIgnoreCase,
+CurrentCultureIgnoreCase, the `StringComparer` and StringComparison
+members that carry them; IHC-4), the diameter curve (`Math.Log`),
+string composition
 (`string.Format`, interpolation, `StringBuilder`, `Join`) and every
 integer literal that equals a core constant (1500, 200, 28, 8, the
 depth bounds 1 and 3) — every hit listed in the record with its
@@ -16200,10 +16205,15 @@ reads from the record and never folds); (v) `ConnectionsLeafViewModel`'s
 (`AppState+Connections.swift:91–92`), host I/O paging that happens to
 share the label cap's number and is not it (IGZ-5); the record
 cross-checks every such literal against `graph_constants`' fields by
-name, not by value. No `OrderBy`, `Sort`, `Math.Log` or case fold
-appears under `Graph/` in the pre-grep; the tier boundary is read
-from `graph_constants`; the sort is `GraphRequest.Sort` to core; the
-needle goes to `graph_visibility`. Should the re-grep find a
+name, not by value; (vi) `GraphDiagramView`'s type-ahead — a
+`StartsWith` under OrdinalIgnoreCase over core's labels — pocket J's
+type-ahead, which 0b's register leaves to the host ("type-ahead a host
+list search over core's labels"), its fold recorded as D-D6 against the
+mac's lowercased prefix (IHC-3). The pre-grep found no sort, no
+logarithm, no Unicode normalisation outside (iv) and no case fold
+outside (ii) and (vi) under `Graph/`; the tier boundary is read from
+`graph_constants`; the sort is `GraphRequest.Sort` to core; the needle
+goes to `graph_visibility`. Should the re-grep find a
 re-derivation the pre-grep missed, it is routed through the FFI and
 pinned by a fact against core's own answer (FD-7); the record names
 it. Pockets L–P are re-recorded with their Windows site: L the
@@ -16237,10 +16247,15 @@ pins that), so the edit is a JSON edit checked by
 `DeliveryEvidenceCensus`, which gains the graph aggregate's assertion
 beside the canvas's. The generator's hard-coded surface literal
 becomes an `issue_delivery_status` call like its two neighbours;
-`issue_delivery_status` returns a new W6-2 CLOSE-OUT status for `#746`
-— "implemented; local gates green ⟨F's gate date⟩; interactive CI +
-human AT pending" — while the thirteen command rows KEEP the dates
-their slices' gates went green (IPA-13's rule; FD-5). `expected_issues`
+`issue_delivery_status`'s `#746` branch returns a SEPARATE constant,
+W6_2_CLOSE_OUT_STATUS — "implemented; local gates green ⟨F's gate
+date⟩; interactive CI + human AT pending" — added beside the slice
+constants and read by that branch alone, while `command_delivery_status`
+keeps the thirteen command rows on their slice constants untouched
+(`W6_2_STATUS` for A's and B's rows, W6_2_PR_C_STATUS, W6_2_PR_D_STATUS),
+so the command rows KEEP the dates their slices' gates went green
+(IPA-13's rule; FD-5; IHC-5 — changing `W6_2_STATUS` itself would
+re-date A's and B's rows). `expected_issues`
 already carries `#746`. `parity_matrix.md` regenerates with the
 surface row implemented and the human AT clause standing (FD-3);
 `docs/help/graph.md` stays `#756` pending — the hand-off, not this
@@ -16317,10 +16332,11 @@ id read by ONE grammar (IHA-4), with the section prefix `X` one of
 an optional letter suffix — `0a-1b`, `0a-2b`, `0b-2b` and `0b-6b` are
 frozen contract heads and are keys (IHB-1) — and F's `Fn` (the
 canvas's H1 form), decisions `XD-n`, divergences
-`X-Dn`, risks `XR-n`, owner questions `XD-Qn`, and the design Terms
-`Term n` and `Term Xn` of A, B, B2, C, D and E — the eight sections'
-prefixes are theirs (`0aD-n`, `B2D-n`, `CD-n` are decisions; `0a-Dn`,
-`B2-Dn`, `C-Dn` divergences; `0aR-n`, `CR-n` risks; `CD-Qn` questions);
+`X-Dn` and, for F alone, the canvas's HD-D form `FD-Dn` (IHC-1),
+risks `XR-n`, owner questions `XD-Qn`, and the design Terms `Term n`
+and `Term Xn` of A, B, B2, C, D and E — the eight sections' prefixes
+are theirs (`0aD-n`, `B2D-n`, `CD-n` are decisions; `0a-Dn`, `B2-Dn`,
+`C-Dn`, `FD-Dn` divergences; `0aR-n`, `CR-n` risks; `CD-Qn` questions);
 the task records (`TG*-n`), the round ledgers (`IG*-n`, `IH*-n`) and
 the post-implementation passes (`IPI-n`) are EVIDENCE, not keys, and
 the "Mac details" registers, the round records, the freezes and the
@@ -16336,8 +16352,9 @@ this document's section list and id grammar — between
 what it would regenerate; the script asserts each key's head occurs
 exactly once in its section, that no two keys share a row, and the
 key total pinned as a constant in both the script and the census — the
-generator's draft over revision 4 of this section derives 519 keys by
-the grammar above, the four suffixed contracts among them (148
+generator's draft over revision 5 of this section derives 519 keys by
+the grammar above, the four suffixed contracts and F's five `FD-Dn`
+divergences among them (148
 contracts, 124 decisions, 87 divergences, 34 risks, 15 questions, 111
 Terms; per section 0a 36, 0b 40, A 49, B 55, B2 39, C 102, D 94, E 72,
 F 32), and the task loop's record pins the
@@ -16374,17 +16391,19 @@ preset's backend filter (C-D7; `graphConfigSaveAggregate` still saves
 observer speaking the mode line on a persisted Diagram (D;
 `GraphTableView.swift:104–105`), with the dead `labelFadeZoom`
 constant noted in the same body as the same file's hygiene — FIVE
-issues; NOT FILED, with the reason: `openGraphTab` speaking Opened
-past the same-tab guard (A) — Windows FOLLOWS it by rule L, a shared
-behaviour, not a mac defect; the generation mismatch dropping a
-pending user sort (C-D17) — Windows inherits it; a restored tab
-mounting on the reset defaults (C-D8) — the mac lane now applies the
-persisted filter before the fetch (`applyPersistedGraphFilter` at
-`AppState+GraphTable.swift:97`), verified at filing; the four C items
-the register marks FIXED; D's observations (the picker's label, tier
-B's tint, the first-visible selection, the tooltip, the pin position)
-— divergences and notes, not defects — no core issue and no
-P-contract issue, the spec's §6 recording none and the registers
+issues; SEVEN CANDIDATES NOT FILED, each with its reason:
+`openGraphTab` speaking Opened past the same-tab guard (A) — Windows
+FOLLOWS it by rule L, a shared behaviour, not a mac defect; the
+generation mismatch dropping a pending user sort (C-D17) — Windows
+inherits it; a restored tab mounting on the reset defaults (C-D8) —
+the mac lane now applies the persisted filter before the fetch
+(`applyPersistedGraphFilter` at `AppState+GraphTable.swift:97`),
+verified at filing; and the four C items the register marks FIXED on
+the mac lane; and, NOT CANDIDATES because they record no defect,
+listed apart from the count (IHC-2): D's five observations (the
+picker's label, tier B's tint, the first-visible selection, the
+tooltip, the pin position) — divergences and notes; no core issue and
+no P-contract issue, the spec's §6 recording none and the registers
 naming none; PR C's seven residue issues re-listed with their state
 (#1189 and #1190 open, mac; #1191–#1195 closed, three by the repair
 PRs of (a)); (f) the hand-offs — `docs/help/graph.md`'s Windows chord
@@ -16464,11 +16483,13 @@ approval on that head; merge on the standing conditions.
   form; the status strings keep "human AT pending"; the issue closes on
   the owner's sign-off, not on this PR's merge.
 - **FD-4 — Upstream issues are filed by rule, one per mac defect that
-  still stands, from the registers' own lines, citing #746.** Five
-  candidates survive the rule at contracts time and five issues are
-  filed; an item marked FIXED, inherited by Windows, followed by a
-  frozen rule, or no longer in the mac sources at filing is recorded
-  as not filed with its reason, never counted (IGZ-6). The two open
+  still stands, from the registers' own lines, citing #746.** Twelve
+  candidates at contracts time: five survive the rule and five issues
+  are filed; seven are recorded as not filed with their reasons — an
+  item marked FIXED, inherited by Windows, followed by a frozen rule,
+  or no longer in the mac sources at filing — never counted (IGZ-6);
+  observations that record no defect are not candidates and sit apart
+  (IHC-2). The two open
   residue issues (#1189, #1190) stand as filed by PR C and are
   re-listed, not duplicated. Nothing is filed for core or for the P
   contract because no register names a defect there.
@@ -16477,9 +16498,11 @@ approval on that head; merge on the standing conditions.
   surface row flips from `pending` to "implemented; local gates green
   ⟨F's gate date⟩; interactive CI + human AT pending" — not to a bare
   "implemented" — evidenced by the `graph` aggregate, never by one
-  command group standing for the issue; the thirteen command rows keep
-  the dates their own gates went green (IPA-13), because re-dating
-  them would claim gates F did not run.
+  command group standing for the issue, and carried by a constant of
+  its own that the issue branch alone reads (IHC-5); the thirteen
+  command rows keep the dates their own gates went green (IPA-13) on
+  their untouched slice constants, because re-dating them would claim
+  gates F did not run.
 - **FD-6 — The spec's acceptance rows are fixed in the spec file, and
   F does not close the issue.** `w6_spec.md` §W6-2's numbered items
   become checkbox rows (the acceptance clause names "checkbox rows
@@ -16636,7 +16659,51 @@ discharged in revision 4's text.
 | IHB-1 | BLOCKER | taken — the contract grammar admits the letter suffix; the four suffixed heads named; the draft generator's 519 already counted them, now stated |
 | IHB-2 | BLOCKER | taken — F5 reads three id forms (literals through helpers, composed prefixes and the `Value` suffix, XAML); the ids the rows lack today are named — the notice, the seven value peers, the switcher's and the verbosity menu's items — and join their rows |
 
-### Tests that pin PR F (revision 4's list; the task loop records what lands)
+### Round 4 ledger (PR F) — five findings; rule 5 the third time → THE FREEZE
+
+Run 2026-09-15 on revision 4 (98640964), the same runner and tier;
+five findings (three blockers, two majors): IHC-1 and IHC-5 created by
+revision 4's change (rule 5's third instance), IHC-2, IHC-3 and IHC-4
+survived earlier rounds; all five discharged in revision 5's text.
+
+| # | Severity | Disposition |
+|---|---|---|
+| IHC-1 | BLOCKER | taken — the grammar admits F's `FD-Dn` divergence form explicitly (the canvas's HD-D); the count stays 519 with F at 32, the draft having read them as divergences |
+| IHC-2 | BLOCKER | taken — twelve candidates: five filed, seven not filed with reasons; D's five observations set apart as non-candidates; FD-4 restated |
+| IHC-3 | BLOCKER | taken — the type-ahead's OrdinalIgnoreCase listed as class (vi), pocket J's host type-ahead with D-D6's recorded fold; the absolute sentence replaced by what the pre-grep found |
+| IHC-4 | MAJOR | taken — the signatures name every case-insensitive comparison form |
+| IHC-5 | MAJOR | taken — W6_2_CLOSE_OUT_STATUS is a separate constant read by the issue branch alone; the slice constants untouched; FD-5 amended |
+
+### THE FREEZE — revision 5 stands
+
+Rule 5 for the third time (rounds 2, 3, 4) — the PR 0b precedent,
+applied by PR B at revision 8, PR C at revision 5, PR D at revision 5
+and PR E at revision 6: the text is corrected for every finding of
+every round as the discharge; the four ledgers (IGZ, IHA, IHB, IHC) are
+carried into the task loop, which discharges them by code — one TGF
+record per task naming the facts, the generators' runs and the
+mutations that pin each — and the post-implementation codex passes
+(IPJ-n) verify the code against this frozen text; no round 5 runs on
+the contracts. The eleven pending owner questions of D and E stay
+PENDING at their defaults, listed in the reconciliation's (d); the
+close-out closes nothing the owner owns. Precedent applied; the owner
+may overrule.
+
+### The task loop (PR F)
+
+| Task | Slice | Discharges |
+| --- | --- | --- |
+| TGF-1 | §W-D: `scripts/graph_trigger_ledger.py`, the ledger table "The trigger ledger (F4)" in this section with its roles, sites, facts and observation column, GraphTriggerParityCensus, the counts and the residue recorded | F4, FD-8, FD-11, FD-D3 |
+| TGF-2 | F1: GraphEndToEndTests — the six facts over the committed vault, the golden as the oracle, the test-owned id space, the two large vaults | F1, FD-1, FD-9, FD-D1, FD-D2, FR-4, FR-5, FR-6 |
+| TGF-3 | §W-A: `ParityHarnessCensus` gains EveryGraphVaultFileIsInTheArtifact and `ParityHarnessTests.swift` its twin | F3, FD-2, FR-1 |
+| TGF-4 | §W-C and the checklist: the id census over the three forms, the rows and the manifest repaired, the checklist link line; `reports/w6_2_graph_at_checklist.md` | F5, F8, FD-3, FD-D4 |
+| TGF-5 | §W-G: the re-grep with its method and every hit classified; the 0b register's "State after F" column; any duplication routed through the FFI | F6, FD-7 |
+| TGF-6 | The matrix: `chords.json`'s four surface groups and the aggregate, `DeliveryEvidenceCensus`'s graph fact, the generator's W6_2_CLOSE_OUT_STATUS and the surface row, `parity_matrix.md` regenerated | F7, FD-5, FD-10 |
+| TGF-7 | §K: the two runners re-run, the end-to-end row, the roll-up section in `BENCHMARKS.md` | F2 |
+| TGF-8 | The reconciliation: `scripts/graph_reconciliation.py`, GraphReconciliationCensus, the section (a)–(h) with the five mac issues filed, the spec's rows rewritten, the citation census's tuple | F9, FD-4, FD-6, FD-D5, FR-2 |
+| TGF-9 | The mutation sweep, one per predicate; the process record — the gates as run, the CI-shaped regression, the five journeys, the wall time | F10 |
+
+### Tests that pin PR F (revision 5's list, frozen; the task loop records what lands)
 
 - GraphEndToEndTests (new): F1's six facts.
 - `ParityHarnessCensus`: EveryGraphVaultFileIsInTheArtifact; the Swift
