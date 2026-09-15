@@ -279,11 +279,11 @@ public sealed class WcMatrixGraphEvidenceCensus
             foreach (Match m in HelperLiteral.Matches(text))
             {
                 literals.Add(m.Groups[1].Value);
-                if (m.Value.StartsWith("SliderRow(", StringComparison.Ordinal))
-                {
-                    literals.Add(m.Groups[1].Value + "Value");
-                }
             }
+            // The slider value peers' ids come from the syntax tree — real
+            // SliderRow invocations in a file whose helper composes them —
+            // not from the lexical scan above (IPJ-6-3).
+            literals.UnionWith(ComposedValueIds(text));
         }
         // the verbosity menu composes its items from a named prefix constant
         string verbosity = File.ReadAllText(Path.Combine(graph, "GraphVerbosityMenu.cs"));
@@ -324,6 +324,17 @@ public sealed class WcMatrixGraphEvidenceCensus
         return ids;
     }
 
+    /// <summary>Whether a method's body composes the value peer's id: an
+    /// addition whose left side is the identifier <c>id</c> and whose right
+    /// side is the literal "Value" — the syntax, not the text (codoki's
+    /// sixth-round note).</summary>
+    private static bool ComposesTheValueId(MethodDeclarationSyntax method) =>
+        method.DescendantNodes().OfType<BinaryExpressionSyntax>().Any(addition =>
+            addition.RawKind == (int)SyntaxKind.AddExpression
+            && addition.Left is IdentifierNameSyntax { Identifier.ValueText: "id" }
+            && addition.Right is LiteralExpressionSyntax { Token.ValueText: "Value" } literal
+            && literal.RawKind == (int)SyntaxKind.StringLiteralExpression);
+
     /// <summary>The value-peer ids one source text composes, bound in its
     /// syntax tree (IPJ-5-2): none unless the text DECLARES a SliderRow
     /// method whose body composes <c>id + "Value"</c>; else one per real
@@ -335,7 +346,7 @@ public sealed class WcMatrixGraphEvidenceCensus
         var ids = new HashSet<string>(StringComparer.Ordinal);
         SyntaxNode root = CSharpSyntaxTree.ParseText(text).GetRoot();
         bool composes = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
-            .Any(method => method.Identifier.ValueText == "SliderRow" && ComposesValue.IsMatch(method.ToString()));
+            .Any(method => method.Identifier.ValueText == "SliderRow" && ComposesTheValueId(method));
         if (!composes)
         {
             return ids;
@@ -390,6 +401,19 @@ public sealed class WcMatrixGraphEvidenceCensus
         Assert.Empty(ComposedValueIds(calls + Declaration.Replace(Composes, "AutomationProperties.SetAutomationId(valueText, id);") + " }"));
         // the composition sits in another method, not SliderRow's
         Assert.Empty(ComposedValueIds(calls + "private Slider SliderRow(Panel section, string id) { return null; } void Other(string id) { " + Composes + " } }"));
+        // the composition mentioned in a comment inside SliderRow does not count
+        Assert.Empty(ComposedValueIds(calls + "private Slider SliderRow(Panel section, string id) { // " + Composes + "\n return null; } }"));
+    }
+
+    /// <summary>Codoki's sixth-round note: a malformed text parses to a tree
+    /// with diagnostics, never a throw — the derivation answers no ids and
+    /// the census that consumes it fails on the manifest, not on an
+    /// exception.</summary>
+    [Fact]
+    public void ComposedValueIdsAnswerNothingForAMalformedTextWithoutThrowing()
+    {
+        Assert.Empty(ComposedValueIds("class { SliderRow(, \"GraphInspectorA\" ; private Slider SliderRow(string id) { id + \"Value\" "));
+        Assert.Empty(ComposedValueIds(string.Empty));
     }
 
     [Fact]

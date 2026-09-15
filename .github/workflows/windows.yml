@@ -133,6 +133,10 @@ on:
       - 'docs/help/**'
       - 'scripts/**'
       - 'apps/slate-mac/**'
+      # IPJ-6-1: the roll-up the §K census reads, and the corpus and
+      # parity fixtures the censuses read.
+      - 'BENCHMARKS.md'
+      - 'tests/fixtures/**'
   push:
     branches: [main]
     paths:
@@ -151,6 +155,10 @@ on:
       - 'docs/help/**'
       - 'scripts/**'
       - 'apps/slate-mac/**'
+      # IPJ-6-1: the roll-up the §K census reads, and the corpus and
+      # parity fixtures the censuses read.
+      - 'BENCHMARKS.md'
+      - 'tests/fixtures/**'
   workflow_dispatch:
 
 concurrency:

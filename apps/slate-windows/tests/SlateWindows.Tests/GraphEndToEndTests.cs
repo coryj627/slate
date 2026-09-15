@@ -331,16 +331,20 @@ public sealed class GraphEndToEndTests
         Host.Settle(document);
         Assert.Equal(publication.Rows.Count, document.Publication.Rows.Count);
 
-        // Where-am-I: the seated row's readback as core renders it.
+        // Where-am-I: the expected readback BUILT from the golden's entry for
+        // the seated note and the test's own state — the default filter,
+        // the empty name query, no zoom (a table) — and the document's
+        // readback, the navigator's render and the announced line all held
+        // to it (IPJ-6-2).
         Assert.True(document.SelectRow("p:hub.md"));
         Host.Settle(document);
         host.Lines.Clear();
         Assert.True(navigator.WhereAmI());
         Host.Settle(document);
-        GraphA11yEvent.GraphWhereAmI readback = document.TableWhereAmI()!;
-        Assert.Equal(Render(readback), navigator.WhereAmIText);
-        Assert.Equal(1, host.Count(Render(readback)));
-        Assert.Equal("hub", ((GraphWhereAmISelection.Node)readback.Selection).Row.Label);
+        GraphA11yEvent.GraphWhereAmI expectedReadback = WhereAmIFromTheGolden(golden, "p:hub.md", DefaultFilter, zoomPercent: null);
+        Assert.Equal(expectedReadback, document.TableWhereAmI());
+        Assert.Equal(Render(expectedReadback), navigator.WhereAmIText);
+        Assert.Equal(1, host.Count(Render(expectedReadback)));
 
         // The preset: Orphans through the navigator — the headline once,
         // the rows the golden's `orphans` visibility entry.
@@ -409,6 +413,38 @@ public sealed class GraphEndToEndTests
             """);
         Assert.Equal(new GraphSnapshotCounts(2, 4, 1, 1, true), CountsFromTheGolden(golden.RootElement, includeAttachments: true));
         Assert.Equal(new GraphSnapshotCounts(2, 3, 1, 1, false), CountsFromTheGolden(golden.RootElement, includeAttachments: false));
+    }
+
+    /// <summary>The Where-am-I event built from the golden's snapshot entry
+    /// for a key and the test's own state (IPJ-6-2): the row copy from the
+    /// entry, its component, the filter the test set, the empty name
+    /// query, and the zoom the test set (none for a table).</summary>
+    private static GraphA11yEvent.GraphWhereAmI WhereAmIFromTheGolden(JsonElement golden, string key, GraphFilter filter, uint? zoomPercent)
+    {
+        JsonElement entry = GoldenEntry(golden.GetProperty("snapshot"), "key", key);
+        return new GraphA11yEvent.GraphWhereAmI(
+            new GraphWhereAmISelection.Node(RowCopyFromTheGolden(golden, key), entry.GetProperty("component").GetUInt32()),
+            zoomPercent,
+            new GraphWhereAmIFilter.Normal(filter.OrphansOnly, filter.IncludeAttachments, filter.IncludeGhosts),
+            string.Empty);
+    }
+
+    /// <summary>A row copy from the golden's snapshot entry: the label, the
+    /// kind, the in- and out-links; the references are the in-links (the
+    /// readback's contract, C-8's row copy) and a node is never an embed
+    /// row.</summary>
+    private static GraphRowCopy RowCopyFromTheGolden(JsonElement golden, string key)
+    {
+        JsonElement entry = GoldenEntry(golden.GetProperty("snapshot"), "key", key);
+        GraphNodeKind kind = entry.GetProperty("kind").GetString() switch
+        {
+            "note" => GraphNodeKind.Note,
+            "ghost" => GraphNodeKind.Ghost,
+            "attachment" => GraphNodeKind.Attachment,
+            var other => throw new InvalidOperationException($"the golden names a kind this suite does not know: {other}"),
+        };
+        uint inLinks = entry.GetProperty("in_links").GetUInt32();
+        return new GraphRowCopy(entry.GetProperty("label").GetString()!, kind, inLinks, entry.GetProperty("out_links").GetUInt32(), inLinks, false);
     }
 
     private static string SummaryFromTheGolden(JsonElement golden, bool includeAttachments) =>
@@ -812,13 +848,20 @@ public sealed class GraphEndToEndTests
         Assert.NotEqual(100u, fit);
         host.Observed(Render(new GraphA11yEvent.GraphZoom(true, fit)));
 
-        // Where-am-I in Diagram mode renders the node's readback.
+        // Where-am-I in Diagram mode: the zoom the test sets (actual size),
+        // the node the test selects, the expectation BUILT from the golden's
+        // entry and the default filter — the document's readback, the
+        // navigator's render and the announced line held to it (IPJ-6-2).
+        host.Lines.Clear();
+        Assert.True(navigator.ActualSize());
+        host.Observed(Render(new GraphA11yEvent.GraphZoom(false, 100)));
         Assert.True(diagram.SelectNode(hubId, announce: false));
         host.Lines.Clear();
         Assert.True(navigator.WhereAmI());
-        GraphA11yEvent.GraphWhereAmI readback = document.DiagramWhereAmI()!;
-        Assert.Equal(Render(readback), navigator.WhereAmIText);
-        Assert.Equal("hub", ((GraphWhereAmISelection.Node)readback.Selection).Row.Label);
+        GraphA11yEvent.GraphWhereAmI expectedReadback = WhereAmIFromTheGolden(golden, "p:hub.md", DefaultFilter, zoomPercent: 100);
+        Assert.Equal(expectedReadback, document.DiagramWhereAmI());
+        Assert.Equal(Render(expectedReadback), navigator.WhereAmIText);
+        host.Observed(Render(expectedReadback));
 
         // The pin verb: GraphPinned observed, the pin surviving one more settle.
         host.Lines.Clear();

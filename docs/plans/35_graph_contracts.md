@@ -17489,6 +17489,47 @@ resolved here; one mutation caught of one; the CI-shaped regression
 once on this tree, green (10 m 30 s, 2,921 facts); IPJ-6 runs on the fixed head, the count toward the stop
 rule starting again.
 
+**IPJ-6 — codex post-implementation pass 6 (gpt-5.5 medium) on 4731ebc5,
+the head carrying IPJ-5's fixes: all three verified (the pass re-ran the
+three generators' checks on the head, all green); THREE findings, one
+blocker, all taken.** IPJ-6-1 [BLOCKER] — the lane's triggers still
+omitted two evidence surfaces: `BENCHMARKS.md`, where §K's roll-up
+lives, and the root `tests/fixtures/**` the corpus and parity censuses
+read. Root cause: the workflow — IPJ-5-1's list was drawn from the
+generators' inputs, not from every file a census reads. TAKEN: both
+paths added to both triggers; and the roll-up gains a census of its own
+(BenchmarksRollupCensus: the W6-2 section's six budgeted rows each PASS
+with a number and a budget, the end-to-end row's five measures), so the
+evidence the owner reads cannot lose a row or a verdict silently — the
+mutation flipping a PASS is caught. IPJ-6-2 [MAJOR] — Where-am-I's
+end-to-end oracle was the SUT: both legs rendered the expected line from
+the document's own readback seam, the same seam the navigator had just
+consumed, and held only the label. Root cause: the test. TAKEN: the
+expected `GraphWhereAmI` is BUILT from the golden and the test's own
+state — the row copy from the golden's snapshot entry for `p:hub.md`
+(the label, the kind, the in- and out-links, the references as the
+in-links per the readback's contract, no embed), the component from the
+same entry, the filter from the test's default filter, the empty name
+query, and in the diagram leg the zoom the test itself set (actual size,
+100) — and the readback, its render and the announced line are all held
+to it (RowCopyFromTheGolden, WhereAmIFromTheGolden); the mutation
+altering the expectation's component is caught. IPJ-6-3 [MINOR] — the
+reverse fact's helper scan still took slider value ids lexically (a
+commented-out call would have claimed an id and failed the census);
+TAKEN: ShellIds takes them from the Roslyn-bound ComposedValueIds.
+Codoki's sixth round, on 4731ebc5, asked that the composition be found
+in the SliderRow method's syntax rather than its text, and that a
+malformed text be shown not to throw — both taken (ComposesTheValueId:
+an addition of the `id` identifier and the "Value" literal; a comment
+inside the method no longer counts; the malformed-text fact); its
+"missing Roslyn package" was not one — the test project has referenced
+`Microsoft.CodeAnalysis.CSharp` since the canvas censuses — answered in
+the thread. Verdict as returned: not safe to continue (IPJ-6-1) — resolved
+here; two mutations caught of two; the CI-shaped regression
+twice on this tree, green (10 m 18 s each, 2,923 then 2,924 facts —
+the second after codoki's round); IPJ-7 runs on the fixed head, the count toward the stop
+rule starting again.
+
 ### Tests that pin PR F (revision 5's list, frozen; the task loop records what lands)
 
 - GraphEndToEndTests (new): F1's six facts.
