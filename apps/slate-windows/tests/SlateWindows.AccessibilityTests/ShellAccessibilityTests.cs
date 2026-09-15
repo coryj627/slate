@@ -562,8 +562,9 @@ public sealed class ShellAccessibilityTests
                 TimeSpan.FromSeconds(10));
             Assert.Equal(ControlType.List, rightPaneLeaves.ControlType);
             Assert.True(rightPaneLeaves.Patterns.Selection.IsSupported);
+            // W6-2 PR E (Term I1): the seventeenth leaf is the graph inspector's.
             Assert.Equal(
-                16,
+                17,
                 rightPaneLeaves.FindAllDescendants(
                     automation.ConditionFactory.ByControlType(ControlType.ListItem)).Length);
 

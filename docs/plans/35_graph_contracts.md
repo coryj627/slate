@@ -15740,6 +15740,15 @@ auto-approved both heads with no issues found) — the PR D precedent (IPH-4,
 IPH-5). The passes ran 1 → 0 → 0 (blockers 1, 0, 0); this ledger is the
 owner's.
 
+**The merge head's CI (041b6cf2):** every lane green but the shell
+accessibility gate — `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean`
+counts the right pane's leaves and asserted sixteen; the inspector's leaf
+is the seventeenth (Term I1; the unit fact in W1WorkspaceTests was
+updated in T5, the journey's literal was not — the accessibility project
+is outside the slnx and its full run is CI's). The count follows the
+registry; the journey re-passed locally; no shell source changed, so the
+unit regression stands as run for 041b6cf2.
+
 ### Tests that pin PR E (revision 6's list, frozen; the task loop records what lands)
 
 - GraphInspectorTests (new): the view model's reads and writes per rule
