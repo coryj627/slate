@@ -15786,10 +15786,11 @@ unit regression stands as run for 041b6cf2.
 
 ## PR F — the close-out: the end-to-end suite, the gates, the reconciliation
 
-**Revision 3 — 2026-09-15** (revisions 1 and 2 the same day; round 1's
-eight findings IGZ-1..8 and round 2's six findings IHA-1..6 taken in
-the text; round 2 was rule 5's first instance — five of its six were
-created by revision 2's change). The last slice of W6-2 (#746):
+**Revision 4 — 2026-09-15** (revisions 1–3 the same day; round 1's
+eight findings IGZ-1..8, round 2's six IHA-1..6 and round 3's two
+IHB-1..2 taken in the text; rounds 2 and 3 were rule 5's first and
+second instances — a finding created by the previous revision's own
+change). The last slice of W6-2 (#746):
 the P analogue of the canvas's PR H, in that section's form — the
 end-to-end suite through the real session and the shell's own seams,
 the §K roll-up with re-measured numbers, the §W-A, §W-C, §W-D and
@@ -16128,12 +16129,21 @@ and Windows's zero host-composed announcement sites under `Graph/` by
 sources close, every non-human cell is populated and resolved.** The
 five rows stand; F adds no row, and repairs the rows the id census
 finds short. `WcMatrixGraphEvidenceCensus` gains
-EveryGraphAutomationIdIsInAManifestRow over TWO inventories (IGZ-3):
-every automation-id literal set under `Graph/` (the twenty-seven
-string arguments of the views' automation-id calls at contracts time;
-the per-node and per-group prefixes matched by prefix), and every
-automation id in `MainWindow.xaml` whose name begins with `Graph` or
-`Connections` — thirteen at contracts time: `GraphMenu`,
+EveryGraphAutomationIdIsInAManifestRow over THREE id forms (IGZ-3,
+IHB-2): (i) every string LITERAL that reaches the automation-id
+setter under `Graph/` — as a direct argument or through a helper's
+`id` parameter (the inspector's `Section`, `Flag` and `SliderRow`
+helpers take the literal from their call sites) — read by walking the
+`Graph/*.cs` sources for the setter's calls and the helpers' calls;
+(ii) every COMPOSED id's constant part: a prefix ending in `:` or `.`
+(`GraphNode:`, `GraphInspectorGroupQuery:`, `GraphInspectorGroupColour:`,
+`GraphInspectorGroupRing:`, `GraphInspectorRemoveGroup:`, the
+switcher's `GraphMode.` choices, the verbosity menu's `GraphVerbosity.`
+items) listed in a manifest row as that prefix, and a suffix
+composition (the seven slider value peers, `⟨slider id⟩Value`) listed
+as its full names; and (iii) every automation id in `MainWindow.xaml`
+whose name begins with `Graph` or `Connections` — thirteen at
+contracts time: `GraphMenu`,
 GraphOpenTabMenuItem, GraphOrphansMenuItem, GraphUnresolvedMenuItem,
 GraphMostLinkedMenuItem, GraphWhereAmIMenuItem, GraphZoomInMenuItem,
 GraphZoomOutMenuItem, GraphActualSizeMenuItem, GraphFitGraphMenuItem,
@@ -16142,9 +16152,15 @@ each in some manifest row's ids, so a control that ships without a
 matrix row fails a census, not a reader; the one reviewed exclusion is
 `InspectorPane`, the shell's right pane (W1's row, not a graph
 surface), listed in the census by name. The census as written fails
-TODAY on the five menu items the navigator's row does not list
-(GraphOpenTabMenuItem, the three preset items, GraphWhereAmIMenuItem);
-the row and the manifest gain them, which is the teeth working. The
+TODAY on ids the rows do not list — the five menu items the
+navigator's row lacks (GraphOpenTabMenuItem, the three preset items,
+GraphWhereAmIMenuItem), the switcher's `GraphMode.` choices (the
+table's row), the `GraphVerbosity.` items (the navigator's row), and
+the inspector's GraphInspectorNoGroups notice and its seven slider
+value peers (GraphInspectorTextFadeValue … GraphInspectorLinkDistanceValue,
+the inspector's row) — the rows and the manifest gain them, which is
+the teeth working; the record lists every id the census found and
+the row it joined. The
 manifest's evidence grammar is the canvas's: backticked journey and
 fact names resolved in the test tree, `axe:` labels matched to
 `AssertAxeClean` literals. Axe is zero failures across the five graph
@@ -16297,8 +16313,10 @@ evidence keyed by (section, register kind, id) over the nine PR
 sections (0a, 0b, A, B, B2, C, D, E, F) — one row per KEY, a key being
 every `**ID — ` or `- **ID — ` head of a key-bearing subsection, the
 id read by ONE grammar (IHA-4), with the section prefix `X` one of
-`0a`, `0b`, `A`, `B`, `B2`, `C`, `D`, `E`, `F`: contracts `X-n` (and
-F's `Fn`, the canvas's H1 form), decisions `XD-n`, divergences
+`0a`, `0b`, `A`, `B`, `B2`, `C`, `D`, `E`, `F`: contracts `X-n` with
+an optional letter suffix — `0a-1b`, `0a-2b`, `0b-2b` and `0b-6b` are
+frozen contract heads and are keys (IHB-1) — and F's `Fn` (the
+canvas's H1 form), decisions `XD-n`, divergences
 `X-Dn`, risks `XR-n`, owner questions `XD-Qn`, and the design Terms
 `Term n` and `Term Xn` of A, B, B2, C, D and E — the eight sections'
 prefixes are theirs (`0aD-n`, `B2D-n`, `CD-n` are decisions; `0a-Dn`,
@@ -16318,10 +16336,11 @@ this document's section list and id grammar — between
 what it would regenerate; the script asserts each key's head occurs
 exactly once in its section, that no two keys share a row, and the
 key total pinned as a constant in both the script and the census — the
-generator's draft over revision 3 of this section derives 519 keys by
-the grammar above (148 contracts, 124 decisions, 87 divergences, 34
-risks, 15 questions, 111 Terms; per section 0a 36, 0b 40, A 49, B 55,
-B2 39, C 102, D 94, E 72, F 32), and the task loop's record pins the
+generator's draft over revision 4 of this section derives 519 keys by
+the grammar above, the four suffixed contracts among them (148
+contracts, 124 decisions, 87 divergences, 34 risks, 15 questions, 111
+Terms; per section 0a 36, 0b 40, A 49, B 55, B2 39, C 102, D 94, E 72,
+F 32), and the task loop's record pins the
 number the landed generator derives on the day, every later move
 deliberate (IHA-4); a key nothing cites reads "unevidenced"; the
 sections that pin per section rather than per contract say exactly
@@ -16605,7 +16624,19 @@ finding is discharged in revision 3's text.
 | IHA-5 | MAJOR | taken — FD-D5 records the departure: the task records and passes are the graph's verified register, visible per key in (b) |
 | IHA-6 | MAJOR | taken — the ledger in two buckets: nine series PRs and four post-implementation and repair PRs, thirteen ancestry rows |
 
-### Tests that pin PR F (revision 3's list; the task loop records what lands)
+### Round 3 ledger (PR F) — two findings; rule 5 the second time
+
+Run 2026-09-15 on revision 3 (6709ab49), the same runner and tier;
+two findings, both blockers: IHB-1 created by revision 3's change
+(rule 5's second instance), IHB-2 survived IGZ-3's repair; both
+discharged in revision 4's text.
+
+| # | Severity | Disposition |
+|---|---|---|
+| IHB-1 | BLOCKER | taken — the contract grammar admits the letter suffix; the four suffixed heads named; the draft generator's 519 already counted them, now stated |
+| IHB-2 | BLOCKER | taken — F5 reads three id forms (literals through helpers, composed prefixes and the `Value` suffix, XAML); the ids the rows lack today are named — the notice, the seven value peers, the switcher's and the verbosity menu's items — and join their rows |
+
+### Tests that pin PR F (revision 4's list; the task loop records what lands)
 
 - GraphEndToEndTests (new): F1's six facts.
 - `ParityHarnessCensus`: EveryGraphVaultFileIsInTheArtifact; the Swift
