@@ -411,6 +411,100 @@ public sealed class MacCatalogParityTests
     private const string SidebarCatalogLabelPattern =
         "SlateCommandID\\.(\\w+),\\s*\"((?:[^\"\\\\]|\\\\.)*)\"";
 
+    /// <summary>W6-2 PR E (E-11; IGU-5): every inspector string Windows ships
+    /// is a literal in the mac's inspector or its header's toggle —
+    /// <c>GraphInspectorView.swift</c>, <c>GraphTableView.swift</c> — read
+    /// from the sources, comments stripped; the four composed names are the
+    /// mac's interpolations with the 1-based index; T60's value text is the
+    /// mac's <c>%.2f</c> — two decimals and a dot under every culture.</summary>
+    [Fact]
+    public void TheGraphInspectorsStringsAreTheMacsByteForByte()
+    {
+        string inspector = SwiftSource.WithoutComments(File.ReadAllText(
+            Path.Combine(MacSourceRoot(), "Graph", "GraphInspectorView.swift")));
+        string header = SwiftSource.WithoutComments(File.ReadAllText(
+            Path.Combine(MacSourceRoot(), "Graph", "GraphTableView.swift")));
+        foreach (string shipped in new[]
+        {
+            Graph.GraphPhrase.InspectorLabel,
+            Graph.GraphPhrase.InspectorToggleName,
+            Graph.GraphPhrase.InspectorToggleHint,
+        })
+        {
+            Assert.Contains($"\"{shipped}\"", header, StringComparison.Ordinal);
+        }
+        foreach (string shipped in new[]
+        {
+            Graph.GraphPhrase.InspectorName,
+            Graph.GraphPhrase.InspectorFiltersSection,
+            Graph.GraphPhrase.InspectorGroupsSection,
+            Graph.GraphPhrase.InspectorDisplaySection,
+            Graph.GraphPhrase.InspectorForcesSection,
+            Graph.GraphPhrase.InspectorNameFieldLabel,
+            Graph.GraphPhrase.FilterFieldName,
+            Graph.GraphPhrase.InspectorAttachmentsLabel,
+            Graph.GraphPhrase.InspectorAttachmentsHint,
+            Graph.GraphPhrase.InspectorUnresolvedLabel,
+            Graph.GraphPhrase.InspectorUnresolvedHint,
+            Graph.GraphPhrase.InspectorOrphansLabel,
+            Graph.GraphPhrase.InspectorOrphansHint,
+            Graph.GraphPhrase.InspectorNoGroupsText,
+            Graph.GraphPhrase.InspectorAddGroupLabel,
+            Graph.GraphPhrase.InspectorAddGroupHint,
+            Graph.GraphPhrase.InspectorGroupQueryLabel,
+            Graph.GraphPhrase.InspectorGroupColourLabel,
+            Graph.GraphPhrase.InspectorGroupRingLabel,
+            Graph.GraphPhrase.InspectorArrowsLabel,
+            Graph.GraphPhrase.InspectorArrowsHint,
+            Graph.GraphPhrase.InspectorTextFadeLabel,
+            Graph.GraphPhrase.InspectorTextFadeHint,
+            Graph.GraphPhrase.InspectorNodeSizeLabel,
+            Graph.GraphPhrase.InspectorNodeSizeHint,
+            Graph.GraphPhrase.InspectorLinkThicknessLabel,
+            Graph.GraphPhrase.InspectorLinkThicknessHint,
+            Graph.GraphPhrase.InspectorCenterLabel,
+            Graph.GraphPhrase.InspectorCenterHint,
+            Graph.GraphPhrase.InspectorRepelLabel,
+            Graph.GraphPhrase.InspectorRepelHint,
+            Graph.GraphPhrase.InspectorLinkForceLabel,
+            Graph.GraphPhrase.InspectorLinkForceHint,
+            Graph.GraphPhrase.InspectorLinkDistanceLabel,
+            Graph.GraphPhrase.InspectorLinkDistanceHint,
+        })
+        {
+            Assert.Contains($"\"{shipped}\"", inspector, StringComparison.Ordinal);
+        }
+        // The composed names: the mac's interpolations, the index 1-based.
+        foreach ((string format, string swift) in new[]
+        {
+            (Graph.GraphPhrase.InspectorGroupQueryFormat, "\"Group \\(index + 1) query\""),
+            (Graph.GraphPhrase.InspectorGroupColourFormat, "\"Group \\(index + 1) colour\""),
+            (Graph.GraphPhrase.InspectorGroupRingFormat, "\"Group \\(index + 1) ring style\""),
+            (Graph.GraphPhrase.InspectorRemoveGroupFormat, "\"Remove group \\(index + 1)\""),
+        })
+        {
+            Assert.Contains(swift, inspector, StringComparison.Ordinal);
+            Assert.Equal(swift.Trim('"').Replace("\\(index + 1)", "{0}", StringComparison.Ordinal), format);
+        }
+        Assert.Equal("Group 1 query", Graph.GraphPhrase.InspectorGroupQueryName(1));
+        Assert.Equal("Remove group 12", Graph.GraphPhrase.InspectorRemoveGroupName(12));
+        // T60: the value text, the mac's %.2f — a dot under a comma culture too.
+        Assert.Contains("String(format: \"%.2f\", value.wrappedValue)", inspector, StringComparison.Ordinal);
+        System.Globalization.CultureInfo was = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("de-DE");
+            Assert.Equal("0.50", Graph.GraphPhrase.InspectorSliderValue(0.5));
+            Assert.Equal("1.00", Graph.GraphPhrase.InspectorSliderValue(1.0));
+            Assert.Equal("0.33", Graph.GraphPhrase.InspectorSliderValue(0.333));
+            Assert.Equal("Group 7 colour", Graph.GraphPhrase.InspectorGroupColourName(7));
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = was;
+        }
+    }
+
     private static string Unescape(string value) =>
         value.Replace("\\\\", "\\", StringComparison.Ordinal)
             .Replace("\\\"", "\"", StringComparison.Ordinal);

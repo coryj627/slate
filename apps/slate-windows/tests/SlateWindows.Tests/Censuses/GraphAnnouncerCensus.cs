@@ -732,7 +732,17 @@ public sealed class GraphAnnouncerCensus
     public void NoMutableShadowOfTheViewStateExistsInTheShell()
     {
         string[] names = ["SelectedKey", "Filter", "NameQuery", "Groups", "Mode", "KindOnly"];
-        string[] types = ["uniffi.slate_uniffi.GraphFilter", "uniffi.slate_uniffi.GraphSurfaceMode"];
+        // W6-2 PR E (E-12 vii): the inspector's five — a query, a display
+        // and a forces record join the filter and the mode; the groups' list
+        // is the generic arm below.
+        string[] types =
+        [
+            "uniffi.slate_uniffi.GraphFilter",
+            "uniffi.slate_uniffi.GraphSurfaceMode",
+            "uniffi.slate_uniffi.GraphVisibilityQuery",
+            "uniffi.slate_uniffi.GraphDisplay",
+            "uniffi.slate_uniffi.GraphForcesConfig",
+        ];
         var offenders = new List<string>();
         foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
@@ -803,11 +813,15 @@ public sealed class GraphAnnouncerCensus
         ];
         // ApplyQuery's callers in this PR: the preset's write and its
         // restore, both in RunPreset (C-3 (ii), (vi)); T5 adds the
-        // constructor's seed and the fresh open's re-apply.
+        // constructor's seed and the fresh open's re-apply. W6-2 PR E (E-12
+        // ii; IGW-3): four ROUTES at five invocation sites — the inspector's
+        // manual change through the document's ChangeFilter (Term X1) is
+        // the fourth route; the census pins the occurrences, not the owners.
         string[] allowedCallers =
         [
             // C-10: the fresh open's re-apply and the constructor's seed.
             "Graph/WorkspaceViewModel.Graph.cs:AttachGraphDocumentTo",
+            "Graph/GraphDocumentViewModel.cs:ChangeFilter",
             "Graph/GraphNavigator.cs:RunPreset",
             "Graph/GraphNavigator.cs:RunPreset",
             "WorkspaceViewModel.cs:<ctor>",
@@ -903,6 +917,46 @@ public sealed class GraphAnnouncerCensus
             ["Graph/GraphDocumentViewModel.cs:SetMode:Mode", "WorkspaceViewModel.cs:<ctor>:Mode"],
             writers.OrderBy(w => w, StringComparer.Ordinal));
         Assert.Equal(["Graph/GraphViewState.cs:Mode:_mode"], fieldWriters);
+    }
+
+    /// <summary>W6-2 PR E (Term Y2; E-12 ii): <c>Groups</c> is written by
+    /// exactly two sites — the workspace constructor's seed from the
+    /// persisted config and the inspector's <c>SetGroups</c> — and its
+    /// backing field by the setter alone; a planted third writer fails here.</summary>
+    [Fact]
+    public void TheGroupsAreWrittenByTheSeedAndTheInspectorsSetGroupsAlone()
+    {
+        var writers = new List<string>();
+        var fieldWriters = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (AssignmentExpressionSyntax assignment in source.Root.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                ISymbol? target = model.GetSymbolInfo(assignment.Left).Symbol;
+                if (target is IPropertySymbol { Name: "Groups" } property && property.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    writers.Add($"{relative}:{OwnerOf(assignment)}:{property.Name}");
+                }
+                if (target is IFieldSymbol { Name: "_groups" } field && field.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    fieldWriters.Add($"{relative}:{OwnerOf(assignment)}:{field.Name}");
+                }
+            }
+            foreach (ArgumentSyntax argument in source.Root.DescendantNodes().OfType<ArgumentSyntax>())
+            {
+                if (argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword)
+                    && model.GetSymbolInfo(argument.Expression).Symbol is IFieldSymbol { Name: "_groups" } field
+                    && field.ContainingType.ToDisplayString() == TheViewStateType)
+                {
+                    fieldWriters.Add($"{relative}:{OwnerOf(argument)}:{field.Name}");
+                }
+            }
+        }
+        Assert.Equal(
+            ["Graph/GraphInspectorViewModel.cs:SetGroups:Groups", "WorkspaceViewModel.cs:<ctor>:Groups"],
+            writers.OrderBy(w => w, StringComparer.Ordinal));
+        Assert.Equal(["Graph/GraphViewState.cs:Groups:_groups"], fieldWriters);
     }
 
     /// <summary>The filter, the mode, or a list of the config's groups.</summary>

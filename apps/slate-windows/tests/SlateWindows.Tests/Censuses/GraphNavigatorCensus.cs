@@ -31,6 +31,10 @@ public sealed class GraphNavigatorCensus
     private const string TheStoreType = "SlateWindows.Graph.GraphConfigStore";
     private const string TheModelType = "SlateWindows.Graph.GraphDiagramModel";
     private const string TheDriverType = "SlateWindows.Graph.GraphLayoutDriver";
+    private const string TheInspectorType = "SlateWindows.Graph.GraphInspectorViewModel";
+
+    /// <summary>W6-2 PR E (Term X1; E-12 ii): ChangeFilter's one outside caller — the inspector's filter route.</summary>
+    private static readonly string[] ChangeFilterCallers = ["Graph/GraphInspectorViewModel.cs:SetBackendFilter"];
 
     private static string OwnerOf(SyntaxNode node)
     {
@@ -139,13 +143,25 @@ public sealed class GraphNavigatorCensus
     /// preferences object are constructed in the shell — each by its
     /// workspace factory, each factory called once from the workspace's
     /// constructor as the field's direct assignment, outside any repeatable
-    /// construct.</summary>
+    /// construct. W6-2 PR E (Term I6; E-12 i): the inspector view model
+    /// joins the theory — one construction, after the preferences and the
+    /// view state and before the navigator.</summary>
     [Fact]
     public void ExactlyOneNavigatorAndOnePreferencesAreConstructedInTheWorkspaceConstructor()
     {
         Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:NewGraphNavigator"], CreationsOf(TheNavigatorType));
         Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:NewGraphPreferences"], CreationsOf(ThePreferencesType));
-        foreach ((string factory, string field) in new[] { ("NewGraphNavigator", "_graphNavigator"), ("NewGraphPreferences", "_graphPreferences") })
+        Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:NewGraphInspector"], CreationsOf(TheInspectorType));
+        (string Relative, CSharpSource Source) workspace = ShellCompilation.Sources.Single(s => s.Relative == "WorkspaceViewModel.cs");
+        int[] order =
+        [
+            .. new[] { "_graphViewState", "_graphPreferences", "_graphInspector", "_graphNavigator" }
+                .Select(field => workspace.Source.Root.DescendantNodes().OfType<AssignmentExpressionSyntax>()
+                    .Where(a => a.Left is IdentifierNameSyntax left && left.Identifier.ValueText == field && a.Ancestors().OfType<ConstructorDeclarationSyntax>().Any())
+                    .Min(a => a.SpanStart)),
+        ];
+        Assert.True(order.SequenceEqual(order.Order()), "the graph objects are constructed out of order — the view state, the preferences, the inspector, the navigator");
+        foreach ((string factory, string field) in new[] { ("NewGraphNavigator", "_graphNavigator"), ("NewGraphPreferences", "_graphPreferences"), ("NewGraphInspector", "_graphInspector") })
         {
             var uses = new List<string>();
             foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
@@ -286,6 +302,7 @@ public sealed class GraphNavigatorCensus
                 "ApplyRefresh",
                 "ApplyRefreshForTests",
                 "BuildDiagram",
+                "ChangeFilter",
                 "EnsureDiagram",
                 "EnterDiagram",
                 "FetchTopology",
@@ -316,6 +333,10 @@ public sealed class GraphNavigatorCensus
         // seat's build from the attach funnel alone; the rest from nowhere.
         Assert.Equal(["Graph/GraphDiagramView.cs:SwitchToTable", "Graph/GraphSurfaceView.cs:OnModeChosen"], CallersOf(TheDocumentType, "SetMode", includeInsideType: false));
         Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:AttachGraphDocumentTo"], CallersOf(TheDocumentType, "EnsureDiagram", includeInsideType: false));
+        // W6-2 PR E (Term X1; E-12 ii): the inspector's filter route reaches
+        // Request through ChangeFilter — the inspector view model's
+        // SetBackendFilter is its one outside caller once T3 lands it.
+        Assert.Equal(ChangeFilterCallers, CallersOf(TheDocumentType, "ChangeFilter", includeInsideType: false));
         foreach (string arm in new[]
         {
             "Issue", "IssueReplacing", "Receive", "ReceiveForTests",
@@ -340,8 +361,9 @@ public sealed class GraphNavigatorCensus
         Assert.Equal(["Converge", "Step"], schedulerInvocations.Order(StringComparer.Ordinal));
         Assert.Equal(["Graph/GraphLayoutDriver.cs:StartSettle"], CallersOf(TheDriverType, "Converge"));
         Assert.Equal(["Graph/GraphLayoutDriver.cs:OnCadence", "Graph/GraphLayoutDriver.cs:StartSettle"], CallersOf(TheDriverType, "Step"));
+        // W6-2 PR E (Term K2): the forces apply restarts the run (ED-5).
         Assert.Equal(
-            ["Graph/GraphDocumentViewModel.cs:ApplyRefresh", "Graph/GraphDocumentViewModel.cs:InstallBuild", "Graph/GraphDocumentViewModel.cs:OnMotionChanged"],
+            ["Graph/GraphDocumentViewModel.cs:ApplyForces", "Graph/GraphDocumentViewModel.cs:ApplyRefresh", "Graph/GraphDocumentViewModel.cs:InstallBuild", "Graph/GraphDocumentViewModel.cs:OnMotionChanged"],
             CallersOf(TheDriverType, "StartSettle"));
     }
 
@@ -892,6 +914,188 @@ public sealed class GraphNavigatorCensus
         Assert.Contains("UnwireWorkspaceGraph", calls);
     }
 
+    // --- W6-2 PR E: Term W7's triggers, the closed list (E-12 iii) -------------
+
+    /// <summary>W6-2 PR E, E-12 (iii), ED-2: Term W7's triggers are the
+    /// closed list — SetVerbosity, SetNameQuery, SetConnectionsDepth,
+    /// SetMode, SetForces, SetFilters, SetGroups, SetDisplay — and each
+    /// updates ITS field alone: every <c>with</c> over the config in the
+    /// preferences type sits in one of them, a trigger's outermost
+    /// <c>with</c> assigns exactly its one field and the trigger then
+    /// schedules, and the two that share <c>Filters</c> part it in a nested
+    /// <c>with</c> — the needle's <c>NameQuery</c>; the flags' three
+    /// booleans and never the needle.</summary>
+    [Fact]
+    public void TermW7sTriggersAreTheClosedListEachUpdatingItsFieldAlone()
+    {
+        (string Relative, CSharpSource Source) file = ShellCompilation.Sources.Single(s => s.Relative == "Graph/GraphPreferencesViewModel.cs");
+        SemanticModel model = ShellCompilation.ModelFor(file.Source);
+        var outer = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        var nested = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (WithExpressionSyntax with in file.Source.Root.DescendantNodes().OfType<WithExpressionSyntax>())
+        {
+            string owner = OwnerOf(with);
+            string fields = string.Join(",", with.Initializer.Expressions.OfType<AssignmentExpressionSyntax>().Select(a => CSharpSource.Normalize(a.Left)));
+            string type = model.GetTypeInfo(with).Type?.ToDisplayString() ?? "?";
+            if (with.Ancestors().OfType<WithExpressionSyntax>().Any())
+            {
+                Assert.Equal("uniffi.slate_uniffi.GraphFilterConfig", type);
+                Assert.False(nested.ContainsKey(owner), $"{owner} parts Filters twice");
+                nested[owner] = fields;
+                continue;
+            }
+            Assert.Equal("uniffi.slate_uniffi.GraphConfig", type);
+            Assert.False(outer.ContainsKey(owner), $"{owner} writes the config twice");
+            outer[owner] = fields;
+            MethodDeclarationSyntax trigger = with.Ancestors().OfType<MethodDeclarationSyntax>().First();
+            Assert.Contains(
+                trigger.DescendantNodes().OfType<InvocationExpressionSyntax>(),
+                call => CSharpSource.Normalize(call.Expression) == "ScheduleSave");
+        }
+        Assert.Equal(
+            [
+                "SetConnectionsDepth=ConnectionsDepth",
+                "SetDisplay=Display",
+                "SetFilters=Filters",
+                "SetForces=Forces",
+                "SetGroups=Groups",
+                "SetMode=Mode",
+                "SetNameQuery=Filters",
+                "SetVerbosity=Verbosity",
+            ],
+            outer.Select(pair => $"{pair.Key}={pair.Value}").ToArray());
+        Assert.Equal(
+            [
+                "SetFilters=IncludeAttachments,IncludeGhosts,OrphansOnly",
+                "SetNameQuery=NameQuery",
+            ],
+            nested.Select(pair => $"{pair.Key}={pair.Value}").ToArray());
+    }
+
+    /// <summary>W6-2 PR E (Term K4; IGX-2, IGY-1): the relay's settle drop is
+    /// called by the document's forces apply (before re-arming) and by its
+    /// model drop (beside the disarm) and by no other site; the navigation
+    /// drop's one caller stays the workspace's verbosity wiring (C-9).</summary>
+    [Fact]
+    public void TheRelaysDropsHaveTheirNamedCallers()
+    {
+        Assert.Equal(
+            ["Graph/GraphDocumentViewModel.cs:ApplyForces", "Graph/GraphDocumentViewModel.cs:DropModel"],
+            CallersOf("SlateWindows.Graph.GraphAnnouncer", "DropPendingSettle"));
+        Assert.Equal(["WorkspaceViewModel.cs:<ctor>"], CallersOf("SlateWindows.Graph.GraphAnnouncer", "DropPendingNavigation"));
+    }
+
+    /// <summary>W6-2 PR E, E-12 (viii), Term Z2 (IGU-1): the renderer's
+    /// document handler branches on exactly three names — HasLiveDiagram
+    /// binding, Verbosity renaming, DiagramDisplay redrawing — and no other.</summary>
+    [Fact]
+    public void TheRenderersDocumentBranchesAreTheThreeNamesAndTheDisplaysRedraws()
+    {
+        (string Relative, CSharpSource Source) file = ShellCompilation.Sources.Single(s => s.Relative == "Graph/GraphDiagramView.cs");
+        MethodDeclarationSyntax handler = file.Source.Method("OnDocumentChanged");
+        var branches = new List<string>();
+        foreach (IfStatementSyntax branch in handler.DescendantNodes().OfType<IfStatementSyntax>())
+        {
+            if (branch.Condition is BinaryExpressionSyntax { Right: InvocationExpressionSyntax nameOf }
+                && CSharpSource.Normalize(nameOf.Expression) == "nameof")
+            {
+                string name = CSharpSource.Normalize(nameOf.ArgumentList.Arguments[0].Expression);
+                string calls = string.Join(",", branch.Statement.DescendantNodes().OfType<InvocationExpressionSyntax>().Select(c => CSharpSource.Normalize(c.Expression)));
+                branches.Add($"{name}:{calls}");
+            }
+        }
+        Assert.Equal(
+            [
+                "GraphDocumentViewModel.HasLiveDiagram:BindDiagram",
+                "GraphDocumentViewModel.Verbosity:RenamePeers",
+                "GraphDocumentViewModel.DiagramDisplay:Redraw",
+            ],
+            branches);
+    }
+
+    /// <summary>W6-2 PR E, E-12 (iv): the inspector's sources post no
+    /// announcement — no instance member of the announcer is invoked in the
+    /// inspector's files; the document's AnnounceForceValue is the one
+    /// force seam and the inspector reaches the relay through it alone.</summary>
+    [Fact]
+    public void TheInspectorPostsNothing()
+    {
+        string[] files = ["Graph/GraphInspectorViewModel.cs", "Graph/GraphInspectorView.cs"];
+        var posts = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources.Where(s => files.Contains(s.Relative)))
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                foreach (ISymbol candidate in Candidates(model.GetSymbolInfo(call)))
+                {
+                    if (candidate is IMethodSymbol method
+                        && (method.ContainingType.Name == "GraphAnnouncer" || method.ContainingType.Name == "A11yAnnouncer"))
+                    {
+                        posts.Add($"{relative}:{OwnerOf(call)}:{method.Name}");
+                    }
+                }
+            }
+        }
+        Assert.Empty(posts);
+        Assert.Equal(files.Length, ShellCompilation.Sources.Count(s => files.Contains(s.Relative)));
+    }
+
+    /// <summary>W6-2 PR E, E-12 (v), Term Y4 (0bD-12): the label theory's
+    /// picker arm — no colour token's or ring style's title is a string
+    /// literal anywhere in the shell; the eight and the four are core's
+    /// <c>Title</c>, listed from the vectors.</summary>
+    [Fact]
+    public void NoPickerTitleIsTypedInTheShell()
+    {
+        string[] titles =
+        [
+            .. SlateUniffiMethods.GraphColorTokens().Select(token => token.Title),
+            .. SlateUniffiMethods.GraphRingStyles().Select(style => style.Title),
+        ];
+        Assert.Equal(12, titles.Length);
+        var typed = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            foreach (LiteralExpressionSyntax literal in source.Root.DescendantNodes().OfType<LiteralExpressionSyntax>())
+            {
+                if (literal.IsKind(SyntaxKind.StringLiteralExpression) && titles.Contains(literal.Token.ValueText, StringComparer.Ordinal))
+                {
+                    typed.Add($"{relative}:{OwnerOf(literal)}:{literal.Token.ValueText}");
+                }
+            }
+        }
+        Assert.Empty(typed);
+    }
+
+    /// <summary>W6-2 PR E (Term K2; IGU-2): the inspector's forces route
+    /// runs its three seams in ONE order — the preferences' field, the
+    /// value spoken, the apply — so the value precedes the settle under
+    /// every scheduler; a synchronous scheduler would otherwise let the
+    /// apply's one-shot convergence speak first.</summary>
+    [Fact]
+    public void TheInspectorSpeaksTheValueBeforeTheApply()
+    {
+        (string Relative, CSharpSource Source) file = ShellCompilation.Sources.Single(s => s.Relative == "Graph/GraphInspectorViewModel.cs");
+        SemanticModel model = ShellCompilation.ModelFor(file.Source);
+        MethodDeclarationSyntax route = file.Source.Root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .Single(m => m.Identifier.ValueText == "SetForces" && m.ParameterList.Parameters.Count == 1 && m.Parent is ClassDeclarationSyntax { Identifier.ValueText: "GraphInspectorViewModel" });
+        var seams = new List<string>();
+        foreach (InvocationExpressionSyntax call in route.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            foreach (ISymbol candidate in Candidates(model.GetSymbolInfo(call)))
+            {
+                if (IsMethodOf(candidate, ThePreferencesType, "SetForces")
+                    || IsMethodOf(candidate, TheDocumentType, "AnnounceForceValue")
+                    || IsMethodOf(candidate, TheDocumentType, "ApplyForces"))
+                {
+                    seams.Add(candidate.Name);
+                }
+            }
+        }
+        Assert.Equal(["SetForces", "AnnounceForceValue", "ApplyForces"], seams);
+    }
+
     // --- (viii) the depth seam's one installer ---------------------------------
 
     /// <summary>C-10, C-15 (viii): the leaf's DepthChanged seam is installed
@@ -927,12 +1131,15 @@ public sealed class GraphNavigatorCensus
     /// invocation in GraphNavigator.cs binds to a relay instance method.
     /// W6-2 PR D (D-1, D-15 iv): the diagram's six seams — the mode line,
     /// the row line, the zoom, the pin, the tier's entry, the settle — ride
-    /// the same boundary and are its only other callers.</summary>
+    /// the same boundary and are its only other callers. W6-2 PR E (Term
+    /// K3; E-12 iv): the force value's seam is the document's ONE force
+    /// seam, on the same boundary.</summary>
     [Fact]
     public void TheAnnouncementBoundaryGainsWhereAmIAndTheNavigatorPostsNothing()
     {
         Assert.Equal(
             [
+                "Graph/GraphDocumentViewModel.cs:AnnounceForceValue",
                 "Graph/GraphDocumentViewModel.cs:AnnounceLayoutSettled",
                 "Graph/GraphDocumentViewModel.cs:AnnounceMode",
                 "Graph/GraphDocumentViewModel.cs:AnnouncePinned",
@@ -1040,6 +1247,9 @@ public sealed class GraphNavigatorCensus
         // The surface's constants ARE the inventory's.
         Assert.Equal(GraphPhrase.FilterFieldName, GraphSurfaceView.FilterFieldName);
         Assert.Equal(GraphPhrase.FilterFieldHint, GraphSurfaceView.FilterFieldHint);
+        Assert.Equal(GraphPhrase.InspectorLabel, GraphSurfaceView.InspectorLabel);
+        Assert.Equal(GraphPhrase.InspectorToggleName, GraphSurfaceView.InspectorToggleName);
+        Assert.Equal(GraphPhrase.InspectorToggleHint, GraphSurfaceView.InspectorToggleHint);
         Assert.Equal(GraphPhrase.FilterSummaryPrefix, GraphSurfaceView.FilterSummaryPrefix);
         Assert.Equal(GraphPhrase.ClearFilterName, GraphSurfaceView.ClearFilterName);
         Assert.Equal(GraphPhrase.WhereAmIHeading, GraphSurfaceView.WhereAmIHeading);
@@ -1053,6 +1263,17 @@ public sealed class GraphNavigatorCensus
         Assert.Equal(["Laying out graph…", "Laying out graph.", "Graph diagram error: "], [GraphPhrase.LoadingDiagramText, GraphPhrase.LoadingDiagramAccessibleName, GraphPhrase.DiagramErrorPrefix]);
         Assert.Equal(["Graph, visual diagram", "Switch to Table", "pinned", "Pin", "Unpin"], [GraphPhrase.DiagramName, GraphPhrase.SwitchToTable, GraphPhrase.PinnedStatus, GraphPhrase.PinLabel, GraphPhrase.UnpinLabel]);
         Assert.Equal([" — ", " in / ", " out", "Connects to: "], [GraphPhrase.TooltipSeparator, GraphPhrase.TooltipInSuffix, GraphPhrase.TooltipOutSuffix, GraphPhrase.ConnectsToPrefix]);
+        // W6-2 PR E (E-11): the inspector's rows T29–T60 — the mac's byte
+        // for byte (MacCatalogParityTests reads them against the Swift
+        // sources) — and the two Windows-authored notices (E-D6, E-D8).
+        Assert.Equal(["Inspector", "Toggle graph inspector", "Show the graph inspector — filters, colour groups, display, and forces.", "Graph inspector"], [GraphPhrase.InspectorLabel, GraphPhrase.InspectorToggleName, GraphPhrase.InspectorToggleHint, GraphPhrase.InspectorName]);
+        Assert.Equal(["Filters", "Groups", "Display", "Forces"], [GraphPhrase.InspectorFiltersSection, GraphPhrase.InspectorGroupsSection, GraphPhrase.InspectorDisplaySection, GraphPhrase.InspectorForcesSection]);
+        Assert.Equal(["Filter by name", "Attachments", "Include attachment nodes.", "Unresolved", "Include unresolved link targets.", "Orphans only", "Show only notes with no links in or out."], [GraphPhrase.InspectorNameFieldLabel, GraphPhrase.InspectorAttachmentsLabel, GraphPhrase.InspectorAttachmentsHint, GraphPhrase.InspectorUnresolvedLabel, GraphPhrase.InspectorUnresolvedHint, GraphPhrase.InspectorOrphansLabel, GraphPhrase.InspectorOrphansHint]);
+        Assert.Equal(["No groups. Add one to colour matching nodes.", "Add Group", "Add a colour rule that highlights nodes whose name matches a query.", "Query", "Colour", "Ring"], [GraphPhrase.InspectorNoGroupsText, GraphPhrase.InspectorAddGroupLabel, GraphPhrase.InspectorAddGroupHint, GraphPhrase.InspectorGroupQueryLabel, GraphPhrase.InspectorGroupColourLabel, GraphPhrase.InspectorGroupRingLabel]);
+        Assert.Equal(["Group 3 query", "Group 3 colour", "Group 3 ring style", "Remove group 3"], [GraphPhrase.InspectorGroupQueryName(3), GraphPhrase.InspectorGroupColourName(3), GraphPhrase.InspectorGroupRingName(3), GraphPhrase.InspectorRemoveGroupName(3)]);
+        Assert.Equal(["Arrows", "Draw arrowheads on directed links.", "Text fade", "Zoom level below which node labels hide.", "Node size", "Multiplier on node circle size.", "Link thickness", "Edge line width."], [GraphPhrase.InspectorArrowsLabel, GraphPhrase.InspectorArrowsHint, GraphPhrase.InspectorTextFadeLabel, GraphPhrase.InspectorTextFadeHint, GraphPhrase.InspectorNodeSizeLabel, GraphPhrase.InspectorNodeSizeHint, GraphPhrase.InspectorLinkThicknessLabel, GraphPhrase.InspectorLinkThicknessHint]);
+        Assert.Equal(["Center", "Gravity pulling the graph toward the centre.", "Repel", "How strongly nodes push each other apart.", "Link force", "How strongly linked nodes pull together.", "Link distance", "The ideal length of a link."], [GraphPhrase.InspectorCenterLabel, GraphPhrase.InspectorCenterHint, GraphPhrase.InspectorRepelLabel, GraphPhrase.InspectorRepelHint, GraphPhrase.InspectorLinkForceLabel, GraphPhrase.InspectorLinkForceHint, GraphPhrase.InspectorLinkDistanceLabel, GraphPhrase.InspectorLinkDistanceHint]);
+        Assert.Equal(["Graph settings are read-only: ", "Open the graph to change these settings."], [GraphPhrase.InspectorReadOnlyPrefix, GraphPhrase.InspectorInactiveText]);
         // The chord rows' labels and hints.
         foreach ((string id, string label, string hint) in new[]
         {

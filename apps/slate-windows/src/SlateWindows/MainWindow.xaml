@@ -1981,6 +1981,26 @@
                                                            Model="{Binding Connections}" />
                             </DockPanel>
 
+                            <!-- W6-2 PR E (#746): the graph inspector leaf —
+                                 filters, colour groups, display and forces over
+                                 the workspace's one view model (rule I, Term I1;
+                                 contracts E-1, E-15). -->
+                            <DockPanel Margin="12"
+                                       AutomationProperties.AutomationId="GraphInspectorBody">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="inspector">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <graph:GraphInspectorView x:Name="GraphInspectorSurface"
+                                                          Model="{Binding Inspector}" />
+                            </DockPanel>
+
                             <!-- W4-7 (#739): the history leaf — two
                                  segments, day-grouped versions, the
                                  structured diff walkthrough, restore

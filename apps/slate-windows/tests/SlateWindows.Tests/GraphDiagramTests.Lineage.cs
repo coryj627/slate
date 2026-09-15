@@ -101,6 +101,12 @@ public sealed partial class GraphDiagramTests
 
     private static string SettledLine() => Render(new GraphA11yEvent.GraphLayoutSettled());
 
+    private static string ForceLine(GraphForceControl control, uint percent) =>
+        Render(new GraphA11yEvent.GraphForceValue(control, percent));
+
+    private static int CrossingCount(GraphDocumentViewModel document, string crossing) =>
+        document.CrossingsForTests.TryGetValue(crossing, out int count) ? count : 0;
+
     /// <summary>A run ends at the predicate or at the kernel's ceiling (a
     /// multi-node graph may jitter at the temperature floor and never meet
     /// the predicate — graph_layout.rs's own note; TGD-2's deviation).</summary>
@@ -648,6 +654,269 @@ public sealed partial class GraphDiagramTests
             _ = SettledModel(host, document);
             PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
             Assert.Equal([ModeLine(GraphSurfaceMode.Table), ModeLine(GraphSurfaceMode.Diagram)], host.GraphLines);
+        });
+    }
+
+    /// <summary>W6-2 PR E (Terms K2, K3, K4; ED-5, ED-6): the inspector's
+    /// route over a live model — the preferences' field, the value spoken,
+    /// then the apply: ONE gate crossing, the line armed, the run restarted;
+    /// the value precedes the settle and the settle speaks once; the model's
+    /// current forces re-heat nothing, arm nothing, tick nothing; Table mode
+    /// has no kernel to reach.</summary>
+    [Fact]
+    public void AForcesEditReheatsThroughTheGateArmsRestartsAndSpeaksTheValueThenTheSettleOnce()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "diagram-forces-edit");
+            GraphDocumentViewModel document = host.Open();
+            Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+            GraphDiagramModel model = SettledModel(host, document);
+            host.GraphLines.Clear();
+            int crossings = CrossingCount(document, "layout_set_forces");
+            GraphPreferencesViewModel preferences = host.Workspace.GraphPreferences;
+            GraphForcesConfig edited = preferences.CurrentConfig.Forces with { Repel = 0.8 };
+            // The inspector's order (Term K2): the field, the value, the apply.
+            preferences.SetForces(edited);
+            document.AnnounceForceValue(GraphForceControl.Repel, 80);
+            Assert.True(document.ApplyForces(edited));
+            Assert.Equal(crossings + 1, CrossingCount(document, "layout_set_forces"));
+            Assert.Equal(GraphDocumentViewModel.ForcesOf(edited), model.Forces);
+            Assert.True(document.SettleAnnouncementArmed);
+            Assert.True(model.Driver.IsSettling);
+            WaitForTheSettle(host, document, model);
+            Assert.True(PumpedDispatcher.PumpUntil(() => host.GraphLines.Count >= 2, TimeSpan.FromSeconds(10)), "the two lines never fired");
+            PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
+            host.Settle(document);
+            Assert.Equal([ForceLine(GraphForceControl.Repel, 80), SettledLine()], host.GraphLines);
+            Assert.False(document.SettleAnnouncementArmed);
+            // The model's current forces: nothing re-heats, nothing armed, nothing ticked.
+            host.GraphLines.Clear();
+            Assert.False(document.ApplyForces(edited));
+            Assert.False(document.SettleAnnouncementArmed);
+            Assert.False(model.Driver.IsSettling);
+            Assert.Equal(crossings + 1, CrossingCount(document, "layout_set_forces"));
+            // Table mode: no live model, nothing armed.
+            Assert.True(document.SetMode(GraphSurfaceMode.Table));
+            Assert.False(document.ApplyForces(edited with { Center = 0.3 }));
+            Assert.False(document.SettleAnnouncementArmed);
+            PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
+            host.Settle(document);
+            Assert.Equal([ModeLine(GraphSurfaceMode.Table)], host.GraphLines);
+        });
+    }
+
+    /// <summary>W6-2 PR E (Term K2; IGU-2): under Reduce Motion the apply's
+    /// restart converges in ONE shot through the scheduler — the value,
+    /// spoken before the arm and the restart, still precedes the settle.</summary>
+    [Fact]
+    public void TheValuePrecedesTheSettleUnderReduceMotionsOneShotConvergence()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(6, "diagram-forces-reduce-motion");
+            var lines = new List<string>();
+            var policy = new GraphMotionPolicy(() => true);
+            GraphDocumentViewModel document = BareDocument(host, policy, lines);
+            Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+            Assert.True(PumpedDispatcher.PumpUntil(() => document.HasLiveDiagram, TimeSpan.FromSeconds(30)), "the build never landed");
+            GraphDiagramModel model = document.DiagramModel!;
+            Assert.True(PumpedDispatcher.PumpUntil(() => !model.Driver.IsSettling, TimeSpan.FromSeconds(30)), "the converge never returned");
+            Settle(document);
+            lines.Clear();
+            GraphForcesConfig edited = SlateUniffiMethods.GraphConfigDefault().Forces with { Center = 0.9 };
+            document.AnnounceForceValue(GraphForceControl.Center, 90);
+            Assert.True(document.ApplyForces(edited));
+            Assert.True(PumpedDispatcher.PumpUntil(() => !model.Driver.IsSettling, TimeSpan.FromSeconds(30)), "the converge never returned");
+            Assert.True(model.Driver.LastRunWasReduceMotionForTests);
+            Assert.True(PumpedDispatcher.PumpUntil(() => lines.Count >= 2, TimeSpan.FromSeconds(10)), "the two lines never fired");
+            Settle(document);
+            Assert.Equal([ForceLine(GraphForceControl.Center, 90), SettledLine()], lines);
+            document.Retire();
+            Settle(document);
+        });
+    }
+
+    /// <summary>W6-2 PR E (Term K4; IGX-2): a second edit inside the relay's
+    /// settle window drops the first run's queued line — re-armed, restarted,
+    /// ONE settle for the last run.</summary>
+    [Fact]
+    public void ASecondEditInsideTheSettleWindowSpeaksOnceForTheLastRun()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "diagram-second-edit");
+            GraphDocumentViewModel document = host.Open();
+            Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+            GraphDiagramModel model = SettledModel(host, document);
+            host.GraphLines.Clear();
+            GraphAnnouncer relay = host.Workspace.GraphRelayForTests;
+            GraphForcesConfig first = host.Workspace.GraphPreferences.CurrentConfig.Forces with { Repel = 0.7 };
+            Assert.True(document.ApplyForces(first));
+            // The first run ends; its settle is QUEUED in the window, unspoken.
+            Assert.True(PumpedDispatcher.PumpUntil(() => relay.PendingForTests == 1, TimeSpan.FromSeconds(30)), "the settle never queued");
+            Assert.False(model.Driver.IsSettling);
+            Assert.Empty(host.GraphLines);
+            Assert.False(document.SettleAnnouncementArmed);
+            // The second edit inside the window: the queued line dropped, re-armed, restarted.
+            Assert.True(document.ApplyForces(first with { Center = 0.2 }));
+            Assert.Equal(0, relay.PendingForTests);
+            Assert.True(document.SettleAnnouncementArmed);
+            Assert.True(model.Driver.IsSettling);
+            WaitForTheSettle(host, document, model);
+            Assert.True(PumpedDispatcher.PumpUntil(() => host.GraphLines.Count > 0, TimeSpan.FromSeconds(10)), "the settled line never fired");
+            PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
+            host.Settle(document);
+            Assert.Equal([SettledLine()], host.GraphLines);
+        });
+    }
+
+    /// <summary>W6-2 PR E (Term K4; IGY-1): a settle queued at convergence and
+    /// still inside the relay's window is dropped with the disarm — by the
+    /// switch to Table and by a filter rebuild (Term G6) — never spoken for a
+    /// model that is gone; the new build's run is unarmed and silent.</summary>
+    [Fact]
+    public void ASettleQueuedAtConvergenceIsDroppedByTheTeardownAndByAFilterRebuild()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "diagram-settle-teardown");
+            GraphDocumentViewModel document = host.Open();
+            Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+            _ = SettledModel(host, document);
+            GraphAnnouncer relay = host.Workspace.GraphRelayForTests;
+            GraphForcesConfig forces = host.Workspace.GraphPreferences.CurrentConfig.Forces;
+            // (a) the switch to Table inside the window.
+            host.GraphLines.Clear();
+            Assert.True(document.ApplyForces(forces with { Repel = 0.7 }));
+            Assert.True(PumpedDispatcher.PumpUntil(() => relay.PendingForTests == 1, TimeSpan.FromSeconds(30)), "the settle never queued");
+            Assert.Empty(host.GraphLines);
+            Assert.True(document.SetMode(GraphSurfaceMode.Table));
+            Assert.Equal(0, relay.PendingForTests);
+            PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
+            host.Settle(document);
+            Assert.Equal([ModeLine(GraphSurfaceMode.Table)], host.GraphLines);
+            // (b) a filter rebuild inside the window: the old model's settle
+            // dropped, the new build's run unarmed.
+            Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+            _ = SettledModel(host, document);
+            host.GraphLines.Clear();
+            Assert.True(document.ApplyForces(forces with { Repel = 0.7 }));
+            Assert.True(PumpedDispatcher.PumpUntil(() => relay.PendingForTests == 1, TimeSpan.FromSeconds(30)), "the settle never queued");
+            GraphFilter flipped = document.ViewState.Filter with { IncludeAttachments = !document.ViewState.Filter.IncludeAttachments };
+            document.ViewState.ApplyQuery(new GraphVisibilityQuery(flipped, document.ViewState.NameQuery, null));
+            Assert.Equal(0, relay.PendingForTests);
+            Assert.False(document.SettleAnnouncementArmed);
+            _ = SettledModel(host, document);
+            PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
+            host.Settle(document);
+            Assert.Empty(host.GraphLines);
+        });
+    }
+
+    /// <summary>W6-2 PR E (Term K2; IGV-2, IGX-1; E-D7): an edit under a build
+    /// in flight has no kernel to reach — the install re-reads the
+    /// preferences' forces, re-applies them and ARMS the settle, so the run
+    /// the install starts speaks it; an edit returned to the captured forces
+    /// before the install re-heats nothing and arms nothing.</summary>
+    [Fact]
+    public void AForcesEditUnderABuildInFlightIsArmedAtTheInstallAndSpokenAtItsRunsEnd()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "diagram-forces-under-build");
+            GraphDocumentViewModel document = host.Open();
+            GraphPreferencesViewModel preferences = host.Workspace.GraphPreferences;
+            GraphForcesConfig original = preferences.CurrentConfig.Forces;
+            GraphForcesConfig edited = original with { Repel = 0.8 };
+            host.GraphLines.Clear();
+            using (var park = new Park(from: 1, until: 1))
+            {
+                document.DiagramRegisteredGateForTests = park.Hit;
+                Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+                park.WaitReached();
+                preferences.SetForces(edited);
+                Assert.False(document.ApplyForces(edited));
+                Assert.False(document.SettleAnnouncementArmed);
+                park.Release();
+            }
+            GraphDiagramModel model = SettledModel(host, document);
+            Assert.Equal(GraphDocumentViewModel.ForcesOf(edited), model.Forces);
+            Assert.True(PumpedDispatcher.PumpUntil(() => host.GraphLines.Count >= 2, TimeSpan.FromSeconds(10)), "the settled line never fired");
+            PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
+            host.Settle(document);
+            Assert.Equal([ModeLine(GraphSurfaceMode.Diagram), SettledLine()], host.GraphLines);
+            Assert.False(document.SettleAnnouncementArmed);
+            // Returned to the captured forces before the install: nothing armed.
+            Assert.True(document.SetMode(GraphSurfaceMode.Table));
+            host.GraphLines.Clear();
+            using (var park = new Park(from: 1, until: 1))
+            {
+                document.DiagramRegisteredGateForTests = park.Hit;
+                Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+                park.WaitReached();
+                preferences.SetForces(original);
+                preferences.SetForces(edited);
+                park.Release();
+            }
+            _ = SettledModel(host, document);
+            PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
+            host.Settle(document);
+            Assert.Equal([ModeLine(GraphSurfaceMode.Diagram)], host.GraphLines);
+            document.DiagramRegisteredGateForTests = null;
+        });
+    }
+
+    /// <summary>W6-2 PR E (Terms K2, K3, K4, Y2; ED-5, ED-6, ED-7): the
+    /// inspector's forces edit end to end — the preferences' field, the
+    /// changed control spoken, the gate, the arm, the restart, the settle
+    /// once; the same value re-asserted speaks nothing and arms nothing; a
+    /// groups edit opens a new epoch by the view state (Term G3) and speaks
+    /// nothing.</summary>
+    [Fact]
+    public void TheInspectorsForcesEditSpeaksTheValueThenTheSettleAndAGroupsEditOpensAnEpoch()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "diagram-inspector-forces");
+            GraphDocumentViewModel document = host.Open();
+            Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+            GraphDiagramModel model = SettledModel(host, document);
+            GraphInspectorViewModel inspector = host.Workspace.Inspector;
+            GraphPreferencesViewModel preferences = host.Workspace.GraphPreferences;
+            host.GraphLines.Clear();
+            ulong? generation = preferences.PendingGenerationForTests;
+            int crossings = CrossingCount(document, "layout_set_forces");
+            inspector.SetRepel(0.8);
+            Assert.Equal(0.8, preferences.CurrentConfig.Forces.Repel);
+            Assert.NotEqual(generation, preferences.PendingGenerationForTests);
+            Assert.Equal(crossings + 1, CrossingCount(document, "layout_set_forces"));
+            Assert.True(document.SettleAnnouncementArmed);
+            Assert.True(model.Driver.IsSettling);
+            WaitForTheSettle(host, document, model);
+            Assert.True(PumpedDispatcher.PumpUntil(() => host.GraphLines.Count >= 2, TimeSpan.FromSeconds(10)), "the two lines never fired");
+            PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
+            host.Settle(document);
+            Assert.Equal([ForceLine(GraphForceControl.Repel, 80), SettledLine()], host.GraphLines);
+            Assert.False(document.SettleAnnouncementArmed);
+            // The same value re-asserted: nothing spoken, nothing armed, nothing ticked.
+            host.GraphLines.Clear();
+            inspector.SetRepel(0.8);
+            Assert.False(document.SettleAnnouncementArmed);
+            Assert.False(model.Driver.IsSettling);
+            PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
+            host.Settle(document);
+            Assert.Empty(host.GraphLines);
+            // A groups edit: a new epoch by the view state, silent.
+            int topology = CrossingCount(document, "graph_topology");
+            inspector.AddGroup();
+            Assert.True(PumpedDispatcher.PumpUntil(() => CrossingCount(document, "graph_topology") == topology + 1, TimeSpan.FromSeconds(10)), "the epoch never opened");
+            host.Settle(document);
+            PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
+            host.Settle(document);
+            Assert.Empty(host.GraphLines);
+            Assert.Single(host.Workspace.GraphViewStateForTests.Groups);
+            Assert.Single(preferences.CurrentConfig.Groups);
         });
     }
 

@@ -104,4 +104,128 @@ internal static class GraphPhrase
     public const string ActualSizeHint = "Reset the visual diagram zoom to 100 percent.";
     public const string FitGraphLabel = "Graph: Fit Graph";
     public const string FitGraphHint = "Zoom so every node is visible. Option-Command-0 on the diagram.";
+
+    // --- W6-2 PR E (E-11): the inspector — the mac's, byte for byte -----------------
+
+    /// <summary>T29: the header's toggle (<c>GraphTableView.swift:179</c>).</summary>
+    public const string InspectorLabel = "Inspector";
+
+    /// <summary>T30: the toggle's AX label and help (<c>GraphTableView.swift:181–182</c>).</summary>
+    public const string InspectorToggleName = "Toggle graph inspector";
+
+    public const string InspectorToggleHint = "Show the graph inspector — filters, colour groups, display, and forces.";
+
+    /// <summary>T37: the pane's group (<c>GraphInspectorView.swift:26</c>).</summary>
+    public const string InspectorName = "Graph inspector";
+
+    /// <summary>T38, T43, T50, T55: the four sections.</summary>
+    public const string InspectorFiltersSection = "Filters";
+
+    public const string InspectorGroupsSection = "Groups";
+
+    public const string InspectorDisplaySection = "Display";
+
+    public const string InspectorForcesSection = "Forces";
+
+    /// <summary>T39: the inspector's name field; its AX label IS <see cref="FilterFieldName"/> (C-5, one constant).</summary>
+    public const string InspectorNameFieldLabel = "Filter by name";
+
+    /// <summary>T40–T42: the three toggles and their hints (the header's T26–T28 twins).</summary>
+    public const string InspectorAttachmentsLabel = "Attachments";
+
+    public const string InspectorAttachmentsHint = "Include attachment nodes.";
+
+    public const string InspectorUnresolvedLabel = "Unresolved";
+
+    public const string InspectorUnresolvedHint = "Include unresolved link targets.";
+
+    public const string InspectorOrphansLabel = "Orphans only";
+
+    public const string InspectorOrphansHint = "Show only notes with no links in or out.";
+
+    /// <summary>T44: the empty text.</summary>
+    public const string InspectorNoGroupsText = "No groups. Add one to colour matching nodes.";
+
+    /// <summary>T45: the add button and its hint.</summary>
+    public const string InspectorAddGroupLabel = "Add Group";
+
+    public const string InspectorAddGroupHint = "Add a colour rule that highlights nodes whose name matches a query.";
+
+    /// <summary>T46–T49: a row's controls — the visible labels and the
+    /// composed AX names (the mac's <c>index + 1</c>; <see cref="InspectorGroupQueryName"/> and its siblings).</summary>
+    public const string InspectorGroupQueryLabel = "Query";
+
+    public const string InspectorGroupColourLabel = "Colour";
+
+    public const string InspectorGroupRingLabel = "Ring";
+
+    public const string InspectorGroupQueryFormat = "Group {0} query";
+
+    public const string InspectorGroupColourFormat = "Group {0} colour";
+
+    public const string InspectorGroupRingFormat = "Group {0} ring style";
+
+    public const string InspectorRemoveGroupFormat = "Remove group {0}";
+
+    /// <summary>T51–T54: the display's controls and their hints.</summary>
+    public const string InspectorArrowsLabel = "Arrows";
+
+    public const string InspectorArrowsHint = "Draw arrowheads on directed links.";
+
+    public const string InspectorTextFadeLabel = "Text fade";
+
+    public const string InspectorTextFadeHint = "Zoom level below which node labels hide.";
+
+    public const string InspectorNodeSizeLabel = "Node size";
+
+    public const string InspectorNodeSizeHint = "Multiplier on node circle size.";
+
+    public const string InspectorLinkThicknessLabel = "Link thickness";
+
+    public const string InspectorLinkThicknessHint = "Edge line width.";
+
+    /// <summary>T56–T59: the forces' sliders and their hints.</summary>
+    public const string InspectorCenterLabel = "Center";
+
+    public const string InspectorCenterHint = "Gravity pulling the graph toward the centre.";
+
+    public const string InspectorRepelLabel = "Repel";
+
+    public const string InspectorRepelHint = "How strongly nodes push each other apart.";
+
+    public const string InspectorLinkForceLabel = "Link force";
+
+    public const string InspectorLinkForceHint = "How strongly linked nodes pull together.";
+
+    public const string InspectorLinkDistanceLabel = "Link distance";
+
+    public const string InspectorLinkDistanceHint = "The ideal length of a link.";
+
+    /// <summary>T60: a slider's value text — the mac's <c>String(format: "%.2f")</c>,
+    /// a dot under every culture (IGU-5).</summary>
+    public const string InspectorSliderValueFormat = "F2";
+
+    public static string InspectorSliderValue(double value) =>
+        value.ToString(InspectorSliderValueFormat, System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>T46–T49's composed names, the 1-based index formatted invariantly.</summary>
+    public static string InspectorGroupQueryName(int index) =>
+        string.Format(System.Globalization.CultureInfo.InvariantCulture, InspectorGroupQueryFormat, index);
+
+    public static string InspectorGroupColourName(int index) =>
+        string.Format(System.Globalization.CultureInfo.InvariantCulture, InspectorGroupColourFormat, index);
+
+    public static string InspectorGroupRingName(int index) =>
+        string.Format(System.Globalization.CultureInfo.InvariantCulture, InspectorGroupRingFormat, index);
+
+    public static string InspectorRemoveGroupName(int index) =>
+        string.Format(System.Globalization.CultureInfo.InvariantCulture, InspectorRemoveGroupFormat, index);
+
+    // --- W6-2 PR E: Windows-authored, never announced -------------------------------------
+
+    /// <summary>E-D6 (Term Y6): the read-only notice's prefix; the preferences' load failure follows it.</summary>
+    public const string InspectorReadOnlyPrefix = "Graph settings are read-only: ";
+
+    /// <summary>E-D8 (Term I7): the inactive notice while the graph is not effective.</summary>
+    public const string InspectorInactiveText = "Open the graph to change these settings.";
 }

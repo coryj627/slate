@@ -57,7 +57,8 @@ apps/slate-windows/src/SlateWindows/Graph/
   GraphDiagramPeers.cs         PR D   the container, node and summary peers — COMPLETE, one per visible node in
                                       tier A whatever the viewport (§PR D DD-Q1; the canvas's windowing is not used)
   GraphMotionPolicy.cs         PR D   Reduce Motion: the system animation preference, read and observed (Term G4)
-  GraphInspectorView.xaml      PR E   filters / groups / display / forces (P2-4), sliders that announce once settled
+  GraphInspectorViewModel.cs   PR E   the ONE inspector view model over the view state and the preferences (E-2; no copy of either)
+  GraphInspectorView.cs        PR E   filters / groups / display / forces (P2-4), code-built like every graph view; sliders that announce once settled (amended W6-2 PR E, ED-8)
   GraphAnnouncer.cs            PR A   thin relay: canonical A11yEvents (PR 0a vocabulary), the pinned coalescing classes,
                                       AccessibilityNotificationDispatcher — NO text
   GraphPreferencesViewModel.cs PR C   verbosity + config, read/written through core's graph config API (0b)
@@ -232,7 +233,7 @@ Each PR section lists: **Goal · Consumes · Builds · Behavior pinned · Tests 
 
 **Evidence / acceptance.** The user switches to Diagram, hears `GraphMode{Diagram}`, moves node to node with arrows hearing each row's copy, zooms and fits, and on a 2,000-node vault hears the tier-B summary and is routed to Table. Matrix rows: the four zoom ids ✓; `w_c_matrix.md` "Graph diagram (W6-2 PR D)".
 
-**Hand-off.** The diagram's selection and viewport seams, read by E's display and forces; the model's `SetForces` seam re-heats the live layout and PR E's forces edit ARMS the settle announcement (rule G, Term G4); a display or groups change is a new epoch (Term G3) — the diagram re-renders without a load (amended W6-2 PR D, DD-14).
+**Hand-off.** The diagram's selection and viewport seams, read by E's display and forces; the model's `SetForces` seam re-heats the live layout and PR E's forces edit ARMS the settle announcement (rule G, Term G4); a GROUPS change is a new epoch (Term G3) and a DISPLAY change is the renderer's redraw on the document's `DiagramDisplay` change — core's topology carries no display term, so the epoch key does not move (W6-2 PR E, ED-Q6) — the diagram re-renders without a load (amended W6-2 PR D, DD-14; amended W6-2 PR E, ED-8).
 
 ### PR E — Inspector: filters, groups, display, forces
 
@@ -240,7 +241,7 @@ Each PR section lists: **Goal · Consumes · Builds · Behavior pinned · Tests 
 
 **Consumes.** 0b's `graph_config_decode/encode`, `graph_config_matching_group`, `graph_config_next_group_style`, `graph_color_tokens` and `graph_ring_styles` (the pickers' items, tags and titles — no picker lists a case) (0bD-12); 0a's `GraphForceValue` (all four controls, `LinkDistance` among them), `GraphLayoutSettled`; the session's `set_forces`; the canvas prompt/sheet machinery for any picker; and PR C's seams — the document's `Request(Filter)` entry (rule Q's fourth user arm: a `FilterCount` pair) as PR E's named fourth caller, the view state's `ApplyQuery` (the manual filter change clears the kind overlay), the preferences' `CurrentConfig` field triggers and the application writer (§PR C C-4, C-15 iv, rule W; amended IGP-22).
 
-**Builds.** `Graph/GraphInspectorView.xaml(.cs)` (peered controls: check boxes, a groups list with add/remove, colour + ring pickers, four sliders with Value patterns), theme keys; the config writer is PR C's (`GraphConfigWriter`, rule W — debounced, serialised per vault, refuse-clobber through core's codec) and PR E adds its triggers (the filters, the groups, the display, the forces) to the preferences' aggregate (amended W6-2 PR C CD-11).
+**Builds.** `Graph/GraphInspectorViewModel.cs` (E-2: the one view model per workspace, every property a read through the view state or the preferences, every write one call into the frozen seam that owns the field) and `Graph/GraphInspectorView.cs` (code-built like every graph view: peered controls — check boxes, a groups list with add/remove, colour + ring pickers from core's vectors, seven sliders with RangeValue patterns and the `%.2f` sibling text), the right pane's `inspector` LEAF and the graph header's toggle (`GraphInspectorToggle`, rule I, Terms I1, I2), the document's `ChangeFilter` / `ApplyForces` / `AnnounceForceValue` routes and its `DiagramDisplay` forward, the preferences' `SetFilters` / `SetGroups` / `SetDisplay` triggers with the `DisplayChanged` / `ForcesChanged` events, the relay's `DropPendingSettle` (amended W6-2 PR E, ED-8); no new theme keys; the config writer is PR C's (`GraphConfigWriter`, rule W — debounced, serialised per vault, refuse-clobber through core's codec) and PR E adds its triggers (the filters, the groups, the display, the forces) to the preferences' aggregate (amended W6-2 PR C CD-11).
 
 **Behavior pinned.** Filter equivalence: table and diagram read one predicate (core's); groups first-match-wins with the ring as the non-colour channel; sliders announce the resulting condition as TWO events in mac's order — `GraphForceValue` coalesced to the resting value, then `GraphLayoutSettled` once the layout converges (contracts doc 0a-16, 0a-D5; P2's single sentence is recorded, not adopted); the config file round-trips with unknown keys preserved and never downgrades; a superseded generation is refused.
 

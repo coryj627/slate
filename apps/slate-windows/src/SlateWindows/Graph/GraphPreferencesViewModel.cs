@@ -51,7 +51,10 @@ internal sealed class GraphVerbosityChoice : BindableBase
 /// the application writer and tracks its task) and the flush (Term W5:
 /// shutdown stops the timer, enqueues a pending pair once, and refuses
 /// every later schedule). The read serves the writer's newest
-/// outstanding aggregate, else the file (Term W6).
+/// outstanding aggregate, else the file (Term W6). W6-2 PR E (ED-2):
+/// the trigger list gains the inspector's three — the flags, the groups,
+/// the display — and the display's and the forces' change events (E-1,
+/// E-10); the list is closed by the navigator census (E-12 iii).
 /// </summary>
 internal sealed class GraphPreferencesViewModel : BindableBase
 {
@@ -208,7 +211,8 @@ internal sealed class GraphPreferencesViewModel : BindableBase
 
     /// <summary>PR E's forces edit → <c>forces</c> (the mac's slider commit);
     /// W6-2 PR D reads it at the build's capture and again at the install
-    /// (Term G2). A no-op for the current forces.</summary>
+    /// (Term G2). A no-op for the current forces; <see cref="ForcesChanged"/>
+    /// raised after a real change (E-1; IGU-4).</summary>
     public void SetForces(GraphForcesConfig forces)
     {
         ArgumentNullException.ThrowIfNull(forces);
@@ -217,8 +221,74 @@ internal sealed class GraphPreferencesViewModel : BindableBase
             return;
         }
         _current = _current with { Forces = forces };
+        ForcesChanged?.Invoke();
         ScheduleSave();
     }
+
+    /// <summary>W6-2 PR E's filter change (Term X1; ED-2) → <c>filters</c>'
+    /// three backend flags and no other field: the needle stays as
+    /// <see cref="SetNameQuery"/> left it. A no-op for the current flags.</summary>
+    public void SetFilters(GraphFilter filter)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        GraphFilterConfig filters = _current.Filters;
+        if (filter.IncludeAttachments == filters.IncludeAttachments
+            && filter.IncludeGhosts == filters.IncludeGhosts
+            && filter.OrphansOnly == filters.OrphansOnly)
+        {
+            return;
+        }
+        _current = _current with
+        {
+            Filters = filters with
+            {
+                IncludeAttachments = filter.IncludeAttachments,
+                IncludeGhosts = filter.IncludeGhosts,
+                OrphansOnly = filter.OrphansOnly,
+            },
+        };
+        ScheduleSave();
+    }
+
+    /// <summary>W6-2 PR E's group edit (Term Y2; ED-2) → <c>groups</c> and
+    /// no other field; the diagram follows the view state's list (Term G3),
+    /// not this one. A no-op for the current list.</summary>
+    public void SetGroups(IReadOnlyList<GraphGroup> groups)
+    {
+        ArgumentNullException.ThrowIfNull(groups);
+        if (groups.SequenceEqual(_current.Groups))
+        {
+            return;
+        }
+        _current = _current with { Groups = [.. groups] };
+        ScheduleSave();
+    }
+
+    /// <summary>W6-2 PR E's display edit (Term Z1; ED-2) → <c>display</c>
+    /// and no other field; <see cref="DisplayChanged"/> raised after a REAL
+    /// change (Term Z2). A no-op for the current display.</summary>
+    public void SetDisplay(GraphDisplay display)
+    {
+        ArgumentNullException.ThrowIfNull(display);
+        if (display == _current.Display)
+        {
+            return;
+        }
+        _current = _current with { Display = display };
+        DisplayChanged?.Invoke();
+        ScheduleSave();
+    }
+
+    /// <summary>W6-2 PR E (Term Z2): raised after a REAL change of
+    /// <c>display</c> — the document forwards it as its DiagramDisplay
+    /// change and the renderer redraws; the inspector re-renders its
+    /// display controls (E-2).</summary>
+    public event Action? DisplayChanged;
+
+    /// <summary>W6-2 PR E (E-1, E-2; IGU-4): raised after a REAL change of
+    /// <c>forces</c> — the inspector re-renders its sliders on an outside
+    /// write.</summary>
+    public event Action? ForcesChanged;
 
     /// <summary>The ONE structural mapper from the persisted filters onto
     /// core's query (C-10; IGP-14): the seed and the fresh open's re-apply

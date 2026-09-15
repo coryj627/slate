@@ -613,6 +613,57 @@ public sealed partial class GraphDiagramTests
         });
     }
 
+    /// <summary>W6-2 PR E (Term Z2; IGU-1, IGU-8; ED-4): a display change is
+    /// the preferences' event, the document's DiagramDisplay change and ONE
+    /// redraw — no epoch (the topology crossing unmoved), no grid rebuild:
+    /// the hit radius reads the scaled diameter live, so a point outside the
+    /// node at ×1 is inside it at ×2; the same display re-asserted redraws
+    /// nothing.</summary>
+    [Fact]
+    public void ADisplayChangeRedrawsWithoutAnEpochAndTheHitFollowsTheEnlargedRadius()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(6, "diagram-display-change");
+            GraphDocumentViewModel document = host.Open();
+            (GraphSurfaceView surface, HostedWindow window, GraphDiagramView diagram, GraphDiagramModel model) = LiveDiagram(host, document);
+            Assert.IsType<GraphViewportOutcome.Zoomed>(surface.ViewportCommand(GraphViewportVerb.ActualSize));
+            window.UpdateLayout();
+            GraphPreferencesViewModel preferences = host.Workspace.GraphPreferences;
+            GraphDisplay display = preferences.CurrentConfig.Display;
+            Assert.Equal(1.0, display.NodeSizeMultiplier);
+            ulong id = diagram.VisibleIds[0];
+            double diameter = diagram.Entries[id].Diameter;
+            Point centre = ViewCentre(diagram, model, id);
+            // Midway between the ×1 radius (d/2 + 2) and the ×2 radius (d + 2), in view units.
+            double offset = ((0.75 * diameter) + 2) * diagram.Viewport.Zoom;
+            var probe = new Point(centre.X + offset, centre.Y);
+            Assert.NotEqual(id, diagram.HitTest(probe));
+            int redraws = diagram.RedrawsForTests;
+            int topology = document.CrossingsForTests["graph_topology"];
+            int notified = 0;
+            document.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(GraphDocumentViewModel.DiagramDisplay))
+                {
+                    notified++;
+                }
+            };
+            preferences.SetDisplay(display with { NodeSizeMultiplier = 2.0 });
+            Assert.Equal(1, notified);
+            Assert.Equal(redraws + 1, diagram.RedrawsForTests);
+            Assert.Equal(2.0, document.DiagramDisplay.NodeSizeMultiplier);
+            Assert.Equal(diameter * 2.0, diagram.ScaledDiameter(id), 6);
+            Assert.Equal(id, diagram.HitTest(probe));
+            host.Settle(document);
+            Assert.Equal(topology, document.CrossingsForTests["graph_topology"]);
+            // The same display re-asserted: nothing forwarded, nothing redrawn.
+            preferences.SetDisplay(display with { NodeSizeMultiplier = 2.0 });
+            Assert.Equal(1, notified);
+            Assert.Equal(redraws + 1, diagram.RedrawsForTests);
+        });
+    }
+
     [Fact]
     public void TheGridHitTestFindsTheNodeUnderAPoint()
     {

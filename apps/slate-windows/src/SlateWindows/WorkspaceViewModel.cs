@@ -1623,6 +1623,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // the view state — a persisted `diagram` is restored; the writers
         // census names this line and the document's SetMode alone.
         _graphViewState.Mode = _graphPreferences.CurrentConfig.Mode;
+        // W6-2 PR E (Term I6; E-12 i): the ONE inspector view model, after
+        // the preferences and the view state and before the navigator and
+        // the graph document — the instance census counts this one
+        // construction; it holds no copy of either source.
+        _graphInspector = NewGraphInspector();
         // W6-2 PR C (C-1): the ONE navigator, after the view state and the
         // preferences and before the first document and the leaf — the
         // instance census counts this one construction.
@@ -1753,6 +1758,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         new("backlinks", "Backlinks"),
         new("outgoingLinks", "Outgoing links"),
         new("connections", "Connections"),
+        // W6-2 PR E (Term I1): the graph inspector's leaf, its title T37.
+        new("inspector", GraphPhrase.InspectorName),
         new("embeds", "Embeds"),
         new("math", "Math"),
         new("code", "Code"),
@@ -1859,6 +1866,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             if (value is not null && SetField(ref _activeLeaf, value))
             {
                 _announce(new A11yEvent.LeafPanelShown(value.Title));
+                // W6-2 PR E (Term I2): the inspector toggle's checked state follows.
+                NotifyGraphInspectorShownChanged();
                 // Rail reveal of the review is an idempotent snapshot
                 // load (mac ensureVaultTasksLoaded); only the review
                 // COMMAND forces a fresh page.
@@ -1928,6 +1937,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 // pending mount its route consumes; a collapse clears the
                 // leaf's view-local state.
                 OnRightPaneVisibilityChanged(value);
+                // W6-2 PR E (Term I2): the inspector toggle's checked state follows.
+                NotifyGraphInspectorShownChanged();
             }
         }
     }

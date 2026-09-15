@@ -201,6 +201,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         if (preferences is not null)
         {
             preferences.PropertyChanged += OnPreferencesChanged;
+            preferences.DisplayChanged += OnDisplayChanged;
         }
         // Rule A (IPA-6): the lifecycle's generation, read when a body is
         // started and again at dispatch; a host without a lifecycle (a
@@ -453,6 +454,11 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
     }
 
+    /// <summary>W6-2 PR E (Term Z2): the preferences' real display change,
+    /// forwarded as this document's own <see cref="DiagramDisplay"/> change —
+    /// the renderer redraws on it; no epoch (ED-Q6).</summary>
+    private void OnDisplayChanged() => OnPropertyChanged(nameof(DiagramDisplay));
+
     // --- Seams the workspace wires (contracts A-8, A-9) --------------------
 
     /// <summary>Open the row's note in the addressed pane; the workspace
@@ -474,6 +480,31 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// disabled; null means admitted. Windows has no structural gate
     /// today, so the default admits.</summary>
     internal Func<string?>? CreateAdmissionReason { get; set; }
+
+    /// <summary>W6-2 PR E (Term I2): the header toggle's route into the
+    /// workspace's ToggleGraphInspector and the shown state it binds — wired
+    /// by the workspace; a bare document has neither (the toggle unchecked,
+    /// a click nothing).</summary>
+    internal Action? ToggleInspectorFromSurface { get; set; }
+
+    internal Func<bool>? InspectorShownFromSurface { get; set; }
+
+    /// <summary>The toggle's checked state: the workspace's IsGraphInspectorShown, read live.</summary>
+    internal bool IsInspectorShown => InspectorShownFromSurface?.Invoke() ?? false;
+
+    /// <summary>The workspace's pane and leaf setters forward their change
+    /// here; the surface's header re-reads the state.</summary>
+    internal void NotifyInspectorShownChanged() => OnPropertyChanged(nameof(IsInspectorShown));
+
+    /// <summary>The header toggle's click: the workspace's route; true when
+    /// the pane was SHOWN and is now hidden — the surface then returns the
+    /// keys to its projection (E-D5).</summary>
+    internal bool ToggleInspectorFromHeader()
+    {
+        bool wasShown = IsInspectorShown;
+        ToggleInspectorFromSurface?.Invoke();
+        return wasShown && !IsInspectorShown;
+    }
 
     /// <summary>Test seam: runs inside the worker AFTER the fetch and
     /// before the envelope returns — the canvas publish-gate shape, for
@@ -715,6 +746,58 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         Navigator?.NotifyDiagramAvailabilityChanged();
     }
 
+    /// <summary>W6-2 PR E (Term X1): the inspector's backend filter change —
+    /// PR E's named fourth caller of ApplyQuery (C-4): the view state's
+    /// query rewritten with the overlay CLEARED (the mac's
+    /// <c>setGraphTableFilter</c>), then rule Q's Filter arm (Term Q4: a pair
+    /// under FilterCount, a Preset policy in flight not inherited, the pending
+    /// sort carried). Refused — nothing written, nothing requested — when
+    /// retired or unseated (the <see cref="SelectRow"/> guard) or for the
+    /// current flags (Term X4); the caller persists the flags only on true.
+    /// In Diagram mode the view state's write is what rebuilds the model
+    /// (Term X2; Term G6) — nothing here touches the diagram.</summary>
+    public bool ChangeFilter(GraphFilter filter)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        if (_retired || !_isSeated() || filter == ViewState.Filter)
+        {
+            return false;
+        }
+        ViewState.ApplyQuery(new GraphVisibilityQuery(filter, ViewState.NameQuery, null));
+        return Request(new GraphRequest.Filter(filter));
+    }
+
+    /// <summary>W6-2 PR E (Terms K2 (iii), K4): the inspector's forces edit
+    /// reaching the kernel — over a LIVE model, <c>SetForces</c> through the
+    /// gate (Term G7's synchronous mutator; refused, not thrown, once
+    /// retired), and when admitted: the relay's pending settle dropped (a
+    /// settle queued by the previous run must not speak for this one;
+    /// IGX-2), the settle line ARMED (Term G4; the mac's
+    /// <c>graphForcesSettlePending</c>) and the run RESTARTED, so the
+    /// re-heated kernel is ticked to its predicate or ceiling (ED-5). A
+    /// no-op — nothing armed, nothing ticked — for the model's current
+    /// forces (nothing re-heats), with no live model (Table mode, a failed
+    /// build) and under a build in flight, whose install re-reads the
+    /// preferences' forces and arms there (Term G2; IGX-1). True iff the
+    /// edit reached a live kernel.</summary>
+    public bool ApplyForces(GraphForcesConfig forces)
+    {
+        ArgumentNullException.ThrowIfNull(forces);
+        if (_retired || _diagramModel is not { } model)
+        {
+            return false;
+        }
+        LayoutForces layout = ForcesOf(forces);
+        if (layout == model.Forces || !model.SetForces(layout))
+        {
+            return false;
+        }
+        _announcer.DropPendingSettle();
+        SettleAnnouncementArmed = true;
+        model.Driver.StartSettle();
+        return true;
+    }
+
     /// <summary>Term M1: the ONE writer of Mode beside the workspace's seed —
     /// refused when retired or unseated (the <see cref="SelectRow"/> guard),
     /// a no-op for the current mode; otherwise the field, the persisted mode
@@ -930,10 +1013,12 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
             return;
         }
         LayoutForces forces = CurrentForces();
-        if (forces != build.Forces)
+        if (forces != build.Forces && model.SetForces(forces))
         {
-            // PR E's edit during the build is not lost.
-            _ = model.SetForces(forces);
+            // PR E's edit during the build is not lost (Term G2) — and the run
+            // this install starts speaks the settle for it (W6-2 PR E, Term
+            // K2; IGX-1, E-D7): armed here, before the install's StartSettle.
+            SettleAnnouncementArmed = true;
         }
         _diagramModel = model;
         model.Driver.Converged += OnSettleConverged;
@@ -967,6 +1052,10 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         }
         model.Driver.Stop();
         SettleAnnouncementArmed = false;
+        // W6-2 PR E (Term K4; IGY-1): the disarm's other half — a settle
+        // queued by this model's last run, still inside the relay's window,
+        // must not speak for a model that is gone.
+        _announcer.DropPendingSettle();
         Navigator?.InstallDiagramReadback(null);
         model.Driver.Converged -= OnSettleConverged;
         _diagramModel = null;
@@ -1402,6 +1491,14 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// <summary>Term N7: the pin's line.</summary>
     internal void AnnouncePinned(bool pinned) =>
         AnnounceIfEffective(new GraphA11yEvent.GraphPinned(pinned));
+
+    /// <summary>W6-2 PR E (Term K3): the changed force control's line —
+    /// <c>GraphForceValue{control, percent}</c>, the relay's forceValue
+    /// class (200 ms latest-wins, so a drag coalesces to its resting value);
+    /// spoken by the inspector's route BEFORE the arm and the restart, so
+    /// the value precedes the settle under every scheduler (IGU-2).</summary>
+    internal void AnnounceForceValue(GraphForceControl control, uint percent) =>
+        AnnounceIfEffective(new GraphA11yEvent.GraphForceValue(control, percent));
 
     /// <summary>Term T3: the tier latch's one line on the A→B edge.</summary>
     internal void AnnounceTierEntered() =>
@@ -2037,6 +2134,7 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
         if (_preferences is not null)
         {
             _preferences.PropertyChanged -= OnPreferencesChanged;
+            _preferences.DisplayChanged -= OnDisplayChanged;
         }
         Shutdown();
         // A-1 as amended (W6-2 PR B, BD-12): the relay is the workspace's;

@@ -75,6 +75,62 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>The workspace's one relay, for the facts that queue a
     /// pending class on it and prove a High flush drops it (IPB-1).</summary>
     internal GraphAnnouncer GraphRelayForTests => _graphRelay;
+
+    private readonly GraphInspectorViewModel _graphInspector;
+
+    /// <summary>W6-2 PR E (Term I6; E-1): the ONE inspector view model —
+    /// PUBLIC for the leaf body's <c>Model</c> binding; constructed in the
+    /// workspace constructor after the preferences and the view state and
+    /// before the navigator and the graph document.</summary>
+    public GraphInspectorViewModel Inspector => _graphInspector;
+
+    private const string GraphInspectorLeafId = "inspector";
+
+    /// <summary>W6-2 PR E (Term I2): true iff the right pane is visible AND
+    /// the active leaf is the inspector — the header toggle's checked state,
+    /// raised by the shell's pane and leaf setters.</summary>
+    public bool IsGraphInspectorShown =>
+        IsRightPaneVisible && string.Equals(ActiveLeaf.Id, GraphInspectorLeafId, StringComparison.Ordinal);
+
+    /// <summary>W6-2 PR E (Term I2; E-3; IGV-1): the header toggle's route.
+    /// Not shown → the pane made visible if it is not (the shell's setter
+    /// posts RightPaneShown), the active leaf set to the inspector (the
+    /// shell's setter posts LeafPanelShown ONLY on a change), then the pane
+    /// boundary requested as ShowConnections requests it; shown → the pane
+    /// hidden (the shell's setter posts RightPaneHidden), the active leaf
+    /// left as it is — the surface returns the keys to its projection
+    /// (rule F's request; E-D5). The toggle adds no line and no suppression
+    /// of its own; the four timelines are the setters'.</summary>
+    public void ToggleGraphInspector()
+    {
+        if (IsGraphInspectorShown)
+        {
+            IsRightPaneVisible = false;
+            return;
+        }
+        if (!IsRightPaneVisible)
+        {
+            IsRightPaneVisible = true;
+        }
+        if (!string.Equals(ActiveLeaf.Id, GraphInspectorLeafId, StringComparison.Ordinal))
+        {
+            ActiveLeaf = Leaves.First(option => string.Equals(option.Id, GraphInspectorLeafId, StringComparison.Ordinal));
+        }
+        // Rule C, Term 3(a) (B-19 iii): a pane reveal arms the Connections
+        // leaf's pending mount and its route consumes it — this route too,
+        // as ShowConnections does, so the reveal census's post-dominance holds.
+        ConsumePendingMount();
+        FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
+    }
+
+    /// <summary>The shell's pane and leaf setters raise the toggle's checked
+    /// state here and forward it to the seated document, through which the
+    /// surface's header binds (a bare document reads false).</summary>
+    private void NotifyGraphInspectorShownChanged()
+    {
+        OnPropertyChanged(nameof(IsGraphInspectorShown));
+        _graphDocument?.NotifyInspectorShownChanged();
+    }
     private GraphActivationCause _graphCause = GraphActivationCause.Activation;
     private bool _graphWasEffective;
     private WorkspaceTabViewModel? _graphEffectiveTab;
@@ -138,6 +194,10 @@ internal sealed partial class WorkspaceViewModel
             // the seat, under the re-applied query, and speaks no mode line.
             _graphDocument.EnsureDiagram();
         }
+        // W6-2 PR E (Term I7): the inspector's gate is NOT recomputed here —
+        // a restored tab is seated inside Restore, before the groups stand
+        // (ActiveGroup is null and rule L's predicate would throw); the
+        // funnel's effectiveness edge follows every seat and moves it.
         tab.AttachGraphDocument(_graphDocument);
     }
 
@@ -173,6 +233,12 @@ internal sealed partial class WorkspaceViewModel
             () => _graphDocument,
             () => GraphOpenAdmissionReason?.Invoke(),
             OpenGraphForPreset);
+
+    /// <summary>W6-2 PR E (Term I6): the inspector over the two sources,
+    /// the navigator's needle writer and the seated document read lazily —
+    /// both are constructed after it.</summary>
+    private GraphInspectorViewModel NewGraphInspector() =>
+        new GraphInspectorViewModel(_graphViewState, _graphPreferences, () => _graphNavigator, () => _graphDocument);
 
     /// <summary>The preset funnel (C-3 (iii)–(v); rule P): the arm set, the
     /// open run as <see cref="OpenGraph"/> runs it — WITHOUT the Open
@@ -279,6 +345,9 @@ internal sealed partial class WorkspaceViewModel
         document.RevealRowFromSurface = path => RevealGraphRowFromSurface(path);
         document.CreateNoteFromSurface = path => CreateGraphNoteFromSurface(path);
         document.CreateAdmissionReason = () => GraphCreateAdmissionReason?.Invoke();
+        // W6-2 PR E (Term I2): the header toggle's route and the state it binds.
+        document.ToggleInspectorFromSurface = ToggleGraphInspector;
+        document.InspectorShownFromSurface = () => IsGraphInspectorShown;
         return document;
     }
 
@@ -347,6 +416,8 @@ internal sealed partial class WorkspaceViewModel
             _graphNavigator.NotifyWhereAmIAvailabilityChanged();
             // W6-2 PR D (Term M3): the diagram's verbs follow the same edge.
             _graphDocument?.NotifyDiagramAvailabilityChanged();
+            // W6-2 PR E (Term I7): the inspector's gate follows the same edge.
+            _graphInspector.RefreshGraphEffectiveness();
         }
         if (effective is null || _graphDocument is null || _graphDocument.IsRetired)
         {
@@ -429,6 +500,8 @@ internal sealed partial class WorkspaceViewModel
         _graphWasVisible = false;
         retired.Retire();
         TrackRetiredBasesWork(retired.WhenAllWorkDrained());
+        // W6-2 PR E (Term I7): the inspector's gate at the retirement.
+        _graphInspector.RefreshGraphEffectiveness();
     }
 
     /// <summary>Teardown (contract A-1): the live document into the
@@ -445,6 +518,10 @@ internal sealed partial class WorkspaceViewModel
             document.Retire();
             drains.Add(document.WhenAllWorkDrained());
         }
+        // W6-2 PR E (Terms I6, I7): the inspector's gate at the teardown's
+        // retirement, then its subscriptions released with the workspace.
+        _graphInspector.RefreshGraphEffectiveness();
+        _graphInspector.Dispose();
         _graphNoteCreation.Shutdown();
         drains.Add(_graphNoteCreation.WhenAllWorkDrained());
         // W6-2 PR B (B-1): the leaf beside the graph document; then the
