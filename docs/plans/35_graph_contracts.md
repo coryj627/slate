@@ -17371,6 +17371,52 @@ doc-comment census catching the new census fact spliced between its
 neighbour's remarks and its attribute, moved above the run; then 10 m
 10 s green, 2,917 facts); IPJ-3 runs on the fixed head.
 
+**IPJ-3 — codex post-implementation pass 3 (gpt-5.5 medium) on 9aebf59e,
+the head carrying IPJ-2's two fixes: both verified; TWO findings, one
+blocker, both taken.** IPJ-3-1 [BLOCKER] — the thirteenth row could lose
+the chord it exists to prove: the generator's Windows-only extension
+failed only on a missing label and rendered whatever `chords.json`
+carried for the mac chord and its spoken form, and the census held the
+row's presence, not its cells — so an entry drifting to a null chord
+still passed `--check`, the evidence validation and the census while the
+inventory sentence went on saying "the mac's ⌘[ panel key". Root cause:
+the generator and the test — IPJ-2-2 proved existence, not evidence.
+TAKEN: WINDOWS_ONLY_COMMANDS carries, per id, the issue, the mac chord
+and its spoken form, and `windows_only_commands` fails unless
+`chords.json`'s entry matches them exactly; EveryMappedGraphCommandHasAMatrixRow
+holds the row's cells (the label, ⌘[, Command Left Bracket, the issue);
+the mutation blanking the row's chord cells in the committed matrix is
+caught, and — as a script observation — the entry's `macChord` set to
+null makes the generator exit 1 naming the drift. IPJ-3-2 [MINOR] — the
+Generated line's head is the run's, one commit behind the file's, and
+`--check` excepts the line. Root cause: the W0-4 convention the program
+has kept since its first matrix (every earlier regeneration names the
+head it stood on — 9969226a, 64229842, 148a339 — branch commits that a
+squash merge left outside main). NOT holding the sha to HEAD: on main
+after this PR's squash the sha names a commit outside main's history,
+so an ancestry or existence check would fail every later run; TAKEN as
+the line saying what it is — the head the run stood on, the carrying
+commit its child, a branch commit after a squash — with `--check`
+holding the body. Verdict as returned: not safe to continue
+(IPJ-3-1) — resolved here; one mutation caught of one (the row's chord cells blanked in
+the committed matrix); the CI-shaped regression
+once on this tree, green (10 m 10 s, 2,921 facts); IPJ-4 runs on the fixed head.
+
+**Codoki's third round, on e0483038: approved with notes, taken here** —
+the §W-C census's walk over the graph shell also excludes bin and
+streams the files; the composed-id derivation is a text-level helper
+(ComposedValueIds) whose SliderRow pattern admits a call spanning lines
+and a first argument that is itself a call with commas, with a focused
+fact over those shapes and over a text that never composes
+(ComposedValueIdsReadEveryCallShapeAndNothingWithoutTheComposition);
+the golden derivation gains its own fact over a synthetic golden under
+both filters (CountsFromTheGoldenDeriveTheSummaryUnderBothFilters); and
+the test-side pump's contract — a false condition pumps for the whole
+budget and answers false, a true one returns at once — is pinned in
+PumpedDispatcherTests, which is what Observed's drain relies on. One
+mutation caught of one: the SliderRow pattern narrowed back to a
+comma-free first argument fails the shapes fact.
+
 ### Tests that pin PR F (revision 5's list, frozen; the task loop records what lands)
 
 - GraphEndToEndTests (new): F1's six facts.

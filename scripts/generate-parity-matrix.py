@@ -417,8 +417,10 @@ def commands() -> list[tuple[str, str, str, str, str]]:
 # as a command. The matrix's inventory is the mac catalogue; these rows
 # extend it from the Windows chord table's projection (chords.json), so
 # the documents' "thirteen graph command rows" is what the matrix shows.
-WINDOWS_ONLY_COMMANDS: dict[str, str] = {
-    "slate.graph.connectionsBack": "#746 (W6-2)",
+# id → (issue, the mac chord the row proves, its spoken form): the row's
+# defining evidence, held to chords.json's entry exactly (IPJ-3-1).
+WINDOWS_ONLY_COMMANDS: dict[str, tuple[str, str, str]] = {
+    "slate.graph.connectionsBack": ("#746 (W6-2)", "⌘[", "Command Left Bracket"),
 }
 
 
@@ -431,7 +433,7 @@ def windows_only_commands() -> list[tuple[str, str, str, str, str]]:
         fail(f"could not load Windows chord/evidence catalog: {exception}")
     entries = {e.get("id"): e for e in catalog.get("commands", []) if isinstance(e, dict)}
     rows = []
-    for cid, issue in sorted(WINDOWS_ONLY_COMMANDS.items()):
+    for cid, (issue, expected_chord, expected_spoken) in sorted(WINDOWS_ONLY_COMMANDS.items()):
         entry = entries.get(cid)
         if entry is None:
             fail(f"Windows-only command {cid} is not in chords.json's commands")
@@ -440,6 +442,12 @@ def windows_only_commands() -> list[tuple[str, str, str, str, str]]:
         spoke = entry.get("mac") or ""
         if not label:
             fail(f"Windows-only command {cid} has no label in chords.json")
+        # The row exists to prove the mac chord the Windows command
+        # delivers; an entry that lost it (or its spoken form) is a
+        # drift, not a row (IPJ-3-1).
+        if chord != expected_chord or spoke != expected_spoken:
+            fail(f"Windows-only command {cid}: chords.json carries macChord {chord!r} / mac {spoke!r}, "
+                 f"the inventory expects {expected_chord!r} / {expected_spoken!r}")
         rows.append((cid, label, chord, spoke, issue))
     return rows
 
@@ -1086,7 +1094,10 @@ def main() -> int:
     a = lines.append
     a("# Milestone W parity matrix (§W-F row-level checklist)")
     a("")
-    a(f"Generated {today} at `{head}` by `scripts/generate-parity-matrix.py` "
+    a(f"Generated {today} at `{head}` (the head the run stood on; the commit "
+      "carrying this file is its child, and after a squash merge the head is a "
+      "branch commit outside main — `--check` holds the body, not this line) "
+      "by `scripts/generate-parity-matrix.py` "
       "(W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage "
       "(program §moving-target). Every row is burned down by its consuming W "
       "issue; §W-F gates close-out on zero unshipped/unwaived rows.")

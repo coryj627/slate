@@ -389,6 +389,27 @@ public sealed class GraphEndToEndTests
     private static string GoldenTableSummary(JsonElement golden) =>
         golden.GetProperty("table").EnumerateArray().Select(e => e.GetProperty("summary").GetString()!).Distinct().Single();
 
+    /// <summary>Codoki's third-round note: the derivation over a synthetic
+    /// golden — two notes, a ghost, an attachment with one incoming embed,
+    /// one orphan — under both filters: attachments in, the embed counts
+    /// and the flag is set; attachments out, the embed is gone and the
+    /// flag is clear.</summary>
+    [Fact]
+    public void CountsFromTheGoldenDeriveTheSummaryUnderBothFilters()
+    {
+        using JsonDocument golden = JsonDocument.Parse(
+            """
+            {"snapshot": [
+              {"key": "p:a.md", "kind": "note", "in_links": 1, "in_embeds": 0, "is_orphan": false},
+              {"key": "p:b.md", "kind": "note", "in_links": 0, "in_embeds": 0, "is_orphan": true},
+              {"key": "g:c", "kind": "ghost", "in_links": 2, "in_embeds": 0, "is_orphan": false},
+              {"key": "p:d.png", "kind": "attachment", "in_links": 0, "in_embeds": 1, "is_orphan": false}
+            ]}
+            """);
+        Assert.Equal(new GraphSnapshotCounts(2, 4, 1, 1, true), CountsFromTheGolden(golden.RootElement, includeAttachments: true));
+        Assert.Equal(new GraphSnapshotCounts(2, 3, 1, 1, false), CountsFromTheGolden(golden.RootElement, includeAttachments: false));
+    }
+
     private static string SummaryFromTheGolden(JsonElement golden, bool includeAttachments) =>
         Render(new GraphA11yEvent.GraphSnapshotSummary(CountsFromTheGolden(golden, includeAttachments)));
 

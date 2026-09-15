@@ -299,8 +299,9 @@ public sealed class WcMatrixGraphEvidenceCensus
     /// excluded (codoki's note on 045bc23c: a subfolder refactor must not
     /// hide an id from the census).</summary>
     private static IEnumerable<string> GraphSources(string graph) =>
-        Directory.GetFiles(graph, "*.cs", SearchOption.AllDirectories)
-            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
+        Directory.EnumerateFiles(graph, "*.cs", SearchOption.AllDirectories)
+            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
 
     /// <summary>The value peer's composition, <c>id + "Value"</c>, with or
     /// without spaces around the plus (codoki's note on 045bc23c).</summary>
@@ -315,17 +316,53 @@ public sealed class WcMatrixGraphEvidenceCensus
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (string path in GraphSources(graph))
         {
-            string text = File.ReadAllText(path);
-            if (!ComposesValue.IsMatch(text))
-            {
-                continue;
-            }
-            foreach (Match m in Regex.Matches(text, @"\bSliderRow\([^,]+,\s*""([^""]+)"""))
-            {
-                ids.Add(m.Groups[1].Value + "Value");
-            }
+            ids.UnionWith(ComposedValueIds(File.ReadAllText(path)));
         }
         return ids;
+    }
+
+    /// <summary>A SliderRow call's second argument, the id literal: the
+    /// first argument may span lines and may itself be a call with commas
+    /// (one level of parentheses).</summary>
+    private static readonly Regex SliderRowId = new(
+        @"\bSliderRow\((?:[^(),]|\([^()]*\))+,\s*""([^""]+)""", RegexOptions.Compiled);
+
+    /// <summary>The value-peer ids one source text composes: none unless
+    /// the text composes <c>id + "Value"</c> (spaces or not), else one
+    /// per SliderRow call's id literal plus "Value".</summary>
+    internal static HashSet<string> ComposedValueIds(string text)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        if (!ComposesValue.IsMatch(text))
+        {
+            return ids;
+        }
+        foreach (Match m in SliderRowId.Matches(text))
+        {
+            ids.Add(m.Groups[1].Value + "Value");
+        }
+        return ids;
+    }
+
+    /// <summary>Codoki's third-round note: the derivation over the shapes a
+    /// refactor could take — a call spanning lines, a first argument that
+    /// is itself a call with commas, the composition without spaces, and
+    /// a text that never composes (no ids at all, whatever it calls).</summary>
+    [Fact]
+    public void ComposedValueIdsReadEveryCallShapeAndNothingWithoutTheComposition()
+    {
+        const string Composes = "AutomationProperties.SetAutomationId(valueText, id+\"Value\");";
+        string text = string.Join("\n",
+            "_a = SliderRow(_display, \"GraphInspectorA\", title, hint, 0, 1, v => Set(v));",
+            "_b = SliderRow(",
+            "    _forces,",
+            "    \"GraphInspectorB\", title, hint, 0, 1, v => Set(v));",
+            "_c = SliderRow(Section(_root, 2), \"GraphInspectorC\", title, hint, 0, 1, v => Set(v));",
+            "private Slider SliderRow(Panel section, string id, string title) { " + Composes + " }");
+        Assert.Equal(
+            ["GraphInspectorAValue", "GraphInspectorBValue", "GraphInspectorCValue"],
+            ComposedValueIds(text).OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Empty(ComposedValueIds(text.Replace(Composes, "AutomationProperties.SetAutomationId(valueText, id);")));
     }
 
     [Fact]

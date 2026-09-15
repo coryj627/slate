@@ -197,6 +197,11 @@ public sealed class DeliveryEvidenceCensus
         Assert.Contains("slate.graph.connectionsBack", mapped);
         var missing = mapped.Where(id => !matrix.Contains($"| `{id}` |", StringComparison.Ordinal)).ToList();
         Assert.True(missing.Count == 0, "graph commands chords.json maps with no matrix row: " + string.Join(", ", missing));
+        // The thirteenth row's defining evidence, not just its presence
+        // (IPJ-3-1): the label, the mac chord the Windows command delivers,
+        // its spoken form and the issue — the cells chords.json's entry
+        // projects and the generator holds it to.
+        Assert.Contains("| `slate.graph.connectionsBack` | Connections: Back | ⌘[ | Command Left Bracket | #746 (W6-2) |", matrix);
     }
 
     /// <summary>W6-2 §F (F7, FD-10): the graph issue maps to the aggregate
