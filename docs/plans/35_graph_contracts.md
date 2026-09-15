@@ -15694,6 +15694,29 @@ evidence census) — seven of seven caught (`gE-mutations.py`, the T7
 entries; an eighth, the dead enabled-guard, survived and is removed as
 the code's own correction, not a fact's gap).
 
+### Post-implementation passes (PR E)
+
+**IPI-1 — codex post-implementation pass 1 (gpt-5.5 medium) on 2913db03,
+the implementation against the frozen revision 6: ONE finding.** IPI-1-1
+[BLOCKER] — the right-pane boundary's inspector arm (TGE-7's Background
+post) validated `IsGraphInspectorShown` before queueing and re-read
+nothing at the callback, outside the shell's `FocusRequestArbiter`: a
+second toggle or another leaf's reveal interleaving before the callback
+let a STALE request call `FocusFirstStop()` against a collapsed host and
+fall back to the rail, stealing the keys the hide had handed to the
+projection (Term I5, Term I2, ED-1). Root cause: the code — the post
+bypassed the arbiter that exists for exactly this class (W6-2 PR B2,
+IGL-3; PR C's IPC-2). TAKEN: the arm's landing goes through
+`_focusRequests.Post` at Background priority (a later request supersedes
+it) AND re-reads the shown state at the callback (a hide raises no
+request), the decision a static `GraphInspectorView.LandBoundary(stillShown,
+focusFirstStop, focusRail)` — nothing when no longer shown, else the first
+stop or the rail; `GraphInspectorViewTests` gains
+TheDeferredBoundaryLandsNothingOnceTheInspectorIsNotShown (the three
+arms); a mutation dropping the shown check is caught; the journey
+re-passed. Verdict as returned: not safe to continue (IPI-1-1) — resolved
+here; IPI-2 runs on the fixed head.
+
 ### Tests that pin PR E (revision 6's list, frozen; the task loop records what lands)
 
 - GraphInspectorTests (new): the view model's reads and writes per rule

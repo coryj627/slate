@@ -162,6 +162,24 @@ internal sealed class GraphInspectorView : UserControl
     /// second guard.)</summary>
     internal bool FocusFirstStop() => _nameQuery.IsVisible && _nameQuery.Focus();
 
+    /// <summary>The boundary's deferred landing (IPI-1-1): nothing when the
+    /// inspector is no longer the shown leaf — a hide or another leaf's
+    /// reveal that interleaved owns the keys now — else the first stop, or
+    /// the rail when the field cannot take the keys.</summary>
+    internal static void LandBoundary(bool stillShown, Func<bool> focusFirstStop, Action focusRail)
+    {
+        ArgumentNullException.ThrowIfNull(focusFirstStop);
+        ArgumentNullException.ThrowIfNull(focusRail);
+        if (!stillShown)
+        {
+            return;
+        }
+        if (!focusFirstStop())
+        {
+            focusRail();
+        }
+    }
+
     // --- Test seams ------------------------------------------------------------------------
 
     internal FrameworkElement RootForTests => _root;

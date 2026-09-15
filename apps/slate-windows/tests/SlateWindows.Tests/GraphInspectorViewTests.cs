@@ -255,6 +255,26 @@ public sealed class GraphInspectorViewTests
         });
     }
 
+    /// <summary>IPI-1-1: the boundary's deferred landing moves nothing once
+    /// the inspector is no longer the shown leaf (a hide or another leaf's
+    /// reveal interleaved before the Background callback); while shown, the
+    /// first stop, or the rail when the field refuses.</summary>
+    [Fact]
+    public void TheDeferredBoundaryLandsNothingOnceTheInspectorIsNotShown()
+    {
+        int firstStop = 0;
+        int rail = 0;
+        GraphInspectorView.LandBoundary(false, () => { firstStop++; return true; }, () => rail++);
+        Assert.Equal(0, firstStop);
+        Assert.Equal(0, rail);
+        GraphInspectorView.LandBoundary(true, () => { firstStop++; return true; }, () => rail++);
+        Assert.Equal(1, firstStop);
+        Assert.Equal(0, rail);
+        GraphInspectorView.LandBoundary(true, () => { firstStop++; return false; }, () => rail++);
+        Assert.Equal(2, firstStop);
+        Assert.Equal(1, rail);
+    }
+
     // --- Terms I7, Y6: the gate and the notices ----------------------------------------------------
 
     [Fact]

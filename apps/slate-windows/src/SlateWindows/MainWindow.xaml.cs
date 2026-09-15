@@ -660,15 +660,16 @@ public partial class MainWindow : Window
                 // name field — so a reader who toggled is IN the pane. The
                 // leaf's host becomes visible through a data trigger whose
                 // EFFECTIVE visibility lands after the layout pass, so the
-                // first stop is asked for after it; a pane whose controls
-                // are disabled (Term I7) falls through to the rail.
-                _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
-                {
-                    if (!GraphInspectorSurface.FocusFirstStop())
-                    {
-                        RightPaneLeavesList.Focus();
-                    }
-                });
+                // first stop is asked for after it — through the arbiter, so
+                // a later request supersedes it, and re-reading the shown
+                // state, since a hide raises no request (IPI-1-1: a stale
+                // callback must not move the keys); a pane whose controls are
+                // disabled (Term I7) falls through to the rail.
+                _ = _focusRequests.Post(Dispatcher, DispatcherPriority.Background, () =>
+                    Graph.GraphInspectorView.LandBoundary(
+                        _viewModel.Workspace is WorkspaceViewModel current && current.IsGraphInspectorShown,
+                        GraphInspectorSurface.FocusFirstStop,
+                        () => _ = RightPaneLeavesList.Focus()));
             }
             else
             {
