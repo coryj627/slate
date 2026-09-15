@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace SlateWindows.Tests.Censuses;
 
@@ -321,48 +324,72 @@ public sealed class WcMatrixGraphEvidenceCensus
         return ids;
     }
 
-    /// <summary>A SliderRow call's second argument, the id literal: the
-    /// first argument may span lines and may itself be a call with commas
-    /// (one level of parentheses).</summary>
-    private static readonly Regex SliderRowId = new(
-        @"\bSliderRow\((?:[^(),]|\([^()]*\))+,\s*""([^""]+)""", RegexOptions.Compiled);
-
-    /// <summary>The value-peer ids one source text composes: none unless
-    /// the text composes <c>id + "Value"</c> (spaces or not), else one
-    /// per SliderRow call's id literal plus "Value".</summary>
+    /// <summary>The value-peer ids one source text composes, bound in its
+    /// syntax tree (IPJ-5-2): none unless the text DECLARES a SliderRow
+    /// method whose body composes <c>id + "Value"</c>; else one per real
+    /// SliderRow invocation whose second argument is a string literal —
+    /// however the first argument nests, and never from a comment or a
+    /// string.</summary>
     internal static HashSet<string> ComposedValueIds(string text)
     {
         var ids = new HashSet<string>(StringComparer.Ordinal);
-        if (!ComposesValue.IsMatch(text))
+        SyntaxNode root = CSharpSyntaxTree.ParseText(text).GetRoot();
+        bool composes = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .Any(method => method.Identifier.ValueText == "SliderRow" && ComposesValue.IsMatch(method.ToString()));
+        if (!composes)
         {
             return ids;
         }
-        foreach (Match m in SliderRowId.Matches(text))
+        foreach (InvocationExpressionSyntax invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
-            ids.Add(m.Groups[1].Value + "Value");
+            string callee = invocation.Expression switch
+            {
+                IdentifierNameSyntax name => name.Identifier.ValueText,
+                MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+                _ => string.Empty,
+            };
+            if (callee != "SliderRow" || invocation.ArgumentList.Arguments.Count < 2)
+            {
+                continue;
+            }
+            if (invocation.ArgumentList.Arguments[1].Expression is LiteralExpressionSyntax literal
+                && literal.RawKind == (int)SyntaxKind.StringLiteralExpression)
+            {
+                ids.Add(literal.Token.ValueText + "Value");
+            }
         }
         return ids;
     }
 
-    /// <summary>Codoki's third-round note: the derivation over the shapes a
-    /// refactor could take — a call spanning lines, a first argument that
-    /// is itself a call with commas, the composition without spaces, and
-    /// a text that never composes (no ids at all, whatever it calls).</summary>
+    /// <summary>Codoki's third-round note and IPJ-5-2: the derivation over
+    /// the shapes a refactor could take — a call spanning lines, a first
+    /// argument that is itself a call with commas, one nested two deep,
+    /// the composition without spaces — and over what must NOT count: a
+    /// call in a comment, a call inside a string, a text whose SliderRow
+    /// method does not compose, and a text where the composition sits in
+    /// some other method.</summary>
     [Fact]
     public void ComposedValueIdsReadEveryCallShapeAndNothingWithoutTheComposition()
     {
         const string Composes = "AutomationProperties.SetAutomationId(valueText, id+\"Value\");";
-        string text = string.Join("\n",
+        const string Declaration = "private Slider SliderRow(Panel section, string id, string title) { " + Composes + " }";
+        string calls = string.Join("\n",
+            "class V { void Build() {",
             "_a = SliderRow(_display, \"GraphInspectorA\", title, hint, 0, 1, v => Set(v));",
             "_b = SliderRow(",
             "    _forces,",
             "    \"GraphInspectorB\", title, hint, 0, 1, v => Set(v));",
             "_c = SliderRow(Section(_root, 2), \"GraphInspectorC\", title, hint, 0, 1, v => Set(v));",
-            "private Slider SliderRow(Panel section, string id, string title) { " + Composes + " }");
-        Assert.Equal(
-            new[] { "GraphInspectorAValue", "GraphInspectorBValue", "GraphInspectorCValue" },
-            ComposedValueIds(text).OrderBy(id => id, StringComparer.Ordinal).ToArray());
-        Assert.Empty(ComposedValueIds(text.Replace(Composes, "AutomationProperties.SetAutomationId(valueText, id);")));
+            "_d = this.SliderRow(Section(Panel(_root, 1), Row(2, 3)), \"GraphInspectorD\", title, hint, 0, 1, v => Set(v));",
+            "// _e = SliderRow(_forces, \"GraphInspectorE\", title, hint, 0, 1, v => Set(v));",
+            "string f = \"SliderRow(_forces, \\\"GraphInspectorF\\\", title)\";",
+            "} ");
+        string[] expected = new[] { "GraphInspectorAValue", "GraphInspectorBValue", "GraphInspectorCValue", "GraphInspectorDValue" };
+        Assert.Equal(expected, ComposedValueIds(calls + Declaration + " }").OrderBy(id => id, StringComparer.Ordinal).ToArray());
+        // the SliderRow method does not compose
+        Assert.Empty(ComposedValueIds(calls + Declaration.Replace(Composes, "AutomationProperties.SetAutomationId(valueText, id);") + " }"));
+        // the composition sits in another method, not SliderRow's
+        Assert.Empty(ComposedValueIds(calls + "private Slider SliderRow(Panel section, string id) { return null; } void Other(string id) { " + Composes + " } }"));
     }
 
     [Fact]

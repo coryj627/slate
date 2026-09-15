@@ -126,6 +126,13 @@ on:
       - '.github/workflows/windows.yml'
       - 'scripts/verify_windows_model_shards.py'
       - 'scripts/tests/test_windows_model_shards.py'
+      # W6-2 PR F (IPJ-5-1): the lane's censuses read the plan documents,
+      # the generators read the scripts, the help catalog and the mac
+      # sources — a change to any of them must run the lane.
+      - 'docs/plans/**'
+      - 'docs/help/**'
+      - 'scripts/**'
+      - 'apps/slate-mac/**'
   push:
     branches: [main]
     paths:
@@ -137,6 +144,13 @@ on:
       - '.github/workflows/windows.yml'
       - 'scripts/verify_windows_model_shards.py'
       - 'scripts/tests/test_windows_model_shards.py'
+      # W6-2 PR F (IPJ-5-1): the lane's censuses read the plan documents,
+      # the generators read the scripts, the help catalog and the mac
+      # sources — a change to any of them must run the lane.
+      - 'docs/plans/**'
+      - 'docs/help/**'
+      - 'scripts/**'
+      - 'apps/slate-mac/**'
   workflow_dispatch:
 
 concurrency:

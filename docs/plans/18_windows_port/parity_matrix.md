@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-09-15 at `fa723916` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-09-15 at `fd5209bd` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 

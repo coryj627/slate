@@ -30,7 +30,7 @@ public sealed class GraphReconciliationCensus
     /// asserts (`EXPECTED_KEYS`).</summary>
     private const int ExpectedKeys = 519;
 
-    /// <summary>The nine series PRs and the four post-implementation and
+    /// <summary>The nine series PRs and the five post-implementation and
     /// repair PRs (F9(a), IHA-6).</summary>
     private static readonly int[] SeriesPrs = [1178, 1179, 1180, 1181, 1184, 1185, 1188, 1214, 1215];
 

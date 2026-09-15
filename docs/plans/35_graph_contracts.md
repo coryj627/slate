@@ -17452,6 +17452,43 @@ collection expression, built by every lane; the thread answered). Verdict as ret
 facts); IPJ-5 runs on
 the fixed head, the count toward the stop rule starting again.
 
+**IPJ-5 — codex post-implementation pass 5 (gpt-5.5 medium) on fd5209bd,
+the head carrying IPJ-4's fixes: both verified; THREE findings, one
+blocker, all taken.** IPJ-5-1 [BLOCKER] — the Windows lane's trigger
+listed the shell, the crates and two model scripts, so a change to the
+plan documents its censuses read (the citation, trigger, reconciliation
+and W-C censuses over `35_graph_contracts.md`, `w_c_matrix.md`, the
+checklist), to the generators, to the help catalogue or to the mac
+sources the generator and the trigger census read never ran the lane —
+the gates IPJ-1-1 and IPJ-2-1 placed in CI held only for pushes that
+also touched the shell. Root cause: the workflow — a path filter written
+before the censuses read beyond the shell. TAKEN: the lane's
+pull_request and push triggers add `docs/plans/**`, `docs/help/**`,
+`scripts/**` and `apps/slate-mac/**`. IPJ-5-2 [MAJOR] — the composed-id
+derivation was lexical: a file-wide match on the composition and a
+regular expression over `SliderRow(` that admitted one level of nesting
+and could not tell a call from a comment or a string. Root cause: the
+census (IHB-2's helper read as text). TAKEN: ComposedValueIds binds in
+the syntax tree (Roslyn, the test project's own reference): no ids
+unless the text DECLARES a SliderRow method whose body composes
+`id + "Value"`, else one per real SliderRow invocation whose second
+argument is a string literal, however the first argument nests; the
+shapes fact gains a two-deep nesting, a member-access call, a call in a
+comment, a call inside a string, and a text whose composition sits in
+another method (none of the last three count); the mutation dropping
+the composing-method guard is caught. The literal scan that feeds the
+reverse fact (HelperLiteral in ShellIds) stays lexical and is
+fail-closed: a commented-out call would ADD a shell id and fail the
+manifest fact, never pass it. IPJ-5-3 [MINOR] — the reconciliation
+census's comment said four repair PRs over an array of five; taken.
+Codoki's fifth round, on fd5209bd, asked that the config fact's previous
+file be built through the JSON DOM rather than by slicing the golden's
+string — taken (`JsonObject` from `unknown_json`, `version` set,
+serialized). Verdict as returned: not safe to continue (IPJ-5-1) —
+resolved here; one mutation caught of one; the CI-shaped regression
+once on this tree, green (10 m 30 s, 2,921 facts); IPJ-6 runs on the fixed head, the count toward the stop
+rule starting again.
+
 ### Tests that pin PR F (revision 5's list, frozen; the task loop records what lands)
 
 - GraphEndToEndTests (new): F1's six facts.

@@ -846,7 +846,9 @@ public sealed class GraphEndToEndTests
         // previous bytes is what the fact exercises, not a first write
         // (IPJ-4-1).
         string unknown = golden.GetProperty("config").GetProperty("unknown_json").GetString()!;
-        string previous = "{\"version\":1," + unknown[1..];
+        var previousObject = (JsonObject)JsonNode.Parse(unknown)!;
+        previousObject["version"] = 1;
+        string previous = previousObject.ToJsonString();
         string file = Path.Combine(vault.Root, ".slate", "graph.json");
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         File.WriteAllText(file, previous);
