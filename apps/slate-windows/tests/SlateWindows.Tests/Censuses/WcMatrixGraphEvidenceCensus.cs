@@ -360,8 +360,8 @@ public sealed class WcMatrixGraphEvidenceCensus
             "_c = SliderRow(Section(_root, 2), \"GraphInspectorC\", title, hint, 0, 1, v => Set(v));",
             "private Slider SliderRow(Panel section, string id, string title) { " + Composes + " }");
         Assert.Equal(
-            ["GraphInspectorAValue", "GraphInspectorBValue", "GraphInspectorCValue"],
-            ComposedValueIds(text).OrderBy(id => id, StringComparer.Ordinal));
+            new[] { "GraphInspectorAValue", "GraphInspectorBValue", "GraphInspectorCValue" },
+            ComposedValueIds(text).OrderBy(id => id, StringComparer.Ordinal).ToArray());
         Assert.Empty(ComposedValueIds(text.Replace(Composes, "AutomationProperties.SetAutomationId(valueText, id);")));
     }
 

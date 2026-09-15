@@ -4,6 +4,7 @@
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -838,8 +839,18 @@ public sealed class GraphEndToEndTests
     public void TheConfigRoundTripsThroughTheInspectorAndTheStore() => RunSta(() =>
     {
         using GraphVault vault = GraphVault.Copy("config");
-        using var host = new Host(vault.Root);
         JsonElement golden = Golden();
+        // A PREVIOUS file, seeded before the host opens: version 1 and the
+        // golden's unknown top-level key (`unknown_json`, what core must
+        // preserve through an encode) — so the writer's merge over the
+        // previous bytes is what the fact exercises, not a first write
+        // (IPJ-4-1).
+        string unknown = golden.GetProperty("config").GetProperty("unknown_json").GetString()!;
+        string previous = "{\"version\":1," + unknown[1..];
+        string file = Path.Combine(vault.Root, ".slate", "graph.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, previous);
+        using var host = new Host(vault.Root);
         GraphDocumentViewModel document = host.Open();
         host.Workspace.ToggleGraphInspector();
         GraphInspectorViewModel inspector = host.Workspace.Inspector;
@@ -859,17 +870,20 @@ public sealed class GraphEndToEndTests
         Host.Settle(document);
         host.Observed(Render(new GraphA11yEvent.GraphForceValue(GraphForceControl.Repel, 70)));
 
-        // The file: core's encode of the same config over the previous bytes
+        // The file: core's encode of the same config over the PREVIOUS bytes
         // (the writer's 400 ms save window fires on the pumped dispatcher,
-        // then the issued writes drain).
+        // then the issued writes drain) — the unknown key preserved, so a
+        // writer that ignored the previous file would fail here.
         Assert.True(PumpedDispatcher.PumpUntil(() => !preferences.HasPendingForTests, TimeSpan.FromSeconds(5)), "the save never flushed");
         PumpedDispatcher.PumpUntilDrained(preferences.WhenWritesDrained());
         PumpedDispatcher.Drain();
-        string file = Path.Combine(vault.Root, ".slate", "graph.json");
-        Assert.True(File.Exists(file), "the writer wrote no graph.json");
         string written = File.ReadAllText(file);
+        Assert.NotEqual(previous, written);
         GraphConfig config = preferences.CurrentConfig;
-        Assert.Equal(SlateUniffiMethods.GraphConfigEncode(config, written), written);
+        Assert.Equal(SlateUniffiMethods.GraphConfigEncode(config, previous), written);
+        Assert.True(JsonNode.DeepEquals(
+            JsonNode.Parse(unknown)!["futureThing"],
+            JsonNode.Parse(written)!["futureThing"]), "the previous file's unknown key did not survive the write:\n" + written);
         Assert.Equal(filter.IncludeAttachments, config.Filters.IncludeAttachments);
         Assert.Equal(0.7, config.Forces.Repel);
         // The golden pins encode over its own input: decode-encode of the

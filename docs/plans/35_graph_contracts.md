@@ -17417,6 +17417,41 @@ PumpedDispatcherTests, which is what Observed's drain relies on. One
 mutation caught of one: the SliderRow pattern narrowed back to a
 comma-free first argument fails the shapes fact.
 
+**IPJ-4 — codex post-implementation pass 4 (gpt-5.5 medium) on fa723916,
+the head carrying IPJ-3's fixes: both verified; TWO findings, one
+blocker, both taken.** IPJ-4-1 [BLOCKER] — the config fact said "core's
+encode over the previous bytes" and asserted encode over the bytes it
+had JUST read back, on a copied vault with no `.slate/graph.json` — so
+the writer's merge over an existing file (core's rule: every unknown
+top-level key preserved, `graph_config.rs`) was never exercised end to
+end, and a writer that ignored the previous file passed. Root cause: the
+test — F1's clause was right, its fact was not. TAKEN: the fact seeds
+the copied vault, before the host opens, with a previous file of version
+1 and the golden's `unknown_json` (the `futureThing` object core must
+carry through), keeps those bytes as `previous`, and holds the written
+file to core's encode OVER THEM, different from the previous bytes, with
+the unknown key deep-equal in the output; one mutation caught of two —
+the store encoding over nothing (the product path, `GraphConfigStore`)
+fails the fact; the fact's oracle drifting back to the written bytes
+SURVIVED BY DESIGN and is recorded, not counted: core's encode is a
+fixed point over its own canonical output, so that assertion holds
+either way, and it is the unknown key's deep-equality (with the
+written bytes differing from the previous) that tells a writer which
+read the previous file from one which did not — as the first mutation
+shows. IPJ-4-2
+[MINOR] — the reconciliation's (a) prose named `f7b94e700` as "TGF-8":
+that sha is the TGF-3/4/5 commit, the head the check ran on with TGF-8
+in the working tree; TGF-8's landing is `097b851be`. Root cause: the
+document. TAKEN: the prose says which head the check ran on and which
+commit TGF-8 landed as; the census re-runs the check on every head
+regardless. Codoki's fourth round, on fa723916, asked that the shapes fact's
+expected sequence be an explicit array and the ordered result
+materialized — taken (its "compile error" was not one: a C# 12
+collection expression, built by every lane; the thread answered). Verdict as returned: not safe to continue (IPJ-4-1)
+— resolved here; the CI-shaped regression once on this tree, green (10 m 25 s, 2,921
+facts); IPJ-5 runs on
+the fixed head, the count toward the stop rule starting again.
+
 ### Tests that pin PR F (revision 5's list, frozen; the task loop records what lands)
 
 - GraphEndToEndTests (new): F1's six facts.
@@ -17459,8 +17494,10 @@ Nine merged SERIES pull requests carry the issue from its spec to the
 inspector, and five merged post-implementation and repair pull requests
 ride beside them (IHA-6; the fifth, #1199, F9 did not know — found by
 the residue issues' cross-references, recorded in TGF-8). Each merge commit below was verified an
-ancestor of F's head (`f7b94e700`, TGF-8) by the command in the last
-column, whose exit code is recorded; the same check is
+ancestor of F's head at the check (`f7b94e700`) by the command in the last
+column, whose exit code is recorded (the head the check ran on:
+`f7b94e700` is the TGF-3/4/5 commit, TGF-8 then in the working tree;
+TGF-8's own landing is `097b851be` — IPJ-4-2); the same check is
 EveryLedgeredMergeIsAnAncestorOfThisHead, run on every build, so the
 ledger cannot outlive its history. F's base is the merged `main` after
 E: `git merge-base origin/main HEAD` answers `b15cbf56a`, and E's
@@ -18004,7 +18041,7 @@ that exists and is not keyed is not claimed as keyed.
 | §E | risk | ER-1 | unevidenced by id — §E's pinning list is not keyed per id | — |
 | §E | risk | ER-2 | unevidenced by id — §E's pinning list is not keyed per id | — |
 | §E | risk | ER-3 | unevidenced by id — §E's pinning list is not keyed per id | — |
-| §F | contract | F1 | Task loop, Post-implementation passes (PR F), Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `GraphStatusNote`, `GraphBlockedReason`, `GraphAnnouncerCensus`, `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, +22 more |
+| §F | contract | F1 | Task loop, Post-implementation passes (PR F), Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `GraphStatusNote`, `GraphBlockedReason`, `GraphAnnouncerCensus`, `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, +23 more |
 | §F | contract | F2 | Task loop | `GraphOpenBenchmarks`, `GraphRendererBenchmarks`, `LargeGraphOpensLaysOutPansAndStepsUnderBudget` |
 | §F | contract | F3 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `ParityHarnessCensus`, `TheLayoutSectionIsTheSessionsSixtiethTickQuantised`, `TwoLayoutsOverOneVaultAreBitIdentical`, `GraphVaultInventory`, `WcMatrixGraphEvidenceCensus`, `DeliveryEvidenceCensus`, `ChordTableTests`, `GraphContractsCitationCensus` |
 | §F | contract | F4 | Task loop, Post-implementation passes (PR F), Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `GraphStatusNote`, `GraphBlockedReason`, `GraphAnnouncerCensus`, `GraphReconciliationCensus`, `ParityHarnessCensus`, `WcMatrixGraphEvidenceCensus`, `DeliveryEvidenceCensus`, `ChordTableTests`, +1 more |
