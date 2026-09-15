@@ -15210,6 +15210,92 @@ dropped instead of kept live, the store dropping the groups, the store
 dropping the display (through the writer) — fourteen of fourteen caught
 (`gE-mutations.py`, the T1 entries).
 
+**TGE-2 — T2: the document's routes — `ChangeFilter`, `ApplyForces`,
+AnnounceForceValue, the `DiagramDisplay` forward; the install's arm; the
+teardown's drop; the relay's `DropPendingSettle`; the renderer's ONE
+`DiagramDisplay` branch (E-1, E-4, E-7, E-8, E-9, E-12 ii, iv, viii; Terms
+X1, X2, X4, Z2, K2, K3, K4; ED-3, ED-4, ED-5; IGU-1, IGU-2, IGU-8, IGV-2,
+IGX-1, IGX-2, IGY-1).** THE RELAY: `GraphAnnouncer` gains
+`DropPendingSettle()` — the settle class taken alone, the navigation
+drop's twin. THE DOCUMENT: `GraphDocumentViewModel` gains
+`ChangeFilter(GraphFilter)` (refused — false, nothing written, nothing
+requested — when retired or unseated, the `SelectRow` guard, or for the
+view state's current flags, Term X4; else ONE `ApplyQuery` with the
+overlay cleared and the needle kept, then rule Q's `Request(Filter)` —
+the caller persists only on true), `ApplyForces(GraphForcesConfig)` (over
+a LIVE model: `SetForces` through the gate, and when admitted the relay's
+pending settle dropped, `SettleAnnouncementArmed = true`, `Driver.StartSettle()`;
+false — nothing armed, nothing ticked — with no live model, once retired,
+and for the model's CURRENT forces, nothing re-heating), AnnounceForceValue
+(the force value through `AnnounceIfEffective`, the boundary's ninth
+caller), the `DisplayChanged` subscription forwarded as the document's own
+`DiagramDisplay` change (released at retirement); `InstallBuild`'s re-apply
+of an edited force ARMS the line before the install's `StartSettle`
+(IGX-1; E-D7); `DropModel` drops the relay's pending settle beside its
+disarm (IGY-1) — Term G7's order unchanged. THE RENDERER:
+`OnDocumentChanged` gains the `DiagramDisplay` → `Redraw()` branch, its
+one edit (IGU-1). THE FACTS: `GraphAnnouncerTests` gains
+AQueuedSettleLineIsDroppedAloneByTheDocumentsDrop (the settle taken, the
+force value and the row line standing, the next settle spoken, the empty
+drop a no-op); `GraphDocumentTests` gains
+ChangeFilterClearsTheOverlayIssuesThePairAndRefuses (a preset's overlay
+cleared by the route, the needle kept, the pair under FilterCount with no
+preset, the count spoken once; the current flags refused with no new
+token and nothing spoken; a retired document refused with the view state
+untouched); `GraphDiagramTests` gains
+AForcesEditReheatsThroughTheGateArmsRestartsAndSpeaksTheValueThenTheSettleOnce
+(the inspector's order driven by hand — the preferences' field, the
+value, the apply — one gate crossing, the model's forces the edit's,
+armed, the run restarted, the value then the settle and nothing else,
+disarmed; the current forces refused with nothing armed and nothing
+ticked; Table mode refused; the mode line alone),
+TheValuePrecedesTheSettleUnderReduceMotionsOneShotConvergence (IGU-2: a
+bare document under Reduce Motion, the one-shot converge, the value first),
+ASecondEditInsideTheSettleWindowSpeaksOnceForTheLastRun (IGX-2: the first
+run's settle queued in the relay and unspoken, the second edit dropping it,
+re-arming and restarting, ONE settle line),
+ASettleQueuedAtConvergenceIsDroppedByTheTeardownAndByAFilterRebuild (IGY-1:
+the switch to Table drops the queued settle with the disarm — the mode line
+alone; a filter rebuild drops it and the new build's unarmed run speaks
+nothing), AForcesEditUnderABuildInFlightIsArmedAtTheInstallAndSpokenAtItsRunsEnd
+(IGV-2, IGX-1: the build parked at its registration gate, the preferences
+moved, the apply refused, the install re-applying, arming and speaking the
+settle once; an edit returned to the captured forces before the install
+arming nothing), ADisplayChangeRedrawsWithoutAnEpochAndTheHitFollowsTheEnlargedRadius
+(IGU-8, ED-4: the preferences' event, the document's one `DiagramDisplay`
+notification, one redraw, the topology crossing unmoved, a point outside
+the node at ×1 hit at ×2 through the live radius, the same display
+re-asserted forwarding and redrawing nothing). THE CENSUSES:
+`GraphNavigatorCensus`' boundary fact lists AnnounceForceValue among
+`AnnounceIfEffective`'s callers (E-12 iv), its load-starting census lists
+`ChangeFilter` among the members reaching a starter with its outside
+callers pinned (none until T3's SetBackendFilter) and `ApplyForces` among
+the driver's `StartSettle` callers, and it gains
+TheRelaysDropsHaveTheirNamedCallers (the settle drop from `ApplyForces`
+and `DropModel` alone; the navigation drop from the workspace's wiring
+alone) and TheRenderersDocumentBranchesAreTheThreeNamesAndTheDisplaysRedraws
+(E-12 viii: `OnDocumentChanged` branches on exactly `HasLiveDiagram`,
+`Verbosity`, `DiagramDisplay`, the third redrawing); `GraphAnnouncerCensus`'
+ApplyQuery callers list gains `ChangeFilter` — four routes at five sites
+(E-12 ii; IGW-3). DEVIATIONS: one, a clarification — `ApplyForces` is a
+no-op for the model's CURRENT forces (Term K2 (iii) names the live arm
+without the equal case; the install's "nothing re-heats, nothing arms"
+rule is applied to the live model too, so a programmatic re-assertion
+never speaks a settle for a run that re-heated nothing); the retirement's
+own superseding sequence is not a request's (the fact reads the sequence
+after the retire). MUTATIONS, each restored byte for byte, each caught by
+the named fact: `ChangeFilter` keeping the overlay, requesting nothing,
+ignoring the guard, accepting the current flags, a second `ApplyQuery`
+site (the callers census); `ApplyForces` never arming, never restarting,
+keeping the queued settle, re-heating the current forces; `DropModel`
+keeping the queued settle; the install arming nothing, arming always; the
+renderer's branch dropped (the fact, and the census), a planted fourth
+branch (the census); the display forward dropped; AnnounceForceValue
+bypassing the gate (the boundary census), the value's seam posting another
+event; the settle drop taking every class; a planted third drop caller
+(the census) — twenty of twenty caught (`gE-mutations.py`, the T2
+entries).
+
 ### Tests that pin PR E (revision 6's list, frozen; the task loop records what lands)
 
 - GraphInspectorTests (new): the view model's reads and writes per rule

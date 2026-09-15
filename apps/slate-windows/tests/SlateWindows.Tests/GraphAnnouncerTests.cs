@@ -233,4 +233,43 @@ public sealed class GraphAnnouncerTests
         });
     }
 
+    /// <summary>W6-2 PR E (Term K4; IGX-2, IGY-1): the SETTLE class dropped
+    /// alone — a settle queued at a run's convergence and held for the
+    /// window is taken by the document's drop (a second edit, a teardown);
+    /// the other classes stand, the relay stays live, and the next settle
+    /// speaks.</summary>
+    [Fact]
+    public void AQueuedSettleLineIsDroppedAloneByTheDocumentsDrop()
+    {
+        PumpedDispatcher.Run(() =>
+        {
+            var posted = new List<string>();
+            var announcer = new GraphAnnouncer(line => posted.Add(line.Text), TimeSpan.FromSeconds(60));
+            announcer.Announce(new GraphA11yEvent.GraphLayoutSettled());
+            announcer.Announce(new GraphA11yEvent.GraphForceValue(GraphForceControl.Repel, 80));
+            announcer.Announce(new GraphA11yEvent.GraphRow(GraphVerbosity.Standard, Row("Alpha")));
+            Assert.Equal(3, announcer.PendingForTests);
+
+            announcer.DropPendingSettle();
+
+            Assert.Equal(2, announcer.PendingForTests);
+            Assert.False(announcer.IsRetired);
+            announcer.FlushForTests();
+            Assert.Equal(
+                [
+                    Render(new GraphA11yEvent.GraphForceValue(GraphForceControl.Repel, 80)),
+                    Render(new GraphA11yEvent.GraphRow(GraphVerbosity.Standard, Row("Alpha"))),
+                ],
+                posted);
+            announcer.Announce(new GraphA11yEvent.GraphLayoutSettled());
+            announcer.FlushForTests();
+            Assert.Equal(3, posted.Count);
+            Assert.Equal(Render(new GraphA11yEvent.GraphLayoutSettled()), posted[2]);
+            // With nothing pending, the drop is a no-op.
+            announcer.DropPendingSettle();
+            Assert.Equal(0, announcer.PendingForTests);
+            Assert.Equal(0, announcer.RefusedAfterShutdownForTests);
+        });
+    }
+
 }

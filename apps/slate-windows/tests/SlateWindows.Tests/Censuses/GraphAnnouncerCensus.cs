@@ -803,11 +803,15 @@ public sealed class GraphAnnouncerCensus
         ];
         // ApplyQuery's callers in this PR: the preset's write and its
         // restore, both in RunPreset (C-3 (ii), (vi)); T5 adds the
-        // constructor's seed and the fresh open's re-apply.
+        // constructor's seed and the fresh open's re-apply. W6-2 PR E (E-12
+        // ii; IGW-3): four ROUTES at five invocation sites — the inspector's
+        // manual change through the document's ChangeFilter (Term X1) is
+        // the fourth route; the census pins the occurrences, not the owners.
         string[] allowedCallers =
         [
             // C-10: the fresh open's re-apply and the constructor's seed.
             "Graph/WorkspaceViewModel.Graph.cs:AttachGraphDocumentTo",
+            "Graph/GraphDocumentViewModel.cs:ChangeFilter",
             "Graph/GraphNavigator.cs:RunPreset",
             "Graph/GraphNavigator.cs:RunPreset",
             "WorkspaceViewModel.cs:<ctor>",

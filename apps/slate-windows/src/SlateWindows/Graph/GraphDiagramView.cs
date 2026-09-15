@@ -248,6 +248,13 @@ internal sealed class GraphDiagramView : FrameworkElement
             // C-9: a verbosity change re-names every peer without a load.
             RenamePeers();
         }
+        else if (e.PropertyName == nameof(GraphDocumentViewModel.DiagramDisplay))
+        {
+            // W6-2 PR E (Term Z2; IGU-1): a display change is a REDRAW under
+            // the new display — no epoch, no grid rebuild (the grid buckets
+            // positions; the hit radius reads ScaledDiameter live, IGU-8).
+            Redraw();
+        }
     }
 
     private void BindDiagram(GraphDiagramModel? diagram)

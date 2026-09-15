@@ -211,6 +211,20 @@ internal sealed class GraphAnnouncer
         }
     }
 
+    /// <summary>W6-2 PR E (Term K4; IGX-2, IGY-1): the SETTLE class dropped
+    /// alone — a settle queued by a run's convergence is held for the
+    /// window, so an admitted forces edit inside it (the run restarted) or
+    /// the model's teardown would let it speak for a run that is no longer
+    /// the last, or for a model that is gone; the document calls this
+    /// before re-arming and beside its disarm. The class enum stays private.</summary>
+    internal void DropPendingSettle()
+    {
+        if (_pending.TryGetValue(EventClass.Settle, out PendingLine? line))
+        {
+            _ = line.Take();
+        }
+    }
+
     /// <summary>Test hook: emit every pending debounced line NOW (the
     /// mac <c>flushForTests</c> twin).</summary>
     internal void FlushForTests()

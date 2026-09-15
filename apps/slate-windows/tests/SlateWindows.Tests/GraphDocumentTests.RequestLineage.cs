@@ -617,6 +617,61 @@ public sealed partial class GraphDocumentTests
         });
     }
 
+    /// <summary>W6-2 PR E (Terms X1, X4; ED-3): the document's ChangeFilter is
+    /// the inspector's route — ONE ApplyQuery clearing a preset's overlay and
+    /// keeping the needle, ONE Filter request (a pair under FilterCount, no
+    /// preset inherited, the count spoken once) — and its refusals: the
+    /// current flags write nothing and request nothing; a retired document
+    /// writes nothing.</summary>
+    [Fact]
+    public void ChangeFilterClearsTheOverlayIssuesThePairAndRefuses()
+    {
+        using GraphVault vault = GraphVault.Copy("change-filter");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            var lines = new List<string>();
+            GraphDocumentViewModel document = BareQuiescent(host, lines);
+            using var park = new Park(document, 1);
+            document.ViewState.ApplyQuery(SlateUniffiMethods.GraphPresetQuery(GraphPreset.Unresolved));
+            Assert.True(document.Request(new GraphRequest.Preset(GraphPreset.Unresolved)));
+            park.WaitReached();
+            var attachmentsOn = new GraphFilter(IncludeAttachments: true, IncludeGhosts: true, OrphansOnly: false);
+            Assert.True(document.ChangeFilter(attachmentsOn));
+            Assert.Equal(attachmentsOn, document.ViewState.Filter);
+            Assert.Null(document.ViewState.KindOnly);
+            Assert.Equal(string.Empty, document.ViewState.NameQuery);
+            GraphLoadToken filter = document.CurrentForTests!;
+            Assert.Equal(GraphLoadKind.Pair, filter.Kind);
+            Assert.Equal(GraphAnnouncePolicy.FilterCount, filter.Announce);
+            Assert.Null(filter.Preset);
+            park.Release();
+            Drain(document);
+            Flush(document);
+            Assert.Null(document.Publication.Query.KindOnly);
+            Assert.Equal(attachmentsOn, document.Publication.Filter);
+            Assert.Equal([Count(document.Publication)], lines);
+            // The current flags: refused — nothing written, no new token, nothing spoken.
+            ulong seq = document.SeqForTests;
+            lines.Clear();
+            Assert.False(document.ChangeFilter(attachmentsOn));
+            Assert.Equal(seq, document.SeqForTests);
+            Assert.Equal(attachmentsOn, document.ViewState.Filter);
+            Drain(document);
+            Flush(document);
+            Assert.Empty(lines);
+            // Retired: refused, the view state untouched (the retirement's own
+            // superseding sequence is not a request's).
+            document.Retire();
+            Drain(document);
+            ulong retired = document.SeqForTests;
+            var orphans = new GraphFilter(IncludeAttachments: false, IncludeGhosts: false, OrphansOnly: true);
+            Assert.False(document.ChangeFilter(orphans));
+            Assert.Equal(attachmentsOn, document.ViewState.Filter);
+            Assert.Equal(retired, document.SeqForTests);
+        });
+    }
+
     [Fact]
     public void GridSortedPrecedesTheReceiversLineAtEveryAdoptingInstall()
     {

@@ -32,6 +32,9 @@ public sealed class GraphNavigatorCensus
     private const string TheModelType = "SlateWindows.Graph.GraphDiagramModel";
     private const string TheDriverType = "SlateWindows.Graph.GraphLayoutDriver";
 
+    /// <summary>W6-2 PR E: ChangeFilter's outside callers — none until T3 lands the inspector's SetBackendFilter.</summary>
+    private static readonly string[] ChangeFilterCallers = [];
+
     private static string OwnerOf(SyntaxNode node)
     {
         foreach (SyntaxNode ancestor in node.Ancestors())
@@ -286,6 +289,7 @@ public sealed class GraphNavigatorCensus
                 "ApplyRefresh",
                 "ApplyRefreshForTests",
                 "BuildDiagram",
+                "ChangeFilter",
                 "EnsureDiagram",
                 "EnterDiagram",
                 "FetchTopology",
@@ -316,6 +320,10 @@ public sealed class GraphNavigatorCensus
         // seat's build from the attach funnel alone; the rest from nowhere.
         Assert.Equal(["Graph/GraphDiagramView.cs:SwitchToTable", "Graph/GraphSurfaceView.cs:OnModeChosen"], CallersOf(TheDocumentType, "SetMode", includeInsideType: false));
         Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:AttachGraphDocumentTo"], CallersOf(TheDocumentType, "EnsureDiagram", includeInsideType: false));
+        // W6-2 PR E (Term X1; E-12 ii): the inspector's filter route reaches
+        // Request through ChangeFilter — the inspector view model's
+        // SetBackendFilter is its one outside caller once T3 lands it.
+        Assert.Equal(ChangeFilterCallers, CallersOf(TheDocumentType, "ChangeFilter", includeInsideType: false));
         foreach (string arm in new[]
         {
             "Issue", "IssueReplacing", "Receive", "ReceiveForTests",
@@ -340,8 +348,9 @@ public sealed class GraphNavigatorCensus
         Assert.Equal(["Converge", "Step"], schedulerInvocations.Order(StringComparer.Ordinal));
         Assert.Equal(["Graph/GraphLayoutDriver.cs:StartSettle"], CallersOf(TheDriverType, "Converge"));
         Assert.Equal(["Graph/GraphLayoutDriver.cs:OnCadence", "Graph/GraphLayoutDriver.cs:StartSettle"], CallersOf(TheDriverType, "Step"));
+        // W6-2 PR E (Term K2): the forces apply restarts the run (ED-5).
         Assert.Equal(
-            ["Graph/GraphDocumentViewModel.cs:ApplyRefresh", "Graph/GraphDocumentViewModel.cs:InstallBuild", "Graph/GraphDocumentViewModel.cs:OnMotionChanged"],
+            ["Graph/GraphDocumentViewModel.cs:ApplyForces", "Graph/GraphDocumentViewModel.cs:ApplyRefresh", "Graph/GraphDocumentViewModel.cs:InstallBuild", "Graph/GraphDocumentViewModel.cs:OnMotionChanged"],
             CallersOf(TheDriverType, "StartSettle"));
     }
 
@@ -950,6 +959,47 @@ public sealed class GraphNavigatorCensus
             nested.Select(pair => $"{pair.Key}={pair.Value}").ToArray());
     }
 
+    /// <summary>W6-2 PR E (Term K4; IGX-2, IGY-1): the relay's settle drop is
+    /// called by the document's forces apply (before re-arming) and by its
+    /// model drop (beside the disarm) and by no other site; the navigation
+    /// drop's one caller stays the workspace's verbosity wiring (C-9).</summary>
+    [Fact]
+    public void TheRelaysDropsHaveTheirNamedCallers()
+    {
+        Assert.Equal(
+            ["Graph/GraphDocumentViewModel.cs:ApplyForces", "Graph/GraphDocumentViewModel.cs:DropModel"],
+            CallersOf("SlateWindows.Graph.GraphAnnouncer", "DropPendingSettle"));
+        Assert.Equal(["WorkspaceViewModel.cs:<ctor>"], CallersOf("SlateWindows.Graph.GraphAnnouncer", "DropPendingNavigation"));
+    }
+
+    /// <summary>W6-2 PR E, E-12 (viii), Term Z2 (IGU-1): the renderer's
+    /// document handler branches on exactly three names — HasLiveDiagram
+    /// binding, Verbosity renaming, DiagramDisplay redrawing — and no other.</summary>
+    [Fact]
+    public void TheRenderersDocumentBranchesAreTheThreeNamesAndTheDisplaysRedraws()
+    {
+        (string Relative, CSharpSource Source) file = ShellCompilation.Sources.Single(s => s.Relative == "Graph/GraphDiagramView.cs");
+        MethodDeclarationSyntax handler = file.Source.Method("OnDocumentChanged");
+        var branches = new List<string>();
+        foreach (IfStatementSyntax branch in handler.DescendantNodes().OfType<IfStatementSyntax>())
+        {
+            if (branch.Condition is BinaryExpressionSyntax { Right: InvocationExpressionSyntax nameOf }
+                && CSharpSource.Normalize(nameOf.Expression) == "nameof")
+            {
+                string name = CSharpSource.Normalize(nameOf.ArgumentList.Arguments[0].Expression);
+                string calls = string.Join(",", branch.Statement.DescendantNodes().OfType<InvocationExpressionSyntax>().Select(c => CSharpSource.Normalize(c.Expression)));
+                branches.Add($"{name}:{calls}");
+            }
+        }
+        Assert.Equal(
+            [
+                "GraphDocumentViewModel.HasLiveDiagram:BindDiagram",
+                "GraphDocumentViewModel.Verbosity:RenamePeers",
+                "GraphDocumentViewModel.DiagramDisplay:Redraw",
+            ],
+            branches);
+    }
+
     // --- (viii) the depth seam's one installer ---------------------------------
 
     /// <summary>C-10, C-15 (viii): the leaf's DepthChanged seam is installed
@@ -985,12 +1035,15 @@ public sealed class GraphNavigatorCensus
     /// invocation in GraphNavigator.cs binds to a relay instance method.
     /// W6-2 PR D (D-1, D-15 iv): the diagram's six seams — the mode line,
     /// the row line, the zoom, the pin, the tier's entry, the settle — ride
-    /// the same boundary and are its only other callers.</summary>
+    /// the same boundary and are its only other callers. W6-2 PR E (Term
+    /// K3; E-12 iv): the force value's seam is the document's ONE force
+    /// seam, on the same boundary.</summary>
     [Fact]
     public void TheAnnouncementBoundaryGainsWhereAmIAndTheNavigatorPostsNothing()
     {
         Assert.Equal(
             [
+                "Graph/GraphDocumentViewModel.cs:AnnounceForceValue",
                 "Graph/GraphDocumentViewModel.cs:AnnounceLayoutSettled",
                 "Graph/GraphDocumentViewModel.cs:AnnounceMode",
                 "Graph/GraphDocumentViewModel.cs:AnnouncePinned",
