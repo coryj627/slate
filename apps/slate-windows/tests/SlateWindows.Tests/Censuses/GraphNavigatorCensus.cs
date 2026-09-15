@@ -31,9 +31,10 @@ public sealed class GraphNavigatorCensus
     private const string TheStoreType = "SlateWindows.Graph.GraphConfigStore";
     private const string TheModelType = "SlateWindows.Graph.GraphDiagramModel";
     private const string TheDriverType = "SlateWindows.Graph.GraphLayoutDriver";
+    private const string TheInspectorType = "SlateWindows.Graph.GraphInspectorViewModel";
 
-    /// <summary>W6-2 PR E: ChangeFilter's outside callers — none until T3 lands the inspector's SetBackendFilter.</summary>
-    private static readonly string[] ChangeFilterCallers = [];
+    /// <summary>W6-2 PR E (Term X1; E-12 ii): ChangeFilter's one outside caller — the inspector's filter route.</summary>
+    private static readonly string[] ChangeFilterCallers = ["Graph/GraphInspectorViewModel.cs:SetBackendFilter"];
 
     private static string OwnerOf(SyntaxNode node)
     {
@@ -142,13 +143,25 @@ public sealed class GraphNavigatorCensus
     /// preferences object are constructed in the shell — each by its
     /// workspace factory, each factory called once from the workspace's
     /// constructor as the field's direct assignment, outside any repeatable
-    /// construct.</summary>
+    /// construct. W6-2 PR E (Term I6; E-12 i): the inspector view model
+    /// joins the theory — one construction, after the preferences and the
+    /// view state and before the navigator.</summary>
     [Fact]
     public void ExactlyOneNavigatorAndOnePreferencesAreConstructedInTheWorkspaceConstructor()
     {
         Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:NewGraphNavigator"], CreationsOf(TheNavigatorType));
         Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:NewGraphPreferences"], CreationsOf(ThePreferencesType));
-        foreach ((string factory, string field) in new[] { ("NewGraphNavigator", "_graphNavigator"), ("NewGraphPreferences", "_graphPreferences") })
+        Assert.Equal(["Graph/WorkspaceViewModel.Graph.cs:NewGraphInspector"], CreationsOf(TheInspectorType));
+        (string Relative, CSharpSource Source) workspace = ShellCompilation.Sources.Single(s => s.Relative == "WorkspaceViewModel.cs");
+        int[] order =
+        [
+            .. new[] { "_graphViewState", "_graphPreferences", "_graphInspector", "_graphNavigator" }
+                .Select(field => workspace.Source.Root.DescendantNodes().OfType<AssignmentExpressionSyntax>()
+                    .Where(a => a.Left is IdentifierNameSyntax left && left.Identifier.ValueText == field && a.Ancestors().OfType<ConstructorDeclarationSyntax>().Any())
+                    .Min(a => a.SpanStart)),
+        ];
+        Assert.True(order.SequenceEqual(order.Order()), "the graph objects are constructed out of order — the view state, the preferences, the inspector, the navigator");
+        foreach ((string factory, string field) in new[] { ("NewGraphNavigator", "_graphNavigator"), ("NewGraphPreferences", "_graphPreferences"), ("NewGraphInspector", "_graphInspector") })
         {
             var uses = new List<string>();
             foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
@@ -998,6 +1011,89 @@ public sealed class GraphNavigatorCensus
                 "GraphDocumentViewModel.DiagramDisplay:Redraw",
             ],
             branches);
+    }
+
+    /// <summary>W6-2 PR E, E-12 (iv): the inspector's sources post no
+    /// announcement — no instance member of the announcer is invoked in the
+    /// inspector's files; the document's AnnounceForceValue is the one
+    /// force seam and the inspector reaches the relay through it alone.</summary>
+    [Fact]
+    public void TheInspectorPostsNothing()
+    {
+        string[] files = ["Graph/GraphInspectorViewModel.cs"];
+        var posts = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources.Where(s => files.Contains(s.Relative)))
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (InvocationExpressionSyntax call in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                foreach (ISymbol candidate in Candidates(model.GetSymbolInfo(call)))
+                {
+                    if (candidate is IMethodSymbol method
+                        && (method.ContainingType.Name == "GraphAnnouncer" || method.ContainingType.Name == "A11yAnnouncer"))
+                    {
+                        posts.Add($"{relative}:{OwnerOf(call)}:{method.Name}");
+                    }
+                }
+            }
+        }
+        Assert.Empty(posts);
+        Assert.Equal(files.Length, ShellCompilation.Sources.Count(s => files.Contains(s.Relative)));
+    }
+
+    /// <summary>W6-2 PR E, E-12 (v), Term Y4 (0bD-12): the label theory's
+    /// picker arm — no colour token's or ring style's title is a string
+    /// literal anywhere in the shell; the eight and the four are core's
+    /// <c>Title</c>, listed from the vectors.</summary>
+    [Fact]
+    public void NoPickerTitleIsTypedInTheShell()
+    {
+        string[] titles =
+        [
+            .. SlateUniffiMethods.GraphColorTokens().Select(token => token.Title),
+            .. SlateUniffiMethods.GraphRingStyles().Select(style => style.Title),
+        ];
+        Assert.Equal(12, titles.Length);
+        var typed = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            foreach (LiteralExpressionSyntax literal in source.Root.DescendantNodes().OfType<LiteralExpressionSyntax>())
+            {
+                if (literal.IsKind(SyntaxKind.StringLiteralExpression) && titles.Contains(literal.Token.ValueText, StringComparer.Ordinal))
+                {
+                    typed.Add($"{relative}:{OwnerOf(literal)}:{literal.Token.ValueText}");
+                }
+            }
+        }
+        Assert.Empty(typed);
+    }
+
+    /// <summary>W6-2 PR E (Term K2; IGU-2): the inspector's forces route
+    /// runs its three seams in ONE order — the preferences' field, the
+    /// value spoken, the apply — so the value precedes the settle under
+    /// every scheduler; a synchronous scheduler would otherwise let the
+    /// apply's one-shot convergence speak first.</summary>
+    [Fact]
+    public void TheInspectorSpeaksTheValueBeforeTheApply()
+    {
+        (string Relative, CSharpSource Source) file = ShellCompilation.Sources.Single(s => s.Relative == "Graph/GraphInspectorViewModel.cs");
+        SemanticModel model = ShellCompilation.ModelFor(file.Source);
+        MethodDeclarationSyntax route = file.Source.Root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .Single(m => m.Identifier.ValueText == "SetForces" && m.ParameterList.Parameters.Count == 1 && m.Parent is ClassDeclarationSyntax { Identifier.ValueText: "GraphInspectorViewModel" });
+        var seams = new List<string>();
+        foreach (InvocationExpressionSyntax call in route.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            foreach (ISymbol candidate in Candidates(model.GetSymbolInfo(call)))
+            {
+                if (IsMethodOf(candidate, ThePreferencesType, "SetForces")
+                    || IsMethodOf(candidate, TheDocumentType, "AnnounceForceValue")
+                    || IsMethodOf(candidate, TheDocumentType, "ApplyForces"))
+                {
+                    seams.Add(candidate.Name);
+                }
+            }
+        }
+        Assert.Equal(["SetForces", "AnnounceForceValue", "ApplyForces"], seams);
     }
 
     // --- (viii) the depth seam's one installer ---------------------------------

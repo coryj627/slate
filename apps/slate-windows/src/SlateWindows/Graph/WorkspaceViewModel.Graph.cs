@@ -75,6 +75,14 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>The workspace's one relay, for the facts that queue a
     /// pending class on it and prove a High flush drops it (IPB-1).</summary>
     internal GraphAnnouncer GraphRelayForTests => _graphRelay;
+
+    private readonly GraphInspectorViewModel _graphInspector;
+
+    /// <summary>W6-2 PR E (Term I6; E-1): the ONE inspector view model —
+    /// PUBLIC for the leaf body's <c>Model</c> binding; constructed in the
+    /// workspace constructor after the preferences and the view state and
+    /// before the navigator and the graph document.</summary>
+    public GraphInspectorViewModel Inspector => _graphInspector;
     private GraphActivationCause _graphCause = GraphActivationCause.Activation;
     private bool _graphWasEffective;
     private WorkspaceTabViewModel? _graphEffectiveTab;
@@ -138,6 +146,10 @@ internal sealed partial class WorkspaceViewModel
             // the seat, under the re-applied query, and speaks no mode line.
             _graphDocument.EnsureDiagram();
         }
+        // W6-2 PR E (Term I7): the inspector's gate is NOT recomputed here —
+        // a restored tab is seated inside Restore, before the groups stand
+        // (ActiveGroup is null and rule L's predicate would throw); the
+        // funnel's effectiveness edge follows every seat and moves it.
         tab.AttachGraphDocument(_graphDocument);
     }
 
@@ -173,6 +185,12 @@ internal sealed partial class WorkspaceViewModel
             () => _graphDocument,
             () => GraphOpenAdmissionReason?.Invoke(),
             OpenGraphForPreset);
+
+    /// <summary>W6-2 PR E (Term I6): the inspector over the two sources,
+    /// the navigator's needle writer and the seated document read lazily —
+    /// both are constructed after it.</summary>
+    private GraphInspectorViewModel NewGraphInspector() =>
+        new GraphInspectorViewModel(_graphViewState, _graphPreferences, () => _graphNavigator, () => _graphDocument);
 
     /// <summary>The preset funnel (C-3 (iii)–(v); rule P): the arm set, the
     /// open run as <see cref="OpenGraph"/> runs it — WITHOUT the Open
@@ -347,6 +365,8 @@ internal sealed partial class WorkspaceViewModel
             _graphNavigator.NotifyWhereAmIAvailabilityChanged();
             // W6-2 PR D (Term M3): the diagram's verbs follow the same edge.
             _graphDocument?.NotifyDiagramAvailabilityChanged();
+            // W6-2 PR E (Term I7): the inspector's gate follows the same edge.
+            _graphInspector.RefreshGraphEffectiveness();
         }
         if (effective is null || _graphDocument is null || _graphDocument.IsRetired)
         {
@@ -429,6 +449,8 @@ internal sealed partial class WorkspaceViewModel
         _graphWasVisible = false;
         retired.Retire();
         TrackRetiredBasesWork(retired.WhenAllWorkDrained());
+        // W6-2 PR E (Term I7): the inspector's gate at the retirement.
+        _graphInspector.RefreshGraphEffectiveness();
     }
 
     /// <summary>Teardown (contract A-1): the live document into the
@@ -445,6 +467,10 @@ internal sealed partial class WorkspaceViewModel
             document.Retire();
             drains.Add(document.WhenAllWorkDrained());
         }
+        // W6-2 PR E (Terms I6, I7): the inspector's gate at the teardown's
+        // retirement, then its subscriptions released with the workspace.
+        _graphInspector.RefreshGraphEffectiveness();
+        _graphInspector.Dispose();
         _graphNoteCreation.Shutdown();
         drains.Add(_graphNoteCreation.WhenAllWorkDrained());
         // W6-2 PR B (B-1): the leaf beside the graph document; then the

@@ -867,6 +867,59 @@ public sealed partial class GraphDiagramTests
         });
     }
 
+    /// <summary>W6-2 PR E (Terms K2, K3, K4, Y2; ED-5, ED-6, ED-7): the
+    /// inspector's forces edit end to end — the preferences' field, the
+    /// changed control spoken, the gate, the arm, the restart, the settle
+    /// once; the same value re-asserted speaks nothing and arms nothing; a
+    /// groups edit opens a new epoch by the view state (Term G3) and speaks
+    /// nothing.</summary>
+    [Fact]
+    public void TheInspectorsForcesEditSpeaksTheValueThenTheSettleAndAGroupsEditOpensAnEpoch()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(4, "diagram-inspector-forces");
+            GraphDocumentViewModel document = host.Open();
+            Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
+            GraphDiagramModel model = SettledModel(host, document);
+            GraphInspectorViewModel inspector = host.Workspace.Inspector;
+            GraphPreferencesViewModel preferences = host.Workspace.GraphPreferences;
+            host.GraphLines.Clear();
+            ulong? generation = preferences.PendingGenerationForTests;
+            int crossings = CrossingCount(document, "layout_set_forces");
+            inspector.SetRepel(0.8);
+            Assert.Equal(0.8, preferences.CurrentConfig.Forces.Repel);
+            Assert.NotEqual(generation, preferences.PendingGenerationForTests);
+            Assert.Equal(crossings + 1, CrossingCount(document, "layout_set_forces"));
+            Assert.True(document.SettleAnnouncementArmed);
+            Assert.True(model.Driver.IsSettling);
+            WaitForTheSettle(host, document, model);
+            Assert.True(PumpedDispatcher.PumpUntil(() => host.GraphLines.Count >= 2, TimeSpan.FromSeconds(10)), "the two lines never fired");
+            PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
+            host.Settle(document);
+            Assert.Equal([ForceLine(GraphForceControl.Repel, 80), SettledLine()], host.GraphLines);
+            Assert.False(document.SettleAnnouncementArmed);
+            // The same value re-asserted: nothing spoken, nothing armed, nothing ticked.
+            host.GraphLines.Clear();
+            inspector.SetRepel(0.8);
+            Assert.False(document.SettleAnnouncementArmed);
+            Assert.False(model.Driver.IsSettling);
+            PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
+            host.Settle(document);
+            Assert.Empty(host.GraphLines);
+            // A groups edit: a new epoch by the view state, silent.
+            int topology = CrossingCount(document, "graph_topology");
+            inspector.AddGroup();
+            Assert.True(PumpedDispatcher.PumpUntil(() => CrossingCount(document, "graph_topology") == topology + 1, TimeSpan.FromSeconds(10)), "the epoch never opened");
+            host.Settle(document);
+            PumpedDispatcher.PumpUntil(() => false, TimeSpan.FromMilliseconds(400));
+            host.Settle(document);
+            Assert.Empty(host.GraphLines);
+            Assert.Single(host.Workspace.GraphViewStateForTests.Groups);
+            Assert.Single(preferences.CurrentConfig.Groups);
+        });
+    }
+
     [Fact]
     public void ACancelledRunAppliesNothingAndTheSessionIsFreedWhenTheInFlightCallReturns()
     {

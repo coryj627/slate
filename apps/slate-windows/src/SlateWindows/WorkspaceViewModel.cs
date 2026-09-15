@@ -1623,6 +1623,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // the view state — a persisted `diagram` is restored; the writers
         // census names this line and the document's SetMode alone.
         _graphViewState.Mode = _graphPreferences.CurrentConfig.Mode;
+        // W6-2 PR E (Term I6; E-12 i): the ONE inspector view model, after
+        // the preferences and the view state and before the navigator and
+        // the graph document — the instance census counts this one
+        // construction; it holds no copy of either source.
+        _graphInspector = NewGraphInspector();
         // W6-2 PR C (C-1): the ONE navigator, after the view state and the
         // preferences and before the first document and the leaf — the
         // instance census counts this one construction.

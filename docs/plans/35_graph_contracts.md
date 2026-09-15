@@ -15296,6 +15296,121 @@ event; the settle drop taking every class; a planted third drop caller
 (the census) — twenty of twenty caught (`gE-mutations.py`, the T2
 entries).
 
+**TGE-3 — T3: the inspector view model — GraphInspectorViewModel, one per
+workspace, the reads through, the writes into the frozen seams, the
+notifications, the changed control, the effectiveness gate, the read-only
+state; the censuses of E-12 i, ii, iv, v, vii (E-2, E-5, E-6, E-8; Terms I6,
+I7, X1, X3, X4, Y1–Y6, Z1, Z4, K1–K3; ED-6, ED-12).** THE VIEW MODEL:
+`Graph/GraphInspectorViewModel.cs` — `GraphInspectorViewModel` over the view
+state, the preferences, a `Func<GraphNavigator?>` and a
+`Func<GraphDocumentViewModel?>`; the bound properties read THROUGH
+(`IncludeAttachments`, `IncludeGhosts`, `OrphansOnly`, `NameQuery` from the
+view state; `Arrows`, `TextFadeZoom`, `NodeSizeMultiplier`,
+`LinkThickness`, `Center`, `Repel`, `Link`, `LinkDistance` from
+`CurrentConfig`); the group rows (`GraphInspectorGroupRow`: the 1-based
+`Index`, the rule's three fields, a `RemoveCommand`) are a projection of
+`ViewState.Groups` rebuilt on its change, `HasNoGroups` beside them;
+`ColorTokens` and `RingStyles` are core's vectors fetched once per process
+(Term Y4); the writes — SetBackendFilter (the document's `ChangeFilter`,
+then the preferences' `SetFilters` ONLY on true; nothing with no document),
+`SetNameQuery` (the navigator's), `SetGroups` (the view state's setter
+then the preferences' trigger), `AddGroup` (core's `GraphConfigNextGroupStyle`
+by count), `RemoveGroup(index)`, `SetGroupQuery`/`SetGroupColor`/`SetGroupRing`
+(an unchanged edit or an index outside the list writes nothing),
+`SetDisplay` with the four per-control setters (the preferences'),
+`SetForces` with the four per-control setters — Term K2's ONE order: the
+preferences' field, the changed control spoken through the document's
+AnnounceForceValue, then the document's `ApplyForces`; `ChangedForce(old,
+new)` the pure static of Term K3 (the first differing control, the percent
+rounded away from zero, null when none differs); IsGraphEffective (private
+set; `RefreshGraphEffectiveness()` = a seated, unretired document AND its
+`IsEffective`) and `IsWritable`/`LoadFailure` (the preferences'); the
+subscriptions to the view state's `PropertyChanged` (Filter → the three
+flags; NameQuery; Groups → the rows) and the preferences' `DisplayChanged`
+/ `ForcesChanged` (the four names each), released by `Dispose`. THE
+WORKSPACE: the constructor calls `NewGraphInspector()` after the mode seed
+and before `NewGraphNavigator()` (Term I6; the navigator and the document
+are read lazily through the two funcs); `Inspector` is the public accessor
+for the leaf's binding; `GraphFollowActiveTab`'s effectiveness edge,
+`ReleaseGraphDocumentIfUnreferenced`'s and `ShutdownGraphDocument`'s
+retirements call `RefreshGraphEffectiveness()`, the shutdown disposing the
+inspector after. THE SEAT IS NOT A RECOMPUTE SITE: the first cut refreshed
+at `AttachGraphDocumentTo` too, and the full regression (the subsets had
+passed) threw NullReferenceException in three restore facts — a
+restored graph tab is seated inside `Restore`, before the groups stand,
+where rule L's predicate dereferences a null `ActiveGroup`; the funnel's
+effectiveness edge follows every seat (a seat always comes with a tab that
+then becomes effective, or not) and moves the flag, so the seat's call
+was removed and Term I7's "at the document's seat" is discharged by the
+edge that follows it (the retirement's call stands: a release clears the
+edge's memory and the flag together). THE FACTS: GraphInspectorTests (new, a
+workspace over the graph vault): TheReadsAreTheSourcesAndOutsideWritesNotify
+(every read equal to its source; core's vectors in order and the same
+instance twice; a preset's outside write raising the three flags; the
+header's needle raising `NameQuery`; the preferences' display and forces
+events raising their four names each; an outside write of the groups
+rebuilding the rows), SetBackendFilterRunsChangeFilterThenPersistsAndRefusesWithoutADocument
+(no document: the view state and the schedule untouched; effective: the
+view state written with the overlay cleared, a request in flight, the
+flags persisted, the count spoken once; the same flags again: no request,
+no schedule, nothing spoken), SetNameQueryIsTheNavigatorsWriter (the view
+state, the preferences and the inspector agree; the same needle a no-op),
+GroupsAddEditAndRemoveWriteTheListToBothSourcesInCoresStylesSilently (two
+adds in core's successive styles differing on both channels; the query,
+the colour and the ring edits; an unchanged edit and an outside index
+writing nothing; the row's command then the index removing; both sources
+equal at every step; nothing spoken), SetDisplayIsThePreferencesTriggerAndSpeaksNothing
+(the four setters landing in `CurrentConfig` and the document's
+`DiagramDisplay`; equal values scheduling nothing; nothing spoken),
+ChangedForceIsTheFirstDifferingControlAtItsPercentRoundedAwayFromZero
+(0.125 → 13, 0.875 → 88, 0.004 → 0, 1.0 → 100, two changed → the first,
+a negative → 0, none → null), TheEffectivenessGateFollowsTheSeatTheEdgeAndTheRetirement
+(no tab → false; opened → true; behind a note tab → false; re-activated →
+true; visible in another group while that group is active → false; back →
+true; the tab closed → false; every notification a real change),
+TheReadOnlyStateIsExposedAndEditsStayLive (invalid UTF-8 on disk: the
+flag and the reason exposed; an add and a display edit move both sources,
+two refusals, the bytes untouched); `GraphDiagramTests` gains
+TheInspectorsForcesEditSpeaksTheValueThenTheSettleAndAGroupsEditOpensAnEpoch
+(`SetRepel(0.8)` over a live model: the field, a schedule, one gate
+crossing, armed, restarted, the value then the settle and nothing else;
+the same value again speaking and arming nothing; `AddGroup` opening one
+epoch — the topology crossing — and speaking nothing, both sources holding
+the group). THE CENSUSES: `GraphNavigatorCensus`' instance census gains the
+inspector (one construction by `NewGraphInspector`, the constructor's
+direct assignment, and the ORDER view state → preferences → inspector →
+navigator asserted by span; E-12 i), its load-starting census names
+SetBackendFilter as `ChangeFilter`'s one outside caller (E-12 ii), and it
+gains TheInspectorPostsNothing (no announcer member reached from the
+inspector's files; E-12 iv), NoPickerTitleIsTypedInTheShell (no literal
+equal to any of the eight colour titles or the four ring titles anywhere
+in the shell; E-12 v) and TheInspectorSpeaksTheValueBeforeTheApply (the
+route's three seams in Term K2's order, bound); `GraphAnnouncerCensus`'
+no-shadow census adds `GraphVisibilityQuery`, `GraphDisplay` and
+`GraphForcesConfig` to the value types (E-12 vii) and gains
+TheGroupsAreWrittenByTheSeedAndTheInspectorsSetGroupsAlone (the view
+state's `Groups` written by the constructor's seed and `SetGroups` alone,
+its backing field by the setter alone; C-15 v amended, ED-9). DEVIATIONS:
+none of substance — the per-control setters (`SetArrows`, `SetCenter` and
+their siblings) are conveniences over E-2's `SetDisplay` and `SetForces`,
+each one call into the same seam; the effectiveness fact drives the
+split-pane case from the note tab so the graph's singleton stays in its
+own group. MUTATIONS, each restored byte for byte, each caught by the
+named fact: SetBackendFilter persisting without a document, skipping the
+document; `SetNameQuery` writing the view state directly (the fact, and
+the query-writers census); `SetGroups` skipping the preferences, skipping
+the view state (the fact, and the Groups-writers census); `AddGroup`
+taking a fixed style; `RemoveGroup` removing the last; `SetForces`
+skipping the preferences, speaking after the apply (the order census),
+never applying; `ChangedForce` rounding to even, the last differing
+control first; the gate ignoring the document's effectiveness; the
+workspace's edge refresh dropped; a second inspector construction; the
+inspector constructed after the navigator; a mutable display shadow, a
+mutable groups shadow (the no-shadow census); a typed picker title; a
+planted third `Groups` writer; the inspector reaching the relay; a second
+`ChangeFilter` caller (the load-starting census) — twenty-four of
+twenty-four caught (`gE-mutations.py`, the T3 entries).
+
 ### Tests that pin PR E (revision 6's list, frozen; the task loop records what lands)
 
 - GraphInspectorTests (new): the view model's reads and writes per rule
