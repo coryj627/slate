@@ -15717,6 +15717,29 @@ arms); a mutation dropping the shown check is caught; the journey
 re-passed. Verdict as returned: not safe to continue (IPI-1-1) — resolved
 here; IPI-2 runs on the fixed head.
 
+**IPI-2 — codex post-implementation pass 2 (gpt-5.5 medium) on f03737f6,
+the head carrying IPI-1's fix: NO findings.** The pass verified the fix —
+the right-pane inspector landing posts through the shell's
+`FocusRequestArbiter` at Background priority and re-reads the workspace's
+`IsGraphInspectorShown` at the callback before `GraphInspectorView.LandBoundary`
+— and returned `VERDICT: safe to continue`. The first clean pass; the
+protocol's stop rule (the standing gate green on a head AND two
+consecutive passes without a blocker) sends a third pass over the same
+head from a different angle.
+
+**IPI-3 — codex post-implementation pass 3 (gpt-5.5 medium) on f03737f6,
+the same head, from a different angle (the view under real input, the
+shutdown order, the hidden-pane restore, the read-only config with the
+graph effective, the announcement order under Reduce Motion, the
+censuses' blind spots): NO findings; the IPI-1 fix's shape re-verified;
+`VERDICT: safe to continue`. THE STOP RULE MET: two consecutive passes
+without a blocker (IPI-2, IPI-3) on one head, with the standing gate's
+greenness on the merge head — CI's Windows lanes, the accessibility gate,
+rust, semgrep, watched on PR #1215 — the merge's own condition (codoki
+auto-approved both heads with no issues found) — the PR D precedent (IPH-4,
+IPH-5). The passes ran 1 → 0 → 0 (blockers 1, 0, 0); this ledger is the
+owner's.
+
 ### Tests that pin PR E (revision 6's list, frozen; the task loop records what lands)
 
 - GraphInspectorTests (new): the view model's reads and writes per rule
