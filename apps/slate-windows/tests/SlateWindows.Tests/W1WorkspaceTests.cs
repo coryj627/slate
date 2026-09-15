@@ -142,7 +142,8 @@ public sealed class W1WorkspaceModelTests
         Assert.True(workspace.Root.IsSplit);
 
         workspace.ActiveLeaf = WorkspaceViewModel.Leaves.Single(leaf => leaf.Id == "syncDiagnostics");
-        Assert.Equal(16, workspace.LeafOptions.Count);
+        // W6-2 PR E (Term I1): the seventeenth leaf is the graph inspector's.
+        Assert.Equal(17, workspace.LeafOptions.Count);
         workspace.FocusPaneLeftCommand.Execute(null);
         Assert.NotNull(workspace.ActiveGroup.ActiveTab);
         workspace.SplitDownCommand.Execute(null);

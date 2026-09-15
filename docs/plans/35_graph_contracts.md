@@ -15411,6 +15411,109 @@ planted third `Groups` writer; the inspector reaching the relay; a second
 `ChangeFilter` caller (the load-starting census) — twenty-four of
 twenty-four caught (`gE-mutations.py`, the T3 entries).
 
+**TGE-4 — T4: the strings — `GraphPhrase` gains the inventory's T29–T60
+byte for byte and the two Windows-only notices; the label census's values;
+the parity fact against the mac's sources (E-11; E-D6, E-D8; IGU-5).** THE
+PHRASES: `GraphPhrase` gains, from the label inventory, T29 InspectorLabel,
+T30 InspectorToggleName and InspectorToggleHint, T37 InspectorName, the four
+sections T38/T43/T50/T55, T39 InspectorNameFieldLabel (its AX name IS
+`FilterFieldName`, C-5's one constant — no second literal), T40–T42's
+toggles and hints, T44 InspectorNoGroupsText, T45's `Add Group` and hint,
+T46–T49's row labels (`Query`, `Colour`, `Ring`) and composed formats
+(`Group {0} query`, `Group {0} colour`, `Group {0} ring style`, `Remove
+group {0}`) with the four composing statics that format the 1-based index
+invariantly, T51–T54's display titles and hints, T56–T59's force titles and
+hints, T60 InspectorSliderValueFormat (`F2`) with InspectorSliderValue —
+the mac's `%.2f`, a dot under every culture; and the Windows-authored
+InspectorReadOnlyPrefix (`Graph settings are read-only: `, E-D6) and
+InspectorInactiveText (`Open the graph to change these settings.`, E-D8),
+never announced. THE FACTS: `GraphNavigatorCensus`' EveryLabelIsTheInventorys
+asserts every value byte for byte (the mac's rows and the two notices);
+`MacCatalogParityTests` gains TheGraphInspectorsStringsAreTheMacsByteForByte
+— every shipped string read as a literal from `GraphInspectorView.swift`
+(the pane's) or `GraphTableView.swift` (the toggle's T29, T30), comments
+stripped; the four composed formats equal to the mac's interpolations with
+`\(index + 1)` as `{0}`; the value text `String(format: "%.2f", …)` present
+and `InspectorSliderValue` giving `0.50`, `1.00`, `0.33` and a composed
+`Group 7 colour` under de-DE. DEVIATIONS: none. MUTATIONS, each restored
+byte for byte, each caught by the named fact: a byte off the toggle's
+hint (the parity fact, and the census), the composed name drifting, the
+composed index zero-based, the slider's value following the culture, the
+slider's format F3, the inactive text drifting (the census), the Forces
+section's name drifting — eight of eight caught (`gE-mutations.py`, the
+T4 entries).
+
+**TGE-5 — T5: the leaf and the toggle — the workspace's leaf entry,
+IsGraphInspectorShown, `ToggleGraphInspector()` on the shell's four
+timelines, the document's two workspace-wired seams, the surface header's
+ToggleButton, the silent restore (E-1, E-3, E-9; Terms I1, I2, I4, I5, I7;
+IGV-1; E-D5).** THE WORKSPACE: `Leaves` gains `new("inspector",
+GraphPhrase.InspectorName)` after `connections` (Term I1; the leaf's title
+is T37, the shell's `LeafPanelShown` text); `IsGraphInspectorShown` is true
+iff the right pane is visible AND the active leaf is the inspector, raised
+by the shell's pane and leaf setters (`NotifyGraphInspectorShownChanged`,
+which also forwards to the seated document); `ToggleGraphInspector()`: not
+shown → `IsRightPaneVisible = true` if hidden (the setter posts
+`RightPaneShown`), the active leaf set to the inspector if it is another
+(the setter posts `LeafPanelShown` only then), the Connections leaf's
+pending mount CONSUMED as every pane reveal must (rule C, Term 3(a);
+B-19 iii's post-dominance census caught the first cut's reveal without
+it in the full regression — the subsets had passed — and the consume is
+inert here, the Connections leaf not being the active one), then
+`FocusBoundaryRequested` (RightPane) as `ShowConnections` raises it;
+shown → `IsRightPaneVisible = false` (the setter posts
+`RightPaneHidden`), the active leaf left — the toggle adds no line and
+no suppression; `NewGraphDocument` wires
+`ToggleInspectorFromSurface` and `InspectorShownFromSurface`. THE
+DOCUMENT: the two seams, `IsInspectorShown` (read live; false when
+unwired), `NotifyInspectorShownChanged()` and `ToggleInspectorFromHeader()`
+(the route; true when the pane was shown and is now hidden). THE SURFACE:
+the header gains the ToggleButton — content T29, AutomationId
+GraphInspectorToggle, Name and HelpText T30 — docked at the header's far
+right, after the switcher, and the LAST Tab stop of the surface (TabIndex
+6, after the projection's 5), so the grid's Shift+Tab still lands on the
+switcher and the switcher's on the field — C's route, which the first cut
+broke by placing the toggle at the switcher's index (the existing fact
+TheTabOrderFromTheGridReachesTheSwitcherThenTheField caught it); the toggle
+is handled on its own Checked/Unchecked — a click, Space, and the Toggle
+PATTERN, which raises no Click (the first cut's Click handler never ran
+under UIA's Toggle; the fact caught it) — the route runs through the
+document, the checked state is re-read from the workspace under a sync
+guard (the programmatic syncs at the bind and on the document's
+`IsInspectorShown` change run under the same guard), and on a hide the
+surface's own `RequestProjectionFocus()` — the presenter's request of rule
+F (E-D5) — hands the keys to the live projection.
+THE FACTS: `GraphTableTests`' Host records the shell's events; it gains
+TheHeaderToggleShowsAndHidesTheInspectorAndReturnsTheKeys (the names, the
+id, the header membership and the Tab order after the switcher and the
+field; the show through the Toggle pattern: the pane, the leaf, the
+boundary, the toggle checked; the hide with the keys on the toggle: the
+pane hidden, the leaf kept, no boundary, the keys delivered inside the
+surface and off the toggle; the shell's own moves re-checking the toggle;
+the leaf entry after Connections with T37's title),
+TheToggleSpeaksTheShellsFourTimelinesAndNothingOfItsOwn (the four
+timelines against the workspace's sink, the graph's relay silent),
+TheInspectorLeafRestoresSilentlyAndStaysInertWithNoGraph (a second
+workspace over the persisted snapshot restores the leaf with no
+`LeafPanelShown`, no document, the gate false; the graph opened → true);
+W1WorkspaceTests' leaf count is seventeen; the label census pins the
+surface's three constants. DEVIATIONS: none — the keys' return on a hide
+runs in the surface (it IS the presenter rule F names) rather than through
+the navigator, which is untouched. MUTATIONS, each restored byte for byte,
+each caught by the named fact: the hide clearing the leaf, the show
+skipping the leaf, the toggle speaking its own line, the toggle never
+asking the boundary, the shown state ignoring the pane, the leaf setter
+and the pane setter forgetting the toggle, a hide keeping the keys, the
+leaf's title typed, the entry misplaced, the toggle inside the switcher's
+Tab index (the toggle fact, and C's tab-order fact), the shell's move
+leaving the toggle stale, the restore speaking, the seams unwired, the
+reveal skipping the pending mount's consume (rule C's reveal census) —
+sixteen of sixteen caught by their facts; a seventeenth — the sync guard
+dropped, so a programmatic sync runs the route — ABORTS the test run in
+an unbounded recursion (the guard is what bounds it), which no fact can
+report and the runner logs as NO RUN: detected, not survived
+(`gE-mutations.py`, the T5 entries).
+
 ### Tests that pin PR E (revision 6's list, frozen; the task loop records what lands)
 
 - GraphInspectorTests (new): the view model's reads and writes per rule

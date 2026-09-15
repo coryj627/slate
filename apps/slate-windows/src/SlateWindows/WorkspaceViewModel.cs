@@ -1758,6 +1758,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         new("backlinks", "Backlinks"),
         new("outgoingLinks", "Outgoing links"),
         new("connections", "Connections"),
+        // W6-2 PR E (Term I1): the graph inspector's leaf, its title T37.
+        new("inspector", GraphPhrase.InspectorName),
         new("embeds", "Embeds"),
         new("math", "Math"),
         new("code", "Code"),
@@ -1864,6 +1866,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             if (value is not null && SetField(ref _activeLeaf, value))
             {
                 _announce(new A11yEvent.LeafPanelShown(value.Title));
+                // W6-2 PR E (Term I2): the inspector toggle's checked state follows.
+                NotifyGraphInspectorShownChanged();
                 // Rail reveal of the review is an idempotent snapshot
                 // load (mac ensureVaultTasksLoaded); only the review
                 // COMMAND forces a fresh page.
@@ -1933,6 +1937,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 // pending mount its route consumes; a collapse clears the
                 // leaf's view-local state.
                 OnRightPaneVisibilityChanged(value);
+                // W6-2 PR E (Term I2): the inspector toggle's checked state follows.
+                NotifyGraphInspectorShownChanged();
             }
         }
     }

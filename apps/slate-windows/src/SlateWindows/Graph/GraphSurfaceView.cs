@@ -41,6 +41,9 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     /// placeholder's text is the hint, C-5).</summary>
     internal const string FilterFieldName = GraphPhrase.FilterFieldName;
     internal const string FilterFieldHint = GraphPhrase.FilterFieldHint;
+    internal const string InspectorLabel = GraphPhrase.InspectorLabel;
+    internal const string InspectorToggleName = GraphPhrase.InspectorToggleName;
+    internal const string InspectorToggleHint = GraphPhrase.InspectorToggleHint;
     internal const string FilterSummaryPrefix = GraphPhrase.FilterSummaryPrefix;
     internal const string ClearFilterName = GraphPhrase.ClearFilterName;
     internal const string WhereAmIHeading = GraphPhrase.WhereAmIHeading;
@@ -51,6 +54,8 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     private readonly TextBlock _filterSummary;
     private readonly Button _clearFilter;
     private readonly AutomationNamedGroupPanel _switcher;
+    private readonly System.Windows.Controls.Primitives.ToggleButton _inspectorToggle;
+    private bool _synchronizingToggle;
     private readonly List<RadioButton> _modeChoices = [];
     private readonly TextBlock _stateText;
     private readonly GraphStateHost _stateHost;
@@ -135,6 +140,29 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         AutomationProperties.SetName(_switcher, "Graph surface");
         AutomationProperties.SetAutomationId(_switcher, "GraphSurfaceSwitcher");
 
+        // W6-2 PR E (Term I2): the inspector's toggle — the mac's header
+        // button (T29, T30) — docked at the header's far right, after the
+        // switcher, and the LAST Tab stop of the surface (after the
+        // projection), so the projection's Shift+Tab still lands on the
+        // switcher and the switcher's on the field (C's route; Term N2;
+        // E-13). IsChecked follows the workspace through the document; a
+        // check or uncheck — a click, the Toggle pattern, Space — runs the
+        // workspace's route and, on a hide, returns the keys to the
+        // projection (E-D5).
+        _inspectorToggle = new System.Windows.Controls.Primitives.ToggleButton
+        {
+            Content = InspectorLabel,
+            Margin = new Thickness(0, 4, 12, 4),
+            Padding = new Thickness(8, 2, 8, 2),
+            VerticalAlignment = VerticalAlignment.Center,
+            TabIndex = 6,
+        };
+        AutomationProperties.SetAutomationId(_inspectorToggle, "GraphInspectorToggle");
+        AutomationProperties.SetName(_inspectorToggle, InspectorToggleName);
+        AutomationProperties.SetHelpText(_inspectorToggle, InspectorToggleHint);
+        _inspectorToggle.Checked += (_, _) => OnInspectorToggleChanged();
+        _inspectorToggle.Unchecked += (_, _) => OnInspectorToggleChanged();
+
         _stateText = new TextBlock
         {
             Margin = new Thickness(32),
@@ -213,6 +241,8 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         filterRegion.Children.Add(_clearFilter);
 
         var header = new DockPanel();
+        DockPanel.SetDock(_inspectorToggle, Dock.Right);
+        header.Children.Add(_inspectorToggle);
         DockPanel.SetDock(_switcher, Dock.Right);
         header.Children.Add(_switcher);
         header.Children.Add(_title);
@@ -299,6 +329,45 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     internal GraphFocusDeparture? AwayBecauseForTests => _awayBecause;
 
     internal IReadOnlyList<RadioButton> ModeChoicesForTests => _modeChoices;
+
+    internal System.Windows.Controls.Primitives.ToggleButton InspectorToggleForTests => _inspectorToggle;
+
+    /// <summary>W6-2 PR E (Term I2): the toggle's own flip — a click, the
+    /// Toggle pattern (which raises no Click), Space — runs the workspace's
+    /// route through the document; the checked state is then re-read from
+    /// the workspace; on a hide the keys return to the projection (E-D5,
+    /// rule F's request). The programmatic syncs run under the guard.</summary>
+    private void OnInspectorToggleChanged()
+    {
+        if (_synchronizingToggle)
+        {
+            return;
+        }
+        if (Model is not { } model)
+        {
+            SyncInspectorToggle(false);
+            return;
+        }
+        bool hidden = model.ToggleInspectorFromHeader();
+        SyncInspectorToggle(model.IsInspectorShown);
+        if (hidden)
+        {
+            RequestProjectionFocus();
+        }
+    }
+
+    private void SyncInspectorToggle(bool shown)
+    {
+        _synchronizingToggle = true;
+        try
+        {
+            _inspectorToggle.IsChecked = shown;
+        }
+        finally
+        {
+            _synchronizingToggle = false;
+        }
+    }
 
     internal TextBox FilterFieldForTests => _filterField;
 
@@ -491,6 +560,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         StopObservingModel();
         _observed = model;
         model.PropertyChanged += OnModelPropertyChanged;
+        SyncInspectorToggle(model.IsInspectorShown);
         // After the table's own rebind (it subscribed first): the landing
         // re-tries once the rows are bound (Term F2's install).
         model.PublicationInstalled += OnPublicationInstalled;
@@ -611,6 +681,11 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         if (Model is not { } model)
         {
             return;
+        }
+        if (e.PropertyName == nameof(GraphDocumentViewModel.IsInspectorShown))
+        {
+            // W6-2 PR E (Term I2): the shell's pane or leaf moved; the toggle follows.
+            SyncInspectorToggle(model.IsInspectorShown);
         }
         if (e.PropertyName == nameof(GraphDocumentViewModel.Publication))
         {

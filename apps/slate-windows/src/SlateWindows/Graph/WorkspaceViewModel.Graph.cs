@@ -83,6 +83,54 @@ internal sealed partial class WorkspaceViewModel
     /// workspace constructor after the preferences and the view state and
     /// before the navigator and the graph document.</summary>
     public GraphInspectorViewModel Inspector => _graphInspector;
+
+    private const string GraphInspectorLeafId = "inspector";
+
+    /// <summary>W6-2 PR E (Term I2): true iff the right pane is visible AND
+    /// the active leaf is the inspector — the header toggle's checked state,
+    /// raised by the shell's pane and leaf setters.</summary>
+    public bool IsGraphInspectorShown =>
+        IsRightPaneVisible && string.Equals(ActiveLeaf.Id, GraphInspectorLeafId, StringComparison.Ordinal);
+
+    /// <summary>W6-2 PR E (Term I2; E-3; IGV-1): the header toggle's route.
+    /// Not shown → the pane made visible if it is not (the shell's setter
+    /// posts RightPaneShown), the active leaf set to the inspector (the
+    /// shell's setter posts LeafPanelShown ONLY on a change), then the pane
+    /// boundary requested as ShowConnections requests it; shown → the pane
+    /// hidden (the shell's setter posts RightPaneHidden), the active leaf
+    /// left as it is — the surface returns the keys to its projection
+    /// (rule F's request; E-D5). The toggle adds no line and no suppression
+    /// of its own; the four timelines are the setters'.</summary>
+    public void ToggleGraphInspector()
+    {
+        if (IsGraphInspectorShown)
+        {
+            IsRightPaneVisible = false;
+            return;
+        }
+        if (!IsRightPaneVisible)
+        {
+            IsRightPaneVisible = true;
+        }
+        if (!string.Equals(ActiveLeaf.Id, GraphInspectorLeafId, StringComparison.Ordinal))
+        {
+            ActiveLeaf = Leaves.First(option => string.Equals(option.Id, GraphInspectorLeafId, StringComparison.Ordinal));
+        }
+        // Rule C, Term 3(a) (B-19 iii): a pane reveal arms the Connections
+        // leaf's pending mount and its route consumes it — this route too,
+        // as ShowConnections does, so the reveal census's post-dominance holds.
+        ConsumePendingMount();
+        FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
+    }
+
+    /// <summary>The shell's pane and leaf setters raise the toggle's checked
+    /// state here and forward it to the seated document, through which the
+    /// surface's header binds (a bare document reads false).</summary>
+    private void NotifyGraphInspectorShownChanged()
+    {
+        OnPropertyChanged(nameof(IsGraphInspectorShown));
+        _graphDocument?.NotifyInspectorShownChanged();
+    }
     private GraphActivationCause _graphCause = GraphActivationCause.Activation;
     private bool _graphWasEffective;
     private WorkspaceTabViewModel? _graphEffectiveTab;
@@ -297,6 +345,9 @@ internal sealed partial class WorkspaceViewModel
         document.RevealRowFromSurface = path => RevealGraphRowFromSurface(path);
         document.CreateNoteFromSurface = path => CreateGraphNoteFromSurface(path);
         document.CreateAdmissionReason = () => GraphCreateAdmissionReason?.Invoke();
+        // W6-2 PR E (Term I2): the header toggle's route and the state it binds.
+        document.ToggleInspectorFromSurface = ToggleGraphInspector;
+        document.InspectorShownFromSurface = () => IsGraphInspectorShown;
         return document;
     }
 

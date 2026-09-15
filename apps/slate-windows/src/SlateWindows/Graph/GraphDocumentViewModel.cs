@@ -481,6 +481,31 @@ internal sealed class GraphDocumentViewModel : PanelWorkScheduler
     /// today, so the default admits.</summary>
     internal Func<string?>? CreateAdmissionReason { get; set; }
 
+    /// <summary>W6-2 PR E (Term I2): the header toggle's route into the
+    /// workspace's ToggleGraphInspector and the shown state it binds — wired
+    /// by the workspace; a bare document has neither (the toggle unchecked,
+    /// a click nothing).</summary>
+    internal Action? ToggleInspectorFromSurface { get; set; }
+
+    internal Func<bool>? InspectorShownFromSurface { get; set; }
+
+    /// <summary>The toggle's checked state: the workspace's IsGraphInspectorShown, read live.</summary>
+    internal bool IsInspectorShown => InspectorShownFromSurface?.Invoke() ?? false;
+
+    /// <summary>The workspace's pane and leaf setters forward their change
+    /// here; the surface's header re-reads the state.</summary>
+    internal void NotifyInspectorShownChanged() => OnPropertyChanged(nameof(IsInspectorShown));
+
+    /// <summary>The header toggle's click: the workspace's route; true when
+    /// the pane was SHOWN and is now hidden — the surface then returns the
+    /// keys to its projection (E-D5).</summary>
+    internal bool ToggleInspectorFromHeader()
+    {
+        bool wasShown = IsInspectorShown;
+        ToggleInspectorFromSurface?.Invoke();
+        return wasShown && !IsInspectorShown;
+    }
+
     /// <summary>Test seam: runs inside the worker AFTER the fetch and
     /// before the envelope returns — the canvas publish-gate shape, for
     /// the gated generation fact.</summary>

@@ -27,6 +27,9 @@ public sealed partial class GraphTableTests
         public WorkspaceViewModel Workspace { get; }
         public List<string> GraphLines { get; } = [];
 
+        /// <summary>W6-2 PR E: the shell's announcements, by event.</summary>
+        public List<A11yEvent> ShellEvents { get; } = [];
+
         public Host(int notes, string label)
             : this(FixtureVault.Create(notes, label))
         {
@@ -44,7 +47,7 @@ public sealed partial class GraphTableTests
                 Session,
                 Vault.Root,
                 () => [],
-                _ => { },
+                @event => ShellEvents.Add(@event),
                 startInteractionBackgroundWork: false,
                 announceRendered: line => GraphLines.Add(line.Text));
         }
@@ -280,6 +283,171 @@ public sealed partial class GraphTableTests
             // Diagram item is live.
             Assert.True(diagram.IsEnabled);
             Assert.Equal(GraphSurfaceMode.Table, document.ViewState.Mode);
+        });
+    }
+
+    private static void Toggle(System.Windows.Controls.Primitives.ToggleButton toggle)
+    {
+        System.Windows.Automation.Peers.AutomationPeer peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(toggle);
+        ((System.Windows.Automation.Provider.IToggleProvider)peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Toggle)!).Toggle();
+    }
+
+    private static string[] Names(IEnumerable<A11yEvent> events) => [.. events.Select(e => e.GetType().Name)];
+
+    /// <summary>W6-2 PR E (Terms I1, I2; E-3; E-D5): the header's toggle carries
+    /// the mac's names (T29, T30) and the automation id; a click shows the
+    /// pane with the inspector leaf active, checks the toggle and asks for
+    /// the pane boundary; a second click hides the pane, leaves the leaf,
+    /// unchecks the toggle and asks the keys back to the projection; the
+    /// shell's own moves re-check the toggle through the document.</summary>
+    [Fact]
+    public void TheHeaderToggleShowsAndHidesTheInspectorAndReturnsTheKeys()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(2, "graph-inspector-toggle");
+            GraphDocumentViewModel document = host.Open();
+            var surface = new GraphSurfaceView { Model = document };
+            using HostedWindow window = HostInWindow(surface);
+            System.Windows.Controls.Primitives.ToggleButton toggle = surface.InspectorToggleForTests;
+            Assert.Equal(GraphPhrase.InspectorLabel, (string)toggle.Content);
+            Assert.Equal("GraphInspectorToggle", System.Windows.Automation.AutomationProperties.GetAutomationId(toggle));
+            Assert.Equal(GraphPhrase.InspectorToggleName, System.Windows.Automation.AutomationProperties.GetName(toggle));
+            Assert.Equal(GraphPhrase.InspectorToggleHint, System.Windows.Automation.AutomationProperties.GetHelpText(toggle));
+            Assert.False(toggle.IsChecked);
+            Assert.False(host.Workspace.IsGraphInspectorShown);
+            // In the header at its far right (docked right, first in the tree),
+            // and the LAST Tab stop of the surface — after the projection — so
+            // the grid's Shift+Tab reaches the switcher and the switcher's the
+            // field (C's route; Term N2; E-13).
+            DockPanel header = Assert.IsType<DockPanel>(toggle.Parent);
+            System.Windows.UIElement switcher = header.Children.OfType<System.Windows.UIElement>().First(child => System.Windows.Automation.AutomationProperties.GetAutomationId(child) == "GraphSurfaceSwitcher");
+            Assert.True(System.Windows.Input.KeyboardNavigation.GetTabIndex(toggle) > System.Windows.Input.KeyboardNavigation.GetTabIndex(switcher));
+            Assert.True(System.Windows.Input.KeyboardNavigation.GetTabIndex(toggle) > System.Windows.Input.KeyboardNavigation.GetTabIndex(surface.FilterFieldForTests));
+            Assert.True(header.Children.IndexOf(toggle) < header.Children.IndexOf(switcher));
+            Assert.Equal(Dock.Right, DockPanel.GetDock(toggle));
+            WorkspaceFocusBoundary? boundary = null;
+            host.Workspace.FocusBoundaryRequested += (_, requested) => boundary = requested;
+            // Show: the pane, the leaf, the boundary; the toggle checked.
+            Toggle(toggle);
+            Assert.True(host.Workspace.IsRightPaneVisible);
+            Assert.Equal("inspector", host.Workspace.ActiveLeaf.Id);
+            Assert.True(host.Workspace.IsGraphInspectorShown);
+            Assert.True(toggle.IsChecked);
+            Assert.Equal(WorkspaceFocusBoundary.RightPane, boundary);
+            // Hide: the pane hidden, the leaf kept, no boundary; the keys, on
+            // the toggle, asked back to the projection and delivered to the
+            // live grid (rule F's request; E-D5).
+            boundary = null;
+            Assert.True(toggle.Focus());
+            Assert.Same(toggle, System.Windows.Input.Keyboard.FocusedElement);
+            Toggle(toggle);
+            Assert.False(host.Workspace.IsRightPaneVisible);
+            Assert.Equal("inspector", host.Workspace.ActiveLeaf.Id);
+            Assert.False(host.Workspace.IsGraphInspectorShown);
+            Assert.False(toggle.IsChecked);
+            Assert.Null(boundary);
+            host.Settle(document);
+            Assert.True(surface.IsKeyboardFocusWithin);
+            Assert.NotSame(toggle, System.Windows.Input.Keyboard.FocusedElement);
+            // The shell's own moves: the pane shown with the leaf still the
+            // inspector checks the toggle; another leaf unchecks it.
+            host.Workspace.IsRightPaneVisible = true;
+            Assert.True(toggle.IsChecked);
+            host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "outline");
+            Assert.False(toggle.IsChecked);
+            host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "inspector");
+            Assert.True(toggle.IsChecked);
+            // The leaf's entry: after the Connections leaf, titled T37.
+            int connections = WorkspaceViewModel.Leaves.ToList().FindIndex(leaf => leaf.Id == "connections");
+            Assert.Equal("inspector", WorkspaceViewModel.Leaves[connections + 1].Id);
+            Assert.Equal(GraphPhrase.InspectorName, WorkspaceViewModel.Leaves[connections + 1].Title);
+        });
+    }
+
+    /// <summary>W6-2 PR E (Term I2; E-3, E-9; IGV-1): the toggle's four
+    /// timelines are the shell's setters' lines and nothing of the graph's —
+    /// (a) hidden pane, another leaf: RightPaneShown then LeafPanelShown;
+    /// (d) a hide: RightPaneHidden alone; (b) hidden pane, the inspector
+    /// already the leaf: RightPaneShown alone; (c) visible pane, another
+    /// leaf: LeafPanelShown alone.</summary>
+    [Fact]
+    public void TheToggleSpeaksTheShellsFourTimelinesAndNothingOfItsOwn()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(2, "graph-inspector-timelines");
+            GraphDocumentViewModel document = host.Open();
+            WorkspaceViewModel workspace = host.Workspace;
+            WorkspaceLeafOption outline = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "outline");
+            // (a) hidden pane, another leaf active.
+            workspace.IsRightPaneVisible = false;
+            workspace.ActiveLeaf = outline;
+            host.Settle(document);
+            document.AnnouncerForTests.FlushForTests();
+            host.ShellEvents.Clear();
+            host.GraphLines.Clear();
+            workspace.ToggleGraphInspector();
+            Assert.Equal(["RightPaneShown", "LeafPanelShown"], Names(host.ShellEvents));
+            Assert.Equal(GraphPhrase.InspectorName, ((A11yEvent.LeafPanelShown)host.ShellEvents[1]).Title);
+            // (d) the hide.
+            host.ShellEvents.Clear();
+            workspace.ToggleGraphInspector();
+            Assert.Equal(["RightPaneHidden"], Names(host.ShellEvents));
+            Assert.Equal("inspector", workspace.ActiveLeaf.Id);
+            // (b) hidden pane, the inspector already the leaf.
+            host.ShellEvents.Clear();
+            workspace.ToggleGraphInspector();
+            Assert.Equal(["RightPaneShown"], Names(host.ShellEvents));
+            // (c) visible pane, another leaf active.
+            workspace.ActiveLeaf = outline;
+            host.ShellEvents.Clear();
+            workspace.ToggleGraphInspector();
+            Assert.Equal(["LeafPanelShown"], Names(host.ShellEvents));
+            Assert.True(workspace.IsGraphInspectorShown);
+            // Nothing of the graph's on any timeline.
+            host.Settle(document);
+            document.AnnouncerForTests.FlushForTests();
+            Assert.Empty(host.GraphLines);
+        });
+    }
+
+    /// <summary>W6-2 PR E (Terms I4, I7; E-D8): the inspector leaf persists as
+    /// every leaf does and restores silently, with no graph document — the
+    /// pane inert (the gate false) until a graph opens.</summary>
+    [Fact]
+    public void TheInspectorLeafRestoresSilentlyAndStaysInertWithNoGraph()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault vault = FixtureVault.Create(2, "graph-inspector-restore");
+            var events = new List<A11yEvent>();
+            using (var session = VaultSession.OpenFilesystem(vault.Root))
+            {
+                using var cancel = new CancelToken();
+                session.ScanInitial(cancel);
+                var first = new WorkspaceViewModel(session, vault.Root, () => [], events.Add, startInteractionBackgroundWork: false, announceRendered: _ => { });
+                first.IsRightPaneVisible = true;
+                first.ToggleGraphInspector();
+                Assert.True(first.IsGraphInspectorShown);
+                first.Dispose();
+            }
+            events.Clear();
+            using (var session = VaultSession.OpenFilesystem(vault.Root))
+            {
+                using var cancel = new CancelToken();
+                session.ScanInitial(cancel);
+                var second = new WorkspaceViewModel(session, vault.Root, () => [], events.Add, startInteractionBackgroundWork: false, announceRendered: _ => { });
+                Assert.Equal("inspector", second.ActiveLeaf.Id);
+                Assert.DoesNotContain(events, @event => @event is A11yEvent.LeafPanelShown);
+                Assert.Null(second.GraphDocument);
+                Assert.False(second.Inspector.IsGraphEffective);
+                second.OpenGraph();
+                PumpedDispatcher.PumpUntilDrained(second.GraphDocument!.WhenAllWorkDrained());
+                PumpedDispatcher.Drain();
+                Assert.True(second.Inspector.IsGraphEffective);
+                second.Dispose();
+            }
         });
     }
 

@@ -1247,6 +1247,9 @@ public sealed class GraphNavigatorCensus
         // The surface's constants ARE the inventory's.
         Assert.Equal(GraphPhrase.FilterFieldName, GraphSurfaceView.FilterFieldName);
         Assert.Equal(GraphPhrase.FilterFieldHint, GraphSurfaceView.FilterFieldHint);
+        Assert.Equal(GraphPhrase.InspectorLabel, GraphSurfaceView.InspectorLabel);
+        Assert.Equal(GraphPhrase.InspectorToggleName, GraphSurfaceView.InspectorToggleName);
+        Assert.Equal(GraphPhrase.InspectorToggleHint, GraphSurfaceView.InspectorToggleHint);
         Assert.Equal(GraphPhrase.FilterSummaryPrefix, GraphSurfaceView.FilterSummaryPrefix);
         Assert.Equal(GraphPhrase.ClearFilterName, GraphSurfaceView.ClearFilterName);
         Assert.Equal(GraphPhrase.WhereAmIHeading, GraphSurfaceView.WhereAmIHeading);
@@ -1260,6 +1263,17 @@ public sealed class GraphNavigatorCensus
         Assert.Equal(["Laying out graph…", "Laying out graph.", "Graph diagram error: "], [GraphPhrase.LoadingDiagramText, GraphPhrase.LoadingDiagramAccessibleName, GraphPhrase.DiagramErrorPrefix]);
         Assert.Equal(["Graph, visual diagram", "Switch to Table", "pinned", "Pin", "Unpin"], [GraphPhrase.DiagramName, GraphPhrase.SwitchToTable, GraphPhrase.PinnedStatus, GraphPhrase.PinLabel, GraphPhrase.UnpinLabel]);
         Assert.Equal([" — ", " in / ", " out", "Connects to: "], [GraphPhrase.TooltipSeparator, GraphPhrase.TooltipInSuffix, GraphPhrase.TooltipOutSuffix, GraphPhrase.ConnectsToPrefix]);
+        // W6-2 PR E (E-11): the inspector's rows T29–T60 — the mac's byte
+        // for byte (MacCatalogParityTests reads them against the Swift
+        // sources) — and the two Windows-authored notices (E-D6, E-D8).
+        Assert.Equal(["Inspector", "Toggle graph inspector", "Show the graph inspector — filters, colour groups, display, and forces.", "Graph inspector"], [GraphPhrase.InspectorLabel, GraphPhrase.InspectorToggleName, GraphPhrase.InspectorToggleHint, GraphPhrase.InspectorName]);
+        Assert.Equal(["Filters", "Groups", "Display", "Forces"], [GraphPhrase.InspectorFiltersSection, GraphPhrase.InspectorGroupsSection, GraphPhrase.InspectorDisplaySection, GraphPhrase.InspectorForcesSection]);
+        Assert.Equal(["Filter by name", "Attachments", "Include attachment nodes.", "Unresolved", "Include unresolved link targets.", "Orphans only", "Show only notes with no links in or out."], [GraphPhrase.InspectorNameFieldLabel, GraphPhrase.InspectorAttachmentsLabel, GraphPhrase.InspectorAttachmentsHint, GraphPhrase.InspectorUnresolvedLabel, GraphPhrase.InspectorUnresolvedHint, GraphPhrase.InspectorOrphansLabel, GraphPhrase.InspectorOrphansHint]);
+        Assert.Equal(["No groups. Add one to colour matching nodes.", "Add Group", "Add a colour rule that highlights nodes whose name matches a query.", "Query", "Colour", "Ring"], [GraphPhrase.InspectorNoGroupsText, GraphPhrase.InspectorAddGroupLabel, GraphPhrase.InspectorAddGroupHint, GraphPhrase.InspectorGroupQueryLabel, GraphPhrase.InspectorGroupColourLabel, GraphPhrase.InspectorGroupRingLabel]);
+        Assert.Equal(["Group 3 query", "Group 3 colour", "Group 3 ring style", "Remove group 3"], [GraphPhrase.InspectorGroupQueryName(3), GraphPhrase.InspectorGroupColourName(3), GraphPhrase.InspectorGroupRingName(3), GraphPhrase.InspectorRemoveGroupName(3)]);
+        Assert.Equal(["Arrows", "Draw arrowheads on directed links.", "Text fade", "Zoom level below which node labels hide.", "Node size", "Multiplier on node circle size.", "Link thickness", "Edge line width."], [GraphPhrase.InspectorArrowsLabel, GraphPhrase.InspectorArrowsHint, GraphPhrase.InspectorTextFadeLabel, GraphPhrase.InspectorTextFadeHint, GraphPhrase.InspectorNodeSizeLabel, GraphPhrase.InspectorNodeSizeHint, GraphPhrase.InspectorLinkThicknessLabel, GraphPhrase.InspectorLinkThicknessHint]);
+        Assert.Equal(["Center", "Gravity pulling the graph toward the centre.", "Repel", "How strongly nodes push each other apart.", "Link force", "How strongly linked nodes pull together.", "Link distance", "The ideal length of a link."], [GraphPhrase.InspectorCenterLabel, GraphPhrase.InspectorCenterHint, GraphPhrase.InspectorRepelLabel, GraphPhrase.InspectorRepelHint, GraphPhrase.InspectorLinkForceLabel, GraphPhrase.InspectorLinkForceHint, GraphPhrase.InspectorLinkDistanceLabel, GraphPhrase.InspectorLinkDistanceHint]);
+        Assert.Equal(["Graph settings are read-only: ", "Open the graph to change these settings."], [GraphPhrase.InspectorReadOnlyPrefix, GraphPhrase.InspectorInactiveText]);
         // The chord rows' labels and hints.
         foreach ((string id, string label, string hint) in new[]
         {
