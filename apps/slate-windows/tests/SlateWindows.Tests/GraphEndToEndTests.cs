@@ -208,7 +208,9 @@ public sealed class GraphEndToEndTests
             // disposals (the vault, the window, the host) run on the way out;
             // the fact fails here rather than at the job's timeout.
             Dispatcher.FromThread(thread)?.BeginInvokeShutdown(DispatcherPriority.Send);
-            Assert.Fail("STA test body timed out after four minutes; its dispatcher was shut down.");
+            // xUnit's failure exception thrown directly — the same object
+            // Assert.Fail throws — the form codoki's eighth round asked for.
+            throw new Xunit.Sdk.XunitException("STA test body timed out after four minutes; its dispatcher was shut down.");
         }
         if (failure is not null)
         {

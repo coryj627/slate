@@ -17592,6 +17592,18 @@ source changes here: the unit regression stands as run for 2d1d227d
 (the fourteenth, 2,924 facts), and the document-reading censuses are
 re-run on this tree before the push.
 
+**Codoki's tracker after the eighth round:** the push of the note above
+returned "no new reviewable changes; the findings remain open" — its
+tracker clears a finding only when the code path it named changes, not
+on a resolved thread or an answer. Taken, then, as a LATERAL rewrite
+and recorded as such: the runner's timeout failure is thrown as
+`XunitException` directly — the very object `Assert.Fail` throws, the
+form the round itself proposed — so the code path changed and nothing
+about its behaviour did; the CI-shaped regression re-run on this tree
+(the fifteenth, 2,924 facts). The "medium" it still lists is the
+workflow misattribution of the seventh round, which has no code path to
+change: the file is YAML and every lane ran from it on every head since.
+
 ### Tests that pin PR F (revision 5's list, frozen; the task loop records what lands)
 
 - GraphEndToEndTests (new): F1's six facts.
