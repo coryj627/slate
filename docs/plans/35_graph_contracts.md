@@ -15786,8 +15786,10 @@ unit regression stands as run for 041b6cf2.
 
 ## PR F — the close-out: the end-to-end suite, the gates, the reconciliation
 
-**Revision 2 — 2026-09-15** (revision 1 the same day; round 1's eight
-findings IGZ-1..8 taken in the text). The last slice of W6-2 (#746):
+**Revision 3 — 2026-09-15** (revisions 1 and 2 the same day; round 1's
+eight findings IGZ-1..8 and round 2's six findings IHA-1..6 taken in
+the text; round 2 was rule 5's first instance — five of its six were
+created by revision 2's change). The last slice of W6-2 (#746):
 the P analogue of the canvas's PR H, in that section's form — the
 end-to-end suite through the real session and the shell's own seams,
 the §K roll-up with re-measured numbers, the §W-A, §W-C, §W-D and
@@ -15805,11 +15807,13 @@ task loop lands them.
 
 ### What stands today (0a, 0b, A, B1, B2, C, D, E merged)
 
-Ten merged pull requests carry the issue from its spec (#1178,
-`bbd3516c8`, 2026-09-03) to the inspector (#1215, `b15cbf56a`,
-2026-09-15), and three merged repair pull requests answered PR C's
-residue issues (#1208 for #1192, #1209 for #1191, #1213 for #1193); F
-branches from the inspector's merge. Every `slate.graph.*` command row
+Nine merged SERIES pull requests carry the issue from its spec (#1178,
+`bbd3516c8`, 2026-09-03) through 0a, 0b, A, B1, B2, C and D to the
+inspector (#1215, `b15cbf56a`, 2026-09-15), and four merged
+post-implementation and repair pull requests ride beside them — PR A's
+sixth codex pass's ledger (#1182, `feat/w6-2-a-ipf`) and the three
+answers to PR C's residue issues (#1208 for #1192, #1209 for #1191,
+#1213 for #1193); F branches from the inspector's merge. Every `slate.graph.*` command row
 of `parity_matrix.md` — thirteen: the mac catalogue's twelve and B2's
 `slate.graph.connectionsBack` — reads implemented with the date of its
 slice's gates; the `connections` leaf row is implemented; the surface
@@ -15884,13 +15888,17 @@ function and compares the shell's route to it. Six facts, named:
   the workspace opens the graph and `GraphStatus{Opened}` and the
   snapshot summary are observed; the publication's rows and its summary
   equal the golden's `table` entry for the default sort under the
-  artifact's filter, cell for cell (nine core-formatted cells per row,
-  the summary string verbatim); then the TABLE SORT leg on the STA
-  thread, as `GraphTableTests` runs it — a `GraphSurfaceView` hosted in
-  a window, the grid's sort command executed on each of the golden's
-  pinned sorts (the command Ctrl+Alt+S runs; `GraphTableView` issues
-  `GraphRequest.Sort`) and the Note column read back through the Grid
-  pattern in the golden's row order for that sort; then a preset
+  artifact's filter — the EIGHT displayed cells the golden pins per row
+  (the nine core-formatted cells minus Modified, which the serializer
+  omits because its order is the checkout time; IHA-3) beside the
+  row's stable key, and the summary string verbatim; then the TABLE
+  SORT leg on the STA thread, as `GraphTableTests` runs it — a
+  `GraphSurfaceView` hosted in a window, the grid's sort command
+  executed on each of the golden's sixteen pinned sorts (each
+  non-Modified column both ways; the command Ctrl+Alt+S runs, and
+  `GraphTableView` issues `GraphRequest.Sort`) and the Note column read
+  back through the Grid pattern in the golden's row order for that
+  sort; then a preset
   (`RunPreset` Orphans through the navigator) whose rows equal the
   golden's `orphans` query entry and whose headline is observed once;
   then the needle (`SetNameQuery` with a needle the golden's
@@ -15928,17 +15936,26 @@ function and compares the shell's route to it. Six facts, named:
   quantises them, equal the golden's `layout` section key by key
   through the SHELL's driver and model (the §W-A determinism pin
   re-run through the shell, a claim the census makes only on a raw
-  session); at that frame the SPATIAL oracle: for each of the four
-  arrow directions from the seated node, the expected target is
-  computed by the TEST with core's exported spatial step over the
-  golden's `layout` positions and the golden's `topology` neighbour
-  ids — inputs from the committed bytes, the function core's — and the
-  shell's `SpatialMove` must land on that node and observe its
-  `GraphRow` (IGZ-2); the STRUCTURAL oracle likewise: the expected
-  Tab/Shift+Tab sequence is core's exported structural step chained
-  over the golden's `topology` node order, and the shell's
-  `StructuralMove` must visit the same labels, wrapping where core
-  wraps; then the driver is pumped to convergence and `GraphLayoutSettled`
+  session); the PRECONDITION pinned first: the diagram's visible
+  keys, in the renderer's order (`VisibleIds` mapped through its
+  entries), equal the golden's `default` visibility entry's `visible`
+  list in order — the same eleven keys as the `layout` section, the
+  attachment excluded — so the oracles below share the shell's
+  universe by proof, not by assumption (IHA-2); at that frame the
+  SPATIAL oracle: the test assigns its OWN ids (1…11 in the golden's
+  order) to the golden's `layout` keys, builds core's points from the
+  golden's positions and the neighbour lists from the golden's
+  `topology` entries' keys, and for each of the four arrow directions
+  from the seated node calls core's exported spatial step over those
+  arrays — no session id and no shell datum enters the oracle
+  (IHA-1) — mapping the answer back to a KEY; the shell's
+  `SpatialMove` must land on the node with that stable key and
+  observe its `GraphRow`; the STRUCTURAL oracle likewise: core's
+  exported structural step chained over the test's ids in the
+  golden's visible order gives the expected key sequence for Tab and
+  for Shift+Tab, wrapping where core wraps, and the shell's
+  `StructuralMove` must visit the same keys; then the driver is pumped
+  to convergence and `GraphLayoutSettled`
   is observed exactly once; zoom in, zoom out, actual size and fit
   through the navigator's verbs observe the percents core renders
   (`GraphZoom`), the fit over a non-empty set changing the percent;
@@ -16263,11 +16280,13 @@ after this section and registered with `GraphContractsCitationCensus`
 like a PR section, so every backticked identifier it cites must
 exist; its structured references beyond that grammar (paths,
 `file#member`, Swift, Rust and Python names) are the round's review
-(FR-2). It contains: (a) the PR ledger — the ten series PRs (#1178
-spec, #1179 0a, #1180 0b, #1181 A, #1182 A's post-implementation
-ledger, #1184 B1, #1185 B2, #1188 C, #1214 D, #1215 E) and the three
-repair PRs (#1208, #1209, #1213) with branch, merge commit and date,
-each merge commit VERIFIED an ancestor of F's head by
+(FR-2). It contains: (a) the PR ledger in TWO buckets (IHA-6) — the nine
+SERIES PRs (#1178 spec, #1179 0a, #1180 0b, #1181 A, #1184 B1, #1185
+B2, #1188 C, #1214 D, #1215 E) and the four post-implementation and
+repair PRs (#1182 PR A's sixth codex pass's ledger, `feat/w6-2-a-ipf`;
+#1208, #1209, #1213 the answers to #1192, #1191, #1193) — thirteen
+rows with branch, merge commit and date, each merge commit VERIFIED an
+ancestor of F's head by
 `git merge-base --is-ancestor` with the exit code recorded, and F's
 base verified as the merged `main` after E (`b15cbf56a`); the check is
 GraphReconciliationCensus's own fact,
@@ -16276,13 +16295,18 @@ binds a merge commit to its PR by the subject where the commit is a
 merge commit and by distinctness where it is a squash; (b) contract →
 evidence keyed by (section, register kind, id) over the nine PR
 sections (0a, 0b, A, B, B2, C, D, E, F) — one row per KEY, a key being
-every `**ID — ` or `- **ID — ` head of a key-bearing subsection:
-contracts (`X-n`; F's `Fn`), decisions (`XD-n`), divergences
-(`X-Dn`), risks (`XR-n`), owner questions (`XD-Qn`) and the design
-Terms of A, B, B2, C, D and E (`Term n`, `Term Xn`); the task records
-(`TG*-n`), the round ledgers and the post-implementation passes are
-EVIDENCE, not keys, and the "Mac details" registers, the round
-records, the freezes and the "What stands" preambles bear no keys —
+every `**ID — ` or `- **ID — ` head of a key-bearing subsection, the
+id read by ONE grammar (IHA-4), with the section prefix `X` one of
+`0a`, `0b`, `A`, `B`, `B2`, `C`, `D`, `E`, `F`: contracts `X-n` (and
+F's `Fn`, the canvas's H1 form), decisions `XD-n`, divergences
+`X-Dn`, risks `XR-n`, owner questions `XD-Qn`, and the design Terms
+`Term n` and `Term Xn` of A, B, B2, C, D and E — the eight sections'
+prefixes are theirs (`0aD-n`, `B2D-n`, `CD-n` are decisions; `0a-Dn`,
+`B2-Dn`, `C-Dn` divergences; `0aR-n`, `CR-n` risks; `CD-Qn` questions);
+the task records (`TG*-n`), the round ledgers (`IG*-n`, `IH*-n`) and
+the post-implementation passes (`IPI-n`) are EVIDENCE, not keys, and
+the "Mac details" registers, the round records, the freezes and the
+"What stands" and "The mac, traced" preambles bear no keys —
 naming the record subsections of the same section that cite the id
 ("discharged by") and the long identifiers those paragraphs backtick
 ("pinned by"), each checked against the Windows tree and rendered
@@ -16293,11 +16317,15 @@ this document's section list and id grammar — between
 `--write` to splice, `--check` to verify the document carries exactly
 what it would regenerate; the script asserts each key's head occurs
 exactly once in its section, that no two keys share a row, and the
-key total pinned as a constant in both the script and the census (516
-at revision 2 of this section, by the grammar above; the pin moves
-with the records and every move is deliberate); a key nothing cites
-reads "unevidenced"; the sections that pin per section rather than
-per contract say exactly that; (c) the divergence index (`0a-D`,
+key total pinned as a constant in both the script and the census — the
+generator's draft over revision 3 of this section derives 519 keys by
+the grammar above (148 contracts, 124 decisions, 87 divergences, 34
+risks, 15 questions, 111 Terms; per section 0a 36, 0b 40, A 49, B 55,
+B2 39, C 102, D 94, E 72, F 32), and the task loop's record pins the
+number the landed generator derives on the day, every later move
+deliberate (IHA-4); a key nothing cites reads "unevidenced"; the
+sections that pin per section rather than per contract say exactly
+that; (c) the divergence index (`0a-D`,
 `0b-D`, `A-D`, `B-D`, `B2-D`, `C-D`, `D-D`, `E-D`, `FD-D`) and the risk
 index (`0aR`, `0bR`, `AR`, `CR`, `DR`, `ER`, `FR`) — id, the head's
 first clause, where recorded — generated with (b); (d) the owner
@@ -16392,17 +16420,21 @@ approval on that head; merge on the standing conditions.
 
 - **FD-1 — The golden is the end-to-end suite's oracle, and where the
   golden pins a synthetic input the oracle is core's function over the
-  golden's data.** Wherever `graph_queries.json` carries the answer —
-  the table's rows and summary per sort, the queries, the visibility,
-  the connections per (path, depth), the topology, the ghost paths, the
-  config's encode, the sixtieth tick's positions — F1 compares the
-  shell's answer to those bytes, so a drift in the shell fails against
-  the same file both twins pin. The `spatial` and `structural` sections
-  are pinned over the serializer's synthetic vectors, so the diagram
-  fact computes its expected step FROM the golden's positions and
-  topology with core's exported function and compares the shell's
-  route to it (IGZ-2): the inputs are the committed bytes, the function
-  is core's, and only the shell's plumbing is under test.
+  golden's data in the test's own id space.** Wherever
+  `graph_queries.json` carries the answer — the table's eight cells
+  and summary per sort, the queries, the visibility, the connections
+  per (path, depth), the topology, the ghost paths, the config's
+  encode, the sixtieth tick's positions — F1 compares the shell's
+  answer to those bytes, so a drift in the shell fails against the
+  same file both twins pin. The `spatial` and `structural` sections
+  are pinned over the serializer's synthetic vectors, and the golden
+  carries stable KEYS while core's exported steps take ids
+  (`GraphQueriesArtifactCarriesNoNodeIds` is a frozen pin), so the
+  diagram fact assigns ids of its own to the golden's keys, computes
+  the expected step with core's function over the golden's positions
+  and neighbours, and compares by key (IGZ-2, IHA-1, IHA-2): the
+  inputs are the committed bytes, the id space is the test's, the
+  function is core's, and only the shell's plumbing is under test.
 - **FD-2 — The Swift twin's one addition is test-only and arbitrated
   by mac's CI lane.** This box has no Xcode; the fact is a directory
   walk against the artifact's keys, the same shape on both twins; a red
@@ -16493,6 +16525,18 @@ approval on that head; merge on the standing conditions.
   authors nothing, so the checklist dictates "Show connections",
   "Where am I", "Zoom in" and "Fit graph" beside "Click 3" — the
   palette rows the graph registers.
+- **FD-D5 — The graph document has no "Verified during
+  implementation" register; its task records are that register.** The
+  canvas kept one global list of facts verified while implementing and
+  keyed them V-n in its reconciliation; every graph section from 0a
+  on recorded what implementation verified INSIDE its own task-loop
+  records (`TG*-n`) and post-implementation passes (`IPI-n`), each
+  citing the contract, term or decision it discharged. F does not
+  retro-create the canvas's register: the reconciliation's (b) table
+  names those records in "discharged by", so what implementation
+  verified is visible per key rather than as a second, unkeyed list;
+  the spec's register name is satisfied by the records, and the
+  departure from the PR H form is recorded here (IHA-5).
 
 ### Risks (PR F)
 
@@ -16544,7 +16588,24 @@ text.
 | IGZ-7 | MAJOR | taken — every posted key names the F1 fact that observes its delivery through the production seam, or is marked site-only with the injected-failure fact; the census checks the column |
 | IGZ-8 | BLOCKER | taken — the ledger carries each key's ROLE from 0a's manifest; the census checks a posted key's construction and observation and a label key's render site; FD-11 |
 
-### Tests that pin PR F (revision 2's list; the task loop records what lands)
+### Round 2 ledger (PR F) — six findings; rule 5 the first time
+
+Run 2026-09-15 on revision 2 (f7297770), the same runner and tier as
+round 1; six findings (four blockers, two majors), FIVE created by
+revision 2's change (IHA-1, IHA-2, IHA-4, IHA-5, IHA-6) and one
+survived round 1 (IHA-3) — rule 5's first instance, recorded; every
+finding is discharged in revision 3's text.
+
+| # | Severity | Disposition |
+|---|---|---|
+| IHA-1 | BLOCKER | taken — the spatial oracle runs in the TEST's own id space over the golden's positions and topology keys, and compares by stable key; FD-1 rewritten |
+| IHA-2 | BLOCKER | taken — the visible order is the golden's `default` visibility entry (eleven keys, the attachment excluded), pinned as the fact's precondition against the renderer's `VisibleIds`; the structural chain runs over the test's ids in that order |
+| IHA-3 | BLOCKER | taken — eight displayed cells plus the stable key, Modified excluded as the serializer records; sixteen pinned sorts |
+| IHA-4 | BLOCKER | taken — the grammar stated as one rule with every section's prefixes; the draft generator's count at revision 3 recorded per kind and per section; the pin is the landed generator's |
+| IHA-5 | MAJOR | taken — FD-D5 records the departure: the task records and passes are the graph's verified register, visible per key in (b) |
+| IHA-6 | MAJOR | taken — the ledger in two buckets: nine series PRs and four post-implementation and repair PRs, thirteen ancestry rows |
+
+### Tests that pin PR F (revision 3's list; the task loop records what lands)
 
 - GraphEndToEndTests (new): F1's six facts.
 - `ParityHarnessCensus`: EveryGraphVaultFileIsInTheArtifact; the Swift
