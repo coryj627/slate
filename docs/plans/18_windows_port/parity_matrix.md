@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-09-14 at `9969226a` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-09-15 at `f7b94e70` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -273,7 +273,7 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Templates picker + prompt flow | template views | #743 (W5-3) | implemented; local gates green 2026-08-20; interactive CI + human AT pending |
 | File management + bulk rename | sidebar/file commands | #744 (W5-4) | implemented; local gates green 2026-08-21; interactive CI + human AT pending (bulk PROPERTY rename shipped in W4-4; the W5-4 scope is the file verbs, the Move-To picker, structural undo, and the mutation harness) |
 | Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
-| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | pending |
+| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | implemented; local gates green 2026-09-15; interactive CI + human AT pending |
 
 ## Settings surface
 

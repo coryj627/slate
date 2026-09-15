@@ -174,4 +174,48 @@ public sealed class DeliveryEvidenceCensus
         Assert.Contains(tests, t => t.EndsWith("#TheLedgerHasARowForEveryStructuralKeyAndNoOther", StringComparison.Ordinal));
         Assert.Contains(tests, t => t.EndsWith("#EveryManifestSurfaceIsARowOfTenCellsAndNoCanvasRowIsUnknown", StringComparison.Ordinal));
     }
+
+    /// <summary>W6-2 §F (F7, FD-10): the graph issue maps to the aggregate
+    /// that spans the four SURFACE command groups — an implementation
+    /// anchor and a test anchor from each — and the close-out's own gates
+    /// ride the aggregate: the six end-to-end facts and the censuses F
+    /// lands.</summary>
+    [Fact]
+    public void TheGraphIssueMapsToTheAggregateOverAllFourCommandGroups()
+    {
+        JsonElement evidence = Evidence();
+        Assert.Equal("graph", evidence.GetProperty("issues").GetProperty("#746").GetString());
+        JsonElement aggregate = evidence.GetProperty("groups").GetProperty("graph");
+        var implementation = aggregate.GetProperty("implementation").EnumerateArray().Select(e => e.GetString()!).ToHashSet(StringComparer.Ordinal);
+        var tests = aggregate.GetProperty("tests").EnumerateArray().Select(e => e.GetString()!).ToHashSet(StringComparer.Ordinal);
+        foreach (string commandGroup in (string[])["graphTable", "graphConnections", "graphNavigator", "graphDiagram"])
+        {
+            JsonElement group = evidence.GetProperty("groups").GetProperty(commandGroup);
+            Assert.Contains(group.GetProperty("implementation").EnumerateArray().Select(e => e.GetString()!), implementation.Contains);
+            Assert.Contains(group.GetProperty("tests").EnumerateArray().Select(e => e.GetString()!), tests.Contains);
+        }
+        // every slate.graph.* command maps to one of the four surface groups
+        JsonElement commands = evidence.GetProperty("commands");
+        foreach (JsonProperty command in commands.EnumerateObject().Where(p => p.Name.StartsWith("slate.graph.", StringComparison.Ordinal)))
+        {
+            Assert.Contains(command.Value.GetString(), (string[])["graphTable", "graphConnections", "graphNavigator", "graphDiagram"]);
+        }
+        // the close-out's own gates ride the aggregate too
+        foreach (string fact in (string[])
+        [
+            "#OpenGraphVaultExposesTheTableTheSummaryAndTheSortAgainstTheGolden",
+            "#TheConnectionsLeafWalksReRootsAndCreatesAgainstTheGolden",
+            "#TheDiagramReproducesTheGoldensSixtiethTickThenConvergesStepsZoomsAndReadsBack",
+            "#TheConfigRoundTripsThroughTheInspectorAndTheStore",
+            "#LargeGraphOpensLaysOutPansAndStepsUnderBudget",
+            "#AnnouncementGrammarConformsPerVerbosity",
+            "#GraphTriggerParityCensus",
+            "#GraphReconciliationCensus",
+            "#EveryGraphVaultFileIsInTheArtifact",
+            "#EveryGraphAutomationIdIsInAManifestRow",
+        ])
+        {
+            Assert.Contains(tests, t => t.EndsWith(fact, StringComparison.Ordinal));
+        }
+    }
 }

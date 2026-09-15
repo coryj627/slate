@@ -1036,3 +1036,85 @@ token, one frozen pen per token/width/dash) and the hop fell to 3.269 ms
 — 1.6 ms of it the redraw, the rest the 1,500 `PointToScreen`
 rectangles. The first rebuild fell with it. Nothing here measures the
 composition thread's frame; the numbers are the UI thread's.
+
+## Milestone W6-2 — graph through the C# binding — 2026-09-15 (#746)
+
+The §K roll-up the W6-2 spec asks PR F for, over the two per-PR sections
+above (W6-2 PR A, W6-2 PR D), re-measured at close-out. Three runners,
+each named with what it measures; six spec budgets, each with the place
+that asserts it; and the end-to-end row measured on the real document,
+driver and surface (§F F2, FD-D2).
+
+Environment: **QEMU Virtual CPU version 2.5+ (Standard PC Q35 + ICH9),
+20 GB**, Windows 11 Pro x64 build 26200, .NET SDK 10.0.401 / .NET
+10.0.12, `rustc 1.97.1`, Release `slate_uniffi.dll`, tests in Debug. The
+same virtualized box as the PR A and PR D rows.
+
+Runners `GraphOpenBenchmarks` and `GraphRendererBenchmarks`
+(`apps/slate-windows/benchmarks/SlateWindows.Benchmarks/`),
+BenchmarkDotNet, three warmups and fifteen measured iterations, the
+budget arm on:
+
+```powershell
+cd apps/slate-windows
+dotnet run --project benchmarks/SlateWindows.Benchmarks `
+  --configuration Release -- --graph --validate-budgets
+dotnet run --project benchmarks/SlateWindows.Benchmarks `
+  --configuration Release -- --graph-renderer --validate-budgets
+```
+
+(Run from `apps/slate-windows`: BenchmarkDotNet locates the project by
+searching the working directory's subfolders, and from the repository
+root that search also finds the copies under untracked worktrees.)
+
+**Marshalling and the open (PR A's row, re-run; the runner's budget arm
+asserts the two open budgets by exit code):**
+
+| Workload | Notes | Median | Budget | Result |
+|---|---:|---:|---:|---|
+| `SnapshotDefaultFilter` | 1,000 | **1.098 ms** | measurement-only | recorded |
+| `TableRowsDefaultSort` | 1,000 | **7.171 ms** | measurement-only | recorded |
+| `OpenToPublication` | 1,000 | **7.718 ms** | 100 ms | PASS |
+| `SnapshotDefaultFilter` | 10,000 | **13.938 ms** | measurement-only | recorded |
+| `TableRowsDefaultSort` | 10,000 | **84.258 ms** | measurement-only | recorded |
+| `OpenToPublication` | 10,000 | **107.302 ms** | 500 ms | PASS |
+
+**The renderer (PR D's row, re-run; the runner's budget arm asserts the
+four budgets by exit code):**
+
+| Workload | Median | Budget | Result |
+|---|---:|---:|---|
+| `WarmTick` | **79.068 ms** | 100 ms | PASS |
+| `FirstRebuild` | **19.742 ms** | 500 ms | PASS |
+| `PanHop` | **3.856 ms** | 100 ms | PASS |
+| `SpatialStep` | **0.206 ms** | 50 ms | PASS |
+
+**End to end (PR F's row):** measured by
+`GraphEndToEndTests.LargeGraphOpensLaysOutPansAndStepsUnderBudget` (the
+real `VaultSession` + `WorkspaceViewModel` + the hosted surface,
+`Stopwatch`; the fact asserts every budget so a regression fails CI, and
+the recorded values show the headroom) over a 1,500-note linked vault —
+tier A's ceiling:
+
+| Measure | Recorded | Budget | Notes |
+|---|---:|---:|---|
+| Open to the installed publication | **60.5 ms** | 500 ms | PR A's 10k ceiling applied at 1,500 (§F FD-9); the headroom is the claim. |
+| Warm tick (`Tick(20)` through the model's gate) | **79.3 ms** | 100 ms | The kernel's O(n²) at 1,500; the closest budget of the six (§F FR-4). |
+| First rebuild (the topology fetched, landed, every peer named) | **39.3 ms** | 500 ms | 1,500 peers materialised with their names read. |
+| Per-pan hop | **7.459 ms** | 100 ms | Ten hops of (±800, ±600), every peer's screen rectangle read, averaged. |
+| Per-step spatial traversal | **0.779 ms** | 50 ms | Fifty `SpatialMove` steps on the real document, averaged. |
+
+**The six spec budgets and where each is asserted.** The two
+open-to-publication budgets (1k under 100 ms, 10k under 500 ms):
+`GraphOpenBenchmarks`' exit code under `--validate-budgets`; the 10k
+ceiling also the E2E fact's at 1,500. The renderer's four (the warm tick
+under 100 ms, the first rebuild under 500 ms, a pan hop under 100 ms, a
+spatial step under 50 ms): `GraphRendererBenchmarks`' exit code AND the
+E2E fact.
+
+**Scope, honestly.** The warm tick is the kernel's own O(n²) repulsion
+at 1,500 nodes and the shell ticks off the dispatcher; the numbers are
+the UI thread's — the derivation, the rebuild and the peer reads — and
+nothing here measures the composition thread's frame (§D TD-7, §F
+FD-D2). The two per-PR sections above stand as measured on their days;
+this roll-up re-measures on the close-out's.

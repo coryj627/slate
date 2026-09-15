@@ -690,6 +690,17 @@ W6_2_PR_D_DELIVERED_COMMANDS = {
     "slate.graph.fitGraph",
 }
 
+# W6-2 PR F (#746, contracts F7, FD-5): the ISSUE's surface row reads the
+# close-out's status — the date F's gates went green — evidenced by the
+# `graph` aggregate group over the four surface command groups; the
+# thirteen command rows keep the dates their own slices' gates went
+# green (IPA-13's rule, per slice). The human AT clause stays until the
+# named run recorded in reports/w6_2_graph_at_checklist.md (FD-3).
+W6_2_CLOSE_OUT_STATUS = (
+    "implemented; local gates green 2026-09-15; "
+    "interactive CI + human AT pending"
+)
+
 W6_2_DELIVERED_COMMANDS = {
     # W6-2 PR A (#746, contract A-12): the graph tab's one chordless row,
     # executable through the palette and the registrar; B–E add the leaf's,
@@ -927,7 +938,11 @@ def load_delivery_evidence(
         # aggregate group — anchors from every command group and the
         # close-out gates (validation 14 makes the aggregate complete).
         "#745",
-        # W6-2 PR A: the graph issue, evidenced by the `graph` group.
+        # W6-2 PR A: the graph issue; since W6-2 PR F (F7, FD-10) evidenced
+        # by the `graph` AGGREGATE group over the four surface command
+        # groups (graphTable, graphConnections, graphNavigator, graphDiagram),
+        # so validation 14 fails when the issue's evidence stops spanning a
+        # surface.
         "#746",
     }
     if set(issue_map) != expected_issues:
@@ -1012,7 +1027,7 @@ def issue_delivery_status(
     if issue_number == "#745":
         return W6_1_STATUS
     if issue_number == "#746":
-        return W6_2_STATUS
+        return W6_2_CLOSE_OUT_STATUS
     return IMPLEMENTED_STATUS
 
 
@@ -1157,7 +1172,7 @@ def main() -> int:
         "harness) |"
     )
     a(f"| Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | {issue_delivery_status('#745 (W6-1)', delivery_evidence)} |")
-    a("| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | pending |")
+    a(f"| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | {issue_delivery_status('#746 (W6-2)', delivery_evidence)} |")
     a("")
     a("## Settings surface")
     a("")

@@ -128,7 +128,7 @@ public sealed class GraphContractsCitationCensus
             (
                 "F",
                 "## PR F — the close-out: the end-to-end suite, the gates, the reconciliation",
-                "<!-- end of the graph contracts document -->",
+                "## Issue reconciliation (#746)",
                 // The close-out section: the end-to-end suite, the gates, the matrices,
                 // the AT checklist, the reconciliation.
                 6_000,
@@ -137,6 +137,17 @@ public sealed class GraphContractsCitationCensus
                 // own names are unbackticked until they exist. The floor sits
                 // one below the measured population and rises with the records.
                 119),
+            (
+                "R",
+                "## Issue reconciliation (#746)",
+                "<!-- end of the graph contracts document -->",
+                // The reconciliation (F9): the PR ledger, the generated evidence
+                // and register tables, the decisions, the issues, the residuals.
+                4_000,
+                // The section cites the shell's identifiers through its generated
+                // tables and its prose; the floor sits one below the measured
+                // population at TGF-8 and rises with the records.
+                135),
         ];
 
     public static TheoryData<string, string, string> SectionRanges
