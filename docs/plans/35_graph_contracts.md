@@ -2411,26 +2411,26 @@ refutation stands on the thread, the hardening is the discharge.
   structural claim depends on a snippet, and an unmatched path is
   ignored.
 
-### §W-G register (seeded from spec §2; the close-out re-greps the Windows tree against it)
+### §W-G register (seeded from spec §2; closed (PR F) — the re-grep's method and every hit are in §F TGF-6)
 
-| # | Pocket | Status after 0b |
-|---|---|---|
-| A | the announcer grammar | moved (PR 0a, #1179) |
-| B | the Connections tree | moved — `graph_connections_tree` with its counts; deleted `ConnectionsPanel.swift:375–499`'s derivation |
-| C | the node identity | moved — `GraphNode.stable_key`, `graph_stable_key_for_path`; deleted `GraphViewState.swift:57–78` |
-| D | visible neighbours and the content cap | moved — the topology entry's `neighbors` and the topology's `edges`, `graph_neighbors` (the cap 0a's); deleted `GraphDiagramView.swift:856–874`'s derivation, `:702–722`'s edge filter and `:1221–1228` |
-| E | the name filter and the visible set | moved — `graph_visibility`, `graph_topology`, `graph_label_matches`; deleted `AppState+GraphConfig.swift:16–20`, `AppState+GraphTable.swift:228–238`'s predicate, `GraphDiagramView.swift:385–408, 640–648` |
-| F | the config schema and policy | moved — `graph_config_decode/encode`, the group rules, the option vectors; the I/O host-designated; deleted `GraphConfigStore.swift:131–202`, the hand-written `allCases` in `GraphConfig.swift:109–142` and `GraphAnnouncer.swift:19–94` |
-| G | the table columns | moved — `graph_table_rows`, `graph_table_columns`; deleted `GraphTableView.swift:300–315, 444–628`, `AppState+GraphTable.swift:418–420` |
-| H | the constants | moved — `graph_constants`, `graph_node_diameter` |
-| I | the action set | moved — `graph_row_actions`, `graph_row_action_title`; deleted `GraphViewState.swift:15–48`; runtime admission host (0bD-8) |
-| J | the spatial and structural steps | moved — `graph_spatial_step`, `graph_structural_step`; deleted `GraphDiagramView.swift:1230–1262`; type-ahead host |
-| K | the ghost's note path | moved — `graph_ghost_note_path`; deleted `AppState+Connections.swift:306–315` |
-| L | viewport math | host-by-designation (the canvas viewport) |
-| M | the hit-test grid and tiles | host-by-designation |
-| N | the coalescing state machine | host timers; the class keys core's (0a) |
-| O | the singleton tab lifecycle | host (W1-3) |
-| P | driving the layout session | host driver over core's session |
+| # | Pocket | Status after 0b | State after F |
+|---|---|---|---|
+| A | the announcer grammar | moved (PR 0a, #1179) | closed — the re-grep finds no announcement composed under `Graph/`; `GraphPhrase` composes NAMES only (0aD-8), `TheRelayIsTheOneFileThatRenders` |
+| B | the Connections tree | moved — `graph_connections_tree` with its counts; deleted `ConnectionsPanel.swift:375–499`'s derivation | closed — the leaf's rows are `graph_connections_tree`'s, nested by `parent_id`, never re-derived (`ConnectionsLeafView`) |
+| C | the node identity | moved — `GraphNode.stable_key`, `graph_stable_key_for_path`; deleted `GraphViewState.swift:57–78` | closed — the stable key is READ from the record; the ordinal dictionaries key on it and fold nothing (`GraphDiagramView`, `GraphDiagramModel`, `ConnectionsLeafView`) |
+| D | visible neighbours and the content cap | moved — the topology entry's `neighbors` and the topology's `edges`, `graph_neighbors` (the cap 0a's); deleted `GraphDiagramView.swift:856–874`'s derivation, `:702–722`'s edge filter and `:1221–1228` | closed — the neighbours and the content are the topology entry's and `RenderLabel`'s (`GraphDiagramView.PeerHelp`) |
+| E | the name filter and the visible set | moved — `graph_visibility`, `graph_topology`, `graph_label_matches`; deleted `AppState+GraphConfig.swift:16–20`, `AppState+GraphTable.swift:228–238`'s predicate, `GraphDiagramView.swift:385–408, 640–648` | closed — the needle goes to `graph_visibility`; the one case-insensitive comparison under `Graph/` outside the writer is the type-ahead's prefix match (pocket J's host half, D-D6) |
+| F | the config schema and policy | moved — `graph_config_decode/encode`, the group rules, the option vectors; the I/O host-designated; deleted `GraphConfigStore.swift:131–202`, the hand-written `allCases` in `GraphConfig.swift:109–142` and `GraphAnnouncer.swift:19–94` | closed — decode and encode are core's (`GraphConfigStore`); the writer's case-insensitive vault-path map is its I/O half, host by 0b's designation |
+| G | the table columns | moved — `graph_table_rows`, `graph_table_columns`; deleted `GraphTableView.swift:300–315, 444–628`, `AppState+GraphTable.swift:418–420` | closed — the cells are `graph_table_rows`'s; the sort is `GraphRequest.Sort` to core (`GraphTableView`) |
+| H | the constants | moved — `graph_constants`, `graph_node_diameter` | closed — the tier boundary is `GraphCoreConstants.Once.TierBThreshold`; the diameter the topology entry's; no `Math.Log` under `Graph/` |
+| I | the action set | moved — `graph_row_actions`, `graph_row_action_title`; deleted `GraphViewState.swift:15–48`; runtime admission host (0bD-8) | closed — the actions are `graph_row_actions`'s; admission is host state (0bD-8) |
+| J | the spatial and structural steps | moved — `graph_spatial_step`, `graph_structural_step`; deleted `GraphDiagramView.swift:1230–1262`; type-ahead host | closed — `SpatialMove` and `StructuralMove` call core's steps; the type-ahead is the host list search 0b designated |
+| K | the ghost's note path | moved — `graph_ghost_note_path`; deleted `AppState+Connections.swift:306–315` | closed — `GraphGhostNotePath` mints the path (`ConnectionsLeafViewModel`, `GraphDocumentViewModel`) |
+| L | viewport math | host-by-designation (the canvas viewport) | host-by-designation — `GraphDiagramView`'s viewport, the constants the canvas's |
+| M | the hit-test grid and tiles | host-by-designation | host-by-designation — `GraphDiagramView`'s hit grid |
+| N | the coalescing state machine | host timers; the class keys core's (0a) | host-by-designation — `GraphAnnouncer`'s 200 ms window; the class keys core's |
+| O | the singleton tab lifecycle | host (W1-3) | host — W1-3's singleton (`WorkspaceViewModel`) |
+| P | driving the layout session | host driver over core's session | host — `GraphLayoutDriver` over core's session |
 
 ### Tests that pin PR 0b (Task 0b-1)
 
@@ -16915,6 +16915,138 @@ REPLACED, not counted: a second `Announce` of the settle inside the
 relay's window SURVIVED because the settle class coalesces two
 announcements to one line by design (0a-3's classes) — not a defect
 the fact can see, so the unarmed-settle mutation took its place.
+
+**TGF-3 — §W-A: the fixture census on both twins; what stands recorded
+(F3, FD-2, FR-1).** WHAT STANDS: `graph_queries.json` is compared byte
+for byte against the Windows serializer's output (`ParityHarnessCensus`)
+and against the Swift serializer's (`ParityHarnessTests.swift`), so the
+twins are byte-identical through the one committed file; the position
+golden is the same file's `layout` section under
+`TheLayoutSectionIsTheSessionsSixtiethTickQuantised` and
+`TwoLayoutsOverOneVaultAreBitIdentical`; TGF-2's suite re-runs the
+golden through the shell — the table's eight cells per row over the
+sixteen sorts, the queries, the visibility, the connections per (path,
+depth), the ghost paths, the config's encode, the sixtieth tick's
+positions. THE GAP CLOSED: `ParityHarnessCensus` gains
+EveryGraphVaultFileIsInTheArtifact — the fixture directory WALKED, every
+file a `p:` key of the golden's snapshot (the attachment included) and
+every `p:` key a file that exists, so a fixture added without a
+regeneration fails where `GraphVaultInventory`'s hand-pinned list would
+not know it — and `ParityHarnessTests.swift` gains
+testEveryGraphVaultFileIsInTheArtifact, the same walk over the same
+directory against the same golden (FD-2; unrun on this box, the mac
+lane arbitrates, FR-1). NO MUTATION HARNESS: the graph authors nothing
+but the ghost's note (FD-D1); no scenario file exists for either twin,
+and the register says so. Mutations (TGF-9's table): a golden `p:` key
+renamed to a file the fixture lacks → the census.
+
+**TGF-4 — §W-C and the checklist: the id census over three forms, the
+rows and the manifest repaired, the checklist landed (F5, F8, FD-3,
+FD-D4).** THE CENSUS: `WcMatrixGraphEvidenceCensus` gains
+EveryGraphAutomationIdIsInAManifestRow, which walks (i) every string
+literal that reaches the automation-id setter under `Graph/` — as a
+direct argument or through the inspector's `Section`, `Flag` and
+`SliderRow` helpers' `id` parameter (the slider value peers composed as
+`id + "Value"` derived from the `SliderRow` calls); (ii) every composed
+id's constant part — a prefix ending in `:` or `.` before a `+`, and the
+verbosity menu's named prefix constant; (iii) every automation id in
+`MainWindow.xaml` whose name begins with `Graph` or `Connections` — and
+asserts each is a manifest row's id, with `InspectorPane` the one named
+exclusion (the shell's right pane, W1's row). The existing literal
+check admits the composed value peers (the stem set, the `+ "Value"`
+composition present). THE REPAIRS the census found on its first run,
+as F5 foresaw: the navigator's row lacked the five menu items
+(GraphOpenTabMenuItem, GraphOrphansMenuItem, GraphUnresolvedMenuItem,
+GraphMostLinkedMenuItem, GraphWhereAmIMenuItem) and the
+`GraphVerbosity.` items' prefix; the table's row lacked the switcher's
+`GraphMode.` choices; the inspector's row lacked GraphInspectorNoGroups
+and the seven slider value peers (GraphInspectorTextFadeValue …
+GraphInspectorLinkDistanceValue) — each now named in its row's
+anatomy cell and listed in the manifest; no surface lacked a row. Axe:
+zero failures across the five graph journeys with the one standing
+waiver (`IsFluentCollapsedScrollBarPart`, pinned both ways in
+`AxeWaiverTests`). THE LINK: `w_c_matrix.md` gains the W6-2 note line
+beside the W6-1 one, linking the checklist. THE CHECKLIST:
+`docs/plans/18_windows_port/reports/w6_2_graph_at_checklist.md` in the
+W7-4 form — the header lines Pending, the corpus line naming the
+committed `graph_vault` and TGF-2's two large vaults, eleven rows one
+to one with the spec's items: the table walk with the nine headers in
+core's column order and the Ctrl+Alt+S sort; the leaf walk with depth,
+re-root, Back and the ghost's create; the diagram traversal with the
+pan at the edge and tier B's summary name; arrow-only per surface with
+"not applicable — no rotor"; the keyboard-only tab-through of the
+header, the panel, the pane and the leaf; Windows Voice Access with
+"Click 3", "Show connections", "Where am I", "Zoom in", "Fit graph"
+(FD-D4); switch access; braille over the Values; text scaling; the
+Contrast themes; Reduce Motion — every human cell Pending, every
+automated twin named or "none — human only" (FD-3). Mutations (TGF-9's
+table): a literal id set under `Graph/` that no row lists, a XAML id
+renamed to one no row lists, the `GraphMode.` prefix dropped from the
+manifest, the matrix row losing GraphInspectorNoGroups — each → the
+census.
+
+**TGF-5 — §W-G: the re-grep with its method, every hit classified, the
+one duplication routed through core, the 0b register closed (F6,
+FD-7).** THE METHOD: `scripts/graph_wg_regrep.py`, committed beside this
+document so the grep is re-runnable, over `Graph/*.cs` and the three
+`WorkspaceViewModel.*.cs` partials that own graph seams (`Graph`,
+`Connections`, `GraphCreate`), comment lines dropped, for the five
+signature classes F6 names — sorting and comparison (`OrderBy`, `Sort`,
+`CompareTo`, `string.Compare`); case folding and normalisation
+(ToLowerInvariant, ToUpperInvariant, `ToLower`, `ToUpper`,
+`Normalize`, every `IgnoreCase` comparison form); the diameter curve
+(`Math.Log`); string composition (`string.Format`, interpolation,
+`StringBuilder`, `string.Join`, `string.Concat`); every integer literal
+equal to a core constant (1500, 200, 28, 8, 1, 3). THE HITS, each
+classified: sorting and comparison, ONE — `GraphTableView.cs:386`, the
+sort REQUEST to core (`GraphRequest.Sort`), pocket G's consumer, not a
+sort; case folding, TWO — `GraphConfigWriter.cs:34`, the vault-path map
+OrdinalIgnoreCase (class ii, pocket F's I/O half, host by 0b's
+designation) and `GraphDiagramView.cs:1102`, the type-ahead's
+`StartsWith` under OrdinalIgnoreCase (class vi, pocket J's host
+type-ahead, the fold recorded D-D6); the diameter curve, NONE (the
+topology entry carries core's diameter); string composition, THIRTEEN before the fix below and twelve after —
+`GraphPhrase.cs:213–222`, the inspector's four indexed control NAMES
+(class i, the label inventory, 0aD-8); `GraphConfigStore.cs:72, 116,
+143`, the store's failure reasons and its temporary file name (host I/O
+text, pocket F's I/O half); `GraphAnnouncer.cs:125`,
+`GraphDocumentViewModel.cs:305, 1396`, three exception messages no user
+hears (excluded by 0a-12's rule); `GraphDocumentViewModel.cs:1466–1467`,
+the `VaultException` arms mapped to the human-readable message the
+`GraphBlocked{LoadFailed}` event carries — the mac's `humanReadable`
+(`AppState.swift:23959`) twin, a host mapping on both platforms and
+recorded as such (the event and its sentence are core's; the message
+inside it is the platform's exception text); and `GraphDiagramPeers.cs:29`
+— the ONE DUPLICATION: `ZoomValue` re-spelled core's `GraphZoom`
+template ("Zoom ⟨percent⟩ percent") as a host interpolation, the
+canvas's row I defect on the graph side; FIXED, not designated (FD-7):
+the Value is now core's render of `GraphZoom{fit: false, percent}` with
+its terminal period stripped (`GraphAnnouncer.RenderLabel`, a Value
+being a phrase), the journeys' `^Zoom [0-9]+ percent$` unchanged, and
+`TheContainerExposesSelectionAndTheZoomValue` pins the Value against
+the render rather than a literal; the period strip is a second `Trim*`
+under `Graph/`, so C-15 (xiv)'s closed list (`NoHostTrimTouchesTheNeedle`)
+is amended under C-15 (iv)'s provision to name it — a rendered label's
+punctuation, never the needle; the literal class, SIXTY-FIVE — none
+a core constant re-derived: the tier boundary reads
+`GraphCoreConstants.Once.TierBThreshold`, the depth clamp is core's
+through `ClampDepth`, the label cap and the diameter are the entries'
+(`labeled`, `diameter`); the 200 is the mac's bundle page size (class
+v, `BundlePagingSpec`, host I/O paging, `AppState+Connections.swift:91–92`)
+and the relay's 200 ms window (pocket N, host timer); the rest are
+layout thicknesses, dash arrays, indices, `Depth == 1`'s bundle rule
+(a request field, not the clamp), `count == 1`'s plural in
+`ConnectionsPhrase` (T13's composed label, recorded in 0a's manifest)
+and the depth tags (T5, the label inventory). THE REGISTER: the 0b
+table gains "State after F" — closed for A–K with the site or the
+seam that proves it, host-by-designation for L–P with the Windows site
+— and its heading says "closed (PR F)". Nothing the register lists as
+moved is re-derived in C#; the audit is closed by the grep, not by the
+prose (F6). Mutations (TGF-9's table): the Value re-spelled by the host with a
+drift ("Zoom 100%") → the renderer fact's literal and its pin; a planted
+`Math.Log` under `Graph/` → the re-grep lists it under the diameter
+class (a script observation, not a test — the register is prose, and
+the grep is its teeth).
 
 ### Tests that pin PR F (revision 5's list, frozen; the task loop records what lands)
 

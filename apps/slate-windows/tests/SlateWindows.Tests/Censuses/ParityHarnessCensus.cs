@@ -337,6 +337,33 @@ public class ParityHarnessCensus
         }
     }
 
+    /// <summary>W6-2 §F (F3, FD-2): the fixture directory WALKED, never
+    /// listed — every file under <c>graph_vault</c> is a <c>p:</c> key of
+    /// the golden's snapshot (the attachment included, as the attachment it
+    /// is) and every <c>p:</c> key names a file that exists; the <c>g:</c>
+    /// keys are the golden's own. A fixture added without a regeneration
+    /// fails here, where <see cref="GraphVaultInventory"/>'s hand-pinned
+    /// list would not know it.</summary>
+    [Fact]
+    public void EveryGraphVaultFileIsInTheArtifact()
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllBytes(Path.Combine(GoldenDir, "graph_queries.json")));
+        var pathKeys = document.RootElement.GetProperty("snapshot").EnumerateArray()
+            .Select(entry => entry.GetProperty("key").GetString()!)
+            .Where(key => key.StartsWith("p:", StringComparison.Ordinal))
+            .Select(key => key[2..])
+            .OrderBy(key => key, StringComparer.Ordinal)
+            .ToList();
+        var files = Directory.EnumerateFiles(GraphFixturesDir, "*", SearchOption.AllDirectories)
+            .Select(file => Path.GetRelativePath(GraphFixturesDir, file).Replace('\\', '/'))
+            .OrderBy(file => file, StringComparer.Ordinal)
+            .ToList();
+        Assert.NotEmpty(files);
+        Assert.Equal(files, pathKeys);
+        Assert.All(pathKeys, key => Assert.True(File.Exists(Path.Combine(GraphFixturesDir, key)), $"the golden names {key}, which the fixture lacks"));
+    }
+
     /// <summary>The artifact's twelve sections, in order (contract 0b-13; the
     /// <c>layout</c> section is W6-2 PR D's, contract D-18).</summary>
     public static readonly string[] GraphArtifactSections =

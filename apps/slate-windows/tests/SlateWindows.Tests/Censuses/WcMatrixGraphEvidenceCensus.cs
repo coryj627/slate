@@ -31,7 +31,7 @@ public sealed class WcMatrixGraphEvidenceCensus
     [
         new(
             "Graph table (W6-2 PR A)",
-            ["GraphSurface", "GraphSurfaceSwitcher", "GraphStateText", "GraphTableGrid"],
+            ["GraphSurface", "GraphSurfaceSwitcher", "GraphMode.", "GraphStateText", "GraphTableGrid"],
             ["Grid", "DataGrid", "Group", "Text"],
             ["Grid", "Table", "Selection", "Invoke", "SelectionItem"],
             ["graph_table_rows", "graph_table_columns", "GraphRow", "audio_summary"],
@@ -49,7 +49,7 @@ public sealed class WcMatrixGraphEvidenceCensus
         // W6-2 PR C (C-16): the navigator, the filter, Where-am-I, the menu.
         new(
             "Graph navigator, filter and Where-am-I (W6-2 PR C)",
-            ["GraphFilterField", "GraphFilterSummary", "GraphClearFilter", "GraphWhereAmIPanel", "GraphWhereAmIReadback", "GraphWhereAmIClose", "GraphStateHost", "GraphMenu", "GraphVerbosityMenu"],
+            ["GraphFilterField", "GraphFilterSummary", "GraphClearFilter", "GraphWhereAmIPanel", "GraphWhereAmIReadback", "GraphWhereAmIClose", "GraphStateHost", "GraphMenu", "GraphOpenTabMenuItem", "GraphOrphansMenuItem", "GraphUnresolvedMenuItem", "GraphMostLinkedMenuItem", "GraphWhereAmIMenuItem", "GraphVerbosityMenu", "GraphVerbosity."],
             ["Edit", "Text", "Button", "Group", "MenuItem"],
             ["Value", "Invoke", "Toggle", "ExpandCollapse"],
             ["GraphPhrase", "GraphFilterCount", "GraphWhereAmI", "GraphRow", "graph_verbosities"],
@@ -69,7 +69,7 @@ public sealed class WcMatrixGraphEvidenceCensus
         // body, the pane, the notices, the four sections and their controls.
         new(
             "Graph inspector (W6-2 PR E)",
-            ["GraphInspectorToggle", "GraphInspectorBody", "GraphInspector", "GraphInspectorInactive", "GraphInspectorReadOnly", "GraphInspectorFilters", "GraphInspectorGroups", "GraphInspectorDisplay", "GraphInspectorForces", "GraphInspectorNameQuery", "GraphInspectorAttachments", "GraphInspectorGhosts", "GraphInspectorOrphans", "GraphInspectorAddGroup", "GraphInspectorGroupQuery:", "GraphInspectorGroupColour:", "GraphInspectorGroupRing:", "GraphInspectorRemoveGroup:", "GraphInspectorArrows", "GraphInspectorTextFade", "GraphInspectorNodeSize", "GraphInspectorLinkThickness", "GraphInspectorCenter", "GraphInspectorRepel", "GraphInspectorLink", "GraphInspectorLinkDistance"],
+            ["GraphInspectorToggle", "GraphInspectorBody", "GraphInspector", "GraphInspectorInactive", "GraphInspectorReadOnly", "GraphInspectorFilters", "GraphInspectorGroups", "GraphInspectorDisplay", "GraphInspectorForces", "GraphInspectorNameQuery", "GraphInspectorAttachments", "GraphInspectorGhosts", "GraphInspectorOrphans", "GraphInspectorNoGroups", "GraphInspectorAddGroup", "GraphInspectorGroupQuery:", "GraphInspectorGroupColour:", "GraphInspectorGroupRing:", "GraphInspectorRemoveGroup:", "GraphInspectorArrows", "GraphInspectorTextFade", "GraphInspectorNodeSize", "GraphInspectorLinkThickness", "GraphInspectorCenter", "GraphInspectorRepel", "GraphInspectorLink", "GraphInspectorLinkDistance", "GraphInspectorTextFadeValue", "GraphInspectorNodeSizeValue", "GraphInspectorLinkThicknessValue", "GraphInspectorCenterValue", "GraphInspectorRepelValue", "GraphInspectorLinkValue", "GraphInspectorLinkDistanceValue"],
             ["Group", "Button", "CheckBox", "Edit", "ComboBox", "Slider", "Text"],
             ["Toggle", "Invoke", "Value", "RangeValue", "Selection", "ExpandCollapse"],
             ["GraphPhrase", "GraphForceValue", "GraphLayoutSettled", "GraphFilterCount", "graph_color_tokens", "graph_ring_styles"],
@@ -154,7 +154,10 @@ public sealed class WcMatrixGraphEvidenceCensus
             string patternCell = row.Cells[3];
             foreach (string id in surface.Ids)
             {
-                if (!shell.Contains($"\"{id}\"", StringComparison.Ordinal))
+                bool composedValue = id.EndsWith("Value", StringComparison.Ordinal)
+                    && shell.Contains($"\"{id[..^5]}\"", StringComparison.Ordinal)
+                    && shell.Contains("id + \"Value\"", StringComparison.Ordinal);
+                if (!shell.Contains($"\"{id}\"", StringComparison.Ordinal) && !composedValue)
                 {
                     failures.Add($"{surface.Title}: the shell sets no automation id {id}");
                 }
@@ -227,6 +230,94 @@ public sealed class WcMatrixGraphEvidenceCensus
                     failures.Add($"{surface.Title}: no executable test reaches a bound AssertAxeClean call for `{label}`");
                 }
             }
+        }
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
+    }
+    // --- W6-2 §F (F5, IGZ-3, IHB-2): every graph automation id has a row ------
+
+    /// <summary>The one reviewed exclusion: the shell's right pane, W1's
+    /// row, not a graph surface.</summary>
+    private static readonly HashSet<string> ExcludedXamlIds = ["InspectorPane"];
+
+    private static readonly Regex SetterLiteral = new(@"SetAutomationId\([^,]+,\s*""([^""]+)""\s*\)", RegexOptions.Compiled);
+
+    /// <summary>A composed id: a literal prefix followed by `+` (the
+    /// per-node, per-group, switcher and verbosity ids).</summary>
+    private static readonly Regex SetterPrefix = new(@"SetAutomationId\([^,]+,\s*""([^""]+)""\s*\+", RegexOptions.Compiled);
+
+    /// <summary>A helper that takes the id as its argument and sets it
+    /// inside (the inspector's Section, Flag and SliderRow): the literal
+    /// reaches the setter through the helper's `id` parameter.</summary>
+    private static readonly Regex HelperLiteral = new(@"\b(?:Section|Flag|SliderRow)\([^,]+,\s*""([^""]+)""", RegexOptions.Compiled);
+
+    private static readonly Regex XamlId = new(@"AutomationId=""((?:Graph|Connections)[^""]*)""", RegexOptions.Compiled);
+
+    /// <summary>The ids the graph shell sets, in three forms: setter
+    /// literals (through helpers too), composed prefixes, and the slider
+    /// value peers (`⟨slider id⟩Value`, composed in SliderRow), plus the
+    /// XAML hosts and menu items.</summary>
+    private static (HashSet<string> Literals, HashSet<string> Prefixes) ShellIds()
+    {
+        var literals = new HashSet<string>(StringComparer.Ordinal);
+        var prefixes = new HashSet<string>(StringComparer.Ordinal);
+        string graph = Path.Combine(RepoRoot, "apps", "slate-windows", "src", "SlateWindows", "Graph");
+        foreach (string path in Directory.GetFiles(graph, "*.cs"))
+        {
+            string text = File.ReadAllText(path);
+            foreach (Match m in SetterLiteral.Matches(text))
+            {
+                literals.Add(m.Groups[1].Value);
+            }
+            foreach (Match m in SetterPrefix.Matches(text))
+            {
+                prefixes.Add(m.Groups[1].Value);
+            }
+            foreach (Match m in HelperLiteral.Matches(text))
+            {
+                literals.Add(m.Groups[1].Value);
+                if (m.Value.StartsWith("SliderRow(", StringComparison.Ordinal))
+                {
+                    literals.Add(m.Groups[1].Value + "Value");
+                }
+            }
+        }
+        // the verbosity menu composes its items from a named prefix constant
+        string verbosity = File.ReadAllText(Path.Combine(graph, "GraphVerbosityMenu.cs"));
+        Match prefix = Regex.Match(verbosity, @"AutomationIdPrefix = ""([^""]+)""");
+        Assert.True(prefix.Success, "GraphVerbosityMenu no longer names its id prefix");
+        prefixes.Add(prefix.Groups[1].Value);
+        string xaml = File.ReadAllText(Path.Combine(RepoRoot, "apps", "slate-windows", "src", "SlateWindows", "MainWindow.xaml"));
+        foreach (Match m in XamlId.Matches(xaml))
+        {
+            literals.Add(m.Groups[1].Value);
+        }
+        return (literals, prefixes);
+    }
+
+    [Fact]
+    public void EveryGraphAutomationIdIsInAManifestRow()
+    {
+        (HashSet<string> literals, HashSet<string> prefixes) = ShellIds();
+        Assert.True(literals.Count >= 40, $"the id walk found only {literals.Count} literals — a regex moved");
+        var manifestIds = Manifest.SelectMany(s => s.Ids).ToHashSet(StringComparer.Ordinal);
+        var failures = new List<string>();
+        foreach (string id in literals.Except(ExcludedXamlIds).OrderBy(i => i, StringComparer.Ordinal))
+        {
+            if (!manifestIds.Contains(id))
+            {
+                failures.Add($"the shell sets automation id {id} and no manifest row lists it");
+            }
+        }
+        foreach (string prefix in prefixes.OrderBy(p => p, StringComparer.Ordinal))
+        {
+            if (!manifestIds.Contains(prefix))
+            {
+                failures.Add($"the shell composes ids on the prefix {prefix} and no manifest row lists it");
+            }
+        }
+        foreach (string id in ExcludedXamlIds)
+        {
+            Assert.DoesNotContain(id, manifestIds);
         }
         Assert.True(failures.Count == 0, string.Join("\n", failures));
     }

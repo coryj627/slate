@@ -26,7 +26,12 @@ internal sealed class GraphDiagramAutomationPeer : FrameworkElementAutomationPee
         _view = view;
     }
 
-    internal static string ZoomValue(uint percent) => $"Zoom {percent} percent";
+    /// <summary>W6-2 §F (F6, FD-7): the container's Value is core's own
+    /// render of <c>GraphZoom{fit: false}</c> with its terminal period
+    /// stripped — a Value is a phrase, not a sentence — never a host
+    /// re-spelling of the template (the canvas's row I precedent).</summary>
+    internal static string ZoomValue(uint percent) =>
+        GraphAnnouncer.RenderLabel(new uniffi.slate_uniffi.GraphA11yEvent.GraphZoom(false, percent)).TrimEnd('.');
 
     protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Group;
 
