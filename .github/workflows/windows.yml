@@ -661,6 +661,11 @@ jobs:
       - name: Test model coverage verifier
         run: python3 -m unittest discover -s scripts/tests -p test_windows_model_shards.py
 
+      # W6-2 PR F (F7, IPJ-2-1): the committed parity matrix is the
+      # generator's output for this tree — drift fails the lane.
+      - name: Verify the parity matrix is the generator's output
+        run: python3 scripts/generate-parity-matrix.py --check
+
       - name: Download every model shard report
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
         with:

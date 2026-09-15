@@ -412,6 +412,38 @@ def commands() -> list[tuple[str, str, str, str, str]]:
     return rows
 
 
+# W6-2 PR B2 (#746, B2-D6; PR F IPJ-2-2): commands the Windows shell
+# delivers with no SlateCommandID twin — the mac's ⌘[ panel key delivered
+# as a command. The matrix's inventory is the mac catalogue; these rows
+# extend it from the Windows chord table's projection (chords.json), so
+# the documents' "thirteen graph command rows" is what the matrix shows.
+WINDOWS_ONLY_COMMANDS: dict[str, str] = {
+    "slate.graph.connectionsBack": "#746 (W6-2)",
+}
+
+
+def windows_only_commands() -> list[tuple[str, str, str, str, str]]:
+    """(id, label, mac chord, spoken, issue) for every Windows-only command,
+    read from chords.json's projection of the Windows chord table."""
+    try:
+        catalog = json.loads(WINDOWS_CHORDS.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exception:
+        fail(f"could not load Windows chord/evidence catalog: {exception}")
+    entries = {e.get("id"): e for e in catalog.get("commands", []) if isinstance(e, dict)}
+    rows = []
+    for cid, issue in sorted(WINDOWS_ONLY_COMMANDS.items()):
+        entry = entries.get(cid)
+        if entry is None:
+            fail(f"Windows-only command {cid} is not in chords.json's commands")
+        label = entry.get("label") or ""
+        chord = entry.get("macChord") or ""
+        spoke = entry.get("mac") or ""
+        if not label:
+            fail(f"Windows-only command {cid} has no label in chords.json")
+        rows.append((cid, label, chord, spoke, issue))
+    return rows
+
+
 def leaves() -> list[tuple[str, str]]:
     text = LEAF_SWIFT.read_text(encoding="utf-8")
     enum_body = re.search(r"enum Leaf: String, CaseIterable.*?\n(.*?)\n    var id",
@@ -1032,7 +1064,9 @@ def issue_delivery_status(
 
 
 def main() -> int:
-    cmd_rows = commands()
+    catalog_rows = commands()
+    extra_rows = windows_only_commands()
+    cmd_rows = catalog_rows + extra_rows
     delivery_evidence = load_delivery_evidence(cmd_rows)
     if "--validate-delivery-evidence" in sys.argv:
         print(
@@ -1101,8 +1135,11 @@ def main() -> int:
     a("")
     a("## Command inventory")
     a("")
-    a(f"{len(cmd_rows)} stable command ids from the `SlateCommandID` catalog "
-      f"(drift-test-enforced), {with_chords} carrying chords from the "
+    a(f"{len(catalog_rows)} stable command ids from the `SlateCommandID` catalog "
+      f"(drift-test-enforced) plus {len(extra_rows)} Windows-only "
+      "(W6-2 PR B2, B2-D6: the mac's ⌘[ panel key delivered as the command "
+      "`slate.graph.connectionsBack`, read from the Windows chord table's "
+      f"projection `chords.json`), {with_chords} carrying chords from the "
       "registration blocks and definition-table chord switches (blank chord "
       "= palette/menu-only or focus-scoped by design; the generator fails if "
       "a `hotkey:` literal goes unattributed). Spoken hotkeys derive from "
@@ -1226,7 +1263,23 @@ def main() -> int:
     a("| Parity matrix + §W-B budgets + entry-criteria snapshot | #716 (W0-4) | **this document** |")
     a("")
 
-    OUT.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    rendered = "\n".join(lines)
+    if "--check" in sys.argv:
+        # W6-2 PR F (F7, IPJ-2-1): the committed matrix is this tree's
+        # output but for the Generated line, whose date and head are the
+        # run's own (the commit that carries the file is that head's child).
+        def body(text: str) -> str:
+            return "\n".join(l for l in text.split("\n") if not l.startswith("Generated "))
+
+        committed = OUT.read_text(encoding="utf-8") if OUT.is_file() else ""
+        if body(committed) != body(rendered):
+            fail("parity matrix drift — re-run scripts/generate-parity-matrix.py "
+                 f"and commit {OUT.relative_to(REPO)}")
+        print(f"parity matrix verified ({len(cmd_rows)} command rows, "
+              f"{with_chords} with chords; {len(leaf_rows)} leaves; the "
+              "committed file is the generator's output but for its Generated line)")
+        return 0
+    OUT.write_text(rendered, encoding="utf-8", newline="\n")
     print(f"wrote {OUT.relative_to(REPO)} "
           f"({len(cmd_rows)} command rows, {with_chords} with chords; "
           f"{len(leaf_rows)} leaves)")

@@ -17220,8 +17220,10 @@ navigator 19 s, the inspector 18 s, the diagram 19 s, the leaf 25 s;
 each passed) — CI's shell accessibility gate arbitrating them; the mac lane's twin arbitrated by CI (FR-1). THE WALL TIME: the
 CI-shaped regression ran 9 m 58 s, 9 m 46 s, 10 m 11 s and 9 m 57 s on this box; the end-to-end suite is 15 s of it, the two large
 vaults most of that (FR-5) — no other suite slowed. THE GATES: the parity
-matrix's generator exits zero (fourteen validations), re-run on the
-landing head so its header names that head (IPJ-1-3); the
+matrix's generator exits zero (fourteen validations), re-run at every
+landing so its header names the head the run stood on — the commit's
+parent — and its `--check` holds the committed file to the generator's
+output, in CI's Windows model job too (IPJ-1-3, IPJ-2-1); the
 reconciliation's `--check` exits zero — re-run on the landing head
 AFTER the citation pass, which edits the records the tables derive
 from (IPJ-1-1: 045bc23c carried tables one pass stale, and
@@ -17326,6 +17328,48 @@ simulates a missing manifest entry — is the mutation ledger's TGF-4 row
 renamed to one no row lists), run byte-restored rather than kept as a
 seam. CI's Windows lane on 045bc23c failed on the stale tables
 (IPJ-1-1), as the census here had.
+
+**IPJ-2 — codex post-implementation pass 2 (gpt-5.5 medium) on e0483038,
+the head carrying IPJ-1's six fixes: the six verified; TWO findings, both
+blockers, both taken.** IPJ-2-1 [BLOCKER] — the matrix's freshness had no
+gate: the reconciliation's tables gained `--check` at IPJ-1-1 but
+`scripts/generate-parity-matrix.py` had none, so the committed
+`parity_matrix.md` could drift from the generator's output while every
+F10 gate stayed green (on e0483038 its header named 045bc23c — the
+convention, the head the run stood on — but nothing held its BODY to the
+tree). Root cause: the process — a generator without a check. TAKEN: the
+generator gains `--check` (the committed file must equal the generator's
+output but for the Generated line, whose date and head are the run's
+own); CI's Windows model job runs it on every push; the landing scripts
+regenerate and check at every landing; the TGF-9 sentence reworded (the
+header names the head the run stood on — the commit's parent). As a
+script observation: a row edited in the committed matrix makes `--check`
+exit 1 with the drift message, restored byte for byte. IPJ-2-2 [BLOCKER]
+— the documents said "thirteen `slate.graph.*` command rows" (the spec's
+§W6-2 acceptance row, F's "What stands today", FD-5, FD-10, TGF-6) while
+the committed matrix carried TWELVE: `slate.graph.connectionsBack` (B2's
+Back — the mac's ⌘[ panel key delivered as a command, B2-D6) lives in
+`chords.json` and its delivery evidence, but the generator's command
+inventory is the mac `SlateCommandID` catalogue, which has no such id,
+so no row was ever rendered — a false claim standing since B2's IGL-11
+amended the spec to "thirteen command rows". Root cause: the generator
+(the inventory had no Windows-only extension); the frozen text's
+"thirteen" is the intent B2 decided, so the code meets it rather than
+the text bending. TAKEN: the generator's WINDOWS_ONLY_COMMANDS extension
+renders the row from `chords.json`'s projection (the label, the mac
+chord ⌘[, its spoken form, the issue), the inventory sentence says so,
+the matrix regenerated with thirteen graph rows (183 command rows);
+`DeliveryEvidenceCensus` gains EveryMappedGraphCommandHasAMatrixRow —
+the thirteen ids `chords.json` maps to the four graph groups each have a
+row, `connectionsBack` among them — and the mutation dropping the
+thirteenth row from the committed matrix is caught. The reconciliation's
+(b) table and the spec's row stand as written, now true. Verdict as
+returned: not safe to continue (IPJ-2-1, IPJ-2-2) — resolved here; one
+mutation caught of one, the drift check observed; the CI-shaped
+regression twice on this tree (10 m 12 s with one failure — the
+doc-comment census catching the new census fact spliced between its
+neighbour's remarks and its attribute, moved above the run; then 10 m
+10 s green, 2,917 facts); IPJ-3 runs on the fixed head.
 
 ### Tests that pin PR F (revision 5's list, frozen; the task loop records what lands)
 
@@ -17923,17 +17967,17 @@ that exists and is not keyed is not claimed as keyed.
 | §F | contract | F7 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `GraphDocumentTests`, `GraphTableTests`, `ShowConnections`, `ConnectionsLeafTests`, `GraphPreferencesViewModel`, `GraphNavigatorTests`, `GraphPreferencesTests`, `GraphDiagramView`, +8 more |
 | §F | contract | F8 | Task loop | `WcMatrixGraphEvidenceCensus`, `IsFluentCollapsedScrollBarPart` |
 | §F | contract | F9 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `GraphContractsCitationCensus`, `ParityHarnessCensus`, `WcMatrixGraphEvidenceCensus`, `DeliveryEvidenceCensus`, `ChordTableTests` |
-| §F | contract | F10 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `NoHostTrimTouchesTheNeedle`, `GraphReconciliationCensus`, `ParityHarnessCensus`, `WcMatrixGraphEvidenceCensus`, `DeliveryEvidenceCensus`, `ChordTableTests`, `GraphContractsCitationCensus` |
+| §F | contract | F10 | Task loop, Post-implementation passes (PR F), Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `NoHostTrimTouchesTheNeedle`, `GraphReconciliationCensus`, `DeliveryEvidenceCensus`, `ParityHarnessCensus`, `WcMatrixGraphEvidenceCensus`, `ChordTableTests`, `GraphContractsCitationCensus` |
 | §F | decision | FD-1 | Task loop | `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, `NoteCreateFailed`, `IterationsPerStep`, `DiagramZoomPercent`, +4 more |
 | §F | decision | FD-2 | Task loop | `ParityHarnessCensus`, `TheLayoutSectionIsTheSessionsSixtiethTickQuantised`, `TwoLayoutsOverOneVaultAreBitIdentical`, `GraphVaultInventory` |
 | §F | decision | FD-3 | Task loop | `WcMatrixGraphEvidenceCensus`, `IsFluentCollapsedScrollBarPart` |
 | §F | decision | FD-4 | Task loop | `GraphContractsCitationCensus` |
-| §F | decision | FD-5 | Task loop | `GraphDocumentTests`, `GraphTableTests`, `ShowConnections`, `ConnectionsLeafTests`, `GraphPreferencesViewModel`, `GraphNavigatorTests`, `GraphPreferencesTests`, `GraphDiagramView`, +4 more |
+| §F | decision | FD-5 | Task loop, Post-implementation passes (PR F) | `GraphDocumentTests`, `GraphTableTests`, `ShowConnections`, `ConnectionsLeafTests`, `GraphPreferencesViewModel`, `GraphNavigatorTests`, `GraphPreferencesTests`, `GraphDiagramView`, +4 more |
 | §F | decision | FD-6 | Task loop | `GraphContractsCitationCensus` |
 | §F | decision | FD-7 | Task loop | `TheContainerExposesSelectionAndTheZoomValue`, `NoHostTrimTouchesTheNeedle`, `BundlePagingSpec`, `ConnectionsPhrase` |
 | §F | decision | FD-8 | Task loop | `GraphStatusNote`, `GraphBlockedReason`, `GraphAnnouncerCensus` |
 | §F | decision | FD-9 | Task loop | `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, `NoteCreateFailed`, `IterationsPerStep`, `DiagramZoomPercent`, +4 more |
-| §F | decision | FD-10 | Task loop | `GraphDocumentTests`, `GraphTableTests`, `ShowConnections`, `ConnectionsLeafTests`, `GraphPreferencesViewModel`, `GraphNavigatorTests`, `GraphPreferencesTests`, `GraphDiagramView`, +4 more |
+| §F | decision | FD-10 | Task loop, Post-implementation passes (PR F) | `GraphDocumentTests`, `GraphTableTests`, `ShowConnections`, `ConnectionsLeafTests`, `GraphPreferencesViewModel`, `GraphNavigatorTests`, `GraphPreferencesTests`, `GraphDiagramView`, +4 more |
 | §F | decision | FD-11 | Task loop | `GraphStatusNote`, `GraphBlockedReason`, `GraphAnnouncerCensus` |
 | §F | divergence | FD-D1 | Task loop | `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, `NoteCreateFailed`, `IterationsPerStep`, `DiagramZoomPercent`, +8 more |
 | §F | divergence | FD-D2 | Task loop | `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, `NoteCreateFailed`, `IterationsPerStep`, `DiagramZoomPercent`, +7 more |

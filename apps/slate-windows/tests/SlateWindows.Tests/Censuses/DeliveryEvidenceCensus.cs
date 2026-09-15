@@ -175,6 +175,30 @@ public sealed class DeliveryEvidenceCensus
         Assert.Contains(tests, t => t.EndsWith("#EveryManifestSurfaceIsARowOfTenCellsAndNoCanvasRowIsUnknown", StringComparison.Ordinal));
     }
 
+    /// <summary>F7 (IPJ-2-2): every command chords.json maps to one of the
+    /// four graph surface groups has a row in the committed matrix — the
+    /// thirteen `slate.graph.*` ids, the mac catalogue's twelve and B2's
+    /// Windows-only `slate.graph.connectionsBack` (the mac's ⌘[ panel key as
+    /// a command, B2-D6), which the generator's Windows-only inventory
+    /// extension renders; the documents' "thirteen command rows" is held
+    /// here, not assumed.</summary>
+    [Fact]
+    public void EveryMappedGraphCommandHasAMatrixRow()
+    {
+        JsonElement commands = Evidence().GetProperty("commands");
+        string matrix = File.ReadAllText(Path.Combine(RepoRoot, "docs", "plans", "18_windows_port", "parity_matrix.md"));
+        string[] graphGroups = ["graphTable", "graphConnections", "graphNavigator", "graphDiagram"];
+        var mapped = commands.EnumerateObject()
+            .Where(c => graphGroups.Contains(c.Value.GetString()))
+            .Select(c => c.Name)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(13, mapped.Count);
+        Assert.Contains("slate.graph.connectionsBack", mapped);
+        var missing = mapped.Where(id => !matrix.Contains($"| `{id}` |", StringComparison.Ordinal)).ToList();
+        Assert.True(missing.Count == 0, "graph commands chords.json maps with no matrix row: " + string.Join(", ", missing));
+    }
+
     /// <summary>W6-2 §F (F7, FD-10): the graph issue maps to the aggregate
     /// that spans the four SURFACE command groups — an implementation
     /// anchor and a test anchor from each — and the close-out's own gates
