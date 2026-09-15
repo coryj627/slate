@@ -116,7 +116,7 @@ public sealed class GraphContractsCitationCensus
             (
                 "E",
                 "## PR E — the inspector: filters, groups, display, forces",
-                "<!-- end of the graph contracts document -->",
+                "## PR F — the close-out: the end-to-end suite, the gates, the reconciliation",
                 // The inspector section: the design over two sources, five rules, fifteen
                 // contracts, the decisions, the divergences, the risks, the pins.
                 6_000,
@@ -125,6 +125,18 @@ public sealed class GraphContractsCitationCensus
                 // own names are unbackticked until they exist. The floor sits
                 // one below the measured population and rises with the records.
                 110),
+            (
+                "F",
+                "## PR F — the close-out: the end-to-end suite, the gates, the reconciliation",
+                "<!-- end of the graph contracts document -->",
+                // The close-out section: the end-to-end suite, the gates, the matrices,
+                // the AT checklist, the reconciliation.
+                6_000,
+                // Revision 1 cites existing identifiers only through the
+                // shell, its tests and the core and mac sources it names; F's
+                // own names are unbackticked until they exist. The floor sits
+                // one below the measured population and rises with the records.
+                66),
         ];
 
     public static TheoryData<string, string, string> SectionRanges

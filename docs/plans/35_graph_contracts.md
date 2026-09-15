@@ -15784,5 +15784,632 @@ unit regression stands as run for 041b6cf2.
 - The journey (E-13), run to its last step locally before every push.
 - `WcMatrixGraphEvidenceCensus`: the row (E-14).
 
+## PR F — the close-out: the end-to-end suite, the gates, the reconciliation
+
+**Revision 1 — 2026-09-15.** The last slice of W6-2 (#746): the P
+analogue of the canvas's PR H, in that section's form — the end-to-end
+suite through the real session and the shell's own seams, the §K
+roll-up with re-measured numbers, the §W-A, §W-C, §W-D and §W-G gates
+each recorded by a census that reads the tree and not the prose, the
+parity matrix regenerated from issue-level evidence, the human AT
+checklist in the W7-4 form, and the issue reconciliation as the final
+section of this document. Spec: `w6_2_graph_spec.md` §4 PR F (items
+1–9) and §5.3's evidence ledger. F ships no new surface, no new command
+row, no new chord and no new announcement; every string it speaks is
+one an earlier section landed. Contract ids are F1…F10; decisions
+FD-n; divergences FD-Dn; risks FR-n. Names that do not exist yet
+(GraphEndToEndTests, GraphTriggerParityCensus, GraphReconciliationCensus,
+the new facts) are unbackticked until the task loop lands them.
+
+### What stands today (0a, 0b, A, B1, B2, C, D, E merged)
+
+Ten merged pull requests carry the issue from its spec (#1178,
+`bbd3516c8`, 2026-09-03) to the inspector (#1215, `b15cbf56a`,
+2026-09-15); F branches from that merge. Every `slate.graph.*` command
+row of `parity_matrix.md` — thirteen: the mac catalogue's twelve and
+B2's `slate.graph.connectionsBack` — reads implemented with the date of
+its slice's gates; the `connections` leaf row is implemented; the
+surface row "Graph view (P parity, canonical textual representation)"
+is the one hard-coded literal left in the generator and reads
+`pending`. `w_c_matrix.md` carries five graph rows (the table, the
+Connections leaf, the navigator, the diagram, the inspector), pinned by
+`WcMatrixGraphEvidenceCensus` over a five-entry manifest, every human
+cell Pending. Five FlaUI journeys scan five axe labels (`graph-table`,
+`graph-connections`, `graph-navigator`, `graph-diagram`,
+`graph-inspector`). `BENCHMARKS.md` holds two per-PR sections
+("Milestone W6-2 PR A", "Milestone W6-2 PR D"); the roll-up section
+the spec names does not exist. The §W-A golden
+`crates/slate-core/tests/fixtures/parity_golden/graph_queries.json`
+over the committed `graph_vault` (eight files; twelve nodes, four of
+them ghosts) is compared byte for byte on BOTH twins today —
+`ParityHarnessCensus` on Windows, `ParityHarnessTests.swift` on mac —
+and its `layout` section is the session's sixtieth tick quantised,
+re-derived in process by `TheLayoutSectionIsTheSessionsSixtiethTickQuantised`
+and proven bit-identical across two sessions by
+`TwoLayoutsOverOneVaultAreBitIdentical`. The corpus carries the graph
+family on both mirrors: seventeen `GraphA11yEvent` variants, 73
+witnesses (unchanged since 0a's freeze), 525 entries in
+`tests/fixtures/a11y/corpus.json` (0a's "521" predates PR E13's four
+canvas entries). The mac residue census pins 28 host-composed sites
+(`A11yResidueCensusTests.swift`, 31 → 30 → 29 → 28; the last step is
+0a's). PR 0b's §W-G register lists pockets A–K moved and L–P host by
+designation, each row's status written at 0b; nothing has re-read the
+Windows tree against it since. The five "Mac details recorded while
+reading" registers (0a, A, B, C, D) hold nine mac defects marked for
+filing at close-out; seven residue issues from PR C's post-implementation
+loop (#1189–#1195) stand five closed and two open. No graph section has
+a "Verified during implementation" register and the spec's eight owner
+decisions D-1…D-8 are answered inside the sections that consumed them,
+not in one place.
+
+### The contracts (PR F)
+
+**F1 — The end-to-end suite is the spec's own sequence, through the
+workspace's seams, against the committed bytes.** GraphEndToEndTests
+lives in the unit project and drives `VaultSession.OpenFilesystem` over
+a copy of the committed `graph_vault` (the same directory
+`ParityHarnessCensus` serialises; copied from `SourceText.RepoRoot()`,
+never a test-authored twin) and a `WorkspaceViewModel` built the way
+`GraphDiagramTests`' host builds it, on the pumped dispatcher, with the
+motion policy set explicitly (D-4): the graph opened by
+`WorkspaceViewModel.OpenGraph`, the leaf by `ShowConnections`, the
+inspector by `ToggleGraphInspector`, the diagram by the document's
+`SetMode` — the members the app runs, never a fake source, never a
+direct FFI call in a fact's body, never a direct write to the view
+state. The ORACLE is the golden (FD-1): wherever `graph_queries.json`
+carries the answer, the fact compares against those bytes, so the
+E2E is the §W-A pin re-run through the shell. Six facts, named:
+
+- OpenGraphVaultExposesTheTableTheSummaryAndTheSortAgainstTheGolden:
+  the workspace opens the graph; the publication's rows and its
+  summary equal the golden's `table` entry for the default sort under
+  the artifact's filter, cell for cell (nine core-formatted cells per
+  row, the summary string verbatim); then the TABLE SORT leg on the STA
+  thread, as `GraphTableTests` runs it — a `GraphSurfaceView` hosted in
+  a window, the grid's sort command executed on each of the golden's
+  pinned sorts (the command Ctrl+Alt+S runs; `GraphTableView` issues
+  `GraphRequest.Sort`) and the Note column read back through the Grid
+  pattern in the golden's row order for that sort; then a preset
+  (`RunPreset` Orphans through the navigator) whose rows equal the
+  golden's `orphans` query entry and whose headline is spoken once;
+  then the needle (`SetNameQuery` with a needle the golden's
+  `visibility` section pins) whose visible set equals that entry and
+  whose count line is spoken as the pair; then `WhereAmI` whose
+  readback equals core's render of the seated row's `GraphWhereAmI`.
+- TheConnectionsLeafWalksReRootsAndCreatesAgainstTheGolden:
+  `ShowConnections` from the table's seated row (`hub.md`) mounts the
+  leaf; at depths one, two and three (`SetDepth`) the leaf's rows equal
+  the golden's `connections` entries for the pinned (path, depth)
+  pairs, row for row, with the neighbourhood summary spoken as core
+  renders it; `PinTo` a child re-roots and speaks `GraphReRooted`;
+  Back (`PopTo`) returns to the previous root; then the ONE mutation the
+  graph surface owns — the ghost row's Create note through the
+  workspace's two-phase seam (`WorkspaceViewModel.GraphCreate.cs`) —
+  lands the file at the path core minted (the golden's `ghost_paths`
+  entry for that target, `graph_ghost_note_path`), speaks
+  `GraphStatus{NoteCreated}` once, and the next publication carries
+  the node as a Note with its stable key changed from the ghost's to
+  the path's.
+- TheDiagramLaysOutConvergesStepsZoomsAndReadsBack: the document's
+  mode set to Diagram with the surface hosted in a window on the STA
+  thread; the driver runs to convergence under the pumped scheduler
+  as `GraphDiagramTests` drives it, and `GraphLayoutSettled` is spoken
+  exactly once; the diagram's visible set equals the golden's
+  `topology` nodes; the STRUCTURAL steps (Tab and Shift+Tab through
+  the surface's keyboard route) visit the visible labels in the
+  golden's `structural` order, wrapping where the golden wraps; a
+  SPATIAL step from the seated node lands on a visible node and speaks
+  its row (self-consistency — the golden's `spatial` section is
+  computed over the sixtieth tick, and the driver has converged past it;
+  the determinism pin is `TwoLayoutsOverOneVaultAreBitIdentical`, not
+  this fact; FD-1); zoom in, zoom out, actual size and fit through
+  the navigator's verbs speak the percents core renders (`GraphZoom`),
+  the fit over a non-empty set changing the percent; `WhereAmI` in
+  Diagram mode renders the node's readback; a pin through the pin verb
+  speaks `GraphPinned` and survives one more settle.
+- TheConfigRoundTripsThroughTheInspectorAndTheStore: the inspector's
+  `SetBackendFilter` and `SetForces` (the members the pane's controls
+  call) reach `.slate/graph.json` through `GraphConfigWriter` — the
+  file's bytes equal core's `graph_config_encode` of the same config
+  over the file's previous bytes (the golden's `config` section pins
+  encode over its pinned input) — and a fresh `GraphPreferencesViewModel`
+  over the same vault reads the same values back through core's
+  decode; the read-only arm is not exercised here (`GraphConfigWriterTests`
+  owns it).
+- LargeGraphOpensLaysOutPansAndStepsUnderBudget: a 1,500-note linked
+  vault (`FixtureVault.Create`, the benchmark's shape without its
+  ghost arm — tier A's ceiling, `tier_b_threshold` inclusive) through
+  the workspace: open to the installed publication under PR A's
+  500 ms ceiling (the 10k budget applied at 1,500; the number is
+  recorded and the headroom shown — FD-9); the diagram surface hosted
+  in a hidden 1600×1200 window: the first rebuild (the topology fetch,
+  its landing, the peers materialised with every name read) under
+  500 ms; ten pan hops averaged under 100 ms; fifty spatial steps on
+  the real document averaged under 50 ms; a warm tick of twenty
+  iterations through the model's admission gate under 100 ms — the
+  four budgets `GraphRendererBenchmarks` asserts, measured by
+  `Stopwatch` on the real document, driver and surface, with the
+  honest scope note that these are the UI thread's numbers and the
+  composition thread's frame is the app's (FD-D2).
+- AnnouncementGrammarConformsPerVerbosity: over the graph vault, the
+  row line for the seated node at Terse, Standard and Verbose through
+  the document's verbosity function equals core's render of
+  `GraphRow` at that verbosity (the terse collapse, the references
+  clause); the preset headline, the filter-count pair and the settle
+  line each equal their event's render; over a 1,501-note vault the
+  diagram enters tier B and speaks `GraphTierEntered` then
+  `GraphTierSummary` as core renders them, with no per-node peer
+  materialised.
+
+**F2 — §K is one roll-up section with re-measured numbers, the runners
+named, and the budgets where they are asserted.** `BENCHMARKS.md`
+gains "Milestone W6-2 — graph through the C# binding — ⟨date⟩ (#746)"
+after the two per-PR sections it rolls up, never editing them: the
+marshalling table from `GraphOpenBenchmarks` re-run at close-out
+(`--graph --validate-budgets`, the six pinned (workload, notes)
+entries); the renderer table from `GraphRendererBenchmarks` re-run
+(`--graph-renderer --validate-budgets`, four workloads); the
+end-to-end row from F1's LargeGraphOpensLaysOutPansAndStepsUnderBudget
+named by its runner the way the canvas roll-up names its E2E fact;
+one environment line (machine, Windows build, .NET SDK, rustc,
+configuration); the SIX budgets and where each is asserted — PR A's
+two open-to-publication budgets (1k under 100 ms, 10k under 500 ms) in
+`GraphOpenBenchmarks`' exit code; the renderer's four in
+`GraphRendererBenchmarks`' exit code AND in F1's fact; and the honest
+scope note carried from PR D (the warm tick is the kernel's O(n²) at
+1,500; nothing measures the composition thread). Numbers are pasted
+from the run, never typed from memory; each run's command line is a
+fenced block.
+
+**F3 — §W-A: the golden is byte-identical on both twins today, the
+end-to-end suite re-runs it through the shell, and the fixture
+census closes the one gap.** What stands is recorded as it is:
+`graph_queries.json` is compared byte for byte against the Windows
+serializer's output (`ParityHarnessCensus`) and against the Swift
+serializer's (`ParityHarnessTests.swift`); two artifacts equal to one
+committed file are equal to each other, so "byte-identical on both
+twins" is a theorem of the two censuses, not a claim of this PR. The
+position golden (D-18) is the same file's `layout` section under the
+same two facts. F1's oracle is that file, so the shell's table, leaf,
+diagram and config are pinned to the golden through the workspace — the
+§W-A line's "closed F". The gap: `GraphVaultInventory` is a hand-pinned
+list of twelve keys, so a file ADDED to `graph_vault` without
+regenerating the golden fails nothing. F extends `ParityHarnessCensus`
+with EveryGraphVaultFileIsInTheArtifact — every file under the fixture
+directory (walked, not listed) appears as a `p:` key in the golden's
+snapshot, and every `p:` key names a file that exists — and the Swift
+twin carries the same fact in `ParityHarnessTests.swift` (FD-2, FR-1).
+The graph has no mutation harness and none is added: the surface is
+read-only but for the ghost create, which is host I/O over core's
+minted path (FD-D1); the canvas's `MutationHarnessCensus` has no graph
+twin, and the register says so rather than leaving the reader to
+wonder.
+
+**F4 — §W-D: the counts are recorded as they are, the trigger-parity
+ledger is keyed by structural key, the three unconsumed keys are
+designated with their reasons, and a census reads both platforms.**
+The family stands: seventeen variants, 73 witnesses, both mirrors
+(`A11yCorpusCensus`, `A11yCorpusCensusTests.swift`), pinned by
+`every_graph_variant_and_arm_is_represented_in_the_corpus`; the corpus
+total is written as 525 where 0a's text says 521, with the four canvas
+entries named as the delta. The ledger has one row per STRUCTURAL KEY
+of the graph vocabulary — each `GraphA11yEvent` arm, the two
+discriminant families (`GraphStatusNote`, six arms; `GraphBlockedReason`,
+three) expanded, because each arm selects a sentence and has a trigger
+of its own; the payload qualifiers (the verbosity, the preset outcome,
+the Where-am-I selection, the row copy's kind) do not split a key —
+twenty-four rows (fifteen unfamilied arms, six status notes, three
+blocked reasons), generated by `scripts/graph_trigger_ledger.py`, the
+canvas generator twinned with the graph's two families, recording per
+key the mac site(s) and the Windows site(s) as `file#member`, the
+Windows fact that constructs the key, and, where a platform never
+fires it, the designation from the list this section owns. The sweep
+at contracts time found THREE keys one platform never constructs, and
+none that Windows owes a consumer for:
+
+- `GraphStatus/AlreadyOpen` — Windows-designated. The mac's only site
+  is Duplicate Tab (`AppState.swift:3321`); the Windows graph tab is
+  excluded from Duplicate since W1 (A-13), and rule L (frozen, §A)
+  speaks `GraphStatus{Opened}` alone when Open lands on the
+  effective-active tab. No trigger exists; consuming it would reopen a
+  frozen rule, so the key is designated and recorded as owed to an
+  owner decision (FD-8).
+- `GraphStatus/NoConnections` and `GraphStatus/LoadingConnections` —
+  mac-designated, by 0a-D3: the mac's panel SHOWS the text
+  (`ConnectionsPanel.swift:31–36`) and posts nothing; Windows posts
+  both from `ConnectionsLeafViewModel`. The designation is 0a's, not
+  this section's invention.
+
+Every other key has a site on both platforms (the pre-sweep's counts:
+`GraphLayoutSettled` at `AppState+GraphDiagram.swift:207`,
+`GraphTierEntered` at `GraphDiagramView.swift:515`,
+`GraphBlocked/ConnectionsLoadFailed` at `AppState+Connections.swift:141`
+— the three a naive grep misses because the Swift spelling spans
+lines). A census, GraphTriggerParityCensus, parses the ledger from
+this section, derives the twenty-four keys from the binding, asserts
+every key has a row, resolves every Windows reference as a member
+present in the named file under `src/SlateWindows/` — ALL production
+roots, because `GraphStatus{Opened}` fires from
+`WorkspaceViewModel.Graph.cs`, `GraphStatus{ConnectionsPanel}` from
+`WorkspaceViewModel.Connections.cs`, and `NoteCreated` and
+`NoteCreateFailed` from `WorkspaceViewModel.GraphCreate.cs` — whose
+body constructs the key, resolves every mac reference as a member of
+the named Swift file that spells the key, asserts the Windows fact
+named exists and references the key, and admits a designation only
+from the section's own list. Whether both triggers fire under the same
+preconditions is the round's review (FR-3). The residue count is
+recorded old → new (29 → 28, `pinnedResidueSites`), and Windows's zero
+host-composed announcement sites under `Graph/` by
+`GraphAnnouncerCensus` (`NoGraphSourceAnnouncesOutsideTheRelay`,
+`TheRelayIsTheOneFileThatRenders`) — the graph's twin of HD-D2 (FD-D3).
+
+**F5 — §W-C: every graph surface has a row, from a manifest the
+sources close, every non-human cell is populated and resolved.** The
+five rows stand; F adds no row unless the id census finds a surface
+without one. `WcMatrixGraphEvidenceCensus` gains
+EveryGraphAutomationIdLiteralIsInAManifestRow: every automation-id
+literal set under `Graph/` (the twenty-seven SetAutomationId string
+arguments at contracts time; the per-node and per-group prefixes
+matched by prefix) and every graph host id in `MainWindow.xaml`
+(GraphInspectorBody, the Connections leaf host) appears in some
+manifest row's ids — so a control that ships without a matrix row
+fails a census, not a reader. The manifest's evidence grammar is the
+canvas's: backticked journey and fact names resolved in the test tree,
+`axe:` labels matched to `AssertAxeClean` literals. Axe is zero
+failures across the five graph journeys with the one standing waiver
+(`IsFluentCollapsedScrollBarPart`, pinned both ways in
+`AxeWaiverTests`) recorded as the only one. The five rows link
+`reports/w6_2_graph_at_checklist.md` through one note line in
+`w_c_matrix.md` beside the W6-1 line, in its form.
+
+**F6 — §W-G: the audit is closed by the re-grep, its method recorded,
+every hit classified, and any duplication fixed, not designated.** The
+re-grep runs over `Graph/*.cs` and the three `WorkspaceViewModel.*.cs`
+partials that own graph seams (`Graph`, `Connections`, `GraphCreate`),
+for the signatures of host derivation the register's pockets name:
+sorting and comparison (`OrderBy`, `Sort`, `CompareTo`, `string.Compare`),
+case folding and normalisation (ToLowerInvariant, ToUpperInvariant,
+`Normalize`), the diameter curve (`Math.Log`), string composition
+(`string.Format`, interpolation, `StringBuilder`, `Join`) and threshold
+literals (1500, 200, the depth clamp) — every hit listed in the record
+with its pocket and its classification. The classes the pre-grep at
+contracts time found, and what each is: (i) `GraphPhrase`'s
+`string.Format` over the inspector's indexed control NAMES ("Group n
+query", …) — the label inventory, names not templates (0aD-8's line;
+pocket A's copy authority is the corpus, and no announcement is
+composed there — `TheRelayIsTheOneFileThatRenders`); (ii)
+`GraphConfigWriter`'s case-insensitive vault-path map — pocket F's I/O
+half, host by 0b's designation; (iii) ordinal dictionaries keyed by
+core's stable keys (`GraphDiagramView`, `GraphDiagramModel`,
+`ConnectionsLeafView`) — identity READ from the record (pocket C), not
+folded. No `OrderBy`, `Sort`, `Math.Log`, `Normalize` or case fold
+exists under `Graph/` today; the tier boundary is read from
+`graph_constants`; the sort is `GraphRequest.Sort` to core; the needle
+goes to `graph_visibility`. Should the re-grep find a re-derivation the
+pre-grep missed, it is routed through the FFI and pinned by a fact
+against core's own answer (FD-7); the record names it. Pockets L–P are
+re-recorded with their Windows site: L the viewport constants pinned to
+the canvas's (`GraphDiagramView`), M the hit grid (`GraphDiagramView`),
+N the coalescing window (`GraphAnnouncer`), O the singleton (W1-3), P
+the driver (`GraphLayoutDriver`). The 0b register gains a fourth column
+"State after F" reading closed, or host-by-designation with the site,
+for every row, and its preamble says "closed (PR F)".
+
+**F7 — The matrix's surface row is derived from issue-level evidence,
+the graph's evidence is split by surface so validation 14 has teeth,
+and the command rows keep their slice dates.** `chords.json`'s
+`deliveryEvidence.groups` today holds ONE `graph` group that all
+thirteen `slate.graph.*` commands map to, so validation 14
+(scope-completeness across command groups) is satisfied trivially for
+`#746`. F splits it into four COMMAND groups named by surface, not by
+PR letter: `graphTable` (`slate.graph.openTab`), `graphConnections`
+(`showConnections`, `connectionsDeeper`, `connectionsShallower`,
+`connectionsBack`), `graphNavigator` (`orphans`, `unresolved`,
+`mostLinked`, `whereAmI`), `graphDiagram` (`zoomIn`, `zoomOut`,
+`actualSize`, `fitGraph`) — each carrying the implementation and test
+anchors of its slice at declaration sites (validation 13) — and an
+AGGREGATE `graph` group whose implementation anchors include at least
+one from each of the four and whose test anchors name F1's six facts,
+the five journeys and the censuses this PR lands; the commands'
+`evidenceGroup` fields are remapped; `#746` stays mapped to `graph`
+(FD-10). The `deliveryEvidence` object is hand-authored and survives
+the projection untouched (`ChordsJson_IsExactlyTheTablesProjection`
+pins that), so the edit is a JSON edit checked by
+`DeliveryEvidenceCensus`, which gains the graph aggregate's assertion
+beside the canvas's. The generator's hard-coded surface literal
+becomes an `issue_delivery_status` call like its two neighbours;
+`issue_delivery_status` returns a new W6-2 CLOSE-OUT status for `#746`
+— "implemented; local gates green ⟨F's gate date⟩; interactive CI +
+human AT pending" — while the thirteen command rows KEEP the dates
+their slices' gates went green (IPA-13's rule; FD-5). `expected_issues`
+already carries `#746`. `parity_matrix.md` regenerates with the
+surface row implemented and the human AT clause standing (FD-3);
+`docs/help/graph.md` stays `#756` pending — the hand-off, not this
+PR's. The generator exits zero with its fourteen validations.
+
+**F8 — The AT checklist carries the spec's eleven items in the
+instrument's form, every human cell Pending, every automated twin
+named.** `docs/plans/18_windows_port/reports/w6_2_graph_at_checklist.md`
+opens with the field-verification form's header lines (Tester, AT, OS,
+Build, Corpus, Method) reading "Pending — release residual" until a
+named tester records a run — the corpus line naming the committed
+`graph_vault` (twelve nodes, four ghosts) and the 1,500-note and
+1,501-note vaults F1 generates — then one table — number, check, how
+(the UIA route), the observable outcome, the automated twin (the
+journey or fact that covers the automatable half, or "none — human
+only"), Narrator, NVDA, JAWS — over the spec's items one to one: (1)
+the table walk — the nine headers read in core's column order, every
+row reads its label, kind, counts and the summary region; a sort by
+Ctrl+Alt+S announces the sort and re-reads in the new order; (2) the
+leaf walk — depth one to three through the depth control, re-root on
+a child, Back, the ghost row's Create note; (3) the diagram traversal
+— peer by peer, traversal past the window's edge PANS the diagram (no
+dead end), Invoke selects, the container's Value reads the zoom, and at
+1,501 notes the tier summary reads in place of peers; (4) arrow-only
+traversal in each surface — the table's rows, the tree's items, the
+diagram's spatial arrows and structural Tab, with "not applicable — no
+rotor" recorded where UIA has none; (5) keyboard-only tab-through of
+the header (the switcher, the field, Clear, the inspector toggle), the
+showing surface, the Where-am-I panel, the inspector pane and the
+Connections leaf, the focus ring always visible; (6) Windows Voice
+Access "show numbers" over the diagram, then the dictated commands
+"Click 3", "Show connections", "Where am I", "Zoom in", "Fit graph"
+(the graph's verbs, D-7's twin; FD-D4); (7) switch access — through
+the header into the diagram with one switch, select a node, open its
+connections, Escape the ladder (the panel, the needle, the surface);
+(8) braille inspectability — the filter field's Value, the zoom Value,
+the state region, the depth control and the sliders' values readable
+from element Values without waiting for announcements; (9) text
+scaling 225 % — node labels and the inspector reflow with no clipping;
+(10) the four Contrast themes plus one customised — node fills and
+group colours collapse, labels remain, the selection ring visible on
+every fill (`ThemeTokenContrastTests` pins the tokens); (11) Reduce
+Motion — the layout lands in one shot, pan, zoom and selection changes
+land instantly. Narrator is smoke scope (D-7). No cell is ever
+pre-filled green: an unexecuted item is the release residual, listed
+as such in the reconciliation with the owner's sign-off as the issue's
+closing condition (FD-3).
+
+**F9 — The reconciliation is the final section, keyed exactly, and
+names evidence, not intent.** "Issue reconciliation (#746)" is added
+after this section and registered with `GraphContractsCitationCensus`
+like a PR section, so every backticked identifier it cites must
+exist; its structured references beyond that grammar (paths,
+`file#member`, Swift, Rust and Python names) are the round's review
+(FR-2). It contains: (a) the PR ledger — the ten series PRs (#1178
+spec, #1179 0a, #1180 0b, #1181 A, #1182 A's post-implementation
+ledger, #1184 B1, #1185 B2, #1188 C, #1214 D, #1215 E) with branch,
+merge commit and date, plus every merged repair PR whose branch cites
+one of PR C's residue issues (#1189–#1195), each merge commit VERIFIED
+an ancestor of F's head by `git merge-base --is-ancestor` with the
+exit code recorded, and F's base verified as the merged `main` after E
+(`b15cbf56a`); the check is GraphReconciliationCensus's own fact,
+EveryLedgeredMergeIsAnAncestorOfThisHead, run on every build; (b)
+contract → evidence keyed by (section, register kind, id) over the
+nine PR sections (0a, 0b, A, B, B2, C, D, E, F) — one row per KEY,
+a key being every `**ID — ` or `- **ID — ` head of a key-bearing
+subsection: contracts (`X-n`), decisions (`XD-n`), divergences
+(`X-Dn`), risks (`XR-n`), owner questions (`XD-Qn`) and the design
+Terms of C, D and E (`Term Xn`); the task records (`TG*-n`), the round
+ledgers and the post-implementation passes (`IPI-n`) are EVIDENCE, not
+keys — naming the record subsections of the same section that cite the
+id ("discharged by") and the long identifiers those paragraphs
+backtick ("pinned by"), each checked against the Windows tree and
+rendered plain with "(not in the tree)" when absent, generated by
+`scripts/graph_reconciliation.py` — the canvas generator twinned with
+this document's section list and id grammar — between
+`<!-- graph-reconciliation:generated:start -->` and `:end -->` markers,
+`--write` to splice, `--check` to verify the document carries exactly
+what it would regenerate; the script asserts each key's head occurs
+exactly once in its section, that no two keys share a row, and the
+key total pinned as a constant in both the script and the census (a
+lost head is a deliberate bump, never a silent re-blessing); a key
+nothing cites reads "unevidenced"; the sections that pin per section
+rather than per contract say exactly that; (c) the divergence index
+(`0a-D`, `0b-D`, `A-D`, `B-D`, `B2-D`, `C-D`, `D-D`, `E-D`, `FD-D`)
+and the risk index (`0aR`, `0bR`, `AR`, `CR`, `DR`, `ER`, `FR`) — id,
+the head's first clause, where recorded — generated with (b); (d) the
+owner decisions, hand-written: the spec's D-1…D-8 each with its
+resolution and the section that recorded it (D-1 the tiering, 0b's
+register; D-2 the chords, C's and D's tables; D-3 the config in core,
+0b; D-4 core's fold, 0b-D3; D-5 the constants, `graph_constants`; D-6
+the graph's own verbosity, the `verbosity` key and PR C's submenu with
+the mac gap filed here; D-7 Voice Access and Narrator smoke, F8; D-8
+follow mac, B2-6), and the fifteen section-local owner questions
+(CD-Q1…4, DD-Q1…5, ED-Q1…6) each with the default it stands at and its
+status as its section records it; (e) the upstream issues FILED,
+grouped by target and numbered — the nine mac inputs from the five
+registers, one issue each (FD-4): the verbosity with no switch and no
+store (0a; D-6's gap); `openGraphTab` speaking Opened past the same-tab
+guard where AlreadyOpen exists (A); the mounted rail switch that shows
+the loading text and starts no load, with `connectionsLoading` written
+and never read (B); a generation mismatch dropping a pending user sort
+(C-D17); a restored tab mounting on the reset defaults (C-D8); a needle
+under a transient preset persisting the preset's backend filter
+(C-D7); the presets shipped with no menu item (C); the restore-driven
+mode observer speaking the mode line on a persisted Diagram (D); the
+dead `labelFadeZoom` constant (D) — no core issue and no P-contract
+issue, the spec's §6 recording none and the registers naming none; PR
+C's seven residue issues re-listed with their state (#1189 and #1190
+open, mac; #1191–#1195 closed); (f) the hand-offs — `docs/help/graph.md`'s
+Windows chord column to W8-6 (#756) with `chords.json` as its source;
+(g) the residuals — the human AT pass (F8), the interactive CI clause,
+the three designated keys (F4), the pending owner questions at their
+defaults, the two open mac residue issues, and anything a gate above
+left Pending; (h) `w6_spec.md` §W6-2's three numbered items become
+checkbox rows ticked with the date of their evidence, and its one
+"(each)" row becomes three — matrix rows green (ticked, F7), the §W-G
+audit recorded (ticked, F6), and the AT checklists rewritten as the
+spec allows, "executed, or listed as the release residual with the
+owner's sign-off", unticked until the owner signs — because the
+acceptance clause is the ISSUE's closing condition and F does not
+close the issue (FD-6).
+
+**F10 — Verification, in the spec's own sequence.** Named facts: the
+six of F1; F3's EveryGraphVaultFileIsInTheArtifact on both lanes;
+F4's GraphTriggerParityCensus; F5's EveryGraphAutomationIdLiteralIsInAManifestRow
+and the five journeys' axe evidence; F7's generator run (`python
+scripts/generate-parity-matrix.py` exits zero, fourteen validations),
+`ChordsJson_IsExactlyTheTablesProjection` and `DeliveryEvidenceCensus`'s
+graph aggregate fact; F9's generated tables (`--check`) and
+EveryLedgeredMergeIsAnAncestorOfThisHead, the two sections checked by
+`GraphContractsCitationCensus`. Byte-restored mutations, each aimed at
+the gate's own predicate: a golden cell altered → F1's table fact; a
+depth row dropped → the leaf fact; the settle line spoken twice → the
+diagram fact; the encoded bytes altered → the config fact; a sleep in
+the spatial step → the budget fact; a verbosity collapsed → the
+grammar fact; a fixture file added without regeneration → F3's census;
+a ledger row's Windows member renamed, a row removed, a key
+constructed by no member → F4's census; an automation id not in any
+row, a fact renamed, a missing `axe:` label → F5's census; `#746`
+remapped to `graphTable` alone → validation 14 and the census mirror;
+a marker moved into a comment → validation 13; a reconciliation key's
+row omitted, two same-id keys collapsed, a head deleted without the
+bump → the generator's assertions and the census; a ledgered commit
+replaced by a non-ancestor → the ancestry fact. Then the spec's §5.2
+sequence, reproduced: `dotnet format` on the slnx after every Windows
+edit batch; the unit suites and censuses locally; the CI-shaped
+regression before every push; the five journeys locally as a
+serialized smoke with no screen reader running — CI's shell
+accessibility gate ARBITRATES them, and every lane's log is read for
+failures, not test names; the post-implementation codex passes over
+the diff until the stop rule; the PR; CI green on BOTH twins on the
+final head; codoki's approval on that head; merge on the standing
+conditions.
+
+### Decisions (PR F)
+
+- **FD-1 — The golden is the end-to-end suite's oracle.** Wherever
+  `graph_queries.json` carries the answer — the table's rows and
+  summary per sort, the queries, the visibility, the connections per
+  (path, depth), the topology, the structural order, the ghost paths,
+  the config's encode — F1 compares the shell's answer to those bytes,
+  so a drift in the shell fails against the same file both twins pin.
+  The layout leg is the one exception: the driver converges past the
+  sixtieth tick, so the spatial step is asserted for self-consistency
+  and the determinism claim rides `TwoLayoutsOverOneVaultAreBitIdentical`.
+- **FD-2 — The Swift twin's one addition is test-only and arbitrated
+  by mac's CI lane.** This box has no Xcode; the fact is a directory
+  walk against the artifact's keys, the same shape on both twins; a red
+  mac lane is fixed here, not waived.
+- **FD-3 — The human AT pass is the release residual, never green by
+  omission.** Every human cell of the checklist and the five matrix
+  rows stays Pending until a named tester records a run per the field
+  form; the status strings keep "human AT pending"; the issue closes on
+  the owner's sign-off, not on this PR's merge.
+- **FD-4 — Upstream issues are filed one per mac defect, from the
+  registers' own lines, citing #746.** Nine inputs, nine issues; the
+  two open residue issues (#1189, #1190) stand as filed by PR C and are
+  re-listed, not duplicated. Nothing is filed for core or for the P
+  contract because no register names a defect there.
+- **FD-5 — The surface row reads the close-out status, from the
+  issue-level aggregate; the command rows keep their slice dates.** The
+  surface row flips from `pending` to "implemented; local gates green
+  ⟨F's gate date⟩; interactive CI + human AT pending" — not to a bare
+  "implemented" — evidenced by the `graph` aggregate, never by one
+  command group standing for the issue; the thirteen command rows keep
+  the dates their own gates went green (IPA-13), because re-dating
+  them would claim gates F did not run.
+- **FD-6 — The spec's acceptance rows are fixed in the spec file, and
+  F does not close the issue.** `w6_spec.md` §W6-2's numbered items
+  become checkbox rows (the acceptance clause names "checkbox rows
+  ticked with dates" and there are none); the AT row carries the
+  residual clause the spec itself allows and is ticked by the owner's
+  sign-off; the issue stays open for that signature.
+- **FD-7 — Host duplications the re-grep finds are fixed, not
+  designated; the label inventory is not a duplication.** A sort, a
+  fold, a curve or a threshold re-derived in C# beside an FFI that
+  answers it is a defect and routes through the seam with a fact
+  against core's answer; a control's NAME composed in `GraphPhrase` is
+  the label inventory the copy authority (0aD-8) leaves to the host.
+- **FD-8 — The three unconsumed keys are designated with their
+  reasons, and none is consumed here.** `AlreadyOpen` on Windows has no
+  trigger without reopening rule L (frozen); `NoConnections` and
+  `LoadingConnections` on mac are 0a-D3's recorded divergence. Each is
+  recorded as owed to an owner decision in the residuals, in HD-D3's
+  form.
+- **FD-9 — The large fixture is tier A's ceiling, and the open budget
+  applied to it is PR A's 10k ceiling.** 1,500 notes is the size the
+  renderer's four budgets were set at (D-18); PR A's budgets are stated
+  at 1k and 10k, and 1,500 sits between them, so the fact asserts the
+  looser ceiling and RECORDS the number — the headroom is the claim,
+  not the pass.
+- **FD-10 — The evidence groups are split by SURFACE, and the
+  aggregate spans them.** Four command groups named for what the user
+  reaches (the table, the leaf, the navigator, the diagram) — not for
+  PR letters, which the staged-claim rule (IPA-13) already found
+  ambiguous across the two W6 series — with the `graph` aggregate
+  required to carry an anchor from each, so validation 14 fails when
+  the issue's evidence stops spanning a surface.
+
+### Divergences recorded (PR F)
+
+- **FD-D1 — The graph has no mutation harness.** The canvas's
+  `MutationHarnessCensus` scripts authoring verbs against fixtures; the
+  graph surface authors nothing but the ghost's note, which is host I/O
+  over core's minted path (`graph_ghost_note_path`, pinned in the
+  golden's `ghost_paths`) — F1's leaf fact is its end-to-end pin, and
+  no scenario file exists for either twin.
+- **FD-D2 — The large-graph budgets measure the driver and the
+  renderer's rebuild on the UI thread, not the frame.** The mac's
+  renderer ticks on its display link; Windows's driver runs off the
+  dispatcher and its numbers are the UI thread's (D's TD-7 analogue,
+  the canvas's HD-D1); the composition thread's frame rides the app and
+  the journeys.
+- **FD-D3 — Windows has no residue census.** The Swift census counts
+  host-composed sites mac still has (28); the Windows graph relay is
+  the one file that renders and no graph source announces outside it
+  (`GraphAnnouncerCensus`), so the count is recorded as zero by the
+  announcer census rather than by a mirror of the Swift one.
+- **FD-D4 — The Voice Access commands are the graph's verbs.** T's
+  five dictated commands were the canvas's authoring verbs; the graph
+  authors nothing, so the checklist dictates "Show connections",
+  "Where am I", "Zoom in" and "Fit graph" beside "Click 3" — the
+  palette rows the graph registers.
+
+### Risks (PR F)
+
+- **FR-1 — The Swift fact is unrun on this box.** Mac's CI lane is the
+  only executor; a compile error there costs a round trip, not a
+  waiver.
+- **FR-2 — The reconciliation's contract → evidence table is generated
+  from prose, and its structured references are review-only.** A record
+  that cites an id in passing reads as evidence for it;
+  `GraphContractsCitationCensus` checks only backticked identifiers of
+  the census's grammar; the round reviews the table, and a row whose
+  evidence is only a mention is marked so.
+- **FR-3 — The trigger census resolves sites, not preconditions.** That
+  both platforms fire a key under the same preconditions and outcomes
+  is the round's review of the ledger and the named Windows facts.
+- **FR-4 — The budgets in F1 run on CI's runner.** A loaded runner can
+  miss a budget the box meets with headroom; a miss is root-caused
+  against the recorded numbers, never widened in the fact.
+- **FR-5 — Two large vaults in the unit suite.** A 1,500-note and a
+  1,501-note scan add seconds to the CI-shaped regression and the
+  Windows lane; the facts share one vault where the tier lets them and
+  the record carries the suite's wall time before and after.
+
+### Tests that pin PR F (revision 1's list; the task loop records what lands)
+
+- GraphEndToEndTests (new): F1's six facts.
+- `ParityHarnessCensus`: EveryGraphVaultFileIsInTheArtifact; the Swift
+  twin in `ParityHarnessTests.swift` (F3).
+- GraphTriggerParityCensus (new): the ledger against both trees, the
+  designations from the list alone (F4).
+- `WcMatrixGraphEvidenceCensus`: EveryGraphAutomationIdLiteralIsInAManifestRow
+  and the checklist link (F5).
+- `DeliveryEvidenceCensus`: the graph aggregate spans the four command
+  groups (F7); `ChordTableTests`: the projection leaves the evidence
+  untouched.
+- GraphReconciliationCensus (new): the ancestry fact, the key total,
+  the generated tables' exact regeneration, the issue list's count (F9).
+- `GraphContractsCitationCensus`: this section and the reconciliation
+  registered, each with its floor.
+- The generator run and `--check` of both scripts, as process steps in
+  the record (F7, F9).
+- The five journeys, run to their last step locally before every push;
+  axe zero with the one waiver (F5).
+- Byte-restored mutations, one per predicate, as F10 lists them.
+
 <!-- end of the graph contracts document -->
 
