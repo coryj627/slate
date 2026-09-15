@@ -17180,6 +17180,72 @@ two same-id keys collapsed, a head deleted without the bump, a ledgered
 commit replaced by a non-ancestor — each → the census or the script's
 own assertion.
 
+**TGF-9 — The mutation sweep consolidated, the process record, the
+gates as run (F10).** THE SWEEP, one byte-restored mutation per
+predicate F10 names, run by the scratchpad's runner (each entry
+reinstates the defect, builds, runs the pinning fact, requires the
+fact to FAIL, restores the bytes):
+
+| Task | Mutations | Caught | Note |
+|---|---:|---:|---|
+| TGF-1 the trigger ledger and its census | 9 | 9 | a Windows member renamed; a member constructing another key; a row removed; a role changed; an observing fact that is not a member of the suite; a reachable key marked site-only; a designation's note dropped; a mac member spelling another key; a Windows construction of `AlreadyOpen` |
+| TGF-2 the end-to-end suite | 12 | 12 | a golden sort's first row altered; a visibility entry altered; a depth-1 reference count altered; a ghost path altered; a layout position altered; the spatial direction inverted; the structural direction inverted; the settle spoken unarmed; the writer's bytes altered; a sleep in the spatial step; the verbosity collapsed; the tier summary's count off by one — one entry REPLACED before counting: a second settle announce inside the relay's window survived by design (the settle class coalesces), so the unarmed-settle mutation stands in its place |
+| TGF-3 the fixture census | 1 | 1 | a golden `p:` key renamed to a file the fixture lacks |
+| TGF-4 the id census and the rows | 4 | 4 | a literal id set under `Graph/` that no row lists; a XAML id renamed to one no row lists; the `GraphMode.` prefix dropped from the manifest; the matrix row losing GraphInspectorNoGroups |
+| TGF-5 the §W-G close-out | 1 | 1 | the zoom Value re-spelled by the host with a drift; and, as a script observation, a planted `Math.Log` under `Graph/` listed by `scripts/graph_wg_regrep.py` under the diameter class |
+| TGF-6 the matrix | 4 | 4 | `#746` remapped to one command group; a command mapped outside the four surfaces; the aggregate dropping the connections group's anchor; a marker into no declaration |
+| TGF-8 the reconciliation | 4 | 4 | a key's row omitted; two same-id keys; a head deleted without the bump; a ledgered commit replaced by a dangling non-ancestor |
+| The codoki round on TGF-8's head (below) | 4 | 4 | an error exit read as "not an ancestor"; a label constructed outside the render's argument; the grammar fact dropping the summary peer's Name read; a ledger row naming a property the fact does not read |
+| Total | 39 | 39 | one entry replaced before counting (TGF-2's coalesced double announce), none silent |
+
+THE PROCESS, as §5.2 writes it and as it ran: `dotnet format` on the
+slnx and on the accessibility project after every edit batch (the
+landing script's step); the unit suites and censuses locally, each
+task's before its record; the CI-shaped regression
+(`--filter "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf"`) before
+every push — four runs on this branch, 2,906 → 2,908 → 2,914 facts, about ten
+minutes each (the fourth on TGF-8's head, with one SELF-INFLICTED failure: the
+evidence-compilation staleness check tripped on a census file edited for
+the codoki round while the run was in flight — the fact green on the
+rebuilt tree; the two census files edited after that run re-run alone
+with their mutations),
+one flake in each of the first two runs in an editor census that
+touches the system clipboard (ImeCompositionLifecycleAndClipboardPaste,
+passes alone twice, absent from the third; unrelated to F) and one true failure caught and fixed
+(`NoHostTrimTouchesTheNeedle` on the zoom Value's period strip, TGF-5);
+the five graph journeys locally as a serialized smoke with no screen
+reader running — the diagram journey after the zoom Value change (20 s)
+and all five on TGF-8's head before the PR opened (the table 10 s, the
+navigator 19 s, the inspector 18 s, the diagram 19 s, the leaf 25 s;
+each passed) — CI's shell accessibility gate arbitrating them; the mac lane's twin arbitrated by CI (FR-1). THE WALL TIME: the
+CI-shaped regression ran 9 m 58 s, 9 m 46 s, 10 m 11 s and 9 m 57 s on this box; the end-to-end suite is 15 s of it, the two large
+vaults most of that (FR-5) — no other suite slowed. THE GATES: the parity
+matrix's generator exits zero (fourteen validations); the
+reconciliation's `--check` exits zero; every census of F10 green on
+the landing head. Then the draft PR, the post-implementation codex
+passes IPJ-n until the stop rule, codoki's approval on the exact head,
+and the merge on the standing conditions — recorded below as they
+happen.
+
+THE CODOKI ROUND, on TGF-8's head 097b851b (the draft PR #1221 opened
+on it): the review approved with two notes, both taken here. (1) The
+reconciliation census's git helpers fail fast — a non-zero exit fails
+the fact with git's own stderr, `--is-ancestor`'s exit 1 is the only
+"no" and any other exit (an unknown object) throws rather than reading
+as "not an ancestor" — pinned by TheAncestryHelperDistinguishesGitsNoFromAnError
+(git's yes, git's no, the error's message). (2) The label keys' grammar-only
+path: the note asked whether label rows should bypass the end-to-end
+membership assertion — NO, deliberately: the grammar fact IS a member
+of the suite and reads the peer; the focused fact the note asked for is
+EveryLabelKeyIsRenderedIntoAPeerAndNeverPosted — the row names the
+grammar fact and the peer property it reads (Name, HelpText), every
+construction of a label key in the shell is `GraphAnnouncer.RenderLabel`'s
+argument (never `Announce`'s), and the grammar fact with the helper it
+calls reads that property and holds the rendered text out of the
+announced lines. The performance and security notes changed nothing: the
+tree scans already exclude obj and the generated binding, and the git
+invocations take fixed arguments. Four mutations, in the table above.
+
 ### Tests that pin PR F (revision 5's list, frozen; the task loop records what lands)
 
 - GraphEndToEndTests (new): F1's six facts.
@@ -17776,7 +17842,7 @@ that exists and is not keyed is not claimed as keyed.
 | §F | contract | F7 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `GraphDocumentTests`, `GraphTableTests`, `ShowConnections`, `ConnectionsLeafTests`, `GraphPreferencesViewModel`, `GraphNavigatorTests`, `GraphPreferencesTests`, `GraphDiagramView`, +8 more |
 | §F | contract | F8 | Task loop | `WcMatrixGraphEvidenceCensus`, `IsFluentCollapsedScrollBarPart` |
 | §F | contract | F9 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `GraphContractsCitationCensus`, `ParityHarnessCensus`, `WcMatrixGraphEvidenceCensus`, `DeliveryEvidenceCensus`, `ChordTableTests` |
-| §F | contract | F10 | Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | `ParityHarnessCensus`, `WcMatrixGraphEvidenceCensus`, `DeliveryEvidenceCensus`, `ChordTableTests`, `GraphContractsCitationCensus` |
+| §F | contract | F10 | Task loop, Tests that pin PR F (revision 5's list, frozen; the task loop records what lands) | ImeCompositionLifecycleAndClipboardPaste (not in the tree), `NoHostTrimTouchesTheNeedle`, `ParityHarnessCensus`, `WcMatrixGraphEvidenceCensus`, `DeliveryEvidenceCensus`, `ChordTableTests`, `GraphContractsCitationCensus` |
 | §F | decision | FD-1 | Task loop | `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, `NoteCreateFailed`, `IterationsPerStep`, `DiagramZoomPercent`, +4 more |
 | §F | decision | FD-2 | Task loop | `ParityHarnessCensus`, `TheLayoutSectionIsTheSessionsSixtiethTickQuantised`, `TwoLayoutsOverOneVaultAreBitIdentical`, `GraphVaultInventory` |
 | §F | decision | FD-3 | Task loop | `WcMatrixGraphEvidenceCensus`, `IsFluentCollapsedScrollBarPart` |
@@ -17793,11 +17859,11 @@ that exists and is not keyed is not claimed as keyed.
 | §F | divergence | FD-D3 | Task loop | `GraphStatusNote`, `GraphBlockedReason`, `GraphAnnouncerCensus` |
 | §F | divergence | FD-D4 | Task loop | `WcMatrixGraphEvidenceCensus`, `IsFluentCollapsedScrollBarPart` |
 | §F | divergence | FD-D5 | Task loop | `GraphContractsCitationCensus` |
-| §F | risk | FR-1 | Task loop | `ParityHarnessCensus`, `TheLayoutSectionIsTheSessionsSixtiethTickQuantised`, `TwoLayoutsOverOneVaultAreBitIdentical`, `GraphVaultInventory` |
+| §F | risk | FR-1 | Task loop | `ParityHarnessCensus`, `TheLayoutSectionIsTheSessionsSixtiethTickQuantised`, `TwoLayoutsOverOneVaultAreBitIdentical`, `GraphVaultInventory`, ImeCompositionLifecycleAndClipboardPaste (not in the tree), `NoHostTrimTouchesTheNeedle` |
 | §F | risk | FR-2 | Task loop | `GraphContractsCitationCensus` |
 | §F | risk | FR-3 | unevidenced by id — §F's pinning list is not keyed per id | — |
 | §F | risk | FR-4 | Task loop | `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, `NoteCreateFailed`, `IterationsPerStep`, `DiagramZoomPercent`, +7 more |
-| §F | risk | FR-5 | Task loop | `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, `NoteCreateFailed`, `IterationsPerStep`, `DiagramZoomPercent`, +8 more |
+| §F | risk | FR-5 | Task loop | `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, `NoteCreateFailed`, `IterationsPerStep`, `DiagramZoomPercent`, +10 more |
 | §F | risk | FR-6 | Task loop | `WorkspaceViewModel`, `FilesSidebarViewModel`, `ShowConnections`, `LoadingConnections`, `CreateNoteFromSurface`, `NoteCreateFailed`, `IterationsPerStep`, `DiagramZoomPercent`, +4 more |
 
 **(c) The divergence registers (87 rows, 0a-D … FD-D) and the risk registers (34 rows, 0aR … FR), as an index.**

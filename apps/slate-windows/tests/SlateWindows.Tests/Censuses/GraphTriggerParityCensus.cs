@@ -284,6 +284,91 @@ public sealed class GraphTriggerParityCensus
         Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
 
+    /// <summary>F4 (FD-11; codoki's note on the F head): a LABEL key is
+    /// rendered into a peer's Name or HelpText and never posted. Its ledger
+    /// row names the grammar fact and the peer property that fact reads;
+    /// every construction of the key in the shell is the argument of
+    /// GraphAnnouncer.RenderLabel, never of Announce; and the grammar fact
+    /// (with the end-to-end helpers it calls) reads that property and
+    /// asserts the rendered text is absent from the announced lines. The
+    /// membership assertion of the posted-key fact applies to label rows
+    /// too, deliberately: the grammar fact IS a member of the suite.</summary>
+    [Fact]
+    public void EveryLabelKeyIsRenderedIntoAPeerAndNeverPosted()
+    {
+        string shell = SourceText.ShellSourceRoot();
+        string tests = Path.Combine(RepoRoot, "apps", "slate-windows", "tests");
+        string shellText = string.Concat(Directory.GetFiles(shell, "*.cs", SearchOption.AllDirectories)
+            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}generated{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(File.ReadAllText));
+        List<Row> labels = Ledger().Where(r => r.Role == "label").ToList();
+        Assert.Equal(LabelKeys.Count, labels.Count);
+        var failures = new List<string>();
+        foreach (Row row in labels)
+        {
+            string token = WindowsTokens(row.Key).Single();
+            Match read = Regex.Match(row.Observed, @"^AnnouncementGrammarConformsPerVerbosity \(the peer's (Name|HelpText)\)$");
+            if (!read.Success)
+            {
+                failures.Add($"{row.Key}: a label row names the grammar fact and the peer property it reads; got '{row.Observed}'");
+                continue;
+            }
+            string property = read.Groups[1].Value;
+            string rendered = $"GraphAnnouncer.RenderLabel(new {token}(";
+            int constructions = 0;
+            foreach (Match construction in Regex.Matches(shellText, @"[^\n]*new " + Regex.Escape(token) + @"\("))
+            {
+                constructions++;
+                if (!construction.Value.Contains(rendered, StringComparison.Ordinal))
+                {
+                    failures.Add($"{row.Key}: constructed outside RenderLabel — '{construction.Value.Trim()}'");
+                }
+            }
+            if (constructions == 0)
+            {
+                failures.Add($"{row.Key}: the shell never renders the key");
+            }
+            string? reader = GrammarFactWithItsHelpers(tests);
+            if (reader is null)
+            {
+                failures.Add($"{row.Key}: the grammar fact is not a member of {EndToEndSuite}");
+            }
+            else
+            {
+                if (!reader.Contains($".Get{property}()", StringComparison.Ordinal))
+                {
+                    failures.Add($"{row.Key}: the grammar fact reads no peer's {property}");
+                }
+                if (!reader.Contains(token, StringComparison.Ordinal) || !reader.Contains("Assert.DoesNotContain(", StringComparison.Ordinal))
+                {
+                    failures.Add($"{row.Key}: the grammar fact does not hold the rendered label out of the announced lines");
+                }
+            }
+        }
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
+    }
+
+    /// <summary>The grammar fact's span joined with the span of every
+    /// end-to-end member it calls by name (one level: the tier-B helper).</summary>
+    private static string? GrammarFactWithItsHelpers(string tests)
+    {
+        string? span = TestMemberSpan(tests, EndToEndSuite, "AnnouncementGrammarConformsPerVerbosity");
+        if (span is null)
+        {
+            return null;
+        }
+        var joined = new System.Text.StringBuilder(span);
+        foreach (string callee in Regex.Matches(span, @"\b([A-Z]\w+)\(").Select(m => m.Groups[1].Value).Distinct())
+        {
+            if (callee != "AnnouncementGrammarConformsPerVerbosity" && TestMemberSpan(tests, EndToEndSuite, callee) is string helper)
+            {
+                joined.Append('\n').Append(helper);
+            }
+        }
+        return joined.ToString();
+    }
+
     [Fact]
     public void EveryMacSiteSpellsItsKey()
     {

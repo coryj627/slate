@@ -86,6 +86,21 @@ public sealed class GraphReconciliationCensus
         Assert.True(IsAncestor(baseSha, mergeBase), "F's base is not an ancestor of the branch's merge-base with main");
     }
 
+    /// <summary>The ancestry helper's three arms (codoki's note on the F
+    /// head): git's yes is true, git's no (exit 1) is false, and any other
+    /// exit — an unknown object here — fails with git's own message rather
+    /// than reading as "not an ancestor".</summary>
+    [Fact]
+    public void TheAncestryHelperDistinguishesGitsNoFromAnError()
+    {
+        Assert.True(IsAncestor("HEAD~1", "HEAD"));
+        Assert.False(IsAncestor("HEAD", "HEAD~1"));
+        const string Unknown = "0000000000000000000000000000000000000000";
+        var error = Assert.Throws<InvalidOperationException>(() => IsAncestor(Unknown, "HEAD"));
+        Assert.Contains("exited 128", error.Message);
+        Assert.Contains(Unknown, error.Message);
+    }
+
     /// <summary>F9(b): one row per key, the keys re-derived here; the
     /// evidence columns re-derived too; the total pinned.</summary>
     [Fact]
@@ -343,22 +358,38 @@ public sealed class GraphReconciliationCensus
     // --- git ------------------------------------------------------------------
 
     private static string MainRef() =>
-        Git("rev-parse", "--verify", "--quiet", "origin/main").Trim().Length > 0 ? "origin/main" : "main";
+        Run("rev-parse", "--verify", "--quiet", "origin/main").Code == 0 ? "origin/main" : "main";
 
+    /// <summary>True when <paramref name="sha"/> is an ancestor of
+    /// <paramref name="descendant"/>; false only when git answers no (exit
+    /// 1). Any other exit — an unknown object, a broken repository — fails
+    /// the fact with git's own stderr instead of reading as "not an
+    /// ancestor" (codoki's note on the F head).</summary>
     private static bool IsAncestor(string sha, string descendant)
     {
-        using var process = Process.Start(new ProcessStartInfo("git", $"merge-base --is-ancestor {sha} {descendant}")
+        (int code, _, string error) = Run("merge-base", "--is-ancestor", sha, descendant);
+        return code switch
         {
-            WorkingDirectory = RepoRoot,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        })!;
-        process.WaitForExit();
-        return process.ExitCode == 0;
+            0 => true,
+            1 => false,
+            _ => throw new InvalidOperationException(
+                $"git merge-base --is-ancestor {sha} {descendant} exited {code}: {error.Trim()}"),
+        };
     }
 
+    /// <summary>Git's stdout for a command that must succeed; a non-zero
+    /// exit fails with the exit code and git's stderr.</summary>
     private static string Git(params string[] args)
+    {
+        (int code, string output, string error) = Run(args);
+        if (code != 0)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', args)} exited {code}: {error.Trim()}");
+        }
+        return output;
+    }
+
+    private static (int Code, string Output, string Error) Run(params string[] args)
     {
         using var process = Process.Start(new ProcessStartInfo("git", string.Join(' ', args))
         {
@@ -367,8 +398,9 @@ public sealed class GraphReconciliationCensus
             RedirectStandardError = true,
             UseShellExecute = false,
         })!;
+        Task<string> error = process.StandardError.ReadToEndAsync();
         string output = process.StandardOutput.ReadToEnd();
         process.WaitForExit();
-        return output;
+        return (process.ExitCode, output, error.Result);
     }
 }
