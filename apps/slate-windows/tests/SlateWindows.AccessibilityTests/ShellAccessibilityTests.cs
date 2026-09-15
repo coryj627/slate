@@ -8947,6 +8947,370 @@ public sealed class ShellAccessibilityTests
     }
 
     /// <summary>
+    /// W6-2 PR E (#746), contract E-13 (§W-C): the inspector journey — open
+    /// the graph through the palette and land on the grid; the header's
+    /// toggle (GraphInspectorToggle, by its Toggle pattern) → the pane's
+    /// Group "Graph inspector" with the keys inside it; the four sections by
+    /// name; Unresolved off → the grid's rows fall by the ghost count
+    /// (oracle: two graph_table_rows reads BEFORE the app opens, with and
+    /// without ghosts) and the count region reads core's FilterCount render;
+    /// the .slate/graph.json on disk carries includeGhosts: false within the
+    /// save window (oracle: core's encoder over the expected config, read
+    /// after the window); Add Group → one row whose colour picker reads
+    /// core's next style's title and whose ring picker the matching ring
+    /// title, the keys in its query field; type "note" → the row's query
+    /// and the file carries the group; Remove group 1 → the empty text
+    /// returns, the keys on Add Group; the toggle → the pane hidden, the
+    /// keys on the grid's row (rule F's request; IGW-4); Shift+Tab to the
+    /// switcher, Right to Diagram → the renderer takes the keys; the toggle
+    /// → the pane shown, the keys in the pane; the Repel slider by Right
+    /// (one SmallChange) → its RangeValue moved and, after the save window,
+    /// the file carries the new repel; the toggle → the pane hidden, the
+    /// keys on the renderer; Ctrl+Alt+Shift+I → the readback's filter clause
+    /// reflects the flags (the render of GraphWhereAmI with the expected
+    /// Normal(orphansOnly: false, includeAttachments: false, includeGhosts:
+    /// false) clause); Escape; the toggle → the pane shown; axe with the
+    /// scan id `graph-inspector` while the pane is shown (IGW-5). The
+    /// announcements are not observable through UIA; the facts pin them.
+    /// </summary>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void GraphInspector_FiltersGroupsAndForces_AreClean()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-graph-inspector-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Inspector Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(Path.Combine(vaultRoot, "Alpha.md"), "# Alpha\n\nLinks to [[Beta]] and [[Gamma]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Beta.md"), "# Beta\n\nLinks to [[Alpha]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Gamma.md"), "# Gamma\n\nLinks to [[Alpha]] and [[Missing Note]].\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "Solo.md"), "# Solo\n\nNo links at all.\n");
+        string configPath = Path.Combine(vaultRoot, ".slate", "graph.json");
+
+        // The expected strings and configs are core's over the same vault,
+        // read BEFORE the app opens it (no second session while the app runs).
+        int allRows;
+        int noGhostRows;
+        string noGhostCount;
+        uniffi.slate_uniffi.GraphConfig defaults = uniffi.slate_uniffi.SlateUniffiMethods.GraphConfigDefault();
+        uniffi.slate_uniffi.GraphFilterConfig filters = defaults.Filters;
+        Assert.True(filters.IncludeGhosts, "the default filter has ghosts IN (IGV-4); the journey turns Unresolved off");
+        Assert.False(filters.IncludeAttachments, "the default filter has attachments OUT (IGV-4)");
+        using (uniffi.slate_uniffi.VaultSession session = uniffi.slate_uniffi.VaultSession.OpenFilesystem(vaultRoot))
+        {
+            using var cancel = new uniffi.slate_uniffi.CancelToken();
+            session.ScanInitial(cancel);
+            uniffi.slate_uniffi.GraphTableSort sort = uniffi.slate_uniffi.SlateUniffiMethods.GraphTableDefaultSort();
+            var plain = new uniffi.slate_uniffi.GraphVisibilityQuery(
+                new uniffi.slate_uniffi.GraphFilter(filters.IncludeAttachments, filters.IncludeGhosts, filters.OrphansOnly),
+                string.Empty, null);
+            allRows = session.GraphTableRows(plain, sort).Rows.Length;
+            uniffi.slate_uniffi.GraphTableRows noGhosts = session.GraphTableRows(
+                plain with { Filter = plain.Filter with { IncludeGhosts = false } }, sort);
+            noGhostRows = noGhosts.Rows.Length;
+            Assert.True(noGhostRows < allRows, "the fixture's ghost must fall away when Unresolved is off");
+            noGhostCount = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphFilterCount(
+                (uint)noGhosts.Rows.Length, (uint)noGhosts.Total));
+        }
+        uniffi.slate_uniffi.GraphGroupStyle style = uniffi.slate_uniffi.SlateUniffiMethods.GraphConfigNextGroupStyle(0);
+        string colourTitle = uniffi.slate_uniffi.SlateUniffiMethods.GraphColorTokens().Single(token => token.Token == style.ColorToken).Title;
+        string ringTitle = uniffi.slate_uniffi.SlateUniffiMethods.GraphRingStyles().Single(ring => ring.Style == style.RingStyle).Title;
+        uniffi.slate_uniffi.GraphConfig ghostsOff = defaults with { Filters = filters with { IncludeGhosts = false } };
+        uniffi.slate_uniffi.GraphConfig withGroup = ghostsOff with
+        {
+            Groups = [new uniffi.slate_uniffi.GraphGroup("note", style.ColorToken, style.RingStyle)],
+        };
+        string ExpectedFile(uniffi.slate_uniffi.GraphConfig config) =>
+            uniffi.slate_uniffi.SlateUniffiMethods.GraphConfigEncode(config, null);
+        string ReadFile()
+        {
+            try
+            {
+                return File.Exists(configPath) ? File.ReadAllText(configPath) : string.Empty;
+            }
+            catch (IOException)
+            {
+                return string.Empty;
+            }
+        }
+        void ExpectFile(uniffi.slate_uniffi.GraphConfig config, string what)
+        {
+            string expected = ExpectedFile(config);
+            Assert.True(
+                SpinWait.SpinUntil(() => ReadFile() == expected, TimeSpan.FromSeconds(10)),
+                $"the config file never carried {what}; it reads:\n{ReadFile()}\nexpected:\n{expected}");
+        }
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-graph-inspector-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+            if (!HasInteractiveDesktop(process, "Graph inspector"))
+            {
+                return;
+            }
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+            WaitForVaultOpen(window);
+            RunPaletteCommand(window, automation, "Open Graph");
+            AutomationElement grid = WaitForElement(window, "GraphTableGrid", TimeSpan.FromSeconds(20));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => FocusIsInside(automation, "GraphTableGrid")
+                        && automation.FocusedElement().Properties.ClassName.ValueOrDefault == "DataGridCell",
+                    TimeSpan.FromSeconds(10)),
+                $"the open did not land focus on a realised row cell; focus is {DescribeFocusedElement(automation)}");
+            Assert.True(
+                SpinWait.SpinUntil(() => RowCount(grid) == allRows, TimeSpan.FromSeconds(10)),
+                $"the grid never showed the default filter's {allRows} rows; it reads {RowCount(grid)}");
+
+            // Term I2: the header's toggle — T29/T30 — by its Toggle pattern;
+            // the pane's Group (T37) takes the keys (the pane boundary).
+            AutomationElement toggle = WaitForElement(window, "GraphInspectorToggle", TimeSpan.FromSeconds(10));
+            Assert.Equal("Toggle graph inspector", toggle.Properties.Name.Value);
+            Assert.Equal("Show the graph inspector — filters, colour groups, display, and forces.", toggle.Properties.HelpText.Value);
+            AutomationElement PaneOrNull() =>
+                window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphInspector"));
+            bool PaneShown() => PaneOrNull() is { } pane && !pane.Properties.IsOffscreen.ValueOrDefault;
+            toggle.Patterns.Toggle.Pattern.Toggle();
+            Assert.True(SpinWait.SpinUntil(PaneShown, TimeSpan.FromSeconds(10)), "the toggle did not show the inspector pane");
+            AutomationElement inspector = PaneOrNull()!;
+            Assert.Equal("Graph inspector", inspector.Properties.Name.Value);
+            AutomationElement nameField = WaitForElement(window, "GraphInspectorNameQuery", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphInspector"), TimeSpan.FromSeconds(10)),
+                $"the show did not move the keys into the pane; focus is {DescribeFocusedElement(automation)}; the name field is enabled={nameField.Properties.IsEnabled.ValueOrDefault} offscreen={nameField.Properties.IsOffscreen.ValueOrDefault} focusable={nameField.Properties.IsKeyboardFocusable.ValueOrDefault}");
+            foreach ((string id, string name) in new[]
+            {
+                ("GraphInspectorFilters", "Filters"),
+                ("GraphInspectorGroups", "Groups"),
+                ("GraphInspectorDisplay", "Display"),
+                ("GraphInspectorForces", "Forces"),
+            })
+            {
+                Assert.Equal(name, WaitForElement(window, id, TimeSpan.FromSeconds(10)).Properties.Name.Value);
+            }
+
+            // Rule X: Unresolved off — the rows fall by the ghost count, the
+            // count region reads core's render, the file carries the flag.
+            AutomationElement ghosts = WaitForElement(window, "GraphInspectorGhosts", TimeSpan.FromSeconds(10));
+            Assert.Equal("Unresolved", ghosts.Properties.Name.Value);
+            Assert.Equal(ToggleState.On, ghosts.Patterns.Toggle.Pattern.ToggleState.Value);
+            ghosts.Patterns.Toggle.Pattern.Toggle();
+            Assert.True(
+                SpinWait.SpinUntil(() => RowCount(grid) == noGhostRows, TimeSpan.FromSeconds(10)),
+                $"Unresolved off did not narrow the grid to {noGhostRows} rows; it reads {RowCount(grid)}");
+            // The count is SPOKEN by the flags' pair (rule Q's FilterCount; the
+            // facts pin it) — the header's count region is the NEEDLE's (C-5)
+            // and stays collapsed with no needle typed, so the journey pins
+            // the rows and the file, not the region (TGE-7's deviation from
+            // E-13's wording).
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")) is null
+                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphFilterSummary")).Properties.IsOffscreen.ValueOrDefault,
+                    TimeSpan.FromSeconds(5)),
+                "the needle's count region showed for a flag change with no needle");
+            _ = noGhostCount;
+            ExpectFile(ghostsOff, "includeGhosts: false");
+
+            // Rule Y: Add Group — core's next style, the keys in the query field;
+            // the query typed; the file carries the group; Remove group 1.
+            AutomationElement add = WaitForElement(window, "GraphInspectorAddGroup", TimeSpan.FromSeconds(10));
+            Assert.Equal("Add Group", add.Properties.Name.Value);
+            add.Patterns.Invoke.Pattern.Invoke();
+            AutomationElement query = WaitForElement(window, "GraphInspectorGroupQuery:1", TimeSpan.FromSeconds(10));
+            Assert.Equal("Group 1 query", query.Properties.Name.Value);
+            AutomationElement colour = WaitForElement(window, "GraphInspectorGroupColour:1", TimeSpan.FromSeconds(10));
+            AutomationElement ring = WaitForElement(window, "GraphInspectorGroupRing:1", TimeSpan.FromSeconds(10));
+            Assert.Equal("Group 1 colour", colour.Properties.Name.Value);
+            Assert.Equal("Group 1 ring style", ring.Properties.Name.Value);
+            static string PickerReads(AutomationElement picker)
+            {
+                FlaUI.Core.AutomationElements.ComboBox combo = picker.AsComboBox();
+                return combo.SelectedItem?.Text ?? combo.Value ?? string.Empty;
+            }
+            Assert.True(
+                SpinWait.SpinUntil(() => PickerReads(colour) == colourTitle, TimeSpan.FromSeconds(10)),
+                $"the colour picker reads '{PickerReads(colour)}', not core's '{colourTitle}'");
+            Assert.True(
+                SpinWait.SpinUntil(() => PickerReads(ring) == ringTitle, TimeSpan.FromSeconds(10)),
+                $"the ring picker reads '{PickerReads(ring)}', not core's '{ringTitle}'");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphInspectorGroupQuery:1"), TimeSpan.FromSeconds(10)),
+                $"Add Group did not put the keys in the new row's query field; focus is {DescribeFocusedElement(automation)}");
+            Keyboard.Type("note");
+            Assert.True(
+                SpinWait.SpinUntil(() => query.Patterns.Value.Pattern.Value.ValueOrDefault == "note", TimeSpan.FromSeconds(10)),
+                $"the query field reads '{query.Patterns.Value.Pattern.Value.ValueOrDefault}', not 'note'");
+            ExpectFile(withGroup, "the group");
+            AutomationElement remove = WaitForElement(window, "GraphInspectorRemoveGroup:1", TimeSpan.FromSeconds(10));
+            Assert.Equal("Remove group 1", remove.Properties.Name.Value);
+            remove.Patterns.Invoke.Pattern.Invoke();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphInspectorGroupQuery:1")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "Remove group 1 did not remove the row");
+            AutomationElement empty = WaitForElement(window, "GraphInspectorNoGroups", TimeSpan.FromSeconds(10));
+            Assert.Equal("No groups. Add one to colour matching nodes.", empty.Properties.Name.Value);
+            Assert.False(empty.Properties.IsOffscreen.ValueOrDefault, "the empty text did not return");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphInspectorAddGroup"), TimeSpan.FromSeconds(10)),
+                $"the last remove did not put the keys on Add Group; focus is {DescribeFocusedElement(automation)}");
+            ExpectFile(ghostsOff, "the group's removal");
+
+            // Term I2's hide: the pane hidden, the keys on the grid's row
+            // (rule F's request; IGW-4).
+            toggle.Patterns.Toggle.Pattern.Toggle();
+            Assert.True(SpinWait.SpinUntil(() => !PaneShown(), TimeSpan.FromSeconds(10)), "the toggle did not hide the pane");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => FocusIsInside(automation, "GraphTableGrid")
+                        && automation.FocusedElement().Properties.ClassName.ValueOrDefault == "DataGridCell",
+                    TimeSpan.FromSeconds(10)),
+                $"the hide did not return the keys to the grid's row; focus is {DescribeFocusedElement(automation)}");
+
+            // Rule M: Shift+Tab to the switcher, Right to Diagram — the
+            // renderer takes the keys.
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.TAB);
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphMode.table"), TimeSpan.FromSeconds(10)),
+                $"Shift+Tab from the grid did not reach the switcher; focus is {DescribeFocusedElement(automation)}");
+            AutomationElement diagramChoice = WaitForElement(window, "GraphMode.diagram", TimeSpan.FromSeconds(10));
+            ChooseRadio(diagramChoice, VirtualKeyShort.RIGHT);
+            Assert.True(
+                SpinWait.SpinUntil(() => diagramChoice.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault, TimeSpan.FromSeconds(10)),
+                "Right on the switcher did not choose the Diagram item");
+            AutomationElement diagram = WaitForElement(window, "GraphDiagram", TimeSpan.FromSeconds(20));
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphDiagram"), TimeSpan.FromSeconds(10)),
+                $"the switch did not land the keys on the renderer; focus is {DescribeFocusedElement(automation)}");
+
+            // Term I2's show with the leaf still the inspector; Rule K: the
+            // Repel slider by Right — one SmallChange — its RangeValue moved,
+            // the file carrying the new repel after the save window.
+            toggle.Patterns.Toggle.Pattern.Toggle();
+            Assert.True(SpinWait.SpinUntil(PaneShown, TimeSpan.FromSeconds(10)), "the toggle did not show the pane again");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphInspector"), TimeSpan.FromSeconds(10)),
+                $"the show did not move the keys into the pane; focus is {DescribeFocusedElement(automation)}");
+            AutomationElement repel = WaitForElement(window, "GraphInspectorRepel", TimeSpan.FromSeconds(10));
+            Assert.Equal("Repel", repel.Properties.Name.Value);
+            Assert.Equal("How strongly nodes push each other apart.", repel.Properties.HelpText.Value);
+            repel.Focus();
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphInspectorRepel"), TimeSpan.FromSeconds(10)),
+                $"the Repel slider did not take the keys; focus is {DescribeFocusedElement(automation)}");
+            double repelBefore = repel.Patterns.RangeValue.Pattern.Value.Value;
+            Assert.Equal(defaults.Forces.Repel, repelBefore, 9);
+            double repelStep = repel.Patterns.RangeValue.Pattern.SmallChange.Value;
+            Assert.Equal(0.01, repelStep, 9);
+            PressKey(VirtualKeyShort.RIGHT);
+            Assert.True(
+                SpinWait.SpinUntil(() => Math.Abs(repel.Patterns.RangeValue.Pattern.Value.Value - (repelBefore + repelStep)) < 1e-6, TimeSpan.FromSeconds(10)),
+                $"Right did not step the Repel slider by its SmallChange; it reads {repel.Patterns.RangeValue.Pattern.Value.Value}");
+            double repelAfter = repel.Patterns.RangeValue.Pattern.Value.Value;
+            // The switch to Diagram persisted the mode (rule M, Term M1) — the
+            // file's oracle carries it beside the new repel.
+            ExpectFile(
+                ghostsOff with { Mode = uniffi.slate_uniffi.GraphSurfaceMode.Diagram, Forces = defaults.Forces with { Repel = repelAfter } },
+                "the new repel");
+
+            // The hide again: the keys on the renderer; Ctrl+Alt+Shift+I —
+            // the readback's filter clause reflects the flags, with the zoom
+            // clause the container's Value carries.
+            toggle.Patterns.Toggle.Pattern.Toggle();
+            Assert.True(SpinWait.SpinUntil(() => !PaneShown(), TimeSpan.FromSeconds(10)), "the toggle did not hide the pane again");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphDiagram"), TimeSpan.FromSeconds(10)),
+                $"the hide did not return the keys to the renderer; focus is {DescribeFocusedElement(automation)}");
+            ReassertForegroundForAChord(window);
+            string zoomValue = diagram.Patterns.Value.Pattern.Value.ValueOrDefault ?? string.Empty;
+            Assert.Matches("^Zoom [0-9]+ percent$", zoomValue);
+            uint zoomPercent = uint.Parse(
+                zoomValue["Zoom ".Length..^" percent".Length], System.Globalization.CultureInfo.InvariantCulture);
+            // (orphansOnly, includeAttachments, includeGhosts) — the D journey's order.
+            var filterProse = new uniffi.slate_uniffi.GraphWhereAmIFilter.Normal(false, false, false);
+            string expectedReadback = RenderGraph(new uniffi.slate_uniffi.GraphA11yEvent.GraphWhereAmI(
+                new uniffi.slate_uniffi.GraphWhereAmISelection.NoSelection(), zoomPercent, filterProse, string.Empty));
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_I);
+            AutomationElement readback = WaitForElement(window, "GraphWhereAmIReadback", TimeSpan.FromSeconds(10));
+            Assert.Equal(expectedReadback, readback.Patterns.Value.Pattern.Value.Value);
+            AssertEventuallyFocused(readback, "the panel did not take the keys from the renderer");
+            PressKey(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")) is null
+                        || window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("GraphWhereAmIReadback")).Properties.IsOffscreen.ValueOrDefault,
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not close the panel");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphDiagram"), TimeSpan.FromSeconds(10)),
+                $"the panel's close did not return the keys to the renderer; focus is {DescribeFocusedElement(automation)}");
+
+            // Back to Table through the switcher's SelectionItem pattern (Term
+            // N3 consumes Tab inside a non-empty diagram; the diagram journey's
+            // route) BEFORE the scan: the diagram's tier-A node peers are
+            // read-time rectangles that a FIT zoom can make smaller than axe's
+            // 25-pixel floor (a W6-2 PR D property, scanned there in Table
+            // mode for the same reason) — the inspector's scan is the pane
+            // over the table, the pane shown (IGW-5: the scan is the last step).
+            AutomationElement tableChoice = WaitForElement(window, "GraphMode.table", TimeSpan.FromSeconds(10));
+            tableChoice.Patterns.SelectionItem.Pattern.Select();
+            Assert.True(
+                SpinWait.SpinUntil(() => tableChoice.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault, TimeSpan.FromSeconds(10)),
+                "the Table choice's Select did not check it");
+            grid = WaitForElement(window, "GraphTableGrid", TimeSpan.FromSeconds(20));
+            Assert.True(
+                SpinWait.SpinUntil(() => RowCount(grid) == noGhostRows, TimeSpan.FromSeconds(10)),
+                $"the grid did not return with the flags' {noGhostRows} rows; it reads {RowCount(grid)}");
+            toggle.Patterns.Toggle.Pattern.Toggle();
+            Assert.True(SpinWait.SpinUntil(PaneShown, TimeSpan.FromSeconds(10)), "the toggle did not show the pane for the scan");
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusIsInside(automation, "GraphInspector"), TimeSpan.FromSeconds(10)),
+                $"the show did not move the keys into the pane; focus is {DescribeFocusedElement(automation)}");
+            AssertAxeClean(process, "graph-inspector");
+        }
+        finally
+        {
+            if (process is { HasExited: false })
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(5000);
+            }
+            process?.Dispose();
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
     /// W6-2 PR D (#746), contract D-19 (§W-C): the diagram journey — open
     /// the graph through the palette and land on the grid (Term F6's arm);
     /// Shift+Tab to the switcher and Right to the Diagram item (the

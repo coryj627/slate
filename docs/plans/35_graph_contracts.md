@@ -15607,6 +15607,93 @@ the view reaching the relay (the postless census), the read-only text
 dropping the reason — twenty-one of twenty-one caught (`gE-mutations.py`,
 the T6 entries).
 
+**TGE-7 — T7: §W-C's journey, §W-A/§K's matrices, the spec's ED-8
+amendments, the pane boundary's first stop, the pickers' accessible names
+(E-13, E-14; Terms I2, I5, Y4; ED-8; E-D1, E-D5; IGV-4, IGW-4, IGW-5).**
+THE JOURNEY: `ShellAccessibilityTests` gains
+GraphInspector_FiltersGroupsAndForces_AreClean (Trait gate W-C) beside the
+four graph journeys, E-13's order as revised: the oracles read BEFORE the
+app opens (two `graph_table_rows` reads with and without ghosts, core's
+next group style and its colour and ring titles from the vectors, the
+expected file texts from core's encoder over the expected configs); open
+the graph from the palette and land on the grid; the toggle
+(GraphInspectorToggle, by its Toggle pattern; T30's name and help) → the
+pane's Group `Graph inspector` with the keys INSIDE it; the four sections
+by name; Unresolved off → the rows fall to the no-ghost count and the file
+carries `includeGhosts: false` within the save window; Add Group → one row
+whose colour and ring pickers READ core's style(0) titles, the keys in its
+query field; `note` typed → the row's query and the file carries the
+group; Remove group 1 → the empty text, the keys on Add Group, the file
+carries the removal; the toggle → the pane hidden, the keys on the grid's
+row; Shift+Tab to the switcher, Right to Diagram → the renderer takes the
+keys; the toggle → the pane shown, the keys in the pane; the Repel slider
+focused and stepped Right by its SmallChange (0.01) → the RangeValue moved
+and the file carries the new repel; the toggle → hidden, the keys on the
+renderer; Ctrl+Alt+Shift+I → the readback equals the render of
+`GraphWhereAmI` with NoSelection, the container's zoom, and the clause
+`Normal(orphansOnly: false, includeAttachments: false, includeGhosts:
+false)`; Escape; the toggle → shown; axe `graph-inspector` last. Run
+locally to its last step with the screen reader stopped — PASSED — and
+the four graph journeys re-run against the changed header — PASSED. FOUR
+FINDINGS OF THE RUN, each fixed before landing: (i) the pane boundary
+landed on the RAIL (the leaves list), not in the pane — the shell's
+right-pane arm had no inspector twin of rule C's Term 9, and the first
+cut's twin asked at the boundary's Normal priority, when the leaf host's
+data trigger had not yet landed its EFFECTIVE visibility (the field
+enabled, loaded, and `IsVisible` false — traced in the app) — so
+`MainWindow.xaml.cs`'s arm now asks for the pane's first stop after the
+layout pass (Background priority) through the view's `FocusFirstStop()`
+(the name field, Term I5; false while it cannot take the keys, Term I7,
+and the rail is the fallback), the one shell file E-1 did not list,
+recorded as a deviation; (ii) E-13's "the count region reads core's
+FilterCount render" is the NEEDLE's region (C-5), collapsed with no
+needle typed — the count is SPOKEN by the flags' pair and the facts pin
+it; the journey pins the rows and the file and asserts the region stays
+collapsed (a deviation from E-13's wording, IGV-4's step kept); (iii) a
+picker ITEM's accessible name read the spec record's ToString
+(`GraphColorTokenSpec { Token = Red, … }`) — WPF names a data item so
+without a container style — the pickers now carry an ItemContainerStyle
+naming each item by core's `Title` (Term Y4's letter: the reader hears
+`Red`, `Solid`); (iv) the file's oracle at the repel step carries the
+persisted Diagram mode (rule M's `SetMode` wrote it at the switch); (v)
+the scan with the DIAGRAM in view failed axe's BoundingRectangleSizeReasonable
+on three tier-A node peers (4 × 5 px) — the peers are read-time
+rectangles a FIT zoom shrinks under the 25-pixel floor, a W6-2 PR D
+property its own journey scans past by returning to Table first — so the
+inspector journey returns to Table through the switcher's SelectionItem
+pattern (Term N3 consumes Tab) before the last show and the scan, the
+pane over the table, and passed twice in a row. Also `FocusFirstStop`'s
+`IsEnabled` guard was dead (a disabled field refuses the keys on its own
+— the sweep found it unobservable) and is gone. THE
+MATRICES: `w_c_matrix.md` gains the row "Graph inspector (W6-2 PR E)"
+(the ids of E-15, the control types, the name sources, the patterns, the
+keys, the announcements, the evidence); `WcMatrixGraphEvidenceCensus`'
+manifest gains the surface (the twenty-six ids — the row ids as literal
+prefixes — the seven control types, the six patterns, the six name
+sources, the ten evidence names, the axe label), every id a literal the
+shell sets, every evidence name resolving; no parity-matrix row, no
+chords.json change, no golden, no benchmark (E-14; ED-11). THE SPEC
+(ED-8): §1's file list names `GraphInspectorViewModel.cs` and
+`GraphInspectorView.cs` (code-built); §PR D's hand-off sentence reads
+"a GROUPS change is a new epoch (Term G3) and a DISPLAY change is the
+renderer's redraw"; §PR E's Builds names the view model, the code-built
+view, the leaf and the toggle, the document's routes, the preferences'
+triggers and events, the relay's drop, and no new theme keys. THE FACTS:
+`GraphInspectorViewTests` gains
+FocusFirstStopLandsOnTheNameFieldOnlyWhileTheGraphIsEffective and the
+rows fact asserts the pickers' item name binding. DEVIATIONS: the two
+above (the shell's boundary arm; the count region's step) and one of
+form — E-1's `.xaml(.cs)` is the code-built `.cs`. MUTATIONS, each
+restored byte for byte, each caught by the named fact — the journey
+itself covering the shell's arm through the accessibility project: the
+boundary arm dropped, the first stop asked before the layout pass, the
+picker items named by ToString (the view fact, and the journey), the leaf
+host keyed to the Connections leaf, the matrix row losing an id (the
+evidence census), the manifest naming a journey that does not exist (the
+evidence census) — seven of seven caught (`gE-mutations.py`, the T7
+entries; an eighth, the dead enabled-guard, survived and is removed as
+the code's own correction, not a fact's gap).
+
 ### Tests that pin PR E (revision 6's list, frozen; the task loop records what lands)
 
 - GraphInspectorTests (new): the view model's reads and writes per rule

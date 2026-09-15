@@ -65,6 +65,16 @@ public sealed class WcMatrixGraphEvidenceCensus
             ["GraphPhrase", "GraphRow", "GraphNeighborsContent", "GraphWhereAmI"],
             ["GraphDiagramTests", "HandleLifetimeCensus", "Censuses/GraphNavigatorCensus", "ThemeTokenContrastTests", "ParityHarnessCensus", "TheLayoutSectionIsTheSessionsSixtiethTickQuantised", "TwoLayoutsOverOneVaultAreBitIdentical", "GraphMenuTests", "ChordTableTests", "GraphSurfaces_DiagramPeersTiersAndZoom_AreClean"],
             ["graph-diagram"]),
+        // W6-2 PR E (E-14): the inspector — the header's toggle, the leaf
+        // body, the pane, the notices, the four sections and their controls.
+        new(
+            "Graph inspector (W6-2 PR E)",
+            ["GraphInspectorToggle", "GraphInspectorBody", "GraphInspector", "GraphInspectorInactive", "GraphInspectorReadOnly", "GraphInspectorFilters", "GraphInspectorGroups", "GraphInspectorDisplay", "GraphInspectorForces", "GraphInspectorNameQuery", "GraphInspectorAttachments", "GraphInspectorGhosts", "GraphInspectorOrphans", "GraphInspectorAddGroup", "GraphInspectorGroupQuery:", "GraphInspectorGroupColour:", "GraphInspectorGroupRing:", "GraphInspectorRemoveGroup:", "GraphInspectorArrows", "GraphInspectorTextFade", "GraphInspectorNodeSize", "GraphInspectorLinkThickness", "GraphInspectorCenter", "GraphInspectorRepel", "GraphInspectorLink", "GraphInspectorLinkDistance"],
+            ["Group", "Button", "CheckBox", "Edit", "ComboBox", "Slider", "Text"],
+            ["Toggle", "Invoke", "Value", "RangeValue", "Selection", "ExpandCollapse"],
+            ["GraphPhrase", "GraphForceValue", "GraphLayoutSettled", "GraphFilterCount", "graph_color_tokens", "graph_ring_styles"],
+            ["GraphInspectorTests", "GraphInspectorViewTests", "GraphPreferencesTests", "GraphDiagramTests", "GraphTableTests", "GraphAnnouncerTests", "MacCatalogParityTests", "Censuses/GraphNavigatorCensus", "Censuses/GraphAnnouncerCensus", "GraphInspector_FiltersGroupsAndForces_AreClean"],
+            ["graph-inspector"]),
     ];
 
     private sealed record Row(string Title, string[] Cells);

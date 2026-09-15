@@ -230,6 +230,31 @@ public sealed class GraphInspectorViewTests
         });
     }
 
+    // --- Term I5: the pane's first stop -----------------------------------------------------------
+
+    /// <summary>W6-2 PR E (Term I5; E-D1): the shell's right-pane boundary
+    /// lands on the name field through FocusFirstStop — only while the field
+    /// can take the keys (the graph effective); otherwise false, and the
+    /// shell falls back to the leaves list.</summary>
+    [Fact]
+    public void FocusFirstStopLandsOnTheNameFieldOnlyWhileTheGraphIsEffective()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(2, "inspector-view-first-stop");
+            (GraphInspectorView view, HostedWindow window) = Shown(host);
+            using (window)
+            {
+                Assert.False(view.FocusFirstStop());
+                Assert.NotSame(view.NameQueryForTests, Keyboard.FocusedElement);
+                host.Open();
+                PumpedDispatcher.Drain();
+                Assert.True(view.FocusFirstStop());
+                Assert.Same(view.NameQueryForTests, Keyboard.FocusedElement);
+            }
+        });
+    }
+
     // --- Terms I7, Y6: the gate and the notices ----------------------------------------------------
 
     [Fact]
@@ -373,6 +398,12 @@ public sealed class GraphInspectorViewTests
                 // The pickers list core's vectors, the titles core's (Term Y4).
                 Assert.Same(host.Inspector.ColorTokens, colour.ItemsSource);
                 Assert.Same(host.Inspector.RingStyles, ring.ItemsSource);
+                // A picker item's accessible name is core's Title, not the record's ToString.
+                foreach (ComboBox picker in new[] { colour, ring })
+                {
+                    Setter name = picker.ItemContainerStyle.Setters.OfType<Setter>().Single(setter => setter.Property == AutomationProperties.NameProperty);
+                    Assert.Equal("Title", ((System.Windows.Data.Binding)name.Value).Path.Path);
+                }
                 GraphGroupStyle style = SlateUniffiMethods.GraphConfigNextGroupStyle(0);
                 Assert.Equal(style.ColorToken, ((GraphColorTokenSpec)colour.SelectedItem!).Token);
                 Assert.Equal(style.RingStyle, ((GraphRingStyleSpec)ring.SelectedItem!).Style);

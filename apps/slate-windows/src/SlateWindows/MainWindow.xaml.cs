@@ -652,6 +652,24 @@ public partial class MainWindow : Window
                 // entry line speaks and the reader is IN the leaf, not on
                 // the rail.
             }
+            else if (_viewModel.Workspace is WorkspaceViewModel inspected
+                && inspected.IsGraphInspectorShown)
+            {
+                // W6-2 PR E (Term I5; E-D1): with the inspector the shown
+                // leaf the boundary lands on the pane's first stop — the
+                // name field — so a reader who toggled is IN the pane. The
+                // leaf's host becomes visible through a data trigger whose
+                // EFFECTIVE visibility lands after the layout pass, so the
+                // first stop is asked for after it; a pane whose controls
+                // are disabled (Term I7) falls through to the rail.
+                _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+                {
+                    if (!GraphInspectorSurface.FocusFirstStop())
+                    {
+                        RightPaneLeavesList.Focus();
+                    }
+                });
+            }
             else
             {
                 RightPaneLeavesList.Focus();

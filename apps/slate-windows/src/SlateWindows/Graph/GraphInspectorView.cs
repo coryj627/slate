@@ -153,6 +153,15 @@ internal sealed class GraphInspectorView : UserControl
         set => SetValue(ModelProperty, value);
     }
 
+    /// <summary>Term I5 (E-D1): the pane's FIRST stop is the name field —
+    /// the shell's right-pane boundary lands here when the inspector is the
+    /// shown leaf (rule C's Term 9 twin), so a reader who toggled is IN the
+    /// pane, not on the rail; false while the field cannot take the keys
+    /// (the graph not effective, Term I7), and the boundary falls back to
+    /// the leaves list. (A disabled field refuses the keys on its own — no
+    /// second guard.)</summary>
+    internal bool FocusFirstStop() => _nameQuery.IsVisible && _nameQuery.Focus();
+
     // --- Test seams ------------------------------------------------------------------------
 
     internal FrameworkElement RootForTests => _root;
@@ -470,7 +479,7 @@ internal sealed class GraphInspectorView : UserControl
             _pendingRowFocus = index - 1;
             Model?.RemoveGroup(index);
         };
-        var ring = new ComboBox { ItemsSource = Model?.RingStyles, DisplayMemberPath = nameof(GraphRingStyleSpec.Title), Margin = new Thickness(4, 0, 0, 0), MinWidth = 72 };
+        var ring = new ComboBox { ItemsSource = Model?.RingStyles, DisplayMemberPath = nameof(GraphRingStyleSpec.Title), ItemContainerStyle = PickerItemStyle(), Margin = new Thickness(4, 0, 0, 0), MinWidth = 72 };
         AutomationProperties.SetAutomationId(ring, "GraphInspectorGroupRing:" + row.Index.ToString(System.Globalization.CultureInfo.InvariantCulture));
         AutomationProperties.SetName(ring, GraphPhrase.InspectorGroupRingName(row.Index));
         ring.SelectionChanged += (_, _) =>
@@ -480,7 +489,7 @@ internal sealed class GraphInspectorView : UserControl
                 Model?.SetGroupRing(index, spec.Style);
             }
         };
-        var colour = new ComboBox { ItemsSource = Model?.ColorTokens, DisplayMemberPath = nameof(GraphColorTokenSpec.Title), Margin = new Thickness(4, 0, 0, 0), MinWidth = 72 };
+        var colour = new ComboBox { ItemsSource = Model?.ColorTokens, DisplayMemberPath = nameof(GraphColorTokenSpec.Title), ItemContainerStyle = PickerItemStyle(), Margin = new Thickness(4, 0, 0, 0), MinWidth = 72 };
         AutomationProperties.SetAutomationId(colour, "GraphInspectorGroupColour:" + row.Index.ToString(System.Globalization.CultureInfo.InvariantCulture));
         AutomationProperties.SetName(colour, GraphPhrase.InspectorGroupColourName(row.Index));
         colour.SelectionChanged += (_, _) =>
@@ -510,6 +519,17 @@ internal sealed class GraphInspectorView : UserControl
         panel.Children.Add(query);
         SyncRow(panel, row);
         return panel;
+    }
+
+    /// <summary>Term Y4 (0bD-12): a picker item's ACCESSIBLE name is core's
+    /// Title — without it WPF names a data item by its ToString (the spec
+    /// record's shape, which the inspector journey heard). The visible text
+    /// is the same Title through DisplayMemberPath.</summary>
+    private static Style PickerItemStyle()
+    {
+        var style = new Style(typeof(ComboBoxItem));
+        style.Setters.Add(new Setter(AutomationProperties.NameProperty, new System.Windows.Data.Binding("Title")));
+        return style;
     }
 
     private void SyncRow(Panel panel, GraphInspectorGroupRow row)
