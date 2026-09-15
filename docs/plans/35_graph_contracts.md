@@ -15514,6 +15514,99 @@ an unbounded recursion (the guard is what bounds it), which no fact can
 report and the runner logs as NO RUN: detected, not survived
 (`gE-mutations.py`, the T5 entries).
 
+**TGE-6 — T6: the view — GraphInspectorView (code-built), the right pane's
+leaf host in `MainWindow.xaml`, the automation ids, the notices and the
+gate, the sliders' value text and keys, the group rows, the keys' landings
+(E-1, E-11, E-15; Terms I1, I5, I7, X1, X3, Y1, Y3, Y4, Y5, Y6, Z1, Z3,
+K1, K6; ED-10; E-D6, E-D8; IGX-3).** THE VIEW: `Graph/GraphInspectorView.cs`
+— a UserControl with a `Model` dependency property, CODE-BUILT like every
+graph view (E-1 and the spec's §1 said `.xaml(.cs)`; the shell's graph
+views are all code-built and the spec's file line is amended in T7, ED-8):
+one `AutomationNamedGroupPanel` (AutomationId `GraphInspector`, Name T37)
+inside a ScrollViewer, holding the two notices FIRST — GraphInspectorInactive
+(T's E-D8 text) then GraphInspectorReadOnly (E-D6's prefix + the
+preferences' `LoadFailure`), both plain Text, never announced — and the
+four sections (`AutomationNamedGroupPanel`s GraphInspectorFilters/Groups/
+Display/Forces named T38/T43/T50/T55, each with a heading Text): the
+name field (GraphInspectorNameQuery; Name `FilterFieldName`, C-5's one
+constant; LabeledBy T39's label; its TextChanged → `SetNameQuery` under a
+sync guard), the three CheckBoxes (T40–T42, hints as HelpText) and Arrows
+(T51) on their Checked/Unchecked — UIA's Toggle pattern raises no Click —
+each flip ONE SetBackendFilter over the three boxes' values (a refused
+write re-renders the boxes from the view state, Term X4) or one
+`SetArrows`; the group rows rebuilt from `Model.Groups` ONLY when the
+count changes and synced in place otherwise, so the field being typed
+into keeps the keys — a row is a query TextBox (GraphInspectorGroupQuery:n,
+Name T46's composed label), two ComboBoxes over core's vectors
+(`ItemsSource` the view model's `ColorTokens` / `RingStyles`, the very
+instances, DisplayMemberPath Title — GraphInspectorGroupColour:n,
+GraphInspectorGroupRing:n, T47/T48's names) and a remove Button
+(GraphInspectorRemoveGroup:n, Name T49's composed label, a `✕` glyph as
+its content — the mac's decorative trash symbol's twin), the ids literal
+prefixes + the 1-based index (the evidence census reads the prefixes as
+the shell's literals); the empty text T44 (GraphInspectorNoGroups) while
+the list is empty; Add Group (GraphInspectorAddGroup, T45 and its hint);
+the seven sliders — Text fade 0.1…2.0, Node size 0.5…2.0, Link thickness
+0.5…4.0, Center/Repel/Link/Link distance 0…1 — each with its title as
+Name, its hint as HelpText, SmallChange 0.01 and LargeChange 0.1 (Term
+K6, applied to the display's sliders too), and the `%.2f` value text as a
+sibling Text (T60; Term Z3; ED-10) — a slider's ValueChanged writes the
+per-control setter unless a programmatic render set it. The gate (Term
+I7): the four sections' `IsEnabled` follow `IsGraphEffective` and the
+inactive notice shows while it is false; the read-only state alone
+disables nothing (IGX-3). Add Group lands the keys in the new row's query
+field (Term Y3); a remove lands them on the row before the removed one,
+or on Add Group when the list empties (Term Y5). The view observes the
+model's `PropertyChanged` while loaded (Loaded/Unloaded, the theme
+lesson of PR D) and re-renders per name; Escape is not handled (Term I5).
+THE HOST: `MainWindow.xaml`'s right pane gains the DockPanel
+GraphInspectorBody keyed `ActiveLeaf.Id == "inspector"` in the Connections
+leaf's shape, hosting `GraphInspectorView` with `Model="{Binding Inspector}"`
+(Term I1). THE FACTS: GraphInspectorViewTests (new; an STA window over a
+fixture vault): TheViewCarriesTheInventorysNamesTheIdsAndTheSlidersRange
+(the root and sections' ids and names; the notices first, in order; the
+name field's id, AX name and label; the flags' and Arrows' ids, labels
+and hints; Add Group and the empty text; the seven sliders' ids, Names,
+HelpTexts, ranges, keys, value texts, and the RangeValue pattern IS the
+value — ED-10), TheSectionsAreEnabledOnlyWhileTheGraphIsEffectiveUnderTheInactiveNotice
+(no graph: disabled with the notice; opened: enabled, the notice gone;
+the tab closed: disabled again), TheReadOnlyNoticeShowsTheReasonSecondAndDisablesNothing
+(invalid UTF-8 on disk: both notices, the inactive one first; effective:
+the sections enabled, the read-only notice standing; an add lands in the
+view state), TheFlagsTheNeedleTheDisplayAndTheForcesRouteThroughTheViewModelAndFollowOutsideWrites
+(a flag through the Toggle pattern → the view state and the preferences;
+the needle typed → the navigator, an outside needle rendered back; Arrows
+and a display slider → the preferences with the value text; a force
+slider by one SmallChange → one SetForces; an outside forces write moves
+the slider and its text without a second schedule),
+TheGroupRowsComposeTheirNamesListCoresVectorsAndMoveTheKeys (Add → a row
+in core's first style with the composed ids and names, the pickers the
+view model's very vectors, the keys in the query field; typing keeps the
+field and the keys; a colour pick writes the view state; a second row,
+the first removed → the survivor renumbered 1 with the keys; the last
+removed → the empty text and the keys on Add Group). THE CENSUSES: the
+postless theory's files gain the view (E-12 iv). DEVIATIONS: two of
+form — the view is `GraphInspectorView.cs`, code-built like the shell's
+other graph views, where E-1 and the spec wrote `.xaml(.cs)` (the spec's
+lines are amended in T7 under ED-8); the remove button's visible content
+is a `✕` glyph (the mac's decorative trash symbol) under T49's composed
+AX name. One of substance in the first cut, corrected before landing: the
+slider's ValueChanged wrote the value text itself AND the model's round
+trip re-rendered it — the sweep found the first write unobservable (the
+render is the one source), so the redundant write is gone and the text is
+rendered from the model alone. MUTATIONS, each restored byte for byte,
+each caught by the named fact: the notices reversed, the gate leaving a
+section enabled, the read-only state disabling, the inactive notice never
+shown, a slider's Name as its hint, the sliders' keys drifting, the name
+field's AX name typed, a flag flip writing nothing, the name field writing
+nothing, an outside needle not rendered, outside forces not rendered, the
+value text never rendered, the rows rebuilt on every edit, Add focusing
+nothing, a remove always focusing Add Group, a row's ids zero-based, the
+picker items copied, a colour pick writing nothing, a remove off by one,
+the view reaching the relay (the postless census), the read-only text
+dropping the reason — twenty-one of twenty-one caught (`gE-mutations.py`,
+the T6 entries).
+
 ### Tests that pin PR E (revision 6's list, frozen; the task loop records what lands)
 
 - GraphInspectorTests (new): the view model's reads and writes per rule

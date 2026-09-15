@@ -1020,7 +1020,7 @@ public sealed class GraphNavigatorCensus
     [Fact]
     public void TheInspectorPostsNothing()
     {
-        string[] files = ["Graph/GraphInspectorViewModel.cs"];
+        string[] files = ["Graph/GraphInspectorViewModel.cs", "Graph/GraphInspectorView.cs"];
         var posts = new List<string>();
         foreach ((string relative, CSharpSource source) in ShellCompilation.Sources.Where(s => files.Contains(s.Relative)))
         {
