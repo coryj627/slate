@@ -17530,6 +17530,54 @@ twice on this tree, green (10 m 18 s each, 2,923 then 2,924 facts —
 the second after codoki's round); IPJ-7 runs on the fixed head, the count toward the stop
 rule starting again.
 
+**IPJ-7 — codex post-implementation pass 7 (gpt-5.5 medium) on 24474280,
+the head carrying IPJ-6's fixes: NO findings.** The pass verified the
+three repairs — the lane's triggers on the roll-up and the fixtures with
+BenchmarksRollupCensus, Where-am-I's expectation built from the golden
+in both legs, ShellIds' slider value ids from the syntax tree — and took
+a fresh angle over the close-out machinery (the workflow's triggers, the
+generated matrix and reconciliation and their checks, the Where-am-I
+oracles, the roll-up census's shape, the Roslyn id derivation, the config
+read and write, the trigger ledger's designations, the one product
+change), ran `graph_reconciliation.py --check` and
+`generate-parity-matrix.py --check` on the head, and returned
+`VERDICT: safe to continue`. The first clean pass; the protocol's stop
+rule (the standing gate green on a head AND two consecutive passes
+without a blocker) sends an eighth pass over the same head from the
+angles the seven did not take.
+
+**IPJ-8 — codex post-implementation pass 8 (gpt-5.5 medium) on 24474280,
+the same head, from the angles the seven did not take (the suite under
+CI's conditions, the Connections leg, the trigger ledger over the real
+trees, the reconciliation's (e), the checklist word by word, the §W-G
+column cell by cell, the frozen text clause by clause, the PR body
+against what landed): ONE finding, no blocker; `VERDICT: safe to
+continue`.** IPJ-8-1 [MAJOR] — the end-to-end suite's STA runner joined
+its thread for four minutes and asserted, but a body wedged in a WPF
+frame stayed alive: no dispatcher shutdown, a foreground thread, so the
+advertised bound was the job's timeout in disguise and the body's
+disposals never ran. Root cause: the test harness. TAKEN after the stop
+rule was met, as a harness change alone (below): the runner's thread is
+a background thread, and a timed-out join shuts the body's dispatcher
+down (a wedged pump unwinds, the vault, window and host dispose on the
+way out) and fails the fact there. THE STOP RULE MET: two consecutive
+passes without a blocker (IPJ-7, IPJ-8) on one head, 24474280, with the
+standing gate's greenness on that head — CI's Windows lanes, the
+accessibility gate, rust, semgrep, the mac lane, watched on PR #1221 —
+the PR D and PR E precedent (IPH-4/IPH-5; IPI-2/IPI-3). The passes ran
+6 → 2 → 2 → 2 → 3 → 3 → 0 → 1 (blockers 2, 2, 1, 1, 1, 1, 0, 0); this
+ledger is the owner's. Codoki's seventh round, on 24474280, read the
+new census's C# as the workflow file (the workflow is YAML and ran on
+that head — answered in the conversation) and asked that the reversed
+composition, `"Value" + id`, be documented — a case in the shapes fact,
+taken with IPJ-8-1 in the landing below.
+
+**The landing after the stop rule:** the two ledgers above, IPJ-8-1's
+harness change and codoki's case, test-side only — no shell source
+changed, so the unit regression stands as run for the reviewed head and
+is re-run once more on this one; the merge's own conditions (CI green
+on the exact head; codoki's approval) are read on this head.
+
 ### Tests that pin PR F (revision 5's list, frozen; the task loop records what lands)
 
 - GraphEndToEndTests (new): F1's six facts.

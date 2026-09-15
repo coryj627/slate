@@ -403,6 +403,10 @@ public sealed class WcMatrixGraphEvidenceCensus
         Assert.Empty(ComposedValueIds(calls + "private Slider SliderRow(Panel section, string id) { return null; } void Other(string id) { " + Composes + " } }"));
         // the composition mentioned in a comment inside SliderRow does not count
         Assert.Empty(ComposedValueIds(calls + "private Slider SliderRow(Panel section, string id) { // " + Composes + "\n return null; } }"));
+        // the reversed order, "Value" + id, names a DIFFERENT id (ValueGraphInspectorA)
+        // and is deliberately not the composition the manifest's `⟨id⟩Value`
+        // rows describe (codoki's seventh-round note)
+        Assert.Empty(ComposedValueIds(calls + "private Slider SliderRow(Panel section, string id) { AutomationProperties.SetAutomationId(valueText, \"Value\" + id); return null; } }"));
     }
 
     /// <summary>Codoki's sixth-round note: a malformed text parses to a tree

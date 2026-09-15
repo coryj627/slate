@@ -10,6 +10,7 @@ using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using SlateWindows.Graph;
 using SlateWindows.Grids;
 using uniffi.slate_uniffi;
@@ -194,9 +195,21 @@ public sealed class GraphEndToEndTests
                 failure = exception;
             }
         });
+        // A background thread: a wedged body cannot hold the process past
+        // the runner (IPJ-8-1).
+        thread.IsBackground = true;
+        thread.Name = "graph-e2e-sta";
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromMinutes(4)), "STA test body timed out.");
+        if (!thread.Join(TimeSpan.FromMinutes(4)))
+        {
+            // The bound is real (IPJ-8-1): the body's dispatcher is shut down,
+            // so a pump wedged in a frame unwinds and the body's own `using`
+            // disposals (the vault, the window, the host) run on the way out;
+            // the fact fails here rather than at the job's timeout.
+            Dispatcher.FromThread(thread)?.BeginInvokeShutdown(DispatcherPriority.Send);
+            Assert.Fail("STA test body timed out after four minutes; its dispatcher was shut down.");
+        }
         if (failure is not null)
         {
             ExceptionDispatchInfo.Capture(failure).Throw();
