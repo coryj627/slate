@@ -36,7 +36,10 @@ def main() -> int:
     try:
         root.mkdir(parents=True, exist_ok=False)
     except FileExistsError:
-        print(f"refusing: {root} already exists", file=sys.stderr)
+        # The target itself, or a parent that is a file (Windows reports
+        # both the same way).
+        what = "already exists" if root.exists() else "cannot be created: a parent is a file"
+        print(f"refusing: {root} {what}", file=sys.stderr)
         return 1
     except OSError as error:
         print(f"refusing: cannot create {root}: {error}", file=sys.stderr)
