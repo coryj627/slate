@@ -27,13 +27,20 @@ def main() -> int:
     parser.add_argument("--notes", type=int, default=1500, help="how many notes besides the hub (default 1500: 1,501 nodes, one past tier A's ceiling; 1499 stays in tier A)")
     args = parser.parse_args()
     root = pathlib.Path(args.directory)
-    if root.exists():
-        print(f"refusing: {root} already exists", file=sys.stderr)
-        return 1
     if args.notes < 2:
         print("refusing: at least two notes", file=sys.stderr)
         return 1
-    root.mkdir(parents=True)
+    # One step, not a check and then a create: an existing directory, an
+    # invalid path or a permission refusal each come back as a message,
+    # never a traceback.
+    try:
+        root.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        print(f"refusing: {root} already exists", file=sys.stderr)
+        return 1
+    except OSError as error:
+        print(f"refusing: cannot create {root}: {error}", file=sys.stderr)
+        return 1
     width = len(str(args.notes))
     for i in range(1, args.notes + 1):
         name = f"note-{i:0{width}d}"
