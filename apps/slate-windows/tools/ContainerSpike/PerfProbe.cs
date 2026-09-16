@@ -190,8 +190,11 @@ internal static class PerfProbe
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
-            GC.KeepAlive(model);
             row.ModelBytes = GC.GetTotalMemory(true);
+            // After the measurement, so the model is provably rooted THROUGH
+            // the forced collection rather than incidentally by its use on
+            // the next line.
+            GC.KeepAlive(model);
 
             sw.Restart();
             FrameworkElement surface = FlowDocumentBuilder.Build(model, withSemanticPeers: true);
