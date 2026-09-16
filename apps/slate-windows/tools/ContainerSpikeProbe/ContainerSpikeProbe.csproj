@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- W3-1 container spike probe (#728, w3_inline_runs_spec.md §10.6).
+       THROWAWAY, alongside ContainerSpike: launches each container variant
+       and records what UIA actually reports, so the container decision
+       rests on measurement rather than on WPF folklore. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ContainerSpikeProbe</RootNamespace>
+    <AssemblyName>ContainerSpikeProbe</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Axe.Windows" Version="2.4.2" />
+    <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+    <PackageReference Include="NvdaTestingDriver" Version="0.2.0-beta" />
+    <!-- NvdaTestingDriver 0.2.0-beta pulls Newtonsoft.Json 12.0.1, which
+         carries GHSA-5crp-9r3c-p9vr (high). Overridden to a patched
+         version. This project is a THROWAWAY spike and is referenced by
+         nothing that ships, but a known-vulnerable transitive dependency
+         should not sit in the repo unremarked either way. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ContainerSpike\ContainerSpike.csproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

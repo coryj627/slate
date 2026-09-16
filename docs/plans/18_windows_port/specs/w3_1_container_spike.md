@@ -1,6 +1,6 @@
 # W3-1 container spike — findings
 
-Spike for [#728](https://github.com/coryj627/slate/issues/728), answering the two mechanism choices `w3_inline_runs_spec.md` §10.6 left open. Code: `apps/slate-windows/tools/ContainerSpike` (both containers over one fixture note) and `apps/slate-windows/tools/ContainerSpikeProbe` (UIA client probe). Both are **throwaway** and are deleted when W3-1 lands.
+Spike for [#728](https://github.com/coryj627/slate/issues/728), answering the two mechanism choices `w3_inline_runs_spec.md` §10.6 left open. Code: `apps/slate-windows/tools/ContainerSpike` (both containers over one fixture note) and `apps/slate-windows/tools/ContainerSpikeProbe` (UIA client probe). Both were written as **throwaway** harnesses, to be deleted once the decision below was recorded. W3-1 shipped in #1052 and they were never merged; they are restored here instead, because this document's own **Reproducing** section runs against them and the measurements are the evidence for the decision. They sit in no solution and ship in no build.
 
 ## Headline
 
