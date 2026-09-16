@@ -179,15 +179,19 @@ internal static class PerfProbe
                 model.Add((blocks[i], inlines[i]));
             }
 
-            // Retention of the parsed model alone — this is where the
-            // shipped payload-duplication residual would show up.
+            // The managed heap with the parsed model alive, after a full
+            // blocking collection — NOT a before/after delta. The model is
+            // already built by this point, so a baseline taken here would
+            // measure the same instant and subtract to zero; the baseline
+            // corpus row is what bounds the non-model share instead, and it
+            // comes in at ~0.1 MB, so this figure is the model's retention
+            // to within that. This is where the shipped payload-duplication
+            // residual shows up.
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
-            long beforeModel = GC.GetTotalMemory(true);
             GC.KeepAlive(model);
-            row.ModelBytes = Math.Max(0, GC.GetTotalMemory(true) - 0);
-            _ = beforeModel;
+            row.ModelBytes = GC.GetTotalMemory(true);
 
             sw.Restart();
             FrameworkElement surface = FlowDocumentBuilder.Build(model, withSemanticPeers: true);

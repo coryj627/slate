@@ -2,6 +2,8 @@
 
 `FlowDocument` + custom semantic peers, the container the spike selected. Stages measured separately because they have different owners: core parse is Rust behind FFI, build and layout are W3-1's, and the peer tree is the custom-peer design itself.
 
+**Reading `model MB`:** the managed heap with the parsed model alive after a full blocking collection, not a before/after delta. The baseline corpus row bounds the non-model share of that heap at ~0.1 MB, so every other row is the model's own retention to within about a tenth of a megabyte.
+
 | corpus | MB | blocks | runs | parse ms | build ms | layout ms | peers | peer walk ms | peer name ms | model MB | peak MB | status |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
 | baseline 1k words / 20 links | 0.01 | 49 | 79 | 19 | 159 | 209 | 50 | 5 | 0 | 0.1 | 82 | ok |
