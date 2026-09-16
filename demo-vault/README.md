@@ -16,6 +16,7 @@ demo-vault/
 ├── blog/                      conversational markdown surfaces (Hello world, Why Slate)
 ├── csl/                       Citation Style Language XML — see csl/README.md
 ├── daily/                     daily-note instances (three days)
+├── graph/                     the graph view's test cluster: a hub, spokes, a depth chain, an island, orphans, ghosts, colour-group names
 ├── learning/                  citation notes, math notes, linear algebra cluster
 ├── people/                    person notes with aliases (Cory Joseph)
 ├── personal/                  Weekly ToDos, Grocery list, personal Index
@@ -40,6 +41,8 @@ demo-vault/
 
 **`daily/`.** Three daily-note instances (2026-05-26, -05-27, -05-28) with varying levels of fill-in, mixing completed and in-progress tasks and linking back to active projects.
 
+**`graph/`.** The material for testing the graph view by hand (the W6-2 accessibility checklist, `docs/plans/18_windows_port/reports/w6_2_graph_at_checklist.md`). `Graph hub.md` is the most-linked note in the vault; its eight spokes (Alpha station … Hotel harbour) differ in links in, links out, embeds in and embeds out so every table sort orders them differently; `Bravo relay` → `Bravo relay detail` → `deep/Bravo relay detail deep` is the three-deep chain for the Connections leaf's depth control and re-root; the three `Island` notes are a component of their own; `Orphan lighthouse` and `deep/Deep orphan` feed the Orphans preset; four unresolved links (three in `Foxtrot beacon`, one in `Project Beta plan`) are the ghosts for the Unresolved preset and the leaf's Create note action; the three `Project` notes and the `relay` and `island` names are labels for the inspector's colour groups; the hub links the cluster to the rest of the vault through `Apple pie`, `Cory Joseph` and `Slate` and carries the two attachment links (`photo.png`, `document.pdf`). `Graph testing guide.md` walks a tester through it inside Slate. The 1,501-node tier-B vault is not committed: `python scripts/make_graph_tier_b_vault.py <folder>` generates it.
+
 **`learning/`.** The intellectually dense section. Contains the linear algebra cluster (lecture 2/3/4 plus glossary, with embeds, heading-targeted links, and one deliberately broken link), the calculus notes (LaTeX math source), the raw MathML passthrough note, and the two citation notes — a short three-citation reflection and a 1,361-word essay exercising every citation variant (page locator, Chapter locator, author-suppressed, multi-cite, same-surname pair, ibid-bait, and one unresolved key).
 
 **`people/`.** Person notes with `aliases:` frontmatter, reachable through any alias form from elsewhere in the vault.
@@ -63,6 +66,7 @@ Three things in this vault are *supposed* to fail:
 - `[[Linear algebra supplementary]]` in `learning/Linear algebra lecture 3.md` — broken link to a note that doesn't exist.
 - `[@notinbib2099]` in `learning/The future of personal knowledge management.md` — unresolved citation key not present in `library.bib`.
 - `$\frac{a$` in `reference/Math sampler.md` — deliberately malformed LaTeX to exercise the graceful-failure path.
+- The four unresolved links in `graph/` — `[[Graph ghost — unresolved target]]`, `[[Café ghost]]` and `[[graph/missing/Ghost in a folder]]` in `graph/Foxtrot beacon.md`, `[[Project Gamma plan]]` in `graph/Project Beta plan.md` — are the graph view's ghosts (the Unresolved preset, the ghosts filter, the Connections leaf's Create note). Creating one of them through the leaf is the test; delete the created file to reset.
 
 If any of these starts succeeding without an explicit fix, something has changed in the parser.
 
