@@ -135,12 +135,7 @@ public sealed class WcMatrixGraphEvidenceCensus
             {
                 Assert.False(string.IsNullOrWhiteSpace(row.Cells[i]), $"{row.Title}: cell {i} is empty");
             }
-            foreach (int human in (int[])[7, 8, 9])
-            {
-                Assert.True(
-                    row.Cells[human] == "Pending" || row.Cells[human].Contains("verified", StringComparison.OrdinalIgnoreCase),
-                    $"{row.Title}: human cell {human} is neither Pending nor a recorded run: {row.Cells[human]}");
-            }
+            // Human dispositions and named records are owned by WcMatrixEvidenceCensus.
         }
     }
 

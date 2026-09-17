@@ -178,21 +178,6 @@ public sealed class WcMatrixCanvasEvidenceCensus
         return all.ToString();
     }
 
-    private static string BenchText()
-    {
-        string root = Path.Combine(RepoRoot, "apps", "slate-windows", "benchmarks");
-        var all = new System.Text.StringBuilder();
-        foreach (string path in Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories))
-        {
-            if (path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
-            {
-                continue;
-            }
-            all.Append(File.ReadAllText(path)).Append('\n');
-        }
-        return all.ToString();
-    }
-
     private static string TestText()
     {
         string root = Path.Combine(RepoRoot, "apps", "slate-windows", "tests");
@@ -222,12 +207,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
             {
                 Assert.False(string.IsNullOrWhiteSpace(row.Cells[i]), $"{row.Title}: cell {i} is empty");
             }
-            foreach (int human in (int[])[7, 8, 9])
-            {
-                Assert.True(
-                    row.Cells[human] == "Pending" || row.Cells[human].Contains("verified", StringComparison.OrdinalIgnoreCase),
-                    $"{row.Title}: human cell {human} is neither Pending nor a recorded run: {row.Cells[human]}");
-            }
+            // Human dispositions and named records are owned by WcMatrixEvidenceCensus.
         }
     }
 
@@ -340,10 +320,8 @@ public sealed class WcMatrixCanvasEvidenceCensus
         string path = Path.Combine(RepoRoot, "docs", "plans", "18_windows_port", "reports", "w6_1_canvas_at_checklist.md");
         Assert.True(File.Exists(path), "the W6-1 AT checklist is missing");
         string text = File.ReadAllText(path);
-        // Review round 1 (IH-60): the header FIELDS have values, and the
-        // values agree with the cells — while every human cell is Pending,
-        // the tester and the run date read Pending; once a cell records a
-        // run, the tester is named and the run date is a date.
+        // The checklist retains its recording fields. Completed cells link
+        // independent, reader-specific records validated by the shared gate.
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (string field in (string[])["Tester", "AT", "OS", "Build", "Corpus", "Method", "Run date", "Evidence reference"])
         {
@@ -355,7 +333,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
         Assert.Equal(11, rows.Count);
         var tItems = new HashSet<int>();
         string tests = TestText();
-        bool anyRun = false;
+        var failures = new List<string>();
         foreach (string[] row in rows)
         {
             Assert.Equal(9, row.Length);
@@ -365,13 +343,9 @@ public sealed class WcMatrixCanvasEvidenceCensus
             }
             foreach (int human in (int[])[6, 7, 8])
             {
-                // Exactly "Pending", or a run: "Verified ⟨date⟩ …" — never
-                // "Unverified", never a bare word.
-                bool run = Regex.IsMatch(row[human], @"^Verified \d{4}-\d{2}-\d{2}\b");
-                anyRun |= run;
-                Assert.True(
-                    row[human] == "Pending" || run,
-                    $"checklist row {row[0]}: a human cell that is neither Pending nor a recorded run: {row[human]}");
+                WcMatrixEvidenceCensus.ValidateHumanCell(
+                    "w6_1_canvas_at_checklist.md#" + row[0], row[human],
+                    new[] { "Narrator", "NVDA", "JAWS" }[human - 6], Path.GetDirectoryName(path)!, failures);
             }
             // The automated twin is named — at least one resolving long
             // name — or the row says "none — human only" in those words.
@@ -387,16 +361,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
                     $"checklist row {row[0]}: the twin `{name}` resolves to no fact, journey or test class");
             }
         }
-        if (anyRun)
-        {
-            Assert.False(fields["Tester"].Contains("Pending", StringComparison.Ordinal), "a run is recorded but the tester is Pending");
-            Assert.Matches(@"^\d{4}-\d{2}-\d{2}", fields["Run date"]);
-        }
-        else
-        {
-            Assert.StartsWith("Pending", fields["Tester"], StringComparison.Ordinal);
-            Assert.StartsWith("Pending", fields["Run date"], StringComparison.Ordinal);
-        }
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
         Assert.Equal(Enumerable.Range(1, 10), tItems.OrderBy(i => i));
         string voice = Assert.Single(rows, r => r[0] == "6")[3];
         foreach (string command in (string[])["\"Click 3\"", "\"Toggle Mark\"", "\"Connect To\"", "\"Delete Marked Cards\"", "\"Where am I\""])

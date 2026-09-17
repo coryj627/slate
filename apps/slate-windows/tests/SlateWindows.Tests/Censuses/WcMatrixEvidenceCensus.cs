@@ -74,7 +74,7 @@ public sealed class WcMatrixEvidenceCensus
             {
                 if (!projects.Any(p => p.HasAxeLabel(label))) { failures.Add($"{row.Title}: no test reaches axe scan {label}"); }
             }
-            if (labels.Length == 0 && !row.Cells[6].Contains("axe: none —", StringComparison.Ordinal))
+            if (labels.Length == 0 && !HasAxeExemption(row.Cells[6]))
             {
                 failures.Add($"{row.Title}: name an axe scan, or record why this row has no dedicated scan");
             }
@@ -83,7 +83,7 @@ public sealed class WcMatrixEvidenceCensus
         Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
 
-    private static void ValidateHumanCell(string title, string cell, string at, string documentDirectory, List<string> failures)
+    internal static void ValidateHumanCell(string title, string cell, string at, string documentDirectory, List<string> failures)
     {
         if (cell.StartsWith("Pending", StringComparison.Ordinal)) { return; }
         Match run = Regex.Match(cell, @"\]\(([^)#]+\.md)(?:#[^)]*)?\)");
@@ -223,4 +223,30 @@ public sealed class WcMatrixEvidenceCensus
         string[] sites = [.. AutomationIdInventory.CSharpExpressions(CSharpSyntaxTree.ParseText(source).GetRoot())];
         Assert.Equal(new[] { "\"" + id + "\"", "\"" + id + "\"" }, sites);
     }
+
+    [Fact]
+    public void HelperInputsBelongToTheBoundMethodNotAnotherTypesNamesake()
+    {
+        string source = """
+            class View {
+                void Label(string id) { AutomationProperties.SetAutomationId(this, id); }
+                void Build() { Label("Actual"); new Other().Label("NotAnId"); }
+            }
+            class Other { public void Label(string id) { } }
+            """;
+        string[] sites = [.. AutomationIdInventory.CSharpExpressions(CSharpSyntaxTree.ParseText(source).GetRoot())];
+        Assert.Contains("\"Actual\"", sites);
+        Assert.DoesNotContain("\"NotAnId\"", sites);
+    }
+
+    private static bool HasAxeExemption(string cell) => Regex.IsMatch(cell, @"\baxe:\s*none\b\s*(?:[—:;-]\s*)?\p{L}.+");
+
+    [Theory]
+    [InlineData("axe: none — the popup has its own HWND", true)]
+    [InlineData("axe: none; the popup has its own HWND", true)]
+    [InlineData("axe: none because the popup has its own HWND", true)]
+    [InlineData("axe: none", false)]
+    [InlineData("axe: none —", false)]
+    public void AxeExemptionsNeedAReasonButNotOnePunctuationStyle(string cell, bool expected) =>
+        Assert.Equal(expected, HasAxeExemption(cell));
 }

@@ -3,6 +3,7 @@
 
 using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace SlateWindows.Tests;
@@ -19,7 +20,7 @@ internal static class AutomationIdInventory
         var sites = new HashSet<Site>();
         foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
         {
-            foreach (string expression in CSharpExpressions(source.Root))
+            foreach (string expression in CSharpExpressions(source.Root, ShellCompilation.ModelFor(source)))
             {
                 sites.Add(new(relative, expression));
             }
@@ -28,12 +29,13 @@ internal static class AutomationIdInventory
             .Where(p => !Path.GetRelativePath(SourceText.ShellSourceRoot(), p).Split(Path.DirectorySeparatorChar).Any(s => s is "obj" or "bin")))
         {
             string relative = Path.GetRelativePath(SourceText.ShellSourceRoot(), path).Replace('\\', '/');
-            foreach (XAttribute attribute in XDocument.Load(path).Descendants().Attributes()
+            XDocument document = XDocument.Load(path);
+            foreach (XAttribute attribute in document.Descendants().Attributes()
                 .Where(a => IsIdProperty(a.Name.LocalName)))
             {
                 sites.Add(new(relative, attribute.Value));
             }
-            foreach (XElement setter in XDocument.Load(path).Descendants().Where(e => e.Name.LocalName == "Setter"
+            foreach (XElement setter in document.Descendants().Where(e => e.Name.LocalName == "Setter"
                 && IsIdProperty((string?)e.Attribute("Property") ?? "")))
             {
                 sites.Add(new(relative, (string?)setter.Attribute("Value") ?? setter.ToString(SaveOptions.DisableFormatting)));
@@ -42,8 +44,9 @@ internal static class AutomationIdInventory
         return [.. sites.OrderBy(s => s.Source, StringComparer.Ordinal).ThenBy(s => s.Expression, StringComparer.Ordinal)];
     }
 
-    internal static IEnumerable<string> CSharpExpressions(SyntaxNode root)
+    internal static IEnumerable<string> CSharpExpressions(SyntaxNode root, SemanticModel? model = null)
     {
+        model ??= CSharpCompilation.Create("AutomationIdInventory", syntaxTrees: [root.SyntaxTree]).GetSemanticModel(root.SyntaxTree);
         // The setter's helper parameters are tracked at EVERY call site too.
         // This catches a newly added Notice(..., "NewId") as well as a new
         // direct setter, including suffixes such as id + "Value".
@@ -52,8 +55,8 @@ internal static class AutomationIdInventory
             .Where(p => p.Parameter.Identifier.ValueText is "automationId" or "id" or "idRoot")
             .Where(p => p.Method.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(IsSetter)
                 || p.Method.DescendantNodes().OfType<AssignmentExpressionSyntax>().Any(a => IsIdProperty(MemberName(a.Left))))
-            .GroupBy(p => p.Method.Identifier.ValueText)
-            .ToDictionary(g => g.Key, g => g.Select(p => (p.Parameter.Identifier.ValueText, p.Index)).Distinct().ToArray());
+            .GroupBy(p => model.GetDeclaredSymbol(p.Method)!, SymbolEqualityComparer.Default)
+            .ToDictionary(g => g.Key, g => g.Select(p => (p.Parameter.Identifier.ValueText, p.Index)).Distinct().ToArray(), SymbolEqualityComparer.Default);
 
         foreach (InvocationExpressionSyntax call in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
@@ -62,7 +65,8 @@ internal static class AutomationIdInventory
                 ArgumentSyntax? value = Argument(call.ArgumentList.Arguments, "value", 1);
                 if (value is not null) { yield return Normalize(value.Expression); }
             }
-            if (helperParameters.TryGetValue(MemberName(call.Expression), out var parameters))
+            if (model.GetSymbolInfo(call).Symbol is IMethodSymbol method
+                && helperParameters.TryGetValue(method.OriginalDefinition, out var parameters))
             {
                 foreach ((string name, int index) in parameters)
                 {
