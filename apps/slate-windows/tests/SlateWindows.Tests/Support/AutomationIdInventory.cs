@@ -44,26 +44,28 @@ internal static class AutomationIdInventory
         return [.. sites.OrderBy(s => s.Source, StringComparer.Ordinal).ThenBy(s => s.Expression, StringComparer.Ordinal)];
     }
 
-    internal static IEnumerable<string> CSharpExpressions(SyntaxNode root, SemanticModel? model = null)
+    internal static IEnumerable<string> CSharpExpressions(SyntaxNode root, SemanticModel model)
     {
         if (root.ContainsDiagnostics)
         {
             throw new ArgumentException("Automation ID inventory requires syntactically valid source.", nameof(root));
         }
-        model ??= CSharpCompilation.Create("AutomationIdInventory", syntaxTrees: [root.SyntaxTree],
-            references: ShellCompilation.Compilation.References).GetSemanticModel(root.SyntaxTree);
         // The setter's helper parameters are tracked at EVERY call site too.
         // This catches a newly added Notice(..., "NewId") as well as a new
         // direct setter, including suffixes such as id + "Value".
-        var helperParameters = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
-            .SelectMany(m => m.ParameterList.Parameters.Select((p, i) => (Method: m, Parameter: p, Index: i)))
-            .Where(p => p.Parameter.Identifier.ValueText is "automationId" or "id" or "idRoot")
-            .Where(p => p.Method.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(IsSetter)
-                || p.Method.DescendantNodes().OfType<AssignmentExpressionSyntax>().Any(a => IsIdProperty(MemberName(a.Left))))
-            .GroupBy(p => model.GetDeclaredSymbol(p.Method)
-                ?? throw new InvalidOperationException($"Cannot bind automation ID helper {p.Method.Identifier.ValueText} at {p.Method.GetLocation()}"),
-                SymbolEqualityComparer.Default)
-            .ToDictionary(g => g.Key, g => g.Select(p => (p.Parameter.Identifier.ValueText, p.Index)).Distinct().ToArray(), SymbolEqualityComparer.Default);
+        var helperParameters = new Dictionary<ISymbol, (string Name, int Index)[]>(SymbolEqualityComparer.Default);
+        foreach (MethodDeclarationSyntax method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+        {
+            if (!method.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(IsSetter)
+                && !method.DescendantNodes().OfType<AssignmentExpressionSyntax>().Any(a => IsIdProperty(MemberName(a.Left)))) { continue; }
+            (string Name, int Index)[] parameters = [.. method.ParameterList.Parameters
+                .Select((parameter, index) => (Name: parameter.Identifier.ValueText, Index: index))
+                .Where(parameter => parameter.Name is "automationId" or "id" or "idRoot")];
+            if (parameters.Length == 0) { continue; }
+            IMethodSymbol symbol = model.GetDeclaredSymbol(method)
+                ?? throw new InvalidOperationException($"Cannot bind automation ID helper {method.Identifier.ValueText} at {method.GetLocation()}");
+            helperParameters.Add(symbol, parameters);
+        }
 
         foreach (InvocationExpressionSyntax call in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
