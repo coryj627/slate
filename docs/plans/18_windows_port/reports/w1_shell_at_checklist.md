@@ -1,0 +1,24 @@
+# W1 SHELL — manual AT checklist (#750)
+
+Source: [wave spec](../specs/w1_spec.md) acceptance lines and the
+[conformance matrix](../w_c_matrix.md) keyboard routes. Run on a disposable
+fixture vault. Use [_at_pass_template.md](_at_pass_template.md) for a named,
+dated record and transcript. NVDA and JAWS are independent passes with stock
+settings; Narrator is W8-6 smoke scope. Automated twins do not prove speech.
+
+**Tester:** Pending · **AT:** Pending (exact version per run) · **OS:** Pending (edition and build)
+**Build:** Pending (branch and verified commit) · **Corpus:** Pending (fixture vault and notes)
+**Method:** Pending (Speech Viewer / JAWS history, braille viewer where required)
+**Run date:** Pending · **Evidence reference:** Pending
+
+| # | Spec item | Check | How (the UIA route) | Observable outcome | Automated twin | Narrator | NVDA | JAWS |
+|---|---|---|---|---|---|---|---|---|
+| 1 | W1-1 | Welcome and menu names | Start with no vault; Tab to Open Vault; use Alt to walk the File and Workspace menus. | Window, menu and button names are spoken; focus remains visible and activation opens the folder picker. | `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` | Pending | Pending | Pending |
+| 2 | W1-1 | Scan progress and completion | Open a fixture vault with enough files to observe scanning; listen until completion. | Progress is announced without a focus jump and the final indexed count is heard. | `W1ShellAccessibilityContractTests` | Pending | Pending | Pending |
+| 3 | W1-2 | Tree and tag navigation | Tab to Files; use arrows and Right/Left, open a row with Enter; toggle Tags and repeat. | Levels, expanded state and selection are spoken; activation opens the named file. | `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` | Pending | Pending | Pending |
+| 4 | W1-2 | Filter and sidebar actions | Focus the file filter with Alt+Ctrl+F; type a query; walk results; tab through sort and organization controls. | Counts and result names agree; control names, values and expanded/toggled states are readable. | `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` | Pending | Pending | Pending |
+| 5 | W1-3 | Tabs, splits and focus routing | Open two notes; split with Ctrl+Backslash; move between panes with Ctrl+Alt+arrows; close and reopen a tab. | Tab selection and pane focus are announced; the active editor is reachable in each split. | `W1WorkspaceTests` | Pending | Pending | Pending |
+| 6 | W1-3 | Resize and restore | Tab to a split handle; resize with arrows; close and reopen the app on the fixture vault. | Handle name and size are inspectable; restored tabs and panes keep their expected focus route. | `W1WorkspaceTests` | Pending | Pending | Pending |
+| 7 | W1-4 | Quick Open | Ctrl+O; type a query; Down through results; Enter opens; reopen and Escape. | Result count and selected name are spoken; Escape restores the invoking editor. | `QuickSwitcherRankCoordinatorTests` | Pending | Pending | Pending |
+
+Residual: every unexecuted row remains Pending. Record findings and the fix commit on retest; never replace a human pass with the automated twin.

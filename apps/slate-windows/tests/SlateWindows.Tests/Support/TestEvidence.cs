@@ -12,7 +12,8 @@ namespace SlateWindows.Tests;
 /// calls reachable from them. This is a static potential-execution check,
 /// not proof that a runtime branch or an external callback scheduler runs.
 /// Direct helpers, local functions, and callbacks invoked by source helpers
-/// are followed; overridable dispatch and unused delegate bodies fail closed.
+/// are followed, as are callbacks of locally constructed, explicitly started
+/// Threads. Overridable dispatch and unused delegate bodies fail closed.
 /// Custom discoverers/attribute constructors are not modeled. The repository
 /// currently uses the standard Fact/Theory attributes.</summary>
 internal sealed class TestEvidence
@@ -36,10 +37,12 @@ internal sealed class TestEvidence
         _axeLabels = new(FindAxeLabels);
     }
 
-    internal bool HasTestEvidence(string name) => _tests.Any(method =>
+    internal bool HasTestEvidence(string name) => _tests.Any(method => Matches(method, name));
+
+    private static bool Matches(IMethodSymbol method, string name) =>
         method.Name == name || method.ContainingType.Name == name
         || method.DeclaringSyntaxReferences.Any(reference =>
-            reference.SyntaxTree.FilePath.Replace('\\', '/').EndsWith("/" + name + ".cs", StringComparison.Ordinal)));
+            reference.SyntaxTree.FilePath.Replace('\\', '/').EndsWith("/" + name + ".cs", StringComparison.Ordinal));
 
     internal bool HasAxeLabel(string label) => _axeLabels.Value.Contains(label);
 
@@ -198,7 +201,7 @@ internal sealed class TestEvidence
     private sealed record Callback(SyntaxNode? Body, IMethodSymbol Method, Context Captured);
 
     private void VisitMethod(IMethodSymbol method, Context context, HashSet<ISymbol> active,
-        IMethodSymbol axe, HashSet<string> labels)
+        IMethodSymbol? axe, HashSet<string> labels)
     {
         method = method.OriginalDefinition;
         if ((method.IsVirtual || method.IsOverride || method.IsAbstract)
@@ -215,7 +218,7 @@ internal sealed class TestEvidence
     }
 
     private void VisitBody(SyntaxNode body, Context context, HashSet<ISymbol> active,
-        IMethodSymbol axe, HashSet<string> labels)
+        IMethodSymbol? axe, HashSet<string> labels)
     {
         SemanticModel model = _compilation.GetSemanticModel(body.SyntaxTree);
         // A passed constant/delegate is useful evidence only while this body
@@ -242,6 +245,12 @@ internal sealed class TestEvidence
                 || model.GetSymbolInfo(invocation).Symbol is not IMethodSymbol
                 || model.GetOperation(invocation) is not IInvocationOperation call) { continue; }
             IMethodSymbol target = call.TargetMethod;
+            if (StartedThreadCallback(call, body, model, context) is { } threadCallback)
+            {
+                if (threadCallback.Body is { } threadBody) { VisitBody(threadBody, threadCallback.Captured, active, axe, labels); }
+                else { VisitMethod(threadCallback.Method, threadCallback.Captured, active, axe, labels); }
+                continue;
+            }
             if (SymbolEqualityComparer.Default.Equals(target.OriginalDefinition, axe))
             {
                 IArgumentOperation? label = call.Arguments.SingleOrDefault(argument => argument.Parameter?.Ordinal == 1);
@@ -264,6 +273,36 @@ internal sealed class TestEvidence
             }
             VisitMethod(target, BindArguments(call, model, context, context, target), active, axe, labels);
         }
+    }
+
+    private Callback? StartedThreadCallback(IInvocationOperation call, SyntaxNode body, SemanticModel model, Context context)
+    {
+        INamedTypeSymbol? thread = _compilation.GetTypeByMetadataName("System.Threading.Thread");
+        if (call.TargetMethod.Name != "Start" || call.Arguments.Length != 0
+            || !SymbolEqualityComparer.Default.Equals(call.TargetMethod.ContainingType, thread)
+            || call.Instance is not ILocalReferenceOperation local
+            || local.Local.DeclaringSyntaxReferences.SingleOrDefault()?.GetSyntax() is not VariableDeclaratorSyntax declaration
+            || declaration.Initializer?.Value is not { } initializer
+            || declaration.SpanStart >= call.Syntax.SpanStart || !body.Span.Contains(declaration.Span)
+            || !IsLive(declaration, body, model, context)
+            || model.GetOperation(initializer) is not IObjectCreationOperation creation
+            || !SymbolEqualityComparer.Default.Equals(creation.Type, thread)
+            || creation.Arguments is not [{ Value: var start }]
+            || ResolveCallback(start, context) is not { Method.Parameters.Length: 0 } callback)
+        {
+            return null;
+        }
+        // An alias, reassignment or ref/out escape is not a proof of which
+        // thread Start invokes. Fail closed instead of interpreting it.
+        foreach (IdentifierNameSyntax reference in body.DescendantNodes().OfType<IdentifierNameSyntax>()
+            .Where(node => SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(node).Symbol, local.Local)))
+        {
+            if (reference.Parent is not MemberAccessExpressionSyntax member || member.Expression != reference
+                || member.Parent is not InvocationExpressionSyntax invocation
+                || model.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method
+                || !SymbolEqualityComparer.Default.Equals(method.ContainingType, thread)) { return null; }
+        }
+        return callback;
     }
 
     private static Context BindArguments(IInvocationOperation call, SemanticModel model, Context caller, Context captured, IMethodSymbol target)
@@ -346,7 +385,7 @@ internal sealed class TestEvidence
             : null;
     }
 
-    private static bool IsLive(InvocationExpressionSyntax invocation, SyntaxNode body, SemanticModel model, Context context)
+    private static bool IsLive(SyntaxNode invocation, SyntaxNode body, SemanticModel model, Context context)
     {
         foreach (InvocationExpressionSyntax call in invocation.AncestorsAndSelf().OfType<InvocationExpressionSyntax>())
         {
