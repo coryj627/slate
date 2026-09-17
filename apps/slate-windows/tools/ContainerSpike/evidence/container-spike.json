@@ -1,0 +1,231 @@
+[
+  {
+    "Variant": "flow",
+    "Error": null,
+    "SurfaceControlType": "Document",
+    "TextPatternSupported": true,
+    "TextPatternHostControlType": "Document",
+    "ReadingOrderText": "Reading container spike\r\nA paragraph with a resolved note link, an absent note link, a #tag, a citation (Smith, 2020), and bold plus code spans.\r\nSecond level heading\r\n\u2022\tfirst bullet\r\n\u2022\tsecond bullet\r\n\u2022\tnested bullet\r\n\u2022\tordered one\r\n\u2022\tordered two\r\n\u2022\t an open task\r\n\u2022\t a done task\r\na block quote with a resolved note link\r\n \r\nheader a\theader b\r\ncell 1\tcell 2\r\n \r\n ",
+    "ReadingOrderLength": 363,
+    "ReadingOrderError": null,
+    "LandmarksFound": [
+      "Reading container spike",
+      "resolved note",
+      "absent note",
+      "Second level heading",
+      "first bullet",
+      "nested bullet",
+      "ordered one",
+      "an open task",
+      "a done task",
+      "block quote",
+      "header a",
+      "cell 1"
+    ],
+    "LandmarksMissing": [
+      "fn main",
+      "Embedded note"
+    ],
+    "LandmarksOutOfOrder": [],
+    "DescendantCount": 16,
+    "ControlTypeHistogram": {
+      "TitleBar": 1,
+      "MenuBar": 1,
+      "MenuItem": 1,
+      "Button": 5,
+      "Document": 2,
+      "CheckBox": 2,
+      "Text": 3,
+      "Separator": 1
+    },
+    "ListControlTypes": 0,
+    "ListItemControlTypes": 0,
+    "HeadingLevelSupportedAnywhere": false,
+    "HeadingLevels": [],
+    "Hyperlinks": [],
+    "InteractiveChildren": [
+      {
+        "Name": "Minimize",
+        "HelpText": "",
+        "KeyboardFocusable": false,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "Maximize",
+        "HelpText": "",
+        "KeyboardFocusable": false,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "Close",
+        "HelpText": "",
+        "KeyboardFocusable": false,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "Task",
+        "HelpText": "",
+        "KeyboardFocusable": true,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "Task",
+        "HelpText": "",
+        "KeyboardFocusable": true,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "Copy rust block",
+        "HelpText": "",
+        "KeyboardFocusable": true,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "Embedded note resolved note",
+        "HelpText": "",
+        "KeyboardFocusable": true,
+        "InvokeSupported": true
+      }
+    ],
+    "FocusableElements": [
+      "TitleBar: ",
+      "MenuBar: System",
+      "MenuItem: System",
+      "Document: Reading view",
+      "CheckBox: Task",
+      "CheckBox: Task",
+      "Button: Copy rust block",
+      "Button: Embedded note resolved note",
+      "Document: "
+    ],
+    "AxeErrors": [
+      "SiblingUniqueAndFocusable: Focusable sibling elements must not have the same Name and LocalizedControlType.",
+      "NameNotNull: The Name property of a focusable element must not be null."
+    ]
+  },
+  {
+    "Variant": "items",
+    "Error": null,
+    "SurfaceControlType": "Pane",
+    "TextPatternSupported": false,
+    "TextPatternHostControlType": null,
+    "ReadingOrderText": null,
+    "ReadingOrderLength": 0,
+    "ReadingOrderError": null,
+    "LandmarksFound": [],
+    "LandmarksMissing": [],
+    "LandmarksOutOfOrder": [],
+    "DescendantCount": 42,
+    "ControlTypeHistogram": {
+      "TitleBar": 1,
+      "MenuBar": 1,
+      "MenuItem": 1,
+      "Button": 5,
+      "Pane": 1,
+      "List": 1,
+      "DataItem": 1,
+      "Text": 23,
+      "Hyperlink": 5,
+      "CheckBox": 2,
+      "Separator": 1
+    },
+    "ListControlTypes": 1,
+    "ListItemControlTypes": 0,
+    "HeadingLevelSupportedAnywhere": true,
+    "HeadingLevels": [
+      "Level1: Reading container spike",
+      "Level2: Second level heading"
+    ],
+    "Hyperlinks": [
+      {
+        "Name": "resolved note",
+        "HelpText": "",
+        "KeyboardFocusable": false,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "absent note",
+        "HelpText": "Unresolved link",
+        "KeyboardFocusable": false,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "#tag",
+        "HelpText": "",
+        "KeyboardFocusable": false,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "(Smith, 2020)",
+        "HelpText": "Smith, two thousand twenty.",
+        "KeyboardFocusable": false,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "resolved note",
+        "HelpText": "",
+        "KeyboardFocusable": false,
+        "InvokeSupported": true
+      }
+    ],
+    "InteractiveChildren": [
+      {
+        "Name": "Minimize",
+        "HelpText": "",
+        "KeyboardFocusable": false,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "Maximize",
+        "HelpText": "",
+        "KeyboardFocusable": false,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "Close",
+        "HelpText": "",
+        "KeyboardFocusable": false,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "Task",
+        "HelpText": "",
+        "KeyboardFocusable": true,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "Task",
+        "HelpText": "",
+        "KeyboardFocusable": true,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "Copy rust block",
+        "HelpText": "",
+        "KeyboardFocusable": true,
+        "InvokeSupported": true
+      },
+      {
+        "Name": "Embedded note resolved note",
+        "HelpText": "",
+        "KeyboardFocusable": true,
+        "InvokeSupported": true
+      }
+    ],
+    "FocusableElements": [
+      "TitleBar: ",
+      "MenuBar: System",
+      "MenuItem: System",
+      "Pane: Reading view",
+      "List: ",
+      "CheckBox: Task",
+      "CheckBox: Task",
+      "Button: Copy rust block",
+      "Button: Embedded note resolved note"
+    ],
+    "AxeErrors": [
+      "NameNotNull: The Name property of a focusable element must not be null.",
+      "SiblingUniqueAndFocusable: Focusable sibling elements must not have the same Name and LocalizedControlType."
+    ]
+  }
+]
