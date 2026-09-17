@@ -362,6 +362,9 @@ public sealed class WcMatrixCanvasEvidenceCensus
             }
         }
         Assert.True(failures.Count == 0, string.Join("\n", failures));
+        bool anyRun = rows.Any(row => row.Skip(6).Any(cell => !cell.StartsWith("Pending", StringComparison.Ordinal)));
+        Assert.True(WcMatrixEvidenceCensus.ChecklistHeaderMatchesRuns(fields["Tester"], fields["Run date"], anyRun),
+            "The checklist Tester / Run date must agree with its recorded human runs.");
         Assert.Equal(Enumerable.Range(1, 10), tItems.OrderBy(i => i));
         string voice = Assert.Single(rows, r => r[0] == "6")[3];
         foreach (string command in (string[])["\"Click 3\"", "\"Toggle Mark\"", "\"Connect To\"", "\"Delete Marked Cards\"", "\"Where am I\""])

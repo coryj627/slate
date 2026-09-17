@@ -46,7 +46,12 @@ internal static class AutomationIdInventory
 
     internal static IEnumerable<string> CSharpExpressions(SyntaxNode root, SemanticModel? model = null)
     {
-        model ??= CSharpCompilation.Create("AutomationIdInventory", syntaxTrees: [root.SyntaxTree]).GetSemanticModel(root.SyntaxTree);
+        if (root.ContainsDiagnostics)
+        {
+            throw new ArgumentException("Automation ID inventory requires syntactically valid source.", nameof(root));
+        }
+        model ??= CSharpCompilation.Create("AutomationIdInventory", syntaxTrees: [root.SyntaxTree],
+            references: ShellCompilation.Compilation.References).GetSemanticModel(root.SyntaxTree);
         // The setter's helper parameters are tracked at EVERY call site too.
         // This catches a newly added Notice(..., "NewId") as well as a new
         // direct setter, including suffixes such as id + "Value".
@@ -55,7 +60,9 @@ internal static class AutomationIdInventory
             .Where(p => p.Parameter.Identifier.ValueText is "automationId" or "id" or "idRoot")
             .Where(p => p.Method.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(IsSetter)
                 || p.Method.DescendantNodes().OfType<AssignmentExpressionSyntax>().Any(a => IsIdProperty(MemberName(a.Left))))
-            .GroupBy(p => model.GetDeclaredSymbol(p.Method)!, SymbolEqualityComparer.Default)
+            .GroupBy(p => model.GetDeclaredSymbol(p.Method)
+                ?? throw new InvalidOperationException($"Cannot bind automation ID helper {p.Method.Identifier.ValueText} at {p.Method.GetLocation()}"),
+                SymbolEqualityComparer.Default)
             .ToDictionary(g => g.Key, g => g.Select(p => (p.Parameter.Identifier.ValueText, p.Index)).Distinct().ToArray(), SymbolEqualityComparer.Default);
 
         foreach (InvocationExpressionSyntax call in root.DescendantNodes().OfType<InvocationExpressionSyntax>())

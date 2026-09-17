@@ -100,3 +100,12 @@ Delivery order for this request: #750 authoring, #747, #749, #748. Final
 wave reconciliation is included in #748 to preserve the owner's one-PR-per-
 issue instruction; #750 remains a rolling gate until the W8 human backlog
 has actual recorded results.
+
+Human-record validation has one owner: the shared census checks the tuple
+of subject, reader and disposition against a named run. A Finding is a
+recorded outcome with an observation, transcript and finding link; it is
+never a Verified result. Checklist headers retain their summary invariant:
+Tester and Run date remain Pending until a human cell records a run, then
+name the tester and date. Detailed reader/build/corpus metadata belongs to
+each linked run. The W6 peer manifests retain their surface-specific
+assertions but delegate human disposition and executable-evidence checks.

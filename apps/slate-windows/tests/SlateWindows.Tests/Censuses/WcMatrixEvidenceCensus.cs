@@ -156,6 +156,10 @@ public sealed class WcMatrixEvidenceCensus
                 .Select(line => line.Trim().Trim('|').Split('|').Select(cell => cell.Trim()).ToArray()).ToArray();
             Assert.NotEmpty(rows);
             var failures = new List<string>();
+            bool anyRun = rows.Any(row => row.Skip(6).Any(cell => !cell.StartsWith("Pending", StringComparison.Ordinal)));
+            string tester = Regex.Match(text, @"\*\*Tester:\*\*\s*([^·\r\n]+)").Groups[1].Value.Trim();
+            string runDate = Regex.Match(text, @"\*\*Run date:\*\*\s*([^·\r\n]+)").Groups[1].Value.Trim();
+            Assert.True(ChecklistHeaderMatchesRuns(tester, runDate, anyRun), $"{wave}: Tester / Run date disagree with the human cells");
             foreach (string[] row in rows)
             {
                 Assert.Equal(9, row.Length);
@@ -238,6 +242,25 @@ public sealed class WcMatrixEvidenceCensus
         Assert.Contains("\"Actual\"", sites);
         Assert.DoesNotContain("\"NotAnId\"", sites);
     }
+
+    [Fact]
+    public void MalformedInventorySourceFailsWithAnExplicitDiagnostic() =>
+        Assert.Throws<ArgumentException>(() => AutomationIdInventory.CSharpExpressions(
+            CSharpSyntaxTree.ParseText("class View { void (string id) {").GetRoot()).ToArray());
+
+    internal static bool ChecklistHeaderMatchesRuns(string tester, string runDate, bool anyRun) => anyRun
+        ? !string.IsNullOrWhiteSpace(tester) && !tester.Contains("Pending", StringComparison.OrdinalIgnoreCase)
+            && Regex.IsMatch(runDate, @"^\d{4}-\d{2}-\d{2}\b")
+        : tester.StartsWith("Pending", StringComparison.Ordinal) && runDate.StartsWith("Pending", StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData("Pending", "Pending", false, true)]
+    [InlineData("Pending", "Pending", true, false)]
+    [InlineData("Cory Joseph", "Pending", true, false)]
+    [InlineData("", "2026-09-17", true, false)]
+    [InlineData("Cory Joseph", "2026-09-17", true, true)]
+    public void ChecklistHeadersTrackWhetherAnyHumanRunIsRecorded(string tester, string date, bool anyRun, bool expected) =>
+        Assert.Equal(expected, ChecklistHeaderMatchesRuns(tester, date, anyRun));
 
     private static bool HasAxeExemption(string cell) => Regex.IsMatch(cell, @"\baxe:\s*none\b\s*(?:[—:;-]\s*)?\p{L}.+");
 
