@@ -317,82 +317,15 @@ public sealed class WcMatrixCanvasEvidenceCensus
     [Fact]
     public void EveryEvidenceNameResolvesAndEveryAxeLabelIsScanned()
     {
-        string tests = TestText();
-        var failures = new List<string>();
+        new WcMatrixEvidenceCensus().EveryRowHasTenCellsAndExecutableEvidence();
         foreach (Surface surface in Manifest)
         {
             Row row = Assert.Single(CanvasRows(), r => r.Title == surface.Title);
-            string evidence = row.Cells[6];
-            foreach (string name in surface.Evidence)
+            foreach (string name in surface.Evidence.Concat(surface.AxeLabels))
             {
-                if (!evidence.Contains($"`{name}`", StringComparison.Ordinal))
-                {
-                    failures.Add($"{surface.Title}: the evidence cell lacks `{name}`");
-                }
-            }
-            // EVERY backticked token in the evidence cell RESOLVES (review
-            // round 1, IH-57 — no length floor): a fact or journey, a test
-            // or benchmark class, a shell member the prose points at, an
-            // axe label this surface scans, or a fixture or scenario
-            // directory under core's tests.
-            string shell = ShellText();
-            foreach (Match backticked in Regex.Matches(evidence, "`([^`]+)`"))
-            {
-                string name = backticked.Groups[1].Value;
-                bool method = Regex.IsMatch(tests, @"\b(void|Task)\s+" + Regex.Escape(name) + @"\s*\(");
-                bool type = Regex.IsMatch(tests, @"\bclass\s+" + Regex.Escape(name) + @"\b")
-                    || Regex.IsMatch(BenchText(), @"\bclass\s+" + Regex.Escape(name) + @"\b");
-                bool member = Regex.IsMatch(shell, @"\b" + Regex.Escape(name) + @"\s*[\(<]");
-                bool axe = surface.AxeLabels.Contains(name);
-                // A dotted token — `Type.Member` — resolves when the type is
-                // declared and the member is declared in the same trees.
-                bool dotted = false;
-                if (name.Contains('.', StringComparison.Ordinal))
-                {
-                    string[] parts = name.Split('.');
-                    string owner = parts[^2];
-                    string leaf = parts[^1];
-                    string all = tests + shell + BenchText();
-                    dotted = Regex.IsMatch(all, @"\b(?:class|record|struct|interface)\s+" + Regex.Escape(owner) + @"\b")
-                        && Regex.IsMatch(all, @"\b" + Regex.Escape(leaf) + @"\s*[\(<{=]");
-                }
-                bool pathLike = name.Contains('/', StringComparison.Ordinal);
-                bool testFile = pathLike && Directory
-                    .EnumerateFiles(Path.Combine(RepoRoot, "apps", "slate-windows", "tests"), "*.cs", SearchOption.AllDirectories)
-                    .Any(p => p.Replace('\\', '/').EndsWith("/" + name + ".cs", StringComparison.Ordinal));
-                bool fixture = !pathLike
-                    && (Directory.Exists(Path.Combine(RepoRoot, "crates", "slate-core", "tests", "fixtures", name))
-                        || Directory.EnumerateFiles(Path.Combine(RepoRoot, "crates", "slate-core", "tests", "fixtures"), name + ".*", SearchOption.AllDirectories).Any());
-                if (!method && !type && !member && !axe && !fixture && !testFile && !dotted)
-                {
-                    failures.Add($"{surface.Title}: `{name}` resolves to no fact, journey, test or benchmark class, shell member, axe label or fixture");
-                }
-            }
-            MatchCollection labels = Regex.Matches(evidence, "axe: (`[a-z0-9-]+`(?:, `[a-z0-9-]+`)*)");
-            if (surface.AxeScanned)
-            {
-                if (labels.Count == 0)
-                {
-                    failures.Add($"{surface.Title}: no axe label");
-                }
-                foreach (string label in surface.AxeLabels)
-                {
-                    if (!evidence.Contains($"`{label}`", StringComparison.Ordinal))
-                    {
-                        failures.Add($"{surface.Title}: the evidence cell lacks axe label `{label}`");
-                    }
-                    if (!tests.Contains($"AssertAxeClean(process, \"{label}\")", StringComparison.Ordinal))
-                    {
-                        failures.Add($"{surface.Title}: no journey scans `{label}`");
-                    }
-                }
-            }
-            else if (!evidence.Contains("axe: none", StringComparison.Ordinal))
-            {
-                failures.Add($"{surface.Title}: an unscanned surface must say why");
+                Assert.Contains($"`{name}`", row.Cells[6], StringComparison.Ordinal);
             }
         }
-        Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
 
     /// <summary>§H TH-10 (H8, IH-20, IH-46): the manual AT checklist carries

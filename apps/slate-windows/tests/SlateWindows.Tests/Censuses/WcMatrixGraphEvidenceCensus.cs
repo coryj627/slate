@@ -198,44 +198,15 @@ public sealed class WcMatrixGraphEvidenceCensus
     [Fact]
     public void EveryEvidenceNameResolvesAndEveryAxeLabelIsScanned()
     {
-        IReadOnlyList<TestEvidence> projects = TestEvidenceCompilation.Projects;
-        var failures = new List<string>();
+        new WcMatrixEvidenceCensus().EveryRowHasTenCellsAndExecutableEvidence();
         foreach (Surface surface in Manifest)
         {
             Row row = Assert.Single(GraphRows(), r => r.Title == surface.Title);
-            string evidence = row.Cells[6];
-            foreach (string name in surface.Evidence)
+            foreach (string name in surface.Evidence.Concat(surface.AxeLabels))
             {
-                if (!evidence.Contains($"`{name}`", StringComparison.Ordinal))
-                {
-                    failures.Add($"{surface.Title}: the evidence cell lacks `{name}`");
-                }
-            }
-            foreach (Match backticked in Regex.Matches(evidence, "`([^`]+)`"))
-            {
-                string name = backticked.Groups[1].Value;
-                bool test = projects.Any(project => project.HasTestEvidence(name));
-                bool axe = surface.AxeLabels.Contains(name);
-                bool fixture = TestEvidence.HasFixture(
-                    Path.Combine(RepoRoot, "crates", "slate-core", "tests", "fixtures"), name);
-                if (!test && !axe && !fixture)
-                {
-                    failures.Add($"{surface.Title}: `{name}` resolves to no executable xUnit test, class/file containing one, axe label or fixture");
-                }
-            }
-            foreach (string label in surface.AxeLabels)
-            {
-                if (!evidence.Contains($"`{label}`", StringComparison.Ordinal))
-                {
-                    failures.Add($"{surface.Title}: the evidence cell lacks axe label `{label}`");
-                }
-                if (!projects.Any(project => project.HasAxeLabel(label)))
-                {
-                    failures.Add($"{surface.Title}: no executable test reaches a bound AssertAxeClean call for `{label}`");
-                }
+                Assert.Contains($"`{name}`", row.Cells[6], StringComparison.Ordinal);
             }
         }
-        Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
     // --- W6-2 §F (F5, IGZ-3, IHB-2): every graph automation id has a row ------
 

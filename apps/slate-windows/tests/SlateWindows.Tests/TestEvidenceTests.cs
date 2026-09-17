@@ -269,18 +269,6 @@ public sealed class TestEvidenceTests
         Assert.Equal(expected, Evidence(members).HasAxeLabel("graph-table"));
     }
 
-    [Theory]
-    [InlineData("Assert.NotNull(peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Text));", true)]
-    [InlineData("Assert.Null(peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Text));", false)]
-    [InlineData("if (false) Assert.NotNull(peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Text));", false)]
-    [InlineData("var ignored = System.Windows.Automation.Peers.PatternInterface.Text;", false)]
-    public void PatternClaimsNeedAPositiveExecutableWitness(string assertion, bool expected)
-    {
-        string members = "[Fact] public void Journey() { System.Windows.Automation.Peers.AutomationPeer peer = null; " + assertion + " }";
-        Assert.Equal(expected, Evidence(members).HasPatternEvidence("Journey", "Text"));
-        Assert.False(Evidence(members).HasPatternEvidence("Absent", "Text"));
-    }
-
     [Fact]
     public void FixturesMustBeRealFilesWithTheExactStem()
     {

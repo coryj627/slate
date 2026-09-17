@@ -33,6 +33,11 @@ internal static class AutomationIdInventory
             {
                 sites.Add(new(relative, attribute.Value));
             }
+            foreach (XElement setter in XDocument.Load(path).Descendants().Where(e => e.Name.LocalName == "Setter"
+                && IsIdProperty((string?)e.Attribute("Property") ?? "")))
+            {
+                sites.Add(new(relative, (string?)setter.Attribute("Value") ?? setter.ToString(SaveOptions.DisableFormatting)));
+            }
         }
         return [.. sites.OrderBy(s => s.Source, StringComparer.Ordinal).ThenBy(s => s.Expression, StringComparer.Ordinal)];
     }
@@ -54,14 +59,14 @@ internal static class AutomationIdInventory
         {
             if (IsSetter(call) && call.ArgumentList.Arguments.Count == 2)
             {
-                yield return Normalize(call.ArgumentList.Arguments[1].Expression);
+                ArgumentSyntax? value = Argument(call.ArgumentList.Arguments, "value", 1);
+                if (value is not null) { yield return Normalize(value.Expression); }
             }
             if (helperParameters.TryGetValue(MemberName(call.Expression), out var parameters))
             {
                 foreach ((string name, int index) in parameters)
                 {
-                    ArgumentSyntax? argument = call.ArgumentList.Arguments.FirstOrDefault(a => a.NameColon?.Name.Identifier.ValueText == name)
-                        ?? call.ArgumentList.Arguments.ElementAtOrDefault(index);
+                    ArgumentSyntax? argument = Argument(call.ArgumentList.Arguments, name, index);
                     if (argument is not null) { yield return Normalize(argument.Expression); }
                 }
             }
@@ -70,6 +75,17 @@ internal static class AutomationIdInventory
             .Where(a => IsIdProperty(MemberName(a.Left))))
         {
             yield return Normalize(assignment.Right);
+        }
+        foreach (ObjectCreationExpressionSyntax creation in root.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
+        {
+            if (creation.Type.ToString().Split('.').Last() == "Setter"
+                && creation.ArgumentList?.Arguments is { Count: 2 } arguments
+                && Argument(arguments, "property", 0)?.Expression is { } property
+                && MemberName(property) == "AutomationIdProperty"
+                && Argument(arguments, "value", 1)?.Expression is { } value)
+            {
+                yield return Normalize(value);
+            }
         }
         foreach (VariableDeclaratorSyntax variable in root.DescendantNodes().OfType<VariableDeclaratorSyntax>()
             .Where(v => IsIdProperty(v.Identifier.ValueText) && v.Initializer is not null))
@@ -91,6 +107,10 @@ internal static class AutomationIdInventory
         or "AutomationId" or "GridAutomationId" or "AutomationIdRoot" or "AutomationIdPrefix";
 
     private static bool IsSetter(InvocationExpressionSyntax call) => MemberName(call.Expression) == "SetAutomationId";
+
+    private static ArgumentSyntax? Argument(SeparatedSyntaxList<ArgumentSyntax> arguments, string name, int index) =>
+        arguments.FirstOrDefault(a => a.NameColon?.Name.Identifier.ValueText == name)
+        ?? (arguments.ElementAtOrDefault(index) is { NameColon: null } positional ? positional : null);
 
     private static string MemberName(ExpressionSyntax expression) => expression switch
     {

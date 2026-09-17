@@ -250,6 +250,11 @@
     "Surface": "Graph connections leaf (W6-2 PR B)"
   },
   {
+    "Source": "Graph/ConnectionsLeafView.cs",
+    "Expression": "new Binding(nameof(ConnectionsRowViewModel.Id))",
+    "Surface": "Graph connections leaf (W6-2 PR B)"
+  },
+  {
     "Source": "Graph/GraphDiagramPeers.cs",
     "Expression": "\"GraphNode:\" + _view.PeerKey(Id)",
     "Surface": "Graph diagram (W6-2 PR D)"

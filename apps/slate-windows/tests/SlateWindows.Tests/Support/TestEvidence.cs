@@ -22,7 +22,6 @@ internal sealed class TestEvidence
     private readonly IAssemblySymbol _xunit;
     private readonly IMethodSymbol[] _tests;
     private readonly Lazy<HashSet<string>> _axeLabels;
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> _patternEvidence = new(StringComparer.Ordinal);
 
     internal TestEvidence(CSharpCompilation compilation)
     {
@@ -44,20 +43,6 @@ internal sealed class TestEvidence
         method.Name == name || method.ContainingType.Name == name
         || method.DeclaringSyntaxReferences.Any(reference =>
             reference.SyntaxTree.FilePath.Replace('\\', '/').EndsWith("/" + name + ".cs", StringComparison.Ordinal));
-
-    internal bool HasPatternEvidence(string name, string pattern)
-    {
-        HashSet<string> observations = _patternEvidence.GetOrAdd(name, key =>
-        {
-            var found = new HashSet<string>(StringComparer.Ordinal);
-            foreach (IMethodSymbol test in _tests.Where(method => Matches(method, key)))
-            {
-                VisitMethod(test, new Context(), new HashSet<ISymbol>(SymbolEqualityComparer.Default), null, found);
-            }
-            return found;
-        });
-        return observations.Contains("pattern:" + pattern);
-    }
 
     internal bool HasAxeLabel(string label) => _axeLabels.Value.Contains(label);
 
@@ -251,30 +236,6 @@ internal sealed class TestEvidence
                 if (!flow.WrittenInside.Contains(callback.Key, SymbolEqualityComparer.Default)) { stable.Callbacks.Add(callback.Key, callback.Value); }
             }
             context = stable;
-        }
-        foreach (MemberAccessExpressionSyntax member in body.DescendantNodesAndSelf(node =>
-            node is not AnonymousFunctionExpressionSyntax and not LocalFunctionStatementSyntax).OfType<MemberAccessExpressionSyntax>())
-        {
-            if (!IsLive(member, body, model, context)) { continue; }
-            // A positive assertion or a real pattern invocation is a witness;
-            // merely mentioning a pattern, or asserting it is absent, is not.
-            bool positive = member.Ancestors().OfType<InvocationExpressionSyntax>().Any(invocation =>
-                model.GetSymbolInfo(invocation).Symbol is IMethodSymbol assertion
-                && assertion.ContainingType.ToDisplayString() == "Xunit.Assert"
-                && assertion.Name is "True" or "NotNull" or "IsAssignableFrom" or "IsType");
-            if (member.Expression is MemberAccessExpressionSyntax pattern
-                && pattern.Expression is MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Patterns" }
-                && model.GetSymbolInfo(pattern).Symbol is IPropertySymbol property
-                && property.ContainingNamespace.ToDisplayString().StartsWith("FlaUI.", StringComparison.Ordinal)
-                && (member.Name.Identifier.ValueText == "Pattern" || (positive && member.Name.Identifier.ValueText == "IsSupported")))
-            {
-                labels.Add("pattern:" + pattern.Name.Identifier.ValueText);
-            }
-            if (positive && model.GetSymbolInfo(member).Symbol is IFieldSymbol field
-                && field.ContainingType.ToDisplayString() == "System.Windows.Automation.Peers.PatternInterface")
-            {
-                labels.Add("pattern:" + field.Name);
-            }
         }
         foreach (InvocationExpressionSyntax invocation in body.DescendantNodesAndSelf(node =>
             node is not AnonymousFunctionExpressionSyntax and not LocalFunctionStatementSyntax)

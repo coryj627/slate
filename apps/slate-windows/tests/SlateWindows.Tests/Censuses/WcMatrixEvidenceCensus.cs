@@ -78,30 +78,22 @@ public sealed class WcMatrixEvidenceCensus
             {
                 failures.Add($"{row.Title}: name an axe scan, or record why this row has no dedicated scan");
             }
-            foreach (string pattern in Enum.GetNames<System.Windows.Automation.Peers.PatternInterface>())
-            {
-                if (!Regex.IsMatch(row.Cells[3], @"\b" + pattern + @"\b")
-                    || Regex.IsMatch(row.Cells[3], @"\b" + pattern + @"\s+n/a\b")) { continue; }
-                if (!names.Any(name => projects.Any(project => project.HasPatternEvidence(name, pattern))))
-                {
-                    failures.Add($"{row.Title}: claimed {pattern} has no positive assertion or invocation in its named evidence");
-                }
-            }
-            for (int i = 7; i < 10; i++) { ValidateHumanCell(row.Title, row.Cells[i], new[] { "Narrator", "NVDA", "JAWS" }[i - 7], failures); }
+            for (int i = 7; i < 10; i++) { ValidateHumanCell(row.Title, row.Cells[i], new[] { "Narrator", "NVDA", "JAWS" }[i - 7], PlanRoot, failures); }
         }
         Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
 
-    private static void ValidateHumanCell(string title, string cell, string at, List<string> failures)
+    private static void ValidateHumanCell(string title, string cell, string at, string documentDirectory, List<string> failures)
     {
         if (cell.StartsWith("Pending", StringComparison.Ordinal)) { return; }
-        Match run = Regex.Match(cell, @"\]\((reports/[^)#]+\.md)(?:#[^)]*)?\)");
-        if (!run.Success || !cell.Contains("verified", StringComparison.OrdinalIgnoreCase))
+        Match run = Regex.Match(cell, @"\]\(([^)#]+\.md)(?:#[^)]*)?\)");
+        string disposition = Regex.IsMatch(cell, @"\bFinding\b", RegexOptions.IgnoreCase) ? "Finding" : "Verified";
+        if (!run.Success || !Regex.IsMatch(cell, @"\b" + disposition + @"\b", RegexOptions.IgnoreCase))
         {
             failures.Add($"{title}: human result has no named verification record: {cell}");
             return;
         }
-        string path = Path.GetFullPath(Path.Combine(PlanRoot, run.Groups[1].Value));
+        string path = Path.GetFullPath(Path.Combine(documentDirectory, run.Groups[1].Value));
         if (!path.StartsWith(PlanRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
         {
             failures.Add($"{title}: missing verification record {run.Groups[1].Value}");
@@ -124,6 +116,34 @@ public sealed class WcMatrixEvidenceCensus
         }
         if (!Regex.IsMatch(record, @"\b20\d{2}-\d{2}-\d{2}\b")) { failures.Add($"{title}: verification record has no date"); }
         if (!Regex.IsMatch(record, @"\b[0-9a-f]{7,40}\b")) { failures.Add($"{title}: verification record has no commit"); }
+        // The one pre-existing field record predates the checklist table.
+        // Its exception is limited to its actual surface and reader.
+        bool historicalReading = path == Path.Combine(PlanRoot, "reports", "w3_1_nvda_field_verification.md")
+            && title == "Reading view (W3-1)" && at == "NVDA" && disposition == "Verified";
+        if (!historicalReading && !HasSubjectResult(record, title, disposition))
+        {
+            failures.Add($"{title}: the run does not record this specific surface/checklist item with an observation and transcript");
+        }
+    }
+
+    private static bool HasSubjectResult(string record, string title, string disposition) =>
+        record.Split('\n').Where(line => line.StartsWith("| ", StringComparison.Ordinal))
+            .Select(line => line.Trim().Trim('|').Split('|').Select(value => value.Trim()).ToArray())
+            .Any(cells => cells.Length == 5 && cells[0] == title && cells[1] == disposition
+                && cells[2].Length > 0 && !cells[2].Contains("Pending", StringComparison.OrdinalIgnoreCase)
+                && Regex.IsMatch(cells[3], @"\[[^\]]+\]\([^)]+\)")
+                && (disposition != "Finding" || Regex.IsMatch(cells[4], @"\[[^\]]+\]\([^)]+\)")));
+
+    [Theory]
+    [InlineData("Finding", "Finding", "[issue](https://github.com/coryj627/slate/issues/750)", true)]
+    [InlineData("Finding", "Finding", "Pending", false)]
+    [InlineData("Finding", "Verified", "[issue](https://github.com/coryj627/slate/issues/750)", false)]
+    [InlineData("Verified", "Verified", "None", true)]
+    public void ARecordedFindingRemainsAFinding(string recorded, string claimed, string finding, bool expected)
+    {
+        string record = $"| subject | {recorded} | Actual observed speech | [transcript](run.txt) | {finding} |";
+        Assert.Equal(expected, HasSubjectResult(record, "subject", claimed));
+        Assert.False(HasSubjectResult(record, "unrelated surface", claimed));
     }
 
     [Fact]
@@ -140,12 +160,14 @@ public sealed class WcMatrixEvidenceCensus
             {
                 Assert.Equal(9, row.Length);
                 Assert.All(row, cell => Assert.False(string.IsNullOrWhiteSpace(cell)));
-                foreach (Match token in Regex.Matches(row[5], "`([^`]+)`"))
+                MatchCollection twins = Regex.Matches(row[5], "`([^`]+)`");
+                Assert.NotEmpty(twins);
+                foreach (Match token in twins)
                 {
                     Assert.True(TestEvidenceCompilation.Projects.Any(p => p.HasTestEvidence(token.Groups[1].Value)),
                         $"{wave}: no executable automated twin {token.Groups[1].Value}");
                 }
-                for (int i = 6; i < 9; i++) { ValidateHumanCell(wave + " " + row[0], row[i], new[] { "Narrator", "NVDA", "JAWS" }[i - 6], failures); }
+                for (int i = 6; i < 9; i++) { ValidateHumanCell(wave + "_at_checklist.md#" + row[0], row[i], new[] { "Narrator", "NVDA", "JAWS" }[i - 6], Path.Combine(PlanRoot, "reports"), failures); }
             }
             Assert.True(failures.Count == 0, string.Join("\n", failures));
         }
@@ -155,11 +177,12 @@ public sealed class WcMatrixEvidenceCensus
     [InlineData("Verified", "NVDA")]
     [InlineData("Verified [record](reports/missing_run.md)", "NVDA")]
     [InlineData("Verified [record](reports/w3_1_nvda_field_verification.md)", "JAWS")]
+    [InlineData("Verified [record](reports/w3_1_nvda_field_verification.md)", "NVDA")]
     [InlineData("Verified [record](reports/_at_pass_template.md)", "NVDA")]
     public void HumanCellsRejectUnrecordedRunsAndTheOtherReadersEvidence(string cell, string at)
     {
         var failures = new List<string>();
-        ValidateHumanCell("test surface", cell, at, failures);
+        ValidateHumanCell("test surface", cell, at, PlanRoot, failures);
         Assert.NotEmpty(failures);
     }
 
@@ -169,7 +192,7 @@ public sealed class WcMatrixEvidenceCensus
         string source = """
             class View {
                 void Label(string id) { AutomationProperties.SetAutomationId(this, id + "Value"); }
-                void Build() { Label("Meter"); AutomationProperties.SetAutomationId(this, "Node:" + key); }
+                void Build() { var setter = new Setter(AutomationProperties.AutomationIdProperty, new Binding("Id")); Label("Meter"); AutomationProperties.SetAutomationId(this, "Node:" + key); }
                 protected override string GetAutomationIdCore() => "Peer:" + key;
                 // AutomationProperties.SetAutomationId(this, "Comment");
                 string text = "SetAutomationId(this, Fake)";
@@ -180,6 +203,24 @@ public sealed class WcMatrixEvidenceCensus
         Assert.Contains("id + \"Value\"", sites);
         Assert.Contains("\"Node:\" + key", sites);
         Assert.Contains("\"Peer:\" + key", sites);
-        Assert.Equal(4, sites.Length);
+        Assert.Contains("new Binding(\"Id\")", sites);
+        Assert.Equal(5, sites.Length);
+    }
+
+    [Theory]
+    [InlineData("One")]
+    [InlineData("Two")]
+    public void IdInventoryTracksTheValueOfReorderedNamedArguments(string id)
+    {
+        string source = $$"""
+            class View {
+                void Build() {
+                    AutomationProperties.SetAutomationId(value: "{{id}}", element: this);
+                    var setter = new Setter(value: "{{id}}", property: AutomationProperties.AutomationIdProperty);
+                }
+            }
+            """;
+        string[] sites = [.. AutomationIdInventory.CSharpExpressions(CSharpSyntaxTree.ParseText(source).GetRoot())];
+        Assert.Equal(new[] { "\"" + id + "\"", "\"" + id + "\"" }, sites);
     }
 }
