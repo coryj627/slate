@@ -1,0 +1,2147 @@
+[
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "\"BaseCountReadout\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "\"BaseEmptyState\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "\"BaseQuickFilter\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "\"BaseRefresh\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "\"BaseStateBanner\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "\"BaseSurface\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "\"BaseTabGrid\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "\"BaseTabList\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "\"BaseViewPicker\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "\"BaseWarningBanners\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "value ? \"BasesDockGrid\" : \"BaseTabGrid\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "value ? \"BasesDockList\" : \"BaseTabList\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/DashboardSurfaceView.cs",
+    "Expression": "\"DashboardEmptyState\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/DashboardSurfaceView.cs",
+    "Expression": "\"DashboardSurface\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/DashboardSurfaceView.cs",
+    "Expression": "$\"{_automationIdRoot}Section{index}Banner\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/DashboardSurfaceView.cs",
+    "Expression": "$\"{idRoot}Section{index}Grid\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/DashboardSurfaceView.cs",
+    "Expression": "$\"{idRoot}Section{index}List\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/DashboardSurfaceView.cs",
+    "Expression": "_automationIdRoot",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/DashboardSurfaceView.cs",
+    "Expression": "value + \"EmptyState\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/DashboardSurfaceView.cs",
+    "Expression": "value + \"Surface\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Canvas/CanvasOutlineView.cs",
+    "Expression": "\"CanvasOutlineTree\"",
+    "Surface": "Canvas outline (W6-1 PR A)"
+  },
+  {
+    "Source": "Canvas/CanvasRendererPeers.cs",
+    "Expression": "(Key.IsEdge ? \"CanvasEdge:\" : \"CanvasCard:\") + Key.Id",
+    "Surface": "Canvas visual (W6-1 §D)"
+  },
+  {
+    "Source": "Canvas/CanvasRendererView.cs",
+    "Expression": "\"CanvasVisualBoard\"",
+    "Surface": "Canvas visual (W6-1 §D)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasCancelMode\"",
+    "Surface": "Canvas navigator, filter and Where-am-I (W6-1 PR C)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasClearFilter\"",
+    "Surface": "Canvas navigator, filter and Where-am-I (W6-1 PR C)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasCommitMode\"",
+    "Surface": "Canvas navigator, filter and Where-am-I (W6-1 PR C)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasDegradedBanner\"",
+    "Surface": "Canvas outline (W6-1 PR A)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasEmptyOnboarding\"",
+    "Surface": "Canvas outline (W6-1 PR A)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasFilterField\"",
+    "Surface": "Canvas navigator, filter and Where-am-I (W6-1 PR C)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasFilterSummary\"",
+    "Surface": "Canvas navigator, filter and Where-am-I (W6-1 PR C)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasReadOnlyBanner\"",
+    "Surface": "Canvas outline (W6-1 PR A)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasRetryLoad\"",
+    "Surface": "Canvas outline (W6-1 PR A)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasShowOutline\"",
+    "Surface": "Canvas outline (W6-1 PR A)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasShowTable\"",
+    "Surface": "Canvas outline (W6-1 PR A)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasShowVisual\"",
+    "Surface": "Canvas outline (W6-1 PR A)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasStateBanner\"",
+    "Surface": "Canvas outline (W6-1 PR A)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasSurface\"",
+    "Surface": "Canvas outline (W6-1 PR A)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasSurfaceSwitcher\"",
+    "Surface": "Canvas outline (W6-1 PR A)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasWarningRows\"",
+    "Surface": "Canvas outline (W6-1 PR A)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasWhereAmIClose\"",
+    "Surface": "Canvas navigator, filter and Where-am-I (W6-1 PR C)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasWhereAmIPanel\"",
+    "Surface": "Canvas navigator, filter and Where-am-I (W6-1 PR C)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "\"CanvasWhereAmIReadback\"",
+    "Surface": "Canvas navigator, filter and Where-am-I (W6-1 PR C)"
+  },
+  {
+    "Source": "Canvas/CanvasSurfaceView.cs",
+    "Expression": "automationId",
+    "Surface": "Canvas outline (W6-1 PR A)"
+  },
+  {
+    "Source": "Canvas/CanvasTableView.cs",
+    "Expression": "\"CanvasTableGrid\"",
+    "Surface": "Canvas table (W6-1 PR B)"
+  },
+  {
+    "Source": "Graph/ConnectionsLeafView.cs",
+    "Expression": "\"ConnectionsDepth\"",
+    "Surface": "Graph connections leaf (W6-2 PR B)"
+  },
+  {
+    "Source": "Graph/ConnectionsLeafView.cs",
+    "Expression": "\"ConnectionsHeading\"",
+    "Surface": "Graph connections leaf (W6-2 PR B)"
+  },
+  {
+    "Source": "Graph/ConnectionsLeafView.cs",
+    "Expression": "\"ConnectionsLeaf\"",
+    "Surface": "Graph connections leaf (W6-2 PR B)"
+  },
+  {
+    "Source": "Graph/ConnectionsLeafView.cs",
+    "Expression": "\"ConnectionsStateText\"",
+    "Surface": "Graph connections leaf (W6-2 PR B)"
+  },
+  {
+    "Source": "Graph/ConnectionsLeafView.cs",
+    "Expression": "\"ConnectionsSummary\"",
+    "Surface": "Graph connections leaf (W6-2 PR B)"
+  },
+  {
+    "Source": "Graph/ConnectionsLeafView.cs",
+    "Expression": "\"ConnectionsTree\"",
+    "Surface": "Graph connections leaf (W6-2 PR B)"
+  },
+  {
+    "Source": "Graph/GraphDiagramPeers.cs",
+    "Expression": "\"GraphNode:\" + _view.PeerKey(Id)",
+    "Surface": "Graph diagram (W6-2 PR D)"
+  },
+  {
+    "Source": "Graph/GraphDiagramPeers.cs",
+    "Expression": "\"GraphTierSummary\"",
+    "Surface": "Graph diagram (W6-2 PR D)"
+  },
+  {
+    "Source": "Graph/GraphDiagramView.cs",
+    "Expression": "\"GraphDiagram\"",
+    "Surface": "Graph diagram (W6-2 PR D)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspector\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorAddGroup\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorArrows\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorAttachments\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorCenter\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorDisplay\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorFilters\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorForces\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorGhosts\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorGroupColour:\" + row.Index.ToString(System.Globalization.CultureInfo.InvariantCulture)",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorGroupQuery:\" + row.Index.ToString(System.Globalization.CultureInfo.InvariantCulture)",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorGroupRing:\" + row.Index.ToString(System.Globalization.CultureInfo.InvariantCulture)",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorGroups\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorInactive\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorLink\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorLinkDistance\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorLinkThickness\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorNameQuery\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorNoGroups\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorNodeSize\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorOrphans\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorReadOnly\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorRemoveGroup:\" + row.Index.ToString(System.Globalization.CultureInfo.InvariantCulture)",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorRepel\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "\"GraphInspectorTextFade\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "id",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphInspectorView.cs",
+    "Expression": "id + \"Value\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphSurfaceView.cs",
+    "Expression": "\"GraphClearFilter\"",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "Graph/GraphSurfaceView.cs",
+    "Expression": "\"GraphFilterField\"",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "Graph/GraphSurfaceView.cs",
+    "Expression": "\"GraphFilterSummary\"",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "Graph/GraphSurfaceView.cs",
+    "Expression": "\"GraphInspectorToggle\"",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "Graph/GraphSurfaceView.cs",
+    "Expression": "\"GraphMode.\" + spec.Tag",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "Graph/GraphSurfaceView.cs",
+    "Expression": "\"GraphStateHost\"",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "Graph/GraphSurfaceView.cs",
+    "Expression": "\"GraphStateText\"",
+    "Surface": "Graph table (W6-2 PR A)"
+  },
+  {
+    "Source": "Graph/GraphSurfaceView.cs",
+    "Expression": "\"GraphSurface\"",
+    "Surface": "Graph table (W6-2 PR A)"
+  },
+  {
+    "Source": "Graph/GraphSurfaceView.cs",
+    "Expression": "\"GraphSurfaceSwitcher\"",
+    "Surface": "Graph table (W6-2 PR A)"
+  },
+  {
+    "Source": "Graph/GraphSurfaceView.cs",
+    "Expression": "\"GraphWhereAmIClose\"",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "Graph/GraphSurfaceView.cs",
+    "Expression": "\"GraphWhereAmIPanel\"",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "Graph/GraphSurfaceView.cs",
+    "Expression": "\"GraphWhereAmIReadback\"",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "Graph/GraphTableView.cs",
+    "Expression": "\"GraphTableGrid\"",
+    "Surface": "Graph table (W6-2 PR A)"
+  },
+  {
+    "Source": "Graph/GraphVerbosityMenu.cs",
+    "Expression": "\"GraphVerbosity.\"",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "Graph/GraphVerbosityMenu.cs",
+    "Expression": "AutomationIdPrefix + choice.Tag",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "Grids/AccessibleDataGrid.cs",
+    "Expression": "\"AccessibleDataGrid\"",
+    "Surface": "Data grids (W4-1 substrate)"
+  },
+  {
+    "Source": "Grids/AccessibleDataGrid.cs",
+    "Expression": "\"AccessibleDataGridSummary\"",
+    "Surface": "Data grids (W4-1 substrate)"
+  },
+  {
+    "Source": "Grids/AccessibleDataGrid.cs",
+    "Expression": "$\"{value}Summary\"",
+    "Surface": "Data grids (W4-1 substrate)"
+  },
+  {
+    "Source": "Grids/AccessibleDataGrid.cs",
+    "Expression": "value",
+    "Surface": "Data grids (W4-1 substrate)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "AddPropertyCancel",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "AddPropertyConfirm",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "AddPropertyKey",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "AddPropertyMenuItem",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "AddPropertySheet",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "AddPropertyType",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "AddPropertyValue",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BaseMenu",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BaseQueryBuilderSheet",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesCopyLinkMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesCopyMarkdownMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesDockDash",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesDockEmptyState",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesDockLeafBody",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesEditPropertyMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesEditViewFiltersMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesExportCsvMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesExportMarkdownMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesNewQueryMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesNextViewMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesOpenRowMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesPreviousViewMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesQuickFilterMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesRefreshMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesResultsMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesSaveSortMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesShowBacklinksMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesSortByColumnMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesViewAsListMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesViewAsTableMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesViewSwitcherMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesWhereAmIMenuItem",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BibliographyEntries",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BibliographyEntriesError",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BibliographyNoSources",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BibliographyNotices",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BibliographySearch",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BibliographySegmentEntries",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BibliographySegmentGroup",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BibliographySegmentUnresolved",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BibliographyUnresolved",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BibliographyUnresolvedError",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BuilderAddCondition",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BuilderAddGroup",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BuilderCombinator",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BuilderConditions",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BuilderDone",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BuilderPreviewLine",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BuilderSaveAsBase",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BuilderSaveAsSavedQuery",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BuilderSaveError",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BuilderSaveNameBox",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BuilderSavePathBox",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BuilderSaveToView",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BuilderUpdateSavedQuery",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BulkRenameApplyButton",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BulkRenameClose",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BulkRenameFooter",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BulkRenameNewKey",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BulkRenameOldKey",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BulkRenameOldKeyType",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BulkRenamePreviewButton",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BulkRenamePropertiesMenuItem",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BulkRenameSheet",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CancelTrash",
+    "Surface": "File management (W5-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasCancelModeMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasCardEditorSheet",
+    "Surface": "Canvas card editor (W6-1 §E)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasCardEditorText",
+    "Surface": "Canvas card editor (W6-1 §E)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasCardPickerFilter",
+    "Surface": "Canvas pickers (W6-1 §E, §F, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasCardPickerRows",
+    "Surface": "Canvas pickers (W6-1 §E, §F, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasCardPickerSheet",
+    "Surface": "Canvas pickers (W6-1 §E, §F, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasClearFilterMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasCommitModeMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasCreateConnectedCardMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasEnterGroupMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasExitGroupMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasFilterCardsMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasFollowBackMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasFollowForwardMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasInspectionClose",
+    "Surface": "Canvas prompt sheets (W6-1 §F, §G, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasMenu",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasNewCardMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasNextCardMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasPreviousCardMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasPromptChoices",
+    "Surface": "Canvas prompt sheets (W6-1 §F, §G, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasPromptClearMarks",
+    "Surface": "Canvas prompt sheets (W6-1 §F, §G, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasPromptDraft",
+    "Surface": "Canvas prompt sheets (W6-1 §F, §G, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasPromptSheet",
+    "Surface": "Canvas prompt sheets (W6-1 §F, §G, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasToggleFollowSelectionMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasTracePathMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasVerbosityMenu",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasVerbosityStandardMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasVerbosityTerseMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasVerbosityVerboseMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CanvasWhereAmIMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CitationDetailsAbstract",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CitationDetailsClose",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CitationDetailsFields",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CitationDetailsSheet",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CitationSummaryDismiss",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CitationSummaryMenuItem",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CitationSummarySheet",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CitationSummaryWalk",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "ClosePaneMenuItem",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CloseVaultMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CommandPalette",
+    "Surface": "Command palette (W5-1)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CommandPaletteResults",
+    "Surface": "Command palette (W5-1)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CommandPaletteSearch",
+    "Surface": "Command palette (W5-1)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "ConnectionsLeafBody",
+    "Surface": "Graph connections leaf (W6-2 PR B)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "ContentPane",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "DashboardEditorAddSection",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "DashboardEditorCancel",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "DashboardEditorName",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "DashboardEditorQueryPicker",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "DashboardEditorSave",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "DashboardEditorSections",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "DashboardEditorSheet",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorActivateMenuItem",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorActualSizeMenuItem",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorCodeVerbosityAllTokensMenuItem",
+    "Surface": "Code blocks (W3-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorCodeVerbosityFirstLineMenuItem",
+    "Surface": "Code blocks (W3-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorCodeVerbosityMenu",
+    "Surface": "Code blocks (W3-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorCodeVerbosityPreambleOnlyMenuItem",
+    "Surface": "Code blocks (W3-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorMathClearSpeakMenuItem",
+    "Surface": "Math blocks (W3-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorMathMediumMenuItem",
+    "Surface": "Math blocks (W3-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorMathNemethMenuItem",
+    "Surface": "Math blocks (W3-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorMathPrefsMenu",
+    "Surface": "Math blocks (W3-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorMathSimpleSpeakMenuItem",
+    "Surface": "Math blocks (W3-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorMathTerseMenuItem",
+    "Surface": "Math blocks (W3-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorMathUebMenuItem",
+    "Surface": "Math blocks (W3-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorMathVerboseMenuItem",
+    "Surface": "Math blocks (W3-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorMenu",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorPreviewEmbedMenuItem",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorToggleReadingLinkTargetMenuItem",
+    "Surface": "Reading view (W3-1)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorToggleReadingModeMenuItem",
+    "Surface": "Reading view (W3-1)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorToggleSpellCheckMenuItem",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorZoomInMenuItem",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "EditorZoomOutMenuItem",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FileMenu",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesCitingClose",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesCitingList",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesCitingSheet",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesPane",
+    "Surface": "Files tree"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesTree",
+    "Surface": "Files tree"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "GraphActualSizeMenuItem",
+    "Surface": "Graph diagram (W6-2 PR D)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "GraphFitGraphMenuItem",
+    "Surface": "Graph diagram (W6-2 PR D)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "GraphInspectorBody",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "GraphMenu",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "GraphMostLinkedMenuItem",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "GraphOpenTabMenuItem",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "GraphOrphansMenuItem",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "GraphUnresolvedMenuItem",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "GraphVerbosityMenu",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "GraphWhereAmIMenuItem",
+    "Surface": "Graph navigator, filter and Where-am-I (W6-2 PR C)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "GraphZoomInMenuItem",
+    "Surface": "Graph diagram (W6-2 PR D)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "GraphZoomOutMenuItem",
+    "Surface": "Graph diagram (W6-2 PR D)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "HistoryChangesSinceOpenMenuItem",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "HistoryLeafBody",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "InspectorPane",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "JumpToBibliographyMenuItem",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "MoveToCancel",
+    "Surface": "File management (W5-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "MoveToFilter",
+    "Surface": "File management (W5-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "MoveToList",
+    "Surface": "File management (W5-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "MoveToRetry",
+    "Surface": "File management (W5-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "MoveToSheet",
+    "Surface": "File management (W5-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "MoveToStatus",
+    "Surface": "File management (W5-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "MoveToSubtitle",
+    "Surface": "File management (W5-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "NewCanvasMenuItem",
+    "Surface": "Canvas context menus and row actions (W6-1 §E, §G2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "NewFromTemplateMenuItem",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "OpenVaultButton",
+    "Surface": "Welcome / Open Vault"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "OpenVaultMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelBacklinksList",
+    "Surface": "Link & structure panels (W4-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelCitationsError",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelCitationsList",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelEmbedsList",
+    "Surface": "Link & structure panels (W4-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelOutgoingLinksList",
+    "Surface": "Link & structure panels (W4-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelOutlineList",
+    "Surface": "Link & structure panels (W4-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelReviewList",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelTasksDoneList",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelTasksOpenList",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesBaseFilesList",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesDashboardsList",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesDelete",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesDeleteDashboard",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesDockBaseFile",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesDockDashboard",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesDockQuery",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesEditDashboard",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesEditInBuilder",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesExport",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesLeafBody",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesNewDashboard",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesOpenBaseFile",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesOpenDashboard",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesPin",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesRefresh",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesRename",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesRenameBox",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesRun",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QueriesSavedList",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QuickOpenMenuItem",
+    "Surface": "Quick Open"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QuickSwitcher",
+    "Surface": "Quick Open"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QuickSwitcherClose",
+    "Surface": "Quick Open"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QuickSwitcherResults",
+    "Surface": "Quick Open"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "QuickSwitcherSearch",
+    "Surface": "Quick Open"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "RefreshSyncDiagnosticsMenuItem",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "ReloadBibliographyMenuItem",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "RightPaneLeaves",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SearchOverlay",
+    "Surface": "Search overlay (W5-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SearchOverlayClearRecents",
+    "Surface": "Search overlay (W5-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SearchOverlayClearTagScope",
+    "Surface": "Search overlay (W5-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SearchOverlayClose",
+    "Surface": "Search overlay (W5-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SearchOverlayIdleHint",
+    "Surface": "Search overlay (W5-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SearchOverlayNoResults",
+    "Surface": "Search overlay (W5-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SearchOverlayResults",
+    "Surface": "Search overlay (W5-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SearchOverlaySearch",
+    "Surface": "Search overlay (W5-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SearchOverlaySearching",
+    "Surface": "Search overlay (W5-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SearchOverlayTagChip",
+    "Surface": "Search overlay (W5-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SearchVaultMenuItem",
+    "Surface": "Search overlay (W5-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "ShowHistoryPanelMenuItem",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "ShowTasksReviewMenuItem",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarBatchActions",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarDualPane",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarDualPaneToggle",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarFileActions",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarFilter",
+    "Surface": "File filter/results"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarFilterResults",
+    "Surface": "File filter/results"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarGroupDates",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarMutationName",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarRefresh",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarShortcuts",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarShortcutsActions",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarShowTags",
+    "Surface": "Tag tree"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarSortOrder",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarTagTree",
+    "Surface": "Tag tree"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "Slate.MainWindow",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SplitDownMenuItem",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SplitRightMenuItem",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SyncDiagnosticsLeafBody",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplateFlowName",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplateFlowSheet",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplateNameCancel",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplateNameCreate",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplateNameSubtitle",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplatePickerCancel",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplatePickerFailedTryAgain",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplatePickerList",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplatePickerSheet",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplatePickerSubtitle",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplatePickerTryAgain",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplatePromptsCancel",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplatePromptsNext",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplatePromptsSubtitle",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TrashProgressStatus",
+    "Surface": "File management (W5-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "VaultScanProgress",
+    "Surface": "Vault scan status"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "VaultStatus",
+    "Surface": "Vault scan status"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WelcomeView",
+    "Surface": "Welcome / Open Vault"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceMenu",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceView",
+    "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryCompareSelected\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryDeletedEmpty\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryDeletedError\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryDeletedFooter\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryDeletedLoading\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryDiffEmpty\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryDiffError\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryDiffList\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryDiffSummary\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryLoadError\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryLoadOlder\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryLoading\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryNoNote\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryNoVersions\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryRecoverAsRow\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryRestoreAsRow\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistorySegmentDeleted\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistorySegmentThisNote\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryShowMarkers\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistorySinceOpenCompacted\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistorySinceOpenHeader\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistorySurface\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "\"HistoryVersionHeader\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "$\"HistoryDay{group.Id}\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "$\"HistoryDiffOp{index}\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "$\"HistoryRowCompare{row.PositionFromTail}\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "$\"HistoryRowRestoreAs{row.PositionFromTail}\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "$\"HistoryRowRestore{row.PositionFromTail}\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "$\"HistoryRowSelect{row.PositionFromTail}\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "$\"HistoryRow{row.PositionFromTail}\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "automationId",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "automationId + \"Notice\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/HistorySurfaceView.cs",
+    "Expression": "automationId + \"Refusal\"",
+    "Surface": "History panel (W4-7)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsEmpty\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsError\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsEvidence\" + provider.Kind",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsHeader\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsLiveSync\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsLiveSync\" + idSuffix",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsLiveSyncAbsent\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsLiveSyncHeader\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsLiveSyncMalformed\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsLoading\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsProvider\" + provider.Kind",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsRefresh\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsRetry\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsSurface\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsUnsupported\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "\"SyncDiagnosticsWarning\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "$\"SyncDiagnosticsEvidence{provider.Kind}Path{index}\"",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Panels/SyncDiagnosticsSurfaceView.cs",
+    "Expression": "automationId",
+    "Surface": "Sync diagnostics (W4-8)"
+  },
+  {
+    "Source": "Reading/ReadingContentViewModel.cs",
+    "Expression": "\"ReadingDegradedNotice\"",
+    "Surface": "Reading view (W3-1)"
+  },
+  {
+    "Source": "Reading/ReadingContentViewModel.cs",
+    "Expression": "\"ReadingRefreshFailedNotice\"",
+    "Surface": "Reading view (W3-1)"
+  },
+  {
+    "Source": "Reading/ReadingDocumentBuilder.cs",
+    "Expression": "\"ReadingBlockEmbed\"",
+    "Surface": "Embed cards (W3-5)"
+  },
+  {
+    "Source": "Reading/ReadingSurface.cs",
+    "Expression": "\"ReadingLoadingNotice\"",
+    "Surface": "Reading view (W3-1)"
+  },
+  {
+    "Source": "Reading/ReadingSurface.cs",
+    "Expression": "\"ReadingSurface\"",
+    "Surface": "Reading view (W3-1)"
+  },
+  {
+    "Source": "Reading/ReadingTableGrid.cs",
+    "Expression": "\"ReadingTableGridWindow\"",
+    "Surface": "Data grids (W4-1 substrate)"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EditorActivateAtCursor",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EditorInteractionPopover",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EditorPopoverClose",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EditorPopoverOpenSource",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EditorPreviewEmbed",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EditorToggleSpellCheckContext",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "MarkdownEditor",
+    "Surface": "Editor document"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "PropertiesAddButton",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "PropertiesBulkRenameButton",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "PropertiesHeader",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "PropertiesRows",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "WorkspaceSplitHandle",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "WorkspaceSplitHandleVertical",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "WorkspaceTabs",
+    "Surface": "Workspace tabs"
+  }
+]

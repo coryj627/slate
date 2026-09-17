@@ -983,7 +983,7 @@ def load_delivery_evidence(
         # groups (graphTable, graphConnections, graphNavigator, graphDiagram),
         # so validation 14 fails when the issue's evidence stops spanning a
         # surface.
-        "#746",
+        "#746", "#750",
     }
     if set(issue_map) != expected_issues:
         fail(
@@ -1068,6 +1068,8 @@ def issue_delivery_status(
         return W6_1_STATUS
     if issue_number == "#746":
         return W6_2_CLOSE_OUT_STATUS
+    if issue_number in {"#747", "#748", "#749", "#750"}:
+        return "instrument authored; CI + human AT pending" if issue_number == "#750" else "implemented; CI + human AT pending"
     return IMPLEMENTED_STATUS
 
 
@@ -1221,6 +1223,13 @@ def main() -> int:
     )
     a(f"| Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | {issue_delivery_status('#745 (W6-1)', delivery_evidence)} |")
     a(f"| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | {issue_delivery_status('#746 (W6-2)', delivery_evidence)} |")
+    for surface, source, issue in [
+        ("Editor TextPattern semantic attributes and events", "Windows-first; mac convergence #1224", "#747 (W7-1)"),
+        ("Notification priority, etiquette and whole-corpus trigger ledger", "canonical A11yEvent consumers", "#748 (W7-2)"),
+        ("Spoken chords and AT navigation map", "chords.json + mac accessibility affordances", "#749 (W7-3)"),
+        ("UIA conformance matrix and per-surface AT checklists", "w_c_matrix.md + reports/", "#750 (W7-4)"),
+    ]:
+        a(f"| {surface} | {source} | {issue} | {issue_delivery_status(issue, delivery_evidence)} |")
     a("")
     a("## Settings surface")
     a("")

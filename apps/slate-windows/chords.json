@@ -2706,6 +2706,14 @@
           "apps/slate-windows/tests/SlateWindows.Tests/Censuses/ParityHarnessCensus.cs#EveryGraphVaultFileIsInTheArtifact",
           "apps/slate-windows/tests/SlateWindows.Tests/Censuses/WcMatrixGraphEvidenceCensus.cs#EveryGraphAutomationIdIsInAManifestRow"
         ]
+      },
+      "uiaConformance": {
+        "implementation": [
+          "docs/plans/18_windows_port/w_c_matrix.md#W7-4 instrument register"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/WcMatrixEvidenceCensus.cs#EveryRowHasTenCellsAndExecutableEvidence"
+        ]
       }
     },
     "commands": {
@@ -2909,7 +2917,8 @@
       "#743": "templates",
       "#744": "fileManagement",
       "#745": "canvas",
-      "#746": "graph"
+      "#746": "graph",
+      "#750": "uiaConformance"
     }
   },
   "chordSurface": [

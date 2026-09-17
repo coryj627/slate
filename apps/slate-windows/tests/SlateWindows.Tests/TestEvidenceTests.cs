@@ -254,6 +254,33 @@ public sealed class TestEvidenceTests
         Assert.True(Evidence(source, symbols: ["ACTIVE_SCAN"]).HasAxeLabel("graph-table"));
     }
 
+    [Theory]
+    [InlineData("thread.Start();", true)]
+    [InlineData("", false)]
+    [InlineData("if (false) thread.Start();", false)]
+    [InlineData("return; thread.Start();", false)]
+    [InlineData("thread = new System.Threading.Thread(() => { }); thread.Start();", false)]
+    [InlineData("var alias = thread; alias.Start();", false)]
+    [InlineData("var other = new System.Threading.Thread(() => { }); other.Start();", false)]
+    public void OnlyTheStartedUnreassignedThreadCertifiesItsCallback(string route, bool expected)
+    {
+        string members = "[Fact] public void Journey() { var thread = new System.Threading.Thread(() => Scan()); "
+            + route + " } private void Scan() { AssertAxeClean(null, \"graph-table\"); }";
+        Assert.Equal(expected, Evidence(members).HasAxeLabel("graph-table"));
+    }
+
+    [Theory]
+    [InlineData("Assert.NotNull(peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Text));", true)]
+    [InlineData("Assert.Null(peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Text));", false)]
+    [InlineData("if (false) Assert.NotNull(peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Text));", false)]
+    [InlineData("var ignored = System.Windows.Automation.Peers.PatternInterface.Text;", false)]
+    public void PatternClaimsNeedAPositiveExecutableWitness(string assertion, bool expected)
+    {
+        string members = "[Fact] public void Journey() { System.Windows.Automation.Peers.AutomationPeer peer = null; " + assertion + " }";
+        Assert.Equal(expected, Evidence(members).HasPatternEvidence("Journey", "Text"));
+        Assert.False(Evidence(members).HasPatternEvidence("Absent", "Text"));
+    }
+
     [Fact]
     public void FixturesMustBeRealFilesWithTheExactStem()
     {
