@@ -26,6 +26,7 @@ internal sealed class EditorHyperlinkTree
     private int _validatedEnd;
     private long _fullRevision = -1;
     private int _nextId;
+    private bool _unavailableEnumeration;
     internal bool WasExposed { get; private set; }
 
     internal EditorHyperlinkTree(SlateTextEditor editor, EditorSemanticTextProvider provider,
@@ -51,15 +52,13 @@ internal sealed class EditorHyperlinkTree
         var candidates = _segments.FindOverlappingSegments(window.AppliedStartUtf16,
             window.AppliedLengthUtf16).ToArray();
         var previous = new Dictionary<(int Start, int End, Type Kind), EditorHyperlinkPeer>();
+        var uniqueStarts = new Dictionary<(int Start, Type Kind), EditorHyperlinkPeer?>();
         foreach (EditorLinkSegment candidate in candidates)
         {
-            if (candidate.Length > 0)
-            { previous.TryAdd((candidate.StartOffset, candidate.EndOffset, candidate.Peer.Kind), candidate.Peer); }
-        }
-        var uniqueStarts = new Dictionary<(int Start, Type Kind), EditorHyperlinkPeer?>();
-        foreach (EditorLinkSegment candidate in candidates.Where(candidate => candidate.Length > 0))
-        {
+            if (candidate.Length <= 0) { continue; }
+            previous.TryAdd((candidate.StartOffset, candidate.EndOffset, candidate.Peer.Kind), candidate.Peer);
             var startKey = (candidate.StartOffset, candidate.Peer.Kind);
+            // Null marks an ambiguous start: no candidate may claim an extended span.
             if (!uniqueStarts.TryAdd(startKey, candidate.Peer)) { uniqueStarts[startKey] = null; }
         }
         var retained = new HashSet<EditorHyperlinkPeer>();
@@ -121,7 +120,8 @@ internal sealed class EditorHyperlinkTree
     internal List<AutomationPeer> RootChildren()
     {
         WasExposed = true;
-        if (!_provider.CanRead) { return []; }
+        if (!_provider.CanRead) { _unavailableEnumeration = true; return []; }
+        _unavailableEnumeration = false;
         Ensure(0, _provider.Length);
         return _segments.Where(segment => ReferenceEquals(segment.Peer.Parent, _root))
             .Select(segment => (AutomationPeer)segment.Peer).ToList();
@@ -171,6 +171,15 @@ internal sealed class EditorHyperlinkTree
         // No semantic parse here: this is the stable publication boundary.
         WpfEditorPeerConnection.InvalidateChildren(_root);
         foreach (EditorLinkSegment segment in _segments) { WpfEditorPeerConnection.InvalidateChildren(segment.Peer); }
+    }
+
+    internal void InvalidateUnavailableChildren()
+    {
+        if (!_unavailableEnumeration || !_provider.CanRead) { return; }
+        _unavailableEnumeration = false;
+        // Empty update groups have no text revision to publish. Only discard the
+        // unavailable root result; ordinary edits must not walk the whole index.
+        WpfEditorPeerConnection.InvalidateChildren(_root);
     }
 }
 

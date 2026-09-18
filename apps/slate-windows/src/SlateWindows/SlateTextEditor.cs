@@ -274,11 +274,24 @@ internal sealed class SlateTextEditor : TextEditor
         DependencyPropertyChangedEventArgs eventArgs)
     {
         var editor = (SlateTextEditor)dependencyObject;
+        if (eventArgs.OldValue is AvalonDocumentBufferSession previous)
+        {
+            WeakEventManager<AvalonDocumentBufferSession, EventArgs>.RemoveHandler(previous,
+                nameof(AvalonDocumentBufferSession.SemanticReadsResumed), editor.SemanticReads_Resumed);
+        }
+        if (eventArgs.NewValue is AvalonDocumentBufferSession current)
+        {
+            WeakEventManager<AvalonDocumentBufferSession, EventArgs>.AddHandler(current,
+                nameof(AvalonDocumentBufferSession.SemanticReadsResumed), editor.SemanticReads_Resumed);
+        }
         if (editor.IsLoaded)
         {
             editor.AttachHighlighting();
         }
     }
+
+    private void SemanticReads_Resumed(object? sender, EventArgs e) =>
+        (UIElementAutomationPeer.FromElement(this) as SlateTextEditorAutomationPeer)?.ResumeSemanticAvailability();
 
     private static void InteractionSession_Changed(
         DependencyObject dependencyObject,
@@ -532,6 +545,8 @@ internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
         WpfEditorPeerConnection.InvalidateChildren(this);
         _semanticProvider?.Links.InvalidateChildren();
     }
+
+    internal void ResumeSemanticAvailability() => _semanticProvider?.Links.InvalidateUnavailableChildren();
 
     internal void InvalidateSemanticOwner()
     {

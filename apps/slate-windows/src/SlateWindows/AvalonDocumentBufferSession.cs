@@ -66,6 +66,7 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
     public TextDocument Document { get; }
 
     public event EventHandler? HighlightInvalidated;
+    public event EventHandler<EventArgs>? SemanticReadsResumed;
 
     internal bool IsDisposed => _disposed;
     internal bool SemanticReadsAvailable => !_disposed && !_peerUpdateOpen && !Document.IsInUpdate;
@@ -434,6 +435,7 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
             _peerUpdateOpen = false;
             _suppressSyncNotifications = false;
         }
+        if (SemanticReadsAvailable) { SemanticReadsResumed?.Invoke(this, EventArgs.Empty); }
     }
 
     /// <summary>
@@ -638,6 +640,8 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
         {
             _documentEvent(new EditorDocumentUpdateFinished());
         }
+        // Peer updates resume only after EndPeerUpdate clears its outer guard.
+        if (SemanticReadsAvailable) { SemanticReadsResumed?.Invoke(this, EventArgs.Empty); }
     }
 
     private bool VerifyAndReconverge(string text)

@@ -410,6 +410,28 @@ public sealed class EditorSemanticTextRangeTests
         Assert.Equal("[[Target]]", Assert.Single(host.Peer.GetChildren()!).GetName());
     });
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FirstChildEnumerationDuringEmptyUpdatesRecoversWithoutTextChanges(bool peerUpdate) => OnSta(() =>
+    {
+        using var host = new Host("[[Target]]");
+        using var highlighting = new AvalonHighlightingCoordinator(host.Editor, host.Session);
+        var events = new List<AutomationEvents>();
+        host.Editor.AutomationEventForCensus = events.Add;
+        if (peerUpdate) { host.Session.BeginPeerUpdate(); }
+        else { host.Session.Document.BeginUpdate(); }
+        long before = host.Session.SemanticQueryCountForCensus;
+        Assert.Empty(host.Peer.GetChildren()!);
+        if (peerUpdate) { host.Session.EndPeerUpdate(); }
+        else { host.Session.Document.EndUpdate(); }
+        Assert.True(host.Session.SemanticReadsAvailable);
+        highlighting.FlushSemanticChanges();
+        Assert.Equal(before, host.Session.SemanticQueryCountForCensus);
+        Assert.Empty(events);
+        Assert.Equal("[[Target]]", Assert.Single(host.Peer.GetChildren()!).GetName());
+    });
+
     [Fact]
     public void DenseInventoryUsesCachedMembershipAndLocalQueriesAfterEdits() => OnSta(() =>
     {

@@ -481,3 +481,25 @@ new-link discovery after replacing editor text. The first integration head's CI
 app lane passed 2,984 tests with only the now-corrected automation-ID register
 failure. Its Codoki summary was Safe to merge, 5/5. Revised-head CI, benchmark
 measurements and the next independent review remain required.
+
+### Hyperlink integration review round 2 (head ebc6242e)
+
+Both independent axes found the same residual P2: first child enumeration in an
+empty peer-update group caches an empty WPF list, but no changed revision exists
+to trigger text publication. A new real-peer regression reproduced the missing
+children for both native and peer-owned empty groups. The session's availability
+guard returns to true; the unavailable WPF cache was the cause.
+
+The session now signals resumption after native updates and after the peer guard
+is cleared. The editor subscribes weakly and detaches on session replacement.
+Only a root enumeration that actually returned unavailable needs invalidation;
+normal update completion neither parses spans nor walks the link index. This
+availability transition does not raise a false TextChanged event. The regression
+asserts no semantic query or automation text event before subsequent enumeration.
+Codoki's two-loop suggestion is also addressed: exact and unambiguous-prefix
+candidate indexes are built together, with the ambiguity-null entry documented.
+
+All 93 focused provider, interaction and surface-census facts and the real
+cross-process UIA3/axe editor journey pass. The pre-fix head's CI passed every
+job, including both model shards and shell accessibility. Benchmarks and
+final-head CI/review results remain required.
