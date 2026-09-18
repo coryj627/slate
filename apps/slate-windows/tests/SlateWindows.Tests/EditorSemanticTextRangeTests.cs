@@ -361,6 +361,20 @@ public sealed class EditorSemanticTextRangeTests
         Assert.Equal(0, range.Move(unit, -1));
     });
 
+    [Theory]
+    [InlineData(TextUnit.Line, 8, 8)]
+    [InlineData(TextUnit.Line, 8, 10)]
+    [InlineData(TextUnit.Line, 6, 8)]
+    [InlineData(TextUnit.Word, 8, 8)]
+    [InlineData(TextUnit.Word, 8, 10)]
+    public void FailedRangeMovementLeavesBothEndpointsUnchanged(TextUnit unit, int start, int end) => OnSta(() =>
+    {
+        using var host = new Host("First\nSecond");
+        EditorSemanticTextRange range = host.Provider.Range(start, end);
+        Assert.Equal(0, range.Move(unit, 1));
+        Assert.Equal((start, end), range.Bounds);
+    });
+
     [Fact]
     public void EmptyCompositionCompletionInvalidatesTheUnavailableChildCache() => OnSta(() =>
     {

@@ -370,12 +370,21 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
         int moved = 0;
         while (moved != count)
         {
-            int before = AvalonTextRangeAccess.Bounds(native).Start;
+            (int before, int beforeEnd) = AvalonTextRangeAccess.Bounds(native);
             if (direction > 0 ? before == _provider.Length : before == 0) { break; }
             _ = native.Move(unit, direction);
-            _provider.Track(native);
             int after = AvalonTextRangeAccess.Bounds(native).Start;
-            if ((after - before) * direction <= 0) { break; }
+            if ((after - before) * direction <= 0)
+            {
+                // Native movement can rewind/expand the final unit on failure.
+                // UIA requires a failed step to leave the previous range intact.
+                ITextRangeProvider previous = Unwrap(_provider.Range(before, beforeEnd));
+                native.MoveEndpointByRange(TextPatternRangeEndpoint.Start, previous, TextPatternRangeEndpoint.Start);
+                native.MoveEndpointByRange(TextPatternRangeEndpoint.End, previous, TextPatternRangeEndpoint.End);
+                _provider.Track(native);
+                break;
+            }
+            _provider.Track(native);
             moved += direction;
         }
         return moved;

@@ -543,7 +543,9 @@ This preserves native character/word boundaries without parsing text or
 deriving semantic spans. Zero and extreme counts must terminate safely, and
 bulk counts stop after the available units rather than reporting the request.
 Native range Move likewise reports actual start progress while preserving its
-native unit expansion. Empty, final-newline, no-final-newline, CRLF, backwards,
+native unit expansion on successful movement. A failed step leaves both endpoints
+unchanged, as required by the [UIA Move contract](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationcore/nf-uiautomationcore-itextrangeprovider-move);
+earlier successful steps in a bulk move are retained. Empty, final-newline, no-final-newline, CRLF, backwards,
 multi-unit and Unicode tests pin the adapter. A real NVDA rerun must reach the
 final marker and emit its normal say-all stop callback before this finding closes.
 
@@ -553,3 +555,14 @@ imply that an unhosted editor has a native provider. Publication must check the
 provider before retrieving its runtime ID; cache invalidation and census signals
 remain available without an HWND. This was reproduced in the existing replacement
 and peer-update facts, independently of the movement regression.
+
+### A-9 review round 1 (head 9d8e4c60)
+
+Spec review found that a failed native forward Move inside the final line could
+rewind and expand the range before the adapter reported zero. Four red cases
+confirmed endpoint mutation. The adapter now restores the endpoints from before
+that failed step. Both reviews also identified ambiguous wording about native
+expansion at boundaries: UIA requires failed movement to leave the range intact,
+so the contract above explicitly limits native expansion to successful movement.
+The initial 107 focused facts and the new cross-process Say All loop passed;
+the live NVDA rerun and final revised-head review remain separate gates.
