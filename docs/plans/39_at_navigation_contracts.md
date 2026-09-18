@@ -183,3 +183,29 @@ Seven map-census facts pass after rebuilding; the affected suite's other
 126 cases (reading, chord table/delivery, help, Swift and speech audit)
 passed before the final traversal correction. The full real-desktop axe
 suite and the next independent fixed-head review remain in progress.
+
+### Implementation round 2: complete factory routes before another repair
+
+The revised File actions checklist accidentally promised folder duplication;
+that route must instead observe the canonical files-only refusal. Review
+also found that a factory's projection spans several controls. This
+repair-created map finding triggers another design stop before map edits.
+
+The two sidebar builders project 14 folder and 13 file VoiceOver actions
+from `Sidebar/SidebarActionCatalog.swift:contextualDefinitions`, after its
+VoiceOver exclusions. Their Windows routes are distributed: File actions
+contains the common file/folder operations (its Open button also opens an
+existing folder note); Batch actions contains Add/Remove Tag; Files menu
+contains Remove Shortcut and Unpin All; File's named New-from-Template item
+contains template creation. The map must name every participating scope
+and describe those exceptional routes explicitly. The file/folder action
+sets are reviewed against that catalog, not inferred from the builder line.
+For the otherwise unnamed Files menu, a `#menu:_Files` anchor selects the
+unique MenuItem by exact authored Header, with the same subtree semantics
+as `#id:`. No application control or behavior changes are needed.
+
+Separately, the speech audit must handle explicit Inlines and Text property
+elements. Codoki's source-parser feedback is addressed with semantic Roslyn
+symbols for native PatternInterface fields (qualified, aliased and static
+forms), AutomationProperties calls and constructed control types; focused
+positive and lookalike-negative facts replace spelling assumptions.
