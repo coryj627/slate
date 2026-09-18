@@ -225,6 +225,13 @@ constructions with identical member identities. The full mandatory desktop
 suite passed all 52 journeys on the unchanged runtime build. Final fixed-head
 reviews and CI remain required.
 
+Round 3, fixed `d6830eb4`: Spec PASS and Standards PASS, no actionable
+findings in either independent integration review. Codoki requested explicit
+tab/mixed-whitespace controls and an explanation of the removed indent
+capture; add those controls to the existing nested-type boundary theory.
+Indentation has no role in the lexical-parent ownership model.
+The added space/tab/mixed cases and full affected suite pass: 37 tests.
+
 Inventory repairs in this slice also route Windows VaultOpened and
 RemovedRecentVault through their existing typed events, and Mac template
 picker/create completion through TemplatePickerOpened/TemplateNoteCreated.

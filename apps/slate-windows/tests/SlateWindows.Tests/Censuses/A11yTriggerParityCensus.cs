@@ -265,8 +265,11 @@ public sealed class A11yTriggerParityCensus
             A11yTriggerInventory.MacSites("File.swift", moved, ["RightPaneShown"]).Select(SiteId));
     }
 
-    [Fact]
-    public void MacInventoryFindsNestedTypeMembersAndIgnoresLiteralScopeDelimiters()
+    [Theory]
+    [InlineData("    ")]
+    [InlineData("\t")]
+    [InlineData(" \t")]
+    public void MacInventoryFindsNestedTypeMembersAndIgnoresLiteralScopeDelimiters(string indentation)
     {
         const string source = """
             class Host {
@@ -280,7 +283,7 @@ public sealed class A11yTriggerParityCensus
             }
             """;
         A11yTriggerInventory.Site site = Assert.Single(
-            A11yTriggerInventory.MacSites("File.swift", source, ["RightPaneShown"]));
+            A11yTriggerInventory.MacSites("File.swift", source.Replace("    ", indentation, StringComparison.Ordinal), ["RightPaneShown"]));
         Assert.Equal("File.swift#scroll", site.Member);
     }
 

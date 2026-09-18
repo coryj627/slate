@@ -76,6 +76,8 @@ internal static class A11yTriggerInventory
         return type + "." + name;
     }
 
+    // Accept editor whitespace without capturing its width: ownership comes
+    // from lexical brace parents, so tabs and spaces must behave identically.
     private static readonly Regex SwiftMember = new(
         @"^[ \t]*(?:(?:@\w+(?:\([^\n]*\))?|private|fileprivate|internal|public|open|static|final|override|mutating|nonisolated|lazy|convenience|required|class(?=\s+(?:func|var)\b))\s+)*(?<kind>func|var|let|init|class|struct|enum|actor|extension)\b\s*(?<name>\w*)",
         RegexOptions.Multiline | RegexOptions.CultureInvariant);
