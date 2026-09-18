@@ -174,7 +174,6 @@ public sealed class AtNavigationMapCensus
         Match selector = Regex.Match(anchor, @"^([^#]+)#(id|class|menu|key):([A-Za-z_][A-Za-z0-9_]*)$");
         if (!selector.Success || !SafeSourcePath(SourceText.ShellSourceRoot(), selector.Groups[1].Value, out string path)) { return false; }
         string name = selector.Groups[3].Value;
-        var types = new HashSet<string>(StringComparer.Ordinal);
         if (selector.Groups[2].Value is "id" or "menu" or "key" && Path.GetExtension(path) == ".xaml")
         {
             XElement[] matches = XDocument.Load(path).Descendants().Where(element => selector.Groups[2].Value switch
@@ -187,7 +186,7 @@ public sealed class AtNavigationMapCensus
             if (matches.Length != 1) { return false; }
             foreach (XElement element in matches[0].DescendantsAndSelf())
             {
-                types.Add(element.Name.LocalName);
+                patterns.UnionWith(XamlNativePatterns(element));
                 XAttribute? id = element.Attribute("AutomationProperties.AutomationId");
                 if (id is not null && !id.Value.StartsWith('{')) { ids.Add(id.Value); }
             }
@@ -202,20 +201,7 @@ public sealed class AtNavigationMapCensus
             if (matches.Length != 1) { return false; }
             SyntaxNode[] nodes = matches[0].DescendantNodes(node => node == matches[0] || node is not ClassDeclarationSyntax).ToArray();
             patterns.UnionWith(PatternNames(nodes, model));
-            foreach (InvocationExpressionSyntax call in nodes.OfType<InvocationExpressionSyntax>())
-            {
-                if (model.GetSymbolInfo(call).Symbol is IMethodSymbol { Name: "SetAutomationId" } method
-                    && method.ContainingType.ToDisplayString() == "System.Windows.Automation.AutomationProperties"
-                    && call.ArgumentList.Arguments.LastOrDefault()?.Expression is LiteralExpressionSyntax literal
-                    && literal.Token.Value is string value) { ids.Add(value); }
-            }
-            foreach (MethodDeclarationSyntax method in nodes.OfType<MethodDeclarationSyntax>()
-                .Where(method => method.Identifier.ValueText == "GetAutomationIdCore"))
-            {
-                ExpressionSyntax? expression = method.ExpressionBody?.Expression
-                    ?? method.Body?.Statements.OfType<ReturnStatementSyntax>().SingleOrDefault()?.Expression;
-                if (expression is LiteralExpressionSyntax literal && literal.Token.Value is string value) { ids.Add(value); }
-            }
+            ids.UnionWith(AutomationIds(nodes, model));
             IEnumerable<TypeSyntax> constructedTypes = nodes.SelectMany(node => node switch
             {
                 ObjectCreationExpressionSyntax created => new[] { created.Type },
@@ -226,22 +212,67 @@ public sealed class AtNavigationMapCensus
             });
             foreach (TypeSyntax type in constructedTypes)
             {
-                string control = model.GetTypeInfo(type).Type?.Name ?? "";
-                types.Add(control.EndsWith("AutomationPeer", StringComparison.Ordinal) ? control[..^"AutomationPeer".Length] : control);
+                patterns.UnionWith(FrameworkPatterns(model.GetTypeInfo(type).Type));
             }
         }
         else { return false; }
-        foreach ((string control, string[] supported) in NativePatterns)
-        {
-            if (types.Contains(control)) { patterns.UnionWith(supported); }
-        }
         return true;
+    }
+
+    private static IEnumerable<string> XamlNativePatterns(XElement element) =>
+        element.Name.NamespaceName == "http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+            && NativePatterns.TryGetValue(element.Name.LocalName, out string[]? patterns) ? patterns : [];
+
+    private static bool IsFrameworkType(ITypeSymbol type, string fullName) =>
+        type.ToDisplayString() == fullName && type.ContainingAssembly.Name is "PresentationCore" or "PresentationFramework";
+
+    private static IEnumerable<string> FrameworkPatterns(ITypeSymbol? type)
+    {
+        for (INamedTypeSymbol? current = type as INamedTypeSymbol; current is not null; current = current.BaseType)
+        {
+            if (current.ContainingAssembly.Name is not ("PresentationCore" or "PresentationFramework")) { continue; }
+            string ns = current.ContainingNamespace.ToDisplayString();
+            if (ns is not ("System.Windows.Controls" or "System.Windows.Automation.Peers")) { continue; }
+            string control = current.Name.EndsWith("AutomationPeer", StringComparison.Ordinal)
+                ? current.Name[..^"AutomationPeer".Length] : current.Name;
+            if (NativePatterns.TryGetValue(control, out string[]? supported))
+            {
+                foreach (string pattern in supported) { yield return pattern; }
+            }
+        }
+    }
+
+    private static IEnumerable<string> AutomationIds(SyntaxNode[] nodes, SemanticModel model)
+    {
+        foreach (InvocationExpressionSyntax call in nodes.OfType<InvocationExpressionSyntax>())
+        {
+            if (model.GetSymbolInfo(call).Symbol is IMethodSymbol { Name: "SetAutomationId" } method
+                && IsFrameworkType(method.ContainingType, "System.Windows.Automation.AutomationProperties")
+                && call.ArgumentList.Arguments.LastOrDefault()?.Expression is { } expression
+                && model.GetConstantValue(expression) is { HasValue: true, Value: string value }) { yield return value; }
+        }
+        foreach (MethodDeclarationSyntax method in nodes.OfType<MethodDeclarationSyntax>()
+            .Where(method => method.Identifier.ValueText == "GetAutomationIdCore"))
+        {
+            IMethodSymbol? overridden = model.GetDeclaredSymbol(method)?.OverriddenMethod;
+            while (overridden is not null && !IsFrameworkType(overridden.ContainingType, "System.Windows.Automation.Peers.AutomationPeer"))
+            {
+                overridden = overridden.OverriddenMethod;
+            }
+            if (overridden is null) { continue; }
+            IEnumerable<ExpressionSyntax?> values = method.ExpressionBody is { } arrow ? [arrow.Expression]
+                : method.DescendantNodes().OfType<ReturnStatementSyntax>().Select(statement => statement.Expression);
+            foreach (ExpressionSyntax? expression in values)
+            {
+                if (expression is not null && model.GetConstantValue(expression) is { HasValue: true, Value: string value }) { yield return value; }
+            }
+        }
     }
 
     private static IEnumerable<string> PatternNames(IEnumerable<SyntaxNode> nodes, SemanticModel model) =>
         nodes.OfType<IdentifierNameSyntax>().Select(node => model.GetSymbolInfo(node).Symbol)
             .OfType<IFieldSymbol>()
-            .Where(field => field.ContainingType.ToDisplayString() == "System.Windows.Automation.Peers.PatternInterface")
+            .Where(field => IsFrameworkType(field.ContainingType, "System.Windows.Automation.Peers.PatternInterface"))
             .Select(field => field.Name);
 
     [Theory]
@@ -270,6 +301,28 @@ public sealed class AtNavigationMapCensus
         CSharpCompilation compilation = ShellCompilation.Compilation.RemoveAllSyntaxTrees().AddSyntaxTrees(tree);
         Assert.DoesNotContain(compilation.GetDiagnostics(), diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
         return PatternNames(tree.GetRoot().DescendantNodes(), compilation.GetSemanticModel(tree)).Distinct().ToArray();
+    }
+
+    [Fact]
+    public void OnlyFrameworkControlsAndRealPeerOverridesSupplyNativeEvidence()
+    {
+        SyntaxTree tree = CSharpSyntaxTree.ParseText("""
+            namespace Other { class Button {} class ButtonAutomationPeer {} }
+            class DerivedButton : System.Windows.Controls.Button {}
+            class Ordinary { string GetAutomationIdCore() => "InventedId"; }
+            class ActualPeer : System.Windows.Automation.Peers.FrameworkElementAutomationPeer {
+                public ActualPeer() : base(new System.Windows.FrameworkElement()) {}
+                protected override string GetAutomationIdCore() => "RealId";
+            }
+            """);
+        CSharpCompilation compilation = ShellCompilation.Compilation.RemoveAllSyntaxTrees().AddSyntaxTrees(tree);
+        Assert.DoesNotContain(compilation.GetDiagnostics(), diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        Assert.Empty(FrameworkPatterns(compilation.GetTypeByMetadataName("Other.Button")));
+        Assert.Empty(FrameworkPatterns(compilation.GetTypeByMetadataName("Other.ButtonAutomationPeer")));
+        Assert.Contains("Invoke", FrameworkPatterns(compilation.GetTypeByMetadataName("DerivedButton")));
+        Assert.Equal(new[] { "RealId" }, AutomationIds(tree.GetRoot().DescendantNodes().ToArray(), compilation.GetSemanticModel(tree)));
+        Assert.Empty(XamlNativePatterns(XElement.Parse("<Button xmlns='clr-namespace:Other'/>")));
+        Assert.Contains("Invoke", XamlNativePatterns(XElement.Parse("<Button xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'/>")));
     }
 
     [Fact]

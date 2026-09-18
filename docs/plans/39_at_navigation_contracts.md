@@ -259,3 +259,10 @@ stop. Before further code changes, freeze this model:
 
 These are declaration witnesses, not a substitute for the row's behavioral
 facts. The map routes and runtime behavior remain as independently verified.
+
+The round-3 declaration and scalar-text repairs pass all 35 map/speech
+census cases. The scalar mutation fact crosses five modifier spellings,
+seven key spellings (including property Binding/MultiBinding and typed
+String), and three collection forms: 105 combinations. Native control,
+peer-name and getter lookalikes are rejected; inherited native controls
+and real AutomationPeer overrides are accepted. No runtime code changed.

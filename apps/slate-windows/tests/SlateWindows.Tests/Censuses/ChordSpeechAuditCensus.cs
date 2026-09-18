@@ -110,8 +110,18 @@ public sealed class ChordSpeechAuditCensus
 
     private static string InlineText(XElement element)
     {
+        if (element.Name.LocalName is "Run.Text" or "TextBlock.Text")
+        {
+            XElement[] values = element.Elements().ToArray();
+            // A Text property is one scalar: literal content (including a
+            // typed String), or an expression such as Binding/MultiBinding.
+            // Its spelling cannot change the unknown-key placeholder.
+            return values.Length == 0 ? element.Value
+                : values.Length == 1 && values[0].Name.LocalName == "String" ? values[0].Value : "A";
+        }
         string text = (string?)element.Attribute("Text") ?? "";
-        if (text.StartsWith('{')) { text = "A"; }
+        if (text.StartsWith("{}", StringComparison.Ordinal)) { text = text[2..]; }
+        else if (text.StartsWith('{')) { text = "A"; }
         return text + string.Concat(element.Nodes().Select(node => node switch
         {
             XText literal => literal.Value,
@@ -185,6 +195,33 @@ public sealed class ChordSpeechAuditCensus
     [InlineData("<TextBlock><Run><Run.Text>Control </Run.Text></Run><Run><Run.Text>Enter</Run.Text></Run></TextBlock>")]
     [InlineData("<Paragraph><Paragraph.Inlines><Span><Span.Inlines><Run Text='Control '/><Run Text='Enter'/></Span.Inlines></Span></Paragraph.Inlines></Paragraph>")]
     public void XamlAttributesAndTextAreAudited(string source) => Assert.NotEmpty(XamlViolations(source));
+
+    [Fact]
+    public void EquivalentScalarAndCollectionSyntaxCannotHideAHandComposedModifier()
+    {
+        string[] modifiers =
+        [
+            "<Run Text='Control '/>", "<Run>Control </Run>", "<Run Text='{}Control '/>",
+            "<Run><Run.Text>Control </Run.Text></Run>",
+            "<Run><Run.Text><s:String xmlns:s='clr-namespace:System;assembly=mscorlib'>Control </s:String></Run.Text></Run>",
+        ];
+        string[] keys =
+        [
+            "<Run Text='Enter'/>", "<Run>Enter</Run>", "<Run><Run.Text>Enter</Run.Text></Run>",
+            "<Run><Run.Text><s:String xmlns:s='clr-namespace:System;assembly=mscorlib'>Enter</s:String></Run.Text></Run>",
+            "<Run Text='{Binding Key}'/>", "<Run><Run.Text><Binding Path='Key'/></Run.Text></Run>",
+            "<Run><Run.Text><MultiBinding StringFormat='{}{0}'><Binding Path='Key'/></MultiBinding></Run.Text></Run>",
+        ];
+        foreach (string modifier in modifiers)
+            foreach (string key in keys)
+                foreach (string collection in new[] { modifier + key, "<TextBlock.Inlines>" + modifier + key + "</TextBlock.Inlines>",
+            "<Span><Span.Inlines>" + modifier + key + "</Span.Inlines></Span>" })
+                {
+                    string source = "<TextBlock>" + collection + "</TextBlock>";
+                    Assert.True(XamlViolations(source).Any(), source);
+                }
+        Assert.Empty(XamlViolations("<TextBlock><Run><Run.Text><Binding Path='CompleteSpokenChord'/></Run.Text></Run><Run Text=' opens.'/></TextBlock>"));
+    }
 
     private static string[] FixtureViolations(string source, string relative)
     {
