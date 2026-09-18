@@ -123,6 +123,7 @@ public sealed class ChordSpeechAuditCensus
         return text + string.Concat(element.Nodes().Select(node => node switch
         {
             XText literal => literal.Value,
+            XElement literal when literal.Name.LocalName == "String" => literal.Value,
             XElement inline when inline.Name.LocalName == "LineBreak" => "\n",
             XElement inline when inline.Name.LocalName is "Run" or "Span" or "Bold" or "Italic" or "Underline" or "Hyperlink" => InlineText(inline),
             XElement property when property.Name.LocalName is "TextBlock.Inlines" or "Paragraph.Inlines"
@@ -211,11 +212,13 @@ public sealed class ChordSpeechAuditCensus
         [
             "<Run Text='Control '/>", "<Run>Control </Run>", "<Run Text='{}Control '/>",
             "<Run><Run.Text>Control </Run.Text></Run>",
+            "<s:String xmlns:s='clr-namespace:System;assembly=mscorlib' xml:space='preserve'>Control </s:String>",
             "<Run><s:String xmlns:s='clr-namespace:System;assembly=mscorlib' xml:space='preserve'>Control </s:String></Run>",
             "<Run><Run.Text><s:String xmlns:s='clr-namespace:System;assembly=mscorlib'>Control </s:String></Run.Text></Run>",
         ];
         string[] keys =
         [
+            "<s:String xmlns:s='clr-namespace:System;assembly=mscorlib'>Enter</s:String>",
             "<Run Text='Enter'/>", "<Run>Enter</Run>", "<Run><Run.Text>Enter</Run.Text></Run>",
             "<Run><Run.Text><s:String xmlns:s='clr-namespace:System;assembly=mscorlib'>Enter</s:String></Run.Text></Run>",
             "<Run><s:String xmlns:s='clr-namespace:System;assembly=mscorlib'>Enter</s:String></Run>",

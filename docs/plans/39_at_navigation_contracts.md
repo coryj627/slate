@@ -306,3 +306,7 @@ normalizing a collection String child exactly like a text node; include it
 on both sides of the modifier/key cross-product. This records the remaining
 collection boundary before code changes under the continuing design stop.
 No runtime or navigation-map behavior changes.
+
+The collection normalization passes all 39 map/speech cases. The matrix now
+crosses seven modifier forms, eleven key forms and three collection forms
+(231 combinations), including direct typed strings in implicit collections.
