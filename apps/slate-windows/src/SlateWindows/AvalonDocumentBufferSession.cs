@@ -71,6 +71,7 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
     /// native/peer update closes, including groups with no text mutation.
     /// Consumers may discard unavailable reads without publishing TextChanged.
     /// </summary>
+    /// <remarks>This is an assembly-private lifecycle event on an internal type.</remarks>
     public event EventHandler? SemanticReadsResumed;
 
     internal bool IsDisposed => _disposed;

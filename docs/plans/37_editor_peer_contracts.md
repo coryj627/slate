@@ -566,3 +566,13 @@ expansion at boundaries: UIA requires failed movement to leave the range intact,
 so the contract above explicitly limits native expansion to successful movement.
 The initial 107 focused facts and the new cross-process Say All loop passed;
 the live NVDA rerun and final revised-head review remain separate gates.
+
+### A-9 review round 2 (head f46b4a07)
+
+Both independent axes report no actionable finding. Per-step restoration keeps
+earlier successful bulk movement and restores both endpoints after the failed
+step. All 112 focused facts and the real cross-process UIA3/axe journey pass.
+The [production NVDA record](18_windows_port/reports/w7_1_nvda_production_verification.md)
+records a complete OneCore Say All ending with its normal stop callback, native
+object Invoke opening the target, and the final-build selected-link
+deletion/undo and destination retests. Remaining human checks stay explicit.

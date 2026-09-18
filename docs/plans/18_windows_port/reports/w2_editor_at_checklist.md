@@ -28,3 +28,9 @@ settings; Narrator is W8-6 smoke scope. Automated twins do not prove speech.
 Residual: every unexecuted row remains Pending. Record findings and the fix commit on retest; never replace a human pass with the automated twin.
 
 Prototype evidence (not a production pass): [NVDA 2026.1.1 run and raw logs](https://github.com/coryj627/slate/blob/5d3b2a7f3bf0f73fba23c9d2028aa3a2210236ac/apps/slate-windows/tools/EditorHyperlinkPrototype/NVDA-VALIDATION.md). Production now uses ordinary Hyperlink children. Retest link destinations with NVDA+K, object navigation/Invoke, selected-link deletion and Say All using the owner's sound-device setup. The deterministic retained-selection regression is fixed; audible timing and licensed JAWS remain Pending.
+
+Production agent-operated evidence: [2026-09-18 NVDA OneCore run](w7_1_nvda_production_verification.md)
+verifies complete Say All termination, required semantic speech output, native
+object Invoke, destination reporting and selected-link deletion/undo. It records
+the EOF-loop finding and passing retest. Human audio confirmation, the complete
+manual reading routes, braille, live IME and licensed JAWS remain Pending.

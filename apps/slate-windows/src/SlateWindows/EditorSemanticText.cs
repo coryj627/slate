@@ -378,6 +378,8 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
             {
                 // Native movement can rewind/expand the final unit on failure.
                 // UIA requires a failed step to leave the previous range intact.
+                // This synchronous restore uses this provider's own native range;
+                // a foreign/null operand cannot enter through a caller here.
                 ITextRangeProvider previous = Unwrap(_provider.Range(before, beforeEnd));
                 native.MoveEndpointByRange(TextPatternRangeEndpoint.Start, previous, TextPatternRangeEndpoint.Start);
                 native.MoveEndpointByRange(TextPatternRangeEndpoint.End, previous, TextPatternRangeEndpoint.End);
