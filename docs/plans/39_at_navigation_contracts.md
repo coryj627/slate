@@ -288,3 +288,10 @@ content property. Record these boundaries before another implementation:
 
 This amendment closes the declaration model; runtime behavior and the
 verified map routes are unchanged.
+
+Round-4 repairs pass all 39 map/speech census cases. The scalar matrix now
+covers 180 combinations; nested local-function, lambda and anonymous-method
+returns cannot supply the enclosing getter's ID. Codoki's missing-source
+comment is addressed by rejecting scopes outside the authored compilation,
+with a generated-file mutation witness. Its claimed collection-expression
+compile error is disproven by the .NET 10 build and these passing tests.

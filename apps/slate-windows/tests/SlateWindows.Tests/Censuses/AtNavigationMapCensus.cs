@@ -194,7 +194,8 @@ public sealed class AtNavigationMapCensus
         else if (selector.Groups[2].Value == "class" && Path.GetExtension(path) == ".cs")
         {
             string relative = Path.GetRelativePath(SourceText.ShellSourceRoot(), path).Replace('\\', '/');
-            CSharpSource source = ShellCompilation.Sources.Single(item => item.Relative == relative).Source;
+            CSharpSource? source = ShellCompilation.Sources.Where(item => item.Relative == relative).Select(item => item.Source).SingleOrDefault();
+            if (source is null) { return false; }
             SemanticModel model = ShellCompilation.ModelFor(source);
             ClassDeclarationSyntax[] matches = source.Root.DescendantNodes()
                 .OfType<ClassDeclarationSyntax>().Where(type => type.Identifier.ValueText == name).ToArray();
@@ -261,7 +262,8 @@ public sealed class AtNavigationMapCensus
             }
             if (overridden is null) { continue; }
             IEnumerable<ExpressionSyntax?> values = method.ExpressionBody is { } arrow ? [arrow.Expression]
-                : method.DescendantNodes().OfType<ReturnStatementSyntax>().Select(statement => statement.Expression);
+                : method.DescendantNodes(node => node is not LocalFunctionStatementSyntax and not AnonymousFunctionExpressionSyntax)
+                    .OfType<ReturnStatementSyntax>().Select(statement => statement.Expression);
             foreach (ExpressionSyntax? expression in values)
             {
                 if (expression is not null && model.GetConstantValue(expression) is { HasValue: true, Value: string value }) { yield return value; }
@@ -325,6 +327,28 @@ public sealed class AtNavigationMapCensus
         Assert.Contains("Invoke", XamlNativePatterns(XElement.Parse("<Button xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'/>")));
     }
 
+    [Theory]
+    [InlineData("string Prefix() { return \"Graph\"; } return Prefix() + \"TierSummary\";")]
+    [InlineData("System.Func<string> prefix = () => { return \"Graph\"; }; return prefix() + \"TierSummary\";")]
+    [InlineData("System.Func<string> prefix = delegate { return \"Graph\"; }; return prefix() + \"TierSummary\";")]
+    public void NestedFunctionReturnsCannotManufactureAnAutomationId(string body)
+    {
+        Assert.Empty(FixtureAutomationIds(body));
+        Assert.Equal(new[] { "First", "Second" }, FixtureAutomationIds("if (System.Environment.TickCount > 0) { return \"First\"; } return \"Second\";"));
+    }
+
+    private static string[] FixtureAutomationIds(string body)
+    {
+        SyntaxTree tree = CSharpSyntaxTree.ParseText("""
+            class ActualPeer : System.Windows.Automation.Peers.FrameworkElementAutomationPeer {
+                public ActualPeer() : base(new System.Windows.FrameworkElement()) {}
+                protected override string GetAutomationIdCore() {
+            """ + body + "} }");
+        CSharpCompilation compilation = ShellCompilation.Compilation.RemoveAllSyntaxTrees().AddSyntaxTrees(tree);
+        Assert.DoesNotContain(compilation.GetDiagnostics(), diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        return AutomationIds(tree.GetRoot().DescendantNodes().ToArray(), compilation.GetSemanticModel(tree)).ToArray();
+    }
+
     [Fact]
     public void TheSourceSweepSeesPluralDefaultAndAppKitFormsAndPreservesLines()
     {
@@ -373,6 +397,15 @@ public sealed class AtNavigationMapCensus
         {
             Assert.NotEmpty(ClaimFailures(broken));
         }
+    }
+
+    [Fact]
+    public void GeneratedFilesOutsideTheAuthoredSourceSetAreInvalidScopes()
+    {
+        string root = SourceText.ShellSourceRoot();
+        string generated = Directory.EnumerateFiles(Path.Combine(root, "obj"), "*.g.cs", SearchOption.AllDirectories).First();
+        string relative = Path.GetRelativePath(root, generated).Replace('\\', '/');
+        Assert.False(ReadScope(relative + "#class:App", new(StringComparer.Ordinal), new(StringComparer.Ordinal)));
     }
 
     [Fact]

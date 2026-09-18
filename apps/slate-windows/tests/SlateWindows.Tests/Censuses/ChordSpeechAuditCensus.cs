@@ -110,14 +110,12 @@ public sealed class ChordSpeechAuditCensus
 
     private static string InlineText(XElement element)
     {
-        if (element.Name.LocalName is "Run.Text" or "TextBlock.Text")
+        if (element.Name.LocalName is "Run.Text" or "TextBlock.Text") { return ScalarText(element.Nodes()); }
+        if (element.Name.LocalName == "Run" && element.Attribute("Text") is null)
         {
-            XElement[] values = element.Elements().ToArray();
-            // A Text property is one scalar: literal content (including a
-            // typed String), or an expression such as Binding/MultiBinding.
-            // Its spelling cannot change the unknown-key placeholder.
-            return values.Length == 0 ? element.Value
-                : values.Length == 1 && values[0].Name.LocalName == "String" ? values[0].Value : "A";
+            XElement? property = element.Elements().SingleOrDefault(child => child.Name.LocalName == "Run.Text");
+            return property is not null ? ScalarText(property.Nodes())
+                : ScalarText(element.Nodes().Where(node => node is not XElement child || !child.Name.LocalName.Contains('.')));
         }
         string text = (string?)element.Attribute("Text") ?? "";
         if (text.StartsWith("{}", StringComparison.Ordinal)) { text = text[2..]; }
@@ -132,6 +130,16 @@ public sealed class ChordSpeechAuditCensus
                 or "Run.Text" or "TextBlock.Text" => InlineText(property),
             _ => "",
         }));
+    }
+
+    private static string ScalarText(IEnumerable<XNode> content)
+    {
+        XNode[] nodes = content.ToArray();
+        XElement[] values = nodes.OfType<XElement>().ToArray();
+        // Explicit Text properties and Run's implicit Text content are one
+        // scalar: literal text, a typed String, or an unknown expression.
+        return values.Length == 0 ? string.Concat(nodes.OfType<XText>().Select(node => node.Value))
+            : values.Length == 1 && values[0].Name.LocalName == "String" ? values[0].Value : "A";
     }
 
     [Theory]
@@ -203,12 +211,16 @@ public sealed class ChordSpeechAuditCensus
         [
             "<Run Text='Control '/>", "<Run>Control </Run>", "<Run Text='{}Control '/>",
             "<Run><Run.Text>Control </Run.Text></Run>",
+            "<Run><s:String xmlns:s='clr-namespace:System;assembly=mscorlib' xml:space='preserve'>Control </s:String></Run>",
             "<Run><Run.Text><s:String xmlns:s='clr-namespace:System;assembly=mscorlib'>Control </s:String></Run.Text></Run>",
         ];
         string[] keys =
         [
             "<Run Text='Enter'/>", "<Run>Enter</Run>", "<Run><Run.Text>Enter</Run.Text></Run>",
             "<Run><Run.Text><s:String xmlns:s='clr-namespace:System;assembly=mscorlib'>Enter</s:String></Run.Text></Run>",
+            "<Run><s:String xmlns:s='clr-namespace:System;assembly=mscorlib'>Enter</s:String></Run>",
+            "<Run><Binding Path='Key'/></Run>",
+            "<Run><MultiBinding StringFormat='{}{0}'><Binding Path='Key'/></MultiBinding></Run>",
             "<Run Text='{Binding Key}'/>", "<Run><Run.Text><Binding Path='Key'/></Run.Text></Run>",
             "<Run><Run.Text><MultiBinding StringFormat='{}{0}'><Binding Path='Key'/></MultiBinding></Run.Text></Run>",
         ];
@@ -221,6 +233,8 @@ public sealed class ChordSpeechAuditCensus
                     Assert.True(XamlViolations(source).Any(), source);
                 }
         Assert.Empty(XamlViolations("<TextBlock><Run><Run.Text><Binding Path='CompleteSpokenChord'/></Run.Text></Run><Run Text=' opens.'/></TextBlock>"));
+        Assert.Empty(XamlViolations("<TextBlock><Run><Binding Path='CompleteSpokenChord'/></Run><Run Text=' opens.'/></TextBlock>"));
+        Assert.Empty(XamlViolations("<TextBlock><Run><Run.ToolTip>Control </Run.ToolTip>Open</Run><Run Text=' Enter'/></TextBlock>"));
     }
 
     private static string[] FixtureViolations(string source, string relative)
