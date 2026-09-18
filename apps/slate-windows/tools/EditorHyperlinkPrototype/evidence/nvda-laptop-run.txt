@@ -1,0 +1,380 @@
+INFO - __main__ (09:45:00.992) - MainThread (1264):
+Starting NVDA version 2026.1.1 AMD64
+INFO - core.main (09:45:01.061) - MainThread (1264):
+Config dir: C:\dev\slate\target\w7-hyperlink-prototype\target\nvda-validation-config
+INFO - config.ConfigManager._loadConfig (09:45:01.065) - MainThread (1264):
+Loading config: C:\dev\slate\target\w7-hyperlink-prototype\target\nvda-validation-config\nvda.ini
+WARNING - nvwave.WavePlayer.open (09:45:01.954) - MainThread (1264):
+Couldn't open specified or default audio device. There may be no audio devices.
+DEBUGWARNING - nvwave.playWaveFile (09:45:01.955) - MainThread (1264):
+Unable to play wave file as the render endpoint was not found.
+Traceback (most recent call last):
+  File "nvwave.pyc", line 134, in playWaveFile
+  File "nvwave.pyc", line 251, in __init__
+  File "nvwave.pyc", line 301, in open
+  File "_ctypes/callproc.c", line 1033, in GetResult
+OSError: [WinError -2147023728] Element not found
+INFO - core.main (09:45:01.957) - MainThread (1264):
+Windows version: Windows 11 25H2 (10.0.26200.9457) workstation AMD64
+INFO - core.main (09:45:01.957) - MainThread (1264):
+Using Python version 3.13.12 (tags/v3.13.12:1cbe481, Feb  3 2026, 18:22:25) [MSC v.1944 64 bit (AMD64)]
+INFO - core.main (09:45:01.957) - MainThread (1264):
+Using comtypes version 1.4.13
+INFO - core.main (09:45:01.959) - MainThread (1264):
+Using configobj version 5.1.0 with validate version 1.0.1
+INFO - core.main (09:45:02.055) - MainThread (1264):
+Add-ons are disabled. Restart NVDA to enable them.
+WARNING - nvwave.WavePlayer.open (09:45:02.143) - MainThread (1264):
+Couldn't open specified or default audio device. There may be no audio devices.
+WARNING - tones.initialize (09:45:02.143) - MainThread (1264):
+Failed to initialize audio for tones
+Traceback (most recent call last):
+  File "tones.pyc", line 24, in initialize
+  File "nvwave.pyc", line 251, in __init__
+  File "nvwave.pyc", line 301, in open
+  File "_ctypes/callproc.c", line 1033, in GetResult
+OSError: [WinError -2147023728] Element not found
+ERROR - audio.soundSplit.initialize (09:45:02.145) - MainThread (1264):
+Could not initialize audio session manager
+Traceback (most recent call last):
+  File "audio\soundSplit.pyc", line 97, in initialize
+  File "pycaw\utils.pyc", line 210, in GetAudioSessionManager
+  File "pycaw\utils.pyc", line 190, in GetSpeakers
+_ctypes.COMError: (-2147023728, 'Element not found.', (None, None, None, 0, None))
+INFO - synthDriverHandler.setSynth (09:45:02.149) - MainThread (1264):
+Loaded synthDriver silence
+INFO - mathPres.MathCAT.MathCAT.MathCAT.__init__ (09:45:02.158) - MainThread (1264):
+MathCAT 0.7.2 installed. Using rules dir: C:\Program Files\NVDA\include\nvda-mathcat\assets\Rules
+INFO - core._setUpWxApp (09:45:02.163) - MainThread (1264):
+Using wx version 4.2.4 msw (phoenix) wxWidgets 3.2.8
+INFO - brailleInput.initialize (09:45:02.165) - MainThread (1264):
+Braille input initialized
+INFO - braille.initialize (09:45:02.165) - MainThread (1264):
+Using liblouis version 3.36.0
+INFO - braille.initialize (09:45:02.165) - MainThread (1264):
+Using pySerial version 3.5
+INFO - braille.BrailleHandler._setDisplay (09:45:02.167) - MainThread (1264):
+Loaded braille display driver 'noBraille', current display has 0 cells.
+DEBUGWARNING - appModuleHandler.getProcessHandleFromProcessId (09:45:02.237) - MainThread (1264):
+Unable to open process for processId 972
+Traceback (most recent call last):
+  File "appModuleHandler.pyc", line 207, in getProcessHandleFromProcessId
+PermissionError: [WinError 5] Access is denied.
+DEBUGWARNING - appModuleHandler.getProcessHandleFromProcessId (09:45:02.238) - MainThread (1264):
+Unable to get process handle for process 972 using window enumeration and subsequently getting process handle from that window
+Traceback (most recent call last):
+  File "appModuleHandler.pyc", line 220, in getProcessHandleFromProcessId
+RuntimeError: No window handle found for process 972 to create process handle
+INFO - core.main (09:45:02.391) - MainThread (1264):
+Java Access Bridge support initialized
+INFO - UIAHandler.UIAHandler.MTAThreadFunc (09:45:02.510) - UIAHandler.UIAHandler.MTAThread (16856):
+UIAutomation: IUIAutomation6
+DEBUGWARNING - inputCore.InputManager.loadLocaleGestureMap (09:45:02.574) - MainThread (1264):
+No locale gesture map for language en
+DEBUGWARNING - inputCore.InputManager.loadUserGestureMap (09:45:02.574) - MainThread (1264):
+No user gesture map
+DEBUGWARNING - touchHandler.touchSupported (09:45:02.594) - MainThread (1264):
+No touch devices found
+DEBUGWARNING - updateCheck.initialize (09:45:02.596) - MainThread (1264):
+Couldn't retrieve update state
+Traceback (most recent call last):
+  File "updateCheck.pyc", line 1041, in initialize
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\dev\\slate\\target\\w7-hyperlink-prototype\\target\\nvda-validation-config\\updateCheckState.pickle'
+INFO - core.main (09:45:02.596) - MainThread (1264):
+NVDA initialized
+DEBUGWARNING - Python warning (09:45:02.650) - MainThread (1264):
+gui\__init__.pyc:940: DeprecationWarning: showScriptModalDialog is deprecated. Use an instance of message.MessageDialog and wx.CallAfter instead.
+IO - braille.BrailleBuffer.update (09:45:02.719) - MainThread (1264):
+Braille regions text: ['Desktop wnd']
+IO - braille.BrailleHandler.update (09:45:02.719) - MainThread (1264):
+Braille window dots: 6 145 15 234 13 2345 135 1234 - 2456 1345 145 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+IO - speech.speech.speak (09:45:02.736) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'NVDA  Usage Data Collection', 'dialog', 'In order to improve NVDA in the future, NV Access wishes to collect usage data from running copies of NVDA.\n\nData includes Operating System version, NVDA version, language, country of origin, plus certain NVDA\nconfiguration such as current synthesizer, braille display and braille table. No spoken or braille content will be ever\nsent to NV Access. Please refer to the User Guide for a current list of all data collected.\n\nDo you wish to allow NV Access to periodically collect this data in order to improve NVDA?', CancellableSpeech (still valid)]
+IO - speech.speech.speak (09:45:02.789) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'Remind me later', 'button', 'Alt+', CharacterModeCommand(True), 'l', CharacterModeCommand(False), CancellableSpeech (still valid)]
+IO - braille.BrailleBuffer.update (09:45:02.791) - MainThread (1264):
+Braille regions text: ['NVDA  Usage Data Collection dlg In order to improve NVDA in the future, NV Access wishes to collect usage data from running copies of NVDA.\n\nData includes Operating System version, NVDA version, language, country of origin, plus certain NVDA\nconfiguration such as current synthesizer, braille display and braille table. No spoken or braille content will be ever\nsent to NV Access. Please refer to the User Guide for a current list of all data collected.\n\nDo you wish to allow NV Access to periodically collect this data in order to improve NVDA? ', 'Remind me later btn Alt+l']
+IO - braille.BrailleHandler.update (09:45:02.791) - MainThread (1264):
+Braille window dots: 6 6 1345 1236 145 1 236 - 6 1235 15 134 24 1345 145 - 134 15 - 123 1 2345 15 1235 - 12 2345 1345 - 6 1 123 2345 5 235 123 - - - -
+IO - braille.BrailleBuffer.update (09:45:02.792) - MainThread (1264):
+Braille regions text: ['NVDA  Usage Data Collection dlg In order to improve NVDA in the future, NV Access wishes to collect usage data from running copies of NVDA.\n\nData includes Operating System version, NVDA version, language, country of origin, plus certain NVDA\nconfiguration such as current synthesizer, braille display and braille table. No spoken or braille content will be ever\nsent to NV Access. Please refer to the User Guide for a current list of all data collected.\n\nDo you wish to allow NV Access to periodically collect this data in order to improve NVDA? ', 'Remind me later btn Alt+l']
+IO - braille.BrailleHandler.update (09:45:02.792) - MainThread (1264):
+Braille window dots: 6 6 1345 1236 145 1 236 - 6 1235 15 134 24 1345 145 - 134 15 - 123 1 2345 15 1235 - 12 2345 1345 - 6 1 123 2345 5 235 123 - - - -
+IO - braille.BrailleBuffer.update (09:45:13.748) - MainThread (1264):
+Braille regions text: ['NVDA  Usage Data Collection dlg In order to improve NVDA in the future, NV Access wishes to collect usage data from running copies of NVDA.\n\nData includes Operating System version, NVDA version, language, country of origin, plus certain NVDA\nconfiguration such as current synthesizer, braille display and braille table. No spoken or braille content will be ever\nsent to NV Access. Please refer to the User Guide for a current list of all data collected.\n\nDo you wish to allow NV Access to periodically collect this data in order to improve NVDA? ', 'Remind me later btn Alt+l']
+IO - braille.BrailleHandler.update (09:45:13.749) - MainThread (1264):
+Braille window dots: 6 6 1345 1236 145 1 236 - 6 1235 15 134 24 1345 145 - 134 15 - 123 1 2345 15 1235 - 12 2345 1345 - 6 1 123 2345 5 235 123 - - - -
+IO - speech.speech.speak (09:45:13.801) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'Slate editor Hyperlink PROTOTYPE', 'window', CancellableSpeech (still valid)]
+IO - speech.speech.speak (09:45:13.883) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'Prototype Markdown editor', 'document', CancellableSpeech (still valid), 'Before ', 'link', '[[Target]]', ' after.']
+IO - braille.BrailleBuffer.update (09:45:13.901) - MainThread (1264):
+Braille regions text: ['Before  lnk [[Target]] after. ']
+IO - braille.BrailleHandler.update (09:45:13.901) - MainThread (1264):
+Braille window dots: 127 15 124 135 1235 15 - - 123 1345 13 - 46 126 46 126 6 2345 1 1235 1245 15 2345 46 345 46 345 - 1 124 2345 15 1235 256 - - - - - -
+IO - speech.speech.speak (09:45:26.784) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), '*Emphasis* and **Strong** and ~~Strike~~ and `inline code`.']
+IO - braille.BrailleBuffer.update (09:45:27.039) - MainThread (1264):
+Braille regions text: ['*Emphasis* and **Strong** and ~~Strike~~ and `inline code`. ']
+IO - braille.BrailleHandler.update (09:45:27.040) - MainThread (1264):
+Braille window dots: - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+IO - inputCore.InputManager.executeGesture (09:45:50.401) - winInputHook (624):
+Input: kb(laptop):NVDA+shift+o
+IO - speech.speech.speak (09:45:50.542) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'Prototype Markdown editor', 'document', 'focused', 'italic', '*Emphasis*', 'no italic', ' and ', 'bold', '**Strong**', 'no bold', ' and ', 'strikethrough', '~~Strike~~', 'no strikethrough', ' and `inline code`.']
+IO - braille.BrailleBuffer.update (09:45:50.543) - MainThread (1264):
+Braille regions text: ['Prototype Markdown editor document focused italic *Emphasis* no italic  and  bold **Strong** no bold  and  strikethrough ~~Strike~~ no strikethrough  and `inline code`.']
+IO - braille.BrailleHandler.update (09:45:50.544) - MainThread (1264):
+Braille window dots: 6 1234 1235 135 2345 135 2345 13456 1234 15 - 6 134 1 1235 13 145 135 2456 1345 - 15 145 24 2345 135 1235 - 145 135 14 136 134 15 1345 2345 - - - -
+IO - braille.BrailleHandler.update (09:45:54.549) - MainThread (1264):
+Braille window dots: - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+IO - inputCore.InputManager.executeGesture (09:46:02.619) - winInputHook (624):
+Input: kb(laptop):NVDA+l
+IO - speech.speech.speak (09:46:02.790) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'italic', '*Emphasis*', 'no italic', ' and ', 'bold', '**Strong**', 'no bold', ' and ', 'strikethrough', '~~Strike~~', 'no strikethrough', ' and `inline code`.']
+IO - inputCore.InputManager.executeGesture (09:46:12.424) - winInputHook (624):
+Input: kb(laptop):NVDA+shift+downArrow
+IO - braille.BrailleBuffer.update (09:46:12.438) - MainThread (1264):
+Braille regions text: ['[[Target]] lnk Prototype link from the canonical editor spans Control+Enter']
+IO - braille.BrailleHandler.update (09:46:12.438) - MainThread (1264):
+Braille window dots: 46 126 46 126 6 2345 1 1235 1245 15 2345 46 345 46 345 - 123 1345 13 - 6 1234 1235 135 2345 135 2345 13456 1234 15 - 123 24 1345 13 - 124 1235 135 134
+IO - speech.speech.speak (09:46:12.441) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), '[[Target]]', 'link', 'Prototype link from the canonical editor spans', 'Control+Enter', CancellableSpeech (still valid)]
+IO - inputCore.InputManager.executeGesture (09:46:23.756) - winInputHook (624):
+Input: kb(laptop):NVDA+enter
+IO - speech.speech.speak (09:46:23.773) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'invoke']
+IO - braille.BrailleBuffer.update (09:46:23.774) - MainThread (1264):
+Braille regions text: ['invoke']
+IO - braille.BrailleHandler.update (09:46:23.775) - MainThread (1264):
+Braille window dots: 24 1345 1236 135 13 15 - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+IO - braille.BrailleBuffer.update (09:46:23.853) - MainThread (1264):
+Braille regions text: ['Before  lnk [[Target]] after. ']
+IO - braille.BrailleBuffer.update (09:46:23.967) - MainThread (1264):
+Braille regions text: ['Before  lnk [[Target]] after. ']
+IO - braille.BrailleHandler.update (09:46:27.782) - MainThread (1264):
+Braille window dots: 6 12 15 124 135 1235 15 - - 123 1345 13 - 46 126 46 126 23457 1 1235 1245 15 2345 46 345 46 345 - 1 124 2345 15 1235 256 - - - - - -
+IO - inputCore.InputManager.executeGesture (09:46:35.563) - winInputHook (624):
+Input: kb(laptop):NVDA+k
+IO - speech.speech.speak (09:46:35.576) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'Link has no apparent destination']
+IO - braille.BrailleBuffer.update (09:46:35.577) - MainThread (1264):
+Braille regions text: ['Link has no apparent destination']
+IO - braille.BrailleHandler.update (09:46:35.577) - MainThread (1264):
+Braille window dots: 6 123 24 1345 13 - 125 1 234 - 1345 135 - 1 1234 1234 1 1235 15 1345 2345 - 145 15 234 2345 24 1345 1 2345 24 135 1345 - - - - - - -
+IO - braille.BrailleHandler.update (09:46:39.581) - MainThread (1264):
+Braille window dots: 6 12 15 124 135 1235 15 - - 123 1345 13 - 46 126 46 126 23457 1 1235 1245 15 2345 46 345 46 345 - 1 124 2345 15 1235 256 - - - - - -
+IO - inputCore.InputManager.executeGesture (09:47:03.148) - winInputHook (624):
+Input: kb(laptop):control+shift+rightArrow
+IO - speech.speech.speak (09:47:03.165) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), '[[ selected']
+IO - braille.BrailleBuffer.update (09:47:03.281) - MainThread (1264):
+Braille regions text: ['Before  lnk [[Target]] after. ']
+IO - braille.BrailleHandler.update (09:47:03.281) - MainThread (1264):
+Braille window dots: 6 12 15 124 135 1235 15 - - 123 1345 13 - 4678 12678 4678 12678 6 2345 1 1235 1245 15 2345 46 345 46 345 - 1 124 2345 15 1235 256 - - - - -
+IO - inputCore.InputManager.executeGesture (09:47:12.347) - winInputHook (624):
+Input: kb(laptop):control+shift+rightArrow
+IO - speech.speech.speak (09:47:12.440) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'Target selected']
+IO - braille.BrailleBuffer.update (09:47:12.599) - MainThread (1264):
+Braille regions text: ['Before  lnk [[Target]] after. ']
+IO - braille.BrailleHandler.update (09:47:12.600) - MainThread (1264):
+Braille window dots: 6 12 15 124 135 1235 15 - - 123 1345 13 - 4678 12678 4678 12678 678 234578 178 123578 124578 1578 234578 46 345 46 345 - 1 124 2345 15 1235 256 - - - - -
+IO - inputCore.InputManager.executeGesture (09:47:21.494) - winInputHook (624):
+Input: kb(laptop):control+shift+rightArrow
+IO - speech.speech.speak (09:47:21.514) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), ']]  selected']
+IO - braille.BrailleBuffer.update (09:47:21.591) - MainThread (1264):
+Braille regions text: ['Before  lnk [[Target]] after. ']
+IO - braille.BrailleHandler.update (09:47:21.591) - MainThread (1264):
+Braille window dots: 6 12 15 124 135 1235 15 - - 123 1345 13 - 4678 12678 4678 12678 678 234578 178 123578 124578 1578 234578 4678 34578 4678 34578 78 1 124 2345 15 1235 256 - - - - -
+IO - inputCore.InputManager.executeGesture (09:47:33.994) - winInputHook (624):
+Input: kb(laptop):delete
+ERROR - extensionPoints.Filter.apply (09:47:34.024) - MainThread (1264):
+Error running handler <function getSpeechSequenceWithLangs at 0x00000160504F13A0> for <extensionPoints.Filter object at 0x00000160504C8980>
+Traceback (most recent call last):
+  File "extensionPoints\__init__.pyc", line 117, in apply
+  File "extensionPoints\util.pyc", line 230, in callWithSupportedKwargs
+  File "speech\languageHandling.pyc", line 39, in getSpeechSequenceWithLangs
+  File "synthDriverHandler.pyc", line 338, in languageIsSupported
+  File "languageHandler.pyc", line 457, in normalizeLanguage
+AttributeError: 'NoneType' object has no attribute 'replace'
+IO - speech.speech.speak (09:47:34.027) - MainThread (1264):
+Speaking [CharacterModeCommand(True), LangChangeCommand ('en'), 'a', EndUtteranceCommand()]
+IO - speech.speech.speak (09:47:34.083) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'after.\nEmbe unselected']
+IO - braille.BrailleBuffer.update (09:47:34.096) - MainThread (1264):
+Braille regions text: ['Before after. ']
+IO - braille.BrailleHandler.update (09:47:34.096) - MainThread (1264):
+Braille window dots: 6 12 15 124 135 1235 15 - 1 124 2345 15 1235 256 - - - - - - - - - - - - - - - - - - - - - - - - - -
+IO - braille.BrailleBuffer.update (09:47:34.170) - MainThread (1264):
+Braille regions text: ['Before after. ']
+IO - braille.BrailleHandler.update (09:47:34.171) - MainThread (1264):
+Braille window dots: 6 12 15 124 135 1235 15 - 1 124 2345 15 1235 256 - - - - - - - - - - - - - - - - - - - - - - - - - -
+IO - inputCore.InputManager.executeGesture (09:47:59.716) - winInputHook (624):
+Input: kb(laptop):NVDA+l
+IO - speech.speech.speak (09:47:59.725) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'Before after.']
+IO - inputCore.InputManager.executeGesture (09:48:11.643) - winInputHook (624):
+Input: kb(laptop):control+z
+IO - speech.speech.speak (09:48:11.719) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), '[[Target]]  selected']
+IO - braille.BrailleBuffer.update (09:48:11.825) - MainThread (1264):
+Braille regions text: ['Before  lnk [[Target]] after. ']
+IO - braille.BrailleHandler.update (09:48:11.826) - MainThread (1264):
+Braille window dots: 6 12 15 124 135 1235 15 - - 123 1345 13 - 4678 12678 4678 12678 678 234578 178 123578 124578 1578 234578 4678 34578 4678 34578 78 1 124 2345 15 1235 256 - - - - -
+IO - inputCore.InputManager.executeGesture (09:48:22.321) - winInputHook (624):
+Input: kb(laptop):NVDA+l
+IO - speech.speech.speak (09:48:22.345) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'Before ', 'link', '[[Target]]', ' after.']
+IO - inputCore.InputManager.executeGesture (09:49:05.107) - winInputHook (624):
+Input: kb(laptop):delete
+ERROR - extensionPoints.Filter.apply (09:49:05.136) - MainThread (1264):
+Error running handler <function getSpeechSequenceWithLangs at 0x00000160504F13A0> for <extensionPoints.Filter object at 0x00000160504C8980>
+Traceback (most recent call last):
+  File "extensionPoints\__init__.pyc", line 117, in apply
+  File "extensionPoints\util.pyc", line 230, in callWithSupportedKwargs
+  File "speech\languageHandling.pyc", line 39, in getSpeechSequenceWithLangs
+  File "synthDriverHandler.pyc", line 338, in languageIsSupported
+  File "languageHandler.pyc", line 457, in normalizeLanguage
+AttributeError: 'NoneType' object has no attribute 'replace'
+IO - speech.speech.speak (09:49:05.140) - MainThread (1264):
+Speaking [CharacterModeCommand(True), LangChangeCommand ('en'), 'a', EndUtteranceCommand()]
+IO - speech.speech.speak (09:49:05.211) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'after.\nEmbe unselected']
+IO - braille.BrailleBuffer.update (09:49:05.222) - MainThread (1264):
+Braille regions text: ['Before after. ']
+IO - braille.BrailleHandler.update (09:49:05.223) - MainThread (1264):
+Braille window dots: 6 12 15 124 135 1235 15 - 1 124 2345 15 1235 256 - - - - - - - - - - - - - - - - - - - - - - - - - -
+IO - braille.BrailleBuffer.update (09:49:05.305) - MainThread (1264):
+Braille regions text: ['Before after. ']
+IO - braille.BrailleHandler.update (09:49:05.306) - MainThread (1264):
+Braille window dots: 6 12 15 124 135 1235 15 - 1 124 2345 15 1235 256 - - - - - - - - - - - - - - - - - - - - - - - - - -
+IO - inputCore.InputManager.executeGesture (09:49:13.588) - winInputHook (624):
+Input: kb(laptop):control+z
+IO - speech.speech.speak (09:49:13.605) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), '[[Target]]  selected']
+IO - braille.BrailleBuffer.update (09:49:13.791) - MainThread (1264):
+Braille regions text: ['Before  lnk [[Target]] after. ']
+IO - braille.BrailleHandler.update (09:49:13.792) - MainThread (1264):
+Braille window dots: 6 12 15 124 135 1235 15 - - 123 1345 13 - 4678 12678 4678 12678 678 234578 178 123578 124578 1578 234578 4678 34578 4678 34578 78 1 124 2345 15 1235 256 - - - - -
+IO - inputCore.InputManager.executeGesture (09:49:30.374) - winInputHook (624):
+Input: kb(laptop):downArrow
+IO - speech.speech.speak (09:49:30.467) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'Embed ', 'link', '![[Target]]', ' ends.']
+IO - speech.speech.speak (09:49:30.474) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), '[[Target]]  unselected']
+IO - braille.BrailleBuffer.update (09:49:30.577) - MainThread (1264):
+Braille regions text: ['Embed  lnk ![[Target]] ends. ']
+IO - braille.BrailleHandler.update (09:49:30.578) - MainThread (1264):
+Braille window dots: 6 15 134 12 15 145 - - 123 1345 13 - 235 46 126 46 126 6 2345 1 1235 1245 15 2345 46 345 46 345 - 15 1345 145 234 256 - - - - - -
+IO - braille.BrailleBuffer.update (09:49:30.718) - MainThread (1264):
+Braille regions text: ['Embed  lnk ![[Target]] ends. ']
+IO - braille.BrailleHandler.update (09:49:30.719) - MainThread (1264):
+Braille window dots: 6 15 134 12 15 145 - - 123 1345 13 - 235 46 126 46 126 6 2345 1 1235 1245 15 2345 46 345 46 345 - 15 1345 145 234 256 - - - - - -
+IO - inputCore.InputManager.executeGesture (09:49:44.361) - winInputHook (624):
+Input: kb(laptop):downArrow
+IO - speech.speech.speak (09:49:44.449) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'Tag ', 'link', '#project', ' ends.']
+IO - braille.BrailleBuffer.update (09:49:44.482) - MainThread (1264):
+Braille regions text: ['Tag  lnk #project ends. ']
+IO - braille.BrailleHandler.update (09:49:44.482) - MainThread (1264):
+Braille window dots: 6 2345 1 1245 - - 123 1345 13 - 456 1456 1234 1235 135 245 15 14 2345 - 15 1345 145 234 256 - - - - - - - - - - - - - - -
+IO - braille.BrailleBuffer.update (09:49:44.541) - MainThread (1264):
+Braille regions text: ['Tag  lnk #project ends. ']
+IO - braille.BrailleHandler.update (09:49:44.541) - MainThread (1264):
+Braille window dots: 6 2345 1 1245 - - 123 1345 13 - 456 1456 1234 1235 135 245 15 14 2345 - 15 1345 145 234 256 - - - - - - - - - - - - - - -
+IO - inputCore.InputManager.executeGesture (09:49:54.821) - winInputHook (624):
+Input: kb(laptop):downArrow
+IO - speech.speech.speak (09:49:54.928) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'Citation ', 'link', '[@smith2020]', ' ends.']
+IO - braille.BrailleBuffer.update (09:49:55.034) - MainThread (1264):
+Braille regions text: ['Citation  lnk [@smith2020] ends. ']
+IO - braille.BrailleHandler.update (09:49:55.035) - MainThread (1264):
+Braille window dots: 6 14 24 2345 1 2345 24 135 1345 - - 123 1345 13 - 46 126 4 1 234 134 24 2345 125 23 356 23 356 46 345 - 15 1345 145 234 256 - - - -
+IO - braille.BrailleBuffer.update (09:49:55.174) - MainThread (1264):
+Braille regions text: ['Citation  lnk [@smith2020] ends. ']
+IO - braille.BrailleHandler.update (09:49:55.175) - MainThread (1264):
+Braille window dots: 6 14 24 2345 1 2345 24 135 1345 - - 123 1345 13 - 46 126 4 1 234 134 24 2345 125 23 356 23 356 46 345 - 15 1345 145 234 256 - - - -
+IO - braille.BrailleBuffer.update (09:49:55.329) - MainThread (1264):
+Braille regions text: ['Citation  lnk [@smith2020] ends. ']
+IO - braille.BrailleHandler.update (09:49:55.329) - MainThread (1264):
+Braille window dots: 6 14 24 2345 1 2345 24 135 1345 - - 123 1345 13 - 46 126 4 1 234 134 24 2345 125 23 356 23 356 46 345 - 15 1345 145 234 256 - - - -
+IO - inputCore.InputManager.executeGesture (09:50:04.411) - winInputHook (624):
+Input: kb(laptop):downArrow
+IO - speech.speech.speak (09:50:04.472) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'Website ', 'link', '[Website](https://example.org)', ' ends.']
+IO - braille.BrailleBuffer.update (09:50:04.566) - MainThread (1264):
+Braille regions text: ['Website  lnk [Website](https://example.org) ends. ']
+IO - braille.BrailleHandler.update (09:50:04.567) - MainThread (1264):
+Braille window dots: 46 126 24567 15 12 234 24 2345 15 46 345 5 126 125 2345 2345 1234 234 25 456 34 456 34 15 1346 1 134 1234 123 15 256 135 1235 1245 5 345 - - - -
+IO - braille.BrailleBuffer.update (09:50:04.685) - MainThread (1264):
+Braille regions text: ['Website  lnk [Website](https://example.org) ends. ']
+IO - braille.BrailleHandler.update (09:50:04.686) - MainThread (1264):
+Braille window dots: 46 126 24567 15 12 234 24 2345 15 46 345 5 126 125 2345 2345 1234 234 25 456 34 456 34 15 1346 1 134 1234 123 15 256 135 1235 1245 5 345 - - - -
+IO - inputCore.InputManager.executeGesture (09:50:12.870) - winInputHook (624):
+Input: kb(laptop):home
+ERROR - extensionPoints.Filter.apply (09:50:12.901) - MainThread (1264):
+Error running handler <function getSpeechSequenceWithLangs at 0x00000160504F13A0> for <extensionPoints.Filter object at 0x00000160504C8980>
+Traceback (most recent call last):
+  File "extensionPoints\__init__.pyc", line 117, in apply
+  File "extensionPoints\util.pyc", line 230, in callWithSupportedKwargs
+  File "speech\languageHandling.pyc", line 39, in getSpeechSequenceWithLangs
+  File "synthDriverHandler.pyc", line 338, in languageIsSupported
+  File "languageHandler.pyc", line 457, in normalizeLanguage
+AttributeError: 'NoneType' object has no attribute 'replace'
+IO - speech.speech.speak (09:50:12.910) - MainThread (1264):
+Speaking [CharacterModeCommand(True), LangChangeCommand ('en'), 'W', EndUtteranceCommand()]
+IO - braille.BrailleBuffer.update (09:50:12.974) - MainThread (1264):
+Braille regions text: ['Website  lnk [Website](https://example.org) ends. ']
+IO - braille.BrailleHandler.update (09:50:12.975) - MainThread (1264):
+Braille window dots: 24567 15 12 234 24 2345 15 - - 123 1345 13 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+IO - braille.BrailleBuffer.update (09:50:13.073) - MainThread (1264):
+Braille regions text: ['Website  lnk [Website](https://example.org) ends. ']
+IO - braille.BrailleHandler.update (09:50:13.073) - MainThread (1264):
+Braille window dots: 24567 15 12 234 24 2345 15 - - 123 1345 13 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+IO - inputCore.InputManager.executeGesture (09:50:21.956) - winInputHook (624):
+Input: kb(laptop):control+rightArrow
+IO - speech.speech.speak (09:50:22.053) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'link']
+ERROR - extensionPoints.Filter.apply (09:50:22.054) - MainThread (1264):
+Error running handler <function getSpeechSequenceWithLangs at 0x00000160504F13A0> for <extensionPoints.Filter object at 0x00000160504C8980>
+Traceback (most recent call last):
+  File "extensionPoints\__init__.pyc", line 117, in apply
+  File "extensionPoints\util.pyc", line 230, in callWithSupportedKwargs
+  File "speech\languageHandling.pyc", line 39, in getSpeechSequenceWithLangs
+  File "synthDriverHandler.pyc", line 338, in languageIsSupported
+  File "languageHandler.pyc", line 457, in normalizeLanguage
+AttributeError: 'NoneType' object has no attribute 'replace'
+IO - speech.speech.speak (09:50:22.059) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'left bracket', EndUtteranceCommand()]
+IO - braille.BrailleBuffer.update (09:50:22.155) - MainThread (1264):
+Braille regions text: ['Website  lnk [Website](https://example.org) ends. ']
+IO - braille.BrailleHandler.update (09:50:22.156) - MainThread (1264):
+Braille window dots: 46 126 24567 15 12 234 24 2345 15 46 345 5 126 125 2345 2345 1234 234 25 456 34 456 34 15 1346 1 134 1234 123 15 256 135 1235 1245 5 345 - - - -
+IO - braille.BrailleBuffer.update (09:50:22.194) - MainThread (1264):
+Braille regions text: ['Website  lnk [Website](https://example.org) ends. ']
+IO - braille.BrailleHandler.update (09:50:22.195) - MainThread (1264):
+Braille window dots: 46 126 24567 15 12 234 24 2345 15 46 345 5 126 125 2345 2345 1234 234 25 456 34 456 34 15 1346 1 134 1234 123 15 256 135 1235 1245 5 345 - - - -
+IO - inputCore.InputManager.executeGesture (09:50:31.696) - winInputHook (624):
+Input: kb(laptop):NVDA+k
+IO - speech.speech.speak (09:50:31.713) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'Link has no apparent destination']
+IO - braille.BrailleBuffer.update (09:50:31.714) - MainThread (1264):
+Braille regions text: ['Link has no apparent destination']
+IO - braille.BrailleHandler.update (09:50:31.714) - MainThread (1264):
+Braille window dots: 6 123 24 1345 13 - 125 1 234 - 1345 135 - 1 1234 1234 1 1235 15 1345 2345 - 145 15 234 2345 24 1345 1 2345 24 135 1345 - - - - - - -
+IO - braille.BrailleHandler.update (09:50:35.735) - MainThread (1264):
+Braille window dots: 46 126 24567 15 12 234 24 2345 15 46 345 5 126 125 2345 2345 1234 234 25 456 34 456 34 15 1346 1 134 1234 123 15 256 135 1235 1245 5 345 - - - -
+IO - inputCore.InputManager.executeGesture (09:52:50.501) - winInputHook (624):
+Input: kb(laptop):control+home
+IO - speech.speech.speak (09:52:50.599) - MainThread (1264):
+Speaking [LangChangeCommand ('en'), 'heading level 1', '# Heading one']
+IO - braille.BrailleBuffer.update (09:52:50.608) - MainThread (1264):
+Braille regions text: ['Prototype Markdown editor doc ', 'h1 # Heading one ']
+IO - braille.BrailleHandler.update (09:52:50.609) - MainThread (1264):
+Braille window dots: 125 3456 1 - 456 1456 - 6 125 15 1 145 24 1345 1245 - 135 1345 15 - - - - - - - - - - - - - - - - - - - - -
+IO - braille.BrailleBuffer.update (09:52:50.681) - MainThread (1264):
+Braille regions text: ['Prototype Markdown editor doc ', 'h1 # Heading one ']
+IO - braille.BrailleHandler.update (09:52:50.681) - MainThread (1264):
+Braille window dots: 125 3456 1 - 456 1456 - 6 125 15 1 145 24 1345 1245 - 135 1345 15 - - - - - - - - - - - - - - - - - - - - -

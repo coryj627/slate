@@ -1,0 +1,4 @@
+Prototype costs: full canonical rebuild on revision change; cached navigation thereafter.
+102400 bytes: initial=17.574ms cached=0.00132ms edit-rebuild=6.540ms
+1048576 bytes: initial=66.847ms cached=0.00042ms edit-rebuild=54.298ms
+8388608 bytes: initial=458.982ms cached=0.00034ms edit-rebuild=470.678ms

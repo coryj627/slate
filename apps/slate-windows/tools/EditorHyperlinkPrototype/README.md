@@ -55,14 +55,18 @@ Windows 11, .NET 10.0.12, NVDA installation version 2026.1.1.55980.
   6.831 / 44.818 / 428.699 ms; cached queries were below 0.002 ms each.
   This is exploratory timing, not the production benchmark gate. Large
   document edit costs need an incremental design before production use.
-- NVDA Speech Viewer validation: pending desktop run. NVDA 2026.1.1 was
-  launched, but a pre-existing `LinkProbe.exe - Application Error` dialog
-  hosted by Windows obstructed desktop input. The old probe process was
-  already gone. App-access approval was granted for the new prototype and
-  NVDA; dismissal of the orphaned dialog was requested separately.
-- NVDA's startup log also reports that no audio output device is available.
-  Speech Viewer can establish generated speech text once accessible; do
-  not describe that as listening to synthesized audio.
+- NVDA Speech Viewer rerun on 18 September: headings, all six link kinds,
+  character/word boundaries, selection, insertion/undo, formatting and
+  object activation passed their bounded checks. Code/comment lookalikes
+  stayed plain text, and the initially offscreen link was reachable.
+- This is not a full acceptance pass: destination reporting is missing,
+  selection deletion produces an incorrect announcement, and full Say All
+  remains incomplete in this machine's no-audio environment. An isolated
+  No-speech profile supplied actual NVDA transcripts; no audible output
+  was verified. See [NVDA-VALIDATION.md](NVDA-VALIDATION.md) for the result
+  matrix, exact settings, raw evidence and follow-up work.
+- The automated rerun passed 46 in-process and 132 cross-process
+  assertions. Latest 8 MiB post-edit metadata rebuilding cost 470.678 ms.
 - JAWS, physical braille, and actual IME input: not executed.
 
 ## NVDA validation sequence

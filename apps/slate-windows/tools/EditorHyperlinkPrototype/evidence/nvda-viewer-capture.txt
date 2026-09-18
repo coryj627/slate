@@ -1,0 +1,51 @@
+{
+  document_text: '[Website](https://example.org) e',
+  focused_element: '2 edit  ID: -31957',
+  tree: 'Window: "NVDA Braille Viewer", App: nvda_noUIAccess.exe.\n' +
+    '\t0 window (disabled) NVDA Braille Viewer Secondary Actions: Raise\n' +
+    '\t\t1 pane panel ID: -31959\n' +
+    '\t\t\t2 edit  ID: -31957\n' +
+    '\t\t\t3 edit RichEdit Control ID: -31956\n' +
+    '\t\t\t4 check box Show Braille Viewer on Startup ID: -31955\n' +
+    '\t\t\t5 check box Hover for cell routing ID: -31954\n' +
+    '\t\t6 title bar\n' +
+    '\t\t\t7 menu bar System ID: MenuBar\n' +
+    '\t\t\t\t8 menu item System\n' +
+    '\t\t\t9 button Close\n' +
+    '\n' +
+    'Document text: ```\n' +
+    '[Website](https://example.org) e\n' +
+    '```'
+}Slate editor Hyperlink PROTOTYPE  window
+Prototype Markdown editor  document  Before   link    [[Target]]   after.
+*Emphasis* and **Strong** and ~~Strike~~ and `inline code`.
+Prototype Markdown editor  document  focused  italic  *Emphasis*  no italic   and   bold  **Strong**  no bold   and   strikethrough  ~~Strike~~  no strikethrough   and `inline code`.
+italic  *Emphasis*  no italic   and   bold  **Strong**  no bold   and   strikethrough  ~~Strike~~  no strikethrough   and `inline code`.
+[[Target]]  link  Prototype link from the canonical editor spans  Control+Enter
+invoke
+Link has no apparent destination
+[[ selected
+Target selected
+]]  selected
+
+a
+after.
+Embe unselected
+Before after.
+[[Target]]  selected
+Before   link    [[Target]]   after.
+
+a
+after.
+Embe unselected
+[[Target]]  selected
+Embed   link    ![[Target]]   ends.
+[[Target]]  unselected
+Tag   link    #project   ends.
+Citation   link    [@smith2020]   ends.
+Website   link    [Website](https://example.org)   ends.
+
+W
+link  
+left bracket
+Link has no apparent destination
