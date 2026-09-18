@@ -1,0 +1,135 @@
+CLIENT CUIAutomation PID=1140
+PASS deferred action completed
+PASS 8 canonical links, excluding code/comment lookalikes and including offscreen
+PASS one continuous byte-exact source stream
+PASS heading StyleId retained
+PASS child 0 has Hyperlink role
+PASS child 0 range text equals source name
+PASS child 0 owns its range
+PASS child 0 has no recursive self child
+PASS child 0 Compare works both directions
+PASS child 0 CompareEndpoints works both directions
+PASS child 0 MoveEndpointByRange works both directions without special clone normalization
+PASS child 1 has Hyperlink role
+PASS child 1 range text equals source name
+PASS child 1 owns its range
+PASS child 1 has no recursive self child
+PASS child 1 Compare works both directions
+PASS child 1 CompareEndpoints works both directions
+PASS child 1 MoveEndpointByRange works both directions without special clone normalization
+PASS child 2 has Hyperlink role
+PASS child 2 range text equals source name
+PASS child 2 owns its range
+PASS child 2 has no recursive self child
+PASS child 2 Compare works both directions
+PASS child 2 CompareEndpoints works both directions
+PASS child 2 MoveEndpointByRange works both directions without special clone normalization
+PASS child 3 has Hyperlink role
+PASS child 3 range text equals source name
+PASS child 3 owns its range
+PASS child 3 has no recursive self child
+PASS child 3 Compare works both directions
+PASS child 3 CompareEndpoints works both directions
+PASS child 3 MoveEndpointByRange works both directions without special clone normalization
+PASS child 4 has Hyperlink role
+PASS child 4 range text equals source name
+PASS child 4 owns its range
+PASS child 4 has no recursive self child
+PASS child 4 Compare works both directions
+PASS child 4 CompareEndpoints works both directions
+PASS child 4 MoveEndpointByRange works both directions without special clone normalization
+PASS child 5 has Hyperlink role
+PASS child 5 range text equals source name
+PASS child 5 owns its range
+PASS child 5 has no recursive self child
+PASS child 5 Compare works both directions
+PASS child 5 CompareEndpoints works both directions
+PASS child 5 MoveEndpointByRange works both directions without special clone normalization
+PASS child 6 has Hyperlink role
+PASS child 6 range text equals source name
+PASS child 6 owns its range
+PASS child 6 has no recursive self child
+PASS child 6 Compare works both directions
+PASS child 6 CompareEndpoints works both directions
+PASS child 6 MoveEndpointByRange works both directions without special clone normalization
+PASS child 7 has Hyperlink role
+PASS child 7 range text equals source name
+PASS child 7 owns its range
+PASS child 7 has no recursive self child
+PASS child 7 Compare works both directions
+PASS child 7 CompareEndpoints works both directions
+PASS child 7 MoveEndpointByRange works both directions without special clone normalization
+PASS deferred action completed
+PASS child identity survives insertion before it
+PASS retained child maps to shifted source
+PASS deferred action completed
+PASS deferred action completed
+PASS deleted child rejected instead of silently targeting another link
+CLIENT CUIAutomation8 PID=1140
+PASS deferred action completed
+PASS 8 canonical links, excluding code/comment lookalikes and including offscreen
+PASS one continuous byte-exact source stream
+PASS heading StyleId retained
+PASS child 0 has Hyperlink role
+PASS child 0 range text equals source name
+PASS child 0 owns its range
+PASS child 0 has no recursive self child
+PASS child 0 Compare works both directions
+PASS child 0 CompareEndpoints works both directions
+PASS child 0 MoveEndpointByRange works both directions without special clone normalization
+PASS child 1 has Hyperlink role
+PASS child 1 range text equals source name
+PASS child 1 owns its range
+PASS child 1 has no recursive self child
+PASS child 1 Compare works both directions
+PASS child 1 CompareEndpoints works both directions
+PASS child 1 MoveEndpointByRange works both directions without special clone normalization
+PASS child 2 has Hyperlink role
+PASS child 2 range text equals source name
+PASS child 2 owns its range
+PASS child 2 has no recursive self child
+PASS child 2 Compare works both directions
+PASS child 2 CompareEndpoints works both directions
+PASS child 2 MoveEndpointByRange works both directions without special clone normalization
+PASS child 3 has Hyperlink role
+PASS child 3 range text equals source name
+PASS child 3 owns its range
+PASS child 3 has no recursive self child
+PASS child 3 Compare works both directions
+PASS child 3 CompareEndpoints works both directions
+PASS child 3 MoveEndpointByRange works both directions without special clone normalization
+PASS child 4 has Hyperlink role
+PASS child 4 range text equals source name
+PASS child 4 owns its range
+PASS child 4 has no recursive self child
+PASS child 4 Compare works both directions
+PASS child 4 CompareEndpoints works both directions
+PASS child 4 MoveEndpointByRange works both directions without special clone normalization
+PASS child 5 has Hyperlink role
+PASS child 5 range text equals source name
+PASS child 5 owns its range
+PASS child 5 has no recursive self child
+PASS child 5 Compare works both directions
+PASS child 5 CompareEndpoints works both directions
+PASS child 5 MoveEndpointByRange works both directions without special clone normalization
+PASS child 6 has Hyperlink role
+PASS child 6 range text equals source name
+PASS child 6 owns its range
+PASS child 6 has no recursive self child
+PASS child 6 Compare works both directions
+PASS child 6 CompareEndpoints works both directions
+PASS child 6 MoveEndpointByRange works both directions without special clone normalization
+PASS child 7 has Hyperlink role
+PASS child 7 range text equals source name
+PASS child 7 owns its range
+PASS child 7 has no recursive self child
+PASS child 7 Compare works both directions
+PASS child 7 CompareEndpoints works both directions
+PASS child 7 MoveEndpointByRange works both directions without special clone normalization
+PASS deferred action completed
+PASS child identity survives insertion before it
+PASS retained child maps to shifted source
+PASS deferred action completed
+PASS deferred action completed
+PASS deleted child rejected instead of silently targeting another link
+ALL PROTOTYPE UIA CHECKS PASSED

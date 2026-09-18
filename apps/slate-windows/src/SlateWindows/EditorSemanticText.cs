@@ -23,6 +23,7 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
     private readonly AvalonDocumentBufferSession _session;
     private readonly Func<IRawElementProviderSimple> _enclosingElement;
     private readonly AutomationPeer _peer;
+    internal EditorHyperlinkPrototypeTree PrototypeLinks { get; }
 
     internal EditorSemanticTextProvider(ITextProvider inner, SlateTextEditor editor,
         AvalonDocumentBufferSession session, AutomationPeer peer, Func<IRawElementProviderSimple> enclosingElement)
@@ -32,6 +33,7 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
         _session = session;
         _enclosingElement = enclosingElement;
         _peer = peer;
+        PrototypeLinks = new(editor, this, session, peer);
     }
 
     internal bool HasCurrentDocument
@@ -108,7 +110,7 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
     }
 
     public ITextRangeProvider RangeFromChild(IRawElementProviderSimple childElement) =>
-        throw new ArgumentException("The source editor contains no child elements.", nameof(childElement));
+        PrototypeLinks.RangeFromChild(childElement);
 
     public ITextRangeProvider RangeFromPoint(Point screenLocation)
     {
@@ -207,7 +209,7 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
 
     public object GetAttributeValue(int attributeId)
     {
-        if (!_provider.CanRead || !Supported(attributeId))
+        if (attributeId == LinkAttribute || !_provider.CanRead || !Supported(attributeId))
         {
             return AutomationElement.NotSupported;
         }
@@ -236,7 +238,7 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
 
     public ITextRangeProvider? FindAttribute(int attributeId, object value, bool backward)
     {
-        if (!_provider.CanRead || attributeId is not (StyleIdAttribute or LinkAttribute))
+        if (!_provider.CanRead || attributeId != StyleIdAttribute)
         {
             return null;
         }
@@ -380,8 +382,9 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
     public ITextRangeProvider? FindText(string text, bool backward, bool ignoreCase) =>
         _inner.FindText(text, backward, ignoreCase) is { } found ? _provider.Wrap(found) : null;
     public double[] GetBoundingRectangles() => _inner.GetBoundingRectangles();
-    public IRawElementProviderSimple[] GetChildren() => [];
-    public IRawElementProviderSimple GetEnclosingElement() => _provider.EnclosingElement;
+    public IRawElementProviderSimple[] GetChildren() => _provider.PrototypeLinks.Children(Bounds.Start, Bounds.End);
+    public IRawElementProviderSimple GetEnclosingElement() =>
+        _provider.PrototypeLinks.Enclosing(Bounds.Start, Bounds.End)?.Provider ?? _provider.EnclosingElement;
     public string GetText(int maxLength) => _inner.GetText(maxLength);
     public int Move(TextUnit unit, int count) => _inner.Move(unit, count);
     public void MoveEndpointByRange(TextPatternRangeEndpoint endpoint, ITextRangeProvider targetRange, TextPatternRangeEndpoint targetEndpoint) =>

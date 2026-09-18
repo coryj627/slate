@@ -92,6 +92,8 @@ internal sealed class SlateTextEditor : TextEditor
         set => SetValue(EditorCaretOffsetProperty, value);
     }
 
+    internal Action<int>? PrototypeLinkInvoked { get; set; }
+
     internal bool FocusInputOwner() => TextArea.Focus();
 
     internal AvalonHighlightingCoordinator? HighlightingForCensus => _highlighting;
@@ -485,6 +487,7 @@ internal sealed class SlateTextEditor : TextEditor
 
 internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
 {
+    internal AutomationPeer? PrototypePeerFromProvider(IRawElementProviderSimple provider) => PeerFromProvider(provider);
     private readonly SlateTextEditor _owner;
     private readonly AutomationPeer _textAreaPeer;
     private EditorSemanticTextProvider? _semanticProvider;
@@ -507,7 +510,9 @@ internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
         && _owner.TextArea.IsEnabled
         && _owner.TextArea.IsVisible;
 
-    protected override List<AutomationPeer>? GetChildrenCore() => null;
+    protected override List<AutomationPeer>? GetChildrenCore() =>
+        GetPattern(PatternInterface.Text) is EditorSemanticTextProvider provider
+            ? provider.PrototypeLinks.Links().Cast<AutomationPeer>().ToList() : null;
 
     public override object? GetPattern(PatternInterface patternInterface)
     {

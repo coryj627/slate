@@ -1,0 +1,48 @@
+In-process checks only; not a substitute for cross-process UIA or NVDA.
+PASS canonical links include offscreen text and exclude code/comments
+PASS continuous source unchanged
+PASS generic Link text attribute removed
+PASS Compare both directions: [[Target]]
+PASS CompareEndpoints both directions
+PASS MoveEndpointByRange both directions
+PASS link owns full range
+PASS end boundary exits link
+PASS Compare both directions: ![[Target]]
+PASS CompareEndpoints both directions
+PASS MoveEndpointByRange both directions
+PASS link owns full range
+PASS end boundary exits link
+PASS Compare both directions: #project
+PASS CompareEndpoints both directions
+PASS MoveEndpointByRange both directions
+PASS link owns full range
+PASS end boundary exits link
+PASS Compare both directions: [@smith2020]
+PASS CompareEndpoints both directions
+PASS MoveEndpointByRange both directions
+PASS link owns full range
+PASS end boundary exits link
+PASS Compare both directions: [Website](https://example.org)
+PASS CompareEndpoints both directions
+PASS MoveEndpointByRange both directions
+PASS link owns full range
+PASS end boundary exits link
+PASS Compare both directions: ![Picture](picture.png)
+PASS CompareEndpoints both directions
+PASS MoveEndpointByRange both directions
+PASS link owns full range
+PASS end boundary exits link
+PASS Compare both directions: [quoted link](https://example.org/quote)
+PASS CompareEndpoints both directions
+PASS MoveEndpointByRange both directions
+PASS link owns full range
+PASS end boundary exits link
+PASS Compare both directions: [[FarAway]]
+PASS CompareEndpoints both directions
+PASS MoveEndpointByRange both directions
+PASS link owns full range
+PASS end boundary exits link
+PASS identity and anchors survive prefix insertion
+PASS deleted child removed
+PASS undo restores semantic link
+ALL IN-PROCESS CHECKS PASSED

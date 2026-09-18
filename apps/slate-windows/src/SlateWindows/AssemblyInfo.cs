@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("SlateWindows.Tests")]
 [assembly: InternalsVisibleTo("SlateWindows.Benchmarks")]
 [assembly: InternalsVisibleTo("GridConformanceHost")]
+[assembly: InternalsVisibleTo("EditorHyperlinkPrototype")]
 
 [assembly: ThemeInfo(
     ResourceDictionaryLocation.None,
