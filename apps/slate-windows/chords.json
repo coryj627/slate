@@ -2714,6 +2714,17 @@
         "tests": [
           "apps/slate-windows/tests/SlateWindows.Tests/Censuses/WcMatrixEvidenceCensus.cs#EveryRowHasTenCellsAndExecutableEvidence"
         ]
+      },
+      "editorSemanticPeer": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/EditorSemanticText.cs#EditorSemanticTextProvider",
+          "apps/slate-windows/src/SlateWindows/EditorHighlighting.cs#FlushSemanticChanges"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/EditorSemanticTextRangeTests.cs#EveryCanonicalKindHasItsContractAttributeThroughTheNativePeer",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/EditorPeerDoctrineCensus.cs#TheContractTableAndMappingSwitchCoverTheSameCanonicalKindsAndAttributes",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#EditorTextPattern_SemanticAttributesUnitsAndEvents_AreClean"
+        ]
       }
     },
     "commands": {
@@ -2918,7 +2929,8 @@
       "#744": "fileManagement",
       "#745": "canvas",
       "#746": "graph",
-      "#750": "uiaConformance"
+      "#750": "uiaConformance",
+      "#747": "editorSemanticPeer"
     }
   },
   "chordSurface": [

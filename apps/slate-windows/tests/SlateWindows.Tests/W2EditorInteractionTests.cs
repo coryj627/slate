@@ -749,6 +749,45 @@ public sealed class W2EditorInteractionTests
         }
     }
 
+    [Theory]
+    [InlineData("[site](https://example.org/a#part)", "https://example.org/a#part", true)]
+    [InlineData("<https://example.org/>", "https://example.org/", true)]
+    [InlineData("[site][ref]\n\n[ref]: https://example.org/ref", "https://example.org/ref", true)]
+    [InlineData("![image](https://example.org/a.png)", "https://example.org/a.png", true)]
+    [InlineData("[local](target.md#Destination)", "target.md#Destination", false)]
+    [InlineData("[[target#Destination]]", "target#Destination", false)]
+    public void HyperlinkMetadataAndActionsUseCurrentCanonicalRecords(string authored, string destination, bool external)
+    {
+        using InteractionFixture fixture = InteractionFixture.Create(authored);
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        var navigation = new List<EditorNavigationRequest>();
+        var opened = new List<string>();
+        var announcements = new List<A11yEvent>();
+        using var tab = new WorkspaceTabViewModel(session, new WorkspaceTabState(Guid.NewGuid(),
+            new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")), startInteractionBackgroundWork: false);
+        using var interactions = new EditorInteractionCoordinator(session, tab, navigation.Add,
+            announce: announcements.Add, startBackgroundWork: false,
+            openExternalForTests: value => { opened.Add(value); return true; });
+        interactions.RefreshMathRangesForTests();
+        interactions.RefreshArtifactCacheForTests();
+        EditorSemanticSpan span = Assert.Single(tab.EditorSession!.InspectInRange(0, authored.Length).Spans
+, EditorHyperlinkTree.IsLink);
+        Assert.Equal(destination, interactions.DestinationFor(span));
+        Assert.True(interactions.ActivateSpan(span));
+        Assert.True(interactions.ActivateAt(span.StartUtf16 + 1));
+        if (external) { Assert.Equal(new[] { destination, destination }, opened); }
+        else { Assert.Equal(2, navigation.Count); Assert.All(navigation, request => Assert.Equal("target.md", request.Path)); }
+        tab.EditorDocument!.Insert(0, "edited ");
+        Assert.Null(interactions.DestinationFor(span));
+        Assert.False(interactions.ActivateSpan(span));
+        EditorSemanticSpan current = Assert.Single(tab.EditorSession.InspectInRange(0, tab.EditorDocument.TextLength).Spans, EditorHyperlinkTree.IsLink);
+        Assert.True(interactions.ActivateSpan(current));
+        Assert.Contains(announcements, announcement => announcement is A11yEvent.HostComposed message && message.Text.StartsWith("Save ", StringComparison.Ordinal));
+        Assert.Equal(external ? 2 : 0, opened.Count);
+    }
+
     private static int Inside(string text, string needle)
     {
         int start = text.IndexOf(needle, StringComparison.Ordinal);

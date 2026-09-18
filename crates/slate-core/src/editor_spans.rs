@@ -84,7 +84,7 @@ pub enum EditorSpanKind {
     Frontmatter,
     /// A token *inside* a fenced/indented code block, from `code.rs`'s
     /// tree-sitter highlighting. An overlay that nests within
-    /// [`EditorSpanKind::CodeFence`] — the one intentional overlap in
+    /// [`EditorSpanKind::CodeFence`] — an intentional overlay in
     /// [`highlight_spans`].
     Code(TokenKind),
 }
@@ -115,7 +115,8 @@ impl EditorSpan {
 /// list; the result is non-overlapping **except** that
 /// [`EditorSpanKind::Code`] tokens nest inside their
 /// [`EditorSpanKind::CodeFence`] container (the apply layer stamps the
-/// fence's base style, then the token colours on top).
+/// fence's base style, then the token colours on top), and uncoloured
+/// structural overlays nest around their contents.
 ///
 /// Overlap policy mirrors the prior Swift `findEditorSyntaxSpans`
 /// coverage scheme: higher-priority spans win, and any span that
@@ -125,25 +126,17 @@ impl EditorSpan {
 /// code-suppressed from their canonical extractors; the tag/comment
 /// scanners rely on this sweep for the same suppression.
 ///
-/// `Link`, `Image`, and `BlockQuote` are intentionally excluded: the
-/// prior Swift editor never coloured them, and treating a multi-line
-/// blockquote as one flat span conflicts with highlighting its
-/// contents. They remain available from [`markdown_spans`] as raw
-/// structure for other consumers.
+/// `Link`, `Image`, and `BlockQuote` are semantic overlays (#747). Both
+/// native palettes leave them uncoloured. Adding them after the visual
+/// sweep preserves their meaning without a container masking its contents.
+/// Opaque frontmatter/comment/code regions still suppress inner semantics.
 pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
     // #388: two pulldown passes, not four. One RAW pass yields the markdown
     // structure spans + the per-token code internals; one BODY pass feeds
     // both the wikilink and citation scanners.
     let (structure, code) = raw_structure_and_code(source);
-    let mut spans: Vec<EditorSpan> = structure
-        .into_iter()
-        .filter(|s| {
-            !matches!(
-                s.kind,
-                EditorSpanKind::Link | EditorSpanKind::Image | EditorSpanKind::BlockQuote
-            )
-        })
-        .collect();
+    let (semantic, mut spans): (Vec<_>, Vec<_>) =
+        structure.into_iter().partition(is_semantic_overlay);
     // #384: emit one high-priority span over the YAML frontmatter block.
     // `raw_structure_and_code` runs pulldown on the raw source, so it
     // produces spurious structure spans (Heading/CodeFence) over the YAML;
@@ -161,13 +154,16 @@ pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
     spans.extend(wikilinks);
     spans.extend(citations);
     spans.extend(scan_tags(source));
-    spans.extend(scan_comments(source));
+    let comments = scan_comments(source, &spans);
+    spans.extend(comments.iter().cloned());
     let mut resolved = resolve_overlaps(source, spans);
+    let opaque = SemanticOpaqueRanges::new(&resolved, &comments);
     // Slice 3: overlay per-token code-block internals. Added *after* the
     // sweep so the CodeFence span still masks markdown/tags elsewhere in
-    // the block, while the tokens themselves nest inside it (the one
-    // intentional overlap) for the apply layer to stamp on top.
-    resolved.extend(code);
+    // the block, while the tokens themselves nest inside it for the apply layer to stamp
+    // on top. Structural overlays are also retained without changing paint.
+    append_semantic_overlays(&mut resolved, semantic, &opaque);
+    append_code_overlays(&mut resolved, code);
     resolved.sort_by_key(|s| s.start_byte);
     resolved
 }
@@ -277,9 +273,8 @@ pub(crate) fn highlight_spans_in_range_with(
     // intersects an existing terminated comment. The free oracle scans the
     // whole source for the latter (the stateful buffer maintains an
     // incremental comment index instead — #407 Part 3).
-    let window_intersects_comment = scan_comments(source)
-        .iter()
-        .any(|c| (c.start_byte as usize) < win_end && win_start < (c.end_byte as usize));
+    let window_intersects_comment =
+        CommentIndex::from_source(source).intersects(win_start, win_end);
 
     let window_text = &source[win_start..win_end];
     highlight_window(
@@ -317,6 +312,15 @@ pub(crate) fn highlight_window(
     let win_end = win_start + window_text.len();
 
     // --- Conservative fallbacks (any "yes" → None ⇒ caller whole-document) ---
+
+    // Reference-link/image definitions can affect any earlier or later block.
+    // The cached lexical marker index is conservative (even a marker inside
+    // code falls back), but is maintained over the edit halo rather than
+    // scanning the document on every UIA line query. Full parsing remains the
+    // authority for whether a marker is actually a reference definition.
+    if !raw_structure.reference_markers.is_empty() {
+        return None;
+    }
 
     // Real top-of-document frontmatter: any edit in/touching it.
     if fm_end > 0 && win_start < fm_end {
@@ -653,6 +657,9 @@ pub(crate) struct StructureSnapshot {
     /// neighbourhood is rescanned, the tail shifts); the drift guard and the
     /// censuses cross-check it against `from_source` like every other field.
     lone_crs: Vec<usize>,
+    /// Every `]:` pair: a conservative signal for globally scoped Markdown
+    /// reference definitions. The index itself does not classify a link.
+    reference_markers: Vec<usize>,
 }
 
 impl StructureSnapshot {
@@ -679,11 +686,18 @@ impl StructureSnapshot {
             .filter(|&(i, &b)| b == b'\r' && bytes.get(i + 1) != Some(&b'\n'))
             .map(|(i, _)| i)
             .collect();
+        let reference_markers = bytes
+            .windows(2)
+            .enumerate()
+            .filter(|(_, pair)| *pair == b"]:")
+            .map(|(index, _)| index)
+            .collect();
         Self {
             blocks,
             containers,
             len: source.len(),
             lone_crs,
+            reference_markers,
         }
     }
 
@@ -701,24 +715,41 @@ impl StructureSnapshot {
         edit_old_end: usize,
         new_text_len: usize,
     ) -> Vec<usize> {
+        Self::adjacent_positions_updated(
+            &self.lone_crs,
+            new_source,
+            edit_start,
+            edit_old_end,
+            new_text_len,
+            |first, next| first == b'\r' && next != Some(b'\n'),
+        )
+    }
+
+    fn adjacent_positions_updated<T: DocText + ?Sized>(
+        positions: &[usize],
+        new_source: &T,
+        edit_start: usize,
+        edit_old_end: usize,
+        new_text_len: usize,
+        matches: fn(u8, Option<u8>) -> bool,
+    ) -> Vec<usize> {
         let delta = new_text_len as isize - (edit_old_end - edit_start) as isize;
         let edit_new_end = edit_start + new_text_len;
         let lo = edit_start.saturating_sub(1);
-        let mut lone: Vec<usize> = self.lone_crs.iter().copied().filter(|&p| p < lo).collect();
+        let mut found: Vec<usize> = positions.iter().copied().filter(|&p| p < lo).collect();
         for i in lo..edit_new_end {
-            if new_source.byte_at(i) == b'\r'
-                && (i + 1 == new_source.len() || new_source.byte_at(i + 1) != b'\n')
-            {
-                lone.push(i);
+            let next = (i + 1 < new_source.len()).then(|| new_source.byte_at(i + 1));
+            if matches(new_source.byte_at(i), next) {
+                found.push(i);
             }
         }
-        lone.extend(
-            self.lone_crs
+        found.extend(
+            positions
                 .iter()
                 .filter(|&&p| p >= edit_old_end)
                 .map(|&p| (p as isize + delta) as usize),
         );
-        lone
+        found
     }
 
     /// A blank line at `r` is a **clean break** — a fresh-parser-state point,
@@ -847,6 +878,14 @@ impl StructureSnapshot {
         // Re-derive from scratch instead. The set is maintained in O(edit),
         // so lone-CR-free documents (LF, CRLF, mixed) pay one bounded scan.
         let lone_crs = self.lone_crs_updated(new_source, edit_start, edit_old_end, new_text_len);
+        let reference_markers = Self::adjacent_positions_updated(
+            &self.reference_markers,
+            new_source,
+            edit_start,
+            edit_old_end,
+            new_text_len,
+            |first, next| first == b']' && next == Some(b':'),
+        );
         if !lone_crs.is_empty() {
             *self = Self::from_source(&new_source.slice_to_string(0, new_source.len()));
             return;
@@ -882,6 +921,7 @@ impl StructureSnapshot {
                 delta,
             ) {
                 self.splice_in_place(chunk_struct, r, p, delta, new_source.len());
+                self.reference_markers = reference_markers;
                 return;
             }
 
@@ -890,6 +930,7 @@ impl StructureSnapshot {
                 // suffix, so splice it as Phase 1 would (prefix `< r` ++ the
                 // shifted suffix), no extra parse.
                 self.splice_suffix_in_place(chunk_struct, r, new_source.len());
+                self.reference_markers = reference_markers;
                 return;
             }
             chunk = chunk.saturating_mul(2);
@@ -1354,59 +1395,58 @@ fn scan_tags(source: &str) -> Vec<EditorSpan> {
     out
 }
 
-/// Scan `%% … %%` comments (inline or multi-line). Non-overlapping:
-/// scanning resumes past each close. An unterminated `%%` is not
-/// emitted (mirrors the prior Swift behaviour).
-fn scan_comments(source: &str) -> Vec<EditorSpan> {
-    scan_comment_ranges(source)
-        .into_iter()
-        .map(|(start, end)| EditorSpan {
-            start_byte: start as u32,
-            end_byte: end as u32,
-            kind: EditorSpanKind::Comment,
-        })
-        .collect()
-}
-
-/// The byte ranges of every terminated `%% … %%` comment in `source`, in
-/// document order, non-overlapping (scanning resumes past each close). The
-/// shared core of [`scan_comments`] and [`CommentIndex`] (#407) — the latter
-/// caches these ranges and maintains them incrementally so the per-keystroke
-/// window-intersection test never re-scans the whole document.
-fn scan_comment_ranges(source: &str) -> Vec<(usize, usize)> {
-    let bytes = source.as_bytes();
+/// Scan terminated `%% … %%` comments using the existing paint precedence:
+/// frontmatter/fenced code > comments > inline code. Skip literal openers
+/// BEFORE pairing; otherwise a marker in a fence steals a later real opener.
+/// Once a comment begins, its next lexical marker closes it, even across a
+/// raw Markdown fence. Both paint and semantic coverage use these same spans.
+fn scan_comments(source: &str, structure: &[EditorSpan]) -> Vec<EditorSpan> {
+    // Frontmatter is a prefix. Any raw fence intersecting it is discarded
+    // by paint precedence, including a spurious fence extending into the body.
+    let frontmatter_end = structure
+        .iter()
+        .find(|span| span.kind == EditorSpanKind::Frontmatter)
+        .map_or(0, |span| span.end_byte);
+    let literal = SemanticOpaqueRanges::merge(structure.iter().filter_map(|span| {
+        (span.kind == EditorSpanKind::Frontmatter
+            || span.kind == EditorSpanKind::CodeFence && span.start_byte >= frontmatter_end)
+            .then_some((span.start_byte, span.end_byte))
+    }));
+    let mut markers = source.match_indices("%%").map(|(at, _)| at);
     let mut out = Vec::new();
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        if bytes[i] == b'%' && bytes[i + 1] == b'%' {
-            let start = i;
-            let mut j = i + 2;
-            let mut close = None;
-            while j + 1 < bytes.len() {
-                if bytes[j] == b'%' && bytes[j + 1] == b'%' {
-                    close = Some(j + 2);
-                    break;
-                }
-                j += 1;
-            }
-            match close {
-                Some(end) => {
-                    out.push((start, end));
-                    i = end;
-                    continue;
-                }
-                None => break, // unterminated `%%` — stop
-            }
+    while let Some(start) = markers.next() {
+        if SemanticOpaqueRanges::contains(&literal, start as u32) {
+            continue;
         }
-        i += 1;
+        let Some(close) = markers.next() else {
+            break;
+        };
+        out.push(EditorSpan {
+            start_byte: start as u32,
+            end_byte: (close + 2) as u32,
+            kind: EditorSpanKind::Comment,
+        });
     }
     out
 }
 
-/// Sorted, non-overlapping byte ranges of the terminated `%% … %%` comments in
-/// the editor document, maintained **incrementally** across edits (#407 Part
+/// Every adjacent pair of non-overlapping lexical `%%` tokens, without
+/// classifying code/frontmatter. A canonical comment must be one of these
+/// candidates, regardless of how many literal openers the classifier skips.
+/// Adjacent candidates overlap at their shared marker; this intentionally
+/// over-approximates comments for the window guard, never for returned spans.
+fn scan_comment_candidates(source: &str) -> Vec<(usize, usize)> {
+    let mut previous = None;
+    source
+        .match_indices("%%")
+        .filter_map(|(at, _)| previous.replace(at).map(|start| (start, at + 2)))
+        .collect()
+}
+
+/// Sorted candidate comment ranges (including overlapping close/open pairs)
+/// in the editor document, maintained **incrementally** across edits (#407 Part
 /// 3) so the per-keystroke "does the window intersect a comment?" test costs
-/// O(comments) instead of an O(document) [`scan_comment_ranges`].
+/// O(comments) instead of an O(document) [`scan_comment_candidates`].
 ///
 /// ## Maintenance contract
 ///
@@ -1418,9 +1458,9 @@ fn scan_comment_ranges(source: &str) -> Vec<(usize, usize)> {
 /// **shifts** the cached ranges, which is sound because a non-`%` edit can
 /// neither create nor destroy a `%%` token nor change the left-to-right
 /// pairing of the tokens that remain (only their positions move). A range
-/// entirely after the edit shifts both ends by `delta`; the (at most one)
-/// range whose interior straddles the edit shifts only its end. The
-/// `DocBufferState` `debug_assert!`s `index == scan_comment_ranges(whole)`
+/// entirely after the edit shifts both ends by `delta`; a candidate whose
+/// interior straddles the edit shifts only its end. The
+/// `DocBufferState` `debug_assert!`s `index == scan_comment_candidates(whole)`
 /// after every edit; the differential census is the real guarantee.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct CommentIndex {
@@ -1432,11 +1472,11 @@ impl CommentIndex {
     /// branch of [`apply_edit`](Self::apply_edit)).
     pub(crate) fn from_source(source: &str) -> Self {
         Self {
-            ranges: scan_comment_ranges(source),
+            ranges: scan_comment_candidates(source),
         }
     }
 
-    /// True when any cached comment range intersects `[win_start, win_end)`.
+    /// True when any conservative comment candidate intersects the window.
     pub(crate) fn intersects(&self, win_start: usize, win_end: usize) -> bool {
         self.ranges
             .iter()
@@ -1473,13 +1513,13 @@ impl CommentIndex {
         let halo_right =
             edit_new_end < new_source.len() && new_source.byte_at(edit_new_end) == b'%';
         if inserted.contains('%') || deleted.contains('%') || halo_left || halo_right {
-            self.ranges = scan_comment_ranges(&new_source.slice_to_string(0, new_source.len()));
+            self.ranges = scan_comment_candidates(&new_source.slice_to_string(0, new_source.len()));
             return;
         }
 
         // No `%` near the edit: shift. A range entirely before the edit is
-        // unchanged; one entirely after shifts both ends by `delta`; the (at
-        // most one) range whose interior straddles the edit shifts only its
+        // unchanged; one entirely after shifts both ends by `delta`; each
+        // candidate whose interior straddles the edit shifts only its
         // end (the edit grew/shrank the comment body between its delimiters).
         let delta = inserted.len() as isize - deleted.len() as isize;
         let shift = |v: usize| (v as isize + delta) as usize;
@@ -1601,15 +1641,9 @@ fn map_content_to_host(segs: &[(usize, usize, usize)], off: usize) -> Option<usi
 /// Because #388 is a pure perf refactor, any divergence is a bug.
 #[cfg(test)]
 fn highlight_spans_reference(source: &str) -> Vec<EditorSpan> {
-    let mut spans: Vec<EditorSpan> = markdown_spans(source)
+    let (semantic, mut spans): (Vec<_>, Vec<_>) = markdown_spans(source)
         .into_iter()
-        .filter(|s| {
-            !matches!(
-                s.kind,
-                EditorSpanKind::Link | EditorSpanKind::Image | EditorSpanKind::BlockQuote
-            )
-        })
-        .collect();
+        .partition(is_semantic_overlay);
     let fm_end = source.len() - crate::frontmatter::body_after_frontmatter(source).len();
     if fm_end > 0 {
         spans.push(EditorSpan {
@@ -1621,16 +1655,125 @@ fn highlight_spans_reference(source: &str) -> Vec<EditorSpan> {
     spans.extend(wikilink_spans(source));
     spans.extend(citation_spans(source));
     spans.extend(scan_tags(source));
-    spans.extend(scan_comments(source));
+    let comments = scan_comments(source, &spans);
+    spans.extend(comments.iter().cloned());
     let mut resolved = resolve_overlaps(source, spans);
-    resolved.extend(code_internal_spans(source));
+    let opaque = SemanticOpaqueRanges::new(&resolved, &comments);
+    append_semantic_overlays(&mut resolved, semantic, &opaque);
+    append_code_overlays(&mut resolved, code_internal_spans(source));
     resolved.sort_by_key(|s| s.start_byte);
     resolved
 }
 
+/// Structural semantics share the highlight query but do not compete for paint.
+fn is_semantic_overlay(span: &EditorSpan) -> bool {
+    matches!(
+        span.kind,
+        EditorSpanKind::Link | EditorSpanKind::Image | EditorSpanKind::BlockQuote
+    )
+}
+
+/// Retained code supplies code coverage, while full canonical comments retain
+/// their coverage across paint fragmentation. Discarded raw structure cannot
+/// influence semantic overlays after higher-priority paint rejected it.
+struct SemanticOpaqueRanges {
+    all: Vec<(u32, u32)>,
+    prose: Vec<(u32, u32)>,
+}
+
+impl SemanticOpaqueRanges {
+    // Paint may fragment comments, but their full canonical ranges must
+    // still mask overlays. Only code coverage comes from retained paint.
+    fn new(retained: &[EditorSpan], full_comments: &[EditorSpan]) -> Self {
+        let code = Self::merge(retained.iter().filter_map(|span| {
+            matches!(
+                span.kind,
+                EditorSpanKind::InlineCode | EditorSpanKind::CodeFence
+            )
+            .then_some((span.start_byte, span.end_byte))
+        }));
+        let prose = Self::merge(
+            retained
+                .iter()
+                .filter(|span| span.kind == EditorSpanKind::Frontmatter)
+                .chain(full_comments.iter())
+                .map(|span| (span.start_byte, span.end_byte)),
+        );
+        let all = Self::merge(code.into_iter().chain(prose.iter().copied()));
+        Self { all, prose }
+    }
+
+    fn merge(ranges: impl Iterator<Item = (u32, u32)>) -> Vec<(u32, u32)> {
+        let mut sorted: Vec<_> = ranges.collect();
+        sorted.sort_unstable();
+        let mut merged: Vec<(u32, u32)> = Vec::new();
+        for (start, end) in sorted {
+            if let Some(last) = merged.last_mut()
+                && start <= last.1
+            {
+                last.1 = last.1.max(end);
+            } else {
+                merged.push((start, end));
+            }
+        }
+        merged
+    }
+
+    fn contains(ranges: &[(u32, u32)], at: u32) -> bool {
+        ranges
+            .get(ranges.partition_point(|range| range.1 <= at))
+            .is_some_and(|range| range.0 <= at)
+    }
+
+    fn suppresses(&self, span: &EditorSpan) -> bool {
+        // Quotes can contain code/comments and link labels can contain inline
+        // code, but no construct begins in opaque text. Comments/frontmatter
+        // additionally mask links whose ranges cross into them.
+        Self::contains(&self.all, span.start_byte)
+            || !matches!(span.kind, EditorSpanKind::BlockQuote)
+                && self
+                    .prose
+                    .get(
+                        self.prose
+                            .partition_point(|range| range.1 <= span.start_byte),
+                    )
+                    .is_some_and(|range| range.0 < span.end_byte)
+    }
+}
+
+fn append_semantic_overlays(
+    resolved: &mut Vec<EditorSpan>,
+    semantic: Vec<EditorSpan>,
+    opaque: &SemanticOpaqueRanges,
+) {
+    resolved.extend(semantic.into_iter().filter(|span| !opaque.suppresses(span)));
+}
+
+/// Token paint only decorates a retained CodeFence. Raw parsing can produce
+/// fences inside YAML that Frontmatter later discards; their tokens must not
+/// survive as orphan semantic/paint overlays.
+fn append_code_overlays(resolved: &mut Vec<EditorSpan>, code: Vec<EditorSpan>) {
+    if code.is_empty() {
+        return;
+    }
+    let fences = SemanticOpaqueRanges::merge(
+        resolved
+            .iter()
+            .filter(|span| span.kind == EditorSpanKind::CodeFence)
+            .map(|span| (span.start_byte, span.end_byte)),
+    );
+    resolved.extend(code.into_iter().filter(|token| {
+        fences
+            .get(fences.partition_point(|range| range.1 <= token.start_byte))
+            .is_some_and(|range| range.0 <= token.start_byte && token.end_byte <= range.1)
+    }));
+}
+
 /// Resolve overlaps by priority (Swift `covered`-set parity): accept
 /// spans highest-priority first, dropping any that intersect an
-/// already-accepted span. Returns survivors in document order.
+/// already-accepted span. Comments retain uncovered fragments around higher-
+/// priority code so their remaining bodies stay opaque. Returns survivors in
+/// document order.
 fn resolve_overlaps(source: &str, mut spans: Vec<EditorSpan>) -> Vec<EditorSpan> {
     spans.sort_by(|a, b| {
         priority(&a.kind)
@@ -1641,8 +1784,34 @@ fn resolve_overlaps(source: &str, mut spans: Vec<EditorSpan>) -> Vec<EditorSpan>
     let mut accepted: Vec<EditorSpan> = Vec::with_capacity(spans.len());
     for span in spans {
         let (s, e) = (span.start_byte as usize, span.end_byte as usize);
-        if s >= e || e > source.len() {
-            continue; // defensive: degenerate or out-of-bounds
+        if s >= e || e > source.len() || !source.is_char_boundary(s) || !source.is_char_boundary(e)
+        {
+            continue; // Only valid canonical boundaries may alter coverage.
+        }
+        if matches!(span.kind, EditorSpanKind::Comment) {
+            // A higher-priority fence can occupy part of a comment without
+            // exposing the rest of its body as headings, links or formatting.
+            // Split only at existing canonical boundaries, which are UTF-8
+            // safe. The complete comment also remains in the overlay mask.
+            let mut cursor = s;
+            while cursor < e {
+                let Some(gap) = covered[cursor..e].iter().position(|&c| !c) else {
+                    break;
+                };
+                let start = cursor + gap;
+                let end = covered[start..e]
+                    .iter()
+                    .position(|&c| c)
+                    .map_or(e, |at| start + at);
+                covered[start..end].fill(true);
+                accepted.push(EditorSpan {
+                    start_byte: start as u32,
+                    end_byte: end as u32,
+                    kind: EditorSpanKind::Comment,
+                });
+                cursor = end;
+            }
+            continue;
         }
         if covered[s..e].iter().any(|&c| c) {
             continue; // intersects a higher-priority span
@@ -1881,6 +2050,267 @@ mod tests {
                 .any(|s| matches!(s.kind, EditorSpanKind::Strong | EditorSpanKind::Wikilink)),
             "tokens inside a comment must be masked, got {spans:?}"
         );
+    }
+
+    #[test]
+    fn editor_semantic_fixture_contains_every_kind() {
+        let source = include_str!("../tests/fixtures/markdown/editor_semantics.md");
+        let spans = highlight_spans(source);
+        let kinds: std::collections::HashSet<_> = spans
+            .iter()
+            .map(|span| std::mem::discriminant(&span.kind))
+            .collect();
+        assert_eq!(kinds.len(), 16, "missing canonical kinds: {spans:?}");
+        for span in &spans {
+            assert!(span.start_byte < span.end_byte);
+            assert!(source.is_char_boundary(span.start_byte as usize));
+            assert!(source.is_char_boundary(span.end_byte as usize));
+        }
+    }
+
+    #[test]
+    fn structural_semantics_overlay_without_displacing_paint() {
+        let source = "> ## Heading\n>\n> [a `label`](https://example.org) and **strong**\n\n![alt](image.png)\n";
+        let spans = highlight_spans(source);
+        for kind in [
+            EditorSpanKind::BlockQuote,
+            EditorSpanKind::Heading(2),
+            EditorSpanKind::Link,
+            EditorSpanKind::InlineCode,
+            EditorSpanKind::Strong,
+            EditorSpanKind::Image,
+        ] {
+            assert!(
+                first(&spans, &kind).is_some(),
+                "missing {kind:?}: {spans:?}"
+            );
+        }
+        let quote = first(&spans, &EditorSpanKind::BlockQuote).unwrap();
+        let heading = first(&spans, &EditorSpanKind::Heading(2)).unwrap();
+        assert!(quote.start_byte <= heading.start_byte && quote.end_byte >= heading.end_byte);
+        assert_ranged_matches_whole(
+            source,
+            source.find("label").unwrap()..source.find("label").unwrap() + 1,
+        );
+    }
+
+    #[test]
+    fn structural_semantics_respect_opaque_regions() {
+        let source = "---\ntitle: '[yaml](hidden)'\n---\n\n%% [comment](hidden) ![image](hidden)\n> quote\n%%\n\n`[inline](hidden)`\n\n```\n[code](hidden)\n> code quote\n```\n\n[visible](shown)\n";
+        let spans = highlight_spans(source);
+        let semantics: Vec<_> = spans
+            .iter()
+            .filter(|span| is_semantic_overlay(span))
+            .collect();
+        assert_eq!(semantics.len(), 1, "opaque semantics leaked: {semantics:?}");
+        assert_eq!(slice(source, semantics[0]), "[visible](shown)");
+    }
+
+    #[test]
+    fn comments_surrounding_code_keep_opaque_semantic_coverage() {
+        let source = "%%\n[hidden](x) ![hidden image](x)\n\n> hidden quote\n\n```\ncode\n```\n%%\n\n[visible](y)\n";
+        let spans = highlight_spans(source);
+        let semantics: Vec<_> = spans
+            .iter()
+            .filter(|span| is_semantic_overlay(span))
+            .collect();
+        assert_eq!(
+            semantics.len(),
+            1,
+            "comment semantics leaked: {semantics:?}"
+        );
+        assert_eq!(slice(source, semantics[0]), "[visible](y)");
+        let at = source.find("hidden").unwrap();
+        assert_ranged_matches_whole(source, at..at + 1);
+
+        let literal = "```\n%% literal percent markers\n```\n\n[visible](y)\n\n%%\n";
+        let spans = highlight_spans(literal);
+        assert_eq!(
+            slice(literal, &first(&spans, &EditorSpanKind::Link).unwrap()),
+            "[visible](y)"
+        );
+    }
+
+    #[test]
+    fn invalid_candidate_boundaries_cannot_split_comment_fragments() {
+        let source = "é📝";
+        let spans = resolve_overlaps(
+            source,
+            vec![
+                EditorSpan {
+                    start_byte: 1,
+                    end_byte: 2,
+                    kind: EditorSpanKind::CodeFence,
+                },
+                EditorSpan {
+                    start_byte: 0,
+                    end_byte: source.len() as u32,
+                    kind: EditorSpanKind::Comment,
+                },
+            ],
+        );
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].kind, EditorSpanKind::Comment);
+        assert_eq!(slice(source, &spans[0]), source);
+    }
+
+    #[test]
+    fn frontmatter_discarded_fence_has_no_code_token_overlays() {
+        let source = "---\ntitle: |\n  ```rust\n  let hidden = 1;\n  ```\n---\n";
+        let spans = highlight_spans(source);
+        assert_eq!(spans.len(), 1, "orphan code token: {spans:?}");
+        assert_eq!(spans[0].kind, EditorSpanKind::Frontmatter);
+    }
+
+    #[test]
+    fn real_comment_closes_at_next_lexical_marker_inside_a_fence() {
+        let source = "%% [hidden](x)\n\n```\n%%\n```\n\n[visible](y)\n\n%% unclosed\n";
+        let spans = highlight_spans(source);
+        let semantics: Vec<_> = spans
+            .iter()
+            .filter(|span| is_semantic_overlay(span))
+            .map(|span| slice(source, span))
+            .collect();
+        assert_eq!(semantics, ["[visible](y)"]);
+        for (at, _) in source.char_indices().filter(|(_, ch)| *ch == '[') {
+            assert_ranged_matches_whole(source, at..at + 1);
+        }
+    }
+
+    #[test]
+    fn frontmatter_discarded_fence_cannot_steal_body_comment() {
+        let source = "---\ntitle: |\n  ```\n---\n%%\n```\n[hidden](x)\n%%\n";
+        let spans = highlight_spans(source);
+        assert!(
+            first(&spans, &EditorSpanKind::Link).is_none(),
+            "hidden link: {spans:?}"
+        );
+    }
+
+    #[test]
+    fn comment_coverage_survives_fence_paint_for_every_prose_kind() {
+        let source = "%% 📝 é\n## hidden heading\n\n[[wiki]] ![[embed]] #tag [@cite] `inline` **strong** *emphasis* ~~strike~~\n\n[link](x) ![image](x)\n\n> quote\n\n```rust\nlet code = 1;\n```\n%%\n\n## visible heading\n\n[visible](y)\n";
+        let spans = highlight_spans(source);
+        let close = source.rfind("%%").unwrap() + 2;
+        for span in &spans {
+            assert!(source.is_char_boundary(span.start_byte as usize));
+            assert!(source.is_char_boundary(span.end_byte as usize));
+            let _ = slice(source, span);
+        }
+        for span in spans
+            .iter()
+            .filter(|span| (span.start_byte as usize) < close)
+        {
+            assert!(
+                matches!(
+                    span.kind,
+                    EditorSpanKind::Comment | EditorSpanKind::CodeFence | EditorSpanKind::Code(_)
+                ),
+                "prose leaked through the comment: {span:?}"
+            );
+        }
+        let heading = first(&spans, &EditorSpanKind::Heading(2)).unwrap();
+        assert!(slice(source, &heading).contains("visible heading"));
+        assert_eq!(
+            slice(source, &first(&spans, &EditorSpanKind::Link).unwrap()),
+            "[visible](y)"
+        );
+        assert_eq!(
+            spans
+                .iter()
+                .filter(|span| span.kind == EditorSpanKind::Comment)
+                .count(),
+            2
+        );
+        for (at, _) in source
+            .char_indices()
+            .filter(|(_, ch)| *ch == '#' || *ch == '[')
+        {
+            assert_ranged_matches_whole(source, at..at + 1);
+        }
+    }
+
+    #[test]
+    fn comment_precedence_and_pairing_share_one_opaque_model() {
+        for source in [
+            "%% ` %%\n%% ` [hidden](x) %%\n\n[visible](y)\n",
+            "`%%` [hidden](x) %%\n\n[visible](y)\n",
+            "```\n%% literal\n```\n\n%%\n\n[hidden](x) ![hidden image](x)\n\n> hidden quote\n\n%%\n\n[visible](y)\n",
+            "---\ntitle: '%% literal'\n---\n\n%%\n\n[hidden](x)\n\n%%\n\n[visible](y)\n",
+            "~~~\n%% literal\n~~~\n\n%%\n\n[hidden](x)\n\n%%\n\n[visible](y)\n",
+            "    %% literal\n\n%%\n\n[hidden](x)\n\n%%\n\n[visible](y)\n",
+            "Préface 📝\n\n```\n%% littéral\n```\n\n%%\n\n[hidden](x)\n\n%%\n\n[visible](y)\n",
+            "%%\n[hidden](x)\n\n```\ncode\n```\n%%\n\n[visible](y)\n",
+        ] {
+            for source in [source.to_owned(), source.replace('\n', "\r\n")] {
+                let buffer = crate::doc_buffer::DocBufferState::new(&source);
+                let spans = highlight_spans(&source);
+                let semantics: Vec<_> = spans
+                    .iter()
+                    .filter(|span| is_semantic_overlay(span))
+                    .map(|span| slice(&source, span))
+                    .collect();
+                assert_eq!(semantics, ["[visible](y)"], "source: {source:?}");
+                // Include every line, especially comment interiors separated
+                // from both delimiters by blank paragraphs.
+                for (at, _) in source
+                    .char_indices()
+                    .filter(|(_, ch)| *ch == '[' || *ch == '%')
+                {
+                    assert_ranged_matches_whole(&source, at..at + 1);
+                    let utf16 = source[..at].encode_utf16().count();
+                    assert_eq!(
+                        buffer.highlight_in_range(utf16, utf16 + 1),
+                        highlight_spans_in_range(&source, at..at + 1)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reference_links_and_images_keep_definitions_outside_the_window() {
+        for source in [
+            "[text][ref] and ![image][ref]\n\nOther paragraph.\n\n[ref]: https://example.org\n",
+            "[ref]: https://example.org\n\nOther paragraph.\n\n[text][ref] and ![image][ref]\n",
+            "[text] and ![text][]\n\n[text]: https://example.org\n",
+        ] {
+            let at = source.find("[text]").unwrap();
+            assert_ranged_matches_whole(source, at..at + 1);
+            let ranged = highlight_spans_in_range(source, at..at + 1);
+            assert!(
+                ranged
+                    .spans
+                    .iter()
+                    .any(|span| span.kind == EditorSpanKind::Link)
+            );
+            assert!(
+                ranged
+                    .spans
+                    .iter()
+                    .any(|span| span.kind == EditorSpanKind::Image)
+            );
+        }
+    }
+
+    #[test]
+    fn reference_marker_index_tracks_insert_remove_and_boundary_edits() {
+        let original = "# Prefix\n\nPlain [link][ref].\n\n[ref] https://example.org\n\nTail.\n";
+        let mut source = original.to_string();
+        let mut structure = StructureSnapshot::from_source(&source);
+        let colon = source.find("] https").unwrap() + 1;
+        source.insert(colon, ':');
+        structure.update(source.as_str(), colon, colon, 1);
+        assert_eq!(structure, StructureSnapshot::from_source(&source));
+        assert_eq!(structure.reference_markers.len(), 1);
+        source.remove(colon);
+        structure.update(source.as_str(), colon, colon + 1, 0);
+        assert_eq!(structure, StructureSnapshot::from_source(&source));
+        assert!(structure.reference_markers.is_empty());
+        let at = source.find("Tail").unwrap();
+        source.insert_str(at, "]: ");
+        structure.update(source.as_str(), at, at, 3);
+        assert_eq!(structure, StructureSnapshot::from_source(&source));
     }
 
     #[test]
@@ -3455,7 +3885,7 @@ mod redteam_reconvergence {
         /// #407 dedicated comment-index census: maintain a `CommentIndex`
         /// incrementally across a SEQUENCE of comment-mutating edits (carrying it
         /// forward, so a shift/re-scan error compounds) and assert it stays
-        /// byte-identical to a from-scratch `scan_comment_ranges` after every
+        /// byte-identical to a from-scratch `scan_comment_candidates` after every
         /// edit. Independent of the buffer's debug-assert (this is a release-mode
         /// hard gate), and it directly hammers the halo rule: typing and deleting
         /// `%` / `%%` at and around comment delimiters.
@@ -3922,7 +4352,7 @@ mod redteam_reconvergence {
         /// (multibyte / CRLF near `%`, odd `%` runs) driven through BOTH the
         /// `&str` `CommentIndex::apply_edit` AND the live-rope path (a
         /// `TextBuffer` fed the identical edit), each asserted byte-identical to
-        /// a from-scratch `scan_comment_ranges`. Carries the index forward so a
+        /// a from-scratch `scan_comment_candidates`. Carries the index forward so a
         /// shift/re-scan error compounds. The rope arm exercises `byte_at` /
         /// `slice_to_string` on the rope — the halo reads the shipping `&str`
         /// census never touches.

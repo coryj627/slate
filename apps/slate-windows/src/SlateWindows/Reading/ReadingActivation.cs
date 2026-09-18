@@ -118,7 +118,7 @@ internal sealed class ReadingActivation
             OpenInNewTab: _tab.EditorPreferences.OpenReadingLinksInNewTab));
     }
 
-    private static bool OpenWithShell(string url)
+    internal static bool OpenWithShell(string url)
     {
         try
         {

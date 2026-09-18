@@ -20,6 +20,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="..\..\..\..\crates\slate-core\tests\fixtures\markdown\editor_semantics.md"
+             Link="fixtures\editor_semantics.md"
+             CopyToOutputDirectory="PreserveNewest" />
     <!-- W4-5 (#737): the citation gate needs a real CSL style, and this
          job runs on DOWNLOADED BINARIES with no checkout (windows.yml
          "no checkout, no compilers"), so nothing outside the output

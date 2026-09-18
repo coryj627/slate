@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Input;
 using System.Windows.Threading;
 using ICSharpCode.AvalonEdit;
@@ -60,6 +62,11 @@ internal sealed class SlateTextEditor : TextEditor
         Loaded += SlateTextEditor_Loaded;
         Unloaded += SlateTextEditor_Unloaded;
         TextArea.Caret.PositionChanged += Caret_PositionChanged;
+        AddHandler(TextCompositionManager.PreviewTextInputStartEvent,
+            new TextCompositionEventHandler(Composition_Started), handledEventsToo: true);
+        AddHandler(TextCompositionManager.TextInputEvent,
+            new TextCompositionEventHandler(Composition_Finished), handledEventsToo: true);
+        LostKeyboardFocus += Composition_FocusLost;
     }
 
     public AvalonDocumentBufferSession? HighlightSession
@@ -90,6 +97,45 @@ internal sealed class SlateTextEditor : TextEditor
 
     internal AvalonHighlightingCoordinator? HighlightingForCensus => _highlighting;
 
+    internal bool IsComposing { get; private set; }
+    internal Action<AutomationEvents>? AutomationEventForCensus { get; set; }
+
+    private void Composition_Started(object sender, TextCompositionEventArgs e)
+    {
+        IsComposing = true;
+        (UIElementAutomationPeer.FromElement(this) as SlateTextEditorAutomationPeer)?.InvalidateSemanticAvailability();
+    }
+
+    private void Composition_Finished(object sender, TextCompositionEventArgs e)
+    {
+        IsComposing = false;
+        (UIElementAutomationPeer.FromElement(this) as SlateTextEditorAutomationPeer)?.InvalidateSemanticAvailability();
+        _highlighting?.ResumeSemanticPublication();
+    }
+
+    private void Composition_FocusLost(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (!TextArea.IsKeyboardFocusWithin)
+        {
+            IsComposing = false;
+            (UIElementAutomationPeer.FromElement(this) as SlateTextEditorAutomationPeer)?.InvalidateSemanticAvailability();
+            _highlighting?.ResumeSemanticPublication();
+        }
+    }
+
+    internal void PublishSemanticTextChanged()
+    {
+        if (UIElementAutomationPeer.FromElement(this) is not SlateTextEditorAutomationPeer peer)
+        {
+            return;
+        }
+        peer.PublishSemanticStructureChanged();
+        peer.RaiseAutomationEvent(AutomationEvents.TextPatternOnTextChanged);
+        AutomationEventForCensus?.Invoke(AutomationEvents.TextPatternOnTextChanged);
+        peer.RaiseAutomationEvent(AutomationEvents.TextPatternOnTextSelectionChanged);
+        AutomationEventForCensus?.Invoke(AutomationEvents.TextPatternOnTextSelectionChanged);
+    }
+
     protected override AutomationPeer OnCreateAutomationPeer() =>
         new SlateTextEditorAutomationPeer(this);
 
@@ -109,6 +155,11 @@ internal sealed class SlateTextEditor : TextEditor
         {
             _suppressingCaretPublication = false;
             throw;
+        }
+
+        if (documentChanging || e.Property == HighlightSessionProperty)
+        {
+            (UIElementAutomationPeer.FromElement(this) as SlateTextEditorAutomationPeer)?.InvalidateSemanticOwner();
         }
 
         if (documentChanging)
@@ -223,11 +274,24 @@ internal sealed class SlateTextEditor : TextEditor
         DependencyPropertyChangedEventArgs eventArgs)
     {
         var editor = (SlateTextEditor)dependencyObject;
+        if (eventArgs.OldValue is AvalonDocumentBufferSession previous)
+        {
+            WeakEventManager<AvalonDocumentBufferSession, EventArgs>.RemoveHandler(previous,
+                nameof(AvalonDocumentBufferSession.SemanticReadsResumed), editor.SemanticReads_Resumed);
+        }
+        if (eventArgs.NewValue is AvalonDocumentBufferSession current)
+        {
+            WeakEventManager<AvalonDocumentBufferSession, EventArgs>.AddHandler(current,
+                nameof(AvalonDocumentBufferSession.SemanticReadsResumed), editor.SemanticReads_Resumed);
+        }
         if (editor.IsLoaded)
         {
             editor.AttachHighlighting();
         }
     }
+
+    private void SemanticReads_Resumed(object? sender, EventArgs e) =>
+        (UIElementAutomationPeer.FromElement(this) as SlateTextEditorAutomationPeer)?.ResumeSemanticAvailability();
 
     private static void InteractionSession_Changed(
         DependencyObject dependencyObject,
@@ -346,6 +410,7 @@ internal sealed class SlateTextEditor : TextEditor
 
     private void SlateTextEditor_Unloaded(object sender, RoutedEventArgs e)
     {
+        IsComposing = false;
         _heldModifiers = ModifierKeys.None;
         DetachControlWindow();
         _highlighting?.Dispose();
@@ -448,6 +513,10 @@ internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
 {
     private readonly SlateTextEditor _owner;
     private readonly AutomationPeer _textAreaPeer;
+    private EditorSemanticTextProvider? _semanticProvider;
+    private AvalonDocumentBufferSession? _semanticSession;
+    private int _ownerGeneration;
+    private bool _ownerTreeChanged;
 
     internal SlateTextEditorAutomationPeer(SlateTextEditor owner)
         : base(owner)
@@ -466,12 +535,59 @@ internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
         && _owner.TextArea.IsEnabled
         && _owner.TextArea.IsVisible;
 
-    protected override List<AutomationPeer>? GetChildrenCore() => null;
+    protected override List<AutomationPeer>? GetChildrenCore() =>
+        (GetPattern(PatternInterface.Text) as EditorSemanticTextProvider)?.Links.RootChildren();
+
+    internal AutomationPeer ChildPeerFromProvider(IRawElementProviderSimple child) => PeerFromProvider(child);
+
+    internal void InvalidateSemanticAvailability()
+    {
+        WpfEditorPeerConnection.InvalidateChildren(this);
+        _semanticProvider?.Links.InvalidateChildren();
+    }
+
+    internal void ResumeSemanticAvailability() => _semanticProvider?.Links.InvalidateUnavailableChildren();
+
+    internal void InvalidateSemanticOwner()
+    {
+        _ownerTreeChanged |= _semanticProvider?.Links.WasExposed == true;
+        InvalidateSemanticAvailability();
+        int generation = ++_ownerGeneration;
+        _owner.Dispatcher.BeginInvoke(DispatcherPriority.DataBind, new Action(() =>
+        {
+            if (generation == _ownerGeneration && _ownerTreeChanged) { PublishSemanticStructureChanged(); }
+        }));
+    }
+
+    internal void PublishSemanticStructureChanged()
+    {
+        if (!_ownerTreeChanged && _semanticProvider?.Links.WasExposed != true) { return; }
+        _ownerTreeChanged = false;
+        InvalidateSemanticAvailability();
+        if (AutomationPeer.ListenerExists(AutomationEvents.StructureChanged)
+            && ProviderFromPeer(this) is IRawElementProviderFragment fragment)
+        {
+            AutomationInteropProvider.RaiseStructureChangedEvent((IRawElementProviderSimple)fragment,
+                new StructureChangedEventArgs(StructureChangeType.ChildrenInvalidated, fragment.GetRuntimeId()));
+        }
+        _owner.AutomationEventForCensus?.Invoke(AutomationEvents.StructureChanged);
+    }
 
     public override object? GetPattern(PatternInterface patternInterface)
     {
         if (patternInterface == PatternInterface.Text)
         {
+            if (_owner.HighlightSession is { } session && ReferenceEquals(_owner.Document, session.Document)
+                && base.GetPattern(patternInterface) is ITextProvider provider)
+            {
+                if (!ReferenceEquals(session, _semanticSession))
+                {
+                    WpfEditorPeerConnection.InvalidateChildren(this);
+                    _semanticSession = session;
+                    _semanticProvider = new EditorSemanticTextProvider(provider, _owner, session, this, () => ProviderFromPeer(this));
+                }
+                return _semanticProvider;
+            }
             return base.GetPattern(patternInterface);
         }
         else if (patternInterface == PatternInterface.Scroll

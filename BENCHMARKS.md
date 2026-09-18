@@ -1118,3 +1118,74 @@ the UI thread's — the derivation, the rebuild and the peer reads — and
 nothing here measures the composition thread's frame (§D TD-7, §F
 FD-D2). The two per-PR sections above stand as measured on their days;
 this roll-up re-measures on the close-out's.
+
+
+## Milestone W7-1 — editor semantic Text-pattern reads (#747)
+
+BenchmarkDotNet 0.15.8, 2026-09-17, Windows 11 build 26200.9457,
+.NET 10.0.12 / SDK 10.0.401, QEMU virtual CPU 3.19 GHz (12 cores).
+Three warmups and ten measured iterations. The real AvalonEdit provider,
+canonical DocumentBuffer session and range decorators live on an STA
+thread; each operation includes dispatcher marshaling. The corpus repeats
+heading/prose blocks, with one link at the document end. Contract E-11 in
+[37_editor_peer_contracts.md](docs/plans/37_editor_peer_contracts.md) freezes
+the budgets and documents the conservative reference-definition fallback.
+
+```powershell
+# From apps/slate-windows, after generating Release bindings:
+dotnet run --project benchmarks/SlateWindows.Benchmarks --configuration Release -- --editor-semantic --validate-budgets
+```
+
+| Operation | Size | p50 | Allocation | Ceiling |
+|---|---|---|---|---|
+| Line GetAttributeValue(StyleId) | 100 KiB | 0.0363 ms | 3.49 KiB | 0.5 ms |
+| Line GetAttributeValue(StyleId) | 1 MiB | 0.0328 ms | 3.49 KiB | 0.5 ms |
+| Line GetAttributeValue(StyleId) | 8 MiB | 0.0331 ms | 3.49 KiB | 0.5 ms |
+| Document FindAttribute(Link) | 8 MiB | 321.2658 ms | 70.1 MiB | 1000 ms |
+
+The line-read 8 MiB / 1 MiB ratio is **1.01x** against a **4.00x** ceiling.
+The runner validates all four cases and rejects absent/duplicate results.
+The full-document search intentionally includes a full canonical span query;
+the line-read result does not claim flatness for notes that trigger a core
+whole-document fallback (comments, frontmatter, or possible reference definitions).
+
+
+W7-1 verification rerun after the complete opaque-region repair (2026-09-17,
+implementation head `7d7f4f13`, same runner/configuration): line p50 was
+0.0332 / 0.0338 / 0.0337 ms at 100 KiB / 1 MiB / 8 MiB, and the 8 MiB
+FindAttribute(Link) p50 was 321.3668 ms. All four original ceilings passed;
+line flatness was 1.00x. The frozen budgets and first measurement above are
+unchanged.
+
+
+### W7-1 ordinary Hyperlink integration (2026-09-18)
+
+The preceding Link attribute figures describe the superseded implementation.
+The current runner keeps the three 0.5 ms line StyleId ceilings, replaces the
+8 MiB search with a complete Hyperlink inventory after an edit (1000 ms), and
+adds post-edit local-link reads at all three sizes (2 ms each). A bounded append/remove at document end and
+lookup are inside the timed operation; prefix edits deliberately trigger the
+core structure index's full fallback and are a separate pre-existing edit cost. Dense cases build and walk 1,000 and
+10,000 links in both directions, including Name/Enabled membership checks
+(1000 ms each; LinkCount is the size parameter for these two rows).
+No missing case passes. The production run at `fd46cb9a` passed all nine cases
+on 2026-09-18 with the same runtime/runner configuration above. Run from the
+benchmark project directory when a prototype worktree also exists in `target/`,
+so BenchmarkDotNet does not discover two projects with the same name.
+
+| Operation | Size | p50 | Allocation | Ceiling |
+|---|---|---|---|---|
+| Line StyleId | 100 KiB | 0.0414 ms | 3.49 KiB | 0.5 ms |
+| Line StyleId | 1 MiB | 0.0360 ms | 3.49 KiB | 0.5 ms |
+| Line StyleId | 8 MiB | 0.0357 ms | 3.49 KiB | 0.5 ms |
+| Edit then local Hyperlink | 100 KiB | 0.1450 ms | 10.40 KiB | 2 ms |
+| Edit then local Hyperlink | 1 MiB | 0.0841 ms | 10.71 KiB | 2 ms |
+| Edit then local Hyperlink | 8 MiB | 0.0823 ms | 10.95 KiB | 2 ms |
+| Edit then complete Hyperlink inventory | 8 MiB | 330.4284 ms | 70.11 MiB | 1000 ms |
+| Dense inventory and bidirectional walk | 1,000 links | 4.1325 ms | 1.15 MiB | 1000 ms |
+| Dense inventory and bidirectional walk | 10,000 links | 48.9076 ms | 13.66 MiB | 1000 ms |
+
+Line-read flatness is **0.99x** (8 MiB / 1 MiB), within the 4.00x ceiling.
+Allocations are managed allocations, including dispatcher marshaling. The
+post-edit measurements include the two bounded edits and current-revision
+canonical validation; full inventory is deliberately a separate operation.

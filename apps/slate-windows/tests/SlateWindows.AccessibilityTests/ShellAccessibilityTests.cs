@@ -1152,6 +1152,155 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>W7-1: usable semantic ranges and ordered events through real UIA.</summary>
+    [Fact]
+    public void EditorTextPattern_SemanticAttributesUnitsAndEvents_AreClean()
+    {
+        string testRoot = Path.Combine(Path.GetTempPath(), $"slate-editor-semantics-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        string fixture = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "editor_semantics.md"));
+        File.WriteAllText(Path.Combine(vaultRoot, "note.md"), fixture);
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] = $"slate-editor-semantics-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo) ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+            if (!HasInteractiveDesktop(process, "Editor semantics")) { return; }
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(process, automation, Path.Combine(logDirectory, "slate-windows.log"), TimeSpan.FromSeconds(30));
+            AutomationElement files = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
+            AutomationElement note = WaitForTreeItemStartingWith(files, automation, "Semantic editor fixture");
+            note.Patterns.SelectionItem.Pattern.Select();
+            AutomationElement editor = WaitForEditor(window, automation, "note.md editor", TimeSpan.FromSeconds(15));
+            var text = editor.Patterns.Text.Pattern;
+            var document = text.DocumentRange;
+            Assert.Equal(fixture, document.GetText(-1));
+            var attributes = automation.TextAttributeLibrary;
+            var heading = document.FindText("Heading two", false, false);
+            Assert.NotNull(heading);
+            Assert.Equal(70002, heading.GetAttributeValue(attributes.StyleId));
+            Assert.Equal("Heading 2", heading.GetAttributeValue(attributes.StyleName));
+            var link = document.FindText("Website", false, false);
+            Assert.NotNull(link);
+            Assert.Equal(automation.NotSupportedValue, link.GetAttributeValue(attributes.Link));
+            AutomationElement nativeLink = link.GetEnclosingElement();
+            Assert.Equal(ControlType.Hyperlink, nativeLink.ControlType);
+            Assert.Equal("[Website](https://example.org)", nativeLink.Name);
+            Assert.True(PollGently(() => nativeLink.Patterns.Value.IsSupported, TimeSpan.FromSeconds(10)));
+            Assert.Equal("https://example.org", nativeLink.Patterns.Value.Pattern.Value.Value);
+            var linkRange = text.RangeFromChild(nativeLink);
+            var canonicalLink = document.FindText("[Website](https://example.org)", false, false);
+            Assert.True(linkRange.Compare(canonicalLink));
+            Assert.True(canonicalLink.Compare(linkRange));
+            Assert.True(linkRange.Clone().Compare(canonicalLink));
+            Assert.Equal(nativeLink, linkRange.GetEnclosingElement());
+            Assert.Contains("Heading two", document.FindAttribute(attributes.StyleId, 70002, false).GetText(-1));
+            Assert.Contains("Quoted heading", document.FindAttribute(attributes.StyleId, 70002, true).GetText(-1));
+            Assert.NotEmpty(text.GetVisibleRanges());
+            var bounds = editor.BoundingRectangle;
+            var point = text.RangeFromPoint(new System.Drawing.Point(bounds.Left + 12, bounds.Top + 12));
+            Assert.Equal(0, point.CompareEndpoints(TextPatternRangeEndpoint.Start, point, TextPatternRangeEndpoint.End));
+            Assert.Equal(editor, point.GetEnclosingElement());
+            foreach (TextUnit unit in new[] { TextUnit.Line, TextUnit.Word, TextUnit.Character })
+            {
+                var moved = heading.Clone();
+                moved.Move(unit, 1);
+                Assert.True(moved.CompareEndpoints(TextPatternRangeEndpoint.Start, heading, TextPatternRangeEndpoint.Start) > 0);
+                moved.Move(unit, -1);
+                Assert.NotNull(moved.GetText(-1));
+            }
+            // NVDA Say All advances the end by Line, reads, then collapses.
+            // A positive result at EOF causes endless empty speech callbacks.
+            var reading = document.Clone();
+            reading.MoveEndpointByRange(TextPatternRangeEndpoint.End, reading, TextPatternRangeEndpoint.Start);
+            var chunks = new List<string>();
+            while (reading.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Line, 1) > 0)
+            {
+                string chunk = reading.GetText(-1);
+                Assert.NotEmpty(chunk);
+                chunks.Add(chunk);
+                Assert.True(chunks.Count <= fixture.Length, "Say All reading did not terminate.");
+                reading.MoveEndpointByRange(TextPatternRangeEndpoint.Start, reading, TextPatternRangeEndpoint.End);
+            }
+            Assert.Equal(fixture, string.Concat(chunks));
+            var walker = automation.TreeWalkerFactory.GetControlViewWalker();
+            var forward = new List<AutomationElement>();
+            var backward = new List<AutomationElement>();
+            Walk(editor, false, forward);
+            Walk(editor, true, backward);
+            backward.Reverse();
+            Assert.Equal(forward, backward);
+            Assert.Equal(7, forward.Count);
+            Assert.All(forward, child => Assert.Equal(ControlType.Hyperlink, child.ControlType));
+            Assert.Equal(forward, document.GetChildren());
+            foreach (AutomationElement child in forward)
+            {
+                Assert.Equal(child.Name, text.RangeFromChild(child).GetText(-1));
+                Assert.True(child.Patterns.Invoke.IsSupported);
+            }
+
+            var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            using var changed = editor.RegisterAutomationEvent(automation.EventLibrary.Text.TextChangedEvent,
+                TreeScope.Element, (_, _) => events.Enqueue("text"));
+            using var selected = editor.RegisterAutomationEvent(automation.EventLibrary.Text.TextSelectionChangedEvent,
+                TreeScope.Element, (_, _) => events.Enqueue("selection"));
+            window.SetForeground();
+            editor.Focus();
+            // One native Value edit is one burst, independent of SendInput's
+            // per-key transport speed on a loaded CI desktop.
+            editor.Patterns.Value.Pattern.SetValue(fixture + "0123456789\n\n[[New link]]");
+            Assert.True(PollGently(() => events.Contains("text") && events.LastOrDefault() == "selection", TimeSpan.FromSeconds(10)),
+                "The committed burst did not publish TextChanged followed by selection.");
+            string[] observed = events.ToArray();
+            Assert.Single(observed, item => item == "text");
+            int textIndex = Array.IndexOf(observed, "text");
+            Assert.Contains("selection", observed.Skip(textIndex + 1));
+            Assert.EndsWith("0123456789\n\n[[New link]]", text.DocumentRange.GetText(-1));
+            Assert.True(PollGently(() => text.DocumentRange.GetChildren().Length == 8, TimeSpan.FromSeconds(10)));
+            var appended = text.DocumentRange.GetChildren().Last();
+            Assert.Equal("[[New link]]", appended.Name);
+            Assert.Equal(appended.Name, text.RangeFromChild(appended).GetText(-1));
+            AssertAxeClean(process, "editor-semantic-text");
+
+            void Walk(AutomationElement parent, bool reverse, List<AutomationElement> output)
+            {
+                AutomationElement? child = reverse ? walker.GetLastChild(parent) : walker.GetFirstChild(parent);
+                while (child is not null)
+                {
+                    Assert.True(output.Count < 1000, "Editor UIA walk did not terminate.");
+                    Assert.DoesNotContain(child, output);
+                    output.Add(child);
+                    Walk(child, reverse, output);
+                    child = reverse ? walker.GetPreviousSibling(child) : walker.GetNextSibling(child);
+                }
+            }
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000)) { process.Kill(entireProcessTree: true); }
+            }
+            process?.Dispose();
+            string temporaryRoot = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (Path.GetFullPath(testRoot).StartsWith(temporaryRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                try { Directory.Delete(testRoot, recursive: true); } catch (IOException) { }
+            }
+        }
+    }
+
     /// <summary>
     /// W-E7 gate spike (task: RangeFromChild over custom peers),
     /// HARDENED per the #1072 adversarial round: the add-on positions

@@ -220,6 +220,11 @@
     "Surface": "Canvas table (W6-1 PR B)"
   },
   {
+    "Source": "EditorHyperlinks.cs",
+    "Expression": "\"EditorLink\" + _id",
+    "Surface": "Editor document"
+  },
+  {
     "Source": "Graph/ConnectionsLeafView.cs",
     "Expression": "\"ConnectionsDepth\"",
     "Surface": "Graph connections leaf (W6-2 PR B)"
