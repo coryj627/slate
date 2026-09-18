@@ -14,7 +14,7 @@ Code citations identify implementation seats. The contract-only commit was
 `AvalonDocumentBufferSession.InspectInRange`. That method calls the same
 `DocumentBuffer.HighlightInRange` as the colorizer's query and does not
 replace `LatestHighlightWindow`. There is no second FFI entry point, host
-Markdown classifier, speech builder or retained semantic window. Offscreen
+Markdown classifier or speech builder. Hyperlink inventory validation is cached only at the current stable revision; the paint window is never read by the peer. Offscreen
 range queries are supported independently of the viewport.
 
 **E-2 — Preserve the text engine.** `SlateTextEditorAutomationPeer.GetPattern`
@@ -45,19 +45,18 @@ character at the caret (and the preceding character at document end).
 Nested canonical spans contribute independently to different attributes;
 for one attribute, the most specific applicable span wins, so a heading
 inside a block quote retains its heading level. Plain text is unsupported.
-Link identity is the canonical link span, not a newly allocated wrapper's
-object identity. Queries do not invent font families: the editor palette
+Hyperlink identity follows a surviving canonical span through document edits; stale membership is never inferred from surviving anchors alone. Queries do not invent font families: the editor palette
 changes foreground brushes, not font families.
 
 | Canonical kind | UIA attributes |
 |---|---|
 | Heading | StyleId = 70000 + level (1–6); StyleName = Heading N |
-| Wikilink | Link = own canonical span range; StyleName = Wikilink |
-| Link | Link = own canonical span range; StyleName = Link |
-| Embed | Link = own canonical span range; StyleName = Embed |
-| Image | Link = own canonical span range; StyleName = Image |
-| Tag | Link = own canonical span range; StyleName = Tag |
-| Citation | Link = own canonical span range; StyleName = Citation |
+| Wikilink | StyleName = Wikilink |
+| Link | StyleName = Link |
+| Embed | StyleName = Embed |
+| Image | StyleName = Image |
+| Tag | StyleName = Tag |
+| Citation | StyleName = Citation |
 | InlineCode | StyleName = Code |
 | CodeFence | StyleName = Code |
 | Code | StyleName = Code |
@@ -73,7 +72,7 @@ defaults (2026-09-17); both already activate with Ctrl+Enter. No editor
 navigation chords are added. StyleName exposure does not imply a reader
 speaks styles at stock settings.
 
-**E-5 — Attribute search.** FindAttribute supports StyleId and Link in
+**E-5 — Attribute search.** FindAttribute supports StyleId in
 both directions within the calling range, returning a decorated matching
 range and null when absent. Search respects range boundaries and canonical
 span identity. It cannot return a span that does not overlap the query.
@@ -109,10 +108,37 @@ The deferred TextChanged is followed by a selection notification so clients
 can refresh selection against the committed text. No ValueProperty change
 storm is added; the pinned base peer does not raise such a text-change event.
 
-**E-9 — Single owner.** The editor peer still has no children; range
-GetChildren returns no embedded objects; GetEnclosingElement returns the
-public editor's provider. TextArea.EventsSource remains the editor peer.
-The #1088 forward and backward UIA3 subtree walks must terminate and agree.
+**E-9 — One text owner, ordinary Hyperlink descendants.** The editor remains
+one Document/Text owner; TextArea.EventsSource remains the editor peer.
+Wikilink, Link, Embed, Image, Tag and Citation spans project to ordinary UIA
+Hyperlink peers. GetEnclosingElement returns the smallest enclosing link or
+the editor. Range GetChildren returns intersecting immediate descendants of
+that enclosing element, excluding the enclosing element itself. RangeFromChild
+accepts only current descendants of this provider, returning ordinary decorated
+ranges. Nested spans form a containment tree; equal intervals choose canonical
+kind order, and crossing intervals retain the earlier outer interval, suppressing
+the crossing peer (text/style attributes remain canonical). Forward and backward
+UIA3 walks terminate and agree, including offscreen and nested links.
+
+Every edit invalidates semantic validation. Candidate identities use AvalonEdit's
+edit-tracking segment index; a local query revalidates its canonical AppliedRange
+at the current revision. AppliedRange is NOT an edit invalidation delta. Full
+root enumeration may inspect the whole document once per stable revision;
+range queries and peer connection must not trigger full root enumeration.
+Reconciliation uses indexed overlap lookup and dictionary matching, never a
+per-span scan of all peers. WPF child caches are reset at the stable E-8 tick,
+with one ChildrenInvalidated structure event when the tree has been exposed.
+
+All observable peer properties validate current session and canonical membership.
+Disabled editors reject Invoke; read-only editors still permit navigation.
+Invoke queues the existing interaction action and raises Invoked when dispatched;
+a child, session or interaction owner removed before dispatch cancels safely.
+Saved, current canonical OutgoingLink records provide meaningful read-only Value
+(destinations), using existing hash/generation/source-current guards. Dirty or
+unavailable records expose no guessed destination; save/loading feedback remains
+the existing interaction policy. Tags/citations expose their action without
+invented URIs. All six kinds must exercise the real production activation path,
+including ordinary Markdown links/images. No new editor navigation chords.
 
 **E-10 — Evidence is executable.** Tests:
 `EditorSemanticTextRangeTests` exercises all kinds through a real session,
@@ -127,8 +153,10 @@ Line/Word/Character units, RangeFromPoint, selection and batched changes,
 and the bidirectional tree walk. The fixture ships with gate binaries.
 
 **E-11 — Measure bounded reads.** BenchmarkDotNet measures line-range
-StyleId at 100 KiB, 1 MiB and 8 MiB, plus document-range FindAttribute(Link)
-at 8 MiB. Measurements, runner details and budgets are recorded below
+StyleId at 100 KiB, 1 MiB and 8 MiB, plus full document Hyperlink inventory at 8 MiB, local post-edit lookup,
+and dense-link inventory/traversal. Local reads must remain bounded after edits,
+including edits that reclassify distant syntax. Explicit full enumeration may
+pay for all spans; returning a local peer must not secretly enumerate the root. Measurements, runner details and budgets are recorded below
 and in BENCHMARKS.md; no unmeasured result is a pass.
 The benchmark validates its complete case inventory and a line-query
 flatness bound. A full-document query may pay for all its spans; a line
@@ -139,7 +167,7 @@ row and W2 checklist with the executable twins and explicit NVDA/JAWS
 checks for line/word/character reading, say-all, semantic boundaries,
 selection, braille and IME. Named runs include reader/version, OS, commit,
 corpus, tester, date and transcript. The owner agreed to both AT checklists;
-unexecuted results stay Pending. JAWS StyleId/Link consumption is an open
+unexecuted results stay Pending. JAWS StyleId/Hyperlink consumption is an open
 measurement, not an assumed compatibility claim. Narrator remains the W8
 release smoke pass. No custom AT layer is load-bearing.
 
@@ -220,44 +248,29 @@ blocking rounds in one subsystem trigger a design pass; a blocker created
 by the previous fix counts twice.
 
 
-**A-6 — Link VARIANT export and the remaining operand limitation.**
-WPF's [TextRangeProviderWrapper](https://source.dot.net/PresentationCore/MS/Internal/Automation/TextRangeProviderWrapper.cs.html)
-wraps ordinary range results and unwraps comparison operands, but passes
-GetAttributeValue results and FindAttribute values through unchanged.
-The Link attribute first uses the exact cached WPF WrapArgument overload
-for dispatcher ownership, then `UiaLinkRangeExport` supplies an IUnknown
-with the native ITextRangeProvider vtable and the system free-threaded
-marshaler. Its eighteen text methods forward to the WPF wrapper; it owns
-one COM reference to that wrapper and frees its allocation at the last
-Release. No export is cached on the peer or provider. Native operand
-normalization unwraps this adapter before calling WPF. The identity query
-used by an in-process FindAttribute likewise unwraps it.
+**A-6 — Superseded generic Link attribute experiment.** The original Link
+VARIANT exporter could not provide symmetric ordinary-range operands across
+WPF's COM boundary. The isolated Hyperlink prototype and actual NVDA evidence
+are recorded in the [architecture research](18_windows_port/reports/w7_1_editor_accessibility_architecture_research.md)
+and [prototype validation](https://github.com/coryj627/slate/blob/5d3b2a7f3bf0f73fba23c9d2028aa3a2210236ac/apps/slate-windows/tools/EditorHyperlinkPrototype/NVDA-VALIDATION.md).
+On 2026-09-18 the owner authorized production integration in the same PR.
+The generic Link attribute, its FindAttribute overload and unsafe COM exporter
+are removed. Native Hyperlink children are the link semantics path. Prior
+measurements/review records below describe the superseded implementation.
+Fresh production evidence is required; prototype tests are not production acceptance.
 
-The ordinary WPF object's controlling IUnknown and typed range pointers
-have different vtables. Returning the former in a Link VARIANT failed
-cross-process GetText before reaching the provider, despite successful QI.
-A separate native RichTextBox probe reproduced this without Slate or
-AvalonEdit, using both CUIAutomation and CUIAutomation8 and direct native
-vtable calls. A default-interface annotation did not fix it. The forwarding
-adapter plus the free-threaded marshaler makes reads and cloning work;
-COM aggregation did not solve the remaining operand difference and is not
-used. See [the measured interoperability report](18_windows_port/reports/w7_1_link_interop_probe.md).
+**A-7 — Bounded peer connection.** WPF's internal TrySetParentInfo is used
+through one pinned reflection adapter to connect an already canonical child to
+its actual parent without enumerating the whole document. It copies only the
+parent/HWND information WPF's own GetChildren would supply. Package-shape and
+cross-process tree tests pin this boundary; no invented parent is permitted.
 
-**Owner decision pending:** a Link range used as an operand of an ordinary
-WPF range's Compare, CompareEndpoints or MoveEndpointByRange is still
-rejected with E_INVALIDARG.
-Cloning the Link first produces an ordinary range that compares in both
-directions and works as an endpoint-movement operand. The reverse direction (Link.Compare(ordinary)), text reads,
-style reads and cloning are verified. A range-valued Link FindAttribute
-is supported inside the provider; cross-process searches use the explicit
-boolean presence value, because UIA does not translate a client range in
-that VARIANT back into a provider range. This limitation is not silently
-counted as unrestricted range interoperability. Do not merge while the
-owner's choice between this documented limitation and full support is pending.
-
-The off-thread unit witness exercises dispatcher access and native ownership;
-the UIA3 journey calls the exported Link's actual methods, including GetText,
-Clone and comparisons. A non-null Link assertion alone is insufficient.
+**A-8 — Retained selection diagnosis.** The prototype's selected-link deletion
+changed the document correctly but NVDA announced later text as unselected.
+A native AvalonEdit versus decorated retained-range regression must establish
+the fault before changing endpoint tracking. Text units and geometry stay native;
+any endpoint tracking correction must survive delete, undo and range movement.
+Live-synth NVDA confirmation remains pending until the owner's sound setup works.
 
 ### Review round 1 (head 21fe5962)
 
@@ -416,3 +429,13 @@ line p50 0.0332 / 0.0338 / 0.0337 ms at 100 KiB / 1 MiB / 8 MiB;
 The full Windows suite with the final export adapter had already passed
 2,976 tests; final-head CI remains the merge gate. A-6 and named human AT
 runs remain pending. No review or automated check supplies that acceptance.
+
+### Hyperlink integration design record (2026-09-18)
+
+Preparatory independent reviews of prototype 5d3b2a7f found unbounded per-edit
+rebuilds, quadratic matching/membership, missing WPF cache reset, stale deferred
+Invoke, missing destinations/actions, and overlapping peers. E-9 now specifies
+revision-local validation, indexed identity candidates, ordinary range operands,
+consistent containment, guarded actions and metadata. No old/new AppliedRange
+union is trusted: list-container edits can reclassify distant paragraphs.
+Production implementation and review evidence follow in later commits.
