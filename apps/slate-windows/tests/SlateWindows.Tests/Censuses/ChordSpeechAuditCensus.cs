@@ -117,6 +117,9 @@ public sealed class ChordSpeechAuditCensus
             XText literal => literal.Value,
             XElement inline when inline.Name.LocalName == "LineBreak" => "\n",
             XElement inline when inline.Name.LocalName is "Run" or "Span" or "Bold" or "Italic" or "Underline" or "Hyperlink" => InlineText(inline),
+            XElement property when property.Name.LocalName is "TextBlock.Inlines" or "Paragraph.Inlines"
+                or "Span.Inlines" or "Bold.Inlines" or "Italic.Inlines" or "Underline.Inlines" or "Hyperlink.Inlines"
+                or "Run.Text" or "TextBlock.Text" => InlineText(property),
             _ => "",
         }));
     }
@@ -178,6 +181,9 @@ public sealed class ChordSpeechAuditCensus
     [InlineData("<TextBlock><Run>Control </Run><Run>Enter</Run></TextBlock>")]
     [InlineData("<TextBlock><Run Text='Control '/><Run Text='Enter'/></TextBlock>")]
     [InlineData("<TextBlock><Span><Run Text='Control '/></Span><Run Text='Enter'/></TextBlock>")]
+    [InlineData("<TextBlock><TextBlock.Inlines><Run Text='Control '/><Run Text='Enter'/></TextBlock.Inlines></TextBlock>")]
+    [InlineData("<TextBlock><Run><Run.Text>Control </Run.Text></Run><Run><Run.Text>Enter</Run.Text></Run></TextBlock>")]
+    [InlineData("<Paragraph><Paragraph.Inlines><Span><Span.Inlines><Run Text='Control '/><Run Text='Enter'/></Span.Inlines></Span></Paragraph.Inlines></Paragraph>")]
     public void XamlAttributesAndTextAreAudited(string source) => Assert.NotEmpty(XamlViolations(source));
 
     private static string[] FixtureViolations(string source, string relative)

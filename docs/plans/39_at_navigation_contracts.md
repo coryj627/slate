@@ -209,3 +209,26 @@ elements. Codoki's source-parser feedback is addressed with semantic Roslyn
 symbols for native PatternInterface fields (qualified, aliased and static
 forms), AutomationProperties calls and constructed control types; focused
 positive and lookalike-negative facts replace spelling assumptions.
+
+The full factory trace additionally pins the distinction between selected
+and checked targets. Add/Remove Tag and batch Move/Delete use checked rows;
+single File actions use the selected node. Remove Shortcut first selects
+an entry in the Shortcuts list, then uses that expander's Remove button.
+Both factory rows therefore also scope SidebarBatchActions,
+SidebarShortcutsActions and the checked-row template. `#key:` selects an
+exact XAML resource by x:Key, preserving its subtree for declaration checks.
+The templates, file-management and W1 sidebar behavioral witnesses cover
+these distinct routes; the human checklist tests them separately.
+
+Local full desktop verification passed all 52 tests with the mandatory UIA
+gate enabled, zero failures and zero skips (8m29s), including the new
+spoken-chord journey and all four new axe scans. Runtime code is unchanged
+by the subsequent census and map corrections.
+
+Implementation round 2 found the explicit-property XAML gap, the incomplete
+sidebar factory routes and the incorrect folder-duplicate expectation.
+Those are corrected according to the second design amendment. The final
+local affected run passes 140 tests, including all map/speech mutations,
+qualified/aliased/static enum binding, source lookalike rejection, reading
+and menu facts, and the added sidebar/template witnesses. The complete
+desktop suite's 52 passing tests cover the unchanged runtime revision.

@@ -7,7 +7,8 @@ The help-page drift test belongs to W8-6. W7-3 does not modify `docs/help/`.
 
 Mac sources below are relative to `apps/slate-mac/Sources/SlateMac`;
 Windows sources to `apps/slate-windows/src/SlateWindows`. A Windows anchor
-selects one XAML element by `#id:` or one C# type by `#class:`; `; `
+selects one XAML element by `#id:`, resource by `#key:`, menu by exact
+`#menu:` Header, or one C# type by `#class:`; `; `
 separates scopes belonging to the same route. Pattern claims cover those
 controls and their generated item peers, not necessarily the host itself. Custom rows name
 each construction's original file:line. Native rows name the owning source
@@ -60,8 +61,8 @@ without them. Windows has no native rotor equivalent.
 | action | Graph node-action factory | Graph/GraphDiagramView.swift:812 | Diagram context menu projects core node actions | Graph/GraphDiagramView.cs#class:GraphDiagramView | `Invoke` | `GraphDiagram` | - | verified | `GraphMenuTests`, `GraphDiagramTests` | reports/w5_commands_at_checklist.md#10 |
 | action | Graph Pin/Unpin | Graph/GraphDiagramView.swift:820 | Diagram node context menu Pin/Unpin | Graph/GraphDiagramView.cs#class:GraphDiagramView | `Invoke` | `GraphDiagram` | - | verified | `GraphMenuTests`, `GraphDiagramTests` | reports/w5_commands_at_checklist.md#10 |
 | action | Canvas Delete builder | Canvas/CanvasOutlineView.swift:230 | Outline context-menu Delete and registered delete command | Canvas/CanvasOutlineView.cs#class:CanvasOutlineView; Canvas/CanvasOutlineView.cs#class:CanvasOutlineTree; Canvas/CanvasOutlineView.cs#class:CanvasOutlineRowDataPeer | `Invoke` | `CanvasOutlineTree` | `slate.canvas.delete` | verified | `DeleteCardClearsSelectionAnnouncesAndUndoes`, `TheOutlineMenuEqualsThePlan` | reports/w5_commands_at_checklist.md#9 |
-| action | Sidebar folder action-catalog builder | FileTreeSidebar.swift:7106 | Select the target, then use the File actions expander buttons | MainWindow.xaml#id:SidebarFileActions | `Invoke` | `SidebarFileActions` | - | verified | `FileManagementTests`, `CommandDriftTests` | reports/w5_commands_at_checklist.md#8 |
-| action | Sidebar file action-catalog builder | FileTreeSidebar.swift:7376 | Select the target, then use the File actions expander buttons | MainWindow.xaml#id:SidebarFileActions | `Invoke` | `SidebarFileActions` | - | verified | `FileManagementTests`, `CommandDriftTests` | reports/w5_commands_at_checklist.md#8 |
+| action | Sidebar folder action-catalog builder | FileTreeSidebar.swift:7106 | Clear checks for single-target File actions; checked rows + Batch actions for tags/move/delete; select the Shortcuts entry before Remove shortcut; File > New Note from Template; Files > Unpin All in Folder; File actions Open opens its existing folder note | MainWindow.xaml#id:SidebarFileActions; MainWindow.xaml#id:SidebarBatchActions; MainWindow.xaml#id:SidebarShortcutsActions; WorkspaceTemplates.xaml#key:FileTreeNodeTemplate; MainWindow.xaml#id:NewFromTemplateMenuItem; MainWindow.xaml#menu:_Files | `Invoke`, `Toggle`, `SelectionItem` | `SidebarFileActions`, `SidebarBatchActions`, `SidebarShortcuts`, `NewFromTemplateMenuItem` | - | verified | `FileManagementTests`, `Sidebar_UsesCoreForFilterBatchTagsExclusiveCreateAndFolderNotes`, `Sidebar_GroupsMovesAndTransformsPersistedPinsAndShortcuts`, `TheRealLifecycleWiresTheDestinationTheVaultNameAndTheSidebarRefresh` | reports/w5_commands_at_checklist.md#8 |
+| action | Sidebar file action-catalog builder | FileTreeSidebar.swift:7376 | Clear checks for single-target File actions; checked rows + Batch actions for tags/move/delete; select the Shortcuts entry before Remove shortcut | MainWindow.xaml#id:SidebarFileActions; MainWindow.xaml#id:SidebarBatchActions; MainWindow.xaml#id:SidebarShortcutsActions; WorkspaceTemplates.xaml#key:FileTreeNodeTemplate | `Invoke`, `Toggle`, `SelectionItem` | `SidebarFileActions`, `SidebarBatchActions`, `SidebarShortcuts` | - | verified | `FileManagementTests`, `Sidebar_UsesCoreForFilterBatchTagsExclusiveCreateAndFolderNotes`, `Sidebar_GroupsMovesAndTransformsPersistedPinsAndShortcuts` | reports/w5_commands_at_checklist.md#8 |
 | content | Math Source | MathView.swift:70 | Canonical math Name; authored source HelpText plus MathML custom property | Reading/ReadingMathElement.cs#class:ReadingMathElement; Reading/ReadingMathElement.cs#class:ReadingMathElementPeer; Reading/ReadingSurface.cs#class:ReadingSurface | - | `ReadingSurface` | - | verified | `ReadingMathTests` | reports/w3_content_at_checklist.md#2 |
 | content | Math Braille | MathView.swift:71 | Decoded cells exposed as ItemStatus; live braille validation deferred by owner | Reading/ReadingMathElement.cs#class:ReadingMathElement; Reading/ReadingMathElement.cs#class:ReadingMathElementPeer; Reading/ReadingSurface.cs#class:ReadingSurface | - | `ReadingSurface` | - | verified | `ReadingMathTests` | reports/w3_content_at_checklist.md#2 |
 | content | Mermaid Source | MermaidView.swift:62 | Canonical diagram description Name and authored source HelpText | Reading/ReadingDiagramElement.cs#class:ReadingDiagramElement; Reading/ReadingDiagramElement.cs#class:ReadingDiagramElementPeer; Reading/ReadingSurface.cs#class:ReadingSurface | - | `ReadingSurface` | - | verified | `ReadingDiagramTests` | reports/w3_content_at_checklist.md#4 |
@@ -75,3 +76,20 @@ diagram aliases. Native editor semantics are Windows-first (#1224 is the
 Mac convergence issue). The map's automatic verification is implemented
 after this contract-only commit; none of its status cells claims a new
 human run.
+
+The sidebar catalog rows cover the complete VoiceOver projections of
+`Sidebar/SidebarActionCatalog.swift:contextualDefinitions` after its
+VoiceOver exclusions: 14 folder actions and 13 file actions. Folder actions
+are New Note, New Folder, New from Template, Rename, Move, Unpin All,
+Add Shortcut, Remove Shortcut, Create/Open/Delete Folder Note, Reveal,
+Copy Path and Delete. File actions are Rename, Move, Duplicate, Pin, Unpin,
+Add Shortcut, Remove Shortcut, Add/Remove Tag, Reveal, Copy Path,
+Copy Wikilink and Delete. The default Open action has its own row above.
+
+Clear existing checks before testing a single selected-target action.
+For multiple targets, Windows uses row checkboxes: Batch actions Move and
+Move checked to Recycle Bin act on that checked set, and Add/Remove Tag
+act on checked files with Tag name filled in. File actions Delete is the
+single selected-node route. Remove Shortcut uses the selected Shortcuts
+entry. These are native Windows routes to the catalog operations; the
+map does not claim a FilesTree context menu or identical selection UI.

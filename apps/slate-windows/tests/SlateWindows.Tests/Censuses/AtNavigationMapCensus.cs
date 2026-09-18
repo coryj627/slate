@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using System.Windows.Automation.Peers;
 using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using SlateWindows.Commands;
 
@@ -170,14 +171,19 @@ public sealed class AtNavigationMapCensus
 
     private static bool ReadScope(string anchor, HashSet<string> patterns, HashSet<string> ids)
     {
-        Match selector = Regex.Match(anchor, @"^([^#]+)#(id|class):([A-Za-z_][A-Za-z0-9_]*)$");
+        Match selector = Regex.Match(anchor, @"^([^#]+)#(id|class|menu|key):([A-Za-z_][A-Za-z0-9_]*)$");
         if (!selector.Success || !SafeSourcePath(SourceText.ShellSourceRoot(), selector.Groups[1].Value, out string path)) { return false; }
         string name = selector.Groups[3].Value;
         var types = new HashSet<string>(StringComparer.Ordinal);
-        if (selector.Groups[2].Value == "id" && Path.GetExtension(path) == ".xaml")
+        if (selector.Groups[2].Value is "id" or "menu" or "key" && Path.GetExtension(path) == ".xaml")
         {
-            XElement[] matches = XDocument.Load(path).Descendants().Where(element =>
-                (string?)element.Attribute("AutomationProperties.AutomationId") == name).ToArray();
+            XElement[] matches = XDocument.Load(path).Descendants().Where(element => selector.Groups[2].Value switch
+            {
+                "id" => (string?)element.Attribute("AutomationProperties.AutomationId") == name,
+                "menu" => element.Name.LocalName == "MenuItem" && (string?)element.Attribute("Header") == name,
+                "key" => (string?)element.Attribute(XName.Get("Key", "http://schemas.microsoft.com/winfx/2006/xaml")) == name,
+                _ => false,
+            }).ToArray();
             if (matches.Length != 1) { return false; }
             foreach (XElement element in matches[0].DescendantsAndSelf())
             {
@@ -188,17 +194,18 @@ public sealed class AtNavigationMapCensus
         }
         else if (selector.Groups[2].Value == "class" && Path.GetExtension(path) == ".cs")
         {
-            ClassDeclarationSyntax[] matches = CSharpSource.LoadPath(path).Root.DescendantNodes()
+            string relative = Path.GetRelativePath(SourceText.ShellSourceRoot(), path).Replace('\\', '/');
+            CSharpSource source = ShellCompilation.Sources.Single(item => item.Relative == relative).Source;
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            ClassDeclarationSyntax[] matches = source.Root.DescendantNodes()
                 .OfType<ClassDeclarationSyntax>().Where(type => type.Identifier.ValueText == name).ToArray();
             if (matches.Length != 1) { return false; }
             SyntaxNode[] nodes = matches[0].DescendantNodes(node => node == matches[0] || node is not ClassDeclarationSyntax).ToArray();
-            foreach (MemberAccessExpressionSyntax member in nodes.OfType<MemberAccessExpressionSyntax>())
-            {
-                if (member.Expression.ToString() == "PatternInterface") { patterns.Add(member.Name.Identifier.ValueText); }
-            }
+            patterns.UnionWith(PatternNames(nodes, model));
             foreach (InvocationExpressionSyntax call in nodes.OfType<InvocationExpressionSyntax>())
             {
-                if (call.Expression.GetLastToken().ValueText == "SetAutomationId"
+                if (model.GetSymbolInfo(call).Symbol is IMethodSymbol { Name: "SetAutomationId" } method
+                    && method.ContainingType.ToDisplayString() == "System.Windows.Automation.AutomationProperties"
                     && call.ArgumentList.Arguments.LastOrDefault()?.Expression is LiteralExpressionSyntax literal
                     && literal.Token.Value is string value) { ids.Add(value); }
             }
@@ -219,7 +226,7 @@ public sealed class AtNavigationMapCensus
             });
             foreach (TypeSyntax type in constructedTypes)
             {
-                string control = type.GetLastToken().ValueText;
+                string control = model.GetTypeInfo(type).Type?.Name ?? "";
                 types.Add(control.EndsWith("AutomationPeer", StringComparison.Ordinal) ? control[..^"AutomationPeer".Length] : control);
             }
         }
@@ -229,6 +236,40 @@ public sealed class AtNavigationMapCensus
             if (types.Contains(control)) { patterns.UnionWith(supported); }
         }
         return true;
+    }
+
+    private static IEnumerable<string> PatternNames(IEnumerable<SyntaxNode> nodes, SemanticModel model) =>
+        nodes.OfType<IdentifierNameSyntax>().Select(node => model.GetSymbolInfo(node).Symbol)
+            .OfType<IFieldSymbol>()
+            .Where(field => field.ContainingType.ToDisplayString() == "System.Windows.Automation.Peers.PatternInterface")
+            .Select(field => field.Name);
+
+    [Theory]
+    [InlineData("PatternInterface.Text")]
+    [InlineData("global::System.Windows.Automation.Peers.PatternInterface.Text")]
+    [InlineData("P.Text")]
+    [InlineData("Text")]
+    public void ClassPatternClaimsBindQualifiedAliasedAndStaticEnumFields(string expression)
+    {
+        Assert.Equal(new[] { "Text" }, FixturePatternNames(expression));
+    }
+
+    [Fact]
+    public void UnrelatedSameNamedFieldsCannotManufacturePatternClaims() =>
+        Assert.Empty(FixturePatternNames("Other.Text"));
+
+    private static string[] FixturePatternNames(string expression)
+    {
+        SyntaxTree tree = CSharpSyntaxTree.ParseText("""
+            using System.Windows.Automation.Peers;
+            using P = System.Windows.Automation.Peers.PatternInterface;
+            using static System.Windows.Automation.Peers.PatternInterface;
+            enum Other { Text }
+            class Fixture { object Read() => (
+            """ + expression + "); }");
+        CSharpCompilation compilation = ShellCompilation.Compilation.RemoveAllSyntaxTrees().AddSyntaxTrees(tree);
+        Assert.DoesNotContain(compilation.GetDiagnostics(), diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        return PatternNames(tree.GetRoot().DescendantNodes(), compilation.GetSemanticModel(tree)).Distinct().ToArray();
     }
 
     [Fact]
