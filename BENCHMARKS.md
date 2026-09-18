@@ -1118,3 +1118,33 @@ the UI thread's — the derivation, the rebuild and the peer reads — and
 nothing here measures the composition thread's frame (§D TD-7, §F
 FD-D2). The two per-PR sections above stand as measured on their days;
 this roll-up re-measures on the close-out's.
+
+
+## Milestone W7-1 — editor semantic Text-pattern reads (#747)
+
+BenchmarkDotNet 0.15.8, 2026-09-17, Windows 11 build 26200.9457,
+.NET 10.0.12 / SDK 10.0.401, QEMU virtual CPU 3.19 GHz (12 cores).
+Three warmups and ten measured iterations. The real AvalonEdit provider,
+canonical DocumentBuffer session and range decorators live on an STA
+thread; each operation includes dispatcher marshaling. The corpus repeats
+heading/prose blocks, with one link at the document end. Contract E-11 in
+[37_editor_peer_contracts.md](docs/plans/37_editor_peer_contracts.md) freezes
+the budgets and documents the conservative reference-definition fallback.
+
+```powershell
+# From apps/slate-windows, after generating Release bindings:
+dotnet run --project benchmarks/SlateWindows.Benchmarks --configuration Release -- --editor-semantic --validate-budgets
+```
+
+| Operation | Size | p50 | Allocation | Ceiling |
+|---|---|---|---|---|
+| Line GetAttributeValue(StyleId) | 100 KiB | 0.0320 ms | 3.49 KiB | 0.5 ms |
+| Line GetAttributeValue(StyleId) | 1 MiB | 0.0322 ms | 3.49 KiB | 0.5 ms |
+| Line GetAttributeValue(StyleId) | 8 MiB | 0.0323 ms | 3.49 KiB | 0.5 ms |
+| Document FindAttribute(Link) | 8 MiB | 327.0786 ms | 70.1 MiB | 1000 ms |
+
+The line-read 8 MiB / 1 MiB ratio is **1.00x** against a **4.00x** ceiling.
+The runner validates all four cases and rejects absent/duplicate results.
+The full-document search intentionally includes a full canonical span query;
+the line-read result does not claim flatness for notes that trigger a core
+whole-document fallback (comments, frontmatter, or possible reference definitions).

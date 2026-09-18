@@ -4,13 +4,13 @@ Scope: [W7 executable spec](18_windows_port/specs/w7_spec.md) §2,
 the editing surface, one PR. G29 is Windows-first editor semantic reading;
 the mac counterpart is [#1224](https://github.com/coryj627/slate/issues/1224).
 This document precedes the implementation review as its own commit.
-Code citations below identify implementation seats; seats marked planned
-do not exist at the contract-only commit.
+Code citations identify implementation seats. The contract-only commit was
+`f328dec7`; the following implementation adds those seats and their witnesses.
 
 ## Contracts
 
 **E-1 — One canonical source.** `EditorSemanticTextProvider` and
-`EditorSemanticTextRange` (planned `EditorSemanticText.cs`) read the editor's
+`EditorSemanticTextRange` (`EditorSemanticText.cs`) read the editor's
 `AvalonDocumentBufferSession.InspectInRange`. That method calls the same
 `DocumentBuffer.HighlightInRange` as the colorizer's query and does not
 replace `LatestHighlightWindow`. There is no second FFI entry point, host
@@ -114,7 +114,7 @@ GetChildren returns no embedded objects; GetEnclosingElement returns the
 public editor's provider. TextArea.EventsSource remains the editor peer.
 The #1088 forward and backward UIA3 subtree walks must terminate and agree.
 
-**E-10 — Evidence is executable.** Planned tests:
+**E-10 — Evidence is executable.** Tests:
 `EditorSemanticTextRangeTests` exercises all kinds through a real session,
 mixed/plain/degenerate ranges, overlapping attributes, both-direction
 search, Unicode offsets, read-only paint-cache behavior, session lifetime,
@@ -128,8 +128,8 @@ and the bidirectional tree walk. The fixture ships with gate binaries.
 
 **E-11 — Measure bounded reads.** BenchmarkDotNet measures line-range
 StyleId at 100 KiB, 1 MiB and 8 MiB, plus document-range FindAttribute(Link)
-at 8 MiB. First measurements, runner details and budgets are appended here
-and to BENCHMARKS.md before acceptance; no unmeasured result is a pass.
+at 8 MiB. Measurements, runner details and budgets are recorded below
+and in BENCHMARKS.md; no unmeasured result is a pass.
 The benchmark validates its complete case inventory and a line-query
 flatness bound. A full-document query may pay for all its spans; a line
 query must not copy or scan the whole document to discover its offsets.
@@ -184,7 +184,36 @@ navigation surface.
 
 ## Measurements and review record
 
-Implementation and measurements pending at the contract-only commit.
+First measurement, 2026-09-17: BenchmarkDotNet 0.15.8, three warmups,
+ten measured iterations; Windows 11 build 26200.9457, .NET 10.0.12,
+SDK 10.0.401, QEMU virtual CPU 3.19 GHz (12 cores). A real native peer and
+session live on an STA dispatcher; the measured operation includes dispatcher
+marshaling. The fixture repeats heading/prose blocks and ends with one link.
+
+| Operation | Document | p50 | Budget |
+|---|---|---|---|
+| Line StyleId | 100 KiB | 0.0320 ms | 0.5 ms |
+| Line StyleId | 1 MiB | 0.0322 ms | 0.5 ms |
+| Line StyleId | 8 MiB | 0.0323 ms | 0.5 ms |
+| Document FindAttribute(Link) | 8 MiB | 327.0786 ms | 1000 ms |
+
+The 8 MiB / 1 MiB line ratio is 1.00x, below the frozen 4.00x ceiling.
+Line queries allocate 3.49 KiB; the full-document search allocates 70.1 MiB,
+including the canonical full span query. The runner rejects missing or duplicate
+benchmark cases. Reference-definition fallback is deliberately not claimed to
+be a bounded line read: A-5 states its whole-document cost.
+
+**A-5 — Reference definitions have document-wide scope.** Retaining canonical
+Link/Image spans makes an isolated reference-link window insufficient when
+its definition lies elsewhere. `StructureSnapshot` maintains a conservative
+index of `]:` marker positions over the edit halo, sharing the adjacent-byte
+index maintenance with the lone-CR guard. A nonempty marker index makes the
+canonical query use its existing full-document fallback. Even a marker in
+code can cause a fallback; the parser, not the marker, determines semantics.
+This trades bounded reads in such notes for exact full/window agreement;
+ordinary heading/prose reads retain their measured flatness. The tests cover
+references before/after the window and insertion/removal at marker boundaries.
+No host classification or second query path is added.
 Append each invariant-targeted review's findings and resolutions here,
 following [the red-team protocol](24_red_team_protocol.md). Three successive
 blocking rounds in one subsystem trigger a design pass; a blocker created

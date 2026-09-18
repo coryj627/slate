@@ -196,6 +196,7 @@ internal sealed class AvalonHighlightingCoordinator : IDisposable
     private readonly AvalonCanonicalSpanColorizer _colorizer;
     private readonly DispatcherTimer _timer;
     private bool _disposed;
+    private long _publishedRevision;
 
     public AvalonHighlightingCoordinator(
         SlateTextEditor editor,
@@ -204,6 +205,7 @@ internal sealed class AvalonHighlightingCoordinator : IDisposable
     {
         _editor = editor;
         _session = session;
+        _publishedRevision = session.Revision;
         _colorizer = new AvalonCanonicalSpanColorizer(editor);
         _timer = new DispatcherTimer(DispatcherPriority.Background, editor.Dispatcher)
         {
@@ -279,6 +281,11 @@ internal sealed class AvalonHighlightingCoordinator : IDisposable
         {
             return;
         }
+        if (!_session.SemanticReadsAvailable || _editor.IsComposing)
+        {
+            Schedule(immediate: false);
+            return;
+        }
 
         (int start, int end) = VisibleRangeWithMargin(
             _editor.Document,
@@ -313,7 +320,30 @@ internal sealed class AvalonHighlightingCoordinator : IDisposable
     private void Timer_Tick(object? sender, EventArgs e)
     {
         _timer.Stop();
+        FlushSemanticChanges();
         RefreshVisibleWindow();
+    }
+
+    internal void ResumeSemanticPublication() => Schedule(immediate: false);
+
+    internal void FlushSemanticChanges()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        if (!_session.SemanticReadsAvailable || _editor.IsComposing)
+        {
+            Schedule(immediate: false);
+            return;
+        }
+        long revision = _session.Revision;
+        if (revision == _publishedRevision)
+        {
+            return;
+        }
+        _publishedRevision = revision;
+        _editor.PublishSemanticTextChanged();
     }
 
     private void TextView_ScrollOffsetChanged(object? sender, EventArgs e) => Schedule(immediate: false);

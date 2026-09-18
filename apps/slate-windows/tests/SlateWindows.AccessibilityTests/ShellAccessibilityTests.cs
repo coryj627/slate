@@ -1179,6 +1179,124 @@ public sealed class ShellAccessibilityTests
     ///    the text pattern exposes, every level resolving.
     /// </summary>
     [Fact]
+    public void EditorTextPattern_SemanticAttributesUnitsAndEvents_AreClean()
+    {
+        string testRoot = Path.Combine(Path.GetTempPath(), $"slate-editor-semantics-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        string fixture = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "editor_semantics.md"));
+        File.WriteAllText(Path.Combine(vaultRoot, "note.md"), fixture);
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] = $"slate-editor-semantics-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo) ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+            if (!HasInteractiveDesktop(process, "Editor semantics")) { return; }
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(process, automation, Path.Combine(logDirectory, "slate-windows.log"), TimeSpan.FromSeconds(30));
+            AutomationElement files = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
+            AutomationElement note = files.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .First(item => item.Name.StartsWith("note", StringComparison.OrdinalIgnoreCase));
+            note.Patterns.SelectionItem.Pattern.Select();
+            AutomationElement editor = WaitForEditor(window, automation, "note.md editor", TimeSpan.FromSeconds(15));
+            var text = editor.Patterns.Text.Pattern;
+            var document = text.DocumentRange;
+            Assert.Equal(fixture, document.GetText(-1));
+            var attributes = automation.TextAttributeLibrary;
+            var heading = document.FindText("Heading two", false, false);
+            Assert.NotNull(heading);
+            Assert.Equal(70002, heading.GetAttributeValue(attributes.StyleId));
+            Assert.Equal("Heading 2", heading.GetAttributeValue(attributes.StyleName));
+            var link = document.FindText("Website", false, false);
+            Assert.NotNull(link);
+            Assert.NotNull(link.GetAttributeValue(attributes.Link));
+            Assert.NotEqual(automation.NotSupportedValue, link.GetAttributeValue(attributes.Link));
+            Assert.NotEqual(automation.MixedAttributeValue, link.GetAttributeValue(attributes.Link));
+            Assert.Contains("Heading two", document.FindAttribute(attributes.StyleId, 70002, false).GetText(-1));
+            Assert.Contains("Quoted heading", document.FindAttribute(attributes.StyleId, 70002, true).GetText(-1));
+            Assert.Contains("[[Target]]", document.FindAttribute(attributes.Link, true, false).GetText(-1));
+            Assert.Contains("quoted link", document.FindAttribute(attributes.Link, true, true).GetText(-1));
+            Assert.NotEmpty(text.GetVisibleRanges());
+            var bounds = editor.BoundingRectangle;
+            var point = text.RangeFromPoint(new System.Drawing.Point(bounds.Left + 12, bounds.Top + 12));
+            Assert.Equal(0, point.CompareEndpoints(TextPatternRangeEndpoint.Start, point, TextPatternRangeEndpoint.End));
+            Assert.Equal(editor, point.GetEnclosingElement());
+            foreach (TextUnit unit in new[] { TextUnit.Line, TextUnit.Word, TextUnit.Character })
+            {
+                var moved = heading.Clone();
+                moved.Move(unit, 1);
+                Assert.True(moved.CompareEndpoints(TextPatternRangeEndpoint.Start, heading, TextPatternRangeEndpoint.Start) > 0);
+                moved.Move(unit, -1);
+                Assert.NotNull(moved.GetText(-1));
+            }
+            var walker = automation.TreeWalkerFactory.GetControlViewWalker();
+            var forward = new List<AutomationElement>();
+            var backward = new List<AutomationElement>();
+            Walk(editor, false, forward);
+            Walk(editor, true, backward);
+            backward.Reverse();
+            Assert.Equal(forward, backward);
+            Assert.Empty(forward); // The source peer owns text ranges, no embedded children.
+            Assert.Empty(document.GetChildren());
+
+            var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            using var changed = editor.RegisterAutomationEvent(automation.EventLibrary.Text.TextChangedEvent,
+                TreeScope.Element, (_, _) => events.Enqueue("text"));
+            using var selected = editor.RegisterAutomationEvent(automation.EventLibrary.Text.TextSelectionChangedEvent,
+                TreeScope.Element, (_, _) => events.Enqueue("selection"));
+            window.SetForeground();
+            editor.Focus();
+            // One native Value edit is one burst, independent of SendInput's
+            // per-key transport speed on a loaded CI desktop.
+            editor.Patterns.Value.Pattern.SetValue(fixture + "0123456789");
+            Assert.True(PollGently(() => events.Contains("text") && events.LastOrDefault() == "selection", TimeSpan.FromSeconds(10)),
+                "The committed burst did not publish TextChanged followed by selection.");
+            string[] observed = events.ToArray();
+            Assert.Single(observed, item => item == "text");
+            int textIndex = Array.IndexOf(observed, "text");
+            Assert.Contains("selection", observed.Skip(textIndex + 1));
+            Assert.EndsWith("0123456789", text.DocumentRange.GetText(-1));
+            AssertAxeClean(process, "editor-semantic-text");
+
+            void Walk(AutomationElement parent, bool reverse, List<AutomationElement> output)
+            {
+                AutomationElement? child = reverse ? walker.GetLastChild(parent) : walker.GetFirstChild(parent);
+                while (child is not null)
+                {
+                    Assert.True(output.Count < 1000, "Editor UIA walk did not terminate.");
+                    Assert.DoesNotContain(child, output);
+                    output.Add(child);
+                    Walk(child, reverse, output);
+                    child = reverse ? walker.GetPreviousSibling(child) : walker.GetNextSibling(child);
+                }
+            }
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000)) { process.Kill(entireProcessTree: true); }
+            }
+            process?.Dispose();
+            string temporaryRoot = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (Path.GetFullPath(testRoot).StartsWith(temporaryRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                try { Directory.Delete(testRoot, recursive: true); } catch (IOException) { }
+            }
+        }
+    }
+
+    [Fact]
     public void ReadingTextPattern_RangeFromChildResolvesEveryCustomPeer()
     {
         string testRoot = Path.Combine(

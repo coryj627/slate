@@ -67,10 +67,13 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
 
     public event EventHandler? HighlightInvalidated;
 
+    internal bool SemanticReadsAvailable => !_disposed && !_peerUpdateOpen && !Document.IsInUpdate;
+    internal long SemanticQueryCountForCensus { get; private set; }
+
     /// <summary>
     /// The last canonical semantic span window accepted for this document
-    /// revision. W7-1's UIA peer consumes this same immutable window instead
-    /// of running a second classifier.
+    /// revision. The colorizer retains this window; UIA reads independently
+    /// through InspectInRange so offscreen text never depends on paint state.
     /// </summary>
     public EditorHighlightWindow? LatestHighlightWindow
     {
@@ -181,10 +184,14 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
     /// <summary>
     /// Computes a canonical semantic window for a discrete interaction without
     /// replacing <see cref="LatestHighlightWindow"/>. The retained window must
-    /// remain the exact one painted by the colorizer for W7's UIA consumer.
+    /// remain the exact one painted by the colorizer while UIA reads elsewhere.
     /// </summary>
-    internal EditorHighlightWindow InspectInRange(int startUtf16, int endUtf16) =>
-        ComputeHighlightWindow(startUtf16, endUtf16, retain: false);
+    internal EditorHighlightWindow InspectInRange(int startUtf16, int endUtf16)
+    {
+        Document.VerifyAccess();
+        SemanticQueryCountForCensus++;
+        return ComputeHighlightWindow(startUtf16, endUtf16, retain: false);
+    }
 
     internal uint Utf16ToByte(int utf16Offset)
     {

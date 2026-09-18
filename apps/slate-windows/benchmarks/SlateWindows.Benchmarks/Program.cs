@@ -7,9 +7,11 @@ using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
 using SlateWindows;
+using SlateWindows.Benchmarks;
 using uniffi.slate_uniffi;
 
 bool validateBudgets = args.Contains("--validate-budgets", StringComparer.Ordinal);
+bool editorSemanticSuite = args.Contains("--editor-semantic", StringComparer.Ordinal);
 // W6-1 PR A (§K, contract A20): the canvas open/marshalling suite is a
 // SEPARATE runner selection rather than a second class in the same run,
 // because the W2-2 budget gate below reads every report's `Bytes`
@@ -25,12 +27,19 @@ bool graphRendererSuite = args.Contains("--graph-renderer", StringComparer.Ordin
 string[] benchmarkArgs = args
     .Where(argument =>
         !string.Equals(argument, "--validate-budgets", StringComparison.Ordinal)
+        && !string.Equals(argument, "--editor-semantic", StringComparison.Ordinal)
         && !string.Equals(argument, "--canvas", StringComparison.Ordinal)
         && !string.Equals(argument, "--graph", StringComparison.Ordinal)
         && !string.Equals(argument, "--graph-renderer", StringComparison.Ordinal))
     .ToArray();
 ManualConfig benchmarkConfig = ManualConfig.Create(DefaultConfig.Instance)
     .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "BenchmarkDotNet.Artifacts"));
+if (editorSemanticSuite)
+{
+    Summary lines = BenchmarkRunner.Run<EditorSemanticLineBenchmarks>(benchmarkConfig, benchmarkArgs);
+    Summary search = BenchmarkRunner.Run<EditorSemanticSearchBenchmarks>(benchmarkConfig, benchmarkArgs);
+    return !validateBudgets || EditorSemanticBudgets.Validate(lines, search) ? 0 : 1;
+}
 if (graphRendererSuite)
 {
     Summary graphRendererSummary = BenchmarkRunner.Run<GraphRendererBenchmarks>(benchmarkConfig, benchmarkArgs);
