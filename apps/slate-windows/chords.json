@@ -2725,6 +2725,18 @@
           "apps/slate-windows/tests/SlateWindows.Tests/Censuses/EditorPeerDoctrineCensus.cs#TheContractTableAndMappingSwitchCoverTheSameCanonicalKindsAndAttributes",
           "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#EditorTextPattern_SemanticAttributesUnitsAndEvents_AreClean"
         ]
+      },
+      "atNavigation": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Commands/NavigationHelp.cs#NavigationHelp",
+          "apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs#EmptyOnboardingText",
+          "apps/slate-windows/src/SlateWindows/Reading/ReadingSurface.cs#ReadingSurface"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/ChordSpeechAuditCensus.cs#EveryAuthoredSpokenChordComesFromTheTable",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/AtNavigationMapCensus.cs#EveryMacConstructionHasOneMapRowAndEveryRowHasALiveConstruction",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.SpokenChords.cs#SpokenChords_MenusPaletteAndOverlays_MatchTheTable"
+        ]
       }
     },
     "commands": {
@@ -2930,7 +2942,8 @@
       "#745": "canvas",
       "#746": "graph",
       "#750": "uiaConformance",
-      "#747": "editorSemanticPeer"
+      "#747": "editorSemanticPeer",
+      "#749": "atNavigation"
     }
   },
   "chordSurface": [

@@ -16,7 +16,7 @@ using FlaUI.UIA3;
 namespace SlateWindows.AccessibilityTests;
 
 [Trait("gate", "W-C")]
-public sealed class ShellAccessibilityTests
+public sealed partial class ShellAccessibilityTests
 {
     private const int AutomationTimeoutHResult = unchecked((int)0x80131505);
 

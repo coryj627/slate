@@ -13,7 +13,7 @@ otherwise stated. Planned witnesses are identified explicitly.
 `WindowsHotkeySpoken.Spoken(row.WindowsChord)` through `ChordTable`.
 `Commands/HotkeyChords.cs` owns the word dictionary;
 `Commands/ChordTable.cs:WindowsSpokenFor` exposes the result. Quick Open
-help, reading navigation help and canvas onboarding compose those results.
+help, reading navigation help, splitter help and canvas onboarding compose those results.
 The planned `Commands/NavigationHelp.cs` fails clearly for a missing or
 chordless ID. It does not introduce another chord parser or key dictionary.
 The palette's existing `CommandPaletteViewModel.AccessibleName` derivation
@@ -40,8 +40,9 @@ duplicate IDs. Its help names both split directions. Existing
 just equal strings. The table is authored C#; `chords.json` is its generated
 projection. W7-3 delivery evidence names the new censuses and live journey.
 
-**N-4 — Display and speech are separate columns.** Menus publish the
-table's display chord as AcceleratorKey. Palette Names and HelpText use
+**N-4 — Display and speech are separate columns.** Menus bind native
+`AutomationProperties.AcceleratorKey` to their table-derived `InputGestureText`,
+including the editor context menu. Palette Names and HelpText use
 the spoken column. The planned FlaUI journey
 `SpokenChords_MenusPaletteAndOverlays_MatchTheTable` launches the real
 shell, reads every declared menu accelerator and palette row, opens Quick
@@ -60,7 +61,7 @@ called UIA patterns. Native controls retain their native patterns.
 
 **N-6 — Completeness and truth are checked both ways.** The planned
 `AtNavigationMapCensus` enumerates `.accessibilityRotor`, all
-`.accessibilityAction` overloads (including default),
+`.accessibilityAction` overloads (including default), `.accessibilityActions` builders,
 `NSAccessibilityCustomAction`, `.accessibilityCustomContent` and
 `AXCustomContent` under all Mac sources. Each construction site has one
 row; missing, duplicate and stale sites fail. Source line citations retain
@@ -95,8 +96,8 @@ cells and W5 checklist gain the new composed help and spoken-chord checks.
 - **A-5:** Canvas has a text filter, tree levels/connection rows and
   navigator commands. UIA has no rotor and the shipped filter is not a
   kind-selector menu. Preserve the W6-1 checklist item 4 equivalence.
-- **A-6:** The Mac sweep finds 3 rotor, 18 action and 4 content
-  constructions: default actions and AppKit `AXCustomContent` count.
+- **A-6:** The Mac sweep finds 3 rotor, 21 action and 4 content
+  constructions: default actions, the three plural action builders, and AppKit `AXCustomContent` count.
   Dynamic action factories are single construction sites with their
   complete menu projection covered by existing behavioral tests.
 - **A-7:** `SwiftSource` is comment-aware, not a Swift compiler. Its
@@ -108,9 +109,33 @@ cells and W5 checklist gain the new composed help and spoken-chord checks.
   Heading/link/list/table plus previous-direction guidance are the entry
   points; the exhaustive map carries the remaining rows.
 
+- **A-9:** The live .NET 10 WPF journey disproved the spec's assumption that
+  `InputGestureText` automatically reaches AcceleratorKey. The native peer
+  reads `AutomationProperties.AcceleratorKey`; an explicit self binding
+  supplies it without replacing the native peer or theme. Both editor
+  context-menu accelerators also consume the table. This corrects the
+  assumed mechanism while delivering N-4's required behavior. See
+  [WPF peer source](https://source.dot.net/PresentationCore/System/Windows/Automation/Peers/UIElementAutomationPeer.cs.html).
+
 ## Review record
 
-Implementation, mutation verification and the two independent review axes
-are pending. Reviews use `24_red_team_protocol.md`: exhaustive invariant
+Contract/map round 1 reviewed fixed remote `88ec8440` against `541f7ceb`.
+Spec found five P2 documentation/coverage defects: three missing plural
+action builders, wrong rail control type, unrelated checklist references,
+non-exercising Canvas evidence, and an unrelated grid chord ID. All were
+corrected before runtime wiring. The map now has 39 rows (11 native,
+3 rotor, 21 action and 4 content). The implementation includes mutation witnesses for source inventory,
+map claims and chord literals. Standards independently found four overlapping P2 groups
+and additionally identified unproven tag expansion and unrelated action
+checklist routes. The tag expansion row now says pending-AT; W5 items
+8–10 explicitly cover the sidebar, canvas and graph action routes. Reading
+link navigation now cites its navigation suite as well as the range walk.
+No heuristic-only findings. Reviews use `24_red_team_protocol.md`: exhaustive invariant
 pass, reachable-blocker threshold, same-subsystem stopping rules, and
 accepted decisions above excluded from re-litigation.
+
+The real spoken-chord journey also exposed two pre-existing Reading list
+axe failures on its list fixture: the Name repeated its control type and
+items had no set position/size. N-5's native-list route now exposes an entry
+count and the current native ListItem membership. A small STA regression
+and the unchanged full-window axe scan pin that repair; no waiver was added.

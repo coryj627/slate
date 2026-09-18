@@ -983,7 +983,7 @@ def load_delivery_evidence(
         # groups (graphTable, graphConnections, graphNavigator, graphDiagram),
         # so validation 14 fails when the issue's evidence stops spanning a
         # surface.
-        "#746", "#747", "#750",
+        "#746", "#747", "#749", "#750",
     }
     if set(issue_map) != expected_issues:
         fail(

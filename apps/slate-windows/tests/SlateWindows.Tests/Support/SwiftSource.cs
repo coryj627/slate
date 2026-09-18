@@ -76,7 +76,15 @@ internal static class SwiftSource
 
                 if (source[index + 1] == '*')
                 {
-                    index = EndOfNestedBlockComment(source, index) - 1;
+                    int end = EndOfNestedBlockComment(source, index);
+                    // Keep original line numbers for source-site registers.
+                    // Removing a multiline comment must not move every later
+                    // accessibility construction's citation.
+                    for (int offset = index; offset < end; offset++)
+                    {
+                        if (source[offset] == '\n') { kept.Append('\n'); }
+                    }
+                    index = end - 1;
                     continue;
                 }
             }
