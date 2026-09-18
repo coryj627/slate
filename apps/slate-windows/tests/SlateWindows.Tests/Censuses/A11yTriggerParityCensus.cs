@@ -215,24 +215,53 @@ public sealed class A11yTriggerParityCensus
         });
     }
 
-    [Fact]
-    public void MacInventoryRestoresTheEnclosingOwnerAfterANestedFunctionEnds()
+    [Theory]
+    [InlineData("", "", "()")]
+    [InlineData("perform({", "})", "()")]
+    [InlineData("perform([{", "}])", "()")]
+    [InlineData("perform({", "})", "(callback: () -> Void = { ignored() })")]
+    public void MacInventoryRestoresTheEnclosingOwnerAfterANestedFunctionEnds(string opening, string closing, string parameters)
     {
-        const string source = """
+        string source = $$"""
             class Host {
               func outer() {
-                func inner() {
+                {{opening}}
+                func inner{{parameters}} {
                   post(.rightPaneShown)
                 }
                 post(.rightPaneShown)
+                // closing boundary
+                {{closing}}
               }
             }
             """;
         A11yTriggerInventory.Site[] sites = A11yTriggerInventory.MacSites("File.swift", source, ["RightPaneShown"]);
         Assert.Equal(["File.swift#inner@1", "File.swift#outer@1"], sites.Select(SiteId));
         string moved = source.Replace("    }\n    post", "    post", StringComparison.Ordinal)
-            .Replace("  }\n}", "    }\n  }\n}", StringComparison.Ordinal);
+            .Replace("    // closing boundary", "    }\n    // closing boundary", StringComparison.Ordinal);
         Assert.Equal(["File.swift#inner@1", "File.swift#inner@2"],
+            A11yTriggerInventory.MacSites("File.swift", moved, ["RightPaneShown"]).Select(SiteId));
+    }
+
+    [Fact]
+    public void MacInventorySeparatesLocalTypeFieldsFromFunctionLocalVariables()
+    {
+        const string source = """
+            class Host {
+              func outer() {
+                let ordinary = A11yEvent.rightPaneShown
+                class Local {
+                  let first: A11yEvent = .rightPaneShown
+                  let second: A11yEvent = .rightPaneHidden
+                }
+              }
+            }
+            """;
+        Assert.Equal(["File.swift#outer@1", "File.swift#first@1"],
+            A11yTriggerInventory.MacSites("File.swift", source, ["RightPaneShown"]).Select(SiteId));
+        string moved = source.Replace("let first: A11yEvent = .rightPaneShown", "let first: A11yEvent = .rightPaneHidden", StringComparison.Ordinal)
+            .Replace("let second: A11yEvent = .rightPaneHidden", "let second: A11yEvent = .rightPaneShown", StringComparison.Ordinal);
+        Assert.Equal(["File.swift#outer@1", "File.swift#second@1"],
             A11yTriggerInventory.MacSites("File.swift", moved, ["RightPaneShown"]).Select(SiteId));
     }
 

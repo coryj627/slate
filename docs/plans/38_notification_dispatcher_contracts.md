@@ -196,6 +196,35 @@ The whole-tree check also exposed the same ownership flaw in the shipped
 member extents, and re-generates the actual member citations. This changes
 source evidence, not the host's runtime behavior or designation reasons.
 
+Round 2, fixed `2c3f856b`: both reviewers found the same remaining P2
+ownership boundary, with no other actionable findings. A local function in
+a parenthesized closure argument starts at nonzero delimiter depth; matching
+its body only at absolute depth zero lets ownership survive its closing brace.
+This remains the original ownership class. Take a design checkpoint before
+more code: every function's body is relative to its containing lexical brace,
+at that brace's delimiter depth. Default-argument closures open at a deeper
+delimiter depth and are excluded; the body's matching closing brace ends
+ownership and restores the enclosing function. Exercise the same cross-scope
+mutation directly, in a closure argument, inside an array of closures, and
+with a closure-valued default argument. The source inventory and all actual
+member citations must remain stable after this boundary repair. No new host
+behavior, accepted limitation, or owner designation is introduced.
+Standards also found the related local-type boundary: a function must not
+own a field initializer inside a type declared within that function. The
+scope model therefore records type bodies as ownership barriers. Within the
+innermost type, choose the innermost active function; if none exists, choose
+the containing field/property initializer. Peer declarations are identified
+by their containing brace, not indentation. Add a field-to-field movement
+witness and a local-variable control so the barrier repair cannot relabel
+ordinary function-local construction as a field. This completes the round-2
+design pass before its implementation.
+Four new scope witnesses failed at `2c3f856b` while the direct-nesting
+control passed. After implementing the lexical-parent model, all 35 affected
+checks pass and the production inventory remains 300 Windows / 273 Mac
+constructions with identical member identities. The full mandatory desktop
+suite passed all 52 journeys on the unchanged runtime build. Final fixed-head
+reviews and CI remain required.
+
 Inventory repairs in this slice also route Windows VaultOpened and
 RemovedRecentVault through their existing typed events, and Mac template
 picker/create completion through TemplatePickerOpened/TemplateNoteCreated.

@@ -77,11 +77,16 @@ internal static class A11yTriggerInventory
     }
 
     private static readonly Regex SwiftMember = new(
-        @"^(?<indent> *)(?:(?:@\w+(?:\([^\n]*\))?|private|fileprivate|internal|public|open|static|final|override|mutating|nonisolated|lazy)\s+)*(?<kind>func|var|let|init)\s*(?<name>\w*)",
+        @"^[ \t]*(?:(?:@\w+(?:\([^\n]*\))?|private|fileprivate|internal|public|open|static|final|override|mutating|nonisolated|lazy|convenience|required|class(?=\s+(?:func|var)\b))\s+)*(?<kind>func|var|let|init|class|struct|enum|actor|extension)\b\s*(?<name>\w*)",
         RegexOptions.Multiline | RegexOptions.CultureInvariant);
 
     private sealed record SwiftBrace(int Start, int End, int Depth, int Delimiters);
-    private sealed record SwiftOwner(Match Declaration, int End);
+    private sealed record SwiftOwner(Match Declaration, int End)
+    {
+        internal string Kind => Declaration.Groups["kind"].Value;
+        internal bool IsFunction => Kind is "func" or "init";
+        internal bool IsType => Kind is "class" or "struct" or "enum" or "actor" or "extension";
+    }
 
     private static (SwiftBrace[] Braces, (int Start, int End)[] Patterns) SwiftBoundaries(string text)
     {
@@ -132,22 +137,25 @@ internal static class A11yTriggerInventory
 
     private static SwiftOwner[] SwiftOwners(string text, SwiftBrace[] braces)
     {
-        Match[] declarations = SwiftMember.Matches(text).ToArray();
-        return declarations.Select(declaration =>
+        var declarations = SwiftMember.Matches(text).Select(declaration => (Declaration: declaration,
+            Parent: braces.LastOrDefault(brace => brace.Start < declaration.Index && brace.End > declaration.Index))).ToArray();
+        return declarations.Select(entry =>
         {
-            SwiftBrace? enclosing = braces.LastOrDefault(brace => brace.Start < declaration.Index && brace.End > declaration.Index);
+            var (declaration, enclosing) = entry;
             int end = Math.Min(enclosing?.End ?? text.Length,
-                declarations.FirstOrDefault(next => next.Index > declaration.Index
-                    && next.Groups["indent"].Length <= declaration.Groups["indent"].Length)?.Index ?? text.Length);
-            if (declaration.Groups["kind"].Value is "func" or "init")
+                declarations.FirstOrDefault(next => next.Declaration.Index > declaration.Index
+                    && next.Parent == enclosing).Declaration?.Index ?? text.Length);
+            var owner = new SwiftOwner(declaration, end);
+            if (owner.IsFunction || owner.IsType)
             {
-                // Skip braces in default-argument closures. A function owns
-                // only its balanced body; after it closes its parent resumes.
+                // Match relative to the containing lexical context. Default
+                // argument closures are deeper; closure arguments around a
+                // local declaration may already have nonzero delimiter depth.
                 SwiftBrace? body = braces.FirstOrDefault(brace => brace.Start > declaration.Index && brace.Start < end
-                    && brace.Depth == (enclosing?.Depth + 1 ?? 0) && brace.Delimiters == 0);
-                if (body is not null) { end = body.End; }
+                    && brace.Depth == (enclosing?.Depth + 1 ?? 0) && brace.Delimiters == (enclosing?.Delimiters ?? 0));
+                if (body is not null) { owner = owner with { End = body.End }; }
             }
-            return new SwiftOwner(declaration, end);
+            return owner;
         }).ToArray();
     }
 
@@ -172,16 +180,14 @@ internal static class A11yTriggerInventory
                 // A payloadless enum expression is a value wherever Swift
                 // permits one, including arrays and implicit returns. Member
                 // reads are excluded by the qualified-name boundary above.
-                Match? owner = null;
-                foreach (SwiftOwner candidate in declarations.Where(d => d.Declaration.Index < match.Index && match.Index < d.End))
-                {
-                    Match declaration = candidate.Declaration;
-                    if (owner is null || declaration.Groups["indent"].Length <= owner.Groups["indent"].Length
-                        || declaration.Groups["kind"].Value is "func" or "init")
-                    {
-                        owner = declaration;
-                    }
-                }
+                SwiftOwner[] active = declarations.Where(d => d.Declaration.Index < match.Index && match.Index < d.End).ToArray();
+                int typeBoundary = active.LastOrDefault(d => d.IsType)?.Declaration.Index ?? -1;
+                SwiftOwner[] members = active.Where(d => !d.IsType && d.Declaration.Index > typeBoundary).ToArray();
+                // A local type's fields belong to that type, not the function
+                // containing it. Within a function its locals retain the
+                // function owner; within a property its initializer retains
+                // the property owner, even when a closure has local variables.
+                Match? owner = (members.LastOrDefault(d => d.IsFunction) ?? members.FirstOrDefault())?.Declaration;
                 Assert.True(owner is not null, $"No Swift owner for {path}:{text[..match.Index].Count(c => c == '\n') + 1} {key}");
                 string name = owner.Groups["kind"].Value == "init" ? "init" : owner.Groups["name"].Value;
                 string member = path + "#" + name;
