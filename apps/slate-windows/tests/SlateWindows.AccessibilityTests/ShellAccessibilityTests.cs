@@ -1219,6 +1219,20 @@ public sealed class ShellAccessibilityTests
                 moved.Move(unit, -1);
                 Assert.NotNull(moved.GetText(-1));
             }
+            // NVDA Say All advances the end by Line, reads, then collapses.
+            // A positive result at EOF causes endless empty speech callbacks.
+            var reading = document.Clone();
+            reading.MoveEndpointByRange(TextPatternRangeEndpoint.End, reading, TextPatternRangeEndpoint.Start);
+            var chunks = new List<string>();
+            while (reading.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Line, 1) > 0)
+            {
+                string chunk = reading.GetText(-1);
+                Assert.NotEmpty(chunk);
+                chunks.Add(chunk);
+                Assert.True(chunks.Count <= fixture.Length, "Say All reading did not terminate.");
+                reading.MoveEndpointByRange(TextPatternRangeEndpoint.Start, reading, TextPatternRangeEndpoint.End);
+            }
+            Assert.Equal(fixture, string.Concat(chunks));
             var walker = automation.TreeWalkerFactory.GetControlViewWalker();
             var forward = new List<AutomationElement>();
             var backward = new List<AutomationElement>();

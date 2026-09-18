@@ -363,11 +363,63 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
     public IRawElementProviderSimple GetEnclosingElement() =>
         _provider.Links.Enclosing(Bounds.Start, Bounds.End)?.Provider ?? _provider.EnclosingElement;
     public string GetText(int maxLength) => Native.GetText(maxLength);
-    public int Move(TextUnit unit, int count) { int moved = Native.Move(unit, count); _provider.Track(_inner); return moved; }
+    public int Move(TextUnit unit, int count)
+    {
+        ITextRangeProvider native = Native;
+        int direction = Math.Sign(count);
+        int moved = 0;
+        while (moved != count)
+        {
+            int before = AvalonTextRangeAccess.Bounds(native).Start;
+            if (direction > 0 ? before == _provider.Length : before == 0) { break; }
+            _ = native.Move(unit, direction);
+            _provider.Track(native);
+            int after = AvalonTextRangeAccess.Bounds(native).Start;
+            if ((after - before) * direction <= 0) { break; }
+            moved += direction;
+        }
+        return moved;
+    }
     public void MoveEndpointByRange(TextPatternRangeEndpoint endpoint, ITextRangeProvider targetRange, TextPatternRangeEndpoint targetEndpoint)
     { Native.MoveEndpointByRange(endpoint, Unwrap(targetRange), targetEndpoint); _provider.Track(_inner); }
     public int MoveEndpointByUnit(TextPatternRangeEndpoint endpoint, TextUnit unit, int count)
-    { int moved = Native.MoveEndpointByUnit(endpoint, unit, count); _provider.Track(_inner); return moved; }
+    {
+        ITextRangeProvider native = Native;
+        int direction = Math.Sign(count);
+        int moved = 0;
+        while (moved != count)
+        {
+            int before = EndpointOffset();
+            if (direction > 0 ? before == _provider.Length : before == 0) { break; }
+            int originalStart = AvalonTextRangeAccess.Bounds(native).Start;
+            _ = native.MoveEndpointByUnit(endpoint, unit, direction);
+            int after = EndpointOffset();
+            // A-9: the native final line/word has no following start boundary.
+            // Its terminal boundary is the document end, even without LF.
+            if (direction > 0 && after <= before
+                && unit is TextUnit.Word or TextUnit.Format or TextUnit.Line or TextUnit.Paragraph)
+            {
+                native.MoveEndpointByRange(endpoint, Unwrap(_provider.DocumentRange), TextPatternRangeEndpoint.End);
+                if (endpoint == TextPatternRangeEndpoint.End)
+                {
+                    // Native backward clamping may also have crossed the start.
+                    native.MoveEndpointByRange(TextPatternRangeEndpoint.Start,
+                        Unwrap(_provider.Range(originalStart, originalStart)), TextPatternRangeEndpoint.Start);
+                }
+                after = EndpointOffset();
+            }
+            _provider.Track(native);
+            if ((after - before) * direction <= 0) { break; }
+            moved += direction;
+        }
+        return moved;
+
+        int EndpointOffset()
+        {
+            (int start, int end) = AvalonTextRangeAccess.Bounds(native);
+            return endpoint == TextPatternRangeEndpoint.Start ? start : end;
+        }
+    }
     public void Select() => Native.Select();
     public void AddToSelection() => Native.AddToSelection();
     public void RemoveFromSelection() => Native.RemoveFromSelection();

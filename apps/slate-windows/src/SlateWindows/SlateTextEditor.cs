@@ -564,10 +564,11 @@ internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
         if (!_ownerTreeChanged && _semanticProvider?.Links.WasExposed != true) { return; }
         _ownerTreeChanged = false;
         InvalidateSemanticAvailability();
-        if (AutomationPeer.ListenerExists(AutomationEvents.StructureChanged))
+        if (AutomationPeer.ListenerExists(AutomationEvents.StructureChanged)
+            && ProviderFromPeer(this) is IRawElementProviderFragment fragment)
         {
-            AutomationInteropProvider.RaiseStructureChangedEvent(ProviderFromPeer(this),
-                new StructureChangedEventArgs(StructureChangeType.ChildrenInvalidated, ((IRawElementProviderFragment)ProviderFromPeer(this)).GetRuntimeId()));
+            AutomationInteropProvider.RaiseStructureChangedEvent((IRawElementProviderSimple)fragment,
+                new StructureChangedEventArgs(StructureChangeType.ChildrenInvalidated, fragment.GetRuntimeId()));
         }
         _owner.AutomationEventForCensus?.Invoke(AutomationEvents.StructureChanged);
     }

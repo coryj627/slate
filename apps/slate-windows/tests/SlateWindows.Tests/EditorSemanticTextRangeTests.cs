@@ -291,6 +291,76 @@ public sealed class EditorSemanticTextRangeTests
         Assert.DoesNotContain(name, character => char.IsSurrogate(character));
     });
 
+    [Theory]
+    [InlineData("", 0)]
+    [InlineData("One line", 0)]
+    [InlineData("One line", 4)]
+    [InlineData("One line\n", 0)]
+    [InlineData("First\r\n\r\nFinal\r\n", 0)]
+    public void SayAllEndpointMovementTerminatesAtDocumentEnd(string text, int start) => OnSta(() =>
+    {
+        using var host = new Host(text);
+        ITextRangeProvider range = host.Provider.Range(start, start);
+        string read = string.Empty;
+        for (int step = 0; step <= host.Session.Document.LineCount; step++)
+        {
+            int moved = range.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Line, 1);
+            if (moved == 0) { Assert.Equal(text[start..], read); return; }
+            string chunk = range.GetText(-1);
+            Assert.NotEmpty(chunk);
+            read += chunk;
+            range.MoveEndpointByRange(TextPatternRangeEndpoint.Start, range, TextPatternRangeEndpoint.End);
+        }
+        Assert.Fail("Say All must stop when its endpoint cannot advance.");
+    });
+
+    [Fact]
+    public void PinnedNativeBaselineOverreportsMovementOnEmptyText() => OnSta(() =>
+    {
+        using var host = new Host(string.Empty);
+        ITextRangeProvider native = AvalonTextRangeAccess.Create(host.Editor.TextArea, host.Session.Document, 0, 0);
+        Assert.Equal(1, native.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Line, 1));
+        Assert.Equal((0, 0), AvalonTextRangeAccess.Bounds(native));
+    });
+
+    [Theory]
+    [InlineData(TextUnit.Character)]
+    [InlineData(TextUnit.Word)]
+    [InlineData(TextUnit.Line)]
+    [InlineData(TextUnit.Paragraph)]
+    [InlineData(TextUnit.Document)]
+    public void EndpointMovementReportsActualProgressAndStopsAtBothEdges(TextUnit unit) => OnSta(() =>
+    {
+        using var host = new Host("One 😀\r\nTwo\nFinal");
+        EditorSemanticTextRange range = host.Provider.Range(0, 0);
+        Assert.Equal(0, range.MoveEndpointByUnit(TextPatternRangeEndpoint.End, unit, 0));
+        int forward = range.MoveEndpointByUnit(TextPatternRangeEndpoint.End, unit, int.MaxValue);
+        Assert.InRange(forward, 1, host.Text.Length);
+        Assert.Equal(host.Text, range.GetText(-1));
+        Assert.Equal(0, range.MoveEndpointByUnit(TextPatternRangeEndpoint.End, unit, 1));
+        int backward = range.MoveEndpointByUnit(TextPatternRangeEndpoint.End, unit, int.MinValue);
+        Assert.InRange(backward, -host.Text.Length, -1);
+        Assert.Equal(string.Empty, range.GetText(-1));
+        Assert.Equal(0, range.MoveEndpointByUnit(TextPatternRangeEndpoint.End, unit, -1));
+        Assert.Equal((0, 0), range.Bounds);
+    });
+
+    [Theory]
+    [InlineData(TextUnit.Character)]
+    [InlineData(TextUnit.Word)]
+    [InlineData(TextUnit.Line)]
+    public void RangeMovementCountsProgressWithoutLoopingAtTheEdges(TextUnit unit) => OnSta(() =>
+    {
+        using var host = new Host("One 😀\nTwo\nFinal");
+        EditorSemanticTextRange range = host.Provider.Range(0, 0);
+        int forward = range.Move(unit, int.MaxValue);
+        Assert.InRange(forward, 1, host.Text.Length);
+        Assert.Equal(0, range.Move(unit, 1));
+        int backward = range.Move(unit, int.MinValue);
+        Assert.InRange(backward, -host.Text.Length, -1);
+        Assert.Equal(0, range.Move(unit, -1));
+    });
+
     [Fact]
     public void EmptyCompositionCompletionInvalidatesTheUnavailableChildCache() => OnSta(() =>
     {

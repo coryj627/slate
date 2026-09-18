@@ -537,7 +537,7 @@ map to Line. The anchor correction is not the source of the native count bug.
 
 The decorator will delegate individual unit steps to the native provider and
 count actual progress, stopping at the document boundary/no-progress. Forward
-Line/Paragraph endpoint movement from the last line must reach document end
+Line/Paragraph and Word/Format endpoint movement from the final unit must reach document end
 once before reporting zero; that endpoint uses the native document range.
 This preserves native character/word boundaries without parsing text or
 deriving semantic spans. Zero and extreme counts must terminate safely, and
@@ -546,3 +546,10 @@ Native range Move likewise reports actual start progress while preserving its
 native unit expansion. Empty, final-newline, no-final-newline, CRLF, backwards,
 multi-unit and Unicode tests pin the adapter. A real NVDA rerun must reach the
 final marker and emit its normal say-all stop callback before this finding closes.
+
+Running the existing headless-owner tests while NVDA is active also exposed an
+event-publication assumption: a process-wide StructureChanged listener does not
+imply that an unhosted editor has a native provider. Publication must check the
+provider before retrieving its runtime ID; cache invalidation and census signals
+remain available without an HWND. This was reproduced in the existing replacement
+and peer-update facts, independently of the movement regression.
