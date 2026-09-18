@@ -29,7 +29,7 @@ public sealed class AtNavigationMapCensus
     ];
 
     private static readonly Regex Construction = new(
-        @"(?<rotor>\.accessibilityRotor\s*\()|(?<action>\.accessibilityAction\s*\(|\.accessibilityActions\s*(?:\(|\{)|\bNSAccessibilityCustomAction\s*\()|(?<content>\.accessibilityCustomContent\s*\(|\bAXCustomContent\s*\()",
+        @"(?<rotor>\.accessibilityRotor\s*\()|(?<action>\.accessibilityAction\s*(?:\(|\{)|\.accessibilityActions\s*(?:\(|\{)|\bNSAccessibilityCustomAction\s*\()|(?<content>\.accessibilityCustomContent\s*\(|\bAXCustomContent\s*\()",
         RegexOptions.CultureInvariant);
 
     private static Row[] ReadRows(string text) => text.Split('\n')
@@ -62,6 +62,7 @@ public sealed class AtNavigationMapCensus
         return sites.Except(registered).Select(site => "Missing " + site)
             .Concat(registered.Except(sites).Select(site => "Stale " + site))
             .Concat(registered.GroupBy(site => site).Where(group => group.Count() != 1).Select(group => "Duplicate " + group.Key))
+            .Concat(sites.GroupBy(site => site).Where(group => group.Count() != 1).Select(group => "Multiple constructions on one line " + group.Key))
             .ToArray();
     }
 
@@ -99,23 +100,20 @@ public sealed class AtNavigationMapCensus
         }
         string macSource = row.MacSource.Split(':')[0];
         if (!SafeSourcePath(MacRoot, macSource, out _)) { Fail("missing Mac source " + macSource); }
-        if (!SafeSourcePath(SourceText.ShellSourceRoot(), row.WindowsSource, out string windowsPath))
+        var patterns = new HashSet<string>(StringComparer.Ordinal);
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string anchor in row.WindowsSource.Split("; "))
         {
-            Fail("missing Windows source " + row.WindowsSource);
+            if (!ReadScope(anchor, patterns, ids)) { Fail("missing or ambiguous Windows source anchor " + anchor); }
         }
-        else
+        foreach (string pattern in Tokens(row.Patterns))
         {
-            HashSet<string> patterns = SourcePatterns(windowsPath);
-            foreach (string pattern in Tokens(row.Patterns))
+            if (!Enum.TryParse(pattern, out PatternInterface _) || !patterns.Contains(pattern))
             {
-                if (!Enum.TryParse(pattern, out PatternInterface _) || !patterns.Contains(pattern))
-                {
-                    Fail("source does not declare native/custom pattern " + pattern);
-                }
+                Fail("selected scope does not declare native/custom pattern " + pattern);
             }
         }
-        HashSet<string> ids = AuthoredIds.Value;
-        foreach (string id in Tokens(row.Ids)) { if (!ids.Contains(id)) { Fail("missing automation ID " + id); } }
+        foreach (string id in Tokens(row.Ids)) { if (!ids.Contains(id)) { Fail("selected scope does not author automation ID " + id); } }
         foreach (string id in Tokens(row.Chords)) { if (ChordTable.Find(id) is null) { Fail("missing chord row " + id); } }
         string[] evidence = Tokens(row.Evidence);
         if (evidence.Length == 0) { Fail("no executable evidence"); }
@@ -151,13 +149,6 @@ public sealed class AtNavigationMapCensus
 
     private static string[] Tokens(string cell) => Regex.Matches(cell, "`([^`]+)`").Select(match => match.Groups[1].Value).ToArray();
 
-    private static readonly Lazy<HashSet<string>> AuthoredIds = new(() => AutomationIdInventory.Read()
-        .SelectMany(site => site.Source.EndsWith(".xaml", StringComparison.Ordinal)
-            ? site.Expression.StartsWith('{') ? Array.Empty<string>() : [site.Expression]
-            : Microsoft.CodeAnalysis.CSharp.SyntaxFactory.ParseExpression(site.Expression) is LiteralExpressionSyntax literal
-                && literal.Token.Value is string value ? new[] { value } : Array.Empty<string>())
-        .ToHashSet(StringComparer.Ordinal));
-
     // These are WPF's native substrate promises, not a second list of map
     // rows. The actual source must construct/inherit one of these controls;
     // arbitrary prose mentioning a pattern cannot satisfy the check. The
@@ -169,55 +160,75 @@ public sealed class AtNavigationMapCensus
         ["CheckBox"] = ["Toggle"],
         ["TextBox"] = ["Text", "Value"],
         ["RichTextBox"] = ["Text"],
-        ["ListBox"] = ["Selection"],
+        ["ListBox"] = ["Selection", "SelectionItem"],
         ["ListBoxItem"] = ["SelectionItem"],
         ["RadioButton"] = ["SelectionItem"],
-        ["TreeView"] = ["Selection"],
+        ["TreeView"] = ["Selection", "SelectionItem", "ExpandCollapse"],
         ["TreeViewItem"] = ["SelectionItem", "ExpandCollapse"],
         ["DataGrid"] = ["Grid", "Table", "Selection", "VirtualizedItem"],
     };
 
-    private static HashSet<string> SourcePatterns(string path)
+    private static bool ReadScope(string anchor, HashSet<string> patterns, HashSet<string> ids)
     {
-        var patterns = new HashSet<string>(StringComparer.Ordinal);
+        Match selector = Regex.Match(anchor, @"^([^#]+)#(id|class):([A-Za-z_][A-Za-z0-9_]*)$");
+        if (!selector.Success || !SafeSourcePath(SourceText.ShellSourceRoot(), selector.Groups[1].Value, out string path)) { return false; }
+        string name = selector.Groups[3].Value;
         var types = new HashSet<string>(StringComparer.Ordinal);
-        if (Path.GetExtension(path) == ".xaml")
+        if (selector.Groups[2].Value == "id" && Path.GetExtension(path) == ".xaml")
         {
-            XDocument document = XDocument.Load(path);
-            foreach (XElement element in document.Descendants())
+            XElement[] matches = XDocument.Load(path).Descendants().Where(element =>
+                (string?)element.Attribute("AutomationProperties.AutomationId") == name).ToArray();
+            if (matches.Length != 1) { return false; }
+            foreach (XElement element in matches[0].DescendantsAndSelf())
             {
                 types.Add(element.Name.LocalName);
-                // Native generated item peers come from the ItemsControl's
-                // item-container style, even before any rows are realized.
-                XAttribute? target = element.Attribute("TargetType");
-                if (target is not null) { types.Add(target.Value.Replace("{x:Type ", "").TrimEnd('}')); }
+                XAttribute? id = element.Attribute("AutomationProperties.AutomationId");
+                if (id is not null && !id.Value.StartsWith('{')) { ids.Add(id.Value); }
             }
         }
-        else
+        else if (selector.Groups[2].Value == "class" && Path.GetExtension(path) == ".cs")
         {
-            CompilationUnitSyntax root = CSharpSource.LoadPath(path).Root;
-            foreach (MemberAccessExpressionSyntax member in CSharpSource.MemberAccesses(root, "PatternInterface"))
+            ClassDeclarationSyntax[] matches = CSharpSource.LoadPath(path).Root.DescendantNodes()
+                .OfType<ClassDeclarationSyntax>().Where(type => type.Identifier.ValueText == name).ToArray();
+            if (matches.Length != 1) { return false; }
+            SyntaxNode[] nodes = matches[0].DescendantNodes(node => node == matches[0] || node is not ClassDeclarationSyntax).ToArray();
+            foreach (MemberAccessExpressionSyntax member in nodes.OfType<MemberAccessExpressionSyntax>())
             {
-                patterns.Add(member.Name.Identifier.ValueText);
+                if (member.Expression.ToString() == "PatternInterface") { patterns.Add(member.Name.Identifier.ValueText); }
             }
-            IEnumerable<TypeSyntax> declaredTypes = root.DescendantNodes().SelectMany(node => node switch
+            foreach (InvocationExpressionSyntax call in nodes.OfType<InvocationExpressionSyntax>())
+            {
+                if (call.Expression.GetLastToken().ValueText == "SetAutomationId"
+                    && call.ArgumentList.Arguments.LastOrDefault()?.Expression is LiteralExpressionSyntax literal
+                    && literal.Token.Value is string value) { ids.Add(value); }
+            }
+            foreach (MethodDeclarationSyntax method in nodes.OfType<MethodDeclarationSyntax>()
+                .Where(method => method.Identifier.ValueText == "GetAutomationIdCore"))
+            {
+                ExpressionSyntax? expression = method.ExpressionBody?.Expression
+                    ?? method.Body?.Statements.OfType<ReturnStatementSyntax>().SingleOrDefault()?.Expression;
+                if (expression is LiteralExpressionSyntax literal && literal.Token.Value is string value) { ids.Add(value); }
+            }
+            IEnumerable<TypeSyntax> constructedTypes = nodes.SelectMany(node => node switch
             {
                 ObjectCreationExpressionSyntax created => new[] { created.Type },
                 BaseTypeSyntax inherited => new[] { inherited.Type },
-                VariableDeclarationSyntax variable => new[] { variable.Type },
+                VariableDeclarationSyntax variable when variable.Variables.Any(item => item.Initializer?.Value is ImplicitObjectCreationExpressionSyntax)
+                    => new[] { variable.Type },
                 _ => Array.Empty<TypeSyntax>(),
             });
-            foreach (TypeSyntax type in declaredTypes)
+            foreach (TypeSyntax type in constructedTypes)
             {
-                string name = type.GetLastToken().ValueText;
-                types.Add(name.EndsWith("AutomationPeer", StringComparison.Ordinal) ? name[..^"AutomationPeer".Length] : name);
+                string control = type.GetLastToken().ValueText;
+                types.Add(control.EndsWith("AutomationPeer", StringComparison.Ordinal) ? control[..^"AutomationPeer".Length] : control);
             }
         }
+        else { return false; }
         foreach ((string control, string[] supported) in NativePatterns)
         {
             if (types.Contains(control)) { patterns.UnionWith(supported); }
         }
-        return patterns;
+        return true;
     }
 
     [Fact]
@@ -229,14 +240,15 @@ public sealed class AtNavigationMapCensus
             */
             .accessibilityRotor("Cards") { }
             .accessibilityAction(.default) { }
+            .accessibilityAction { }
             .accessibilityActions { Button("Delete") {} }
             NSAccessibilityCustomAction(name: name) { }
             .accessibilityCustomContent("Source", value)
             AXCustomContent(label: "Connects to", value: value)
             // .accessibilityActions { }
             """;
-        Assert.Equal(new[] { "rotor", "action", "action", "action", "content", "content" }, Sites("View.swift", source).Select(site => site.Group));
-        Assert.Equal(Enumerable.Range(4, 6).Select(line => "View.swift:" + line), Sites("View.swift", source).Select(site => site.Source));
+        Assert.Equal(new[] { "rotor", "action", "action", "action", "action", "content", "content" }, Sites("View.swift", source).Select(site => site.Group));
+        Assert.Equal(Enumerable.Range(4, 7).Select(line => "View.swift:" + line), Sites("View.swift", source).Select(site => site.Source));
     }
 
     [Fact]
@@ -249,6 +261,8 @@ public sealed class AtNavigationMapCensus
         Assert.NotEmpty(CoverageFailures(rows, sites.Where(site => site.Source != custom.MacSource).ToArray()));
         Assert.NotEmpty(CoverageFailures([.. rows, custom], sites));
         Assert.NotEmpty(CoverageFailures(rows, [.. sites, .. Sites("NewView.swift", ".accessibilityActions { }")]));
+        Assert.NotEmpty(CoverageFailures(rows, [.. sites, .. Sites("NewView.swift", ".accessibilityAction { }")]));
+        Assert.NotEmpty(CoverageFailures(rows, [.. sites, sites.First()]));
     }
 
     [Fact]
@@ -261,6 +275,24 @@ public sealed class AtNavigationMapCensus
             row with { Patterns = "`RangeValue`" }, row with { Status = "passed" },
             row with { Evidence = "`TestThatDoesNotExist`" }, row with { Checklist = "reports/w1_shell_at_checklist.md#999" },
             row with { WindowsSource = "Missing.cs" }, row with { Status = "designated" },
+        })
+        {
+            Assert.NotEmpty(ClaimFailures(broken));
+        }
+    }
+
+    [Fact]
+    public void ExistingButUnrelatedIdsAndPatternsCannotSatisfyTheMappedRoute()
+    {
+        Row row = Rows().Single(row => row.Affordance == "Sidebar trees");
+        Assert.Empty(ClaimFailures(row));
+        foreach (Row broken in new[]
+        {
+            row with { Ids = "`CommandPaletteSearch`" },
+            row with { Patterns = "`Value`" },
+            row with { Patterns = "`Toggle`" },
+            row with { Patterns = "`Invoke`" },
+            row with { WindowsSource = "MainWindow.xaml#id:CommandPaletteSearch" },
         })
         {
             Assert.NotEmpty(ClaimFailures(broken));

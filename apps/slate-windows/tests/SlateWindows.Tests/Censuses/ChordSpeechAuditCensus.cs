@@ -103,7 +103,22 @@ public sealed class ChordSpeechAuditCensus
         XDocument document = XDocument.Parse(source);
         return document.Descendants().SelectMany(element => element.Attributes().Select(attribute => attribute.Value)
                 .Concat(element.Nodes().OfType<XText>().Select(node => node.Value)))
+            .Concat(document.Descendants().Where(element => element.Name.LocalName is "TextBlock" or "Paragraph" or "Span" or "Hyperlink")
+                .Select(InlineText))
             .Where(value => SpokenChord.IsMatch(value));
+    }
+
+    private static string InlineText(XElement element)
+    {
+        string text = (string?)element.Attribute("Text") ?? "";
+        if (text.StartsWith('{')) { text = "A"; }
+        return text + string.Concat(element.Nodes().Select(node => node switch
+        {
+            XText literal => literal.Value,
+            XElement inline when inline.Name.LocalName == "LineBreak" => "\n",
+            XElement inline when inline.Name.LocalName is "Run" or "Span" or "Bold" or "Italic" or "Underline" or "Hyperlink" => InlineText(inline),
+            _ => "",
+        }));
     }
 
     [Theory]
@@ -160,6 +175,9 @@ public sealed class ChordSpeechAuditCensus
     [InlineData("<TextBlock Text='Right Arrow'/>")]
     [InlineData("<TextBlock Text='Control Equals'/>")]
     [InlineData("<TextBlock Text='Alt Backtick'/>")]
+    [InlineData("<TextBlock><Run>Control </Run><Run>Enter</Run></TextBlock>")]
+    [InlineData("<TextBlock><Run Text='Control '/><Run Text='Enter'/></TextBlock>")]
+    [InlineData("<TextBlock><Span><Run Text='Control '/></Span><Run Text='Enter'/></TextBlock>")]
     public void XamlAttributesAndTextAreAudited(string source) => Assert.NotEmpty(XamlViolations(source));
 
     private static string[] FixtureViolations(string source, string relative)

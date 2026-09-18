@@ -172,3 +172,14 @@ uses this narrower model, specified before changing the census:
    owner, so splitting a spoken chord across adjacent Runs cannot hide it.
 
 These changes amend N-2/N-6's witnesses, not the accepted owner decisions.
+
+The scoped repair resolves the four Spec findings and five overlapping
+Standards groups from implementation round 1. The source sweep now sees
+trailing-closure defaults and rejects repeated constructions on one line;
+the XAML audit joins inline Runs. The map and File actions checklist name
+the shipped buttons, and Mermaid points to item 4. Wrong-but-existing
+ID/pattern mutations pass only when the census correctly rejects them.
+Seven map-census facts pass after rebuilding; the affected suite's other
+126 cases (reading, chord table/delivery, help, Swift and speech audit)
+passed before the final traversal correction. The full real-desktop axe
+suite and the next independent fixed-head review remain in progress.
