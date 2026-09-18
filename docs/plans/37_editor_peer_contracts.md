@@ -283,3 +283,52 @@ rejected: TextDocument and the byte-offset index are dispatcher-owned, and
 WPF marshals external UIA calls. A-6 documents the exceptional Link attribute
 route and its remaining operand limitation; exported reads are exercised off-thread.
 The raw internal session method deliberately retains its thread guard.
+
+
+### Review round 2 and opaque-region design pass (head 29dbeabe)
+
+Standards and spec independently found one E-6 blocker in the same subsystem:
+raw InlineCode was allowed to veto a higher-priority Comment. Two comments
+containing one backtick each could be joined by raw Markdown into one code
+span; the second comment's Link then escaped its mask. The simpler retained
+Comment plus escaped Link case also contradicted visual precedence. This
+was created by the round-one fix, so rounds 1 + 2 reach the protocol's
+weighted three-round stop. The following design is recorded before code.
+
+1. Preserve the established paint precedence: Frontmatter > CodeFence >
+   Comment > InlineCode. In particular, percent markers inside inline
+   backticks retain their existing comment meaning; W7 does not introduce
+   a new code-first comment dialect. Raw InlineCode cannot veto a comment.
+2. Classify comments once, before deriving semantic masks. A possible opener
+   inside higher-priority frontmatter or fenced/indented code is literal and
+   skipped BEFORE pairing. A real opener consumes the next lexical percent
+   pair as its close, even when a raw Markdown fence occurs in between.
+   Unterminated openers emit no Comment. This preserves a real comment's
+   complete opaque coverage when a nested fence wins visual resolution.
+3. Feed these same canonical Comment spans into both paint resolution and
+   the opaque semantic mask. The mask retains complete comment coverage;
+   it never reclassifies an already-paired comment using raw inline code.
+4. The incremental CommentIndex is a conservative window guard, not a
+   classifier. Cache every adjacent non-overlapping lexical percent-token
+   pair, including the pair that bridges the old close/open parity. Every
+   canonical comment is one such pair after literal openers are skipped.
+   A window between otherwise independent comments may therefore fall back
+   unnecessarily, but a skipped code marker cannot hide a genuine comment
+   from the guard. The existing percent-edit rescan / ordinary-edit shift
+   model remains sound for these overlapping candidate intervals.
+5. Regression witnesses cover comments joined by backticks, a retained
+   Comment with an escaped Link, literal fence/frontmatter markers before a
+   genuine comment, a real comment surrounding fences, Unicode/CRLF, and
+   full/window equivalence inside comments across blank paragraphs. The
+   cached guard must still match a fresh scan after arbitrary edit sequences.
+
+This is one core classification and the existing full-document fallback,
+not an accessibility-only parser. The cost is conservative fallback between
+percent markers; ordinary heading/prose benchmark cases are unchanged.
+
+The regression first failed on 29dbeabe with `[hidden](x)` exposed from the
+second comment. With the shared classification repair, all 83 editor-span
+and edit-sequence tests pass. The expanded focused witness also passes
+UTF-8/UTF-16, CRLF, and live DocumentBuffer window equivalence. No further
+native ABI, ownership, dispatcher, geometry or batching blocker was found
+by either review axis. A-6 remains pending owner acceptance.

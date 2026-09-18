@@ -154,7 +154,8 @@ pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
     spans.extend(wikilinks);
     spans.extend(citations);
     spans.extend(scan_tags(source));
-    spans.extend(scan_comments(source));
+    let comments = scan_comments(source, &spans);
+    spans.extend(comments);
     let opaque = SemanticOpaqueRanges::new(&spans);
     let mut resolved = resolve_overlaps(source, spans);
     // Slice 3: overlay per-token code-block internals. Added *after* the
@@ -272,9 +273,8 @@ pub(crate) fn highlight_spans_in_range_with(
     // intersects an existing terminated comment. The free oracle scans the
     // whole source for the latter (the stateful buffer maintains an
     // incremental comment index instead — #407 Part 3).
-    let window_intersects_comment = scan_comments(source)
-        .iter()
-        .any(|c| (c.start_byte as usize) < win_end && win_start < (c.end_byte as usize));
+    let window_intersects_comment =
+        CommentIndex::from_source(source).intersects(win_start, win_end);
 
     let window_text = &source[win_start..win_end];
     highlight_window(
@@ -1395,59 +1395,54 @@ fn scan_tags(source: &str) -> Vec<EditorSpan> {
     out
 }
 
-/// Scan `%% … %%` comments (inline or multi-line). Non-overlapping:
-/// scanning resumes past each close. An unterminated `%%` is not
-/// emitted (mirrors the prior Swift behaviour).
-fn scan_comments(source: &str) -> Vec<EditorSpan> {
-    scan_comment_ranges(source)
-        .into_iter()
-        .map(|(start, end)| EditorSpan {
-            start_byte: start as u32,
-            end_byte: end as u32,
-            kind: EditorSpanKind::Comment,
-        })
-        .collect()
-}
-
-/// The byte ranges of every terminated `%% … %%` comment in `source`, in
-/// document order, non-overlapping (scanning resumes past each close). The
-/// shared core of [`scan_comments`] and [`CommentIndex`] (#407) — the latter
-/// caches these ranges and maintains them incrementally so the per-keystroke
-/// window-intersection test never re-scans the whole document.
-fn scan_comment_ranges(source: &str) -> Vec<(usize, usize)> {
-    let bytes = source.as_bytes();
+/// Scan terminated `%% … %%` comments using the existing paint precedence:
+/// frontmatter/fenced code > comments > inline code. Skip literal openers
+/// BEFORE pairing; otherwise a marker in a fence steals a later real opener.
+/// Once a comment begins, its next lexical marker closes it, even across a
+/// raw Markdown fence. Both paint and semantic coverage use these same spans.
+fn scan_comments(source: &str, structure: &[EditorSpan]) -> Vec<EditorSpan> {
+    let literal = SemanticOpaqueRanges::merge(structure.iter().filter_map(|span| {
+        matches!(
+            span.kind,
+            EditorSpanKind::Frontmatter | EditorSpanKind::CodeFence
+        )
+        .then_some((span.start_byte, span.end_byte))
+    }));
+    let mut markers = source.match_indices("%%").map(|(at, _)| at);
     let mut out = Vec::new();
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        if bytes[i] == b'%' && bytes[i + 1] == b'%' {
-            let start = i;
-            let mut j = i + 2;
-            let mut close = None;
-            while j + 1 < bytes.len() {
-                if bytes[j] == b'%' && bytes[j + 1] == b'%' {
-                    close = Some(j + 2);
-                    break;
-                }
-                j += 1;
-            }
-            match close {
-                Some(end) => {
-                    out.push((start, end));
-                    i = end;
-                    continue;
-                }
-                None => break, // unterminated `%%` — stop
-            }
+    while let Some(start) = markers.next() {
+        if SemanticOpaqueRanges::contains(&literal, start as u32) {
+            continue;
         }
-        i += 1;
+        let Some(close) = markers.next() else {
+            break;
+        };
+        out.push(EditorSpan {
+            start_byte: start as u32,
+            end_byte: (close + 2) as u32,
+            kind: EditorSpanKind::Comment,
+        });
     }
     out
 }
 
-/// Sorted, non-overlapping byte ranges of the terminated `%% … %%` comments in
-/// the editor document, maintained **incrementally** across edits (#407 Part
+/// Every adjacent pair of non-overlapping lexical `%%` tokens, without
+/// classifying code/frontmatter. A canonical comment must be one of these
+/// candidates, regardless of how many literal openers the classifier skips.
+/// Adjacent candidates overlap at their shared marker; this intentionally
+/// over-approximates comments for the window guard, never for returned spans.
+fn scan_comment_candidates(source: &str) -> Vec<(usize, usize)> {
+    let mut previous = None;
+    source
+        .match_indices("%%")
+        .filter_map(|(at, _)| previous.replace(at).map(|start| (start, at + 2)))
+        .collect()
+}
+
+/// Sorted candidate comment ranges (including overlapping close/open pairs)
+/// in the editor document, maintained **incrementally** across edits (#407 Part
 /// 3) so the per-keystroke "does the window intersect a comment?" test costs
-/// O(comments) instead of an O(document) [`scan_comment_ranges`].
+/// O(comments) instead of an O(document) [`scan_comment_candidates`].
 ///
 /// ## Maintenance contract
 ///
@@ -1459,9 +1454,9 @@ fn scan_comment_ranges(source: &str) -> Vec<(usize, usize)> {
 /// **shifts** the cached ranges, which is sound because a non-`%` edit can
 /// neither create nor destroy a `%%` token nor change the left-to-right
 /// pairing of the tokens that remain (only their positions move). A range
-/// entirely after the edit shifts both ends by `delta`; the (at most one)
-/// range whose interior straddles the edit shifts only its end. The
-/// `DocBufferState` `debug_assert!`s `index == scan_comment_ranges(whole)`
+/// entirely after the edit shifts both ends by `delta`; a candidate whose
+/// interior straddles the edit shifts only its end. The
+/// `DocBufferState` `debug_assert!`s `index == scan_comment_candidates(whole)`
 /// after every edit; the differential census is the real guarantee.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct CommentIndex {
@@ -1473,11 +1468,11 @@ impl CommentIndex {
     /// branch of [`apply_edit`](Self::apply_edit)).
     pub(crate) fn from_source(source: &str) -> Self {
         Self {
-            ranges: scan_comment_ranges(source),
+            ranges: scan_comment_candidates(source),
         }
     }
 
-    /// True when any cached comment range intersects `[win_start, win_end)`.
+    /// True when any conservative comment candidate intersects the window.
     pub(crate) fn intersects(&self, win_start: usize, win_end: usize) -> bool {
         self.ranges
             .iter()
@@ -1514,13 +1509,13 @@ impl CommentIndex {
         let halo_right =
             edit_new_end < new_source.len() && new_source.byte_at(edit_new_end) == b'%';
         if inserted.contains('%') || deleted.contains('%') || halo_left || halo_right {
-            self.ranges = scan_comment_ranges(&new_source.slice_to_string(0, new_source.len()));
+            self.ranges = scan_comment_candidates(&new_source.slice_to_string(0, new_source.len()));
             return;
         }
 
         // No `%` near the edit: shift. A range entirely before the edit is
-        // unchanged; one entirely after shifts both ends by `delta`; the (at
-        // most one) range whose interior straddles the edit shifts only its
+        // unchanged; one entirely after shifts both ends by `delta`; each
+        // candidate whose interior straddles the edit shifts only its
         // end (the edit grew/shrank the comment body between its delimiters).
         let delta = inserted.len() as isize - deleted.len() as isize;
         let shift = |v: usize| (v as isize + delta) as usize;
@@ -1656,7 +1651,8 @@ fn highlight_spans_reference(source: &str) -> Vec<EditorSpan> {
     spans.extend(wikilink_spans(source));
     spans.extend(citation_spans(source));
     spans.extend(scan_tags(source));
-    spans.extend(scan_comments(source));
+    let comments = scan_comments(source, &spans);
+    spans.extend(comments);
     let opaque = SemanticOpaqueRanges::new(&spans);
     let mut resolved = resolve_overlaps(source, spans);
     append_semantic_overlays(&mut resolved, semantic, &opaque);
@@ -1674,8 +1670,9 @@ fn is_semantic_overlay(span: &EditorSpan) -> bool {
 }
 
 /// Opaque coverage precedes paint conflict resolution: a comment surrounding a
-/// fence still hides semantics outside that fence. Conversely, percent markers
-/// starting inside code are literal text, not a comment extending past the code.
+/// fence still hides semantics outside that fence. Canonical comments have
+/// already accounted for higher-priority frontmatter/fenced code; raw inline
+/// code cannot veto them because comments have higher paint priority.
 struct SemanticOpaqueRanges {
     all: Vec<(u32, u32)>,
     prose: Vec<(u32, u32)>,
@@ -1691,9 +1688,10 @@ impl SemanticOpaqueRanges {
             .then_some((span.start_byte, span.end_byte))
         }));
         let prose = Self::merge(spans.iter().filter_map(|span| {
-            (matches!(span.kind, EditorSpanKind::Frontmatter)
-                || matches!(span.kind, EditorSpanKind::Comment)
-                    && !Self::contains(&code, span.start_byte))
+            matches!(
+                span.kind,
+                EditorSpanKind::Frontmatter | EditorSpanKind::Comment
+            )
             .then_some((span.start_byte, span.end_byte))
         }));
         let all = Self::merge(code.into_iter().chain(prose.iter().copied()));
@@ -2078,6 +2076,44 @@ mod tests {
             slice(literal, &first(&spans, &EditorSpanKind::Link).unwrap()),
             "[visible](y)"
         );
+    }
+
+    #[test]
+    fn comment_precedence_and_pairing_share_one_opaque_model() {
+        for source in [
+            "%% ` %%\n%% ` [hidden](x) %%\n\n[visible](y)\n",
+            "`%%` [hidden](x) %%\n\n[visible](y)\n",
+            "```\n%% literal\n```\n\n%%\n\n[hidden](x) ![hidden image](x)\n\n> hidden quote\n\n%%\n\n[visible](y)\n",
+            "---\ntitle: '%% literal'\n---\n\n%%\n\n[hidden](x)\n\n%%\n\n[visible](y)\n",
+            "~~~\n%% literal\n~~~\n\n%%\n\n[hidden](x)\n\n%%\n\n[visible](y)\n",
+            "    %% literal\n\n%%\n\n[hidden](x)\n\n%%\n\n[visible](y)\n",
+            "Préface 📝\n\n```\n%% littéral\n```\n\n%%\n\n[hidden](x)\n\n%%\n\n[visible](y)\n",
+            "%%\n[hidden](x)\n\n```\ncode\n```\n%%\n\n[visible](y)\n",
+        ] {
+            for source in [source.to_owned(), source.replace('\n', "\r\n")] {
+                let buffer = crate::doc_buffer::DocBufferState::new(&source);
+                let spans = highlight_spans(&source);
+                let semantics: Vec<_> = spans
+                    .iter()
+                    .filter(|span| is_semantic_overlay(span))
+                    .map(|span| slice(&source, span))
+                    .collect();
+                assert_eq!(semantics, ["[visible](y)"], "source: {source:?}");
+                // Include every line, especially comment interiors separated
+                // from both delimiters by blank paragraphs.
+                for (at, _) in source
+                    .char_indices()
+                    .filter(|(_, ch)| *ch == '[' || *ch == '%')
+                {
+                    assert_ranged_matches_whole(&source, at..at + 1);
+                    let utf16 = source[..at].encode_utf16().count();
+                    assert_eq!(
+                        buffer.highlight_in_range(utf16, utf16 + 1),
+                        highlight_spans_in_range(&source, at..at + 1)
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -3697,7 +3733,7 @@ mod redteam_reconvergence {
         /// #407 dedicated comment-index census: maintain a `CommentIndex`
         /// incrementally across a SEQUENCE of comment-mutating edits (carrying it
         /// forward, so a shift/re-scan error compounds) and assert it stays
-        /// byte-identical to a from-scratch `scan_comment_ranges` after every
+        /// byte-identical to a from-scratch `scan_comment_candidates` after every
         /// edit. Independent of the buffer's debug-assert (this is a release-mode
         /// hard gate), and it directly hammers the halo rule: typing and deleting
         /// `%` / `%%` at and around comment delimiters.
@@ -4164,7 +4200,7 @@ mod redteam_reconvergence {
         /// (multibyte / CRLF near `%`, odd `%` runs) driven through BOTH the
         /// `&str` `CommentIndex::apply_edit` AND the live-rope path (a
         /// `TextBuffer` fed the identical edit), each asserted byte-identical to
-        /// a from-scratch `scan_comment_ranges`. Carries the index forward so a
+        /// a from-scratch `scan_comment_candidates`. Carries the index forward so a
         /// shift/re-scan error compounds. The rope arm exercises `byte_at` /
         /// `slice_to_string` on the rope — the halo reads the shipping `&str`
         /// census never touches.
