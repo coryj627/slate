@@ -360,3 +360,39 @@ provider/doctrine/parity run passed all 44 facts with the round-two core.
 The independent native probe also verified the A-6 operand limitation for
 MoveEndpointByRange under both CUIAutomation and CUIAutomation8; cloning
 first works. The owner-pending scope now names all three operand methods.
+
+
+### Review round 4 and raw-candidate precedence (head a8259299)
+
+Standards found no new issue. Spec found two E-6 frontmatter interactions:
+a raw fence starting inside YAML could cross into the body and steal its
+comment opener, even though Frontmatter later discarded that fence; raw
+code tokens were also appended after their containing fence was discarded.
+The crossing-fence regression reproduced both an escaped Link and an orphan
+Code token. These cases require the following design extension before code.
+
+Raw Markdown output is a set of candidates, not the authority for retained
+code coverage. Frontmatter is a prefix and wins over every intersecting
+CodeFence. Comment classification therefore excludes such discarded fences
+from its literal-opener ranges. After visual resolution, semantic code masks
+use retained InlineCode/CodeFence spans, while full canonical comments remain
+available separately (their paint may be fragmented). Finally, code tokens
+are overlays only when contained by a retained CodeFence. This orders each
+classification after its higher-priority inputs and prevents discarded raw
+structure from affecting lower-priority or overlay semantics.
+
+Codoki proposed skipping literal comment closers as well as openers. That
+would change the documented existing lexical close rule. A dedicated witness
+will pin a real comment closing inside a raw fence and preserve visible prose
+after the fence. This is a deliberate grammar choice, not an ignored error.
+
+Codoki also questioned UTF-8 safety of comment fragments. Their endpoints
+already come from coverage transitions at canonical boundaries. The sweep
+now explicitly rejects any candidate whose endpoints are not UTF-8 character
+boundaries before it can alter coverage, making that invariant local and
+executable. A malformed-candidate witness and multibyte comment/fence witness
+pin the guarantee; no endpoint rounding can change the accepted coverage.
+
+Both frontmatter regressions failed before the repair. All 88 editor-span
+and edit-sequence tests now pass, including the lexical-close, Unicode and
+malformed-candidate boundary witnesses; workspace Clippy is clean.

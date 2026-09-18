@@ -155,15 +155,15 @@ pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
     spans.extend(citations);
     spans.extend(scan_tags(source));
     let comments = scan_comments(source, &spans);
-    spans.extend(comments);
-    let opaque = SemanticOpaqueRanges::new(&spans);
+    spans.extend(comments.iter().cloned());
     let mut resolved = resolve_overlaps(source, spans);
+    let opaque = SemanticOpaqueRanges::new(&resolved, &comments);
     // Slice 3: overlay per-token code-block internals. Added *after* the
     // sweep so the CodeFence span still masks markdown/tags elsewhere in
     // the block, while the tokens themselves nest inside it for the apply layer to stamp
     // on top. Structural overlays are also retained without changing paint.
     append_semantic_overlays(&mut resolved, semantic, &opaque);
-    resolved.extend(code);
+    append_code_overlays(&mut resolved, code);
     resolved.sort_by_key(|s| s.start_byte);
     resolved
 }
@@ -1401,12 +1401,16 @@ fn scan_tags(source: &str) -> Vec<EditorSpan> {
 /// Once a comment begins, its next lexical marker closes it, even across a
 /// raw Markdown fence. Both paint and semantic coverage use these same spans.
 fn scan_comments(source: &str, structure: &[EditorSpan]) -> Vec<EditorSpan> {
+    // Frontmatter is a prefix. Any raw fence intersecting it is discarded
+    // by paint precedence, including a spurious fence extending into the body.
+    let frontmatter_end = structure
+        .iter()
+        .find(|span| span.kind == EditorSpanKind::Frontmatter)
+        .map_or(0, |span| span.end_byte);
     let literal = SemanticOpaqueRanges::merge(structure.iter().filter_map(|span| {
-        matches!(
-            span.kind,
-            EditorSpanKind::Frontmatter | EditorSpanKind::CodeFence
-        )
-        .then_some((span.start_byte, span.end_byte))
+        (span.kind == EditorSpanKind::Frontmatter
+            || span.kind == EditorSpanKind::CodeFence && span.start_byte >= frontmatter_end)
+            .then_some((span.start_byte, span.end_byte))
     }));
     let mut markers = source.match_indices("%%").map(|(at, _)| at);
     let mut out = Vec::new();
@@ -1652,11 +1656,11 @@ fn highlight_spans_reference(source: &str) -> Vec<EditorSpan> {
     spans.extend(citation_spans(source));
     spans.extend(scan_tags(source));
     let comments = scan_comments(source, &spans);
-    spans.extend(comments);
-    let opaque = SemanticOpaqueRanges::new(&spans);
+    spans.extend(comments.iter().cloned());
     let mut resolved = resolve_overlaps(source, spans);
+    let opaque = SemanticOpaqueRanges::new(&resolved, &comments);
     append_semantic_overlays(&mut resolved, semantic, &opaque);
-    resolved.extend(code_internal_spans(source));
+    append_code_overlays(&mut resolved, code_internal_spans(source));
     resolved.sort_by_key(|s| s.start_byte);
     resolved
 }
@@ -1669,17 +1673,16 @@ fn is_semantic_overlay(span: &EditorSpan) -> bool {
     )
 }
 
-/// Opaque coverage precedes paint conflict resolution: a comment surrounding a
-/// fence still hides semantics outside that fence. Canonical comments have
-/// already accounted for higher-priority frontmatter/fenced code; raw inline
-/// code cannot veto them because comments have higher paint priority.
+/// Retained code supplies code coverage, while full canonical comments retain
+/// their coverage across paint fragmentation. Discarded raw structure cannot
+/// influence semantic overlays after higher-priority paint rejected it.
 struct SemanticOpaqueRanges {
     all: Vec<(u32, u32)>,
     prose: Vec<(u32, u32)>,
 }
 
 impl SemanticOpaqueRanges {
-    fn new(spans: &[EditorSpan]) -> Self {
+    fn new(spans: &[EditorSpan], comments: &[EditorSpan]) -> Self {
         let code = Self::merge(spans.iter().filter_map(|span| {
             matches!(
                 span.kind,
@@ -1687,13 +1690,13 @@ impl SemanticOpaqueRanges {
             )
             .then_some((span.start_byte, span.end_byte))
         }));
-        let prose = Self::merge(spans.iter().filter_map(|span| {
-            matches!(
-                span.kind,
-                EditorSpanKind::Frontmatter | EditorSpanKind::Comment
-            )
-            .then_some((span.start_byte, span.end_byte))
-        }));
+        let prose = Self::merge(
+            spans
+                .iter()
+                .filter(|span| span.kind == EditorSpanKind::Frontmatter)
+                .chain(comments.iter())
+                .map(|span| (span.start_byte, span.end_byte)),
+        );
         let all = Self::merge(code.into_iter().chain(prose.iter().copied()));
         Self { all, prose }
     }
@@ -1744,6 +1747,26 @@ fn append_semantic_overlays(
     resolved.extend(semantic.into_iter().filter(|span| !opaque.suppresses(span)));
 }
 
+/// Token paint only decorates a retained CodeFence. Raw parsing can produce
+/// fences inside YAML that Frontmatter later discards; their tokens must not
+/// survive as orphan semantic/paint overlays.
+fn append_code_overlays(resolved: &mut Vec<EditorSpan>, code: Vec<EditorSpan>) {
+    if code.is_empty() {
+        return;
+    }
+    let fences = SemanticOpaqueRanges::merge(
+        resolved
+            .iter()
+            .filter(|span| span.kind == EditorSpanKind::CodeFence)
+            .map(|span| (span.start_byte, span.end_byte)),
+    );
+    resolved.extend(code.into_iter().filter(|token| {
+        fences
+            .get(fences.partition_point(|range| range.1 <= token.start_byte))
+            .is_some_and(|range| range.0 <= token.start_byte && token.end_byte <= range.1)
+    }));
+}
+
 /// Resolve overlaps by priority (Swift `covered`-set parity): accept
 /// spans highest-priority first, dropping any that intersect an
 /// already-accepted span. Comments retain uncovered fragments around higher-
@@ -1759,8 +1782,9 @@ fn resolve_overlaps(source: &str, mut spans: Vec<EditorSpan>) -> Vec<EditorSpan>
     let mut accepted: Vec<EditorSpan> = Vec::with_capacity(spans.len());
     for span in spans {
         let (s, e) = (span.start_byte as usize, span.end_byte as usize);
-        if s >= e || e > source.len() {
-            continue; // defensive: degenerate or out-of-bounds
+        if s >= e || e > source.len() || !source.is_char_boundary(s) || !source.is_char_boundary(e)
+        {
+            continue; // Only valid canonical boundaries may alter coverage.
         }
         if matches!(span.kind, EditorSpanKind::Comment) {
             // A higher-priority fence can occupy part of a comment without
@@ -2106,10 +2130,71 @@ mod tests {
     }
 
     #[test]
+    fn invalid_candidate_boundaries_cannot_split_comment_fragments() {
+        let source = "é📝";
+        let spans = resolve_overlaps(
+            source,
+            vec![
+                EditorSpan {
+                    start_byte: 1,
+                    end_byte: 2,
+                    kind: EditorSpanKind::CodeFence,
+                },
+                EditorSpan {
+                    start_byte: 0,
+                    end_byte: source.len() as u32,
+                    kind: EditorSpanKind::Comment,
+                },
+            ],
+        );
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].kind, EditorSpanKind::Comment);
+        assert_eq!(slice(source, &spans[0]), source);
+    }
+
+    #[test]
+    fn frontmatter_discarded_fence_has_no_code_token_overlays() {
+        let source = "---\ntitle: |\n  ```rust\n  let hidden = 1;\n  ```\n---\n";
+        let spans = highlight_spans(source);
+        assert_eq!(spans.len(), 1, "orphan code token: {spans:?}");
+        assert_eq!(spans[0].kind, EditorSpanKind::Frontmatter);
+    }
+
+    #[test]
+    fn real_comment_closes_at_next_lexical_marker_inside_a_fence() {
+        let source = "%% [hidden](x)\n\n```\n%%\n```\n\n[visible](y)\n\n%% unclosed\n";
+        let spans = highlight_spans(source);
+        let semantics: Vec<_> = spans
+            .iter()
+            .filter(|span| is_semantic_overlay(span))
+            .map(|span| slice(source, span))
+            .collect();
+        assert_eq!(semantics, ["[visible](y)"]);
+        for (at, _) in source.char_indices().filter(|(_, ch)| *ch == '[') {
+            assert_ranged_matches_whole(source, at..at + 1);
+        }
+    }
+
+    #[test]
+    fn frontmatter_discarded_fence_cannot_steal_body_comment() {
+        let source = "---\ntitle: |\n  ```\n---\n%%\n```\n[hidden](x)\n%%\n";
+        let spans = highlight_spans(source);
+        assert!(
+            first(&spans, &EditorSpanKind::Link).is_none(),
+            "hidden link: {spans:?}"
+        );
+    }
+
+    #[test]
     fn comment_coverage_survives_fence_paint_for_every_prose_kind() {
-        let source = "%%\n## hidden heading\n\n[[wiki]] ![[embed]] #tag [@cite] `inline` **strong** *emphasis* ~~strike~~\n\n[link](x) ![image](x)\n\n> quote\n\n```rust\nlet code = 1;\n```\n%%\n\n## visible heading\n\n[visible](y)\n";
+        let source = "%% 📝 é\n## hidden heading\n\n[[wiki]] ![[embed]] #tag [@cite] `inline` **strong** *emphasis* ~~strike~~\n\n[link](x) ![image](x)\n\n> quote\n\n```rust\nlet code = 1;\n```\n%%\n\n## visible heading\n\n[visible](y)\n";
         let spans = highlight_spans(source);
         let close = source.rfind("%%").unwrap() + 2;
+        for span in &spans {
+            assert!(source.is_char_boundary(span.start_byte as usize));
+            assert!(source.is_char_boundary(span.end_byte as usize));
+            let _ = slice(source, span);
+        }
         for span in spans
             .iter()
             .filter(|span| (span.start_byte as usize) < close)
