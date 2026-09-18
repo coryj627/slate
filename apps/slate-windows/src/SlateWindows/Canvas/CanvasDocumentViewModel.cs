@@ -468,7 +468,8 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         !IsReadOnly && _outline.Count == 0
             ? CanvasAnnouncer.RenderLabel(
                 new CanvasA11yEvent.CanvasEmptyOnboarding(
-                    "Control Alt N", "Control Shift P"))
+                    Commands.NavigationHelp.Spoken(Commands.ChordTable.Ids.CanvasNewCard),
+                    Commands.NavigationHelp.Spoken("windows.view.showCommandPalette")))
             : null;
 
     /// <summary>The host-owned display chord the vocabulary takes as a

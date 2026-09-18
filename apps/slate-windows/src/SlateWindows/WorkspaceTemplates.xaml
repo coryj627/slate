@@ -1,6 +1,7 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:local="clr-namespace:SlateWindows"
+                    xmlns:cmd="clr-namespace:SlateWindows.Commands"
                     xmlns:panels="clr-namespace:SlateWindows.Panels"
                     xmlns:reading="clr-namespace:SlateWindows.Reading"
                     xmlns:bases="clr-namespace:SlateWindows.Bases"
@@ -409,11 +410,11 @@
                     <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                         <MenuItem Header="_Activate at Cursor"
                                   AutomationProperties.AutomationId="EditorActivateAtCursor"
-                                  InputGestureText="Ctrl+Enter"
+                                  InputGestureText="{cmd:ChordText slate.editor.activateAtCaret}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
                                   Command="{Binding EditorInteractions.ActivateAtCaretCommand}" />
                         <MenuItem Header="Preview _Embed"
                                   AutomationProperties.AutomationId="EditorPreviewEmbed"
-                                  InputGestureText="Ctrl+E"
+                                  InputGestureText="{cmd:ChordText slate.editor.previewEmbed}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
                                   Command="{Binding EditorInteractions.PreviewEmbedCommand}" />
                         <Separator />
                         <local:CheckMenuItem Header="Check _Spelling While Typing"
@@ -644,7 +645,7 @@
                    AutomationProperties.Name="Resize editor panes horizontally"
                    AutomationProperties.ItemStatus="{Binding Weight, StringFormat={}{0:P0} of split space}"
                    AutomationProperties.LiveSetting="Polite"
-                   AutomationProperties.HelpText="Drag, or use Left and Right Arrow, to resize adjacent editor panes.">
+                   AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.HorizontalSplitter}">
                 <Thumb.Style>
                     <Style TargetType="Thumb">
                         <Setter Property="Visibility" Value="Collapsed" />
@@ -670,7 +671,7 @@
                    AutomationProperties.Name="Resize editor panes vertically"
                    AutomationProperties.ItemStatus="{Binding Weight, StringFormat={}{0:P0} of split space}"
                    AutomationProperties.LiveSetting="Polite"
-                   AutomationProperties.HelpText="Drag, or use Up and Down Arrow, to resize adjacent editor panes.">
+                   AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.VerticalSplitter}">
                 <Thumb.Style>
                     <Style TargetType="Thumb">
                         <Setter Property="Visibility" Value="Collapsed" />

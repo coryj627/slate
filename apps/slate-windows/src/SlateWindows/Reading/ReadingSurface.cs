@@ -62,6 +62,7 @@ internal sealed class ReadingSurface : RichTextBox
 
         AutomationProperties.SetAutomationId(this, "ReadingSurface");
         AutomationProperties.SetName(this, "Reading view");
+        AutomationProperties.SetHelpText(this, Commands.NavigationHelp.Reading);
 
         // ONE document for the surface's whole life. Replacing the
         // Document property on a live RichTextBox breaks the UIA
@@ -894,7 +895,8 @@ internal sealed class ReadingListPeer : TextElementAutomationPeer
     protected override AutomationControlType GetAutomationControlTypeCore() =>
         AutomationControlType.List;
 
-    protected override string GetNameCore() => "list";
+    protected override string GetNameCore() =>
+        _list.ListItems.Count == 1 ? "1 entry" : $"{_list.ListItems.Count} entries";
 
     protected override bool IsControlElementCore() => true;
 
@@ -935,6 +937,21 @@ internal sealed class ReadingListItemPeer : TextElementAutomationPeer
 
     protected override string GetNameCore() =>
         new TextRange(_item.ContentStart, _item.ContentEnd).Text.Trim();
+
+    protected override int GetPositionInSetCore()
+    {
+        if (_item.Parent is not WpfList list) { return -1; }
+        int position = 0;
+        foreach (ListItem item in list.ListItems)
+        {
+            position++;
+            if (ReferenceEquals(item, _item)) { return position; }
+        }
+        return -1;
+    }
+
+    protected override int GetSizeOfSetCore() =>
+        _item.Parent is WpfList list ? list.ListItems.Count : -1;
 
     protected override bool IsControlElementCore() => true;
 
