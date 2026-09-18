@@ -1682,8 +1682,10 @@ struct SemanticOpaqueRanges {
 }
 
 impl SemanticOpaqueRanges {
-    fn new(spans: &[EditorSpan], comments: &[EditorSpan]) -> Self {
-        let code = Self::merge(spans.iter().filter_map(|span| {
+    // Paint may fragment comments, but their full canonical ranges must
+    // still mask overlays. Only code coverage comes from retained paint.
+    fn new(retained: &[EditorSpan], full_comments: &[EditorSpan]) -> Self {
+        let code = Self::merge(retained.iter().filter_map(|span| {
             matches!(
                 span.kind,
                 EditorSpanKind::InlineCode | EditorSpanKind::CodeFence
@@ -1691,10 +1693,10 @@ impl SemanticOpaqueRanges {
             .then_some((span.start_byte, span.end_byte))
         }));
         let prose = Self::merge(
-            spans
+            retained
                 .iter()
                 .filter(|span| span.kind == EditorSpanKind::Frontmatter)
-                .chain(comments.iter())
+                .chain(full_comments.iter())
                 .map(|span| (span.start_byte, span.end_byte)),
         );
         let all = Self::merge(code.into_iter().chain(prose.iter().copied()));

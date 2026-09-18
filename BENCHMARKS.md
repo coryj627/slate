@@ -1148,3 +1148,11 @@ The runner validates all four cases and rejects absent/duplicate results.
 The full-document search intentionally includes a full canonical span query;
 the line-read result does not claim flatness for notes that trigger a core
 whole-document fallback (comments, frontmatter, or possible reference definitions).
+
+
+W7-1 verification rerun after the complete opaque-region repair (2026-09-17,
+implementation head `7d7f4f13`, same runner/configuration): line p50 was
+0.0332 / 0.0338 / 0.0337 ms at 100 KiB / 1 MiB / 8 MiB, and the 8 MiB
+FindAttribute(Link) p50 was 321.3668 ms. All four original ceilings passed;
+line flatness was 1.00x. The frozen budgets and first measurement above are
+unchanged.

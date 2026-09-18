@@ -396,3 +396,23 @@ pin the guarantee; no endpoint rounding can change the accepted coverage.
 Both frontmatter regressions failed before the repair. All 88 editor-span
 and edit-sequence tests now pass, including the lexical-close, Unicode and
 malformed-candidate boundary witnesses; workspace Clippy is clean.
+
+
+### Review round 5 and final local verification (head 7d7f4f13)
+
+Both independent review axes reported no new actionable finding. The final
+constructor parameter names distinguish retained paint from full comments;
+this makes the reviewed data flow explicit without changing its behavior.
+All 88 Rust span/edit-sequence tests and Clippy pass. With the rebuilt native
+library, 44 Windows provider/doctrine/parity facts pass and the real desktop
+UIA/axe editor journey passes, including actual exported Link methods.
+A restricted sandbox launch could not enumerate FilesTree; the normal Windows
+desktop run passed in nine seconds. This was not counted as a product pass
+until the actual UIA journey completed.
+
+The benchmark rerun after the complete core repair passed all frozen budgets:
+line p50 0.0332 / 0.0338 / 0.0337 ms at 100 KiB / 1 MiB / 8 MiB;
+8 MiB FindAttribute(Link) p50 321.3668 ms; line flatness 1.00x.
+The full Windows suite with the final export adapter had already passed
+2,976 tests; final-head CI remains the merge gate. A-6 and named human AT
+runs remain pending. No review or automated check supplies that acceptance.
