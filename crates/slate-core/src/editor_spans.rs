@@ -1746,7 +1746,9 @@ fn append_semantic_overlays(
 
 /// Resolve overlaps by priority (Swift `covered`-set parity): accept
 /// spans highest-priority first, dropping any that intersect an
-/// already-accepted span. Returns survivors in document order.
+/// already-accepted span. Comments retain uncovered fragments around higher-
+/// priority code so their remaining bodies stay opaque. Returns survivors in
+/// document order.
 fn resolve_overlaps(source: &str, mut spans: Vec<EditorSpan>) -> Vec<EditorSpan> {
     spans.sort_by(|a, b| {
         priority(&a.kind)
@@ -1759,6 +1761,31 @@ fn resolve_overlaps(source: &str, mut spans: Vec<EditorSpan>) -> Vec<EditorSpan>
         let (s, e) = (span.start_byte as usize, span.end_byte as usize);
         if s >= e || e > source.len() {
             continue; // defensive: degenerate or out-of-bounds
+        }
+        if matches!(span.kind, EditorSpanKind::Comment) {
+            // A higher-priority fence can occupy part of a comment without
+            // exposing the rest of its body as headings, links or formatting.
+            // Split only at existing canonical boundaries, which are UTF-8
+            // safe. The complete comment also remains in the overlay mask.
+            let mut cursor = s;
+            while cursor < e {
+                let Some(gap) = covered[cursor..e].iter().position(|&c| !c) else {
+                    break;
+                };
+                let start = cursor + gap;
+                let end = covered[start..e]
+                    .iter()
+                    .position(|&c| c)
+                    .map_or(e, |at| start + at);
+                covered[start..end].fill(true);
+                accepted.push(EditorSpan {
+                    start_byte: start as u32,
+                    end_byte: end as u32,
+                    kind: EditorSpanKind::Comment,
+                });
+                cursor = end;
+            }
+            continue;
         }
         if covered[s..e].iter().any(|&c| c) {
             continue; // intersects a higher-priority span
@@ -2076,6 +2103,44 @@ mod tests {
             slice(literal, &first(&spans, &EditorSpanKind::Link).unwrap()),
             "[visible](y)"
         );
+    }
+
+    #[test]
+    fn comment_coverage_survives_fence_paint_for_every_prose_kind() {
+        let source = "%%\n## hidden heading\n\n[[wiki]] ![[embed]] #tag [@cite] `inline` **strong** *emphasis* ~~strike~~\n\n[link](x) ![image](x)\n\n> quote\n\n```rust\nlet code = 1;\n```\n%%\n\n## visible heading\n\n[visible](y)\n";
+        let spans = highlight_spans(source);
+        let close = source.rfind("%%").unwrap() + 2;
+        for span in spans
+            .iter()
+            .filter(|span| (span.start_byte as usize) < close)
+        {
+            assert!(
+                matches!(
+                    span.kind,
+                    EditorSpanKind::Comment | EditorSpanKind::CodeFence | EditorSpanKind::Code(_)
+                ),
+                "prose leaked through the comment: {span:?}"
+            );
+        }
+        let heading = first(&spans, &EditorSpanKind::Heading(2)).unwrap();
+        assert!(slice(source, &heading).contains("visible heading"));
+        assert_eq!(
+            slice(source, &first(&spans, &EditorSpanKind::Link).unwrap()),
+            "[visible](y)"
+        );
+        assert_eq!(
+            spans
+                .iter()
+                .filter(|span| span.kind == EditorSpanKind::Comment)
+                .count(),
+            2
+        );
+        for (at, _) in source
+            .char_indices()
+            .filter(|(_, ch)| *ch == '#' || *ch == '[')
+        {
+            assert_ranged_matches_whole(source, at..at + 1);
+        }
     }
 
     #[test]

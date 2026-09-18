@@ -80,3 +80,11 @@ dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindow
 
 The cross-process journey passed locally with the adapter and strict Link
 method assertions. CI and stock-reader human acceptance are separate gates.
+
+
+Follow-up operand check (2026-09-17): both CUIAutomation and CUIAutomation8
+also return E_INVALIDARG from ordinary `MoveEndpointByRange(Start, Link,
+Start)`. The same operation with `Link.Clone()` succeeds. Thus the pending
+owner decision covers all three ordinary-WPF methods that accept another
+range: Compare, CompareEndpoints and MoveEndpointByRange. It is one operand
+unwrapping limitation, not three independent text-engine failures.

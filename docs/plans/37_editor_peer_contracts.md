@@ -244,9 +244,10 @@ COM aggregation did not solve the remaining operand difference and is not
 used. See [the measured interoperability report](18_windows_port/reports/w7_1_link_interop_probe.md).
 
 **Owner decision pending:** a Link range used as an operand of an ordinary
-WPF range's Compare/CompareEndpoints is still rejected with E_INVALIDARG.
+WPF range's Compare, CompareEndpoints or MoveEndpointByRange is still
+rejected with E_INVALIDARG.
 Cloning the Link first produces an ordinary range that compares in both
-directions. The reverse direction (Link.Compare(ordinary)), text reads,
+directions and works as an endpoint-movement operand. The reverse direction (Link.Compare(ordinary)), text reads,
 style reads and cloning are verified. A range-valued Link FindAttribute
 is supported inside the provider; cross-process searches use the explicit
 boolean presence value, because UIA does not translate a client range in
@@ -332,3 +333,30 @@ and edit-sequence tests pass. The expanded focused witness also passes
 UTF-8/UTF-16, CRLF, and live DocumentBuffer window equivalence. No further
 native ABI, ownership, dispatcher, geometry or batching blocker was found
 by either review axis. A-6 remains pending owner acceptance.
+
+
+### Review round 3 and complete comment coverage (head 4ed119b8)
+
+Spec reported no new findings. Standards identified the remaining whole-span
+paint interaction: a fence dropped an entire surrounding Comment, leaving a
+Heading (and other lower-priority prose kinds) outside the fence available to
+the new semantic reader. The round-two repair fixed added overlays but did
+not yet make canonical comment coverage complete for all sixteen kinds.
+
+Design extension, recorded before code: when higher-priority paint occupies
+part of a Comment, retain its uncovered fragments instead of discarding the
+whole Comment. CodeFence keeps its existing higher priority and token paint;
+Comment fragments keep every other part of the body opaque to Heading, Tag,
+Wikilink, Citation, InlineCode and formatting. The existing complete comment
+mask still suppresses structural overlays across that boundary. Both native
+hosts consume the same corrected spans. Fragment boundaries inherit existing
+UTF-8-safe canonical boundaries; ordinary span conflict resolution is unchanged.
+A regression must assert every retained kind across a comment containing all
+prose styles and a fence, while preserving visible heading/link text afterward.
+
+The new all-prose regression reproduced the leaked Heading before the repair;
+all 84 editor-span and edit-sequence tests now pass. The earlier Windows
+provider/doctrine/parity run passed all 44 facts with the round-two core.
+The independent native probe also verified the A-6 operand limitation for
+MoveEndpointByRange under both CUIAutomation and CUIAutomation8; cloning
+first works. The owner-pending scope now names all three operand methods.
