@@ -25,7 +25,8 @@ of Compare, CompareEndpoints and MoveEndpointByRange are unwrapped.
 SupportedTextSelection remains Single. Unsupported attributes return
 `AutomationElement.NotSupported`, never null. Unsupported FindAttribute
 requests return null. The pinned library's three missing provider methods
-are handled as recorded in divergence A-1 below.
+are handled as recorded in divergence A-1 below. Movement progress and the
+terminal line endpoint are normalized as recorded in A-9.
 
 **E-3 — Coordinates and lifetime.** Attribute ranges use the raw range's
 UTF-16 endpoints, never a whole-document GetText copy or character movement
@@ -519,3 +520,29 @@ on that same dispatcher. Delaying recovery onto a later dispatcher turn would
 allow another unavailable-cache read after the update returns. XML comments now
 state that contract, the event follows the local EventHandler convention, and the
 regression also verifies repeated resumption preserves the recovered WPF list.
+
+### A-9 — Native end-of-document movement (live NVDA finding, 2026-09-18)
+
+The first production OneCore Say All reached the complete fixture and final
+marker, then produced repeated empty callbacks instead of finishing. Four small
+provider regressions reproduce positive Line endpoint progress with no text,
+including an empty document and a last line without a newline.
+
+The pinned [AvalonEdit provider](https://github.com/icsharpcode/AvalonEdit/blob/v6.3.1/ICSharpCode.AvalonEdit/Editing/TextRangeProvider.cs)
+returns the requested count even when its endpoint did not move. Its line lookup
+also clamps to the last line's start rather than the document end. NVDA's
+[Say All loop](https://github.com/nvaccess/nvda/blob/release-2026.1.1/source/speech/sayAll.py)
+requires endpoint movement to report zero when exhausted; UIA reading chunks
+map to Line. The anchor correction is not the source of the native count bug.
+
+The decorator will delegate individual unit steps to the native provider and
+count actual progress, stopping at the document boundary/no-progress. Forward
+Line/Paragraph endpoint movement from the last line must reach document end
+once before reporting zero; that endpoint uses the native document range.
+This preserves native character/word boundaries without parsing text or
+deriving semantic spans. Zero and extreme counts must terminate safely, and
+bulk counts stop after the available units rather than reporting the request.
+Native range Move likewise reports actual start progress while preserving its
+native unit expansion. Empty, final-newline, no-final-newline, CRLF, backwards,
+multi-unit and Unicode tests pin the adapter. A real NVDA rerun must reach the
+final marker and emit its normal say-all stop callback before this finding closes.
