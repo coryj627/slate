@@ -266,3 +266,25 @@ seven key spellings (including property Binding/MultiBinding and typed
 String), and three collection forms: 105 combinations. Native control,
 peer-name and getter lookalikes are rejected; inherited native controls
 and real AutomationPeer overrides are accepted. No runtime code changed.
+
+### Implementation round 4: execution scope and implicit scalar content
+
+Both reviewers closed the prior findings at `1a6692b8`, then found two
+remaining census boundaries. Recursive return traversal introduced a false
+ID witness from nested functions; this repair-created blocker counts double
+under protocol rule 5. The scalar model also omitted Run's implicit Text
+content property. Record these boundaries before another implementation:
+
+- Constant AutomationId returns belong to the real override's execution
+  scope. Conditional blocks within that scope are included; local functions,
+  anonymous methods and lambdas are separate scopes and contribute no return
+  evidence. Dynamic outer returns remain unproven, even if a nested helper
+  returns a constant. Test each nested-function form and a positive conditional.
+- Run's implicit content and explicit Run.Text property use one scalar
+  reader. Typed String means literal text; an object-valued expression means
+  unknown text. Other Run property elements (for example ToolTip) are not
+  text content. Extend the representation cross-product to implicit typed
+  String, Binding and MultiBinding, with complete-token and non-text controls.
+
+This amendment closes the declaration model; runtime behavior and the
+verified map routes are unchanged.
