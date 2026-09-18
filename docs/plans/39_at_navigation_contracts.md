@@ -232,3 +232,30 @@ local affected run passes 140 tests, including all map/speech mutations,
 qualified/aliased/static enum binding, source lookalike rejection, reading
 and menu facts, and the added sidebar/template witnesses. The complete
 desktop suite's 52 passing tests cover the unchanged runtime revision.
+
+### Implementation round 3: source identity and scalar-text model
+
+Standards reported no findings at `176d619d`; Spec found two census-only
+boundary gaps. Three successive speech-audit findings trigger the protocol
+stop. Before further code changes, freeze this model:
+
+- A scalar XAML text value is either literal text (attribute, direct text,
+  explicit Text property, or typed String) or a markup expression. Every
+  markup expression is the same unknown text token for this audit,
+  regardless of attribute versus property-element spelling. A literal
+  modifier beside that unknown token is still a forbidden hand-composed
+  chord. Inline collections recursively concatenate these scalar values;
+  explicit collection properties do not change the result. Mutation cases
+  must cross scalar representation with implicit/explicit collection form.
+- Native pattern inference retains the resolved framework type's namespace
+  and assembly identity, including inherited native types. A lookalike
+  short name contributes nothing. XAML native controls must have the WPF
+  presentation namespace; custom controls need their explicit C# scope.
+- An AutomationId getter is evidence only when Roslyn proves its override
+  chain reaches WPF AutomationPeer.GetAutomationIdCore. An ordinary method
+  with that spelling is not a UIA declaration. SetAutomationId likewise
+  resolves to the native AutomationProperties method. Positive inherited
+  cases and negative control/peer/getter lookalikes pin these boundaries.
+
+These are declaration witnesses, not a substitute for the row's behavioral
+facts. The map routes and runtime behavior remain as independently verified.
