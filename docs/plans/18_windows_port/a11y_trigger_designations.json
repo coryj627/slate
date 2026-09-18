@@ -667,17 +667,17 @@
         "decision": "docs/plans/31_file_management_contracts.md",
         "status": "proposed"
       },
-      "AppState.swift#mutateSidebarOrganization@2": {
+      "AppState.swift#handleCommit@1": {
         "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
         "decision": "docs/plans/31_file_management_contracts.md",
         "status": "proposed"
       },
-      "AppState.swift#mutateSidebarOrganization@3": {
+      "AppState.swift#handleCommit@2": {
         "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
         "decision": "docs/plans/31_file_management_contracts.md",
         "status": "proposed"
       },
-      "AppState.swift#mutateSidebarOrganization@4": {
+      "AppState.swift#handleCommit@3": {
         "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
         "decision": "docs/plans/31_file_management_contracts.md",
         "status": "proposed"

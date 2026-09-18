@@ -196,6 +196,65 @@ public sealed class A11yTriggerParityCensus
         Assert.Single(sites, site => site.Key == "Canvas");
     }
 
+    [Theory]
+    [InlineData("switch event { case .rightPaneHidden: post(.rightPaneShown) }", 1)]
+    [InlineData("let events: [A11yEvent] = [.rightPaneShown, .rightPaneShown]", 2)]
+    [InlineData(".rightPaneShown", 1)]
+    [InlineData("switch event { case .noteSaved(filename: let name): post(.rightPaneShown) }", 1)]
+    [InlineData("if case .rightPaneHidden = event { post(.rightPaneShown) }", 1)]
+    public void MacInventoryCountsExpressionsAfterPatternsInArraysAndImplicitReturns(string statement, int expected)
+    {
+        string source = "class Host {\n  func event() -> A11yEvent {\n    " + statement + "\n  }\n}";
+        A11yTriggerInventory.Site[] sites = A11yTriggerInventory.MacSites("File.swift", source,
+            ["RightPaneShown", "RightPaneHidden", "NoteSaved"]);
+        Assert.Equal(expected, sites.Length);
+        Assert.All(sites, site =>
+        {
+            Assert.Equal("RightPaneShown", site.Key);
+            Assert.Equal("File.swift#event", site.Member);
+        });
+    }
+
+    [Fact]
+    public void MacInventoryRestoresTheEnclosingOwnerAfterANestedFunctionEnds()
+    {
+        const string source = """
+            class Host {
+              func outer() {
+                func inner() {
+                  post(.rightPaneShown)
+                }
+                post(.rightPaneShown)
+              }
+            }
+            """;
+        A11yTriggerInventory.Site[] sites = A11yTriggerInventory.MacSites("File.swift", source, ["RightPaneShown"]);
+        Assert.Equal(["File.swift#inner@1", "File.swift#outer@1"], sites.Select(SiteId));
+        string moved = source.Replace("    }\n    post", "    post", StringComparison.Ordinal)
+            .Replace("  }\n}", "    }\n  }\n}", StringComparison.Ordinal);
+        Assert.Equal(["File.swift#inner@1", "File.swift#inner@2"],
+            A11yTriggerInventory.MacSites("File.swift", moved, ["RightPaneShown"]).Select(SiteId));
+    }
+
+    [Fact]
+    public void MacInventoryFindsNestedTypeMembersAndIgnoresLiteralScopeDelimiters()
+    {
+        const string source = """
+            class Host {
+                func earlier() {}
+                class Coordinator {
+                    func scroll() {
+                        let guidance = "} case [ ( {"
+                        post(.rightPaneShown)
+                    }
+                }
+            }
+            """;
+        A11yTriggerInventory.Site site = Assert.Single(
+            A11yTriggerInventory.MacSites("File.swift", source, ["RightPaneShown"]));
+        Assert.Equal("File.swift#scroll", site.Member);
+    }
+
     private static void AssertDecision(string path, string status)
     {
         Assert.StartsWith("docs/plans/", path);

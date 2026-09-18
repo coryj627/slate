@@ -80,14 +80,85 @@ internal static class A11yTriggerInventory
         @"^(?<indent> *)(?:(?:@\w+(?:\([^\n]*\))?|private|fileprivate|internal|public|open|static|final|override|mutating|nonisolated|lazy)\s+)*(?<kind>func|var|let|init)\s*(?<name>\w*)",
         RegexOptions.Multiline | RegexOptions.CultureInvariant);
 
+    private sealed record SwiftBrace(int Start, int End, int Depth, int Delimiters);
+    private sealed record SwiftOwner(Match Declaration, int End);
+
+    private static (SwiftBrace[] Braces, (int Start, int End)[] Patterns) SwiftBoundaries(string text)
+    {
+        var braces = new List<SwiftBrace>();
+        var open = new Stack<(int Start, int Delimiters)>();
+        var patterns = new List<(int Start, int End)>();
+        int delimiters = 0;
+        int patternStart = -1;
+        int patternDepth = 0;
+        for (int index = 0; index < text.Length; index++)
+        {
+            int literalEnd = SwiftSource.EndOfLiteral(text, index);
+            if (literalEnd > index) { index = literalEnd - 1; continue; }
+            char token = text[index];
+            if (char.IsLetter(token) || token == '_')
+            {
+                int end = index + 1;
+                while (end < text.Length && (char.IsLetterOrDigit(text[end]) || text[end] == '_')) { end++; }
+                string word = text[index..end];
+                if (word == "case" && (index == 0 || text[index - 1] != '.'))
+                {
+                    patternStart = index;
+                    patternDepth = delimiters;
+                }
+                else if (patternStart >= 0 && delimiters == patternDepth && word is "in" or "where")
+                {
+                    patterns.Add((patternStart, index));
+                    patternStart = -1;
+                }
+                index = end - 1;
+                continue;
+            }
+            if (patternStart >= 0 && delimiters == patternDepth && token is ':' or '=' or '{' or '}')
+            {
+                patterns.Add((patternStart, index));
+                patternStart = -1;
+            }
+            if (token is '(' or '[') { delimiters++; }
+            else if (token is ')' or ']') { delimiters--; }
+            else if (token == '{') { open.Push((index, delimiters)); }
+            else if (token == '}' && open.TryPop(out var start))
+            {
+                braces.Add(new(start.Start, index, open.Count, start.Delimiters));
+            }
+        }
+        return (braces.OrderBy(brace => brace.Start).ToArray(), patterns.ToArray());
+    }
+
+    private static SwiftOwner[] SwiftOwners(string text, SwiftBrace[] braces)
+    {
+        Match[] declarations = SwiftMember.Matches(text).ToArray();
+        return declarations.Select(declaration =>
+        {
+            SwiftBrace? enclosing = braces.LastOrDefault(brace => brace.Start < declaration.Index && brace.End > declaration.Index);
+            int end = Math.Min(enclosing?.End ?? text.Length,
+                declarations.FirstOrDefault(next => next.Index > declaration.Index
+                    && next.Groups["indent"].Length <= declaration.Groups["indent"].Length)?.Index ?? text.Length);
+            if (declaration.Groups["kind"].Value is "func" or "init")
+            {
+                // Skip braces in default-argument closures. A function owns
+                // only its balanced body; after it closes its parent resumes.
+                SwiftBrace? body = braces.FirstOrDefault(brace => brace.Start > declaration.Index && brace.Start < end
+                    && brace.Depth == (enclosing?.Depth + 1 ?? 0) && brace.Delimiters == 0);
+                if (body is not null) { end = body.End; }
+            }
+            return new SwiftOwner(declaration, end);
+        }).ToArray();
+    }
+
     internal static Site[] MacSites(string path, string source, string[] keys)
     {
         string text = SwiftSource.WithoutComments(source);
-        // A member is at the type's indentation, never a local variable.
-        // Swift files use either two or four spaces; the enclosing function
-        // wins over deeper declarations. A case spelling is retained only at
-        // a construction (payload parentheses or an argument/return position).
-        Match[] declarations = SwiftMember.Matches(text).Where(match => match.Groups["indent"].Length <= 4).ToArray();
+        // An enclosing function wins over its local variables and resumes
+        // after a nested function closes. Nested types may put real members
+        // at any indentation. Case patterns end at their delimiter, not the line.
+        var (braces, patterns) = SwiftBoundaries(text);
+        SwiftOwner[] declarations = SwiftOwners(text, braces);
         var counts = new Dictionary<(string Key, string Member), int>();
         var sites = new List<Site>();
         foreach (string key in keys)
@@ -96,24 +167,22 @@ internal static class A11yTriggerInventory
             foreach (Match match in Regex.Matches(text, @"(?<![\w.])(?:A11yEvent)?\." + camel + @"\b"))
             {
                 string after = text[(match.Index + match.Length)..];
-                string before = text[..match.Index];
-                string linePrefix = before[(before.LastIndexOf('\n') + 1)..];
-                if (Regex.IsMatch(linePrefix, @"\bcase\b")) { continue; }
+                if (patterns.Any(pattern => pattern.Start <= match.Index && match.Index < pattern.End)) { continue; }
                 if (key is "Canvas" or "Graph" && !Regex.IsMatch(after, @"^\s*\(\s*event\s*:")) { continue; }
-                bool hasPayload = Regex.IsMatch(after, @"^\s*\(");
-                bool bareArgument = Regex.IsMatch(before, @"(?:[(:=?]|\breturn)\s*$")
-                    && Regex.IsMatch(after, @"^\s*(?:[,:)}\n]|$)");
-                if (!hasPayload && !bareArgument) { continue; }
+                // A payloadless enum expression is a value wherever Swift
+                // permits one, including arrays and implicit returns. Member
+                // reads are excluded by the qualified-name boundary above.
                 Match? owner = null;
-                foreach (Match declaration in declarations.TakeWhile(d => d.Index < match.Index))
+                foreach (SwiftOwner candidate in declarations.Where(d => d.Declaration.Index < match.Index && match.Index < d.End))
                 {
+                    Match declaration = candidate.Declaration;
                     if (owner is null || declaration.Groups["indent"].Length <= owner.Groups["indent"].Length
                         || declaration.Groups["kind"].Value is "func" or "init")
                     {
                         owner = declaration;
                     }
                 }
-                Assert.NotNull(owner);
+                Assert.True(owner is not null, $"No Swift owner for {path}:{text[..match.Index].Count(c => c == '\n') + 1} {key}");
                 string name = owner.Groups["kind"].Value == "init" ? "init" : owner.Groups["name"].Value;
                 string member = path + "#" + name;
                 var identity = (key, member);
