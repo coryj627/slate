@@ -503,3 +503,19 @@ All 93 focused provider, interaction and surface-census facts and the real
 cross-process UIA3/axe editor journey pass. The pre-fix head's CI passed every
 job, including both model shards and shell accessibility. Benchmarks and
 final-head CI/review results remain required.
+
+### Hyperlink integration review round 3 (head fd46cb9a)
+
+Both independent axes found no actionable issue in the repair or full native
+Hyperlink integration. Native/peer/nested completion, weak subscription lifetime,
+constant-time unavailable-cache recovery and candidate identity were reviewed.
+All nine benchmarks pass; `BENCHMARKS.md` records the measured costs. Local
+post-edit reads are 0.1450/0.0841/0.0823 ms across the three sizes; complete
+8 MiB inventory is 330.4284 ms, and the 10,000-link walk is 48.9076 ms.
+
+Codoki's thread-affinity concern is resolved by the existing document ownership
+contract: EndPeerUpdate verifies access, and native UpdateFinished is synchronous
+on that same dispatcher. Delaying recovery onto a later dispatcher turn would
+allow another unavailable-cache read after the update returns. XML comments now
+state that contract, the event follows the local EventHandler convention, and the
+regression also verifies repeated resumption preserves the recovered WPF list.

@@ -1168,4 +1168,24 @@ lookup are inside the timed operation; prefix edits deliberately trigger the
 core structure index's full fallback and are a separate pre-existing edit cost. Dense cases build and walk 1,000 and
 10,000 links in both directions, including Name/Enabled membership checks
 (1000 ms each; LinkCount is the size parameter for these two rows).
-No missing case passes. Current measurements are pending the production run.
+No missing case passes. The production run at `fd46cb9a` passed all nine cases
+on 2026-09-18 with the same runtime/runner configuration above. Run from the
+benchmark project directory when a prototype worktree also exists in `target/`,
+so BenchmarkDotNet does not discover two projects with the same name.
+
+| Operation | Size | p50 | Allocation | Ceiling |
+|---|---|---|---|---|
+| Line StyleId | 100 KiB | 0.0414 ms | 3.49 KiB | 0.5 ms |
+| Line StyleId | 1 MiB | 0.0360 ms | 3.49 KiB | 0.5 ms |
+| Line StyleId | 8 MiB | 0.0357 ms | 3.49 KiB | 0.5 ms |
+| Edit then local Hyperlink | 100 KiB | 0.1450 ms | 10.40 KiB | 2 ms |
+| Edit then local Hyperlink | 1 MiB | 0.0841 ms | 10.71 KiB | 2 ms |
+| Edit then local Hyperlink | 8 MiB | 0.0823 ms | 10.95 KiB | 2 ms |
+| Edit then complete Hyperlink inventory | 8 MiB | 330.4284 ms | 70.11 MiB | 1000 ms |
+| Dense inventory and bidirectional walk | 1,000 links | 4.1325 ms | 1.15 MiB | 1000 ms |
+| Dense inventory and bidirectional walk | 10,000 links | 48.9076 ms | 13.66 MiB | 1000 ms |
+
+Line-read flatness is **0.99x** (8 MiB / 1 MiB), within the 4.00x ceiling.
+Allocations are managed allocations, including dispatcher marshaling. The
+post-edit measurements include the two bounded edits and current-revision
+canonical validation; full inventory is deliberately a separate operation.

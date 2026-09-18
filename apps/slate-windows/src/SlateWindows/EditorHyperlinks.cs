@@ -173,6 +173,10 @@ internal sealed class EditorHyperlinkTree
         foreach (EditorLinkSegment segment in _segments) { WpfEditorPeerConnection.InvalidateChildren(segment.Peer); }
     }
 
+    /// <summary>
+    /// On the editor dispatcher, discard a root result cached while CanRead was
+    /// false, once reads resume. Repeated resumption leaves a readable cache intact.
+    /// </summary>
     internal void InvalidateUnavailableChildren()
     {
         if (!_unavailableEnumeration || !_provider.CanRead) { return; }

@@ -429,7 +429,11 @@ public sealed class EditorSemanticTextRangeTests
         highlighting.FlushSemanticChanges();
         Assert.Equal(before, host.Session.SemanticQueryCountForCensus);
         Assert.Empty(events);
-        Assert.Equal("[[Target]]", Assert.Single(host.Peer.GetChildren()!).GetName());
+        List<AutomationPeer> children = host.Peer.GetChildren()!;
+        Assert.Equal("[[Target]]", Assert.Single(children).GetName());
+        host.Peer.ResumeSemanticAvailability();
+        host.Peer.ResumeSemanticAvailability();
+        Assert.Same(children, host.Peer.GetChildren());
     });
 
     [Fact]

@@ -66,7 +66,12 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
     public TextDocument Document { get; }
 
     public event EventHandler? HighlightInvalidated;
-    public event EventHandler<EventArgs>? SemanticReadsResumed;
+    /// <summary>
+    /// Raised synchronously on the owning document dispatcher after the outer
+    /// native/peer update closes, including groups with no text mutation.
+    /// Consumers may discard unavailable reads without publishing TextChanged.
+    /// </summary>
+    public event EventHandler? SemanticReadsResumed;
 
     internal bool IsDisposed => _disposed;
     internal bool SemanticReadsAvailable => !_disposed && !_peerUpdateOpen && !Document.IsInUpdate;
