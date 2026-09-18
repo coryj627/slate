@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -31,7 +32,7 @@ public sealed class EditorSemanticTextRangeTests
         AssertAttribute("Quoted text", EditorSemanticTextRange.StyleIdAttribute, 70014);
         foreach (string marker in new[] { "[[Target]]", "![[Target]]", "#project", "[@smith2020]", "[Website]", "![Picture]" })
         {
-            var link = Assert.IsType<EditorSemanticTextRange>(host.At(marker).GetAttributeValue(EditorSemanticTextRange.LinkAttribute));
+            var link = (ITextRangeProvider)host.At(marker).GetAttributeValue(EditorSemanticTextRange.LinkAttribute);
             Assert.Contains(marker, link.GetText(-1));
         }
         AssertAttribute("inline code", EditorSemanticTextRange.StyleNameAttribute, "Code");
@@ -134,6 +135,69 @@ public sealed class EditorSemanticTextRangeTests
     });
 
     [Fact]
+    public void LinkAttributeRangesUseWpfMarshalingAndAcceptOrdinaryRangeOperands() => OnSta(() =>
+    {
+        using var host = new Host("[Website](https://example.org)", show: true);
+        var exportedDocument = WpfTextRangeAccess.Wrap(host.Provider.DocumentRange, host.Peer);
+        Task read = Task.Run(() =>
+        {
+            var link = (ITextRangeProvider)exportedDocument.GetAttributeValue(EditorSemanticTextRange.LinkAttribute);
+            Assert.Equal(host.Text, link.GetText(-1));
+            Assert.Equal("Link", link.GetAttributeValue(EditorSemanticTextRange.StyleNameAttribute));
+            Assert.True(link.Compare(exportedDocument));
+            Assert.True(link.Compare(link));
+            Assert.Equal(0, link.CompareEndpoints(TextPatternRangeEndpoint.End, exportedDocument, TextPatternRangeEndpoint.End));
+            ITextRangeProvider clone = link.Clone();
+            Assert.Equal(host.Text, clone.GetText(-1));
+            Assert.True(exportedDocument.Compare(clone));
+            Assert.True(clone.Compare(exportedDocument));
+            Assert.Equal(host.Text, exportedDocument.FindAttribute(EditorSemanticTextRange.LinkAttribute, link, false)!.GetText(-1));
+            Assert.Equal(host.Text, link.FindAttribute(EditorSemanticTextRange.LinkAttribute, true, false)!.GetText(-1));
+            Assert.Null(link.FindAttribute(EditorSemanticTextRange.StyleIdAttribute, 70001, false));
+            Assert.Equal("Website", link.FindText("Website", false, false)!.GetText(-1));
+            Assert.NotEmpty(link.GetBoundingRectangles());
+            Assert.Same(exportedDocument.GetEnclosingElement(), link.GetEnclosingElement());
+            Assert.Empty(link.GetChildren());
+            link.MoveEndpointByRange(TextPatternRangeEndpoint.End, link, TextPatternRangeEndpoint.Start);
+            Assert.Equal(string.Empty, link.GetText(-1));
+            link.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Character, 1);
+            Assert.Equal("[", link.GetText(-1));
+            link.ExpandToEnclosingUnit(TextUnit.Document);
+            link.Select();
+            link.ScrollIntoView(true);
+        });
+        PumpUntil(() => read.IsCompleted);
+        read.GetAwaiter().GetResult();
+        Assert.Equal(host.Text, host.Provider.GetSelection()[0].GetText(-1));
+    });
+
+    [Fact]
+    public void LinkExportUsesOneComIdentityAndReleasesItsNativeOwnership() => OnSta(() =>
+    {
+        using var host = new Host("[Website](https://example.org)");
+        int before = UiaLinkRangeExport.LiveExportsForCensus;
+        object exported = host.Provider.DocumentRange.GetAttributeValue(EditorSemanticTextRange.LinkAttribute);
+        Assert.Equal(before + 1, UiaLinkRangeExport.LiveExportsForCensus);
+        nint unknown = Marshal.GetIUnknownForObject(exported);
+        nint typed = Marshal.GetComInterfaceForObject(exported, typeof(ITextRangeProvider));
+        try { Assert.Equal(unknown, typed); }
+        finally { Marshal.Release(typed); Marshal.Release(unknown); }
+        Assert.Equal(0, Marshal.ReleaseComObject(exported));
+        Assert.Equal(before, UiaLinkRangeExport.LiveExportsForCensus);
+    });
+
+    [Fact]
+    public void StartupPaintDoesNotCancelTheFirstTwentyEditNotificationBatch() => OnSta(() =>
+    {
+        using var host = new Host("## Heading\n", show: true, drainStartup: false);
+        var events = new List<AutomationEvents>();
+        host.Editor.AutomationEventForCensus = events.Add;
+        for (int index = 0; index < 20; index++) { host.Session.Document.Insert(host.Session.Document.TextLength, "x"); }
+        PumpUntil(() => events.Count >= 2);
+        Assert.Equal(new[] { AutomationEvents.TextPatternOnTextChanged, AutomationEvents.TextPatternOnTextSelectionChanged }, events);
+    });
+
+    [Fact]
     public void CompositionReadsStayUnavailableUntilTheCommittedNativeEdit() => OnSta(() =>
     {
         using var host = new Host("## Heading\n\n", show: true);
@@ -145,6 +209,8 @@ public sealed class EditorSemanticTextRangeTests
         SetComposition(nameof(TextComposition.CompositionText), "に");
         TextCompositionManager.StartComposition(composition);
         Assert.True(host.Editor.IsComposing);
+        Assert.NotEmpty(host.Provider.GetVisibleRanges());
+        Assert.NotNull(host.Provider.RangeFromPoint(host.Editor.TextArea.TextView.PointToScreen(new Point(8, 8))));
         long before = host.Session.SemanticQueryCountForCensus;
         Assert.Same(AutomationElement.NotSupported, host.Provider.DocumentRange.GetAttributeValue(EditorSemanticTextRange.StyleIdAttribute));
         Assert.Equal(before, host.Session.SemanticQueryCountForCensus);
@@ -165,16 +231,36 @@ public sealed class EditorSemanticTextRangeTests
     [Fact]
     public void QueriesRejectForeignThreadsAndDoNotReadAReplacementDocument() => OnSta(() =>
     {
-        using var host = new Host("## Original");
+        using var host = new Host("## Original", show: true);
         ITextRangeProvider old = host.Provider.DocumentRange;
         Exception? error = Task.Run(() => Record.Exception(() => old.GetAttributeValue(EditorSemanticTextRange.StyleIdAttribute))).GetAwaiter().GetResult();
         Assert.IsType<InvalidOperationException>(error);
-        using var replacement = new AvalonDocumentBufferSession("# Replacement", _ => { });
+        using var replacement = new AvalonDocumentBufferSession("# Replacement\n\nSecond line", _ => { });
         host.Editor.Document = replacement.Document;
         host.Editor.HighlightSession = replacement;
         Assert.Same(AutomationElement.NotSupported, old.GetAttributeValue(EditorSemanticTextRange.StyleIdAttribute));
+        Assert.Throws<ElementNotAvailableException>(() => host.Provider.RangeFromPoint(new Point(8, 40)));
+        Assert.Throws<ElementNotAvailableException>(() => host.Provider.GetVisibleRanges());
+        Assert.Throws<ElementNotAvailableException>(() => host.Provider.DocumentRange);
+        Assert.Throws<ElementNotAvailableException>(() => host.Provider.GetSelection());
         ITextProvider current = Assert.IsAssignableFrom<ITextProvider>(host.Peer.GetPattern(PatternInterface.Text));
-        Assert.Equal(70001, current.DocumentRange.GetAttributeValue(EditorSemanticTextRange.StyleIdAttribute));
+        Assert.Equal(70001, current.DocumentRange.FindText("Replacement", false, false)!.GetAttributeValue(EditorSemanticTextRange.StyleIdAttribute));
+    });
+
+    [Fact]
+    public void VisibleRangeIncludesTheCharacterClippedAtTheRightEdge() => OnSta(() =>
+    {
+        using var host = new Host(new string('W', 300), show: true);
+        host.Editor.Width = 101.25;
+        host.Editor.UpdateLayout();
+        var view = host.Editor.TextArea.TextView;
+        view.EnsureVisualLines();
+        var edge = new Point(view.HorizontalOffset + view.ActualWidth, view.VisualLines[0].Height / 2);
+        var position = view.GetPositionFloor(edge)!.Value;
+        Assert.True(view.GetVisualPosition(position, ICSharpCode.AvalonEdit.Rendering.VisualYPosition.LineTop).X < edge.X);
+        int clippedCharacter = host.Session.Document.GetOffset(position.Location);
+        var visible = Assert.IsType<EditorSemanticTextRange>(Assert.Single(host.Provider.GetVisibleRanges()));
+        Assert.Equal(clippedCharacter + 1, visible.Bounds.End);
     });
 
     [Fact]
@@ -182,6 +268,9 @@ public sealed class EditorSemanticTextRangeTests
     {
         using var host = new Host(Fixture, show: true);
         Assert.NotEmpty(host.Provider.GetVisibleRanges());
+        host.Session.BeginPeerUpdate();
+        Assert.NotEmpty(host.Provider.GetVisibleRanges());
+        host.Session.EndPeerUpdate();
         Point screen = host.Editor.TextArea.TextView.PointToScreen(new Point(8, 8));
         var point = Assert.IsType<EditorSemanticTextRange>(host.Provider.RangeFromPoint(screen));
         Assert.Equal(point.Bounds.Start, point.Bounds.End);
@@ -193,7 +282,7 @@ public sealed class EditorSemanticTextRangeTests
     private sealed class Host : IDisposable
     {
         private readonly Window? _window;
-        internal Host(string text, bool show = false)
+        internal Host(string text, bool show = false, bool drainStartup = true)
         {
             Text = text;
             Session = new AvalonDocumentBufferSession(text, _ => { });
@@ -219,7 +308,7 @@ public sealed class EditorSemanticTextRangeTests
                 _window.UpdateLayout();
                 _window.Activate();
                 Editor.FocusInputOwner();
-                Editor.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                if (drainStartup) { Editor.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle); }
             }
             Peer = Assert.IsType<SlateTextEditorAutomationPeer>(UIElementAutomationPeer.CreatePeerForElement(Editor));
             Provider = Assert.IsType<EditorSemanticTextProvider>(Peer.GetPattern(PatternInterface.Text));
@@ -231,6 +320,19 @@ public sealed class EditorSemanticTextRangeTests
         internal EditorSemanticTextProvider Provider { get; }
         internal ITextRangeProvider At(string marker) => Provider.Range(Text.IndexOf(marker, StringComparison.Ordinal), Text.IndexOf(marker, StringComparison.Ordinal) + 1);
         public void Dispose() { _window?.Close(); Session.Dispose(); }
+    }
+
+    private static void PumpUntil(Func<bool> complete)
+    {
+        var frame = new DispatcherFrame();
+        var timer = new DispatcherTimer(DispatcherPriority.ApplicationIdle)
+        { Interval = TimeSpan.FromMilliseconds(10) };
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        timer.Tick += (_, _) => { if (complete() || elapsed.Elapsed > TimeSpan.FromSeconds(10)) { frame.Continue = false; } };
+        timer.Start();
+        try { Dispatcher.PushFrame(frame); }
+        finally { timer.Stop(); }
+        Assert.True(complete(), "The dispatched editor operation did not complete.");
     }
 
     private static void OnSta(Action action)

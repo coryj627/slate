@@ -1152,32 +1152,7 @@ public sealed class ShellAccessibilityTests
         }
     }
 
-    /// <summary>
-    /// W-E7 gate spike (task: RangeFromChild over custom peers),
-    /// HARDENED per the #1072 adversarial round: the add-on positions
-    /// browse mode via ITextProvider::RangeFromChild, NVDA treats a
-    /// failing element as OUTSIDE the document
-    /// (UIABrowseModeDocument.__contains__), and its renderer walks
-    /// child ranges RECURSIVELY. WPF resolves in three tiers
-    /// (TextAdaptor.RangeFromChild) and the custom elements ride the
-    /// one-logical-hop UIContainer tier, so every interactive
-    /// UIElement in the reading document must stay its container's
-    /// DIRECT child.
-    ///
-    /// Proof shape (round-1 findings addressed):
-    ///  - a POSITIVE CENSUS: every custom peer kind must be found and
-    ///    must resolve - including the object-tree structural peers
-    ///    (heading, code block, list, list item) that GetChildrenCore
-    ///    serves outside the text-range child list;
-    ///  - IDENTITY, not just sanity: embedded elements assert NVDA's
-    ///    own round-trip (the child range's GetChildren yields the
-    ///    probed element); TextElement peers assert their range TEXT
-    ///    carries the element's own content;
-    ///  - DOCUMENT ORDER: probe ranges are strictly ordered as
-    ///    authored, so no two probes can share one bogus range;
-    ///  - a RECURSIVE range walk (visited-guarded) over everything
-    ///    the text pattern exposes, every level resolving.
-    /// </summary>
+    /// <summary>W7-1: usable semantic ranges and ordered events through real UIA.</summary>
     [Fact]
     public void EditorTextPattern_SemanticAttributesUnitsAndEvents_AreClean()
     {
@@ -1204,8 +1179,7 @@ public sealed class ShellAccessibilityTests
             using var automation = new UIA3Automation();
             Window window = WaitForMainWindow(process, automation, Path.Combine(logDirectory, "slate-windows.log"), TimeSpan.FromSeconds(30));
             AutomationElement files = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
-            AutomationElement note = files.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.TreeItem))
-                .First(item => item.Name.StartsWith("note", StringComparison.OrdinalIgnoreCase));
+            AutomationElement note = WaitForTreeItemStartingWith(files, automation, "Semantic editor fixture");
             note.Patterns.SelectionItem.Pattern.Select();
             AutomationElement editor = WaitForEditor(window, automation, "note.md editor", TimeSpan.FromSeconds(15));
             var text = editor.Patterns.Text.Pattern;
@@ -1218,9 +1192,22 @@ public sealed class ShellAccessibilityTests
             Assert.Equal("Heading 2", heading.GetAttributeValue(attributes.StyleName));
             var link = document.FindText("Website", false, false);
             Assert.NotNull(link);
-            Assert.NotNull(link.GetAttributeValue(attributes.Link));
-            Assert.NotEqual(automation.NotSupportedValue, link.GetAttributeValue(attributes.Link));
-            Assert.NotEqual(automation.MixedAttributeValue, link.GetAttributeValue(attributes.Link));
+            object linkValue = link.GetAttributeValue(attributes.Link);
+            Assert.NotEqual(automation.NotSupportedValue, linkValue);
+            Assert.NotEqual(automation.MixedAttributeValue, linkValue);
+            // A COM interface cast performs QueryInterface; reflection-based
+            // IsAssignableFrom sees only the RCW's __ComObject runtime type.
+            var nativeLink = (Interop.UIAutomationClient.IUIAutomationTextRange)linkValue;
+            Assert.Equal("[Website](https://example.org)", nativeLink.GetText(-1));
+            Assert.Equal("Link", nativeLink.GetAttributeValue(attributes.StyleName.Id));
+            Assert.Equal("note.md editor", nativeLink.GetEnclosingElement().CurrentName);
+            var linkClone = nativeLink.Clone();
+            Assert.Equal(nativeLink.GetText(-1), linkClone.GetText(-1));
+            var canonicalLink = ((FlaUI.UIA3.UIA3TextRange)document.FindText("[Website](https://example.org)", false, false)).NativeRange;
+            Assert.Equal(1, nativeLink.Compare(canonicalLink));
+            Assert.Equal(1, nativeLink.Compare(nativeLink));
+            Assert.Equal(1, canonicalLink.Compare(linkClone));
+            Assert.Equal(1, linkClone.Compare(canonicalLink));
             Assert.Contains("Heading two", document.FindAttribute(attributes.StyleId, 70002, false).GetText(-1));
             Assert.Contains("Quoted heading", document.FindAttribute(attributes.StyleId, 70002, true).GetText(-1));
             Assert.Contains("[[Target]]", document.FindAttribute(attributes.Link, true, false).GetText(-1));
@@ -1296,6 +1283,32 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// W-E7 gate spike (task: RangeFromChild over custom peers),
+    /// HARDENED per the #1072 adversarial round: the add-on positions
+    /// browse mode via ITextProvider::RangeFromChild, NVDA treats a
+    /// failing element as OUTSIDE the document
+    /// (UIABrowseModeDocument.__contains__), and its renderer walks
+    /// child ranges RECURSIVELY. WPF resolves in three tiers
+    /// (TextAdaptor.RangeFromChild) and the custom elements ride the
+    /// one-logical-hop UIContainer tier, so every interactive
+    /// UIElement in the reading document must stay its container's
+    /// DIRECT child.
+    ///
+    /// Proof shape (round-1 findings addressed):
+    ///  - a POSITIVE CENSUS: every custom peer kind must be found and
+    ///    must resolve - including the object-tree structural peers
+    ///    (heading, code block, list, list item) that GetChildrenCore
+    ///    serves outside the text-range child list;
+    ///  - IDENTITY, not just sanity: embedded elements assert NVDA's
+    ///    own round-trip (the child range's GetChildren yields the
+    ///    probed element); TextElement peers assert their range TEXT
+    ///    carries the element's own content;
+    ///  - DOCUMENT ORDER: probe ranges are strictly ordered as
+    ///    authored, so no two probes can share one bogus range;
+    ///  - a RECURSIVE range walk (visited-guarded) over everything
+    ///    the text pattern exposes, every level resolving.
+    /// </summary>
     [Fact]
     public void ReadingTextPattern_RangeFromChildResolvesEveryCustomPeer()
     {

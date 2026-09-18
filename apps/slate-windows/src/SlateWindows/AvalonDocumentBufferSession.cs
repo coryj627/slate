@@ -67,6 +67,7 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
 
     public event EventHandler? HighlightInvalidated;
 
+    internal bool IsDisposed => _disposed;
     internal bool SemanticReadsAvailable => !_disposed && !_peerUpdateOpen && !Document.IsInUpdate;
     internal long SemanticQueryCountForCensus { get; private set; }
 
@@ -185,6 +186,8 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
     /// Computes a canonical semantic window for a discrete interaction without
     /// replacing <see cref="LatestHighlightWindow"/>. The retained window must
     /// remain the exact one painted by the colorizer while UIA reads elsewhere.
+    /// Like TextDocument and its offset index, this boundary is dispatcher-owned.
+    /// WPF marshals external UIA calls before they enter the semantic provider.
     /// </summary>
     internal EditorHighlightWindow InspectInRange(int startUtf16, int endUtf16)
     {

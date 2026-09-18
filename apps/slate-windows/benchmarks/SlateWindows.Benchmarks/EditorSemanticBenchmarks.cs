@@ -57,8 +57,10 @@ internal sealed class SemanticBenchmarkHost : IDisposable
                 string text = string.Concat(Enumerable.Repeat(block, bytes / block.Length + 1)) + "[[last link]]";
                 _session = new AvalonDocumentBufferSession(text, _ => { }, TimeSpan.FromHours(1));
                 var editor = new SlateTextEditor { Document = _session.Document, HighlightSession = _session };
-                var peer = UIElementAutomationPeer.CreatePeerForElement(editor);
-                var provider = (EditorSemanticTextProvider)peer.GetPattern(PatternInterface.Text);
+                var peer = UIElementAutomationPeer.CreatePeerForElement(editor)
+                    ?? throw new InvalidOperationException("Editor benchmark could not create the native automation peer.");
+                var provider = peer.GetPattern(PatternInterface.Text) as EditorSemanticTextProvider
+                    ?? throw new InvalidOperationException("Editor benchmark requires the semantic TextPattern provider.");
                 int start = text.IndexOf("## Heading", text.Length / 2, StringComparison.Ordinal);
                 _line = provider.Range(start, start + "## Heading".Length);
                 _document = provider.DocumentRange;

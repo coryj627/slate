@@ -14,8 +14,9 @@ public sealed class EditorPeerDoctrineCensus
     public void TheContractTableAndMappingSwitchCoverTheSameCanonicalKindsAndAttributes()
     {
         string contract = File.ReadAllText(Path.Combine(SourceText.RepoRoot(), "docs", "plans", "37_editor_peer_contracts.md"));
-        var documented = Regex.Matches(contract, @"(?m)^\| (\w+) \| (.+) \|$")
-            .Where(match => match.Groups[1].Value != "Canonical")
+        Match table = Regex.Match(contract, @"(?m)^\| Canonical kind \| UIA attributes \|\r?\n(?<rows>(?:\|[^\r\n]*\|\r?\n)+)");
+        Assert.True(table.Success, "The canonical attribute table is missing from the contract.");
+        var documented = Regex.Matches(table.Groups["rows"].Value, @"(?m)^\| (\w+) \| (.+) \|\r?$")
             .ToDictionary(match => match.Groups[1].Value, match =>
                 Regex.Matches(match.Groups[2].Value, @"(?:^|; )(\w+) =")
                     .Select(attribute => attribute.Groups[1].Value).Order().ToArray());

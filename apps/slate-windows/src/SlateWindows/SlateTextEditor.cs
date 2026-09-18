@@ -519,7 +519,7 @@ internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
                 if (!ReferenceEquals(session, _semanticSession))
                 {
                     _semanticSession = session;
-                    _semanticProvider = new EditorSemanticTextProvider(provider, _owner, session, () => ProviderFromPeer(this));
+                    _semanticProvider = new EditorSemanticTextProvider(provider, _owner, session, this, () => ProviderFromPeer(this));
                 }
                 return _semanticProvider;
             }

@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Automation.Text;
 using ICSharpCode.AvalonEdit.Document;
@@ -21,44 +22,65 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
     private readonly SlateTextEditor _editor;
     private readonly AvalonDocumentBufferSession _session;
     private readonly Func<IRawElementProviderSimple> _enclosingElement;
+    private readonly AutomationPeer _peer;
 
     internal EditorSemanticTextProvider(ITextProvider inner, SlateTextEditor editor,
-        AvalonDocumentBufferSession session, Func<IRawElementProviderSimple> enclosingElement)
+        AvalonDocumentBufferSession session, AutomationPeer peer, Func<IRawElementProviderSimple> enclosingElement)
     {
         _inner = inner;
         _editor = editor;
         _session = session;
         _enclosingElement = enclosingElement;
+        _peer = peer;
     }
 
-    internal bool CanRead
+    internal bool HasCurrentDocument
     {
         get
         {
             Debug.Assert(_editor.Dispatcher.CheckAccess());
             _editor.Dispatcher.VerifyAccess();
             return ReferenceEquals(_editor.HighlightSession, _session)
-                && ReferenceEquals(_editor.Document, _session.Document)
-                && _session.SemanticReadsAvailable && !_editor.IsComposing;
+                && ReferenceEquals(_editor.Document, _session.Document) && !_session.IsDisposed;
         }
+    }
+
+    internal bool CanRead => HasCurrentDocument && _session.SemanticReadsAvailable && !_editor.IsComposing;
+
+    private void VerifyCurrentDocument()
+    {
+        if (!HasCurrentDocument) { throw new ElementNotAvailableException("The editor document has been replaced or disposed."); }
     }
 
     internal int Length => _session.Document.TextLength;
     internal IRawElementProviderSimple EnclosingElement => _enclosingElement();
     internal EditorHighlightWindow Inspect(int start, int end) => _session.InspectInRange(start, end);
     internal EditorSemanticTextRange Wrap(ITextRangeProvider range) => new(range, this);
-    internal EditorSemanticTextRange Range(int start, int end) => Wrap(
-        AvalonTextRangeAccess.Create(_editor.TextArea, _session.Document, start, end - start));
+    internal object ExportLinkRange(int start, int end) =>
+        UiaLinkRangeExport.Create(WpfTextRangeAccess.Wrap(Range(start, end), _peer));
+    internal EditorSemanticTextRange Range(int start, int end)
+    {
+        VerifyCurrentDocument();
+        return Wrap(AvalonTextRangeAccess.Create(_editor.TextArea, _session.Document, start, end - start));
+    }
 
-    public ITextRangeProvider DocumentRange => Wrap(_inner.DocumentRange);
+    public ITextRangeProvider DocumentRange
+    {
+        get { VerifyCurrentDocument(); return Wrap(_inner.DocumentRange); }
+    }
     public SupportedTextSelection SupportedTextSelection => _inner.SupportedTextSelection;
-    public ITextRangeProvider[] GetSelection() => _inner.GetSelection().Select(Wrap).ToArray();
+    public ITextRangeProvider[] GetSelection()
+    {
+        VerifyCurrentDocument();
+        return _inner.GetSelection().Select(Wrap).ToArray();
+    }
 
     // AvalonEdit 6.3.1.120 throws for these three members (contract A-1).
     // Geometry remains AvalonEdit's, and every resulting range is native.
     public ITextRangeProvider[] GetVisibleRanges()
     {
-        if (!CanRead || !_editor.IsVisible)
+        VerifyCurrentDocument();
+        if (!_editor.IsVisible)
         {
             return [];
         }
@@ -76,7 +98,7 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
                     double middle = (Math.Max(y, view.VerticalOffset)
                         + Math.Min(bottom, view.VerticalOffset + view.ActualHeight)) / 2;
                     int start = OffsetAt(view, new Point(view.HorizontalOffset, middle));
-                    int end = OffsetAt(view, new Point(view.HorizontalOffset + view.ActualWidth, middle));
+                    int end = OffsetAt(view, new Point(view.HorizontalOffset + view.ActualWidth, middle), includeClippedCharacter: true);
                     ranges.Add(Range(start, Math.Max(start, end)));
                 }
                 y = bottom;
@@ -90,7 +112,7 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
 
     public ITextRangeProvider RangeFromPoint(Point screenLocation)
     {
-        _editor.Dispatcher.VerifyAccess();
+        VerifyCurrentDocument();
         TextView view = _editor.TextArea.TextView;
         view.EnsureVisualLines();
         Point local = view.PointFromScreen(screenLocation);
@@ -101,8 +123,40 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
         return Range(offset, offset);
     }
 
-    private int OffsetAt(TextView view, Point point) => view.GetPositionFloor(point) is { } position
-        ? _session.Document.GetOffset(position.Location) : Length;
+    private int OffsetAt(TextView view, Point point, bool includeClippedCharacter = false)
+    {
+        if (view.GetPositionFloor(point) is not { } position) { return Length; }
+        int offset = _session.Document.GetOffset(position.Location);
+        if (includeClippedCharacter && offset < _session.Document.GetLineByNumber(position.Line).EndOffset
+            && view.GetVisualPosition(position, VisualYPosition.LineTop).X < point.X)
+        {
+            return TextUtilities.GetNextCaretPosition(_session.Document, offset,
+                System.Windows.Documents.LogicalDirection.Forward, CaretPositioningMode.Normal);
+        }
+        return offset;
+    }
+}
+
+/// <summary>WPF does not marshal ranges returned as attribute values (A-6).</summary>
+internal static class WpfTextRangeAccess
+{
+    private static readonly Type WrapperType = typeof(AutomationPeer).Assembly.GetType(
+        "MS.Internal.Automation.TextRangeProviderWrapper", throwOnError: true)!;
+    private static readonly MethodInfo WrapMethod = WrapperType.GetMethod("WrapArgument",
+        BindingFlags.Static | BindingFlags.NonPublic, [typeof(ITextRangeProvider), typeof(AutomationPeer)])
+        ?? throw new InvalidOperationException("WPF's text-range wrapping contract changed.");
+    private static readonly MethodInfo UnwrapMethod = WrapperType.GetMethod("UnwrapArgument",
+        BindingFlags.Static | BindingFlags.NonPublic, [typeof(ITextRangeProvider)])
+        ?? throw new InvalidOperationException("WPF's text-range unwrapping contract changed.");
+
+    internal static ITextRangeProvider Wrap(ITextRangeProvider range, AutomationPeer peer) =>
+        (ITextRangeProvider)WrapMethod.Invoke(null, [range, peer])!;
+    internal static ITextRangeProvider Unwrap(ITextRangeProvider range)
+    {
+        range = UiaLinkRangeExport.Unwrap(range);
+        return WrapperType.IsInstanceOfType(range)
+            ? (ITextRangeProvider)UnwrapMethod.Invoke(null, [range])! : range;
+    }
 }
 
 /// <summary>One pinned dependency adapter, never text scanning (contract A-2).</summary>
@@ -176,7 +230,7 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
                 return TextPattern.MixedAttributeValue;
             }
         }
-        return uniform is LinkIdentity link ? _provider.Range(link.Start, link.End)
+        return uniform is LinkIdentity link ? _provider.ExportLinkRange(link.Start, link.End)
             : uniform ?? AutomationElement.NotSupported;
     }
 
@@ -188,7 +242,8 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
         }
         (int start, int end) = Bounds;
         object sought = value;
-        if (attributeId == LinkAttribute && value is EditorSemanticTextRange link)
+        if (attributeId == LinkAttribute && value is ITextRangeProvider supplied
+            && WpfTextRangeAccess.Unwrap(supplied) is EditorSemanticTextRange link)
         {
             if (!ReferenceEquals(link._provider, _provider))
             {

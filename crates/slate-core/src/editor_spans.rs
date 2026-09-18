@@ -155,12 +155,13 @@ pub fn highlight_spans(source: &str) -> Vec<EditorSpan> {
     spans.extend(citations);
     spans.extend(scan_tags(source));
     spans.extend(scan_comments(source));
+    let opaque = SemanticOpaqueRanges::new(&spans);
     let mut resolved = resolve_overlaps(source, spans);
     // Slice 3: overlay per-token code-block internals. Added *after* the
     // sweep so the CodeFence span still masks markdown/tags elsewhere in
     // the block, while the tokens themselves nest inside it for the apply layer to stamp
     // on top. Structural overlays are also retained without changing paint.
-    append_semantic_overlays(&mut resolved, semantic);
+    append_semantic_overlays(&mut resolved, semantic, &opaque);
     resolved.extend(code);
     resolved.sort_by_key(|s| s.start_byte);
     resolved
@@ -1656,8 +1657,9 @@ fn highlight_spans_reference(source: &str) -> Vec<EditorSpan> {
     spans.extend(citation_spans(source));
     spans.extend(scan_tags(source));
     spans.extend(scan_comments(source));
+    let opaque = SemanticOpaqueRanges::new(&spans);
     let mut resolved = resolve_overlaps(source, spans);
-    append_semantic_overlays(&mut resolved, semantic);
+    append_semantic_overlays(&mut resolved, semantic, &opaque);
     resolved.extend(code_internal_spans(source));
     resolved.sort_by_key(|s| s.start_byte);
     resolved
@@ -1671,42 +1673,77 @@ fn is_semantic_overlay(span: &EditorSpan) -> bool {
     )
 }
 
-fn append_semantic_overlays(resolved: &mut Vec<EditorSpan>, semantic: Vec<EditorSpan>) {
-    // The visual sweep is sorted and non-overlapping. Binary-search its opaque
-    // survivors rather than comparing each link against every code block.
-    let opaque: Vec<_> = resolved
-        .iter()
-        .filter(|span| {
+/// Opaque coverage precedes paint conflict resolution: a comment surrounding a
+/// fence still hides semantics outside that fence. Conversely, percent markers
+/// starting inside code are literal text, not a comment extending past the code.
+struct SemanticOpaqueRanges {
+    all: Vec<(u32, u32)>,
+    prose: Vec<(u32, u32)>,
+}
+
+impl SemanticOpaqueRanges {
+    fn new(spans: &[EditorSpan]) -> Self {
+        let code = Self::merge(spans.iter().filter_map(|span| {
             matches!(
                 span.kind,
-                EditorSpanKind::Frontmatter
-                    | EditorSpanKind::Comment
-                    | EditorSpanKind::InlineCode
-                    | EditorSpanKind::CodeFence
+                EditorSpanKind::InlineCode | EditorSpanKind::CodeFence
             )
-        })
-        .collect();
-    let accepted: Vec<_> = semantic
-        .into_iter()
-        .filter(|span| {
-            let first = opaque.partition_point(|mask| mask.end_byte <= span.start_byte);
-            !opaque[first..]
-                .iter()
-                .take_while(|mask| mask.start_byte < span.end_byte)
-                .any(|mask| {
-                    // A quote may contain code/comment children; a link label may
-                    // contain inline code. A construct starting IN an opaque run is
-                    // never semantic. Comments/frontmatter also mask crossing links.
-                    mask.start_byte <= span.start_byte
-                        || (!matches!(span.kind, EditorSpanKind::BlockQuote)
-                            && matches!(
-                                mask.kind,
-                                EditorSpanKind::Comment | EditorSpanKind::Frontmatter
-                            ))
-                })
-        })
-        .collect();
-    resolved.extend(accepted);
+            .then_some((span.start_byte, span.end_byte))
+        }));
+        let prose = Self::merge(spans.iter().filter_map(|span| {
+            (matches!(span.kind, EditorSpanKind::Frontmatter)
+                || matches!(span.kind, EditorSpanKind::Comment)
+                    && !Self::contains(&code, span.start_byte))
+            .then_some((span.start_byte, span.end_byte))
+        }));
+        let all = Self::merge(code.into_iter().chain(prose.iter().copied()));
+        Self { all, prose }
+    }
+
+    fn merge(ranges: impl Iterator<Item = (u32, u32)>) -> Vec<(u32, u32)> {
+        let mut sorted: Vec<_> = ranges.collect();
+        sorted.sort_unstable();
+        let mut merged: Vec<(u32, u32)> = Vec::new();
+        for (start, end) in sorted {
+            if let Some(last) = merged.last_mut()
+                && start <= last.1
+            {
+                last.1 = last.1.max(end);
+            } else {
+                merged.push((start, end));
+            }
+        }
+        merged
+    }
+
+    fn contains(ranges: &[(u32, u32)], at: u32) -> bool {
+        ranges
+            .get(ranges.partition_point(|range| range.1 <= at))
+            .is_some_and(|range| range.0 <= at)
+    }
+
+    fn suppresses(&self, span: &EditorSpan) -> bool {
+        // Quotes can contain code/comments and link labels can contain inline
+        // code, but no construct begins in opaque text. Comments/frontmatter
+        // additionally mask links whose ranges cross into them.
+        Self::contains(&self.all, span.start_byte)
+            || !matches!(span.kind, EditorSpanKind::BlockQuote)
+                && self
+                    .prose
+                    .get(
+                        self.prose
+                            .partition_point(|range| range.1 <= span.start_byte),
+                    )
+                    .is_some_and(|range| range.0 < span.end_byte)
+    }
+}
+
+fn append_semantic_overlays(
+    resolved: &mut Vec<EditorSpan>,
+    semantic: Vec<EditorSpan>,
+    opaque: &SemanticOpaqueRanges,
+) {
+    resolved.extend(semantic.into_iter().filter(|span| !opaque.suppresses(span)));
 }
 
 /// Resolve overlaps by priority (Swift `covered`-set parity): accept
@@ -2016,6 +2053,31 @@ mod tests {
             .collect();
         assert_eq!(semantics.len(), 1, "opaque semantics leaked: {semantics:?}");
         assert_eq!(slice(source, semantics[0]), "[visible](shown)");
+    }
+
+    #[test]
+    fn comments_surrounding_code_keep_opaque_semantic_coverage() {
+        let source = "%%\n[hidden](x) ![hidden image](x)\n\n> hidden quote\n\n```\ncode\n```\n%%\n\n[visible](y)\n";
+        let spans = highlight_spans(source);
+        let semantics: Vec<_> = spans
+            .iter()
+            .filter(|span| is_semantic_overlay(span))
+            .collect();
+        assert_eq!(
+            semantics.len(),
+            1,
+            "comment semantics leaked: {semantics:?}"
+        );
+        assert_eq!(slice(source, semantics[0]), "[visible](y)");
+        let at = source.find("hidden").unwrap();
+        assert_ranged_matches_whole(source, at..at + 1);
+
+        let literal = "```\n%% literal percent markers\n```\n\n[visible](y)\n\n%%\n";
+        let spans = highlight_spans(literal);
+        assert_eq!(
+            slice(literal, &first(&spans, &EditorSpanKind::Link).unwrap()),
+            "[visible](y)"
+        );
     }
 
     #[test]

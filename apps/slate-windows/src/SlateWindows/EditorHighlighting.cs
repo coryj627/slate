@@ -223,7 +223,8 @@ internal sealed class AvalonHighlightingCoordinator : IDisposable
     internal EditorHighlightWindow RefreshRangeForCensus(int startUtf16, int endUtf16)
     {
         ThrowIfDisposed();
-        _timer.Stop();
+        // An initial/explicit paint must not cancel a pending semantic batch.
+        // Only the timer tick (or disposal) owns completion of that batch.
         EditorHighlightWindow window = _session.HighlightInRange(startUtf16, endUtf16);
         _colorizer.SetWindow(window);
         RefreshCountForCensus++;

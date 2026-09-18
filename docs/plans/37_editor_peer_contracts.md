@@ -192,12 +192,12 @@ marshaling. The fixture repeats heading/prose blocks and ends with one link.
 
 | Operation | Document | p50 | Budget |
 |---|---|---|---|
-| Line StyleId | 100 KiB | 0.0320 ms | 0.5 ms |
-| Line StyleId | 1 MiB | 0.0322 ms | 0.5 ms |
-| Line StyleId | 8 MiB | 0.0323 ms | 0.5 ms |
-| Document FindAttribute(Link) | 8 MiB | 327.0786 ms | 1000 ms |
+| Line StyleId | 100 KiB | 0.0363 ms | 0.5 ms |
+| Line StyleId | 1 MiB | 0.0328 ms | 0.5 ms |
+| Line StyleId | 8 MiB | 0.0331 ms | 0.5 ms |
+| Document FindAttribute(Link) | 8 MiB | 321.2658 ms | 1000 ms |
 
-The 8 MiB / 1 MiB line ratio is 1.00x, below the frozen 4.00x ceiling.
+The 8 MiB / 1 MiB line ratio is 1.01x, below the frozen 4.00x ceiling.
 Line queries allocate 3.49 KiB; the full-document search allocates 70.1 MiB,
 including the canonical full span query. The runner rejects missing or duplicate
 benchmark cases. Reference-definition fallback is deliberately not claimed to
@@ -218,3 +218,68 @@ Append each invariant-targeted review's findings and resolutions here,
 following [the red-team protocol](24_red_team_protocol.md). Three successive
 blocking rounds in one subsystem trigger a design pass; a blocker created
 by the previous fix counts twice.
+
+
+**A-6 — Link VARIANT export and the remaining operand limitation.**
+WPF's [TextRangeProviderWrapper](https://source.dot.net/PresentationCore/MS/Internal/Automation/TextRangeProviderWrapper.cs.html)
+wraps ordinary range results and unwraps comparison operands, but passes
+GetAttributeValue results and FindAttribute values through unchanged.
+The Link attribute first uses the exact cached WPF WrapArgument overload
+for dispatcher ownership, then `UiaLinkRangeExport` supplies an IUnknown
+with the native ITextRangeProvider vtable and the system free-threaded
+marshaler. Its eighteen text methods forward to the WPF wrapper; it owns
+one COM reference to that wrapper and frees its allocation at the last
+Release. No export is cached on the peer or provider. Native operand
+normalization unwraps this adapter before calling WPF. The identity query
+used by an in-process FindAttribute likewise unwraps it.
+
+The ordinary WPF object's controlling IUnknown and typed range pointers
+have different vtables. Returning the former in a Link VARIANT failed
+cross-process GetText before reaching the provider, despite successful QI.
+A separate native RichTextBox probe reproduced this without Slate or
+AvalonEdit, using both CUIAutomation and CUIAutomation8 and direct native
+vtable calls. A default-interface annotation did not fix it. The forwarding
+adapter plus the free-threaded marshaler makes reads and cloning work;
+COM aggregation did not solve the remaining operand difference and is not
+used. See [the measured interoperability report](18_windows_port/reports/w7_1_link_interop_probe.md).
+
+**Owner decision pending:** a Link range used as an operand of an ordinary
+WPF range's Compare/CompareEndpoints is still rejected with E_INVALIDARG.
+Cloning the Link first produces an ordinary range that compares in both
+directions. The reverse direction (Link.Compare(ordinary)), text reads,
+style reads and cloning are verified. A range-valued Link FindAttribute
+is supported inside the provider; cross-process searches use the explicit
+boolean presence value, because UIA does not translate a client range in
+that VARIANT back into a provider range. This limitation is not silently
+counted as unrestricted range interoperability. Do not merge while the
+owner's choice between this documented limitation and full support is pending.
+
+The off-thread unit witness exercises dispatcher access and native ownership;
+the UIA3 journey calls the exported Link's actual methods, including GetText,
+Clone and comparisons. A non-null Link assertion alone is insufficient.
+
+### Review round 1 (head 21fe5962)
+
+Standards: three findings (E-2/E-3 WPF Link marshaling, E-8 startup painting
+canceling the first edit notification, E-3 retained-provider point geometry).
+Spec: four findings (the shared E-8/E-3 findings, E-6 comments surrounding
+fences losing opaque coverage, E-2/E-7 visible ranges disappearing during IME).
+Resolutions: A-6 supplies WPF's wrapper; painting no longer stops the batch
+timer; all document-based range creation checks the retained provider's
+lifetime separately from semantic-read availability. Native geometry remains
+available during IME/peer updates, including a character clipped at the right
+edge. Opaque coverage is preserved before visual conflict resolution, with
+literal percent markers beginning in code excluded from comment coverage.
+Targeted regressions exercise each case, including twenty native edits before
+the initial dispatcher callback and comments containing links/images/quotes
+before a nested fence. Full/window differential coverage remains required.
+
+Codoki round 1: accepted deterministic benchmark-startup diagnostics. The
+claimed C# compile errors were disproved by the .NET 10 CI build (Order and
+collection expressions are supported). CI instead found that the doctrine
+census parsed a later benchmark-table header as a canonical kind; parsing now
+selects the exact attribute table. The proposed removal of VerifyAccess was
+rejected: TextDocument and the byte-offset index are dispatcher-owned, and
+WPF marshals external UIA calls. A-6 documents the exceptional Link attribute
+route and its remaining operand limitation; exported reads are exercised off-thread.
+The raw internal session method deliberately retains its thread guard.

@@ -1138,12 +1138,12 @@ dotnet run --project benchmarks/SlateWindows.Benchmarks --configuration Release 
 
 | Operation | Size | p50 | Allocation | Ceiling |
 |---|---|---|---|---|
-| Line GetAttributeValue(StyleId) | 100 KiB | 0.0320 ms | 3.49 KiB | 0.5 ms |
-| Line GetAttributeValue(StyleId) | 1 MiB | 0.0322 ms | 3.49 KiB | 0.5 ms |
-| Line GetAttributeValue(StyleId) | 8 MiB | 0.0323 ms | 3.49 KiB | 0.5 ms |
-| Document FindAttribute(Link) | 8 MiB | 327.0786 ms | 70.1 MiB | 1000 ms |
+| Line GetAttributeValue(StyleId) | 100 KiB | 0.0363 ms | 3.49 KiB | 0.5 ms |
+| Line GetAttributeValue(StyleId) | 1 MiB | 0.0328 ms | 3.49 KiB | 0.5 ms |
+| Line GetAttributeValue(StyleId) | 8 MiB | 0.0331 ms | 3.49 KiB | 0.5 ms |
+| Document FindAttribute(Link) | 8 MiB | 321.2658 ms | 70.1 MiB | 1000 ms |
 
-The line-read 8 MiB / 1 MiB ratio is **1.00x** against a **4.00x** ceiling.
+The line-read 8 MiB / 1 MiB ratio is **1.01x** against a **4.00x** ceiling.
 The runner validates all four cases and rejects absent/duplicate results.
 The full-document search intentionally includes a full canonical span query;
 the line-read result does not claim flatness for notes that trigger a core
