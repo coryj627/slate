@@ -8308,6 +8308,16 @@ pub enum A11yEvent {
     },
     CommandPaletteNeedsVault,
     SearchNeedsVault,
+    VaultScanStarted {
+        total_files: u64,
+    },
+    VaultScanProgress {
+        indexed: u64,
+        total: u64,
+    },
+    VaultScanFinished {
+        files_indexed: u64,
+    },
     SearchResultsSummary {
         count: u32,
     },
@@ -10139,6 +10149,9 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::WelcomeShown { recent_vault_count } => C::WelcomeShown { recent_vault_count },
             F::CommandPaletteNeedsVault => C::CommandPaletteNeedsVault,
             F::SearchNeedsVault => C::SearchNeedsVault,
+            F::VaultScanStarted { total_files } => C::VaultScanStarted { total_files },
+            F::VaultScanProgress { indexed, total } => C::VaultScanProgress { indexed, total },
+            F::VaultScanFinished { files_indexed } => C::VaultScanFinished { files_indexed },
             F::SearchResultsSummary { count } => C::SearchResultsSummary { count },
             F::SearchFailed { message } => C::SearchFailed { message },
             F::SearchResultOpened {

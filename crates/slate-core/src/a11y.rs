@@ -32,9 +32,13 @@
 //! it, so `CanvasAnnouncer` posts rendered events and its residue site
 //! is gone (the mac census drops 30 → 29). The GRAPH announcer followed
 //! in W6-2 PR 0a (#746): its family is below, `GraphAnnouncer` relays
-//! rendered events, and its residue site is gone too (29 → 28). No
-//! engine-level vocabulary remains outstanding. One shared residue
-//! site survives that neither migration could delete: the
+//! rendered events, and its residue site is gone too (29 → 28). W7-2
+//! (#748) gives the scan-progress family its three VaultScan events,
+//! removing that adapter too (28 → 27); its timing remains host-side.
+//! Remaining host-composed sites are enumerated with their producing
+//! engines in docs/plans/38_notification_dispatcher_contracts.md, rather
+//! than inferred from these migration counts. One shared residue
+//! site survives those migrations: the
 //! structural-mutation builder the mac reaches through
 //! `postMutationAnnouncement`, which serves every authoring surface —
 //! the canvas and graph call sites left it, the marker stays.
@@ -632,6 +636,16 @@ pub enum A11yEvent {
     },
     CommandPaletteNeedsVault,
     SearchNeedsVault,
+    VaultScanStarted {
+        total_files: u64,
+    },
+    VaultScanProgress {
+        indexed: u64,
+        total: u64,
+    },
+    VaultScanFinished {
+        files_indexed: u64,
+    },
 
     // --- Links, search, embeds, headings, navigation ---
     /// The search panel's result-count summary. This is the §W-D
@@ -1745,6 +1759,18 @@ impl A11yEvent {
             }
             CommandPaletteNeedsVault => "Open a vault to use the command palette.".to_owned(),
             SearchNeedsVault => "Open a vault first. Search works inside a vault.".to_owned(),
+            VaultScanStarted { total_files } => format!(
+                "Scanning vault. {total_files} {} to index.",
+                plural_u64(*total_files, "file", "files")
+            ),
+            VaultScanProgress { indexed, total } => format!(
+                "Indexed {indexed} of {total} {}.",
+                plural_u64(*total, "file", "files")
+            ),
+            VaultScanFinished { files_indexed } => format!(
+                "Scan complete. {files_indexed} {} indexed.",
+                plural_u64(*files_indexed, "file", "files")
+            ),
             SearchResultsSummary { count } => match *count {
                 0 => "Search returned no results.".to_owned(),
                 1 => "Search returned 1 result.".to_owned(),
@@ -2880,7 +2906,11 @@ fn contains_field(haystack: &str, field: &str) -> bool {
 /// Delegates so the singular-at-exactly-one rule has one definition;
 /// the count is interpolated by the caller and stays ungrouped here.
 fn plural<'a>(count: u32, one: &'a str, many: &'a str) -> &'a str {
-    crate::sidebar_filter::noun(count as u64, one, many)
+    plural_u64(u64::from(count), one, many)
+}
+
+fn plural_u64<'a>(count: u64, one: &'a str, many: &'a str) -> &'a str {
+    crate::sidebar_filter::noun(count, one, many)
 }
 
 /// The same rule over a COLLECTION LENGTH. Every count payload in this
@@ -3469,6 +3499,12 @@ pub fn corpus() -> Vec<A11yEvent> {
         },
         CommandPaletteNeedsVault,
         SearchNeedsVault,
+        VaultScanStarted { total_files: 1 },
+        VaultScanStarted { total_files: 2 },
+        VaultScanProgress { indexed: 1, total: 1 },
+        VaultScanProgress { indexed: 1, total: 2 },
+        VaultScanFinished { files_indexed: 1 },
+        VaultScanFinished { files_indexed: 2 },
         SearchResultsSummary { count: 0 },
         SearchResultsSummary { count: 1 },
         SearchResultsSummary { count: 7 },
@@ -5340,6 +5376,34 @@ mod tests {
     use super::*;
     use A11yPriority::{High, Medium};
 
+    #[test]
+    fn scan_counts_preserve_u64_and_singular_copy_at_medium_priority() {
+        for (count, noun) in [(0, "files"), (1, "file"), (2, "files"), (u64::MAX, "files")] {
+            for (event, expected) in [
+                (
+                    A11yEvent::VaultScanStarted { total_files: count },
+                    format!("Scanning vault. {count} {noun} to index."),
+                ),
+                (
+                    A11yEvent::VaultScanProgress {
+                        indexed: count,
+                        total: count,
+                    },
+                    format!("Indexed {count} of {count} {noun}."),
+                ),
+                (
+                    A11yEvent::VaultScanFinished {
+                        files_indexed: count,
+                    },
+                    format!("Scan complete. {count} {noun} indexed."),
+                ),
+            ] {
+                assert_eq!(event.priority(), Medium);
+                assert_eq!(event.render(), expected);
+            }
+        }
+    }
+
     /// The full corpus golden: every representative event's exact
     /// (priority, text). THIS TABLE IS THE CONTRACT — a wording change
     /// here is a product decision (and a §W-D parity change), never a
@@ -5385,6 +5449,12 @@ mod tests {
             ),
             (High, "Open a vault to use the command palette."),
             (Medium, "Open a vault first. Search works inside a vault."),
+            (Medium, "Scanning vault. 1 file to index."),
+            (Medium, "Scanning vault. 2 files to index."),
+            (Medium, "Indexed 1 of 1 file."),
+            (Medium, "Indexed 1 of 2 files."),
+            (Medium, "Scan complete. 1 file indexed."),
+            (Medium, "Scan complete. 2 files indexed."),
             (Medium, "Search returned no results."),
             (Medium, "Search returned 1 result."),
             (Medium, "Search returned 7 results."),
@@ -6754,7 +6824,7 @@ mod tests {
     fn a11y_event_top_level_count_is_pinned() {
         assert_eq!(
             declared_variants("A11yEvent").len(),
-            199,
+            202,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }
@@ -7540,9 +7610,9 @@ mod tests {
         }
     }
 
-    /// 0a-18: the module doc names no outstanding engine — only the
-    /// structural-mutation builder remains a named host-composed
-    /// exception — and the graph is recorded as migrated.
+    /// 0a-18 / W7 D-8: the migrated announcers and scan family are
+    /// recorded, and remaining engine sites have an explicit register.
+    /// The historic fact name is retained by the graph contract citations.
     #[test]
     fn the_module_doc_names_no_engine_but_the_mutation_builder() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/a11y.rs");
@@ -7562,6 +7632,11 @@ mod tests {
         assert!(
             doc.contains("GraphAnnouncer"),
             "the graph migration is recorded"
+        );
+        assert!(doc.contains("VaultScan"), "the scan migration is recorded");
+        assert!(
+            doc.contains("38_notification_dispatcher_contracts.md"),
+            "remaining engine sites point to the exhaustive register"
         );
         for stale in [
             "remaining named engine",

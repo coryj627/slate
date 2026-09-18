@@ -15,8 +15,12 @@ public sealed class ScanAnnouncementGateTests
     {
         var gate = new ScanAnnouncementGate(() => _now);
 
-        RenderedAnnouncement started = Render(gate.Started(1));
-        RenderedAnnouncement finished = Render(gate.Finished(1));
+        A11yEvent.VaultScanStarted start = Assert.IsType<A11yEvent.VaultScanStarted>(gate.Started(1));
+        A11yEvent.VaultScanFinished finish = Assert.IsType<A11yEvent.VaultScanFinished>(gate.Finished(1));
+        Assert.Equal(1UL, start.TotalFiles);
+        Assert.Equal(1UL, finish.FilesIndexed);
+        RenderedAnnouncement started = Render(start);
+        RenderedAnnouncement finished = Render(finish);
 
         Assert.Equal("Scanning vault. 1 file to index.", started.Text);
         Assert.Equal(A11yPriority.Medium, started.Priority);
@@ -55,7 +59,8 @@ public sealed class ScanAnnouncementGateTests
         Assert.Null(gate.FileIndexed(6, 10));
 
         _now += TimeSpan.FromMilliseconds(1);
-        A11yEvent announcement = Assert.IsAssignableFrom<A11yEvent>(gate.FileIndexed(7, 10));
+        A11yEvent.VaultScanProgress announcement = Assert.IsType<A11yEvent.VaultScanProgress>(gate.FileIndexed(7, 10));
+        Assert.Equal((7UL, 10UL), (announcement.Indexed, announcement.Total));
         Assert.Equal("Indexed 7 of 10 files.", Render(announcement).Text);
     }
 
@@ -174,7 +179,7 @@ public sealed class UiProgressListenerTests
             await lifecycle.OpenVaultAsync(fixture.Root);
 
             Assert.NotEmpty(queued);
-            Assert.Empty(announcements);
+            Assert.IsType<A11yEvent.VaultOpened>(Assert.Single(announcements));
             Assert.Equal(2, lifecycle.ProgressMaximum);
             Assert.Equal(2, lifecycle.ProgressValue);
             Assert.False(lifecycle.IsProgressIndeterminate);
@@ -189,6 +194,7 @@ public sealed class UiProgressListenerTests
             Assert.False(lifecycle.IsProgressIndeterminate);
             Assert.Equal(
                 [
+                    $"Vault {lifecycle.VaultDisplayName} opened. Scanning files for the sidebar.",
                     "Scanning vault. 2 files to index.",
                     "Scan complete. 0 files indexed.",
                 ],

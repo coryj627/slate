@@ -383,7 +383,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         Func<Action, CancellationToken, Task>? treeWorker = null,
         Func<Action, CancellationToken, Task>? filterWorker = null,
         Func<Action, CancellationToken, Task>? importWorker = null,
-        Func<Action, CancellationToken, Task>? moveToWorker = null)
+        Func<Action, CancellationToken, Task>? moveToWorker = null,
+        Func<CancellationToken, Task>? filterDelay = null)
     {
         _session = session;
         _announce = announce;
@@ -396,6 +397,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             ?? (currentUiContext is DispatcherSynchronizationContext ? currentUiContext : null);
         _runTreeWorker = treeWorker ?? ((work, token) => Task.Run(work, token));
         _runFilterWorker = filterWorker ?? ((work, token) => Task.Run(work, token));
+        _filterDelay = filterDelay ?? (token => Task.Delay(FilterDebounceMilliseconds, token));
         _runImportWorker = importWorker ?? ((work, token) => Task.Run(work, token));
         _runMoveToWorker = moveToWorker ?? ((work, token) => Task.Run(work, token));
         _vaultRoot = vaultRoot;

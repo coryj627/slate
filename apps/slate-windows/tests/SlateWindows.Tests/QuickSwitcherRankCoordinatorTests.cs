@@ -9,6 +9,53 @@ namespace SlateWindows.Tests;
 public sealed class QuickSwitcherRankCoordinatorTests
 {
     [Fact]
+    public async Task RankingWindowCollapsesKeystrokesAndPublishesTheInitialCountOnce()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "quick-count-window");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        var context = new PumpSynchronizationContext();
+        var delays = new List<TaskCompletionSource>();
+        var rankedQueries = new List<string>();
+        var announcements = new List<A11yEvent>();
+        Task Delay(CancellationToken token)
+        {
+            var delay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            delays.Add(delay);
+            return delay.Task.WaitAsync(token);
+        }
+        using QuickSwitcherViewModel quick = CreateQuick(session, fixture.Root, context,
+            announcements.Add, new QuickSwitcherRankCoordinator(), (_, query, _) =>
+            {
+                rankedQueries.Add(query);
+                return Page("note.md");
+            }, Delay);
+
+        quick.Open();
+        Assert.Empty(announcements);
+        Assert.Empty(rankedQueries);
+        Assert.Single(delays).SetResult();
+        await quick.RankCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        context.Drain();
+        Assert.Null(Assert.Single(announcements.OfType<A11yEvent.QuickSwitcherCount>()).Query);
+        context.Drain();
+        Assert.Single(announcements);
+
+        var pending = new List<Task>();
+        foreach (string query in new[] { "n", "no", "not", "note" })
+        {
+            quick.Query = query;
+            pending.Add(quick.RankCompletion);
+        }
+        Assert.Equal([string.Empty], rankedQueries);
+        Assert.Single(announcements);
+        delays[^1].SetResult();
+        await Task.WhenAll(pending).WaitAsync(TimeSpan.FromSeconds(5));
+        context.Drain();
+        Assert.Equal([string.Empty, "note"], rankedQueries);
+        Assert.Equal([null, "note"], announcements.OfType<A11yEvent.QuickSwitcherCount>().Select(e => e.Query));
+    }
+
+    [Fact]
     public async Task SupersededQueriesSerializeAndPublishOnlyTheNewestResult()
     {
         using FixtureVault fixture = FixtureVault.Create(1, "quick-rank-supersede");
@@ -278,7 +325,8 @@ public sealed class QuickSwitcherRankCoordinatorTests
         SynchronizationContext context,
         Action<A11yEvent> announce,
         QuickSwitcherRankCoordinator? coordinator = null,
-        Func<SwitcherFile[], string, string[], SwitcherRankPage>? rankTop = null)
+        Func<SwitcherFile[], string, string[], SwitcherRankPage>? rankTop = null,
+        Func<CancellationToken, Task>? rankDelay = null)
     {
         SynchronizationContext? previous = SynchronizationContext.Current;
         SynchronizationContext.SetSynchronizationContext(context);
@@ -291,7 +339,8 @@ public sealed class QuickSwitcherRankCoordinatorTests
                 [new SwitcherFile("note.md", "note.md")],
                 Path.Combine(vaultRoot, $"device-state-{Guid.NewGuid():N}"),
                 rankCoordinator: coordinator,
-                rankTop: rankTop);
+                rankTop: rankTop,
+                rankDelay: rankDelay);
         }
         finally
         {

@@ -115,6 +115,36 @@
     "text": "Open a vault first. Search works inside a vault."
   },
   {
+    "event": "VaultScanStarted { total_files: 1 }",
+    "priority": "medium",
+    "text": "Scanning vault. 1 file to index."
+  },
+  {
+    "event": "VaultScanStarted { total_files: 2 }",
+    "priority": "medium",
+    "text": "Scanning vault. 2 files to index."
+  },
+  {
+    "event": "VaultScanProgress { indexed: 1, total: 1 }",
+    "priority": "medium",
+    "text": "Indexed 1 of 1 file."
+  },
+  {
+    "event": "VaultScanProgress { indexed: 1, total: 2 }",
+    "priority": "medium",
+    "text": "Indexed 1 of 2 files."
+  },
+  {
+    "event": "VaultScanFinished { files_indexed: 1 }",
+    "priority": "medium",
+    "text": "Scan complete. 1 file indexed."
+  },
+  {
+    "event": "VaultScanFinished { files_indexed: 2 }",
+    "priority": "medium",
+    "text": "Scan complete. 2 files indexed."
+  },
+  {
     "event": "SearchResultsSummary { count: 0 }",
     "priority": "medium",
     "text": "Search returned no results."

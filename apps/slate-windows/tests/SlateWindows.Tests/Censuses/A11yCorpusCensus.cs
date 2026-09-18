@@ -43,6 +43,14 @@ public sealed class A11yCorpusCensus
 
     private sealed record CorpusEntry(string Event, string Priority, string Text);
 
+    internal static IEnumerable<(A11yEvent Event, string Priority, string Text)> DispatcherCases()
+    {
+        CorpusEntry[] golden = JsonSerializer.Deserialize<CorpusEntry[]>(
+            File.ReadAllText(CorpusPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        Assert.Equal(golden.Length, Corpus.Length);
+        return Corpus.Zip(golden, (sample, entry) => (sample, entry.Priority, entry.Text));
+    }
+
     /// <summary>The C# mirror of <c>slate_core::a11y::corpus()</c> —
     /// same events, same sample values, same order (transliterated
     /// from the mac mirror, which is the hand-maintained twin).</summary>
@@ -71,6 +79,12 @@ public sealed class A11yCorpusCensus
         new A11yEvent.WelcomeShown(RecentVaultCount: 2),
         new A11yEvent.CommandPaletteNeedsVault(),
         new A11yEvent.SearchNeedsVault(),
+        new A11yEvent.VaultScanStarted(TotalFiles: 1),
+        new A11yEvent.VaultScanStarted(TotalFiles: 2),
+        new A11yEvent.VaultScanProgress(Indexed: 1, Total: 1),
+        new A11yEvent.VaultScanProgress(Indexed: 1, Total: 2),
+        new A11yEvent.VaultScanFinished(FilesIndexed: 1),
+        new A11yEvent.VaultScanFinished(FilesIndexed: 2),
         new A11yEvent.SearchResultsSummary(Count: 0),
         new A11yEvent.SearchResultsSummary(Count: 1),
         new A11yEvent.SearchResultsSummary(Count: 7),

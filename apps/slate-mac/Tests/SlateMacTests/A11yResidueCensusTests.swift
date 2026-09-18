@@ -25,10 +25,11 @@ final class A11yResidueCensusTests: XCTestCase {
     /// typed core vocabulary (`A11yEvent.canvas`) and W6-2 PR 0a did the
     /// same for the graph (`A11yEvent.graph`), so both announcers post
     /// rendered events and their `.hostComposed` sites are gone. No
-    /// engine-level vocabulary remains outstanding. The shared
+    /// engine-level announcer vocabulary remains outstanding. W7-2 moves
+    /// scan progress to three typed events, reducing 28 to 27. The shared
     /// structural-mutation site stays: it serves every authoring
     /// surface, and both admission ladders merely left it.
-    private static let pinnedResidueSites = 28
+    private static let pinnedResidueSites = 27
 
     private struct SwiftSource {
         let path: String

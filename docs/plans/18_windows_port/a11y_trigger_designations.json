@@ -1,0 +1,742 @@
+{
+  "designated": {
+    "Windows": {
+      "PrintNeedsNote": {
+        "reason": "W3 printing waiver: Windows has no print command or dialog; no corresponding announcement trigger.",
+        "decision": "docs/plans/18_windows_port/parity_matrix.md",
+        "status": "recorded"
+      },
+      "PrintDialogOpened": {
+        "reason": "W3 printing waiver: Windows has no print command or dialog; no corresponding announcement trigger.",
+        "decision": "docs/plans/18_windows_port/parity_matrix.md",
+        "status": "recorded"
+      },
+      "HelpOpened": {
+        "reason": "Help delivery remains assigned to W8-6 (#756); no Windows help-opening trigger is claimed.",
+        "decision": "docs/plans/18_windows_port/parity_matrix.md",
+        "status": "recorded"
+      },
+      "HelpFailed": {
+        "reason": "Help delivery remains assigned to W8-6 (#756); no Windows help-opening trigger is claimed.",
+        "decision": "docs/plans/18_windows_port/parity_matrix.md",
+        "status": "recorded"
+      },
+      "PropertyRetainedCopied": {
+        "reason": "The retained-update recovery suite is explicitly deferred; Windows uses the PropertiesReloadFailed containment state.",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "recorded"
+      },
+      "PropertyRecoveryUnverified": {
+        "reason": "The retained-update recovery suite is explicitly deferred; Windows uses the PropertiesReloadFailed containment state.",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "recorded"
+      },
+      "PropertyRetainedDiscarded": {
+        "reason": "The retained-update recovery suite is explicitly deferred; Windows uses the PropertiesReloadFailed containment state.",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "recorded"
+      },
+      "PropertyRetainedReapplyFailed": {
+        "reason": "The retained-update recovery suite is explicitly deferred; Windows uses the PropertiesReloadFailed containment state.",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "recorded"
+      },
+      "PropertyReloadStillFailed": {
+        "reason": "The retained-update recovery suite is explicitly deferred; Windows uses the PropertiesReloadFailed containment state.",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "recorded"
+      },
+      "PropertyLoadCurrentFailed": {
+        "reason": "The retained-update recovery suite is explicitly deferred; Windows uses the PropertiesReloadFailed containment state.",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "recorded"
+      },
+      "PropertiesSourceRejected": {
+        "reason": "YAML source mode is explicitly deferred; the Windows property header has no source-mode commit/discard trigger.",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "recorded"
+      },
+      "SourceChangesDiscarded": {
+        "reason": "YAML source mode is explicitly deferred; the Windows property header has no source-mode commit/discard trigger.",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "recorded"
+      },
+      "NoteChangedAgain": {
+        "reason": "Mac body-only property reconciliation/publication recovery has no identical Windows trigger: Windows uses whole-file dirty/stale refusal, PropertyConflict and PropertiesReloaded/PropertiesReloadFailed.",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "recorded"
+      },
+      "PropertiesReloadedBodyChanged": {
+        "reason": "Mac body-only property reconciliation/publication recovery has no identical Windows trigger: Windows uses whole-file dirty/stale refusal, PropertyConflict and PropertiesReloaded/PropertiesReloadFailed.",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "recorded"
+      },
+      "PropertiesUpdated": {
+        "reason": "Windows successful property writes post PropertyChanged with the committed key (WorkspaceViewModel.Properties AddWriteCompletion/CommitPanelProperty); generic Mac PropertiesUpdated is the same completion family.",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "recorded"
+      },
+      "BaseRowReorderAtBoundary": {
+        "reason": "D-18: expression-first builder has no structured condition-row move actions.",
+        "decision": "docs/plans/25_bases_grid_contracts.md",
+        "status": "recorded"
+      },
+      "BaseRowReorderMoved": {
+        "reason": "D-18: expression-first builder has no structured condition-row move actions.",
+        "decision": "docs/plans/25_bases_grid_contracts.md",
+        "status": "recorded"
+      },
+      "BaseRowReorderRefused": {
+        "reason": "D-18: expression-first builder has no structured condition-row move actions.",
+        "decision": "docs/plans/25_bases_grid_contracts.md",
+        "status": "recorded"
+      },
+      "BasesDashboardSectionRemoveFailed": {
+        "reason": "D-19: missing sections are repaired through the dashboard editor, not Mac inline remove/replace actions.",
+        "decision": "docs/plans/25_bases_grid_contracts.md",
+        "status": "recorded"
+      },
+      "BasesDashboardSectionReplaceFailed": {
+        "reason": "D-19: missing sections are repaired through the dashboard editor, not Mac inline remove/replace actions.",
+        "decision": "docs/plans/25_bases_grid_contracts.md",
+        "status": "recorded"
+      },
+      "BasesDataviewConversionSaveFailed": {
+        "reason": "D-20: query fences remain readable source; there is no inline Dataview conversion trigger.",
+        "decision": "docs/plans/25_bases_grid_contracts.md",
+        "status": "recorded"
+      },
+      "BasesDataviewConverted": {
+        "reason": "D-20: query fences remain readable source; there is no inline Dataview conversion trigger.",
+        "decision": "docs/plans/25_bases_grid_contracts.md",
+        "status": "recorded"
+      },
+      "DataviewConversionFailed": {
+        "reason": "D-20: query fences remain readable source; there is no inline Dataview conversion trigger.",
+        "decision": "docs/plans/25_bases_grid_contracts.md",
+        "status": "recorded"
+      },
+      "BasesSavedQueryReferenceMissing": {
+        "reason": "D-17: anchored Base embeds remain unresolved cards; Windows does not open the Mac saved-query reference route from a card.",
+        "decision": "docs/plans/25_bases_grid_contracts.md",
+        "status": "recorded"
+      },
+      "BasesPreviewFailed": {
+        "reason": "The builder preview publishes BaseQueryPreviewFailed through BaseQueryBuilderViewModel.PreviewAnnouncement; the Mac AppState failure envelope additionally uses BasesPreviewFailed. Retain the existing single Windows outcome.",
+        "decision": "docs/plans/25_bases_grid_contracts.md",
+        "status": "proposed"
+      },
+      "BasesDashboardMissing": {
+        "reason": "Windows docks the selected dashboard ID (MainWindow.QueriesDockDashboard_Click / WorkspaceViewModel.DockDashboardToSidebar). A removed registry entry produces DashboardViewModel.LoadBody's visible failed section. Mac instead checks the registry before docking and posts BasesDashboardMissing.",
+        "decision": "docs/plans/25_bases_grid_contracts.md",
+        "status": "proposed"
+      },
+      "BasesViewCopyNoActiveBase": {
+        "reason": "The Windows copy command is disabled without an active executable Base; Mac also has a defensive no-active-base invocation outcome.",
+        "decision": "docs/plans/25_bases_grid_contracts.md",
+        "status": "proposed"
+      },
+      "SwitcherRecentCount": {
+        "reason": "QuickSwitcherCount is the Windows canonical envelope for the same recent/no-match/match states; a11y.rs renders it through the same vocabulary templates.",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "recorded"
+      },
+      "SwitcherNoMatches": {
+        "reason": "QuickSwitcherCount is the Windows canonical envelope for the same recent/no-match/match states; a11y.rs renders it through the same vocabulary templates.",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "recorded"
+      },
+      "SwitcherMatchCount": {
+        "reason": "QuickSwitcherCount is the Windows canonical envelope for the same recent/no-match/match states; a11y.rs renders it through the same vocabulary templates.",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "recorded"
+      },
+      "CitationStyleChanged": {
+        "reason": "The bibliography settings/style picker is deferred to W8-1; citation contract D-2 records the absent settings pane.",
+        "decision": "docs/plans/23_citation_surfaces_contracts.md",
+        "status": "recorded"
+      },
+      "BatchCheckStarted": {
+        "reason": "Mac has an asynchronous sidebar action-validation admission phase. Windows materialized checkbox selection publishes ItemsSelected/SelectionCleared and has no matching validation-start phase.",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "SidebarSettingsReloaded": {
+        "reason": "Windows SidebarSettingsStore loads settings at sidebar construction and surfaces its read-only notice; it has no Mac retry-vault-preferences action. Retain the current route for this notification slice.",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "SidebarSettingsReloadedStaleRefs": {
+        "reason": "Windows SidebarSettingsStore loads settings at sidebar construction and surfaces its read-only notice; it has no Mac retry-vault-preferences action. Retain the current route for this notification slice.",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "SidebarSettingsStillDefaults": {
+        "reason": "Windows SidebarSettingsStore loads settings at sidebar construction and surfaces its read-only notice; it has no Mac retry-vault-preferences action. Retain the current route for this notification slice.",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "EditorTextSize": {
+        "reason": "Windows editor preferences use absolute WPF font points (EditorPreferencesViewModel.FontSize); Mac uses percentage scale. Keep the existing points announcement in the explicit preference residue register.",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "HeadingScrollFailed": {
+        "reason": "Mac updateNSView can fail an AppKit scroll request after locating a heading. Windows uses core offsets and the editor navigation request, with HeadingNotFound at failed resolution; it has no AppKit scroll-failure stage.",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "ReopenTargetMissing": {
+        "reason": "Windows reopens a missing file as an error-state tab with preserved identity (WorkspaceViewModel.ReopenClosedTab), then posts ReopenedFile; Mac refuses the reopen. Retain the existing Windows recovery route.",
+        "decision": "docs/plans/08_ui_parity/specs/u1_spec.md",
+        "status": "proposed"
+      },
+      "SaveConflict": {
+        "reason": "Mac SaveConflict tells users to resolve in its overwrite/reload dialog. Windows tab.Save retains the unsaved buffer and exposes Save blocked inline; there is no equivalent dialog. Do not post the misleading Mac dialog instruction.",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "ShowingNote": {
+        "reason": "Windows tab/pane activation posts TabFocused/EditorPaneFocused with the note title; Mac NoteContentView separately posts ShowingNote on appearance. Retain one Windows focus route.",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "WelcomeShown": {
+        "reason": "The Mac sentence promises Command-O and Open Vault focus. Windows uses native welcome controls and their focus/name semantics; do not post the platform-specific Mac sentence.",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      }
+    },
+    "Mac": {
+      "QuickSwitcherCount": {
+        "reason": "Mac constructs SwitcherRecentCount, SwitcherNoMatches and SwitcherMatchCount in QuickSwitcherModel.publishAnnouncement; Windows QuickSwitcherCount renders the same three state templates.",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "recorded"
+      },
+      "ReadingNavLanded": {
+        "reason": "G21/G23: Windows app-owned reading navigation chords provide guaranteed structural movement/landing speech. Mac uses native VoiceOver reading navigation; these Windows command triggers do not exist on Mac.",
+        "decision": "docs/plans/18_windows_port/specs/gap_analysis.md",
+        "status": "recorded"
+      },
+      "ReadingNavNoTarget": {
+        "reason": "G21/G23: Windows app-owned reading navigation chords provide guaranteed structural movement/landing speech. Mac uses native VoiceOver reading navigation; these Windows command triggers do not exist on Mac.",
+        "decision": "docs/plans/18_windows_port/specs/gap_analysis.md",
+        "status": "recorded"
+      }
+    }
+  },
+  "roles": {
+    "GridGroup": "label"
+  },
+  "residue": {
+    "Windows": {
+      "EditorInteractions.cs#EditorInteractionCoordinator.AnnounceReloadBeforeInteraction@1": {
+        "engine": "Editor interaction cache admission/publication and D-14 save/reload refusal",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "EditorInteractions.cs#EditorInteractionCoordinator.AnnounceSaveBeforeInteraction@1": {
+        "engine": "Editor interaction cache admission/publication and D-14 save/reload refusal",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "EditorInteractions.cs#EditorInteractionCoordinator.EnsureArtifactCacheReady@1": {
+        "engine": "Editor interaction cache admission/publication and D-14 save/reload refusal",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "EditorInteractions.cs#EditorInteractionCoordinator.EnsureCitationCacheReady@1": {
+        "engine": "Editor interaction cache admission/publication and D-14 save/reload refusal",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "EditorInteractions.cs#EditorInteractionCoordinator.EnsureMathRangesReady@1": {
+        "engine": "Editor interaction cache admission/publication and D-14 save/reload refusal",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "EditorInteractions.cs#EditorInteractionCoordinator.PublishArtifactCache@1": {
+        "engine": "Editor interaction cache admission/publication and D-14 save/reload refusal",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "EditorInteractions.cs#EditorInteractionCoordinator.PublishCitationCache@1": {
+        "engine": "Editor interaction cache admission/publication and D-14 save/reload refusal",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "EditorInteractions.cs#EditorInteractionCoordinator.PublishMathRefreshFailure@1": {
+        "engine": "Editor interaction cache admission/publication and D-14 save/reload refusal",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "EditorInteractions.cs#EditorPreferencesViewModel.EditorPreferencesViewModel@1": {
+        "engine": "Editor preference state (font points, platform spell-check availability, reading-link and History toggles)",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "EditorInteractions.cs#EditorPreferencesViewModel.EditorPreferencesViewModel@2": {
+        "engine": "Editor preference state (font points, platform spell-check availability, reading-link and History toggles)",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "EditorInteractions.cs#EditorPreferencesViewModel.EditorPreferencesViewModel@3": {
+        "engine": "Editor preference state (font points, platform spell-check availability, reading-link and History toggles)",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "EditorInteractions.cs#EditorPreferencesViewModel.EditorPreferencesViewModel@4": {
+        "engine": "Editor preference state (font points, platform spell-check availability, reading-link and History toggles)",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "EditorInteractions.cs#EditorPreferencesViewModel.FontSize@1": {
+        "engine": "Editor preference state (font points, platform spell-check availability, reading-link and History toggles)",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "FileManagement/MoveToPickerViewModel.cs#MoveToPickerViewModel.RebuildRows@1": {
+        "engine": "Structural mutation/import/Move To/undo outcome builder",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "FilesSidebarViewModel.FileManagement.cs#FilesSidebarViewModel.AnnounceUndoResidue@1": {
+        "engine": "Structural mutation/import/Move To/undo outcome builder",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "FilesSidebarViewModel.FileManagement.cs#FilesSidebarViewModel.ConsumeStructuralReport@1": {
+        "engine": "Structural mutation/import/Move To/undo outcome builder",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "FilesSidebarViewModel.FileManagement.cs#FilesSidebarViewModel.OpenMoveTo@1": {
+        "engine": "Structural mutation/import/Move To/undo outcome builder",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "FilesSidebarViewModel.FileManagement.cs#FilesSidebarViewModel.ReportMutationResult@1": {
+        "engine": "Structural mutation/import/Move To/undo outcome builder",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "FilesSidebarViewModel.Import.cs#FilesSidebarViewModel.ImportAsync@1": {
+        "engine": "Structural mutation/import/Move To/undo outcome builder",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "FilesSidebarViewModel.MoveToLoading.cs#FilesSidebarViewModel.LoadMoveToFoldersAsync@1": {
+        "engine": "Structural mutation/import/Move To/undo outcome builder",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "FilesSidebarViewModel.MoveToLoading.cs#FilesSidebarViewModel.LoadMoveToFoldersAsync@2": {
+        "engine": "Structural mutation/import/Move To/undo outcome builder",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "FilesSidebarViewModel.cs#FilesSidebarViewModel.AnnounceSort@1": {
+        "engine": "Sidebar sort/result/failure and core tag-edit report adapter",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "FilesSidebarViewModel.cs#FilesSidebarViewModel.EditTag@1": {
+        "engine": "Sidebar sort/result/failure and core tag-edit report adapter",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "FilesSidebarViewModel.cs#FilesSidebarViewModel.ReportFailure@1": {
+        "engine": "Sidebar sort/result/failure and core tag-edit report adapter",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "FilesSidebarViewModel.cs#FilesSidebarViewModel.ReportResult@1": {
+        "engine": "Sidebar sort/result/failure and core tag-edit report adapter",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "MainWindow.Citations.cs#MainWindow.TryClearTheWayForCitationSummary@1": {
+        "engine": "Citation modal admission and bibliography jump/filter guidance",
+        "decision": "docs/plans/23_citation_surfaces_contracts.md",
+        "status": "proposed"
+      },
+      "MainWindow.MoveTo.cs#MainWindow.TryClearTheWayForMoveTo@1": {
+        "engine": "Structural mutation/import/Move To/undo outcome builder",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "MainWindow.Properties.cs#MainWindow.TryClearTheWayForBulkRename@1": {
+        "engine": "Property dirty/stale/in-flight refusal, modal guidance and draft-revert builder",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "proposed"
+      },
+      "MainWindow.Templates.cs#MainWindow.TryClearTheWayForTemplates@1": {
+        "engine": "Template availability/modal-admission and landed-create caveat builder",
+        "decision": "docs/plans/30_templates_contracts.md",
+        "status": "proposed"
+      },
+      "MainWindow.xaml.cs#MainWindow.AnnounceNoPaneInDirection@1": {
+        "engine": "Workspace pane/focus/anchor/missing-file availability and editor tag activation",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "Panels/AddPropertyViewModel.cs#AddPropertyViewModel.Add@1": {
+        "engine": "Property dirty/stale/in-flight refusal, modal guidance and draft-revert builder",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "proposed"
+      },
+      "Panels/BulkRenameViewModel.cs#BulkRenameViewModel.Apply@1": {
+        "engine": "Property dirty/stale/in-flight refusal, modal guidance and draft-revert builder",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "proposed"
+      },
+      "Panels/TasksReviewViewModel.cs#TasksReviewViewModel.OpenRow@1": {
+        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
+        "decision": "docs/plans/21_write_intent_protocol_invariants.md",
+        "status": "proposed"
+      },
+      "Panels/TasksReviewViewModel.cs#TasksReviewViewModel.OpenRow@2": {
+        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
+        "decision": "docs/plans/21_write_intent_protocol_invariants.md",
+        "status": "proposed"
+      },
+      "Panels/TasksReviewViewModel.cs#TasksReviewViewModel.ToggleTask@1": {
+        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
+        "decision": "docs/plans/21_write_intent_protocol_invariants.md",
+        "status": "proposed"
+      },
+      "Panels/TasksReviewViewModel.cs#TasksReviewViewModel.ToggleTask@2": {
+        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
+        "decision": "docs/plans/21_write_intent_protocol_invariants.md",
+        "status": "proposed"
+      },
+      "QuickSwitcherViewModel.cs#QuickSwitcherViewModel.RankAsync@1": {
+        "engine": "Quick Open ranking terminal failure",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "Reading/ReadingActivation.cs#ReadingActivation.Activate@1": {
+        "engine": "Reading projection load/clipboard/readiness and canonical citation/math content adapter",
+        "decision": "docs/plans/18_windows_port/specs/w3_spec.md",
+        "status": "proposed"
+      },
+      "Reading/ReadingContentViewModel.cs#ReadingContentViewModel.CopyCode@1": {
+        "engine": "Reading projection load/clipboard/readiness and canonical citation/math content adapter",
+        "decision": "docs/plans/18_windows_port/specs/w3_spec.md",
+        "status": "proposed"
+      },
+      "Reading/ReadingContentViewModel.cs#ReadingContentViewModel.FinishPublish@1": {
+        "engine": "Reading projection load/clipboard/readiness and canonical citation/math content adapter",
+        "decision": "docs/plans/18_windows_port/specs/w3_spec.md",
+        "status": "proposed"
+      },
+      "Reading/ReadingContentViewModel.cs#ReadingContentViewModel.PublishTerminalFailure@1": {
+        "engine": "Reading projection load/clipboard/readiness and canonical citation/math content adapter",
+        "decision": "docs/plans/18_windows_port/specs/w3_spec.md",
+        "status": "proposed"
+      },
+      "Reading/ReadingContentViewModel.cs#ReadingContentViewModel.ToggleTaskAt@1": {
+        "engine": "Reading projection load/clipboard/readiness and canonical citation/math content adapter",
+        "decision": "docs/plans/18_windows_port/specs/w3_spec.md",
+        "status": "proposed"
+      },
+      "Reading/ReadingSurface.cs#ReadingSurface.TryActivateAtCaret@1": {
+        "engine": "Reading projection load/clipboard/readiness and canonical citation/math content adapter",
+        "decision": "docs/plans/18_windows_port/specs/w3_spec.md",
+        "status": "proposed"
+      },
+      "Templates/TemplatePickerViewModel.cs#TemplatePickerViewModel.Load@1": {
+        "engine": "Template availability/modal-admission and landed-create caveat builder",
+        "decision": "docs/plans/30_templates_contracts.md",
+        "status": "proposed"
+      },
+      "Templates/TemplatePickerViewModel.cs#TemplatePickerViewModel.Load@2": {
+        "engine": "Template availability/modal-admission and landed-create caveat builder",
+        "decision": "docs/plans/30_templates_contracts.md",
+        "status": "proposed"
+      },
+      "VaultLifecycleViewModel.cs#VaultLifecycleViewModel.ReportTerminalStatus@1": {
+        "engine": "Vault lifecycle terminal failure/cancellation and close-plan guidance",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "WorkspaceTabViewModel.Properties.cs#WorkspaceTabViewModel.MarkPropertyStale@1": {
+        "engine": "Property dirty/stale/in-flight refusal, modal guidance and draft-revert builder",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.Citations.cs#WorkspaceViewModel.JumpToBibliography@1": {
+        "engine": "Citation modal admission and bibliography jump/filter guidance",
+        "decision": "docs/plans/23_citation_surfaces_contracts.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.History.cs#WorkspaceViewModel.AnnounceHistoryCompactionFailure@1": {
+        "engine": "History D-14 dirty restore refusal and core compaction-error adapter",
+        "decision": "docs/plans/26_history_contracts.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.History.cs#WorkspaceViewModel.RequestRestoreVersion@1": {
+        "engine": "History D-14 dirty restore refusal and core compaction-error adapter",
+        "decision": "docs/plans/26_history_contracts.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.Layout.cs#WorkspaceViewModel.AddSplitWithItem@1": {
+        "engine": "Workspace pane/focus/anchor/missing-file availability and editor tag activation",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.Layout.cs#WorkspaceViewModel.AnnouncePaneResize@1": {
+        "engine": "Workspace pane/focus/anchor/missing-file availability and editor tag activation",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.Layout.cs#WorkspaceViewModel.FocusDirectionalPane@1": {
+        "engine": "Workspace pane/focus/anchor/missing-file availability and editor tag activation",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.Properties.cs#WorkspaceViewModel.AnnounceDirtyTabPropertyRefusal@1": {
+        "engine": "Property dirty/stale/in-flight refusal, modal guidance and draft-revert builder",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.Properties.cs#WorkspaceViewModel.AnnounceWriteInFlightRefusal@1": {
+        "engine": "Property dirty/stale/in-flight refusal, modal guidance and draft-revert builder",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.Properties.cs#WorkspaceViewModel.CommitAddProperty@1": {
+        "engine": "Property dirty/stale/in-flight refusal, modal guidance and draft-revert builder",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.Properties.cs#WorkspaceViewModel.CommitAddProperty@2": {
+        "engine": "Property dirty/stale/in-flight refusal, modal guidance and draft-revert builder",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.Properties.cs#WorkspaceViewModel.EnsureActiveTabProperties@1": {
+        "engine": "Property dirty/stale/in-flight refusal, modal guidance and draft-revert builder",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.Properties.cs#WorkspaceViewModel.RequestPanelPropertyDelete@1": {
+        "engine": "Property dirty/stale/in-flight refusal, modal guidance and draft-revert builder",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.SyncDiagnostics.cs#WorkspaceViewModel.AnnounceSyncFindingsIfNeeded@1": {
+        "engine": "Core sync-detection report AudioSummary adapter",
+        "decision": "docs/plans/27_sync_diagnostics_contracts.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.Templates.cs#WorkspaceViewModel.CreateFromTemplate@1": {
+        "engine": "Template availability/modal-admission and landed-create caveat builder",
+        "decision": "docs/plans/30_templates_contracts.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishAnchorNavigation@1": {
+        "engine": "Workspace pane/focus/anchor/missing-file availability and editor tag activation",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishAnchorNavigation@2": {
+        "engine": "Workspace pane/focus/anchor/missing-file availability and editor tag activation",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@1": {
+        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
+        "decision": "docs/plans/21_write_intent_protocol_invariants.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@2": {
+        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
+        "decision": "docs/plans/21_write_intent_protocol_invariants.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@3": {
+        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
+        "decision": "docs/plans/21_write_intent_protocol_invariants.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@4": {
+        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
+        "decision": "docs/plans/21_write_intent_protocol_invariants.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.cs#WorkspaceTabViewModel.ReconcileAfterExternalTaskWrite@1": {
+        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
+        "decision": "docs/plans/21_write_intent_protocol_invariants.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.cs#WorkspaceTabViewModel.ToggleTask@1": {
+        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
+        "decision": "docs/plans/21_write_intent_protocol_invariants.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.cs#WorkspaceViewModel.ActivateEditorTag@1": {
+        "engine": "Workspace pane/focus/anchor/missing-file availability and editor tag activation",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.cs#WorkspaceViewModel.InvalidatePath@1": {
+        "engine": "Workspace pane/focus/anchor/missing-file availability and editor tag activation",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.cs#WorkspaceViewModel.ScrollToPanelTaskIfCurrent@1": {
+        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
+        "decision": "docs/plans/21_write_intent_protocol_invariants.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.cs#WorkspaceViewModel.TaskToggleCompletion@1": {
+        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
+        "decision": "docs/plans/21_write_intent_protocol_invariants.md",
+        "status": "proposed"
+      },
+      "WorkspaceViewModel.cs#WorkspaceViewModel.TaskToggleCompletion@2": {
+        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
+        "decision": "docs/plans/21_write_intent_protocol_invariants.md",
+        "status": "proposed"
+      }
+    },
+    "Mac": {
+      "AddPropertySheet.swift#commit@1": {
+        "engine": "Property disabled/validation guidance",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "proposed"
+      },
+      "AppState+History.swift#handleVaultEvent@1": {
+        "engine": "Core history compaction-error message adapter",
+        "decision": "docs/plans/26_history_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#announceSidebarWriteDiscardedForReplacedVault@1": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#announceSyncFindingsIfNeeded@1": {
+        "engine": "Core sync-detection report AudioSummary adapter",
+        "decision": "docs/plans/27_sync_diagnostics_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#announceTemplate@1": {
+        "engine": "Template availability and flow-admission guidance",
+        "decision": "docs/plans/30_templates_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#bindSidebarFilterModel@1": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#dispatchSidebarNavigationAction@1": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#dispatchSidebarNavigationAction@2": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#dispatchSidebarNavigationAction@3": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#invokeSidebarKeyboardAction@1": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#invokeSidebarKeyboardAction@2": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#jumpToBibliographyFromExpandedCitation@1": {
+        "engine": "Citation bibliography jump/filter guidance",
+        "decision": "docs/plans/23_citation_surfaces_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#mutateSidebarOrganization@1": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#mutateSidebarOrganization@2": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#mutateSidebarOrganization@3": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#mutateSidebarOrganization@4": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#mutationAnnouncementEvent@1": {
+        "engine": "Core structural-mutation announcement builder adapter",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#performPropertyEdit@1": {
+        "engine": "Property disabled/validation guidance",
+        "decision": "docs/plans/22_property_panel_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#reconcileSidebarOrganizationFromDisk@1": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#rejectOpenSelectionConfirmation@1": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#retrySidebarVaultPreferences@1": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "AppState.swift#setViewMode@1": {
+        "engine": "Workspace view-mode/structural admission guidance",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "AppState.swift#splitActivePane@1": {
+        "engine": "Workspace view-mode/structural admission guidance",
+        "decision": "docs/plans/18_windows_port/specs/w1_spec.md",
+        "status": "proposed"
+      },
+      "AppState.swift#surfaceSidebarActionBackgroundFailure@1": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "FileTreeSidebar.swift#announceFocusedFileSelection@1": {
+        "engine": "Sidebar action-validation, organization persistence, filter summary and structural-admission guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      },
+      "NoteEditorView.swift#performKeyEquivalent@1": {
+        "engine": "Editor read-only command refusal",
+        "decision": "docs/plans/18_windows_port/specs/w2_spec.md",
+        "status": "proposed"
+      },
+      "Sidebar/FilenameAdvisory.swift#body@1": {
+        "engine": "Filename advisory dialog guidance",
+        "decision": "docs/plans/31_file_management_contracts.md",
+        "status": "proposed"
+      }
+    }
+  }
+}

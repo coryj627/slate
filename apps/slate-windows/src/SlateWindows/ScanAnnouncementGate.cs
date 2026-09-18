@@ -21,11 +21,7 @@ internal sealed class ScanAnnouncementGate
     public A11yEvent Started(ulong totalFiles)
     {
         _lastFiredAt = _clock();
-        string noun = totalFiles == 1 ? "file" : "files";
-        // W0.5-3 residue: scan-progress announcement builder.
-        return new A11yEvent.HostComposed(
-            $"Scanning vault. {totalFiles} {noun} to index.",
-            A11yPriority.Medium);
+        return new A11yEvent.VaultScanStarted(totalFiles);
     }
 
     public A11yEvent? FileIndexed(ulong indexed, ulong total)
@@ -37,20 +33,13 @@ internal sealed class ScanAnnouncementGate
         }
 
         _lastFiredAt = now;
-        // W0.5-3 residue: scan-progress announcement builder.
-        return new A11yEvent.HostComposed(
-            $"Indexed {indexed} of {total} files.",
-            A11yPriority.Medium);
+        return new A11yEvent.VaultScanProgress(indexed, total);
     }
 
     public A11yEvent Finished(ulong filesIndexed)
     {
         _lastFiredAt = _clock();
-        string noun = filesIndexed == 1 ? "file" : "files";
-        // W0.5-3 residue: scan-progress announcement builder.
-        return new A11yEvent.HostComposed(
-            $"Scan complete. {filesIndexed} {noun} indexed.",
-            A11yPriority.Medium);
+        return new A11yEvent.VaultScanFinished(filesIndexed);
     }
 
     public void Reset()
