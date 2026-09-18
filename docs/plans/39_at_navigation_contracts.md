@@ -295,3 +295,14 @@ returns cannot supply the enclosing getter's ID. Codoki's missing-source
 comment is addressed by rejecting scopes outside the authored compilation,
 with a generated-file mutation witness. Its claimed collection-expression
 compile error is disproven by the .NET 10 build and these passing tests.
+
+### Implementation round 5: inline collection text normalization
+
+Spec passes at `165e6ce1`. Standards identified one remaining representation:
+a typed String directly inside an InlineCollection. WPF's
+[InlineCollection.OnAdd/AddText](https://raw.githubusercontent.com/dotnet/wpf/main/src/Microsoft.DotNet.Wpf/src/PresentationFramework/System/Windows/Documents/InlineCollection.cs)
+wraps that value in an implicit Run. Complete the existing scalar model by
+normalizing a collection String child exactly like a text node; include it
+on both sides of the modifier/key cross-product. This records the remaining
+collection boundary before code changes under the continuing design stop.
+No runtime or navigation-map behavior changes.
