@@ -139,3 +139,36 @@ axe failures on its list fixture: the Name repeated its control type and
 items had no set position/size. N-5's native-list route now exposes an entry
 count and the current native ListItem membership. A small STA regression
 and the unchanged full-window axe scan pin that repair; no waiver was added.
+
+### Implementation round 1: map validation design reset
+
+The first implementation review (`ce7b7f5a`) found that the plural-builder
+correction introduced an unshipped sidebar context-menu route. Combined
+with the earlier map blockers, this triggers the protocol's design stop.
+The source check also pooled unrelated controls and IDs, allowing an
+existing but unrelated pattern or ID to satisfy a row. The next repair
+uses this narrower model, specified before changing the census:
+
+1. A Windows source is one or more explicit anchors, separated by `; `:
+   `file.xaml#id:AutomationId` selects that element and its descendants;
+   `file.cs#class:TypeName` selects exactly that type declaration. A route
+   spanning host and child/peer types names each scope explicitly.
+2. IDs must be authored inside the selected scopes. Patterns must be
+   declared by their custom peers or the native controls (including their
+   generated item peers) inside those scopes. Unrelated siblings in the
+   same file and IDs elsewhere in the repository cannot satisfy a claim.
+   This proves scoped declarations, not arbitrary behavioral equivalence;
+   the row's named behavioral facts and human checklist retain that role.
+3. Mutation witnesses substitute wrong-but-existing IDs and patterns,
+   alongside missing tokens. Mac action discovery includes trailing-closure
+   defaults. Multiple constructions of the same group on one line fail
+   explicitly, requiring separate source lines/citations rather than
+   collapsing multiplicity into set membership.
+4. Sidebar plural action builders map to selected-target File actions
+   buttons (`SidebarFileActions`), with a matching human route. Mermaid
+   refers to the diagram checklist item 4. All remaining rows are reviewed
+   against the selected scopes before another review round.
+5. The literal audit also joins authored inline XAML text within its text
+   owner, so splitting a spoken chord across adjacent Runs cannot hide it.
+
+These changes amend N-2/N-6's witnesses, not the accepted owner decisions.
