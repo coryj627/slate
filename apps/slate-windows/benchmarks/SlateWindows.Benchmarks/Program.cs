@@ -38,7 +38,8 @@ if (editorSemanticSuite)
 {
     Summary lines = BenchmarkRunner.Run<EditorSemanticLineBenchmarks>(benchmarkConfig, benchmarkArgs);
     Summary search = BenchmarkRunner.Run<EditorSemanticSearchBenchmarks>(benchmarkConfig, benchmarkArgs);
-    return !validateBudgets || EditorSemanticBudgets.Validate(lines, search) ? 0 : 1;
+    Summary dense = BenchmarkRunner.Run<EditorSemanticDenseBenchmarks>(benchmarkConfig, benchmarkArgs);
+    return !validateBudgets || EditorSemanticBudgets.Validate(lines, search, dense) ? 0 : 1;
 }
 if (graphRendererSuite)
 {

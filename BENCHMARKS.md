@@ -1156,3 +1156,15 @@ implementation head `7d7f4f13`, same runner/configuration): line p50 was
 FindAttribute(Link) p50 was 321.3668 ms. All four original ceilings passed;
 line flatness was 1.00x. The frozen budgets and first measurement above are
 unchanged.
+
+
+### W7-1 ordinary Hyperlink integration (2026-09-18)
+
+The preceding Link attribute figures describe the superseded implementation.
+The current runner keeps the three 0.5 ms line StyleId ceilings, replaces the
+8 MiB search with a complete Hyperlink inventory after an edit (1000 ms), and
+adds post-edit local-link reads at all three sizes (2 ms each). Both edits and
+lookup are inside the timed operation. Dense cases build and walk 1,000 and
+10,000 links in both directions, including Name/Enabled membership checks
+(1000 ms each; the runner's Bytes column holds link count for these two rows).
+No missing case passes. Current measurements are pending the production run.

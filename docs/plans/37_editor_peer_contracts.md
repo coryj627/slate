@@ -262,7 +262,9 @@ Fresh production evidence is required; prototype tests are not production accept
 **A-7 — Bounded peer connection.** WPF's internal TrySetParentInfo is used
 through one pinned reflection adapter to connect an already canonical child to
 its actual parent without enumerating the whole document. It copies only the
-parent/HWND information WPF's own GetChildren would supply. Package-shape and
+parent/HWND information WPF's own GetChildren would supply. The same adapter
+invalidates WPF's ChildrenValid bit: public ResetChildrenCache eagerly rebuilds
+the tree and therefore cannot serve the bounded publication path. Package-shape and
 cross-process tree tests pin this boundary; no invented parent is permitted.
 
 **A-8 — Retained selection diagnosis.** The prototype's selected-link deletion
@@ -270,7 +272,12 @@ changed the document correctly but NVDA announced later text as unselected.
 A native AvalonEdit versus decorated retained-range regression must establish
 the fault before changing endpoint tracking. Text units and geometry stay native;
 any endpoint tracking correction must survive delete, undo and range movement.
-Live-synth NVDA confirmation remains pending until the owner's sound setup works.
+The deterministic regression reproduced exactly `after.\nEmbe` on the pinned
+native GetSelection range: that path supplies a SimpleSegment while the offset
+constructor uses AnchorSegment. Wrapping now normalizes only nontracking native
+segments to native anchors. Delete, undo and subsequent movement pass; the
+control witness still reproduces the original text. Live-synth NVDA confirmation
+remains pending until the owner's sound setup works.
 
 ### Review round 1 (head 21fe5962)
 
@@ -439,3 +446,10 @@ revision-local validation, indexed identity candidates, ordinary range operands,
 consistent containment, guarded actions and metadata. No old/new AppliedRange
 union is trusted: list-container edits can reclassify distant paragraphs.
 Production implementation and review evidence follow in later commits.
+
+Production integration first verification: 52 provider/doctrine/interaction facts
+passed, including canonical Markdown/reference/autolink/image destinations and
+activation. The actual cross-process UIA3/axe editor journey passed with seven
+Hyperlink descendants, symmetric ordinary range comparisons, destination Value,
+RangeFromChild roundtrips and agreeing forward/backward walks. Full unit suite,
+new nine-case benchmarks, CI and renewed reviews are still in progress.

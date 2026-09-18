@@ -32,8 +32,10 @@ public sealed class EditorSemanticTextRangeTests
         AssertAttribute("Quoted text", EditorSemanticTextRange.StyleIdAttribute, 70014);
         foreach (string marker in new[] { "[[Target]]", "![[Target]]", "#project", "[@smith2020]", "[Website]", "![Picture]" })
         {
-            var link = (ITextRangeProvider)host.At(marker).GetAttributeValue(EditorSemanticTextRange.LinkAttribute);
-            Assert.Contains(marker, link.GetText(-1));
+            var link = host.Provider.Links.Enclosing(host.Text.IndexOf(marker, StringComparison.Ordinal), host.Text.IndexOf(marker, StringComparison.Ordinal) + 1);
+            Assert.True(link is not null, marker + " | " + string.Join("; ", host.Session.InspectInRange(0, host.Text.Length).Spans.Select(x => $"{x.Kind}:{x.StartUtf16},{x.LengthUtf16}")));
+            Assert.Contains(marker, link.GetName());
+            Assert.Same(AutomationElement.NotSupported, host.At(marker).GetAttributeValue(EditorSemanticTextRange.LinkAttribute));
         }
         AssertAttribute("inline code", EditorSemanticTextRange.StyleNameAttribute, "Code");
         AssertAttribute("```rust", EditorSemanticTextRange.StyleNameAttribute, "Code");
@@ -76,13 +78,7 @@ public sealed class EditorSemanticTextRangeTests
         Assert.Contains("Quoted heading", document.FindAttribute(EditorSemanticTextRange.StyleIdAttribute, 70002, true)!.GetText(-1));
         Assert.Null(document.FindAttribute(EditorSemanticTextRange.StyleIdAttribute, 70006, false));
         Assert.Null(document.FindAttribute(EditorSemanticTextRange.IsItalicAttribute, true, false));
-        Assert.Contains("[[Target]]", document.FindAttribute(EditorSemanticTextRange.LinkAttribute, true, false)!.GetText(-1));
-        Assert.Contains("quoted link", document.FindAttribute(EditorSemanticTextRange.LinkAttribute, true, true)!.GetText(-1));
-        object link = host.At("[Website]").GetAttributeValue(EditorSemanticTextRange.LinkAttribute);
-        Assert.Equal("[Website](https://example.org)", document.FindAttribute(EditorSemanticTextRange.LinkAttribute, link, true)!.GetText(-1));
-        Assert.Null(host.At("Plain text").FindAttribute(EditorSemanticTextRange.LinkAttribute, true, false));
-        Assert.Equal("Web", host.Provider.DocumentRange.FindText("Web", false, false)!
-            .FindAttribute(EditorSemanticTextRange.LinkAttribute, true, false)!.GetText(-1));
+        Assert.Null(document.FindAttribute(EditorSemanticTextRange.LinkAttribute, true, false));
     });
 
     [Fact]
@@ -125,65 +121,13 @@ public sealed class EditorSemanticTextRangeTests
         }
         host.Session.EndPeerUpdate();
         coordinator.FlushSemanticChanges();
-        Assert.Equal(new[] { AutomationEvents.TextPatternOnTextChanged, AutomationEvents.TextPatternOnTextSelectionChanged }, events);
+        Assert.Equal(new[] { AutomationEvents.TextPatternOnTextChanged, AutomationEvents.TextPatternOnTextSelectionChanged }, events.Where(item => item != AutomationEvents.StructureChanged));
         coordinator.FlushSemanticChanges();
         Assert.Equal(2, events.Count);
         host.Session.Document.Insert(host.Session.Document.TextLength, "next");
         coordinator.Dispose();
         coordinator.FlushSemanticChanges();
         Assert.Equal(2, events.Count);
-    });
-
-    [Fact]
-    public void LinkAttributeRangesUseWpfMarshalingAndAcceptOrdinaryRangeOperands() => OnSta(() =>
-    {
-        using var host = new Host("[Website](https://example.org)", show: true);
-        var exportedDocument = WpfTextRangeAccess.Wrap(host.Provider.DocumentRange, host.Peer);
-        Task read = Task.Run(() =>
-        {
-            var link = (ITextRangeProvider)exportedDocument.GetAttributeValue(EditorSemanticTextRange.LinkAttribute);
-            Assert.Equal(host.Text, link.GetText(-1));
-            Assert.Equal("Link", link.GetAttributeValue(EditorSemanticTextRange.StyleNameAttribute));
-            Assert.True(link.Compare(exportedDocument));
-            Assert.True(link.Compare(link));
-            Assert.Equal(0, link.CompareEndpoints(TextPatternRangeEndpoint.End, exportedDocument, TextPatternRangeEndpoint.End));
-            ITextRangeProvider clone = link.Clone();
-            Assert.Equal(host.Text, clone.GetText(-1));
-            Assert.True(exportedDocument.Compare(clone));
-            Assert.True(clone.Compare(exportedDocument));
-            Assert.Equal(host.Text, exportedDocument.FindAttribute(EditorSemanticTextRange.LinkAttribute, link, false)!.GetText(-1));
-            Assert.Equal(host.Text, link.FindAttribute(EditorSemanticTextRange.LinkAttribute, true, false)!.GetText(-1));
-            Assert.Null(link.FindAttribute(EditorSemanticTextRange.StyleIdAttribute, 70001, false));
-            Assert.Equal("Website", link.FindText("Website", false, false)!.GetText(-1));
-            Assert.NotEmpty(link.GetBoundingRectangles());
-            Assert.Same(exportedDocument.GetEnclosingElement(), link.GetEnclosingElement());
-            Assert.Empty(link.GetChildren());
-            link.MoveEndpointByRange(TextPatternRangeEndpoint.End, link, TextPatternRangeEndpoint.Start);
-            Assert.Equal(string.Empty, link.GetText(-1));
-            link.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Character, 1);
-            Assert.Equal("[", link.GetText(-1));
-            link.ExpandToEnclosingUnit(TextUnit.Document);
-            link.Select();
-            link.ScrollIntoView(true);
-        });
-        PumpUntil(() => read.IsCompleted);
-        read.GetAwaiter().GetResult();
-        Assert.Equal(host.Text, host.Provider.GetSelection()[0].GetText(-1));
-    });
-
-    [Fact]
-    public void LinkExportUsesOneComIdentityAndReleasesItsNativeOwnership() => OnSta(() =>
-    {
-        using var host = new Host("[Website](https://example.org)");
-        int before = UiaLinkRangeExport.LiveExportsForCensus;
-        object exported = host.Provider.DocumentRange.GetAttributeValue(EditorSemanticTextRange.LinkAttribute);
-        Assert.Equal(before + 1, UiaLinkRangeExport.LiveExportsForCensus);
-        nint unknown = Marshal.GetIUnknownForObject(exported);
-        nint typed = Marshal.GetComInterfaceForObject(exported, typeof(ITextRangeProvider));
-        try { Assert.Equal(unknown, typed); }
-        finally { Marshal.Release(typed); Marshal.Release(unknown); }
-        Assert.Equal(0, Marshal.ReleaseComObject(exported));
-        Assert.Equal(before, UiaLinkRangeExport.LiveExportsForCensus);
     });
 
     [Fact]
@@ -194,7 +138,7 @@ public sealed class EditorSemanticTextRangeTests
         host.Editor.AutomationEventForCensus = events.Add;
         for (int index = 0; index < 20; index++) { host.Session.Document.Insert(host.Session.Document.TextLength, "x"); }
         PumpUntil(() => events.Count >= 2);
-        Assert.Equal(new[] { AutomationEvents.TextPatternOnTextChanged, AutomationEvents.TextPatternOnTextSelectionChanged }, events);
+        Assert.Equal(new[] { AutomationEvents.TextPatternOnTextChanged, AutomationEvents.TextPatternOnTextSelectionChanged }, events.Where(item => item != AutomationEvents.StructureChanged));
     });
 
     [Fact]
@@ -222,7 +166,7 @@ public sealed class EditorSemanticTextRangeTests
         Assert.False(host.Editor.IsComposing);
         Assert.EndsWith("日本語", host.Session.Document.Text);
         coordinator.FlushSemanticChanges();
-        Assert.Equal(new[] { AutomationEvents.TextPatternOnTextChanged, AutomationEvents.TextPatternOnTextSelectionChanged }, events);
+        Assert.Equal(new[] { AutomationEvents.TextPatternOnTextChanged, AutomationEvents.TextPatternOnTextSelectionChanged }, events.Where(item => item != AutomationEvents.StructureChanged));
 
         void SetComposition(string property, string value) => typeof(TextComposition).GetProperty(property)!
             .GetSetMethod(nonPublic: true)!.Invoke(composition, [value]);
@@ -275,8 +219,120 @@ public sealed class EditorSemanticTextRangeTests
         var point = Assert.IsType<EditorSemanticTextRange>(host.Provider.RangeFromPoint(screen));
         Assert.Equal(point.Bounds.Start, point.Bounds.End);
         Assert.Same(host.Provider.EnclosingElement, point.GetEnclosingElement());
-        Assert.Null(host.Peer.GetChildren());
+        Assert.NotEmpty(host.Peer.GetChildren()!);
         Assert.Same(host.Peer, UIElementAutomationPeer.FromElement(host.Editor.TextArea).EventsSource);
+    });
+
+    [Fact]
+    public void RetainedSelectionTracksDeletionUndoAndSubsequentMovement() => OnSta(() =>
+    {
+        using var host = new Host("Before [[Target]] after.\nEmbed ![[Target]] ends.");
+        const int start = 7;
+        const int length = 11;
+        host.Editor.Select(start, length);
+        ITextProvider nativeProvider = (ITextProvider)UIElementAutomationPeer.CreatePeerForElement(host.Editor.TextArea).GetPattern(PatternInterface.Text);
+        ITextRangeProvider nativeSelection = Assert.Single(nativeProvider.GetSelection());
+        ITextRangeProvider selected = Assert.Single(host.Provider.GetSelection());
+        ITextRangeProvider cloned = selected.Clone();
+        ITextRangeProvider native = AvalonTextRangeAccess.Create(host.Editor.TextArea, host.Session.Document, start, length);
+        Assert.Equal("[[Target]] ", selected.GetText(-1));
+        host.Session.Document.Remove(start, length);
+        Assert.Equal("Before after.\nEmbed ![[Target]] ends.", host.Session.Document.Text);
+        // Compare the native baseline before attributing NVDA speech to the decorator.
+        Assert.Equal(string.Empty, native.GetText(-1));
+        Assert.Equal("after.\nEmbe", nativeSelection.GetText(-1));
+        Assert.Equal(string.Empty, selected.GetText(-1));
+        Assert.Equal(string.Empty, cloned.GetText(-1));
+        host.Session.Document.UndoStack.Undo();
+        Assert.Equal(host.Text, host.Session.Document.Text);
+        Assert.Equal(string.Empty, selected.GetText(-1));
+        selected.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Character, 1);
+        Assert.Equal("a", selected.GetText(-1));
+    });
+
+    [Fact]
+    public void HyperlinkContainmentRoundtripsAndOrdinaryOperandsAgree() => OnSta(() =>
+    {
+        using var host = new Host("Before [outer [[Inner]]](https://example.org) after.\n\n[[Last]]", show: true);
+        ITextRangeProvider outer = host.Provider.DocumentRange.FindText("[outer [[Inner]]](https://example.org)", false, false)!;
+        ITextRangeProvider inner = host.Provider.DocumentRange.FindText("[[Inner]]", false, false)!;
+        nint handle = new System.Windows.Interop.WindowInteropHelper(Window.GetWindow(host.Editor)).Handle;
+        Task connect = Task.Run(() => AutomationElement.FromHandle(handle));
+        PumpUntil(() => connect.IsCompleted);
+        connect.GetAwaiter().GetResult();
+        IRawElementProviderSimple outerElement = outer.GetEnclosingElement();
+        Assert.NotNull(outerElement);
+        IRawElementProviderSimple innerElement = inner.GetEnclosingElement();
+        Assert.False(ReferenceEquals(outerElement, innerElement), string.Join("; ", host.Session.InspectInRange(0, host.Text.Length).Spans.Select(x => $"{x.Kind}:{x.StartUtf16},{x.LengthUtf16}")));
+        Assert.Same(innerElement, Assert.Single(outer.GetChildren()));
+        Assert.Empty(inner.GetChildren());
+        Assert.Equal(2, host.Provider.DocumentRange.GetChildren().Length);
+        ITextRangeProvider roundtrip = host.Provider.RangeFromChild(innerElement);
+        Assert.True(inner.Compare(roundtrip));
+        Assert.True(roundtrip.Compare(inner));
+        Assert.True(roundtrip.Clone().Compare(inner));
+        roundtrip.MoveEndpointByRange(TextPatternRangeEndpoint.End, inner, TextPatternRangeEndpoint.Start);
+        Assert.Equal(string.Empty, roundtrip.GetText(-1));
+        Assert.Equal(2, host.Peer.GetChildren()!.Count);
+        AutomationPeer child = Assert.Single(host.Peer.GetChildren()![0].GetChildren()!);
+        Assert.Equal("[[Inner]]", child.GetName());
+        Assert.Same(host.Peer.GetChildren()![0], child.GetParent());
+    });
+
+    [Fact]
+    public void LinksRetainIdentityButRejectRemovedSemanticsAndReplacedSessions() => OnSta(() =>
+    {
+        using var host = new Host("Before [[Target]] after.\n\n[[Other]]", show: true);
+        EditorHyperlinkPeer first = Assert.IsType<EditorHyperlinkPeer>(host.Peer.GetChildren()![0]);
+        string id = first.GetAutomationId();
+        host.Session.Document.Insert(0, "prefix ");
+        Assert.Equal("[[Target]]", first.GetName());
+        Assert.Equal(id, first.GetAutomationId());
+        host.Editor.PublishSemanticTextChanged();
+        Assert.Same(first, host.Peer.GetChildren()![0]);
+        host.Session.Document.Remove(first.Start, 1);
+        Assert.Throws<ElementNotAvailableException>(() => first.GetName());
+        Assert.Throws<ElementNotAvailableException>(() => first.IsEnabled());
+        Assert.Throws<ElementNotAvailableException>(() => first.Invoke());
+        host.Editor.PublishSemanticTextChanged();
+        EditorHyperlinkPeer other = Assert.IsType<EditorHyperlinkPeer>(Assert.Single(host.Peer.GetChildren()!));
+        other.Invoke(); // Queued work must cancel after the old session disappears.
+        using var replacement = new AvalonDocumentBufferSession("[[Replacement]]", _ => { });
+        host.Editor.Document = replacement.Document;
+        host.Editor.HighlightSession = replacement;
+        host.Editor.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+        Assert.Throws<ElementNotAvailableException>(() => other.GetName());
+        Assert.Throws<ElementNotAvailableException>(() => other.GetPattern(PatternInterface.Invoke));
+    });
+
+    [Fact]
+    public void StructuralEditsRevalidateDistantLinksAndWpfChildCaches() => OnSta(() =>
+    {
+        using var host = new Host("- item\n\n  continuation\n\n    [link](x)\n\nTail\n", show: true);
+        EditorHyperlinkPeer link = Assert.IsType<EditorHyperlinkPeer>(Assert.Single(host.Peer.GetChildren()!));
+        host.Session.Document.Remove(0, 2);
+        Assert.Throws<ElementNotAvailableException>(() => link.GetName());
+        host.Editor.PublishSemanticTextChanged();
+        Assert.Empty(host.Peer.GetChildren()!);
+        host.Session.Document.Insert(host.Session.Document.TextLength, "\n[[New]]");
+        host.Editor.PublishSemanticTextChanged();
+        Assert.Equal("[[New]]", Assert.Single(host.Peer.GetChildren()!).GetName());
+    });
+
+    [Fact]
+    public void DenseInventoryUsesCachedMembershipAndLocalQueriesAfterEdits() => OnSta(() =>
+    {
+        using var host = new Host(string.Concat(Enumerable.Range(0, 2000).Select(index => $"[[Link{index}]]\n\n")));
+        List<AutomationPeer> all = host.Provider.Links.RootChildren();
+        Assert.Equal(2000, all.Count);
+        long before = host.Session.SemanticQueryCountForCensus;
+        foreach (AutomationPeer peer in all) { Assert.StartsWith("[[Link", peer.GetName()); }
+        Assert.Equal(before, host.Session.SemanticQueryCountForCensus);
+        host.Session.Document.Insert(0, "prefix\n\n");
+        Assert.Equal("[[Link1500]]", all[1500].GetName());
+        Assert.Equal(before + 1, host.Session.SemanticQueryCountForCensus);
+        Assert.Equal("[[Link1500]]", all[1500].GetName());
+        Assert.Equal(before + 1, host.Session.SemanticQueryCountForCensus);
     });
 
     private sealed class Host : IDisposable

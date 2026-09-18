@@ -1192,26 +1192,20 @@ public sealed class ShellAccessibilityTests
             Assert.Equal("Heading 2", heading.GetAttributeValue(attributes.StyleName));
             var link = document.FindText("Website", false, false);
             Assert.NotNull(link);
-            object linkValue = link.GetAttributeValue(attributes.Link);
-            Assert.NotEqual(automation.NotSupportedValue, linkValue);
-            Assert.NotEqual(automation.MixedAttributeValue, linkValue);
-            // A COM interface cast performs QueryInterface; reflection-based
-            // IsAssignableFrom sees only the RCW's __ComObject runtime type.
-            var nativeLink = (Interop.UIAutomationClient.IUIAutomationTextRange)linkValue;
-            Assert.Equal("[Website](https://example.org)", nativeLink.GetText(-1));
-            Assert.Equal("Link", nativeLink.GetAttributeValue(attributes.StyleName.Id));
-            Assert.Equal("note.md editor", nativeLink.GetEnclosingElement().CurrentName);
-            var linkClone = nativeLink.Clone();
-            Assert.Equal(nativeLink.GetText(-1), linkClone.GetText(-1));
-            var canonicalLink = ((FlaUI.UIA3.UIA3TextRange)document.FindText("[Website](https://example.org)", false, false)).NativeRange;
-            Assert.Equal(1, nativeLink.Compare(canonicalLink));
-            Assert.Equal(1, nativeLink.Compare(nativeLink));
-            Assert.Equal(1, canonicalLink.Compare(linkClone));
-            Assert.Equal(1, linkClone.Compare(canonicalLink));
+            Assert.Equal(automation.NotSupportedValue, link.GetAttributeValue(attributes.Link));
+            AutomationElement nativeLink = link.GetEnclosingElement();
+            Assert.Equal(ControlType.Hyperlink, nativeLink.ControlType);
+            Assert.Equal("[Website](https://example.org)", nativeLink.Name);
+            Assert.True(PollGently(() => nativeLink.Patterns.Value.IsSupported, TimeSpan.FromSeconds(10)));
+            Assert.Equal("https://example.org", nativeLink.Patterns.Value.Pattern.Value.Value);
+            var linkRange = text.RangeFromChild(nativeLink);
+            var canonicalLink = document.FindText("[Website](https://example.org)", false, false);
+            Assert.True(linkRange.Compare(canonicalLink));
+            Assert.True(canonicalLink.Compare(linkRange));
+            Assert.True(linkRange.Clone().Compare(canonicalLink));
+            Assert.Equal(nativeLink, linkRange.GetEnclosingElement());
             Assert.Contains("Heading two", document.FindAttribute(attributes.StyleId, 70002, false).GetText(-1));
             Assert.Contains("Quoted heading", document.FindAttribute(attributes.StyleId, 70002, true).GetText(-1));
-            Assert.Contains("[[Target]]", document.FindAttribute(attributes.Link, true, false).GetText(-1));
-            Assert.Contains("quoted link", document.FindAttribute(attributes.Link, true, true).GetText(-1));
             Assert.NotEmpty(text.GetVisibleRanges());
             var bounds = editor.BoundingRectangle;
             var point = text.RangeFromPoint(new System.Drawing.Point(bounds.Left + 12, bounds.Top + 12));
@@ -1232,8 +1226,14 @@ public sealed class ShellAccessibilityTests
             Walk(editor, true, backward);
             backward.Reverse();
             Assert.Equal(forward, backward);
-            Assert.Empty(forward); // The source peer owns text ranges, no embedded children.
-            Assert.Empty(document.GetChildren());
+            Assert.Equal(7, forward.Count);
+            Assert.All(forward, child => Assert.Equal(ControlType.Hyperlink, child.ControlType));
+            Assert.Equal(forward, document.GetChildren());
+            foreach (AutomationElement child in forward)
+            {
+                Assert.Equal(child.Name, text.RangeFromChild(child).GetText(-1));
+                Assert.True(child.Patterns.Invoke.IsSupported);
+            }
 
             var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
             using var changed = editor.RegisterAutomationEvent(automation.EventLibrary.Text.TextChangedEvent,

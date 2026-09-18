@@ -22,16 +22,16 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
     private readonly SlateTextEditor _editor;
     private readonly AvalonDocumentBufferSession _session;
     private readonly Func<IRawElementProviderSimple> _enclosingElement;
-    private readonly AutomationPeer _peer;
+    internal EditorHyperlinkTree Links { get; }
 
     internal EditorSemanticTextProvider(ITextProvider inner, SlateTextEditor editor,
-        AvalonDocumentBufferSession session, AutomationPeer peer, Func<IRawElementProviderSimple> enclosingElement)
+        AvalonDocumentBufferSession session, SlateTextEditorAutomationPeer peer, Func<IRawElementProviderSimple> enclosingElement)
     {
         _inner = inner;
         _editor = editor;
         _session = session;
         _enclosingElement = enclosingElement;
-        _peer = peer;
+        Links = new(editor, this, session, peer);
     }
 
     internal bool HasCurrentDocument
@@ -55,9 +55,11 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
     internal int Length => _session.Document.TextLength;
     internal IRawElementProviderSimple EnclosingElement => _enclosingElement();
     internal EditorHighlightWindow Inspect(int start, int end) => _session.InspectInRange(start, end);
-    internal EditorSemanticTextRange Wrap(ITextRangeProvider range) => new(range, this);
-    internal object ExportLinkRange(int start, int end) =>
-        UiaLinkRangeExport.Create(WpfTextRangeAccess.Wrap(Range(start, end), _peer));
+    internal EditorSemanticTextRange Wrap(ITextRangeProvider range)
+    {
+        AvalonTextRangeAccess.Track(range, _session.Document);
+        return new(range, this);
+    }
     internal EditorSemanticTextRange Range(int start, int end)
     {
         VerifyCurrentDocument();
@@ -107,8 +109,11 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
         return ranges.ToArray();
     }
 
-    public ITextRangeProvider RangeFromChild(IRawElementProviderSimple childElement) =>
-        throw new ArgumentException("The source editor contains no child elements.", nameof(childElement));
+    public ITextRangeProvider RangeFromChild(IRawElementProviderSimple childElement)
+    {
+        VerifyCurrentDocument();
+        return Links.RangeFromChild(childElement);
+    }
 
     public ITextRangeProvider RangeFromPoint(Point screenLocation)
     {
@@ -137,28 +142,6 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
     }
 }
 
-/// <summary>WPF does not marshal ranges returned as attribute values (A-6).</summary>
-internal static class WpfTextRangeAccess
-{
-    private static readonly Type WrapperType = typeof(AutomationPeer).Assembly.GetType(
-        "MS.Internal.Automation.TextRangeProviderWrapper", throwOnError: true)!;
-    private static readonly MethodInfo WrapMethod = WrapperType.GetMethod("WrapArgument",
-        BindingFlags.Static | BindingFlags.NonPublic, [typeof(ITextRangeProvider), typeof(AutomationPeer)])
-        ?? throw new InvalidOperationException("WPF's text-range wrapping contract changed.");
-    private static readonly MethodInfo UnwrapMethod = WrapperType.GetMethod("UnwrapArgument",
-        BindingFlags.Static | BindingFlags.NonPublic, [typeof(ITextRangeProvider)])
-        ?? throw new InvalidOperationException("WPF's text-range unwrapping contract changed.");
-
-    internal static ITextRangeProvider Wrap(ITextRangeProvider range, AutomationPeer peer) =>
-        (ITextRangeProvider)WrapMethod.Invoke(null, [range, peer])!;
-    internal static ITextRangeProvider Unwrap(ITextRangeProvider range)
-    {
-        range = UiaLinkRangeExport.Unwrap(range);
-        return WrapperType.IsInstanceOfType(range)
-            ? (ITextRangeProvider)UnwrapMethod.Invoke(null, [range])! : range;
-    }
-}
-
 /// <summary>One pinned dependency adapter, never text scanning (contract A-2).</summary>
 internal static class AvalonTextRangeAccess
 {
@@ -177,6 +160,17 @@ internal static class AvalonTextRangeAccess
             throw new InvalidOperationException("Expected the pinned AvalonEdit native text range.");
         }
         return (segment.Offset, segment.EndOffset);
+    }
+
+    // The offset constructor uses anchors, but GetSelection supplies a SimpleSegment.
+    // Normalize that native segment once; movement/units/geometry remain AvalonEdit's.
+    internal static void Track(ITextRangeProvider range, TextDocument document)
+    {
+        if (Segment.GetValue(range) is not AnchorSegment)
+        {
+            (int start, int end) = Bounds(range);
+            Segment.SetValue(range, new AnchorSegment(document, start, end - start));
+        }
     }
 
     internal static ITextRangeProvider Create(TextArea area, TextDocument document, int start, int length) =>
@@ -230,28 +224,16 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
                 return TextPattern.MixedAttributeValue;
             }
         }
-        return uniform is LinkIdentity link ? _provider.ExportLinkRange(link.Start, link.End)
-            : uniform ?? AutomationElement.NotSupported;
+        return uniform ?? AutomationElement.NotSupported;
     }
 
     public ITextRangeProvider? FindAttribute(int attributeId, object value, bool backward)
     {
-        if (!_provider.CanRead || attributeId is not (StyleIdAttribute or LinkAttribute))
+        if (!_provider.CanRead || attributeId != StyleIdAttribute)
         {
             return null;
         }
         (int start, int end) = Bounds;
-        object sought = value;
-        if (attributeId == LinkAttribute && value is ITextRangeProvider supplied
-            && WpfTextRangeAccess.Unwrap(supplied) is EditorSemanticTextRange link)
-        {
-            if (!ReferenceEquals(link._provider, _provider))
-            {
-                return null;
-            }
-            (int linkStart, int linkEnd) = link.Bounds;
-            sought = new LinkIdentity(linkStart, linkEnd);
-        }
         EditorHighlightWindow window = _provider.Inspect(start, end);
         IEnumerable<AttributeRun> runs = Runs(window.Spans, start, end, attributeId);
         if (backward)
@@ -260,11 +242,7 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
         }
         foreach (AttributeRun run in runs)
         {
-            // A boolean Link search is the convenient presence query. A range
-            // value matches the exact identity returned by GetAttributeValue.
-            bool matches = Equals(run.Value, sought)
-                || attributeId == LinkAttribute && Equals(sought, true) && run.Value is LinkIdentity;
-            if (matches)
+            if (Equals(run.Value, value))
             {
                 return _provider.Range(run.Start, run.End);
             }
@@ -273,7 +251,7 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
     }
 
     private static bool Supported(int attributeId) => attributeId is StyleIdAttribute
-        or StyleNameAttribute or LinkAttribute or IsItalicAttribute or FontWeightAttribute
+        or StyleNameAttribute or IsItalicAttribute or FontWeightAttribute
         or StrikethroughStyleAttribute;
 
     // Table E-4: UIA idioms only. The kinds and intervals are canonical.
@@ -281,9 +259,6 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
     {
         (EditorSpanKind.Heading heading, StyleIdAttribute) => 70000 + heading.Level,
         (EditorSpanKind.Heading heading, StyleNameAttribute) => $"Heading {heading.Level}",
-        (EditorSpanKind.Wikilink or EditorSpanKind.Link or EditorSpanKind.Embed
-            or EditorSpanKind.Image or EditorSpanKind.Tag or EditorSpanKind.Citation, LinkAttribute) =>
-                new LinkIdentity(span.StartUtf16, span.StartUtf16 + span.LengthUtf16),
         (EditorSpanKind.Wikilink, StyleNameAttribute) => "Wikilink",
         (EditorSpanKind.Link, StyleNameAttribute) => "Link",
         (EditorSpanKind.Embed, StyleNameAttribute) => "Embed",
@@ -301,7 +276,6 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
         _ => AutomationElement.NotSupported,
     };
 
-    private sealed record LinkIdentity(int Start, int End);
     private sealed record AttributeRun(int Start, int End, object Value);
     private sealed record Contribution(int Start, int End, int Length, int Index, object Value);
 
@@ -380,8 +354,9 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
     public ITextRangeProvider? FindText(string text, bool backward, bool ignoreCase) =>
         _inner.FindText(text, backward, ignoreCase) is { } found ? _provider.Wrap(found) : null;
     public double[] GetBoundingRectangles() => _inner.GetBoundingRectangles();
-    public IRawElementProviderSimple[] GetChildren() => [];
-    public IRawElementProviderSimple GetEnclosingElement() => _provider.EnclosingElement;
+    public IRawElementProviderSimple[] GetChildren() => _provider.Links.Children(Bounds.Start, Bounds.End);
+    public IRawElementProviderSimple GetEnclosingElement() =>
+        _provider.Links.Enclosing(Bounds.Start, Bounds.End)?.Provider ?? _provider.EnclosingElement;
     public string GetText(int maxLength) => _inner.GetText(maxLength);
     public int Move(TextUnit unit, int count) => _inner.Move(unit, count);
     public void MoveEndpointByRange(TextPatternRangeEndpoint endpoint, ITextRangeProvider targetRange, TextPatternRangeEndpoint targetEndpoint) =>

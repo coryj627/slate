@@ -20,6 +20,7 @@ public class EditorSemanticLineBenchmarks
     public int Bytes { get; set; }
     [GlobalSetup] public void Setup() => _host = new SemanticBenchmarkHost(Bytes);
     [Benchmark] public object LineStyleId() => _host!.LineStyleId();
+    [Benchmark] public object? PostEditLocalLink() => _host!.PostEditLocalLink();
     [GlobalCleanup] public void Cleanup() => _host?.Dispose();
 }
 
@@ -32,7 +33,19 @@ public class EditorSemanticSearchBenchmarks
     [Params(8 * 1024 * 1024)]
     public int Bytes { get; set; }
     [GlobalSetup] public void Setup() => _host = new SemanticBenchmarkHost(Bytes);
-    [Benchmark] public object? DocumentFindLink() => _host!.DocumentFindLink();
+    [Benchmark] public object? DocumentHyperlinks() => _host!.DocumentHyperlinks();
+    [GlobalCleanup] public void Cleanup() => _host?.Dispose();
+}
+
+[MemoryDiagnoser]
+[MedianColumn]
+[SimpleJob(warmupCount: 3, iterationCount: 10)]
+public class EditorSemanticDenseBenchmarks
+{
+    private SemanticBenchmarkHost? _host;
+    [Params(1000, 10000)] public int Bytes { get; set; } // Link count; retained runner column name.
+    [GlobalSetup] public void Setup() => _host = new SemanticBenchmarkHost(Bytes, dense: true);
+    [Benchmark] public object DenseInventoryAndWalk() => _host!.DenseInventoryAndWalk();
     [GlobalCleanup] public void Cleanup() => _host?.Dispose();
 }
 
@@ -42,9 +55,10 @@ internal sealed class SemanticBenchmarkHost : IDisposable
     private Dispatcher? _dispatcher;
     private AvalonDocumentBufferSession? _session;
     private ITextRangeProvider? _line;
-    private ITextRangeProvider? _document;
+    private EditorSemanticTextProvider? _provider;
+    private ITextRangeProvider? _link;
 
-    internal SemanticBenchmarkHost(int bytes)
+    internal SemanticBenchmarkHost(int bytes, bool dense = false)
     {
         using var ready = new ManualResetEventSlim(false);
         Exception? failure = null;
@@ -54,7 +68,8 @@ internal sealed class SemanticBenchmarkHost : IDisposable
             {
                 _dispatcher = Dispatcher.CurrentDispatcher;
                 const string block = "## Heading\n\nPlain prose for a bounded semantic read.\n\n";
-                string text = string.Concat(Enumerable.Repeat(block, bytes / block.Length + 1)) + "[[last link]]";
+                string text = dense ? string.Concat(Enumerable.Range(0, bytes).Select(index => $"## Heading\n\n[[Link{index}]]\n\n"))
+                    : string.Concat(Enumerable.Repeat(block, bytes / block.Length + 1)) + "[[last link]]";
                 _session = new AvalonDocumentBufferSession(text, _ => { }, TimeSpan.FromHours(1));
                 var editor = new SlateTextEditor { Document = _session.Document, HighlightSession = _session };
                 var peer = UIElementAutomationPeer.CreatePeerForElement(editor)
@@ -63,7 +78,9 @@ internal sealed class SemanticBenchmarkHost : IDisposable
                     ?? throw new InvalidOperationException("Editor benchmark requires the semantic TextPattern provider.");
                 int start = text.IndexOf("## Heading", text.Length / 2, StringComparison.Ordinal);
                 _line = provider.Range(start, start + "## Heading".Length);
-                _document = provider.DocumentRange;
+                _provider = provider;
+                int linkStart = text.LastIndexOf("[[", StringComparison.Ordinal);
+                _link = provider.Range(linkStart, linkStart + 1);
             }
             catch (Exception error) { failure = error; }
             finally { ready.Set(); }
@@ -77,7 +94,30 @@ internal sealed class SemanticBenchmarkHost : IDisposable
     }
 
     internal object LineStyleId() => _dispatcher!.Invoke(() => _line!.GetAttributeValue(EditorSemanticTextRange.StyleIdAttribute));
-    internal object? DocumentFindLink() => _dispatcher!.Invoke(() => _document!.FindAttribute(EditorSemanticTextRange.LinkAttribute, true, false));
+    private void Edit()
+    {
+        _session!.Document.Insert(0, "x");
+        _session.Document.Remove(0, 1);
+    }
+    internal object? PostEditLocalLink() => _dispatcher!.Invoke(() =>
+    {
+        Edit();
+        var range = (EditorSemanticTextRange)_link!;
+        return _provider!.Links.Enclosing(range.Bounds.Start, range.Bounds.End)?.GetName();
+    });
+    internal object DocumentHyperlinks() => _dispatcher!.Invoke(() =>
+    {
+        Edit();
+        return _provider!.Links.RootChildren();
+    });
+    internal object DenseInventoryAndWalk() => _dispatcher!.Invoke(() =>
+    {
+        Edit();
+        var peers = _provider!.Links.RootChildren();
+        foreach (AutomationPeer peer in peers) { _ = peer.GetName(); _ = peer.IsEnabled(); }
+        foreach (AutomationPeer peer in peers.AsEnumerable().Reverse()) { _ = peer.GetName(); }
+        return peers.Count;
+    });
     public void Dispose()
     {
         if (_dispatcher is { } dispatcher)
@@ -97,7 +137,10 @@ internal static class EditorSemanticBudgets
         var expected = new HashSet<(string Name, int Bytes)>
         {
             ("LineStyleId", 100 * 1024), ("LineStyleId", 1024 * 1024),
-            ("LineStyleId", 8 * 1024 * 1024), ("DocumentFindLink", 8 * 1024 * 1024),
+            ("LineStyleId", 8 * 1024 * 1024), ("DocumentHyperlinks", 8 * 1024 * 1024),
+            ("PostEditLocalLink", 100 * 1024), ("PostEditLocalLink", 1024 * 1024),
+            ("PostEditLocalLink", 8 * 1024 * 1024),
+            ("DenseInventoryAndWalk", 1000), ("DenseInventoryAndWalk", 10000),
         };
         var lineMedians = new Dictionary<int, double>();
         bool passed = true;
@@ -106,7 +149,7 @@ internal static class EditorSemanticBudgets
             string name = report.BenchmarkCase.Descriptor.WorkloadMethod.Name;
             int bytes = (int)report.BenchmarkCase.Parameters["Bytes"];
             double? median = report.ResultStatistics?.Median / 1_000_000;
-            double budget = name == "LineStyleId" ? 0.5 : 1000;
+            double budget = name switch { "LineStyleId" => 0.5, "PostEditLocalLink" => 2, _ => 1000 };
             bool row = expected.Remove((name, bytes)) && median is not null && median <= budget;
             passed &= row;
             if (name == "LineStyleId" && median is { } value) { lineMedians[bytes] = value; }

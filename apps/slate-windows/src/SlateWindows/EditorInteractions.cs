@@ -522,6 +522,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private readonly VaultSession _session;
     private readonly WorkspaceTabViewModel _tab;
     private readonly Action<EditorNavigationRequest> _navigate;
+    private readonly Func<string, bool> _openExternal;
+    internal bool IsDisposed => _disposed;
     private readonly Action<string> _activateTag;
     private readonly Action<A11yEvent> _announce;
     private readonly Func<EditorInteractionWorkerKind, Exception?>? _backgroundFaultForTests;
@@ -585,11 +587,13 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         Action<string>? activateTag = null,
         Action<A11yEvent>? announce = null,
         bool startBackgroundWork = true,
-        Func<EditorInteractionWorkerKind, Exception?>? backgroundFaultForTests = null)
+        Func<EditorInteractionWorkerKind, Exception?>? backgroundFaultForTests = null,
+        Func<string, bool>? openExternalForTests = null)
     {
         _session = session;
         _tab = tab;
         _navigate = navigate ?? (_ => { });
+        _openExternal = openExternalForTests ?? Reading.ReadingActivation.OpenWithShell;
         _activateTag = activateTag ?? (_ => { });
         _announce = announce ?? (_ => { });
         _backgroundFaultForTests = backgroundFaultForTests;
@@ -778,7 +782,9 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             {
                 Kind: EditorSpanKind.Wikilink
                     or EditorSpanKind.Embed
-                    or EditorSpanKind.Citation,
+                    or EditorSpanKind.Citation
+                    or EditorSpanKind.Link
+                    or EditorSpanKind.Image,
             })
         {
             AnnounceSaveBeforeInteraction();
@@ -805,6 +811,28 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return TryToggleTaskAt(utf16Offset, origin);
         }
 
+        return ActivateCanonicalSpan(span);
+    }
+
+    internal bool ActivateSpan(EditorSemanticSpan requested)
+    {
+        ThrowIfDisposed();
+        if (_tab.EditorSession is not { SemanticReadsAvailable: true } session) { return false; }
+        EditorSemanticSpan? span = session.InspectInRange(requested.StartUtf16,
+            requested.StartUtf16 + requested.LengthUtf16).Spans.FirstOrDefault(candidate => candidate == requested);
+        if (span is null) { return false; }
+        if (_tab.IsDirty && span.Kind is not EditorSpanKind.Tag)
+        {
+            AnnounceSaveBeforeInteraction();
+            return true;
+        }
+        if (!EnsureMathRangesReady(announceWhenUnavailable: true)
+            || IsInsideMathRegion(span.StartUtf16)) { return false; }
+        return ActivateCanonicalSpan(span);
+    }
+
+    private bool ActivateCanonicalSpan(EditorSemanticSpan span)
+    {
         if (span.Kind is EditorSpanKind.Tag)
         {
             string authored = _tab.EditorDocument!.GetText(span.StartUtf16, span.LengthUtf16);
@@ -833,9 +861,9 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return PreviewEmbed(span);
         }
 
-        if (span.Kind is EditorSpanKind.Wikilink)
+        if (span.Kind is EditorSpanKind.Wikilink or EditorSpanKind.Link or EditorSpanKind.Image)
         {
-            return FollowWikilink(span);
+            return FollowLink(span);
         }
 
         return false;
@@ -1169,7 +1197,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         QueueArtifactCacheRefresh();
         QueueCitationCacheRefresh();
     }
-    private bool FollowWikilink(EditorSemanticSpan span)
+    private bool FollowLink(EditorSemanticSpan span)
     {
         if (_tab.IsDirty)
         {
@@ -1182,10 +1210,20 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return true;
         }
 
-        OutgoingLink? link = LinkRecordFor(span, expectEmbed: false);
+        OutgoingLink? link = LinkRecordFor(span, expectEmbed: span.Kind is EditorSpanKind.Image);
         if (link is null)
         {
             _announce(new A11yEvent.LinkUnresolved("link at cursor"));
+            return true;
+        }
+
+        if (link.IsExternal)
+        {
+            string destination = ComposeAnchoredTarget(link);
+            _announce(!ExternalLinkPolicy.IsLaunchable(destination)
+                ? new A11yEvent.ExternalLinkUnsupported(destination)
+                : _openExternal(destination) ? new A11yEvent.ExternalLinkOpened()
+                : new A11yEvent.ExternalLinkFailed(destination));
             return true;
         }
 
@@ -1751,7 +1789,9 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             span.Kind is EditorSpanKind.Wikilink
                 or EditorSpanKind.Embed
                 or EditorSpanKind.Tag
-                or EditorSpanKind.Citation);
+                or EditorSpanKind.Citation
+                or EditorSpanKind.Link
+                or EditorSpanKind.Image);
         return actionable is not null;
     }
 
@@ -2578,6 +2618,20 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 sourceCurrent),
             terminalFailure: false);
     }
+    // UIA metadata reads never classify authored Markdown or consume stale saved offsets.
+    internal string? DestinationFor(EditorSemanticSpan span)
+    {
+        _dispatcher.VerifyAccess();
+        if (_disposed || _tab.IsDirty || !_artifactCacheSourceCurrent
+            || !string.Equals(_artifactCachePath, _tab.Path, StringComparison.Ordinal)
+            || !string.Equals(_artifactCacheHash, _tab.SavedContentHash, StringComparison.Ordinal)
+            || _artifactCacheSessionGeneration != _session.InteractionGeneration()) { return null; }
+        if (span.Kind is not (EditorSpanKind.Wikilink or EditorSpanKind.Link or EditorSpanKind.Embed or EditorSpanKind.Image))
+        { return null; }
+        OutgoingLink? link = LinkRecordFor(span, span.Kind is EditorSpanKind.Embed or EditorSpanKind.Image);
+        return link is null ? null : ComposeAnchoredTarget(link);
+    }
+
     private OutgoingLink? LinkRecordFor(EditorSemanticSpan selected, bool expectEmbed) =>
         _linksBySpan.GetValueOrDefault(
             (selected.StartByte, selected.EndByte, expectEmbed));

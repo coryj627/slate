@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Input;
@@ -122,6 +123,7 @@ internal sealed class SlateTextEditor : TextEditor
         {
             return;
         }
+        peer.PublishSemanticStructureChanged();
         peer.RaiseAutomationEvent(AutomationEvents.TextPatternOnTextChanged);
         AutomationEventForCensus?.Invoke(AutomationEvents.TextPatternOnTextChanged);
         peer.RaiseAutomationEvent(AutomationEvents.TextPatternOnTextSelectionChanged);
@@ -507,7 +509,22 @@ internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
         && _owner.TextArea.IsEnabled
         && _owner.TextArea.IsVisible;
 
-    protected override List<AutomationPeer>? GetChildrenCore() => null;
+    protected override List<AutomationPeer>? GetChildrenCore() =>
+        (GetPattern(PatternInterface.Text) as EditorSemanticTextProvider)?.Links.RootChildren();
+
+    internal AutomationPeer ChildPeerFromProvider(IRawElementProviderSimple child) => PeerFromProvider(child);
+
+    internal void PublishSemanticStructureChanged()
+    {
+        if (_semanticProvider?.Links.WasExposed != true) { return; }
+        _semanticProvider.Links.InvalidateChildren();
+        if (AutomationPeer.ListenerExists(AutomationEvents.StructureChanged))
+        {
+            AutomationInteropProvider.RaiseStructureChangedEvent(ProviderFromPeer(this),
+                new StructureChangedEventArgs(StructureChangeType.ChildrenInvalidated, ((IRawElementProviderFragment)ProviderFromPeer(this)).GetRuntimeId()));
+        }
+        _owner.AutomationEventForCensus?.Invoke(AutomationEvents.StructureChanged);
+    }
 
     public override object? GetPattern(PatternInterface patternInterface)
     {
@@ -518,6 +535,7 @@ internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
             {
                 if (!ReferenceEquals(session, _semanticSession))
                 {
+                    WpfEditorPeerConnection.InvalidateChildren(this);
                     _semanticSession = session;
                     _semanticProvider = new EditorSemanticTextProvider(provider, _owner, session, this, () => ProviderFromPeer(this));
                 }

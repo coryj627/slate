@@ -62,7 +62,7 @@ public sealed class EditorPeerDoctrineCensus
             .Where(call => call.Expression is MemberAccessExpressionSyntax member && member.Name.Identifier.ValueText == "InspectInRange").ToArray();
         Assert.Single(queries);
         Assert.Equal("_session.InspectInRange(start, end)", queries[0].ToString());
-        foreach (string file in new[] { "EditorSemanticText.cs", "SlateTextEditor.cs", "EditorHighlighting.cs" })
+        foreach (string file in new[] { "EditorSemanticText.cs", "EditorHyperlinks.cs", "SlateTextEditor.cs", "EditorHighlighting.cs" })
         {
             CSharpSource source = CSharpSource.Load(file);
             string[] names = source.Root.DescendantNodes().OfType<MemberAccessExpressionSyntax>()
