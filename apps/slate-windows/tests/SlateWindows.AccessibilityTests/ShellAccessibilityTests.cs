@@ -1244,14 +1244,18 @@ public sealed class ShellAccessibilityTests
             editor.Focus();
             // One native Value edit is one burst, independent of SendInput's
             // per-key transport speed on a loaded CI desktop.
-            editor.Patterns.Value.Pattern.SetValue(fixture + "0123456789");
+            editor.Patterns.Value.Pattern.SetValue(fixture + "0123456789\n\n[[New link]]");
             Assert.True(PollGently(() => events.Contains("text") && events.LastOrDefault() == "selection", TimeSpan.FromSeconds(10)),
                 "The committed burst did not publish TextChanged followed by selection.");
             string[] observed = events.ToArray();
             Assert.Single(observed, item => item == "text");
             int textIndex = Array.IndexOf(observed, "text");
             Assert.Contains("selection", observed.Skip(textIndex + 1));
-            Assert.EndsWith("0123456789", text.DocumentRange.GetText(-1));
+            Assert.EndsWith("0123456789\n\n[[New link]]", text.DocumentRange.GetText(-1));
+            Assert.True(PollGently(() => text.DocumentRange.GetChildren().Length == 8, TimeSpan.FromSeconds(10)));
+            var appended = text.DocumentRange.GetChildren().Last();
+            Assert.Equal("[[New link]]", appended.Name);
+            Assert.Equal(appended.Name, text.RangeFromChild(appended).GetText(-1));
             AssertAxeClean(process, "editor-semantic-text");
 
             void Walk(AutomationElement parent, bool reverse, List<AutomationElement> output)

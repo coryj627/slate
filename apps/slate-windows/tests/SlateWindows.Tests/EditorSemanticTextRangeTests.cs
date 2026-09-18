@@ -187,6 +187,9 @@ public sealed class EditorSemanticTextRangeTests
         Assert.Throws<ElementNotAvailableException>(() => host.Provider.GetVisibleRanges());
         Assert.Throws<ElementNotAvailableException>(() => host.Provider.DocumentRange);
         Assert.Throws<ElementNotAvailableException>(() => host.Provider.GetSelection());
+        Assert.Throws<ElementNotAvailableException>(() => old.GetText(-1));
+        Assert.Throws<ElementNotAvailableException>(() => old.GetChildren());
+        Assert.Throws<ElementNotAvailableException>(() => old.Select());
         ITextProvider current = Assert.IsAssignableFrom<ITextProvider>(host.Peer.GetPattern(PatternInterface.Text));
         Assert.Equal(70001, current.DocumentRange.FindText("Replacement", false, false)!.GetAttributeValue(EditorSemanticTextRange.StyleIdAttribute));
     });
@@ -250,6 +253,60 @@ public sealed class EditorSemanticTextRangeTests
         Assert.Equal("a", selected.GetText(-1));
     });
 
+    [Theory]
+    [InlineData(TextUnit.Line)]
+    [InlineData(TextUnit.Paragraph)]
+    public void ExpandedNativeRangesStillTrackDeletedLines(TextUnit unit) => OnSta(() =>
+    {
+        using var host = new Host("First line\nSecond line\nLast line");
+        ITextRangeProvider range = host.Provider.DocumentRange.FindText("Second", false, false)!;
+        range.ExpandToEnclosingUnit(unit);
+        host.Session.Document.Remove(11, 12);
+        Assert.Equal(string.Empty, range.GetText(-1));
+        host.Session.Document.UndoStack.Undo();
+        range.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Character, 1);
+        Assert.Equal("L", range.GetText(-1));
+    });
+
+    [Fact]
+    public void EofMovementStillTracksDeletionAndSelection() => OnSta(() =>
+    {
+        using var host = new Host("[[Target]]");
+        host.Editor.Select(0, host.Text.Length);
+        ITextRangeProvider range = Assert.Single(host.Provider.GetSelection());
+        range.Move(TextUnit.Character, 100);
+        host.Session.Document.Remove(0, host.Text.Length);
+        Assert.Equal(string.Empty, range.GetText(-1));
+        Assert.Empty(range.GetChildren());
+        range.Select();
+        Assert.Equal(0, host.Editor.CaretOffset);
+    });
+
+    [Fact]
+    public void HyperlinkNamesDoNotSplitSurrogatePairs() => OnSta(() =>
+    {
+        using var host = new Host("[[" + new string('a', 509) + "😀]]");
+        string name = Assert.Single(host.Peer.GetChildren()!).GetName();
+        Assert.EndsWith("…", name);
+        Assert.DoesNotContain(name, character => char.IsSurrogate(character));
+    });
+
+    [Fact]
+    public void EmptyCompositionCompletionInvalidatesTheUnavailableChildCache() => OnSta(() =>
+    {
+        using var host = new Host("[[Target]]", show: true);
+        Assert.Single(host.Peer.GetChildren()!);
+        var composition = new TextComposition(InputManager.Current, host.Editor.TextArea,
+            string.Empty, TextCompositionAutoComplete.Off);
+        TextCompositionManager.StartComposition(composition);
+        Assert.True(host.Editor.IsComposing);
+        Assert.Empty(host.Peer.GetChildren()!);
+        TextCompositionManager.CompleteComposition(composition);
+        Assert.False(host.Editor.IsComposing);
+        Assert.Equal("[[Target]]", Assert.Single(host.Peer.GetChildren()!).GetName());
+        Assert.Equal(host.Text, host.Session.Document.Text);
+    });
+
     [Fact]
     public void HyperlinkContainmentRoundtripsAndOrdinaryOperandsAgree() => OnSta(() =>
     {
@@ -279,10 +336,12 @@ public sealed class EditorSemanticTextRangeTests
         Assert.Same(host.Peer.GetChildren()![0], child.GetParent());
     });
 
-    [Fact]
-    public void LinksRetainIdentityButRejectRemovedSemanticsAndReplacedSessions() => OnSta(() =>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LinksRetainIdentityButRejectRemovedSemanticsAndReplacedSessions(bool show) => OnSta(() =>
     {
-        using var host = new Host("Before [[Target]] after.\n\n[[Other]]", show: true);
+        using var host = new Host("Before [[Target]] after.\n\n[[Other]]", show: show);
         EditorHyperlinkPeer first = Assert.IsType<EditorHyperlinkPeer>(host.Peer.GetChildren()![0]);
         string id = first.GetAutomationId();
         host.Session.Document.Insert(0, "prefix ");
@@ -301,6 +360,7 @@ public sealed class EditorSemanticTextRangeTests
         host.Editor.Document = replacement.Document;
         host.Editor.HighlightSession = replacement;
         host.Editor.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+        Assert.Equal("[[Replacement]]", Assert.Single(host.Peer.GetChildren()!).GetName());
         Assert.Throws<ElementNotAvailableException>(() => other.GetName());
         Assert.Throws<ElementNotAvailableException>(() => other.GetPattern(PatternInterface.Invoke));
     });
@@ -317,6 +377,37 @@ public sealed class EditorSemanticTextRangeTests
         host.Session.Document.Insert(host.Session.Document.TextLength, "\n[[New]]");
         host.Editor.PublishSemanticTextChanged();
         Assert.Equal("[[New]]", Assert.Single(host.Peer.GetChildren()!).GetName());
+    });
+
+    [Fact]
+    public void TagExtensionRetainsIdentityWithoutAbsorbingAdjacentTokens() => OnSta(() =>
+    {
+        using var host = new Host("#tag");
+        AutomationPeer tag = Assert.Single(host.Peer.GetChildren()!);
+        host.Session.Document.Insert(4, "x");
+        Assert.Equal("#tagx", tag.GetName());
+        host.Editor.PublishSemanticTextChanged();
+        Assert.Same(tag, Assert.Single(host.Peer.GetChildren()!));
+        host.Session.Document.Insert(5, " #next");
+        host.Editor.PublishSemanticTextChanged();
+        Assert.Equal(2, host.Peer.GetChildren()!.Count);
+        Assert.Same(tag, host.Peer.GetChildren()![0]);
+        Assert.Equal("#tagx", tag.GetName());
+        Assert.Equal("#next", host.Peer.GetChildren()![1].GetName());
+    });
+
+    [Fact]
+    public void FirstChildEnumerationDuringPeerUpdateDoesNotCacheAnEmptyTree() => OnSta(() =>
+    {
+        using var host = new Host("[[Target]]");
+        host.Session.BeginPeerUpdate();
+        long before = host.Session.SemanticQueryCountForCensus;
+        Assert.Empty(host.Peer.GetChildren()!);
+        Assert.Equal(before, host.Session.SemanticQueryCountForCensus);
+        host.Session.ApplyPeerEdit(new EditorDocumentChange(0, 0, "prefix "));
+        host.Session.EndPeerUpdate();
+        host.Editor.PublishSemanticTextChanged();
+        Assert.Equal("[[Target]]", Assert.Single(host.Peer.GetChildren()!).GetName());
     });
 
     [Fact]

@@ -1163,8 +1163,9 @@ unchanged.
 The preceding Link attribute figures describe the superseded implementation.
 The current runner keeps the three 0.5 ms line StyleId ceilings, replaces the
 8 MiB search with a complete Hyperlink inventory after an edit (1000 ms), and
-adds post-edit local-link reads at all three sizes (2 ms each). Both edits and
-lookup are inside the timed operation. Dense cases build and walk 1,000 and
+adds post-edit local-link reads at all three sizes (2 ms each). A bounded append/remove at document end and
+lookup are inside the timed operation; prefix edits deliberately trigger the
+core structure index's full fallback and are a separate pre-existing edit cost. Dense cases build and walk 1,000 and
 10,000 links in both directions, including Name/Enabled membership checks
-(1000 ms each; the runner's Bytes column holds link count for these two rows).
+(1000 ms each; LinkCount is the size parameter for these two rows).
 No missing case passes. Current measurements are pending the production run.

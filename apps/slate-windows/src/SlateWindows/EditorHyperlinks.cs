@@ -56,6 +56,12 @@ internal sealed class EditorHyperlinkTree
             if (candidate.Length > 0)
             { previous.TryAdd((candidate.StartOffset, candidate.EndOffset, candidate.Peer.Kind), candidate.Peer); }
         }
+        var uniqueStarts = new Dictionary<(int Start, Type Kind), EditorHyperlinkPeer?>();
+        foreach (EditorLinkSegment candidate in candidates.Where(candidate => candidate.Length > 0))
+        {
+            var startKey = (candidate.StartOffset, candidate.Peer.Kind);
+            if (!uniqueStarts.TryAdd(startKey, candidate.Peer)) { uniqueStarts[startKey] = null; }
+        }
         var retained = new HashSet<EditorHyperlinkPeer>();
         var ancestors = new Stack<EditorHyperlinkPeer>();
         foreach (EditorSemanticSpan span in window.Spans.Where(IsLink)
@@ -70,6 +76,18 @@ internal sealed class EditorHyperlinkTree
                 && (right > enclosing.End || span.StartUtf16 == enclosing.Start && right == enclosing.End)) { continue; }
             var key = (span.StartUtf16, right, span.Kind.GetType());
             if (!previous.TryGetValue(key, out EditorHyperlinkPeer? peer))
+            {
+                // Insertion at a TextSegment's end stays outside that segment.
+                // A canonical tag may nevertheless grow through the insertion.
+                // Reuse only an unambiguous surviving prefix, never an adjacent token.
+                if (uniqueStarts.TryGetValue((span.StartUtf16, span.Kind.GetType()), out EditorHyperlinkPeer? prefix)
+                    && prefix is not null && !retained.Contains(prefix) && prefix.End < right)
+                {
+                    peer = prefix;
+                    peer.Segment.Length = span.LengthUtf16;
+                }
+            }
+            if (peer is null)
             {
                 peer = new(this, _editor, _provider, _session.Document, span, ++_nextId);
                 _segments.Add(peer.Segment);
@@ -102,6 +120,7 @@ internal sealed class EditorHyperlinkTree
 
     internal List<AutomationPeer> RootChildren()
     {
+        WasExposed = true;
         if (!_provider.CanRead) { return []; }
         Ensure(0, _provider.Length);
         return _segments.Where(segment => ReferenceEquals(segment.Peer.Parent, _root))
@@ -232,7 +251,14 @@ internal sealed class EditorHyperlinkPeer : AutomationPeer, IInvokeProvider, IVa
         });
     }
 
-    protected override string GetNameCore() { VerifyLive(); return _document.GetText(Start, Math.Min(End - Start, 512)); }
+    protected override string GetNameCore()
+    {
+        VerifyLive();
+        int length = Math.Min(End - Start, 512);
+        if (length < End - Start && char.IsHighSurrogate(_document.GetCharAt(Start + length - 1))) { length--; }
+        string text = _document.GetText(Start, length);
+        return length < End - Start ? text + "…" : text;
+    }
     protected override AutomationControlType GetAutomationControlTypeCore() { VerifyLive(); return AutomationControlType.Hyperlink; }
     protected override string GetClassNameCore() { VerifyLive(); return "EditorHyperlink"; }
     protected override string GetAutomationIdCore() { VerifyLive(); return "EditorLink" + _id; }

@@ -47,7 +47,7 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
 
     internal bool CanRead => HasCurrentDocument && _session.SemanticReadsAvailable && !_editor.IsComposing;
 
-    private void VerifyCurrentDocument()
+    internal void VerifyCurrentDocument()
     {
         if (!HasCurrentDocument) { throw new ElementNotAvailableException("The editor document has been replaced or disposed."); }
     }
@@ -55,9 +55,10 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
     internal int Length => _session.Document.TextLength;
     internal IRawElementProviderSimple EnclosingElement => _enclosingElement();
     internal EditorHighlightWindow Inspect(int start, int end) => _session.InspectInRange(start, end);
+    internal void Track(ITextRangeProvider range) => AvalonTextRangeAccess.Track(range, _session.Document);
     internal EditorSemanticTextRange Wrap(ITextRangeProvider range)
     {
-        AvalonTextRangeAccess.Track(range, _session.Document);
+        Track(range);
         return new(range, this);
     }
     internal EditorSemanticTextRange Range(int start, int end)
@@ -195,9 +196,9 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
         _provider = provider;
     }
 
-    internal (int Start, int End) Bounds => AvalonTextRangeAccess.Bounds(_inner);
+    internal (int Start, int End) Bounds => AvalonTextRangeAccess.Bounds(Native);
     private static ITextRangeProvider Unwrap(ITextRangeProvider range) =>
-        range is EditorSemanticTextRange semantic ? semantic._inner : range;
+        range is EditorSemanticTextRange semantic ? semantic.Native : range;
 
     public object GetAttributeValue(int attributeId)
     {
@@ -346,24 +347,29 @@ internal sealed class EditorSemanticTextRange : ITextRangeProvider
         }
     }
 
-    public ITextRangeProvider Clone() => _provider.Wrap(_inner.Clone());
-    public bool Compare(ITextRangeProvider range) => _inner.Compare(Unwrap(range));
+    private ITextRangeProvider Native
+    {
+        get { _provider.VerifyCurrentDocument(); return _inner; }
+    }
+    public ITextRangeProvider Clone() => _provider.Wrap(Native.Clone());
+    public bool Compare(ITextRangeProvider range) => Native.Compare(Unwrap(range));
     public int CompareEndpoints(TextPatternRangeEndpoint endpoint, ITextRangeProvider targetRange, TextPatternRangeEndpoint targetEndpoint) =>
-        _inner.CompareEndpoints(endpoint, Unwrap(targetRange), targetEndpoint);
-    public void ExpandToEnclosingUnit(TextUnit unit) => _inner.ExpandToEnclosingUnit(unit);
+        Native.CompareEndpoints(endpoint, Unwrap(targetRange), targetEndpoint);
+    public void ExpandToEnclosingUnit(TextUnit unit) { Native.ExpandToEnclosingUnit(unit); _provider.Track(_inner); }
     public ITextRangeProvider? FindText(string text, bool backward, bool ignoreCase) =>
-        _inner.FindText(text, backward, ignoreCase) is { } found ? _provider.Wrap(found) : null;
-    public double[] GetBoundingRectangles() => _inner.GetBoundingRectangles();
+        Native.FindText(text, backward, ignoreCase) is { } found ? _provider.Wrap(found) : null;
+    public double[] GetBoundingRectangles() => Native.GetBoundingRectangles();
     public IRawElementProviderSimple[] GetChildren() => _provider.Links.Children(Bounds.Start, Bounds.End);
     public IRawElementProviderSimple GetEnclosingElement() =>
         _provider.Links.Enclosing(Bounds.Start, Bounds.End)?.Provider ?? _provider.EnclosingElement;
-    public string GetText(int maxLength) => _inner.GetText(maxLength);
-    public int Move(TextUnit unit, int count) => _inner.Move(unit, count);
-    public void MoveEndpointByRange(TextPatternRangeEndpoint endpoint, ITextRangeProvider targetRange, TextPatternRangeEndpoint targetEndpoint) =>
-        _inner.MoveEndpointByRange(endpoint, Unwrap(targetRange), targetEndpoint);
-    public int MoveEndpointByUnit(TextPatternRangeEndpoint endpoint, TextUnit unit, int count) => _inner.MoveEndpointByUnit(endpoint, unit, count);
-    public void Select() => _inner.Select();
-    public void AddToSelection() => _inner.AddToSelection();
-    public void RemoveFromSelection() => _inner.RemoveFromSelection();
-    public void ScrollIntoView(bool alignToTop) => _inner.ScrollIntoView(alignToTop);
+    public string GetText(int maxLength) => Native.GetText(maxLength);
+    public int Move(TextUnit unit, int count) { int moved = Native.Move(unit, count); _provider.Track(_inner); return moved; }
+    public void MoveEndpointByRange(TextPatternRangeEndpoint endpoint, ITextRangeProvider targetRange, TextPatternRangeEndpoint targetEndpoint)
+    { Native.MoveEndpointByRange(endpoint, Unwrap(targetRange), targetEndpoint); _provider.Track(_inner); }
+    public int MoveEndpointByUnit(TextPatternRangeEndpoint endpoint, TextUnit unit, int count)
+    { int moved = Native.MoveEndpointByUnit(endpoint, unit, count); _provider.Track(_inner); return moved; }
+    public void Select() => Native.Select();
+    public void AddToSelection() => Native.AddToSelection();
+    public void RemoveFromSelection() => Native.RemoveFromSelection();
+    public void ScrollIntoView(bool alignToTop) => Native.ScrollIntoView(alignToTop);
 }

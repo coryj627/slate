@@ -43,8 +43,8 @@ public class EditorSemanticSearchBenchmarks
 public class EditorSemanticDenseBenchmarks
 {
     private SemanticBenchmarkHost? _host;
-    [Params(1000, 10000)] public int Bytes { get; set; } // Link count; retained runner column name.
-    [GlobalSetup] public void Setup() => _host = new SemanticBenchmarkHost(Bytes, dense: true);
+    [Params(1000, 10000)] public int LinkCount { get; set; }
+    [GlobalSetup] public void Setup() => _host = new SemanticBenchmarkHost(LinkCount, dense: true);
     [Benchmark] public object DenseInventoryAndWalk() => _host!.DenseInventoryAndWalk();
     [GlobalCleanup] public void Cleanup() => _host?.Dispose();
 }
@@ -96,8 +96,9 @@ internal sealed class SemanticBenchmarkHost : IDisposable
     internal object LineStyleId() => _dispatcher!.Invoke(() => _line!.GetAttributeValue(EditorSemanticTextRange.StyleIdAttribute));
     private void Edit()
     {
-        _session!.Document.Insert(0, "x");
-        _session.Document.Remove(0, 1);
+        int end = _session!.Document.TextLength;
+        _session.Document.Insert(end, " ");
+        _session.Document.Remove(end, 1);
     }
     internal object? PostEditLocalLink() => _dispatcher!.Invoke(() =>
     {
@@ -147,13 +148,13 @@ internal static class EditorSemanticBudgets
         foreach (BenchmarkReport report in summaries.SelectMany(summary => summary.Reports))
         {
             string name = report.BenchmarkCase.Descriptor.WorkloadMethod.Name;
-            int bytes = (int)report.BenchmarkCase.Parameters["Bytes"];
+            int bytes = (int)report.BenchmarkCase.Parameters[name == "DenseInventoryAndWalk" ? "LinkCount" : "Bytes"];
             double? median = report.ResultStatistics?.Median / 1_000_000;
             double budget = name switch { "LineStyleId" => 0.5, "PostEditLocalLink" => 2, _ => 1000 };
             bool row = expected.Remove((name, bytes)) && median is not null && median <= budget;
             passed &= row;
             if (name == "LineStyleId" && median is { } value) { lineMedians[bytes] = value; }
-            Console.WriteLine($"W7-1 {name} {bytes} bytes p50 {median:F4} ms / {budget:F1} ms: {(row ? "PASS" : "MISS")}");
+            Console.WriteLine($"W7-1 {name} size={bytes} p50 {median:F4} ms / {budget:F1} ms: {(row ? "PASS" : "MISS")}");
         }
         passed &= expected.Count == 0;
         if (lineMedians.TryGetValue(1024 * 1024, out double one) && lineMedians.TryGetValue(8 * 1024 * 1024, out double eight))

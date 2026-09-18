@@ -100,11 +100,16 @@ internal sealed class SlateTextEditor : TextEditor
     internal bool IsComposing { get; private set; }
     internal Action<AutomationEvents>? AutomationEventForCensus { get; set; }
 
-    private void Composition_Started(object sender, TextCompositionEventArgs e) => IsComposing = true;
+    private void Composition_Started(object sender, TextCompositionEventArgs e)
+    {
+        IsComposing = true;
+        (UIElementAutomationPeer.FromElement(this) as SlateTextEditorAutomationPeer)?.InvalidateSemanticAvailability();
+    }
 
     private void Composition_Finished(object sender, TextCompositionEventArgs e)
     {
         IsComposing = false;
+        (UIElementAutomationPeer.FromElement(this) as SlateTextEditorAutomationPeer)?.InvalidateSemanticAvailability();
         _highlighting?.ResumeSemanticPublication();
     }
 
@@ -113,6 +118,7 @@ internal sealed class SlateTextEditor : TextEditor
         if (!TextArea.IsKeyboardFocusWithin)
         {
             IsComposing = false;
+            (UIElementAutomationPeer.FromElement(this) as SlateTextEditorAutomationPeer)?.InvalidateSemanticAvailability();
             _highlighting?.ResumeSemanticPublication();
         }
     }
@@ -149,6 +155,11 @@ internal sealed class SlateTextEditor : TextEditor
         {
             _suppressingCaretPublication = false;
             throw;
+        }
+
+        if (documentChanging || e.Property == HighlightSessionProperty)
+        {
+            (UIElementAutomationPeer.FromElement(this) as SlateTextEditorAutomationPeer)?.InvalidateSemanticOwner();
         }
 
         if (documentChanging)
@@ -491,6 +502,8 @@ internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
     private readonly AutomationPeer _textAreaPeer;
     private EditorSemanticTextProvider? _semanticProvider;
     private AvalonDocumentBufferSession? _semanticSession;
+    private int _ownerGeneration;
+    private bool _ownerTreeChanged;
 
     internal SlateTextEditorAutomationPeer(SlateTextEditor owner)
         : base(owner)
@@ -514,10 +527,28 @@ internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
 
     internal AutomationPeer ChildPeerFromProvider(IRawElementProviderSimple child) => PeerFromProvider(child);
 
+    internal void InvalidateSemanticAvailability()
+    {
+        WpfEditorPeerConnection.InvalidateChildren(this);
+        _semanticProvider?.Links.InvalidateChildren();
+    }
+
+    internal void InvalidateSemanticOwner()
+    {
+        _ownerTreeChanged |= _semanticProvider?.Links.WasExposed == true;
+        InvalidateSemanticAvailability();
+        int generation = ++_ownerGeneration;
+        _owner.Dispatcher.BeginInvoke(DispatcherPriority.DataBind, new Action(() =>
+        {
+            if (generation == _ownerGeneration && _ownerTreeChanged) { PublishSemanticStructureChanged(); }
+        }));
+    }
+
     internal void PublishSemanticStructureChanged()
     {
-        if (_semanticProvider?.Links.WasExposed != true) { return; }
-        _semanticProvider.Links.InvalidateChildren();
+        if (!_ownerTreeChanged && _semanticProvider?.Links.WasExposed != true) { return; }
+        _ownerTreeChanged = false;
+        InvalidateSemanticAvailability();
         if (AutomationPeer.ListenerExists(AutomationEvents.StructureChanged))
         {
             AutomationInteropProvider.RaiseStructureChangedEvent(ProviderFromPeer(this),

@@ -453,3 +453,31 @@ activation. The actual cross-process UIA3/axe editor journey passed with seven
 Hyperlink descendants, symmetric ordinary range comparisons, destination Value,
 RangeFromChild roundtrips and agreeing forward/backward walks. Full unit suite,
 new nine-case benchmarks, CI and renewed reviews are still in progress.
+
+### Hyperlink integration review round 1 (head 7c23147d)
+
+Standards confirmed replacement leaving cached old children, first enumeration
+during a peer update retaining an empty tree, native movement discarding anchor
+tracking, and a growing tag losing its peer identity. Spec independently confirmed
+line/paragraph expansion losing tracking and a 512-unit Name cutting a surrogate.
+Red witnesses reproduced stale replacement children in a headless editor and
+expanded deleted lines reading the next line; the visible case was masked by
+incidental layout. Fixes invalidate owner/availability transitions independently
+of TextPattern lookup, publish replacement structure after binding settles, mark
+even unavailable enumeration as exposure, normalize native mutating operations,
+and bound names at a complete Unicode scalar. Exact interval identity is tried
+first; only an unambiguous canonical surviving prefix can retain a growing span.
+New tests cover headless/visible replacement, EOF deletion, Line/Paragraph deletion,
+empty IME completion, peer-update first enumeration and tag growth versus adjacency.
+
+The full-suite census also found the new EditorLink automation-ID construction
+missing from the surface register; it is now assigned to Editor document. The
+post-edit benchmark uses a bounded end edit; a prefix edit invokes the core's
+existing whole-structure fallback and does not isolate bounded semantic lookup.
+
+Round-one fix verification: all 91 focused provider/interaction/surface-census
+facts pass; the renewed cross-process UIA3/axe journey also passes, including
+new-link discovery after replacing editor text. The first integration head's CI
+app lane passed 2,984 tests with only the now-corrected automation-ID register
+failure. Its Codoki summary was Safe to merge, 5/5. Revised-head CI, benchmark
+measurements and the next independent review remain required.
