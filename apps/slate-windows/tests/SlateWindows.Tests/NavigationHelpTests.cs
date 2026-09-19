@@ -110,9 +110,12 @@ public sealed class NavigationHelpTests
             }
             catch (Exception exception) { failure = exception; }
         });
+        // A background thread: a hung action fails this test at Join and
+        // must not keep the test host alive until the lane's timeout.
+        thread.IsBackground = true;
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)));
+        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "The STA editor operation did not finish.");
         if (failure is not null) { ExceptionDispatchInfo.Capture(failure).Throw(); }
     }
 

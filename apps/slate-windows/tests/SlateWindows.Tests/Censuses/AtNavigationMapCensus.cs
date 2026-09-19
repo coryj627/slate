@@ -29,9 +29,18 @@ public sealed class AtNavigationMapCensus
         "Editor text and Outline heading navigation", "Panel lists and links", "Data grids and tables", "Sidebar trees",
     ];
 
+    // The adjustable action is an action too: VoiceOver's increment/decrement
+    // on a divider, whose Windows twin is a focusable split handle.
     private static readonly Regex Construction = new(
-        @"(?<rotor>\.accessibilityRotor\s*\()|(?<action>\.accessibilityAction\s*(?:\(|\{)|\.accessibilityActions\s*(?:\(|\{)|\bNSAccessibilityCustomAction\s*\()|(?<content>\.accessibilityCustomContent\s*\(|\bAXCustomContent\s*\()",
+        @"(?<rotor>\.accessibilityRotor\s*\()|(?<action>\.accessibilityAction\s*(?:\(|\{)|\.accessibilityActions\s*(?:\(|\{)|\.accessibilityAdjustableAction\s*(?:\(|\{)|\bNSAccessibilityCustomAction\s*\()|(?<content>\.accessibilityCustomContent\s*\(|\bAXCustomContent\s*\()",
         RegexOptions.CultureInvariant);
+
+    // Parsed once per path for the test process: the sources are immutable
+    // while the censuses run, and every anchor of every row reads them.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, XDocument> Documents = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> Texts = new(StringComparer.OrdinalIgnoreCase);
+    private static XDocument LoadXaml(string path) => Documents.GetOrAdd(path, static p => XDocument.Load(p));
+    private static string ReadText(string path) => Texts.GetOrAdd(path, static p => File.ReadAllText(p));
 
     private static Row[] ReadRows(string text) => text.Split('\n')
         .SkipWhile(line => !line.StartsWith("| Group |", StringComparison.Ordinal)).Skip(2)
@@ -44,7 +53,7 @@ public sealed class AtNavigationMapCensus
             return new Row(cells[0], cells[1], cells[2], cells[3], cells[4], cells[5], cells[6], cells[7], cells[8], cells[9], cells[10]);
         }).ToArray();
 
-    private static Row[] Rows() => ReadRows(File.ReadAllText(Path.Combine(PlanRoot, "at_navigation_map.md")));
+    private static Row[] Rows() => ReadRows(ReadText(Path.Combine(PlanRoot, "at_navigation_map.md")));
 
     private static Site[] Sites(string path, string source)
     {
@@ -127,14 +136,14 @@ public sealed class AtNavigationMapCensus
         {
             if (!row.Evidence.Contains("../25_bases_grid_contracts.md", StringComparison.Ordinal)
                 || !row.Mechanism.Contains("D-19", StringComparison.Ordinal)
-                || !File.ReadAllText(Path.Combine(PlanRoot, "..", "25_bases_grid_contracts.md")).Contains("**D-19**", StringComparison.Ordinal))
+                || !ReadText(Path.Combine(PlanRoot, "..", "25_bases_grid_contracts.md")).Contains("**D-19**", StringComparison.Ordinal))
             {
                 Fail("designation has no recorded owner reason");
             }
         }
         Match checklist = Regex.Match(row.Checklist, @"^(reports/[a-z0-9_]+\.md)#([1-9][0-9]*)$");
         if (!checklist.Success || !SafeSourcePath(PlanRoot, checklist.Groups[1].Value, out string checklistPath)
-            || !Regex.IsMatch(File.ReadAllText(checklistPath), @"^\| " + checklist.Groups[2].Value + @" \|", RegexOptions.Multiline))
+            || !Regex.IsMatch(ReadText(checklistPath), @"^\| " + checklist.Groups[2].Value + @" \|", RegexOptions.Multiline))
         {
             Fail("missing numbered checklist item " + row.Checklist);
         }
@@ -176,7 +185,7 @@ public sealed class AtNavigationMapCensus
         string name = selector.Groups[3].Value;
         if (selector.Groups[2].Value is "id" or "menu" or "key" && Path.GetExtension(path) == ".xaml")
         {
-            XElement[] matches = XDocument.Load(path).Descendants().Where(element => selector.Groups[2].Value switch
+            XElement[] matches = LoadXaml(path).Descendants().Where(element => selector.Groups[2].Value switch
             {
                 "id" => (string?)element.Attribute("AutomationProperties.AutomationId") == name,
                 "menu" => element.Name.LocalName == "MenuItem" && (string?)element.Attribute("Header") == name,
@@ -231,7 +240,7 @@ public sealed class AtNavigationMapCensus
     {
         for (INamedTypeSymbol? current = type as INamedTypeSymbol; current is not null; current = current.BaseType)
         {
-            if (current.ContainingAssembly.Name is not ("PresentationCore" or "PresentationFramework")) { continue; }
+            if (current.ContainingAssembly?.Name is not ("PresentationCore" or "PresentationFramework")) { continue; }
             string ns = current.ContainingNamespace.ToDisplayString();
             if (ns is not ("System.Windows.Controls" or "System.Windows.Automation.Peers")) { continue; }
             string control = current.Name.EndsWith("AutomationPeer", StringComparison.Ordinal)
@@ -361,12 +370,28 @@ public sealed class AtNavigationMapCensus
             .accessibilityAction { }
             .accessibilityActions { Button("Delete") {} }
             NSAccessibilityCustomAction(name: name) { }
+            .accessibilityAdjustableAction { direction in }
             .accessibilityCustomContent("Source", value)
             AXCustomContent(label: "Connects to", value: value)
             // .accessibilityActions { }
             """;
-        Assert.Equal(new[] { "rotor", "action", "action", "action", "action", "content", "content" }, Sites("View.swift", source).Select(site => site.Group));
-        Assert.Equal(Enumerable.Range(4, 7).Select(line => "View.swift:" + line), Sites("View.swift", source).Select(site => site.Source));
+        Assert.Equal(new[] { "rotor", "action", "action", "action", "action", "action", "content", "content" }, Sites("View.swift", source).Select(site => site.Group));
+        Assert.Equal(Enumerable.Range(4, 8).Select(line => "View.swift:" + line), Sites("View.swift", source).Select(site => site.Source));
+    }
+
+    /// <summary>A constructed type that does not bind in the shell compilation
+    /// (a missing reference, a generated partial not yet under obj/) is an
+    /// error type with no containing assembly: it supplies no native evidence
+    /// and must not crash the whole claim census.</summary>
+    [Fact]
+    public void AnUnresolvedConstructedTypeYieldsNoNativeEvidenceInsteadOfCrashing()
+    {
+        SyntaxTree tree = CSharpSyntaxTree.ParseText("class Uses { object Field = new Missing(); }");
+        CSharpCompilation compilation = ShellCompilation.Compilation.RemoveAllSyntaxTrees().AddSyntaxTrees(tree);
+        SemanticModel model = compilation.GetSemanticModel(tree);
+        TypeSyntax type = tree.GetRoot().DescendantNodes().OfType<ObjectCreationExpressionSyntax>().Single().Type;
+        Assert.IsAssignableFrom<IErrorTypeSymbol>(model.GetTypeInfo(type).Type);
+        Assert.Empty(FrameworkPatterns(model.GetTypeInfo(type).Type));
     }
 
     [Fact]
@@ -403,7 +428,15 @@ public sealed class AtNavigationMapCensus
     public void GeneratedFilesOutsideTheAuthoredSourceSetAreInvalidScopes()
     {
         string root = SourceText.ShellSourceRoot();
-        string generated = Directory.EnumerateFiles(Path.Combine(root, "obj"), "*.g.cs", SearchOption.AllDirectories).First();
+        // The authored set never includes obj/: pinned directly, and through a
+        // real generated file when a build has left one behind (a clean tree,
+        // or a non-default intermediate directory, has none to offer).
+        Assert.DoesNotContain(ShellCompilation.Sources, source =>
+            source.Relative.StartsWith("obj/", StringComparison.Ordinal) || source.Relative.Contains("/obj/", StringComparison.Ordinal));
+        string objRoot = Path.Combine(root, "obj");
+        string? generated = Directory.Exists(objRoot)
+            ? Directory.EnumerateFiles(objRoot, "*.g.cs", SearchOption.AllDirectories).FirstOrDefault() : null;
+        if (generated is null) { return; }
         string relative = Path.GetRelativePath(root, generated).Replace('\\', '/');
         Assert.False(ReadScope(relative + "#class:App", new(StringComparer.Ordinal), new(StringComparer.Ordinal)));
     }
