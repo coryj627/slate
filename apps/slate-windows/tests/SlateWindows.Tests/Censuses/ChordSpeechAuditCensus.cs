@@ -41,7 +41,7 @@ public sealed class ChordSpeechAuditCensus
     private static IEnumerable<string> CSharpViolations(CompilationUnitSyntax root, SemanticModel model, string relative)
     {
         foreach (ExpressionSyntax expression in root.DescendantNodes().OfType<ExpressionSyntax>()
-            .Where(node => node is LiteralExpressionSyntax or InterpolatedStringExpressionSyntax
+            .Where(node => node is LiteralExpressionSyntax or InterpolatedStringExpressionSyntax or InvocationExpressionSyntax
                 || node.IsKind(SyntaxKind.AddExpression)))
         {
             if (IsDictionaryDefinition(expression, relative)) { continue; }
@@ -68,9 +68,54 @@ public sealed class ChordSpeechAuditCensus
             BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.AddExpression) =>
                 (TextOf(binary.Left, model) ?? "A") + (TextOf(binary.Right, model) ?? "A"),
             ParenthesizedExpressionSyntax parenthesized => TextOf(parenthesized.Expression, model),
+            InvocationExpressionSyntax invocation => InvocationText(invocation, model),
             _ => null,
         };
     }
+
+    /// <summary>The BCL's well-known string producers, composed the way the
+    /// operators are — string.Concat, string.Join, string.Format with its
+    /// holes filled from the arguments, and a StringBuilder Append chain
+    /// ending in ToString — so a chord spelled through them is a chord.
+    /// Anything else stays opaque, never silently clean. Known holes: a
+    /// display-form chord ("Ctrl+Enter") in a speech attribute, and a
+    /// lower-case key, are not this regex's business.</summary>
+    private static string? InvocationText(InvocationExpressionSyntax invocation, SemanticModel model)
+    {
+        if (model.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method) { return null; }
+        ExpressionSyntax[] arguments = [.. invocation.ArgumentList.Arguments.Select(argument => argument.Expression)];
+        string Part(ExpressionSyntax argument) => TextOf(argument, model) ?? "A";
+        if (method.ContainingType.SpecialType == SpecialType.System_String)
+        {
+            int format = Array.FindIndex([.. method.Parameters], parameter => parameter.Name == "format");
+            switch (method.Name)
+            {
+                case "Concat":
+                    return string.Concat(arguments.Select(Part));
+                case "Join" when arguments.Length >= 2:
+                    return string.Join(Part(arguments[0]), arguments.Skip(1).Select(Part));
+                case "Format" when format >= 0 && arguments.Length > format && TextOf(arguments[format], model) is { } template:
+                    return Regex.Replace(template, @"\{(\d+)[^}]*\}", hole =>
+                        int.Parse(hole.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) is int index
+                            && format + 1 + index < arguments.Length ? Part(arguments[format + 1 + index]) : "A");
+            }
+            return null;
+        }
+        return method.ContainingType.ToDisplayString() == "System.Text.StringBuilder" && method.Name == "ToString"
+            && invocation.Expression is MemberAccessExpressionSyntax { Expression: { } chain }
+            ? AppendChainText(chain, model) : null;
+    }
+
+    private static string? AppendChainText(ExpressionSyntax chain, SemanticModel model) => chain switch
+    {
+        ParenthesizedExpressionSyntax parenthesized => AppendChainText(parenthesized.Expression, model),
+        ObjectCreationExpressionSyntax creation when model.GetTypeInfo(creation).Type?.ToDisplayString() == "System.Text.StringBuilder" =>
+            creation.ArgumentList is { Arguments.Count: 1 } seed ? TextOf(seed.Arguments[0].Expression, model) ?? "A" : "",
+        InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Append" or "AppendLine", Expression: { } receiver } } append
+            when append.ArgumentList.Arguments.Count <= 1 && AppendChainText(receiver, model) is { } head =>
+            head + (append.ArgumentList.Arguments.Count == 1 ? TextOf(append.ArgumentList.Arguments[0].Expression, model) ?? "A" : ""),
+        _ => null,
+    };
 
     private static bool IsDictionaryDefinition(ExpressionSyntax expression, string relative)
     {
@@ -150,6 +195,13 @@ public sealed class ChordSpeechAuditCensus
     [InlineData("$\"Use Control {key}\"")]
     [InlineData("\"Control \" + key")]
     [InlineData("prefix + \" Enter\"")]
+    [InlineData("string.Concat(\"Control \", key)")]
+    [InlineData("string.Concat(\"Control \", \"Alt \", \"Enter\")")]
+    [InlineData("string.Format(\"Control {0}\", key)")]
+    [InlineData("string.Format(\"{0} Enter\", prefix)")]
+    [InlineData("string.Join(\" \", \"Control\", key)")]
+    [InlineData("new System.Text.StringBuilder().Append(\"Control \").Append(key).ToString()")]
+    [InlineData("new System.Text.StringBuilder().Append(\"Use \").Append(prefix).Append(\" Enter\").ToString()")]
     public void AddedFilesCannotHideOrdinaryRawConcatenatedOrInterpolatedChords(string expression)
     {
         string source = "class NewHelp { const string prefix = \"Control\"; string Help(string key) => " + expression + "; }";
