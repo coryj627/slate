@@ -32,8 +32,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
         string[] NativePatterns,
         string[] NameSources,
         string[] Evidence,
-        string[] AxeLabels,
-        bool AxeScanned);
+        string[] AxeLabels);
 
     /// <summary>The manifest — sourced from the shell, not from the matrix.</summary>
     private static readonly Surface[] Manifest =
@@ -50,8 +49,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["SelectionItem", "ExpandCollapse"],
             ["CanvasPhrase.CardReference", "CanvasPhrase.RowStatus"],
             ["CanvasSurfaces_OutlineTreeSelectionAndActivation_AreClean", "ThePlanServesMacsOrderPerSurfaceAndTarget"],
-            ["canvas-outline", "canvas-degraded"],
-            true),
+            ["canvas-outline", "canvas-degraded"]),
         new(
             "Canvas table (W6-1 PR B)",
             ["CanvasTableGrid"],
@@ -60,8 +58,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["Grid", "Table", "Selection", "Invoke"],
             ["canvas_table_rows", "speakable_name"],
             ["CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean", "TheRowMenuEqualsThePlansGridProjectionAndToggleMarkIsLive", "OpenSampleExposesOutlineTableAndScene"],
-            ["canvas-table"],
-            true),
+            ["canvas-table"]),
         new(
             "Canvas navigator, filter and Where-am-I (W6-1 PR C)",
             ["CanvasFilterField", "CanvasFilterSummary", "CanvasClearFilter", "CanvasWhereAmIPanel", "CanvasWhereAmIReadback", "CanvasWhereAmIClose", "CanvasCommitMode", "CanvasCancelMode"],
@@ -70,8 +67,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["Value", "Invoke"],
             ["Filter cards", "Filter results"],
             ["CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean", "CanvasModes_MoveResizeAndConnectPicker_AreReachable", "TheZoomVerbsSpeakCoresZoomEventWithTheirContext"],
-            ["canvas-navigator", "canvas-move-mode-active"],
-            true),
+            ["canvas-navigator", "canvas-move-mode-active"]),
         new(
             "Canvas visual (W6-1 §D)",
             [],
@@ -83,8 +79,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
             [],
             ["speakable_name", "Zoom N percent"],
             ["CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheZoomValueIsCoresRenderMinusItsPeriod", "FitCanvasContainsAndCentresCoresBounds"],
-            ["canvas-visual"],
-            true),
+            ["canvas-visual"]),
         new(
             "Canvas card editor (W6-1 §E)",
             ["CanvasCardEditorSheet", "CanvasCardEditorText"],
@@ -93,8 +88,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["Value", "Text"],
             ["card's reference"],
             ["CanvasAuthoring_NewCanvasCardEditorAndUndo_AreReachable", "AuthoringLoopThenUndoChainRestoresTheCommittedBytes"],
-            ["canvas-card-editor"],
-            true),
+            ["canvas-card-editor"]),
         new(
             "Canvas prompt sheets (W6-1 §F, §G, §G2)",
             ["CanvasPromptSheet", "CanvasPromptDraft", "CanvasPromptChoices", "CanvasPromptClearMarks"],
@@ -103,8 +97,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["Value", "Selection", "SelectionItem", "Invoke"],
             ["Title", "Name", "Status"],
             ["CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable", "CanvasVerbs_GroupConnectDuplicateLinkConvertAndUndo_AreReachable", "TheSubmitFamilyAndTheChoiceStatusAreShapedAsFrozen"],
-            ["canvas-marks-list", "canvas-verbs-group-prompt"],
-            true),
+            ["canvas-marks-list", "canvas-verbs-group-prompt"]),
         new(
             "Canvas pickers (W6-1 §E, §F, §G2)",
             ["CanvasCardPickerSheet", "CanvasCardPickerFilter", "CanvasCardPickerRows"],
@@ -113,8 +106,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["Value", "Selection", "SelectionItem"],
             ["SheetName", "FilterName", "RowsName", "Label", "Status"],
             ["CanvasModes_MoveResizeAndConnectPicker_AreReachable", "CanvasVerbs_GroupConnectDuplicateLinkConvertAndUndo_AreReachable", "AStaleVaultPickRefusesPickDifferentTarget"],
-            ["canvas-card-picker", "canvas-verbs-note-picker"],
-            true),
+            ["canvas-card-picker", "canvas-verbs-note-picker"]),
         new(
             "Canvas context menus and row actions (W6-1 §E, §G2)",
             [],
@@ -123,8 +115,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["Invoke"],
             ["CanvasContextMenuPlan.Label"],
             ["TheOutlineMenuEqualsThePlan", "TheRowMenuEqualsThePlansGridProjectionAndToggleMarkIsLive", "AConnectionRowsVerbsActOnTheCapturedEdgeFromItsSeatedSource", "CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean"],
-            [],
-            false),
+            []),
     ];
 
     private static readonly Dictionary<string, string> BaseControlTypes = new()
@@ -146,21 +137,10 @@ public sealed class WcMatrixCanvasEvidenceCensus
 
     private static string RepoRoot => SourceText.RepoRoot();
 
-    private static List<Row> CanvasRows()
-    {
-        string matrix = File.ReadAllText(Path.Combine(RepoRoot, "docs", "plans", "18_windows_port", "w_c_matrix.md"));
-        var rows = new List<Row>();
-        foreach (string line in matrix.Split('\n'))
-        {
-            if (!line.StartsWith("| Canvas ", StringComparison.Ordinal))
-            {
-                continue;
-            }
-            string[] cells = line.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToArray();
-            rows.Add(new Row(cells[0], cells));
-        }
-        return rows;
-    }
+    /// <summary>The canvas rows, from the shared parser — escaped pipes and
+    /// all, so a row counts the same cells in every census.</summary>
+    private static List<Row> CanvasRows() =>
+        WcMatrixEvidenceCensus.MatrixRows("Canvas ").Select(cells => new Row(cells[0], cells)).ToList();
 
     private static string ShellText()
     {
@@ -168,21 +148,6 @@ public sealed class WcMatrixCanvasEvidenceCensus
         var all = new System.Text.StringBuilder();
         foreach (string path in Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
             .Concat(Directory.GetFiles(root, "*.xaml", SearchOption.AllDirectories)))
-        {
-            if (path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
-            {
-                continue;
-            }
-            all.Append(File.ReadAllText(path)).Append('\n');
-        }
-        return all.ToString();
-    }
-
-    private static string TestText()
-    {
-        string root = Path.Combine(RepoRoot, "apps", "slate-windows", "tests");
-        var all = new System.Text.StringBuilder();
-        foreach (string path in Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories))
         {
             if (path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
             {
@@ -294,10 +259,15 @@ public sealed class WcMatrixCanvasEvidenceCensus
         Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
 
+    /// <summary>The manifest's evidence names and axe labels are in each
+    /// row's evidence cell. That every name there binds to an executable
+    /// test, that every label is scanned and that the human cells are
+    /// Pending or recorded is the shared gate's
+    /// (<see cref="WcMatrixEvidenceCensus.EveryRowHasTenCellsAndExecutableEvidence"/>),
+    /// which covers these rows in its own run.</summary>
     [Fact]
     public void EveryEvidenceNameResolvesAndEveryAxeLabelIsScanned()
     {
-        new WcMatrixEvidenceCensus().EveryRowHasTenCellsAndExecutableEvidence();
         foreach (Surface surface in Manifest)
         {
             Row row = Assert.Single(CanvasRows(), r => r.Title == surface.Title);
@@ -310,10 +280,12 @@ public sealed class WcMatrixCanvasEvidenceCensus
 
     /// <summary>§H TH-10 (H8, IH-20, IH-46): the manual AT checklist carries
     /// T's ten items one to one — the three clauses of T's first item as
-    /// three checks — with the five dictated commands verbatim, every
-    /// human cell Pending until a named run, the field form's header
-    /// fields present, and every automated twin resolving in the test
-    /// tree; the matrix's wave-close status links it.</summary>
+    /// three checks — with the five dictated commands verbatim and the
+    /// field form's header fields present; the matrix's wave-close status
+    /// links it. Its rows' automated twins and human cells are the shared
+    /// gate's (<see cref="WcMatrixEvidenceCensus.ChecklistRowsHaveSpecRoutesEvidenceAndUninventedHumanResults"/>),
+    /// which binds each twin to an executable test instead of matching
+    /// text a comment or a string could carry.</summary>
     [Fact]
     public void TheAtChecklistCarriesTsTenItemsWithTheirTwinsPending()
     {
@@ -322,18 +294,14 @@ public sealed class WcMatrixCanvasEvidenceCensus
         string text = File.ReadAllText(path);
         // The checklist retains its recording fields. Completed cells link
         // independent, reader-specific records validated by the shared gate.
-        var fields = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (string field in (string[])["Tester", "AT", "OS", "Build", "Corpus", "Method", "Run date", "Evidence reference"])
         {
             Match value = Regex.Match(text, @"\*\*" + Regex.Escape(field) + @":\*\* ([^·\n]+)");
             Assert.True(value.Success && value.Groups[1].Value.Trim().Length > 0, $"the checklist's {field} field is missing or empty");
-            fields[field] = value.Groups[1].Value.Trim();
         }
         var rows = text.Split('\n').Where(l => Regex.IsMatch(l, @"^\| \d+ \|")).Select(l => l.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToArray()).ToList();
         Assert.Equal(11, rows.Count);
         var tItems = new HashSet<int>();
-        string tests = TestText();
-        var failures = new List<string>();
         foreach (string[] row in rows)
         {
             Assert.Equal(9, row.Length);
@@ -341,30 +309,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
             {
                 tItems.Add(int.Parse(item, System.Globalization.CultureInfo.InvariantCulture));
             }
-            foreach (int human in (int[])[6, 7, 8])
-            {
-                WcMatrixEvidenceCensus.ValidateHumanCell(
-                    "w6_1_canvas_at_checklist.md#" + row[0], row[human],
-                    new[] { "Narrator", "NVDA", "JAWS" }[human - 6], Path.GetDirectoryName(path)!, failures);
-            }
-            // The automated twin is named — at least one resolving long
-            // name — or the row says "none — human only" in those words.
-            MatchCollection twins = Regex.Matches(row[5], "`([A-Za-z][A-Za-z0-9_]{14,})`");
-            Assert.True(
-                twins.Count > 0 || row[5].StartsWith("none — human only", StringComparison.Ordinal),
-                $"checklist row {row[0]}: no automated twin and no \"none — human only\"");
-            foreach (Match backticked in twins)
-            {
-                string name = backticked.Groups[1].Value;
-                Assert.True(
-                    Regex.IsMatch(tests, @"\b(void|Task)\s+" + name + @"\s*\(") || Regex.IsMatch(tests, @"\bclass\s+" + name + @"\b"),
-                    $"checklist row {row[0]}: the twin `{name}` resolves to no fact, journey or test class");
-            }
         }
-        Assert.True(failures.Count == 0, string.Join("\n", failures));
-        bool anyRun = rows.Any(row => row.Skip(6).Any(cell => !WcMatrixEvidenceCensus.IsPending(cell)));
-        Assert.True(WcMatrixEvidenceCensus.ChecklistHeaderMatchesRuns(fields["Tester"], fields["Run date"], anyRun),
-            "The checklist Tester / Run date must agree with its recorded human runs.");
         Assert.Equal(Enumerable.Range(1, 10), tItems.OrderBy(i => i));
         string voice = Assert.Single(rows, r => r[0] == "6")[3];
         foreach (string command in (string[])["\"Click 3\"", "\"Toggle Mark\"", "\"Connect To\"", "\"Delete Marked Cards\"", "\"Where am I\""])

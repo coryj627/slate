@@ -117,6 +117,8 @@ public sealed class TestEvidenceTests
         Assert.True(evidence.HasTestEvidence("Journey"));
         Assert.True(evidence.HasTestEvidence("ShellAccessibilityTests"));
         Assert.True(evidence.HasTestEvidence("Journeys"));
+        Assert.True(evidence.HasTestEvidence("tests/Journeys"));
+        Assert.False(evidence.HasTestEvidence("other/Journeys"));
         Assert.True(evidence.HasAxeLabel("graph-table"));
         Assert.False(evidence.HasAxeLabel("graph-connections"));
     }
@@ -262,6 +264,9 @@ public sealed class TestEvidenceTests
     [InlineData("thread = new System.Threading.Thread(() => { }); thread.Start();", false)]
     [InlineData("var alias = thread; alias.Start();", false)]
     [InlineData("var other = new System.Threading.Thread(() => { }); other.Start();", false)]
+    [InlineData("thread.IsBackground = true; thread.Start();", true)]
+    [InlineData("thread.Name = \"scan\"; thread.Start();", true)]
+    [InlineData("System.GC.KeepAlive(thread); thread.Start();", false)]
     public void OnlyTheStartedUnreassignedThreadCertifiesItsCallback(string route, bool expected)
     {
         string members = "[Fact] public void Journey() { var thread = new System.Threading.Thread(() => Scan()); "

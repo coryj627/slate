@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Concurrent;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -18,9 +19,12 @@ namespace SlateWindows.Tests;
 /// currently uses the standard Fact/Theory attributes.</summary>
 internal sealed class TestEvidence
 {
+    private static readonly ConcurrentDictionary<string, HashSet<string>> FixtureStems = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly CSharpCompilation _compilation;
     private readonly IAssemblySymbol _xunit;
     private readonly IMethodSymbol[] _tests;
+    private readonly Lazy<HashSet<string>> _names;
     private readonly Lazy<HashSet<string>> _axeLabels;
 
     internal TestEvidence(CSharpCompilation compilation)
@@ -34,21 +38,39 @@ internal sealed class TestEvidence
                 .OfType<MethodDeclarationSyntax>())
             .Select(method => compilation.GetSemanticModel(method.SyntaxTree).GetDeclaredSymbol(method))
             .OfType<IMethodSymbol>().Where(method => IsTest(method, fact))];
+        _names = new(() => _tests.SelectMany(Names).ToHashSet(StringComparer.Ordinal));
         _axeLabels = new(FindAxeLabels);
     }
 
-    internal bool HasTestEvidence(string name) => _tests.Any(method => Matches(method, name));
+    /// <summary>A name is evidence when it is an executable test's method
+    /// name, its declaring type's name, or its file's stem — bare or
+    /// qualified by any of its directories (<c>Censuses/GraphNavigatorCensus</c>).</summary>
+    internal bool HasTestEvidence(string name) => _names.Value.Contains(name);
 
-    private static bool Matches(IMethodSymbol method, string name) =>
-        method.Name == name || method.ContainingType.Name == name
-        || method.DeclaringSyntaxReferences.Any(reference =>
-            reference.SyntaxTree.FilePath.Replace('\\', '/').EndsWith("/" + name + ".cs", StringComparison.Ordinal));
+    private static IEnumerable<string> Names(IMethodSymbol method)
+    {
+        yield return method.Name;
+        yield return method.ContainingType.Name;
+        foreach (SyntaxReference reference in method.DeclaringSyntaxReferences)
+        {
+            string path = reference.SyntaxTree.FilePath.Replace('\\', '/');
+            if (!path.EndsWith(".cs", StringComparison.Ordinal)) { continue; }
+            string stem = path[..^3];
+            for (int slash = stem.LastIndexOf('/'); slash >= 0; slash = slash > 0 ? stem.LastIndexOf('/', slash - 1) : -1)
+            {
+                yield return stem[(slash + 1)..];
+            }
+        }
+    }
 
     internal bool HasAxeLabel(string label) => _axeLabels.Value.Contains(label);
 
+    /// <summary>The fixture tree's file stems, enumerated once per root for
+    /// the test process: the tree is immutable while the censuses run.</summary>
     internal static bool HasFixture(string root, string name) =>
-        Directory.Exists(root) && Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-            .Any(path => string.Equals(Path.GetFileNameWithoutExtension(path), name, StringComparison.Ordinal));
+        Directory.Exists(root) && FixtureStems.GetOrAdd(Path.GetFullPath(root), static fullRoot =>
+            Directory.EnumerateFiles(fullRoot, "*", SearchOption.AllDirectories)
+                .Select(path => Path.GetFileNameWithoutExtension(path)).ToHashSet(StringComparer.Ordinal)).Contains(name);
 
     private bool IsTest(IMethodSymbol method, INamedTypeSymbol fact)
     {
@@ -293,14 +315,17 @@ internal sealed class TestEvidence
             return null;
         }
         // An alias, reassignment or ref/out escape is not a proof of which
-        // thread Start invokes. Fail closed instead of interpreting it.
+        // thread Start invokes. Fail closed instead of interpreting it. A
+        // Thread member on the local — Start, Join, SetApartmentState, or a
+        // property such as IsBackground or Name — neither aliases nor rebinds it.
         foreach (IdentifierNameSyntax reference in body.DescendantNodes().OfType<IdentifierNameSyntax>()
             .Where(node => SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(node).Symbol, local.Local)))
         {
-            if (reference.Parent is not MemberAccessExpressionSyntax member || member.Expression != reference
-                || member.Parent is not InvocationExpressionSyntax invocation
-                || model.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method
-                || !SymbolEqualityComparer.Default.Equals(method.ContainingType, thread)) { return null; }
+            if (reference.Parent is not MemberAccessExpressionSyntax member || member.Expression != reference) { return null; }
+            ISymbol? accessed = member.Parent is InvocationExpressionSyntax invocation
+                ? model.GetSymbolInfo(invocation).Symbol : model.GetSymbolInfo(member).Symbol;
+            if (accessed is not (IMethodSymbol or IPropertySymbol)
+                || !SymbolEqualityComparer.Default.Equals(accessed.ContainingType, thread)) { return null; }
         }
         return callback;
     }

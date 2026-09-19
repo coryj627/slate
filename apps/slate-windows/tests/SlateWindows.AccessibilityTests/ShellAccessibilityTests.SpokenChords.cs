@@ -125,8 +125,8 @@ public sealed partial class ShellAccessibilityTests
                 string? spoken = row.GetProperty("windowsSpoken").GetString();
                 string expected = spoken is null ? label : label + ", " + spoken;
                 palette.Patterns.Value.Pattern.SetValue(label);
-                Assert.True(SpinWait.SpinUntil(() => results.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.ListItem))
-                    .Any(item => item.Name == expected), TimeSpan.FromSeconds(5)), "No palette row with its composed Name: " + expected);
+                Assert.True(SpinWait.SpinUntil(() => PaletteRowNamed(results, automation, expected), TimeSpan.FromSeconds(5)),
+                    "No palette row with its composed Name: " + expected);
             }
             AssertAxeClean(process, "spoken-chords-palette");
             PressKey(VirtualKeyShort.ESCAPE);
@@ -162,6 +162,26 @@ public sealed partial class ShellAccessibilityTests
                 process.Dispose();
             }
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>Whether the palette's results show a row whose Name is the
+    /// composed label. A poll's predicate, so a row the filter is still
+    /// re-realizing — its Name transiently unsupported, its peer already
+    /// replaced — answers "not yet" and the wait retries, instead of the
+    /// transient fault escaping the poll: CI's gate failed this journey on
+    /// two branches within sixteen minutes on 2026-09-19 with
+    /// PropertyNotSupportedException('Name') thrown from here.</summary>
+    private static bool PaletteRowNamed(AutomationElement results, UIA3Automation automation, string expected)
+    {
+        try
+        {
+            return results.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                .Any(item => item.Properties.Name.ValueOrDefault == expected);
+        }
+        catch (Exception exception) when (IsTransientUiaFault(exception))
+        {
+            return false;
         }
     }
 }

@@ -22,9 +22,10 @@ caret/focus behavior, and any braille output. Each verified result needs a
 transcript reference. A partial pass must name the unexecuted checks. Link
 this dated record from the corresponding checklist cell and matrix cell;
 preserve earlier runs and record the fix commit on every retest.
-Use the exact matrix surface title, or a checklist key such as
-`w1_shell_at_checklist.md#1`, in the first column. Add separate rows for each
-verified matrix surface and checklist item; link the transcript in column 4.
+Use the exact matrix surface title, or the bare checklist key (for example
+w1_shell_at_checklist.md#1; backticks around it are tolerated), in the first
+column. Add separate rows for each verified matrix surface and checklist
+item; link the transcript in column 4 as a file beside this record.
 A run for another surface or another reader cannot certify this one.
 
 NVDA and JAWS are separate acceptance targets. Narrator is the W8-6 smoke

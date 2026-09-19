@@ -87,21 +87,10 @@ public sealed class WcMatrixGraphEvidenceCensus
 
     private static string RepoRoot => SourceText.RepoRoot();
 
-    private static List<Row> GraphRows()
-    {
-        string matrix = File.ReadAllText(Path.Combine(RepoRoot, "docs", "plans", "18_windows_port", "w_c_matrix.md"));
-        var rows = new List<Row>();
-        foreach (string line in matrix.Split('\n'))
-        {
-            if (!line.StartsWith("| Graph ", StringComparison.Ordinal))
-            {
-                continue;
-            }
-            string[] cells = line.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToArray();
-            rows.Add(new Row(cells[0], cells));
-        }
-        return rows;
-    }
+    /// <summary>The graph rows, from the shared parser — escaped pipes and
+    /// all, so a row counts the same cells in every census.</summary>
+    private static List<Row> GraphRows() =>
+        WcMatrixEvidenceCensus.MatrixRows("Graph ").Select(cells => new Row(cells[0], cells)).ToList();
 
     private static string TreeText(params string[] segments)
     {
@@ -190,10 +179,15 @@ public sealed class WcMatrixGraphEvidenceCensus
         Assert.True(failures.Count == 0, string.Join("\n", failures));
     }
 
+    /// <summary>The manifest's evidence names and axe labels are in each
+    /// row's evidence cell. That every name there binds to an executable
+    /// test, that every label is scanned and that the human cells are
+    /// Pending or recorded is the shared gate's
+    /// (<see cref="WcMatrixEvidenceCensus.EveryRowHasTenCellsAndExecutableEvidence"/>),
+    /// which covers these rows in its own run.</summary>
     [Fact]
     public void EveryEvidenceNameResolvesAndEveryAxeLabelIsScanned()
     {
-        new WcMatrixEvidenceCensus().EveryRowHasTenCellsAndExecutableEvidence();
         foreach (Surface surface in Manifest)
         {
             Row row = Assert.Single(GraphRows(), r => r.Title == surface.Title);
@@ -203,6 +197,21 @@ public sealed class WcMatrixGraphEvidenceCensus
             }
         }
     }
+    /// <summary>The graph's manual AT checklist carries the spec's eleven
+    /// items and the matrix's wave-close status links it. Its rows' automated
+    /// twins, header fields and human cells are the shared gate's
+    /// (<see cref="WcMatrixEvidenceCensus.ChecklistRowsHaveSpecRoutesEvidenceAndUninventedHumanResults"/>).</summary>
+    [Fact]
+    public void TheAtChecklistCarriesTheSpecsElevenItemsAndTheMatrixLinksIt()
+    {
+        string path = Path.Combine(RepoRoot, "docs", "plans", "18_windows_port", "reports", "w6_2_graph_at_checklist.md");
+        Assert.True(File.Exists(path), "the W6-2 AT checklist is missing");
+        int rows = File.ReadAllText(path).Split('\n').Count(line => Regex.IsMatch(line, @"^\| \d+ \|"));
+        Assert.Equal(11, rows);
+        string matrix = File.ReadAllText(Path.Combine(RepoRoot, "docs", "plans", "18_windows_port", "w_c_matrix.md"));
+        Assert.Contains("reports/w6_2_graph_at_checklist.md", matrix);
+    }
+
     // --- W6-2 §F (F5, IGZ-3, IHB-2): every graph automation id has a row ------
 
     /// <summary>The one reviewed exclusion: the shell's right pane, W1's
