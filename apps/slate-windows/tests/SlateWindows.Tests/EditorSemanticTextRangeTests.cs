@@ -47,17 +47,23 @@ public sealed class EditorSemanticTextRangeTests
 
     /// <summary>Availability invalidation runs on every composition start and
     /// finish — every keystroke. It touches the root and the link peers whose
-    /// children a client has actually enumerated, not every link in the
-    /// document.</summary>
+    /// children were enumerated since the last reset, not every link in the
+    /// document. The baseline is taken after a first reset, not assumed: when
+    /// a UI Automation client is attached to the test process (an earlier
+    /// test's), WPF walks every peer's children on layout, and the full suite
+    /// saw all three links exposed before this fact's first reset.</summary>
     [Fact]
     public void AvailabilityInvalidationTouchesOnlyThePeersWhoseChildrenWereExposed() => OnSta(() =>
     {
         using var host = new Host("[[One]] and [[Two]] and [[Three]]", show: true);
         List<AutomationPeer> children = host.Peer.GetChildren();
         Assert.Equal(3, children.Count);
+        host.Peer.InvalidateSemanticAvailability();
+        // Nothing enumerated since that reset: the root alone.
         WpfEditorPeerConnection.InvalidationCountForCensus = 0;
         host.Peer.InvalidateSemanticAvailability();
         Assert.Equal(1, WpfEditorPeerConnection.InvalidationCountForCensus);
+        // One link's children enumerated since: the root and that link.
         Assert.Empty(children[1].GetChildren());
         WpfEditorPeerConnection.InvalidationCountForCensus = 0;
         host.Peer.InvalidateSemanticAvailability();

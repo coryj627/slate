@@ -23,6 +23,7 @@
     <!-- W7-3's live audit runs from the CI binary artifact, without a checkout. -->
     <Content Include="..\..\chords.json" Link="fixtures\chords.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\src\SlateWindows\MainWindow.xaml" Link="fixtures\MainWindow.xaml" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\src\SlateWindows\WorkspaceTemplates.xaml" Link="fixtures\WorkspaceTemplates.xaml" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\..\..\crates\slate-core\tests\fixtures\markdown\editor_semantics.md"
              Link="fixtures\editor_semantics.md"
              CopyToOutputDirectory="PreserveNewest" />

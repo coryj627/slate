@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Xml.Linq;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Conditions;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
 using FlaUI.Core.WindowsAPI;
@@ -27,6 +28,7 @@ public sealed partial class ShellAccessibilityTests
             .Concat(table.RootElement.GetProperty("chordSurface").EnumerateArray())
             .ToDictionary(row => row.GetProperty("id").GetString()!, row => row);
         XDocument xaml = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "fixtures", "MainWindow.xaml"));
+        XDocument templates = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "fixtures", "WorkspaceTemplates.xaml"));
         string Speech(string id) => rows[id].GetProperty("windowsSpoken").GetString()
             ?? throw new Xunit.Sdk.XunitException("No spoken chord for " + id);
         string LiteralHelp(string id) => xaml.Descendants().Single(element =>
@@ -75,15 +77,16 @@ public sealed partial class ShellAccessibilityTests
                 AutomationElement? menu = mainMenu.FindFirstChild(automation.ConditionFactory.ByName(group.Key));
                 Assert.NotNull(menu);
                 menu.Patterns.ExpandCollapse.Pattern.Expand();
-                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(80));
                 foreach (XElement declared in group)
                 {
                     string name = declared.Attribute("Header")!.Value.Replace("_", "");
-                    string expression = declared.Attribute("InputGestureText")!.Value;
-                    Assert.StartsWith("{cmd:ChordText ", expression);
-                    string id = expression[15..^1];
-                    AutomationElement? item = menu.FindFirstDescendant(automation.ConditionFactory.ByControlType(ControlType.MenuItem).And(automation.ConditionFactory.ByName(name)));
-                    Assert.NotNull(item);
+                    string id = ChordTextId(declared);
+                    // The popup realizes its peers on its own schedule: poll,
+                    // as every other Expand() in the journeys does.
+                    AutomationElement? item = FindDescendantWithin(menu,
+                        automation.ConditionFactory.ByControlType(ControlType.MenuItem).And(automation.ConditionFactory.ByName(name)),
+                        TimeSpan.FromSeconds(10));
+                    Assert.True(item is not null, "Menu item did not appear: " + group.Key + " > " + name);
                     Assert.Equal(rows[id].GetProperty("windows").GetString(), item.Properties.AcceleratorKey.Value);
                     checkedMenus++;
                 }
@@ -92,21 +95,22 @@ public sealed partial class ShellAccessibilityTests
             Assert.Equal(menuItems.Length, checkedMenus);
             PressKey(VirtualKeyShort.ESCAPE);
 
+            // The editor context menu's accelerators come from the templates
+            // fixture, as the main menu's come from MainWindow.xaml: a third
+            // chorded item is audited live the day it is declared.
+            (string AutomationId, string CommandId)[] contextItems = [.. templates.Descendants()
+                .Where(element => element.Name.LocalName == "MenuItem" && element.Attribute("InputGestureText") is not null)
+                .Select(element => ((string)element.Attribute("AutomationProperties.AutomationId")!, ChordTextId(element)))];
+            Assert.NotEmpty(contextItems);
+            Assert.All(contextItems, pair => Assert.False(string.IsNullOrEmpty(pair.AutomationId)));
             window.SetForeground();
             WaitForElement(window, "MarkdownEditor", TimeSpan.FromSeconds(10)).Focus();
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F10);
             AutomationElement desktop = automation.GetDesktop();
-            foreach ((string automationId, string commandId) in new[]
+            foreach ((string automationId, string commandId) in contextItems)
             {
-                ("EditorActivateAtCursor", "slate.editor.activateAtCaret"),
-                ("EditorPreviewEmbed", "slate.editor.previewEmbed"),
-            })
-            {
-                AutomationElement? item = null;
-                Assert.True(SpinWait.SpinUntil(() => (item = desktop.FindFirstDescendant(
-                    automation.ConditionFactory.ByAutomationId(automationId))) is not null, TimeSpan.FromSeconds(10)),
-                    "Editor context-menu item did not appear: " + automationId);
-                Assert.NotNull(item);
+                AutomationElement? item = FindDescendantWithin(desktop, automation.ConditionFactory.ByAutomationId(automationId), TimeSpan.FromSeconds(10));
+                Assert.True(item is not null, "Editor context-menu item did not appear: " + automationId);
                 Assert.Equal(rows[commandId].GetProperty("windows").GetString(), item.Properties.AcceleratorKey.Value);
             }
             PressKey(VirtualKeyShort.ESCAPE);
@@ -125,8 +129,12 @@ public sealed partial class ShellAccessibilityTests
                 string? spoken = row.GetProperty("windowsSpoken").GetString();
                 string expected = spoken is null ? label : label + ", " + spoken;
                 palette.Patterns.Value.Pattern.SetValue(label);
-                Assert.True(SpinWait.SpinUntil(() => PaletteRowNamed(results, automation, expected), TimeSpan.FromSeconds(5)),
-                    "No palette row with its composed Name: " + expected);
+                // One provider-side FindFirst per poll, not every row's Name
+                // read cross-process on every spin, for each of the rows.
+                AutomationElement? found = FindDescendantWithin(results,
+                    automation.ConditionFactory.ByControlType(ControlType.ListItem).And(automation.ConditionFactory.ByName(expected)),
+                    TimeSpan.FromSeconds(5));
+                Assert.True(found is not null, "No palette row with its composed Name: " + expected);
             }
             AssertAxeClean(process, "spoken-chords-palette");
             PressKey(VirtualKeyShort.ESCAPE);
@@ -165,23 +173,31 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
-    /// <summary>Whether the palette's results show a row whose Name is the
-    /// composed label. A poll's predicate, so a row the filter is still
-    /// re-realizing — its Name transiently unsupported, its peer already
-    /// replaced — answers "not yet" and the wait retries, instead of the
-    /// transient fault escaping the poll: CI's gate failed this journey on
-    /// two branches within sixteen minutes on 2026-09-19 with
-    /// PropertyNotSupportedException('Name') thrown from here.</summary>
-    private static bool PaletteRowNamed(AutomationElement results, UIA3Automation automation, string expected)
+    /// <summary>The command id a declared <c>{cmd:ChordText id}</c> gesture names.</summary>
+    private static string ChordTextId(XElement declared)
     {
-        try
+        string expression = declared.Attribute("InputGestureText")!.Value;
+        Assert.StartsWith("{cmd:ChordText ", expression);
+        return expression[15..^1];
+    }
+
+    /// <summary>A descendant UIA finds for the condition, polled with an
+    /// interval: each attempt is one cross-process FindFirst evaluated on
+    /// the provider side, and a transient fault — a popup still realizing
+    /// its peers, a list row the filter is re-realizing (CI's gate failed
+    /// this journey on two branches on 2026-09-19 with
+    /// PropertyNotSupportedException('Name')) — answers "not yet" and the
+    /// wait retries instead of the fault escaping it.</summary>
+    private static AutomationElement? FindDescendantWithin(AutomationElement scope, ConditionBase condition, TimeSpan timeout)
+    {
+        AutomationElement? found = null;
+        SpinWait.SpinUntil(() =>
         {
-            return results.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.ListItem))
-                .Any(item => item.Properties.Name.ValueOrDefault == expected);
-        }
-        catch (Exception exception) when (IsTransientUiaFault(exception))
-        {
-            return false;
-        }
+            try { found = scope.FindFirstDescendant(condition); }
+            catch (Exception exception) when (IsTransientUiaFault(exception)) { found = null; }
+            if (found is null) { Thread.Sleep(25); }
+            return found is not null;
+        }, timeout);
+        return found;
     }
 }
