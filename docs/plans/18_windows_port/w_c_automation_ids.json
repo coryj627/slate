@@ -61,6 +61,11 @@
   },
   {
     "Source": "Bases/DashboardSurfaceView.cs",
+    "Expression": "\"Dashboard\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/DashboardSurfaceView.cs",
     "Expression": "\"DashboardEmptyState\"",
     "Surface": "Bases surfaces (W4-6)"
   },
@@ -541,6 +546,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "BadgeChip",
+    "Surface": "Link & structure panels (W4-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "BaseMenu",
     "Surface": "Bases surfaces (W4-6)"
   },
@@ -572,6 +582,11 @@
   {
     "Source": "MainWindow.xaml",
     "Expression": "BasesDockLeafBody",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "BasesDockSurface",
     "Surface": "Bases surfaces (W4-6)"
   },
   {
@@ -816,6 +831,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "BulkRenamePreviewGrid",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "BulkRenamePropertiesMenuItem",
     "Surface": "Properties header + sheets (W4-4)"
   },
@@ -981,6 +1001,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "CitationBadge",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "CitationDetailsAbstract",
     "Surface": "Citation surfaces (W4-5)"
   },
@@ -1047,6 +1072,11 @@
   {
     "Source": "MainWindow.xaml",
     "Expression": "ConnectionsLeafBody",
+    "Surface": "Graph connections leaf (W6-2 PR B)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "ConnectionsLeafSurface",
     "Surface": "Graph connections leaf (W6-2 PR B)"
   },
   {
@@ -1196,6 +1226,16 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "FieldValueLink",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FieldValueText",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "FileMenu",
     "Surface": "Main window and menu bar"
   },
@@ -1237,6 +1277,11 @@
   {
     "Source": "MainWindow.xaml",
     "Expression": "GraphInspectorBody",
+    "Surface": "Graph inspector (W6-2 PR E)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "GraphInspectorSurface",
     "Surface": "Graph inspector (W6-2 PR E)"
   },
   {
@@ -1303,6 +1348,11 @@
     "Source": "MainWindow.xaml",
     "Expression": "JumpToBibliographyMenuItem",
     "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "MainMenu",
+    "Surface": "Main window and menu bar"
   },
   {
     "Source": "MainWindow.xaml",
@@ -1391,12 +1441,47 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "PanelReviewFilterAll",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelReviewFilterDueToday",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelReviewFilterOverdue",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelReviewFilterThisWeek",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "PanelReviewList",
     "Surface": "Tasks panel + review flow (W4-3)"
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "PanelReviewLoadMore",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelTasksDoneHeader",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "PanelTasksDoneList",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelTasksOpenHeader",
     "Surface": "Tasks panel + review flow (W4-3)"
   },
   {
@@ -1496,6 +1581,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "QueriesRenameRow",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "QueriesRun",
     "Surface": "Bases surfaces (W4-6)"
   },
@@ -1538,6 +1628,16 @@
     "Source": "MainWindow.xaml",
     "Expression": "ReloadBibliographyMenuItem",
     "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "ReviewTaskMetadata",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "ReviewTaskText",
+    "Surface": "Tasks panel + review flow (W4-3)"
   },
   {
     "Source": "MainWindow.xaml",
@@ -1686,6 +1786,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "SnippetText",
+    "Surface": "Link & structure panels (W4-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "SplitDownMenuItem",
     "Surface": "Split workspace"
   },
@@ -1701,7 +1806,27 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "TargetText",
+    "Surface": "Link & structure panels (W4-2)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TaskMetadata",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TaskText",
+    "Surface": "Tasks panel + review flow (W4-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "TemplateFlowName",
+    "Surface": "Templates (W5-3)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TemplateFlowPromptsList",
     "Surface": "Templates (W5-3)"
   },
   {
@@ -1773,6 +1898,11 @@
     "Source": "MainWindow.xaml",
     "Expression": "TrashProgressStatus",
     "Surface": "File management (W5-4)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TruncationNotice",
+    "Surface": "Link & structure panels (W4-2)"
   },
   {
     "Source": "MainWindow.xaml",
