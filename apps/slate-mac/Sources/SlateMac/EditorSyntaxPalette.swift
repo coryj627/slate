@@ -44,9 +44,10 @@ import AppKit
 ///   highlighter coloured only the markers. A marker-only pass is a
 ///   deliberate follow-up (#377) — until then these stay in body
 ///   colour.
-/// - `link` / `image` / `blockQuote` → `nil`. `editor_highlightSpans`
-///   never emits these (filtered backend-side); listed only so the
-///   switch is exhaustive.
+/// - `link` / `image` / `blockQuote` → `nil`. Since W7-1 (#747)
+///   `editor_highlightSpans` emits these on every highlight (the UIA
+///   peer needs them); the editor still leaves them in body colour,
+///   so adding a colour here would paint every link and block quote.
 /// - all `code` kinds (`codeFence` / `inlineCode` / `code(token:)`)
 ///   → one `codeColor`. Per-token editor colouring needs an
 ///   APCA-validated `TokenKind` palette (follow-up); for now the code
@@ -145,7 +146,7 @@ enum EditorSyntaxPalette {
         // they're not part of the colour cue at all. `emphasis` / `strong`
         // / `strikethrough` cover the whole run (markers + prose), so
         // colouring them would dim the prose; `link` / `image` /
-        // `blockQuote` are never emitted by `editorHighlightSpans`.
+        // `blockQuote` are emitted (since W7-1) but deliberately uncoloured.
         //
         // Coloured kinds collapse to `labelColor` under Increase Contrast
         // — colour stops being the cue, but glyph / position still carry

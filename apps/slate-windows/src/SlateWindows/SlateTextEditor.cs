@@ -542,8 +542,10 @@ internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
 
     internal void InvalidateSemanticAvailability()
     {
-        WpfEditorPeerConnection.InvalidateChildren(this);
-        _semanticProvider?.Links.InvalidateChildren();
+        // The tree resets the root itself, with the link peers a client has
+        // enumerated; without a provider there is only the root to reset.
+        if (_semanticProvider is { } provider) { provider.Links.InvalidateChildren(); }
+        else { WpfEditorPeerConnection.InvalidateChildren(this); }
     }
 
     internal void ResumeSemanticAvailability() => _semanticProvider?.Links.InvalidateUnavailableChildren();

@@ -1154,17 +1154,11 @@ fn mappable_spans(
 }
 
 /// Every span the inline pipeline consults: the canonical highlight
-/// classifier plus the CommonMark link/image spans it intentionally
-/// omits (those arrive only as exclusion ranges).
+/// classifier, which since W7-1 (#747) emits the CommonMark link/image
+/// spans itself — one raw parse per block, not a second one whose
+/// duplicates `mappable_spans` would only merge away.
 fn inline_spans(text: &str) -> Vec<crate::editor_spans::EditorSpan> {
-    use crate::editor_spans::EditorSpanKind as K;
-    let mut spans = crate::editor_spans::highlight_spans(text);
-    spans.extend(
-        crate::editor_spans::markdown_spans(text)
-            .into_iter()
-            .filter(|s| matches!(s.kind, K::Link | K::Image)),
-    );
-    spans
+    crate::editor_spans::highlight_spans(text)
 }
 
 // --- §5 block-level embed detection ------------------------------------
