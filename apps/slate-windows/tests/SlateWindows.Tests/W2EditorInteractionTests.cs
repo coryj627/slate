@@ -788,6 +788,39 @@ public sealed class W2EditorInteractionTests
         Assert.Equal(external ? 2 : 0, opened.Count);
     }
 
+    /// <summary>The caret action follows the innermost link at the caret, as
+    /// the UIA Hyperlink tree does (E-9: the wikilink nested in a Markdown
+    /// link's label is the inner child, and its Invoke follows the wikilink).</summary>
+    [Fact]
+    public void ActivationAtTheCaretFollowsTheInnermostLinkAsTheHyperlinkTreeDoes()
+    {
+        const string authored = "[outer [[target#Destination]]](https://example.org/outer)";
+        using InteractionFixture fixture = InteractionFixture.Create(authored);
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        var navigation = new List<EditorNavigationRequest>();
+        var opened = new List<string>();
+        using var tab = new WorkspaceTabViewModel(session, new WorkspaceTabState(Guid.NewGuid(),
+            new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")), startInteractionBackgroundWork: false);
+        using var interactions = new EditorInteractionCoordinator(session, tab, navigation.Add,
+            announce: _ => { }, startBackgroundWork: false,
+            openExternalForTests: value => { opened.Add(value); return true; });
+        interactions.RefreshMathRangesForTests();
+        interactions.RefreshArtifactCacheForTests();
+        EditorSemanticSpan[] links = [.. tab.EditorSession!.InspectInRange(0, authored.Length).Spans.Where(EditorHyperlinkTree.IsLink)];
+        Assert.Contains(links, span => span.Kind is EditorSpanKind.Link);
+        Assert.Contains(links, span => span.Kind is EditorSpanKind.Wikilink);
+
+        Assert.True(interactions.ActivateAt(Inside(authored, "[[target#Destination]]")));
+        Assert.Equal("target.md", Assert.Single(navigation).Path);
+        Assert.Empty(opened);
+
+        Assert.True(interactions.ActivateAt(Inside(authored, "outer ")));
+        Assert.Equal(["https://example.org/outer"], opened);
+        Assert.Single(navigation);
+    }
+
     private static int Inside(string text, string needle)
     {
         int start = text.IndexOf(needle, StringComparison.Ordinal);

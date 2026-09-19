@@ -7,6 +7,7 @@ using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using ICSharpCode.AvalonEdit.Document;
+using ICSharpCode.AvalonEdit.Rendering;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -21,6 +22,9 @@ internal sealed class EditorHyperlinkTree
     private readonly SlateTextEditorAutomationPeer _root;
     private readonly TextSegmentCollection<EditorLinkSegment> _segments;
     private readonly HashSet<EditorHyperlinkPeer> _members = [];
+    // The link peers whose children a client has enumerated: the only ones
+    // holding a WPF child cache that an availability change must reset.
+    private readonly HashSet<EditorHyperlinkPeer> _exposed = [];
     private long _validatedRevision = -1;
     private int _validatedStart;
     private int _validatedEnd;
@@ -102,6 +106,7 @@ internal sealed class EditorHyperlinkTree
             {
                 _segments.Remove(old);
                 _members.Remove(old.Peer);
+                _exposed.Remove(old.Peer);
             }
         }
         _validatedRevision = revision;
@@ -155,6 +160,7 @@ internal sealed class EditorHyperlinkTree
     internal List<AutomationPeer> Children(EditorHyperlinkPeer parent)
     {
         parent.VerifyLive();
+        _exposed.Add(parent);
         return Overlapping(parent.Start, parent.End).Where(peer => ReferenceEquals(peer.Parent, parent))
             .Select(peer => (AutomationPeer)peer).ToList();
     }
@@ -169,8 +175,12 @@ internal sealed class EditorHyperlinkTree
     internal void InvalidateChildren()
     {
         // No semantic parse here: this is the stable publication boundary.
+        // This runs on every composition start and finish — every keystroke —
+        // so it resets the root and the peers a client has enumerated, never
+        // every link in the document.
         WpfEditorPeerConnection.InvalidateChildren(_root);
-        foreach (EditorLinkSegment segment in _segments) { WpfEditorPeerConnection.InvalidateChildren(segment.Peer); }
+        foreach (EditorHyperlinkPeer peer in _exposed) { WpfEditorPeerConnection.InvalidateChildren(peer); }
+        _exposed.Clear();
     }
 
     /// <summary>
@@ -278,7 +288,12 @@ internal sealed class EditorHyperlinkPeer : AutomationPeer, IInvokeProvider, IVa
     protected override Rect GetBoundingRectangleCore()
     {
         VerifyLive();
-        double[] rectangles = _provider.Range(Start, End).GetBoundingRectangles();
+        // A background tab or a collapsed pane has no layout: offscreen, as
+        // GetVisibleRanges reports, never AvalonEdit's layout exception.
+        if (!_editor.IsVisible || PresentationSource.FromVisual(_editor) is null) { return Rect.Empty; }
+        double[] rectangles;
+        try { rectangles = _provider.Range(Start, End).GetBoundingRectangles(); }
+        catch (VisualLinesInvalidException) { return Rect.Empty; }
         Rect result = Rect.Empty;
         for (int index = 0; index + 3 < rectangles.Length; index += 4)
         { result.Union(new Rect(rectangles[index], rectangles[index + 1], rectangles[index + 2], rectangles[index + 3])); }
@@ -313,14 +328,32 @@ internal sealed class EditorHyperlinkPeer : AutomationPeer, IInvokeProvider, IVa
 /// <summary>A-7: connect a known canonical descendant without walking the entire document.</summary>
 internal static class WpfEditorPeerConnection
 {
-    private static readonly MethodInfo SetParent = typeof(AutomationPeer).GetMethod("TrySetParentInfo",
-        BindingFlags.Instance | BindingFlags.NonPublic, [typeof(AutomationPeer)])
-        ?? throw new InvalidOperationException("WPF's peer connection contract changed.");
-    private static readonly PropertyInfo ChildrenValid = typeof(AutomationPeer).GetProperty("ChildrenValid",
-        BindingFlags.Instance | BindingFlags.NonPublic)
-        ?? throw new InvalidOperationException("WPF's child-cache contract changed.");
+    // Nullable, never throwing from the type initializer: a WPF servicing
+    // change to these internal names must degrade the connection on the UIA
+    // path, not raise a TypeInitializationException from the keystroke path
+    // that invalidates availability.
+    private static readonly MethodInfo? SetParent = typeof(AutomationPeer).GetMethod("TrySetParentInfo",
+        BindingFlags.Instance | BindingFlags.NonPublic, [typeof(AutomationPeer)]);
+    private static readonly PropertyInfo? ChildrenValid = typeof(AutomationPeer).GetProperty("ChildrenValid",
+        BindingFlags.Instance | BindingFlags.NonPublic);
+
+    [ThreadStatic]
+    internal static int InvalidationCountForCensus;
+
+    /// <summary>Whether the running WPF still carries the internal members
+    /// this connection relies on (the census that pins the reflection contract).</summary>
+    internal static bool WpfInternalsResolved => SetParent is not null && ChildrenValid is not null;
+
     // ResetChildrenCache eagerly rebuilds the entire subtree. Marking WPF's
-    // existing validity bit defers that work until an actual navigation request.
-    internal static void InvalidateChildren(AutomationPeer peer) => ChildrenValid.SetValue(peer, false);
-    internal static void Connect(AutomationPeer child, AutomationPeer parent) => SetParent.Invoke(child, [parent]);
+    // existing validity bit defers that work until an actual navigation
+    // request; without the bit, the eager reset is the fallback.
+    internal static void InvalidateChildren(AutomationPeer peer)
+    {
+        InvalidationCountForCensus++;
+        if (ChildrenValid is null) { peer.ResetChildrenCache(); return; }
+        ChildrenValid.SetValue(peer, false);
+    }
+
+    internal static void Connect(AutomationPeer child, AutomationPeer parent) =>
+        (SetParent ?? throw new InvalidOperationException("WPF's peer connection contract changed.")).Invoke(child, [parent]);
 }

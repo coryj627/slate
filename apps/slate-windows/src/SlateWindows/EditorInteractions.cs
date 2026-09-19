@@ -1772,6 +1772,9 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
         int clamped = Math.Clamp(utf16Offset, 0, _tab.EditorDocument.TextLength);
         EditorHighlightWindow window = WindowContaining(clamped, includeRightEdge);
+        // Innermost first: the link at the caret is the one the UIA Hyperlink
+        // tree projects there (E-9) — a wikilink nested in a Markdown link's
+        // label is the inner child, and its Invoke follows the wikilink.
         EditorSemanticSpan[] containing = window.Spans
             .Where(span => span.StartUtf16 <= clamped
                 && (clamped < span.StartUtf16 + span.LengthUtf16
@@ -1779,6 +1782,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                         && span.LengthUtf16 > 0
                         && clamped == span.StartUtf16 + span.LengthUtf16)))
             .OrderByDescending(span => clamped < span.StartUtf16 + span.LengthUtf16)
+            .ThenBy(span => span.LengthUtf16)
             .ToArray();
         if (containing.Any(span => span.Kind is EditorSpanKind.CodeFence))
         {

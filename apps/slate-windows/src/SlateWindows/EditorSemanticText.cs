@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Diagnostics;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Automation;
@@ -38,7 +37,8 @@ internal sealed class EditorSemanticTextProvider : ITextProvider
     {
         get
         {
-            Debug.Assert(_editor.Dispatcher.CheckAccess());
+            // VerifyAccess alone: a Debug.Assert here fails fast in a Debug
+            // build before the documented InvalidOperationException is reached.
             _editor.Dispatcher.VerifyAccess();
             return ReferenceEquals(_editor.HighlightSession, _session)
                 && ReferenceEquals(_editor.Document, _session.Document) && !_session.IsDisposed;

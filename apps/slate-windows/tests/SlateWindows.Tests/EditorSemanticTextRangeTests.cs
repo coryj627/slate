@@ -20,6 +20,84 @@ public sealed class EditorSemanticTextRangeTests
     private static string Fixture => File.ReadAllText(Path.Combine(SourceText.RepoRoot(),
         "crates", "slate-core", "tests", "fixtures", "markdown", "editor_semantics.md"));
 
+    /// <summary>E-7 gates semantic reads during a composition; paint is not a
+    /// semantic read. A pending composition (a dead key, an IME in progress)
+    /// must leave the visible window painting on the ordinary cadence.</summary>
+    [Fact]
+    public void PaintContinuesDuringACompositionWhileSemanticReadsWait() => OnSta(() =>
+    {
+        using var host = new Host("## Heading\n\n", show: true);
+        AvalonHighlightingCoordinator coordinator = Assert.IsType<AvalonHighlightingCoordinator>(host.Editor.HighlightingForCensus);
+        host.Editor.CaretOffset = host.Session.Document.TextLength;
+        var composition = new TextComposition(InputManager.Current, host.Editor.TextArea, string.Empty, TextCompositionAutoComplete.Off);
+        SetComposition(nameof(TextComposition.CompositionText), "に");
+        TextCompositionManager.StartComposition(composition);
+        Assert.True(host.Editor.IsComposing);
+        int painted = coordinator.RefreshCountForCensus;
+        coordinator.ResumeSemanticPublication();
+        PumpUntil(() => coordinator.RefreshCountForCensus > painted);
+        Assert.True(host.Editor.IsComposing);
+        Assert.Same(AutomationElement.NotSupported, host.Provider.DocumentRange.GetAttributeValue(EditorSemanticTextRange.StyleIdAttribute));
+        SetComposition(nameof(TextComposition.CompositionText), string.Empty);
+        TextCompositionManager.CompleteComposition(composition);
+
+        void SetComposition(string property, string value) => typeof(TextComposition).GetProperty(property)!
+            .GetSetMethod(nonPublic: true)!.Invoke(composition, [value]);
+    });
+
+    /// <summary>Availability invalidation runs on every composition start and
+    /// finish — every keystroke. It touches the root and the link peers whose
+    /// children a client has actually enumerated, not every link in the
+    /// document.</summary>
+    [Fact]
+    public void AvailabilityInvalidationTouchesOnlyThePeersWhoseChildrenWereExposed() => OnSta(() =>
+    {
+        using var host = new Host("[[One]] and [[Two]] and [[Three]]", show: true);
+        List<AutomationPeer> children = host.Peer.GetChildren();
+        Assert.Equal(3, children.Count);
+        WpfEditorPeerConnection.InvalidationCountForCensus = 0;
+        host.Peer.InvalidateSemanticAvailability();
+        Assert.Equal(1, WpfEditorPeerConnection.InvalidationCountForCensus);
+        Assert.Empty(children[1].GetChildren());
+        WpfEditorPeerConnection.InvalidationCountForCensus = 0;
+        host.Peer.InvalidateSemanticAvailability();
+        Assert.Equal(2, WpfEditorPeerConnection.InvalidationCountForCensus);
+    });
+
+    /// <summary>The peer connection reflects into two WPF internals. This
+    /// pins that the running framework still has them; when it does not, the
+    /// connection degrades (eager cache resets, a throwing Connect on the UIA
+    /// path) instead of failing the type initializer on a keystroke.</summary>
+    [Fact]
+    public void ThePeerConnectionsWpfInternalsResolveOnThisFramework() =>
+        Assert.True(WpfEditorPeerConnection.WpfInternalsResolved);
+
+    /// <summary>A hyperlink peer in an editor with no layout (a background tab,
+    /// a collapsed pane) reports offscreen geometry, as GetVisibleRanges does,
+    /// instead of surfacing AvalonEdit's layout exception to the client.</summary>
+    [Fact]
+    public void HyperlinkGeometryReportsOffscreenWhenTheEditorHasNoLayout() => OnSta(() =>
+    {
+        using var host = new Host("Before [[Target]] after.");
+        AutomationPeer link = Assert.Single(host.Peer.GetChildren());
+        Assert.Equal(Rect.Empty, link.GetBoundingRectangle());
+        Assert.True(link.IsOffscreen());
+    });
+
+    /// <summary>E-8: disposal ends publication. A disposed session never
+    /// becomes readable again, so the debounce must not keep rescheduling
+    /// itself every tick until the editor unloads.</summary>
+    [Fact]
+    public void PublicationStopsReschedulingOnceTheSessionIsDisposed() => OnSta(() =>
+    {
+        using var host = new Host("## Heading\n", show: true);
+        AvalonHighlightingCoordinator coordinator = Assert.IsType<AvalonHighlightingCoordinator>(host.Editor.HighlightingForCensus);
+        host.Session.Document.Insert(host.Session.Document.TextLength, "x");
+        host.Session.Dispose();
+        coordinator.FlushSemanticChanges();
+        Assert.False(coordinator.TimerEnabledForCensus);
+    });
+
     [Fact]
     public void EveryCanonicalKindHasItsContractAttributeThroughTheNativePeer() => OnSta(() =>
     {

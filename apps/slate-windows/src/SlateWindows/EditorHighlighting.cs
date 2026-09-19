@@ -237,6 +237,8 @@ internal sealed class AvalonHighlightingCoordinator : IDisposable
 
     internal int RefreshCountForCensus { get; private set; }
 
+    internal bool TimerEnabledForCensus => _timer.IsEnabled;
+
     internal EditorHighlightWindow? ColorizerWindowForCensus => _colorizer.WindowForCensus;
 
     public void Dispose()
@@ -258,8 +260,11 @@ internal sealed class AvalonHighlightingCoordinator : IDisposable
 
     private void Schedule(bool immediate)
     {
-        if (_disposed)
+        // E-8: disposal ends publication. A disposed session never becomes
+        // readable again, so there is nothing to wait for.
+        if (_disposed || _session.IsDisposed)
         {
+            _timer.Stop();
             return;
         }
 
@@ -278,11 +283,19 @@ internal sealed class AvalonHighlightingCoordinator : IDisposable
 
     private void RefreshVisibleWindow()
     {
-        if (_disposed || !_editor.IsLoaded || _editor.Document is null)
+        if (_disposed || _session.IsDisposed)
+        {
+            _timer.Stop();
+            return;
+        }
+        if (!_editor.IsLoaded || _editor.Document is null)
         {
             return;
         }
-        if (!_session.SemanticReadsAvailable || _editor.IsComposing)
+        // Paint is not a semantic read: E-7 gates reads during a composition,
+        // but the document holds only committed text until the composition
+        // completes, so the visible window keeps painting on its cadence.
+        if (!_session.SemanticReadsAvailable)
         {
             Schedule(immediate: false);
             return;
@@ -329,8 +342,9 @@ internal sealed class AvalonHighlightingCoordinator : IDisposable
 
     internal void FlushSemanticChanges()
     {
-        if (_disposed)
+        if (_disposed || _session.IsDisposed)
         {
+            _timer.Stop();
             return;
         }
         if (!_session.SemanticReadsAvailable || _editor.IsComposing)
