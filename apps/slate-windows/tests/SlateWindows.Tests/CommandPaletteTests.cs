@@ -717,6 +717,23 @@ public sealed class CommandPaletteTests
     // --- P10: announcement triggers ---------------------------------------
 
     [Fact]
+    public void UnchangedFilterStateIsSilentButANewQueryWithTheSameCountIsAnnounced()
+    {
+        PaletteHarness harness = StandardHarness();
+        harness.Palette.Open();
+        harness.Palette.Query = "sa";
+        uint count = Assert.Single(harness.Announcements.OfType<A11yEvent.PaletteFilterCount>()).Count;
+        harness.Announcements.Clear();
+        harness.Palette.Query = "sa";
+        Assert.Empty(harness.Announcements);
+        harness.Palette.Query = "sav";
+        A11yEvent.PaletteFilterCount changed = Assert.Single(
+            harness.Announcements.OfType<A11yEvent.PaletteFilterCount>());
+        Assert.Equal(count, changed.Count);
+        Assert.Equal("sav", changed.Query);
+    }
+
+    [Fact]
     public void FilterCountFiresOnEveryNonEmptyKeystrokeAndIsSuppressedOnEmptyQuery()
     {
         PaletteHarness harness = StandardHarness();

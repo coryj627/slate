@@ -26,6 +26,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     private readonly SynchronizationContext? _uiContext;
     private readonly QuickSwitcherRankCoordinator _rankCoordinator;
     private readonly Func<SwitcherFile[], string, string[], SwitcherRankPage> _rankTop;
+    private readonly Func<CancellationToken, Task> _rankDelay;
     private CancellationTokenSource? _rankCancellation;
     private int _rankGeneration;
     private SwitcherFile[] _files = [];
@@ -45,11 +46,13 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         string? localAppDataRoot = null,
         bool debounceRanking = true,
         QuickSwitcherRankCoordinator? rankCoordinator = null,
-        Func<SwitcherFile[], string, string[], SwitcherRankPage>? rankTop = null)
+        Func<SwitcherFile[], string, string[], SwitcherRankPage>? rankTop = null,
+        Func<CancellationToken, Task>? rankDelay = null)
     {
         _announce = announce;
         _uiContext = debounceRanking ? SynchronizationContext.Current : null;
         _rankCoordinator = rankCoordinator ?? QuickSwitcherRankCoordinator.Shared;
+        _rankDelay = rankDelay ?? (token => Task.Delay(60, token));
         _rankTop = rankTop ?? ((files, query, recents) =>
             SlateUniffiMethods.SwitcherRankTop(files, query, recents, DisplayCap));
         _recentsStore = new FileRecentsStore(vaultRoot, session.RootIdentity(), localAppDataRoot);
@@ -301,7 +304,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     {
         try
         {
-            await Task.Delay(60, cancellationToken);
+            await _rankDelay(cancellationToken);
             SwitcherRankPage ranked = await _rankCoordinator.RankAsync(
                 () => _rankTop(files, query, recents),
                 cancellationToken);

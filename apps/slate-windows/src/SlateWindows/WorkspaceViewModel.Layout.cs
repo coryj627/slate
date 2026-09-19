@@ -520,10 +520,32 @@ internal sealed partial class WorkspaceViewModel
             WorkspaceItemKind.Graph => new A11yEvent.ReopenedGraph(),
             WorkspaceItemKind.SavedQuery or WorkspaceItemKind.Dashboard =>
                 new A11yEvent.ReopenedNamed(tab.Title),
-            _ => new A11yEvent.ReopenedFile(tab.Title),
+            _ => ReopenFileAnnouncement(tab),
         });
         RaiseCommandStates();
         Persist();
+    }
+
+    private A11yEvent ReopenFileAnnouncement(WorkspaceTabViewModel tab)
+    {
+        string filename = System.IO.Path.GetFileName(tab.Path);
+        try
+        {
+            // The index may still contain a deleted file. Ask the live core
+            // provider and retain the tab's recovery UI without claiming success.
+            if (_session.CanonicalPath(tab.Path) is null)
+            {
+                tab.InvalidatePath();
+                return new A11yEvent.ReopenTargetMissing(filename);
+            }
+        }
+        catch (VaultException failure)
+        {
+            return new A11yEvent.FileReopenFailed(filename, failure.Message);
+        }
+        return tab.LoadFailure is { } detail
+            ? new A11yEvent.FileReopenFailed(filename, detail)
+            : new A11yEvent.ReopenedFile(tab.Title);
     }
 
     private void MoveActiveTab(int delta)

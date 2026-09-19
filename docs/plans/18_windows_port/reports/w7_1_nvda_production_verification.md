@@ -33,7 +33,7 @@ Synthesizer callbacks and text output do not substitute for that confirmation.
 | Meaningful link destination | Verified | NVDA+K said `Target` at the wikilink on the final code build. The earlier production HTTPS check said `https://example.org`. |
 | Selection, selected-link deletion and undo | Verified | Selection text matched the token; deletion announced leaving the link and the following character; undo restored the token and its selection announcement. |
 | Character/word semantic boundaries | Partial | Ctrl+Right announced link entry, character selection reversal announced the removed space, and deletion announced exit. The full human character/word/line checklist remains Pending. |
-| Braille viewer | Pending | Viewers opened, but the separate NVDA Usage Data Collection dialog requires the owner's choice before continuation. No braille result is inferred from speech. |
+| Braille viewer | Pending — owner-deferred 2026-09-18 | The owner elected to skip braille for now. No viewer run or braille result is claimed; the former privacy-dialog prompt is no longer a blocker. |
 | IME composition and cancel with AT | Pending | Automated composition/batching facts pass; no live installed-IME pass recorded here. |
 | Licensed JAWS | Pending | Owner's separate run remains required. |
 

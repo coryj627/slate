@@ -8289,6 +8289,10 @@ pub enum A11yEvent {
     ReopenTargetMissing {
         filename: String,
     },
+    FileReopenFailed {
+        filename: String,
+        detail: String,
+    },
     ReopenedFile {
         filename: String,
     },
@@ -8308,6 +8312,16 @@ pub enum A11yEvent {
     },
     CommandPaletteNeedsVault,
     SearchNeedsVault,
+    VaultScanStarted {
+        total_files: u64,
+    },
+    VaultScanProgress {
+        indexed: u64,
+        total: u64,
+    },
+    VaultScanFinished {
+        files_indexed: u64,
+    },
     SearchResultsSummary {
         count: u32,
     },
@@ -8376,6 +8390,10 @@ pub enum A11yEvent {
     },
     SaveConflict {
         filename: String,
+    },
+    NoteSaveBlocked {
+        filename: String,
+        detail: String,
     },
     RestoredVersionFrom {
         formatted_date: String,
@@ -8674,6 +8692,10 @@ pub enum A11yEvent {
         detail: String,
     },
     BasesDashboardMissing,
+    BasesDashboardLoadFailed {
+        name: String,
+        detail: String,
+    },
     BasesDockUpdatedForNote,
     BasesLinkCopied {
         name: String,
@@ -10125,6 +10147,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::RightPaneHidden => C::RightPaneHidden,
             F::HistoryPanelShown => C::HistoryPanelShown,
             F::ReopenTargetMissing { filename } => C::ReopenTargetMissing { filename },
+            F::FileReopenFailed { filename, detail } => C::FileReopenFailed { filename, detail },
             F::ReopenedFile { filename } => C::ReopenedFile { filename },
             F::ReopenedNamed { name } => C::ReopenedNamed { name },
             F::ReopenedGraph => C::ReopenedGraph,
@@ -10139,6 +10162,9 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::WelcomeShown { recent_vault_count } => C::WelcomeShown { recent_vault_count },
             F::CommandPaletteNeedsVault => C::CommandPaletteNeedsVault,
             F::SearchNeedsVault => C::SearchNeedsVault,
+            F::VaultScanStarted { total_files } => C::VaultScanStarted { total_files },
+            F::VaultScanProgress { indexed, total } => C::VaultScanProgress { indexed, total },
+            F::VaultScanFinished { files_indexed } => C::VaultScanFinished { files_indexed },
             F::SearchResultsSummary { count } => C::SearchResultsSummary { count },
             F::SearchFailed { message } => C::SearchFailed { message },
             F::SearchResultOpened {
@@ -10173,6 +10199,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::TasksFilterSet { filter_name } => C::TasksFilterSet { filter_name },
             F::NoteSaved { filename } => C::NoteSaved { filename },
             F::SaveConflict { filename } => C::SaveConflict { filename },
+            F::NoteSaveBlocked { filename, detail } => C::NoteSaveBlocked { filename, detail },
             F::RestoredVersionFrom { formatted_date } => C::RestoredVersionFrom { formatted_date },
             F::RestoredFile { filename } => C::RestoredFile { filename },
             F::RestoredFileAs {
@@ -10362,6 +10389,9 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::BasesDashboardDeleteFailed { detail } => C::BasesDashboardDeleteFailed { detail },
             F::BasesDashboardEditFailed { detail } => C::BasesDashboardEditFailed { detail },
             F::BasesDashboardMissing => C::BasesDashboardMissing,
+            F::BasesDashboardLoadFailed { name, detail } => {
+                C::BasesDashboardLoadFailed { name, detail }
+            }
             F::BasesDockUpdatedForNote => C::BasesDockUpdatedForNote,
             F::BasesLinkCopied { name } => C::BasesLinkCopied { name },
             F::BasesBacklinksFor { name } => C::BasesBacklinksFor { name },

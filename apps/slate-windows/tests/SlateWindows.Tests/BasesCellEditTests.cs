@@ -243,9 +243,11 @@ public sealed class BasesCellEditTests : IDisposable
     [Fact]
     public void FunnelRefreshesEveryDocumentAndAnnouncesMembershipOnce()
     {
+        File.Copy(Path.Combine(_root, "Others.base"), Path.Combine(_root, "Others2.base"));
         using WorkspaceViewModel workspace = NewWorkspace();
         BaseDocumentViewModel status = workspace.BaseDocumentFor("Status.base");
         BaseDocumentViewModel others = workspace.BaseDocumentFor("Others.base");
+        BaseDocumentViewModel duplicate = workspace.BaseDocumentFor("Others2.base");
         Assert.Equal(2, others.Result!.Rows.Length);
         BasesRow row = RowFor(status, "note1.md");
         BasesColumn column = StatusColumn(status);
@@ -257,7 +259,8 @@ public sealed class BasesCellEditTests : IDisposable
         // BOTH documents re-executed (contract C9): the second base
         // lost the row too, and its membership change was announced.
         Assert.Single(others.Result!.Rows);
-        Assert.Contains(_announced, e => e is A11yEvent.BasesRefreshUpdated);
+        Assert.Single(duplicate.Result!.Rows);
+        string firstSummary = Assert.Single(_announced.OfType<A11yEvent.BasesRefreshUpdated>()).AudioSummary;
         // Exactly one cell OUTCOME sentence for the whole write.
         Assert.Equal(
             1,
@@ -265,5 +268,13 @@ public sealed class BasesCellEditTests : IDisposable
                 e is A11yEvent.BasesCellSaved
                     or A11yEvent.BasesCellCleared
                     or A11yEvent.BasesCellRowNoLongerMatches));
+
+        // Restore, then repeat the same membership change in a new funnel.
+        // The identical summary must be allowed again, once per funnel.
+        status.ApplyPropertyEdit!(row, column, new PropertyValue.Text("todo"));
+        Assert.Equal(2, others.Result!.Rows.Length);
+        _announced.Clear();
+        status.ApplyPropertyEdit!(RowFor(status, "note1.md"), column, new PropertyValue.Text("done"));
+        Assert.Equal(firstSummary, Assert.Single(_announced.OfType<A11yEvent.BasesRefreshUpdated>()).AudioSummary);
     }
 }

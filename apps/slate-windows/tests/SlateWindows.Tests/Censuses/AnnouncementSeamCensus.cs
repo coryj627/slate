@@ -26,6 +26,77 @@ namespace SlateWindows.Tests.Censuses;
 [Trait("census", "announcement-seams")]
 public sealed class AnnouncementSeamCensus
 {
+    [Fact]
+    public void OnlyTheDispatchersElementConstructorSuppliesTheNativeRaiser()
+    {
+        var raisers = ShellCompilation.Sources.SelectMany(entry => entry.Source.Root
+            .DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Where(call => ShellCompilation.ModelFor(entry.Source).GetSymbolInfo(call).Symbol is IMethodSymbol method
+                && method.Name == "RaiseNotificationEvent"
+                && method.ContainingType.ToDisplayString() == "System.Windows.Automation.Peers.AutomationPeer")
+            .Select(call => (entry.Relative, Call: call))).ToArray();
+        var raiser = Assert.Single(raisers);
+        Assert.Equal("AccessibilityNotificationDispatcher.cs", raiser.Relative);
+        AssertNativeConstructor(raiser.Call.Ancestors().OfType<ConstructorDeclarationSyntax>().Single());
+
+        var constructors = ShellCompilation.Sources.SelectMany(entry => entry.Source.Root
+            .DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>()
+            .Where(creation => ShellCompilation.ModelFor(entry.Source).GetSymbolInfo(creation).Symbol is IMethodSymbol method
+                && method.ContainingType.ToDisplayString() == "SlateWindows.AccessibilityNotificationDispatcher")
+            .Select(creation => (entry.Relative, Creation: creation))).ToArray();
+        Assert.Equal(["Grids/AccessibleDataGrid.cs", "MainWindow.xaml.cs"], constructors.Select(c => c.Relative).Order());
+        var construction = Assert.Single(constructors, c => c.Relative == "MainWindow.xaml.cs");
+        Assert.Equal("StatusTextBlock", Assert.Single(construction.Creation.ArgumentList!.Arguments).Expression.ToString());
+        Assert.Equal("_announcer", construction.Creation.Ancestors().OfType<AssignmentExpressionSyntax>().Single().Left.ToString());
+        foreach (var site in constructors)
+        {
+            var symbol = (IMethodSymbol)ShellCompilation.ModelFor(
+                ShellCompilation.Sources.Single(s => s.Relative == site.Relative).Source)
+                .GetSymbolInfo(site.Creation).Symbol!;
+            Assert.Equal("System.Windows.FrameworkElement", Assert.Single(symbol.Parameters).Type.ToDisplayString());
+        }
+    }
+
+    [Fact]
+    public void NativeConstructorCheckRejectsDroppedOrRewrittenArguments()
+    {
+        ConstructorDeclarationSyntax constructor = CSharpSource.Load("AccessibilityNotificationDispatcher.cs")
+            .Root.DescendantNodes().OfType<ConstructorDeclarationSyntax>()
+            .Single(c => c.Modifiers.Any(SyntaxKind.PublicKeyword));
+        AssertNativeConstructor(constructor);
+        string original = constructor.ToString();
+        foreach (string mutation in new[]
+        {
+            original.Replace("peer.RaiseNotificationEvent(kind, processing, text, activityId);", "", StringComparison.Ordinal),
+            original.Replace("kind, processing, text, activityId);", "kind, processing, text, \"wrong\");", StringComparison.Ordinal),
+            original.Replace("FromElement(source)", "FromElement(new System.Windows.Controls.TextBlock())", StringComparison.Ordinal),
+        })
+        {
+            Assert.NotEqual(original, mutation);
+            var changed = CSharpSyntaxTree.ParseText("class AccessibilityNotificationDispatcher { " + mutation + " }")
+                .GetRoot().DescendantNodes().OfType<ConstructorDeclarationSyntax>().Single();
+            Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertNativeConstructor(changed));
+        }
+    }
+
+    private static void AssertNativeConstructor(ConstructorDeclarationSyntax constructor)
+    {
+        Assert.Equal("FrameworkElement", Assert.Single(constructor.ParameterList.Parameters).Type!.ToString());
+        Assert.Equal(SyntaxKind.ThisConstructorInitializer, constructor.Initializer!.Kind());
+        var lambda = Assert.IsType<ParenthesizedLambdaExpressionSyntax>(Assert.Single(constructor.Initializer.ArgumentList.Arguments).Expression);
+        Assert.Equal(["kind", "processing", "text", "activityId"], lambda.ParameterList.Parameters.Select(p => p.Identifier.ValueText));
+        var body = Assert.IsType<BlockSyntax>(lambda.Body);
+        Assert.Equal(2, body.Statements.Count);
+        var declaration = Assert.IsType<LocalDeclarationStatementSyntax>(body.Statements[0]);
+        VariableDeclaratorSyntax peer = Assert.Single(declaration.Declaration.Variables);
+        Assert.Equal("peer", peer.Identifier.ValueText);
+        Assert.Equal("UIElementAutomationPeer.FromElement(source) ?? UIElementAutomationPeer.CreatePeerForElement(source) ?? new FrameworkElementAutomationPeer(source)",
+            peer.Initializer!.Value.NormalizeWhitespace().ToFullString());
+        var call = Assert.IsType<InvocationExpressionSyntax>(Assert.IsType<ExpressionStatementSyntax>(body.Statements[1]).Expression);
+        Assert.Equal("peer.RaiseNotificationEvent", call.Expression.ToString());
+        Assert.Equal(["kind", "processing", "text", "activityId"], call.ArgumentList.Arguments.Select(a => a.Expression.ToString()));
+    }
+
     /// <summary>
     /// Hop 1 — <c>MainWindow</c> hands the dispatcher to the vault
     /// lifecycle on BOTH seams. Mutation-verified: deleting the

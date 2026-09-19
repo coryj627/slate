@@ -43,6 +43,14 @@ public sealed class A11yCorpusCensus
 
     private sealed record CorpusEntry(string Event, string Priority, string Text);
 
+    internal static IEnumerable<(A11yEvent Event, string Priority, string Text)> DispatcherCases()
+    {
+        CorpusEntry[] golden = JsonSerializer.Deserialize<CorpusEntry[]>(
+            File.ReadAllText(CorpusPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        Assert.Equal(golden.Length, Corpus.Length);
+        return Corpus.Zip(golden, (sample, entry) => (sample, entry.Priority, entry.Text));
+    }
+
     /// <summary>The C# mirror of <c>slate_core::a11y::corpus()</c> —
     /// same events, same sample values, same order (transliterated
     /// from the mac mirror, which is the hand-maintained twin).</summary>
@@ -61,6 +69,7 @@ public sealed class A11yCorpusCensus
         new A11yEvent.RightPaneHidden(),
         new A11yEvent.HistoryPanelShown(),
         new A11yEvent.ReopenTargetMissing(Filename: "gone.md"),
+        new A11yEvent.FileReopenFailed(Filename: "notes.md", Detail: "invalid UTF-8"),
         new A11yEvent.ReopenedFile(Filename: "notes.md"),
         new A11yEvent.ReopenedNamed(Name: "Open tasks"),
         new A11yEvent.ReopenedGraph(),
@@ -71,6 +80,12 @@ public sealed class A11yCorpusCensus
         new A11yEvent.WelcomeShown(RecentVaultCount: 2),
         new A11yEvent.CommandPaletteNeedsVault(),
         new A11yEvent.SearchNeedsVault(),
+        new A11yEvent.VaultScanStarted(TotalFiles: 1),
+        new A11yEvent.VaultScanStarted(TotalFiles: 2),
+        new A11yEvent.VaultScanProgress(Indexed: 1, Total: 1),
+        new A11yEvent.VaultScanProgress(Indexed: 1, Total: 2),
+        new A11yEvent.VaultScanFinished(FilesIndexed: 1),
+        new A11yEvent.VaultScanFinished(FilesIndexed: 2),
         new A11yEvent.SearchResultsSummary(Count: 0),
         new A11yEvent.SearchResultsSummary(Count: 1),
         new A11yEvent.SearchResultsSummary(Count: 7),
@@ -99,6 +114,7 @@ public sealed class A11yCorpusCensus
         new A11yEvent.TasksFilterSet(FilterName: "All tasks"),
         new A11yEvent.NoteSaved(Filename: "notes.md"),
         new A11yEvent.SaveConflict(Filename: "notes.md"),
+        new A11yEvent.NoteSaveBlocked(Filename: "notes.md", Detail: "modified externally"),
         new A11yEvent.RestoredVersionFrom(FormattedDate: "July 19, 2026 at 9:41 AM"),
         new A11yEvent.RestoredFile(Filename: "notes.md"),
         new A11yEvent.RestoredFileAs(SourceName: "notes.md", Filename: "notes-restored.md"),
@@ -244,6 +260,7 @@ public sealed class A11yCorpusCensus
         new A11yEvent.BasesDashboardDeleteFailed(Detail: "io error"),
         new A11yEvent.BasesDashboardEditFailed(Detail: "io error"),
         new A11yEvent.BasesDashboardMissing(),
+        new A11yEvent.BasesDashboardLoadFailed(Name: "Reading", Detail: "unknown dashboard"),
         new A11yEvent.BasesDockUpdatedForNote(),
         new A11yEvent.BasesLinkCopied(Name: "Reading"),
         new A11yEvent.BasesBacklinksFor(Name: "Reading"),

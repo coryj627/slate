@@ -446,6 +446,7 @@ internal sealed class VaultLifecycleViewModel
             VaultPath = root;
             VaultDisplayName = RecentVault.FromPath(root).DisplayName;
             AddRecentVault(root);
+            _announce(new A11yEvent.VaultOpened(VaultDisplayName, string.Empty));
 
             _scanCancel = new CancelToken();
             _progressListener = new UiProgressListener(
@@ -820,9 +821,9 @@ internal sealed class VaultLifecycleViewModel
         try
         {
             ReplaceRecentVaults(_recentVaultsStore.Remove(recent.Path));
-            ReportTerminalStatus(
-                $"Removed {recent.DisplayName} from recent vaults.",
-                A11yPriority.Medium);
+            var removed = new A11yEvent.RemovedRecentVault(recent.DisplayName);
+            StatusText = SlateUniffiMethods.A11yRender(removed).Text;
+            _announce(removed);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {

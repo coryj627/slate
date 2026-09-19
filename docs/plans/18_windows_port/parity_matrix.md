@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-09-18 at `88ec8440` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-09-19 at `cb0a4f1d` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -276,7 +276,7 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | implemented; local gates green 2026-09-02; interactive CI + human AT pending |
 | Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | implemented; local gates green 2026-09-15; interactive CI + human AT pending |
 | Editor TextPattern semantic attributes and events | Windows-first; mac convergence #1224 | #747 (W7-1) | implemented; CI + human AT pending |
-| Notification priority, etiquette and whole-corpus trigger ledger | canonical A11yEvent consumers | #748 (W7-2) | pending |
+| Notification priority, etiquette and whole-corpus trigger ledger | canonical A11yEvent consumers | #748 (W7-2) | implemented; CI + human AT pending |
 | Spoken chords and AT navigation map | chords.json + mac accessibility affordances | #749 (W7-3) | implemented; CI + human AT pending |
 | UIA conformance matrix and per-surface AT checklists | w_c_matrix.md + reports/ | #750 (W7-4) | instrument authored; CI + human AT pending |
 
