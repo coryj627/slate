@@ -315,6 +315,26 @@ directory censuses that Windows CI excludes: their generated filenames fail
 with Windows error 123. Validation follows the existing platform CI selection;
 the full cross-platform censuses remain on the Rust CI runner.
 
+### Recovery amendment independent review
+
+Reviewed pushed implementation `6b3589b37103cd9d84249553f066ca660c040ebd`
+against base `12878e180c9d5f9d49dc820d34137c4ac443e1d7`, with the
+owner-approved contracts amendment `cb0a4f1d` preceding implementation.
+
+- Standards: PASS; no actionable documented-standard violations or heuristic
+  findings. The shared save boundary, live core path query and guarded
+  publication follow the recorded contracts; vocabulary and mirrors agree.
+- Spec: PASS; no actionable findings against D-10–D-12 or the reviewed
+  integration. Recovery behavior, explicit designations and reconciliation
+  evidence agree. Human AT acceptance remains a separate release residual.
+
+Both independent passes were source-only and made no edits or UI actions.
+No findings required another implementation change. The exact Windows Rust
+core/integration/CLI selection and all 90 UniFFI tests passed. Release solution
+build, native bindings, format, clippy, benchmark compilation, license headers
+and both generators passed. Desktop and final-head CI results are recorded on
+PR #1229; no human listening result is inferred from these checks.
+
 W7 wave reconciliation (#750) is included in this #748 PR, matching the
 committed W7-4 instrument rule and the owner's one-PR-per-issue instruction.
 Human NVDA/JAWS/IME acceptance remains a release residual; braille is deferred.
