@@ -140,6 +140,7 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
                     Message = $"Dashboard could not be loaded: {failure.Message}",
                 };
                 Sections.Add(failed);
+                _announce(new A11yEvent.BasesDashboardLoadFailed(Name, failure.Message));
                 SectionsPublished?.Invoke(this, EventArgs.Empty);
             });
             return;

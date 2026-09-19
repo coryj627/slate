@@ -98,7 +98,7 @@ def render(data: dict, config: dict) -> str:
               "counts differ from construction counts because one family marker can cover",
               "several sites. The binding-aware inventory found 74 Windows constructions",
               "after scan conversion (the earlier unqualified-spelling scan missed one),",
-              "and 27 Mac constructions. Proposed rows await the owner's decision.", "",
+              "and 27 Mac constructions. Each site's decision status is recorded below.", "",
               "| Platform | Site | Engine | Decision source | Status |",
               "|---|---|---|---|---|"]
     for side in ("Windows", "Mac"):

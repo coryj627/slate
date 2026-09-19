@@ -2742,12 +2742,18 @@
         "implementation": [
           "apps/slate-windows/src/SlateWindows/AccessibilityNotificationDispatcher.cs#Post",
           "apps/slate-windows/src/SlateWindows/ScanAnnouncementGate.cs#FileIndexed",
-          "apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.Filter.cs#ApplyFilterOutcome"
+          "apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.Filter.cs#ApplyFilterOutcome",
+          "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs#Save",
+          "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Layout.cs#ReopenFileAnnouncement",
+          "apps/slate-windows/src/SlateWindows/Bases/DashboardViewModel.cs#LoadBody"
         ],
         "tests": [
           "apps/slate-windows/tests/SlateWindows.Tests/AccessibilityNotificationDispatcherTests.cs#EveryPriorityAndBothOverloadsReachTheExactNativeTuple",
           "apps/slate-windows/tests/SlateWindows.Tests/SidebarAnnouncementEtiquetteTests.cs#DebouncedPublicationDedupsQueryAndTotalAcrossRefreshes",
-          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/A11yTriggerParityCensus.cs#EveryBindingKeyAndEveryConstructionIsCoveredInBothDirections"
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/A11yTriggerParityCensus.cs#EveryBindingKeyAndEveryConstructionIsCoveredInBothDirections",
+          "apps/slate-windows/tests/SlateWindows.Tests/RecoveryAnnouncementTests.cs#ConflictingSaveSpeaksOnceAndPreservesBothVersions",
+          "apps/slate-windows/tests/SlateWindows.Tests/RecoveryAnnouncementTests.cs#ReopeningMissingFileKeepsTheTabAndSpeaksMissingInsteadOfSuccess",
+          "apps/slate-windows/tests/SlateWindows.Tests/RecoveryAnnouncementTests.cs#DashboardFailureSpeaksOnlyWhenItsCurrentPublicationRuns"
         ]
       }
     },

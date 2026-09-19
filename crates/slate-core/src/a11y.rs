@@ -611,6 +611,10 @@ pub enum A11yEvent {
     ReopenTargetMissing {
         filename: String,
     },
+    FileReopenFailed {
+        filename: String,
+        detail: String,
+    },
     ReopenedFile {
         filename: String,
     },
@@ -732,6 +736,10 @@ pub enum A11yEvent {
     },
     SaveConflict {
         filename: String,
+    },
+    NoteSaveBlocked {
+        filename: String,
+        detail: String,
     },
 
     // --- History restore (O-3) ---
@@ -1127,6 +1135,10 @@ pub enum A11yEvent {
         detail: String,
     },
     BasesDashboardMissing,
+    BasesDashboardLoadFailed {
+        name: String,
+        detail: String,
+    },
     /// The last group behind the `postBaseActionAnnouncement` funnel:
     /// row actions, clipboard/export, and cell editing. With these the
     /// funnel is deleted and the Bases family is fully converted.
@@ -1662,7 +1674,10 @@ impl A11yEvent {
     pub fn priority(&self) -> A11yPriority {
         use A11yEvent::*;
         match self {
-            CommandPaletteNeedsVault
+            NoteSaveBlocked { .. }
+            | FileReopenFailed { .. }
+            | BasesDashboardLoadFailed { .. }
+            | CommandPaletteNeedsVault
             | PaletteCommandFailed { .. }
             | PaletteCommandNotFound { .. }
             | PaletteCommandUnavailable { .. }
@@ -1732,6 +1747,9 @@ impl A11yEvent {
             HistoryPanelShown => "History panel.".to_owned(),
 
             ReopenTargetMissing { filename } => format!("{filename} no longer exists."),
+            FileReopenFailed { filename, detail } => {
+                format!("Could not reopen {filename}: {detail}")
+            }
             ReopenedFile { filename } => format!("Reopened {filename}."),
             ReopenedNamed { name } => format!("Reopened {name}."),
             ReopenedGraph => "Reopened Graph.".to_owned(),
@@ -1816,6 +1834,9 @@ impl A11yEvent {
             TasksFilterSet { filter_name } => format!("Filter set to {filter_name}."),
 
             NoteSaved { filename } => format!("Saved {filename}."),
+            NoteSaveBlocked { filename, detail } => format!(
+                "Save blocked. Could not save {filename}: {detail}. Your edits remain in the editor."
+            ),
             SaveConflict { filename } => {
                 format!("Save blocked. {filename} was modified externally. Resolve in the dialog.")
             }
@@ -2155,6 +2176,9 @@ impl A11yEvent {
                 format!("Dashboard could not be edited: {detail}")
             }
             BasesDashboardMissing => "Dashboard is no longer available.".to_owned(),
+            BasesDashboardLoadFailed { name, detail } => {
+                format!("Dashboard {name} could not be loaded: {detail}")
+            }
             BasesDockUpdatedForNote => "Base dock updated for active note.".to_owned(),
             BasesLinkCopied { name } => format!("Copied link to {name}."),
             BasesBacklinksFor { name } => format!("Backlinks for {name}."),
@@ -3474,6 +3498,7 @@ pub fn corpus() -> Vec<A11yEvent> {
         ReopenTargetMissing {
             filename: "gone.md".into(),
         },
+        FileReopenFailed { filename: "notes.md".into(), detail: "invalid UTF-8".into() },
         ReopenedFile {
             filename: "notes.md".into(),
         },
@@ -3574,6 +3599,7 @@ pub fn corpus() -> Vec<A11yEvent> {
         SaveConflict {
             filename: "notes.md".into(),
         },
+        NoteSaveBlocked { filename: "notes.md".into(), detail: "modified externally".into() },
         RestoredVersionFrom {
             formatted_date: "July 19, 2026 at 9:41 AM".into(),
         },
@@ -3956,6 +3982,7 @@ pub fn corpus() -> Vec<A11yEvent> {
             detail: "io error".into(),
         },
         BasesDashboardMissing,
+        BasesDashboardLoadFailed { name: "Reading".into(), detail: "unknown dashboard".into() },
         BasesDockUpdatedForNote,
         BasesLinkCopied {
             name: "Reading".into(),
@@ -5427,6 +5454,7 @@ mod tests {
             (Medium, "Right pane hidden."),
             (Medium, "History panel."),
             (Medium, "gone.md no longer exists."),
+            (High, "Could not reopen notes.md: invalid UTF-8"),
             (Medium, "Reopened notes.md."),
             (Medium, "Reopened Open tasks."),
             (Medium, "Reopened Graph."),
@@ -5494,6 +5522,10 @@ mod tests {
             (
                 Medium,
                 "Save blocked. notes.md was modified externally. Resolve in the dialog.",
+            ),
+            (
+                High,
+                "Save blocked. Could not save notes.md: modified externally. Your edits remain in the editor.",
             ),
             (High, "Restored version from July 19, 2026 at 9:41 AM."),
             (High, "Restored notes.md."),
@@ -5679,6 +5711,10 @@ mod tests {
             (Medium, "Dashboard could not be deleted: io error"),
             (Medium, "Dashboard could not be edited: io error"),
             (Medium, "Dashboard is no longer available."),
+            (
+                High,
+                "Dashboard Reading could not be loaded: unknown dashboard",
+            ),
             (Medium, "Base dock updated for active note."),
             (Medium, "Copied link to Reading."),
             (Medium, "Backlinks for Reading."),
@@ -6824,7 +6860,7 @@ mod tests {
     fn a11y_event_top_level_count_is_pinned() {
         assert_eq!(
             declared_variants("A11yEvent").len(),
-            202,
+            205,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

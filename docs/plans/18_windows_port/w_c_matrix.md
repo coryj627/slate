@@ -120,8 +120,16 @@ and `A11yTriggerParityCensus` checks every binding key and registered source
 construction. The nine-family etiquette register and residue/trigger ledgers
 live in [contracts 38](../38_notification_dispatcher_contracts.md).
 
+The owner's 2026-09-19 approved amendment adds typed failure announcements
+for failed saves, file reopen failures and dashboard loads (D-10–D-12).
+`RecoveryAnnouncementTests` covers conflicting Save/Save All/close without
+data loss, missing and unreadable reopen outcomes, success controls, and
+production asynchronous dashboard publication with stale/shutdown guards.
+Existing platform adaptations and enumerated residue are recorded; the
+sidebar-settings retry flow is deferred to [#1230](https://github.com/coryj627/slate/issues/1230).
+
 The [notification checklist](reports/w7_2_notification_etiquette_checklist.md)
-adds independent NVDA and JAWS queue/interruption/Say All/scan runs. All
+adds independent NVDA and JAWS queue/interruption/Say All/scan and recovery runs. All
 remain Pending. Braille is owner-deferred (2026-09-18), unverified and not
 a current blocker. The editor report preserves the agent-operated NVDA
 results separately from human acceptance. Narrator remains W8-6 smoke.
