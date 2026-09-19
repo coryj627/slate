@@ -56,7 +56,11 @@ internal sealed class AccessibilityNotificationDispatcher
         {
             A11yPriority.High => AutomationNotificationProcessing.ImportantMostRecent,
             A11yPriority.Medium => AutomationNotificationProcessing.All,
-            _ => throw new ArgumentOutOfRangeException(nameof(rendered), rendered.Priority, "Unknown announcement priority."),
+            // D-1's exhaustiveness lives in the tests, which fail the build
+            // when a third priority appears. At runtime an unknown value is
+            // still an announcement: it degrades to the polite queue rather
+            // than throwing out of a command handler on the UI thread.
+            _ => AutomationNotificationProcessing.All,
         };
         _raise(
             AutomationNotificationKind.Other,

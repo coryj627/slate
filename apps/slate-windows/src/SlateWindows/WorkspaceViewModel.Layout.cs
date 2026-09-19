@@ -515,13 +515,21 @@ internal sealed partial class WorkspaceViewModel
             ?? ActiveGroup;
         WorkspaceTabViewModel tab = AddTab(group, item, activate: true);
         ActiveGroup = group;
-        _announce(item.Kind switch
+        A11yEvent reopened = item.Kind switch
         {
             WorkspaceItemKind.Graph => new A11yEvent.ReopenedGraph(),
             WorkspaceItemKind.SavedQuery or WorkspaceItemKind.Dashboard =>
                 new A11yEvent.ReopenedNamed(tab.Title),
             _ => ReopenFileAnnouncement(tab),
-        });
+        };
+        // A missing target keeps the tab and its recovery UI, without
+        // claiming success (D-11): the tab's state changes here, not
+        // inside the function that composes the announcement.
+        if (reopened is A11yEvent.ReopenTargetMissing)
+        {
+            tab.InvalidatePath();
+        }
+        _announce(reopened);
         RaiseCommandStates();
         Persist();
     }
@@ -532,10 +540,9 @@ internal sealed partial class WorkspaceViewModel
         try
         {
             // The index may still contain a deleted file. Ask the live core
-            // provider and retain the tab's recovery UI without claiming success.
+            // provider (D-11) rather than trusting index metadata.
             if (_session.CanonicalPath(tab.Path) is null)
             {
-                tab.InvalidatePath();
                 return new A11yEvent.ReopenTargetMissing(filename);
             }
         }
