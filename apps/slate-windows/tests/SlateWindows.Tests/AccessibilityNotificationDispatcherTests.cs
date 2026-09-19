@@ -49,6 +49,18 @@ public sealed class AccessibilityNotificationDispatcherTests
         }
     }
 
+    /// <summary>D-1's exhaustiveness is the fact above: a third priority fails
+    /// the build's tests. At runtime an unknown value is an announcement, not
+    /// a crash on the UI thread — it degrades to the polite queue.</summary>
+    [Fact]
+    public void AnUnknownPriorityDegradesToThePoliteQueueInsteadOfThrowing()
+    {
+        var raised = new List<Notification>();
+        Recording(raised).Post(new RenderedAnnouncement("Unknown priority.", (A11yPriority)42));
+        Assert.Equal(new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All,
+            "Unknown priority.", "slate-accessibility-announcement"), Assert.Single(raised));
+    }
+
     private static AccessibilityNotificationDispatcher Recording(List<Notification> raised) =>
         new((kind, processing, text, activityId) =>
             raised.Add(new Notification(kind, processing, text, activityId)));

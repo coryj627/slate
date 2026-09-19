@@ -72,13 +72,4 @@ public sealed class SidebarAnnouncementEtiquetteTests
         await CompleteNext();
         Assert.Equal(3, announcements.OfType<A11yEvent.FileListCount>().Count());
     }
-
-    private sealed class PublicationContext : SynchronizationContext
-    {
-        private readonly Channel<Action> _posts = Channel.CreateUnbounded<Action>();
-        public override void Post(SendOrPostCallback callback, object? state) =>
-            Assert.True(_posts.Writer.TryWrite(() => callback(state)));
-        internal async Task PublishNext() =>
-            (await _posts.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)))();
-    }
 }

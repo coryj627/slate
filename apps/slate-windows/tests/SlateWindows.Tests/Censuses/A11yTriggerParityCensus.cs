@@ -171,6 +171,31 @@ public sealed class A11yTriggerParityCensus
         Assert.All(sites, site => Assert.Equal("NoteSaved", site.Key));
     }
 
+    /// <summary>Every member kind that can construct an event names its site:
+    /// each variable of a multi-variable field, an indexer, an event accessor,
+    /// an operator. The census reports the site rather than dying on it.</summary>
+    [Fact]
+    public void WindowsInventoryNamesEveryMemberKindThatCanConstructAnEvent()
+    {
+        const string source = """
+            using E = uniffi.slate_uniffi.A11yEvent;
+            class Owner {
+                static readonly object _first = new E.NoteSaved("a"), _second = new E.NoteSaved("b");
+                object this[int index] => new E.NoteSaved("indexer");
+                event System.Action Changed { add { _ = new E.NoteSaved("add"); } remove { } }
+                public static Owner operator +(Owner left, Owner right) { _ = new E.NoteSaved("operator"); return left; }
+            }
+            """;
+        SyntaxTree tree = CSharpSyntaxTree.ParseText(source);
+        CSharpCompilation compilation = CSharpCompilation.Create("inventory-members", [tree],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+             MetadataReference.CreateFromFile(typeof(A11yEvent).Assembly.Location)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        A11yTriggerInventory.Site[] sites = A11yTriggerInventory.WindowsSites("File.cs", tree.GetRoot(), compilation.GetSemanticModel(tree));
+        Assert.Equal(["File.cs#Owner._first", "File.cs#Owner._second", "File.cs#Owner.this[]", "File.cs#Owner.Changed", "File.cs#Owner.operator +"],
+            sites.Select(site => site.Member));
+    }
+
     [Fact]
     public void MacInventoryRejectsCommentsPatternsAndUnrelatedMemberReads()
     {

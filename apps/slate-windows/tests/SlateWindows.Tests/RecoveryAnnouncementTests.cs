@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Threading.Channels;
 using SlateWindows.Bases;
 using uniffi.slate_uniffi;
 
@@ -148,12 +147,76 @@ public sealed class RecoveryAnnouncementTests
         }
     }
 
-    private sealed class PublicationContext : SynchronizationContext
+    /// <summary>D-12 makes a failed load audible when published; an unchanged
+    /// failure re-published by the next refresh funnel is not news. A docked
+    /// dashboard whose target stays broken must not interrupt the user at High
+    /// on every note save and vault change.</summary>
+    [Fact]
+    public async Task AnUnchangedDashboardFailureIsAnnouncedOnceAcrossPublications()
     {
-        private readonly Channel<Action> _posts = Channel.CreateUnbounded<Action>();
-        public override void Post(SendOrPostCallback callback, object? state) =>
-            Assert.True(_posts.Writer.TryWrite(() => callback(state)));
-        internal Task<Action> Next() => _posts.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        using var fixture = FixtureVault.Create(0, "dashboard-failure-dedupe");
+        using var session = VaultSession.OpenFilesystem(fixture.Root);
+        var context = new PublicationContext();
+        var announced = new List<A11yEvent>();
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        DashboardViewModel document;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(context);
+            document = new DashboardViewModel(session, "removed-dashboard", "Reading", announced.Add);
+        }
+        finally { SynchronizationContext.SetSynchronizationContext(previous); }
+        try
+        {
+            for (int load = 0; load < 2; load++)
+            {
+                document.Load();
+                Action publish = await context.Next();
+                await document.WhenAllWorkDrained().WaitAsync(TimeSpan.FromSeconds(10));
+                publish();
+                Assert.Equal(DashboardSectionState.Failed, Assert.Single(document.Sections).State);
+            }
+            Assert.Single(announced.OfType<A11yEvent.BasesDashboardLoadFailed>());
+        }
+        finally
+        {
+            document.Shutdown();
+            await document.WhenAllWorkDrained().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    /// <summary>The failed section shows the sentence the user hears: core
+    /// owns the failure copy (D-12), so the visible message is its rendering,
+    /// not a second host spelling that can drift.</summary>
+    [Fact]
+    public async Task TheFailedSectionShowsTheSentenceThatIsSpoken()
+    {
+        using var fixture = FixtureVault.Create(0, "dashboard-failure-message");
+        using var session = VaultSession.OpenFilesystem(fixture.Root);
+        var context = new PublicationContext();
+        var announced = new List<A11yEvent>();
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        DashboardViewModel document;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(context);
+            document = new DashboardViewModel(session, "removed-dashboard", "Reading", announced.Add);
+        }
+        finally { SynchronizationContext.SetSynchronizationContext(previous); }
+        try
+        {
+            document.Load();
+            Action publish = await context.Next();
+            await document.WhenAllWorkDrained().WaitAsync(TimeSpan.FromSeconds(10));
+            publish();
+            RenderedAnnouncement failure = SlateUniffiMethods.A11yRender(Assert.Single(announced));
+            Assert.Equal(failure.Text, Assert.Single(document.Sections).Message);
+        }
+        finally
+        {
+            document.Shutdown();
+            await document.WhenAllWorkDrained().WaitAsync(TimeSpan.FromSeconds(10));
+        }
     }
 
     private sealed class Host : IDisposable

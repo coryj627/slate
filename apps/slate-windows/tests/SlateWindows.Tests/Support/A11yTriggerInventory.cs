@@ -63,13 +63,21 @@ internal static class A11yTriggerInventory
     private static string MemberName(SyntaxNode node)
     {
         MemberDeclarationSyntax declaration = node.Ancestors().OfType<MemberDeclarationSyntax>()
-            .First(member => member is BaseMethodDeclarationSyntax or BasePropertyDeclarationSyntax or FieldDeclarationSyntax);
+            .First(member => member is BaseMethodDeclarationSyntax or BasePropertyDeclarationSyntax or BaseFieldDeclarationSyntax);
         string name = declaration switch
         {
             MethodDeclarationSyntax method => method.Identifier.ValueText,
             ConstructorDeclarationSyntax constructor => constructor.Identifier.ValueText,
+            DestructorDeclarationSyntax destructor => "~" + destructor.Identifier.ValueText,
+            OperatorDeclarationSyntax @operator => "operator " + @operator.OperatorToken.ValueText,
+            ConversionOperatorDeclarationSyntax conversion => "operator " + conversion.Type.ToString(),
             PropertyDeclarationSyntax property => property.Identifier.ValueText,
-            FieldDeclarationSyntax field => field.Declaration.Variables.Single().Identifier.ValueText,
+            IndexerDeclarationSyntax => "this[]",
+            EventDeclarationSyntax @event => @event.Identifier.ValueText,
+            // A field (or field-like event) may declare several variables: the
+            // site belongs to the one whose initializer holds the construction.
+            BaseFieldDeclarationSyntax field => field.Declaration.Variables
+                .Single(variable => variable.Span.Contains(node.Span)).Identifier.ValueText,
             _ => throw new InvalidOperationException($"Unclassified event owner: {declaration.Kind()}"),
         };
         string type = declaration.Ancestors().OfType<TypeDeclarationSyntax>().First().Identifier.ValueText;
