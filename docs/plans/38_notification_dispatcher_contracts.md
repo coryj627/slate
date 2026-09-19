@@ -238,10 +238,62 @@ picker/create completion through TemplatePickerOpened/TemplateNoteCreated.
 Their core text/priority is unchanged; template guidance retains its one
 registered residue adapter. No new enum keys beyond the three scan events.
 
-Owner decision requested for rows explicitly marked proposed in the tables
-below (2026-09-18). Existing cited decisions stay recorded. Proposed is not
-approval, and elapsed time does not approve it. The register is concrete and
-censused; the PR cannot claim those designations accepted until answered.
+## Owner decision and recovery-announcement amendment (2026-09-19)
+
+The owner explicitly answered **"approve the package"** after the four-part
+decision walkthrough. This approves the seven routine platform adaptations
+(font size, welcome/focus, Bases preview/copy, selection validation and heading
+scrolling), the enumerated 74 Windows / 27 Mac residue constructions, and
+deferral of a sidebar-settings retry flow to
+[#1230](https://github.com/coryj627/slate/issues/1230). Existing cited decisions
+remain recorded. The approval also requires explicit save-failure,
+missing-file reopen and dashboard-load failure announcements before merge;
+it does not approve leaving those failure paths silent. No additional
+HostComposed site is authorized by this amendment.
+
+**D-10 — Failed saves speak at the save boundary.** Each failed
+WorkspaceTabViewModel.Save attempt posts one High NoteSaveBlocked(filename,
+detail) after publishing its existing inline status. Both editor-integrity
+and core save failures retain the current buffer, dirty state and save/repair
+semantics. This covers explicit Save, Save All and save-before-close/navigation
+without repeating the announcement at each caller. Success remains on the
+existing NoteSaved path. Core owns the failure sentence; the detail is the
+original error, with no Mac overwrite/reload-dialog instruction.
+
+**D-11 — Reopen describes the actual file outcome.** Keep the Windows tab and
+its recovery UI. For file-backed tabs, use core's existing CanonicalPath
+query (live provider, not index metadata) to identify a missing path and post
+ReopenTargetMissing instead of ReopenedFile. If that query fails or the
+Markdown load failed while the path exists, post High ReopenFailed(filename,
+detail). Preserve the load outcome separately from mutable status text and
+reset it for each load. Successful file, registry-item and graph reopen
+behavior stays unchanged. No parsing of error messages and no host filesystem
+existence rules. The async Base/Canvas document load paths keep their existing
+failure handling; this amendment does not redesign those documents.
+
+**D-12 — Dashboard load failure is audible when published.** In
+DashboardViewModel.LoadBody, a failed GetDashboard retains the visible failed
+section and posts High BasesDashboardLoadFailed(name,detail) from the same
+owner-context publication. Generation and shutdown guards suppress retired
+results. The generic failure event deliberately covers both missing registry
+entries and unreadable/corrupt registry data without guessing from exception
+text. A failed individual saved-query section keeps its existing behavior.
+
+The three new events are core/UniFFI vocabulary with deliberate corpus rows
+and both host mirrors. Mac retains its existing save-conflict/error UI,
+ReopenTargetMissing refusal and DashboardDocument failed state; those are
+explicit platform designations for these Windows recovery notifications.
+Windows SaveConflict and BasesDashboardMissing designations now cite the
+new typed replacement outcomes. Windows ReopenTargetMissing ceases to be a
+missing-trigger designation. Remaining approved proposals become recorded.
+
+Validation before merge: demonstrate the actual save/reopen/dashboard
+failure paths red with regression tests, including data preservation and
+success controls; exercise dashboard publication through its production
+asynchronous scheduler, stale generation and shutdown. Regenerate bindings,
+corpus and trigger ledger, validate dispatcher tuples and mirrors, run both
+independent review axes and final-head CI/Codoki. Human AT remains separate.
+This design amendment is committed before its implementation.
 
 W7 wave reconciliation (#750) is included in this #748 PR, matching the
 committed W7-4 instrument rule and the owner's one-PR-per-issue instruction.
