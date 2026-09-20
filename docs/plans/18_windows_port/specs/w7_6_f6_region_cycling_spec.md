@@ -1,0 +1,70 @@
+# W7-6 executable spec — F6 / Shift+F6 shell region cycling
+
+Issue: W7-6 ([#1240](https://github.com/coryj627/slate/issues/1240)). Wave: [W7](w7_spec.md) (the UIA accessibility program). Depends on W7-5 ([#1239](https://github.com/coryj627/slate/issues/1239), [PR #1241](https://github.com/coryj627/slate/pull/1241)): the menu bar must already be out of the Tab order, and the empty tab control must already refuse focus. One PR. **Issue = unit of acceptance; PR = unit of review** (the W6 convention).
+
+**Origin.** The first human NVDA field pass ([record](../reports/w7_5_nvda_field_pass_2026-09-20.md), Landmarks row) pressed F6, Shift+F6 and Ctrl+F6 four times and heard nothing: no binding exists. The owner's decision (2026-09-20) is the Win32 / Office convention — F6 cycles keyboard focus through the shell's regions, Shift+F6 cycles back. Today the only region movement is Ctrl+Alt+Arrows, which ping-pongs Files ⇄ editor splits ⇄ right-pane rail with no wrap and never reaches the menu bar or the status bar, and `slate.workspace.focusNextPane` / `focusPreviousPane` exist as chordless verbs that only walk editor split groups (`WorkspaceViewModel.FocusPane`, gated on `Groups.Count > 1`).
+
+**Behavioral source (normative, in this order):** the owner decisions below → program decision 6 (canonical announcement artifacts produced in core) and the W7-2 four-place rule ([w7_spec.md](w7_spec.md) §B2) → the shipped boundary precedent (`WorkspaceViewModel.Layout.cs#FocusDirectionalPane`, `MainWindow.xaml.cs#ViewModel_WorkspaceFocusBoundaryRequested`) → [contract 39](../../39_at_navigation_contracts.md) and the [AT navigation map](../at_navigation_map.md). Mac has no F6 and navigates panes directionally only; this is a **recorded Windows-only affordance** (`MacCatalogParityTests.WindowsOnlyIds` already lists both verbs), not a parity target.
+
+---
+
+## 0. Owner decisions (2026-09-20)
+
+- **D-1** F6 and Shift+F6 become the Windows chords of the EXISTING verbs `slate.workspace.focusNextPane` / `slate.workspace.focusPreviousPane`. The verbs widen from editor split groups to shell regions; the `Groups.Count > 1` gate goes. No second navigation mechanism.
+- **D-2** Cycle order: **menu bar → Files pane → tab bar → editor → right pane content → right pane rail → status bar → (wrap) menu bar.** Shift+F6 is the exact reverse.
+- **D-3** With files open, the tab bar and the editor caret are two stops. With no tab open, the tab bar stop is skipped and the editor stop lands on the empty editor pane region (announced as empty) — the note's "editor pane (empty) OR tab bar if files open".
+- **D-4** A hidden right pane is **skipped**, never force-opened (unlike Ctrl+Alt+Right, which reveals it — that behaviour is untouched).
+- **D-5** The status bar becomes a focusable, named region; its stop speaks the status text.
+- **D-6** Each landing announces the region. Announcements are typed core events (decision 6, W7-2 B2), never `HostComposed` text.
+
+## 1. Regions, in order
+
+| # | Region | Landing element | Present when | Announcement (rendered by core) |
+|---|---|---|---|---|
+| 1 | Menu bar | `MainMenu`'s first top-level `MenuItem` (`FileMenu`), the same element Alt lands on | always (disabled under a modal surface — see §4) | "Menu bar." |
+| 2 | Files pane | `FilesTree` (or `FilterResultsList` when the filter is active, the sidebar's own current stop) | always | existing `FilesRegionFocused` → "Files." |
+| 3 | Tab bar | the `TabItem` container of the active tab in the active group (`FocusEditorPane` arm 4) | active group has ≥ 1 tab | existing `TabFocused` → "{filename}, tab {i} of {n}." with `prefix` "Tab bar. " |
+| 4 | Editor | the active tab's input owner: `SlateTextEditor.FocusInputOwner()`, or the canvas / graph surface's focus landing (arms 1–3 of `FocusEditorPane`) | active group has ≥ 1 tab | existing `EditorPaneFocused` (unchanged copy) |
+| 4′ | Empty editor pane | the `ContentPane` landmark (`AutomationLandmarkBorder`, already a named focusable Group) | active group has 0 tabs (replaces 3 + 4) | "Editor pane. Empty." |
+| 5 | Right pane content | the shown leaf's first stop: the existing per-leaf landings (`ConnectionsLeafSurface.FocusAnchor`, `GraphInspectorSurface.FocusFirstStop`), else `FocusNavigationDirection.First` within the leaf body host (column 0 of the right-pane grid), else **skip to 6** | `IsRightPaneVisible` and the leaf has a focusable stop | existing `LeafPanelShown` → "{title} panel." |
+| 6 | Right pane rail | `RightPaneLeavesList` (selected item) | `IsRightPaneVisible` | "Right pane panels." |
+| 7 | Status bar | the `StatusBar` (`Focusable="True"`, `AutomationProperties.Name="Status bar"`, AutomationId `StatusBar`) | always | "Status bar. {status text}." |
+
+Wrap: after 7 comes 1; before 1 comes 7. Skipped regions are simply absent from the ring for that press; the ring is recomputed on every press from live state (no cached order).
+
+**Where am I** (the origin of a press): the focused element's landmark ancestor decides — `MainMenu` → 1; `FilesPane` → 2; a `TabItem` / `TabPanel` under `ContentPane` → 3; anything else under `ContentPane` → 4 (or 4′); under `InspectorPane` and inside `RightPaneLeavesList` → 6, else 5; under the `StatusBar` → 7. Focus on the window root, on an overlay, or nowhere → treat as "before 1" so F6 lands on 1 and Shift+F6 on 7.
+
+## 2. Chords and delivery
+
+- `chords.json`: `slate.workspace.focusNextPane` gets `"windows": "F6"`, `"windowsSpoken": "F6"`, `"scope": "Global"`; `focusPreviousPane` gets `"Shift+F6"` / `"Shift F6"` / `"Global"`. `macChord`/`mac` stay `null` (Windows-only, §0). Hints reworded: "Move focus to the next shell region: menu bar, files, tab bar, editor, right pane, status bar." / "… previous …".
+- `MainWindow.xaml` `Window.InputBindings`: `<KeyBinding Key="F6" Command="{Binding Workspace.FocusNextPaneCommand}" />` and `<KeyBinding Key="F6" Modifiers="Shift" Command="{Binding Workspace.FocusPreviousPaneCommand}" />` — contract P13c (`ChordTableTests`) requires the window KeyBinding for every global row; the verbs leave the "PR-4 orphans" comment in `ChordTable.cs`.
+- The Workspace menu gains "Focus Next _Region" / "Focus Previous Re_gion" items beside Focus Pane Left…Below (the labels in `chords.json` change from "Focus Next Pane" to "Focus Next Region" and likewise for Previous); they advertise `{cmd:ChordText …}` → `AcceleratorKey` (`CommandDriftTests`, `SpokenChords_…`).
+- `NavigationHelp` gains a `Shell` entry: "F6 moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. Shift F6 moves back." — spoken from the chord rows, never literal (W7-3 N-1/N-4).
+- Both commands' `CanExecute` becomes `_ => true` (a vault is open whenever the workspace exists).
+
+## 3. Announcements (core, four places)
+
+New `A11yEvent::ShellRegionFocused { region: ShellRegion }` with `ShellRegion::{ MenuBar, EmptyEditor, RightPaneRail, StatusBar { text: String } }`, priority `Medium`, renders: "Menu bar.", "Editor pane. Empty.", "Right pane panels.", "Status bar. {text}." (empty text → "Status bar."). Regions 2–5 reuse the existing events (table above). Per W7-2 B2: `a11y.rs` (variants, `priority`, `render`, `corpus()` rows — one per variant, status bar with and without text), `tests/fixtures/a11y/corpus.json` (regenerate with `SLATE_REGENERATE_FIXTURES=1 cargo test -p slate-core a11y`, re-run clean), the `slate-uniffi` mirror (`F::` ↔ `C::` mapping), the Swift corpus mirror and `A11yCorpusCensus.cs`. `HostComposed` is not an option for this copy.
+
+## 4. Edge rules
+
+- **Modal surface up** (`ModalSurface` non-null: palette, search, Quick Open, any sheet): F6 is a no-op — the menu is disabled and focus stays in the modal (the W5-2 rule that nothing opens beneath a sheet). The KeyBinding's command returns without moving focus; no announcement.
+- **Menu bar stop and Escape**: landing on `FileMenu` puts WPF in menu mode. Escape leaves menu mode and WPF restores focus to the previously focused element, which is the region F6 came from. That matches Alt and is documented, not overridden.
+- **Right pane content with no focusable stop** (a leaf whose body is a read-only notice): region 5 is skipped for that press, region 6 still lands — a reader is never stranded on an unfocusable notice.
+- **Editor split groups**: F6 treats the whole editor area as one region; the active group's caret is the stop. Ctrl+Alt+Arrows remain the way between splits (unchanged).
+- **Focus that the app cannot take** (e.g. a landing whose `Focus()` returns false): fall through to the next region in the same direction, at most one full ring, then announce nothing and leave focus where it was.
+
+## 5. Tests (the twins)
+
+- `ShellRegionRingTests` (unit, pure): the ring for each layout state — no tabs / tabs / right pane hidden / leaf without a stop — in both directions, with wrap; origin classification for every landmark; the modal no-op. The ring is a pure function `(ShellLayoutState, origin, direction) → landing` so it is testable without a window.
+- `ChordTableTests` / `CommandDriftTests` / `MacCatalogParityTests`: unchanged rules now cover the two rows (global scope, KeyBinding present, `WindowsOnlyIds` reasons updated to "Windows-only shell region cycling (F6)").
+- FlaUI journey `ShellRegions_F6CyclesForwardAndShiftF6Back` in `ShellAccessibilityTests`: open a note, focus the Files tree, then press F6 six times and assert the focused element after each press, by AutomationId: the active `WorkspaceTabs` tab item, `MarkdownEditor`, the Outline leaf's first stop (or `RightPaneLeaves` when the leaf has none), `RightPaneLeaves`, `StatusBar`, `FileMenu`; a seventh F6 returns to `FilesTree`. Then Shift+F6 back through the same ids reversed. Then hide the right pane and assert both right stops vanish from the ring. Then relaunch on a zero-tab vault and assert `ContentPane` is the editor stop. Axe clean at the end (`AssertAxeClean`).
+- `A11yCorpusCensus` (Rust tripwires + C# census) fails until all mirrors list the new family.
+- Human: `w1_shell_at_checklist.md` gains row 8 "Region cycling — F6 / Shift+F6 walk the seven regions and wrap; each landing is spoken" (twin: the FlaUI journey), Narrator/NVDA/JAWS Pending; `at_navigation_map.md` Landmarks row gains the chord column `F6 / Shift+F6` and the `ShellRegionRingTests` evidence; `w_c_matrix.md` row "Main window and menu bar" focus-route cell adds "F6 region ring".
+
+## 6. Non-goals
+
+- No change to Ctrl+Alt+Arrows semantics (including the right-pane reveal).
+- No mac binding (recorded divergence).
+- No new landmark controls beyond the status bar's focusability and name.
+- No F6 inside dialogs, sheets or the palette.
