@@ -238,6 +238,12 @@ public partial class MainWindow : Window
 
     private void ViewModel_WorkspaceReady(object? sender, EventArgs e)
     {
+        // W7-6 (#1240): the window answers F6 for THIS workspace.
+        if (_viewModel.Workspace is WorkspaceViewModel workspace)
+        {
+            workspace.ShellRegionHost = this;
+        }
+
         _ = Dispatcher.InvokeAsync(FocusActiveEditorPane, DispatcherPriority.Loaded);
     }
 
@@ -1212,6 +1218,10 @@ public partial class MainWindow : Window
             // Ctrl+Shift+J/R open sheets, Ctrl+Shift+E toggles reading.
             (Key.J or Key.R, ModifierKeys.Control or ModifierKeys.Control | ModifierKeys.Shift) => true,
             (Key.E, ModifierKeys.Control | ModifierKeys.Shift) => true,
+            // W7-6 (#1240): F6 / Shift+F6 cycle the shell regions, and
+            // spec §4 makes them a no-op under any modal surface — so the
+            // sheet layer suppresses them on the way down.
+            (Key.F6, ModifierKeys.None or ModifierKeys.Shift) => true,
             _ => false,
         };
     }

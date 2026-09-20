@@ -58,6 +58,12 @@ public sealed class A11yCorpusCensus
     [
         new A11yEvent.FilesRegionFocused(),
         new A11yEvent.LeafPanelShown(Title: "Outline"),
+        new A11yEvent.ShellRegionFocused(Region: new ShellRegion.MenuBar()),
+        new A11yEvent.ShellRegionFocused(Region: new ShellRegion.EmptyEditor()),
+        new A11yEvent.ShellRegionFocused(Region: new ShellRegion.RightPaneRail()),
+        new A11yEvent.ShellRegionFocused(Region: new ShellRegion.StatusBar(Text: "Scan finished: 90 files indexed.")),
+        new A11yEvent.ShellRegionFocused(Region: new ShellRegion.StatusBar(Text: "")),
+        new A11yEvent.ShellRegionFocused(Region: new ShellRegion.StatusBar(Text: "Scanning 120 files…")),
         new A11yEvent.EditorPaneFocused(Ordinal: 2, Total: 3, Title: "notes.md", Prefix: ""),
         new A11yEvent.TabFocused(Prefix: "Now", Filename: "notes.md", Index: 1, Count: 4),
         new A11yEvent.TabClosed(ClosedTitle: "draft.md", Successor: "notes.md"),

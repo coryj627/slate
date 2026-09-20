@@ -1,0 +1,274 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Media;
+
+namespace SlateWindows;
+
+/// <summary>The window's half of F6 cycling (W7-6, #1240): which region
+/// holds focus, and how each region takes it. The ring and the speech
+/// are the view model's (<see cref="WorkspaceViewModel.ShellRegionHost"/>).</summary>
+public partial class MainWindow : IShellRegionHost
+{
+    bool IShellRegionHost.ModalSurfaceOpen =>
+        ModalSurfaces.TopmostOpen(CurrentModalSurfaceState) is not null;
+
+    string IShellRegionHost.StatusText => _viewModel.StatusText ?? string.Empty;
+
+    bool IShellRegionHost.RightPaneHasContentStop =>
+        _viewModel.Workspace is WorkspaceViewModel workspace
+        && (workspace.ConnectionsLeafIsActive()
+            || (workspace.IsGraphInspectorShown && GraphInspectorSurface.IsVisible)
+            || VisibleLeafBody() is { } body && FirstFocusable(body) is not null);
+
+    ShellRegionKind? IShellRegionHost.FocusedRegion()
+    {
+        if (Keyboard.FocusedElement is not DependencyObject focused
+            || !ReferenceEquals(Window.GetWindow(focused), this))
+        {
+            return null;
+        }
+
+        if (IsWithin(focused, MainMenu))
+        {
+            return ShellRegionKind.MenuBar;
+        }
+
+        if (IsWithin(focused, FilesPaneBorder))
+        {
+            return ShellRegionKind.Files;
+        }
+
+        if (IsWithin(focused, ContentPaneBorder))
+        {
+            // The border itself is the EMPTY pane's stop, and only then
+            // (final review, #1240): with tabs open it is just the content
+            // pane's own chrome, and calling that EmptyEditor made the ring
+            // believe the tabless shape while a note was open.
+            if (ReferenceEquals(focused, ContentPaneBorder)
+                && _viewModel.Workspace is WorkspaceViewModel { } w
+                && w.ActiveGroup.Tabs.Count == 0)
+            {
+                return ShellRegionKind.EmptyEditor;
+            }
+
+            return HasAncestor<TabItem>(focused) || HasAncestor<TabPanel>(focused)
+                ? ShellRegionKind.TabBar
+                : ShellRegionKind.Editor;
+        }
+
+        if (IsWithin(focused, RightPaneBorder))
+        {
+            return IsWithin(focused, RightPaneLeavesList)
+                ? ShellRegionKind.RightPaneRail
+                : ShellRegionKind.RightPaneContent;
+        }
+
+        if (IsWithin(focused, ShellStatusBar))
+        {
+            return ShellRegionKind.StatusBar;
+        }
+
+        return null;
+    }
+
+    /// <summary>A landing succeeds when focus ENDS UP in the region, not
+    /// when a container's <c>Focus()</c> call reports true (W7-6 fix
+    /// round 1, #1240): WPF redirects keyboard focus to a
+    /// <c>TreeViewItem</c>'s or <c>ListBoxItem</c>'s selected container, so
+    /// <c>Focus()</c> on the <c>TreeView</c>/<c>ListBox</c> itself can
+    /// report false even though the press landed inside it — the ring then
+    /// treated the landing as refused and skipped the region entirely. Each
+    /// case still performs the same landing call(s); only the guard clauses
+    /// (no workspace, hidden right pane, no tab) return false before any of
+    /// them run. <see cref="ShellRegionKind.Editor"/> answers early only
+    /// for canvas and graph tabs, whose <c>FocusEditorPane</c> landing is
+    /// asynchronous; a text tab's end state is checked like every other
+    /// region's (final review, #1240).</summary>
+    bool IShellRegionHost.TryLand(ShellRegionKind region)
+    {
+        if (_viewModel.Workspace is not WorkspaceViewModel workspace)
+        {
+            return false;
+        }
+
+        switch (region)
+        {
+            case ShellRegionKind.MenuBar:
+                if (MainMenu.Items.Count == 0
+                    || MainMenu.ItemContainerGenerator.ContainerFromIndex(0) is not MenuItem first)
+                {
+                    return false;
+                }
+
+                first.Focus();
+                break;
+            case ShellRegionKind.Files:
+                _ = FilterResultsList.IsVisible
+                    ? FilterResultsList.Focus() || FilesTree.Focus()
+                    : FilesTree.Focus();
+                break;
+            case ShellRegionKind.TabBar:
+                {
+                    WorkspaceGroupViewModel group = workspace.ActiveGroup;
+                    if (group.ActiveTab is not { } activeTab)
+                    {
+                        return false;
+                    }
+
+                    TabControl? tabs = FindVisualDescendants<TabControl>(ContentPaneBorder)
+                        .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, group));
+                    tabs?.UpdateLayout();
+                    if (tabs?.ItemContainerGenerator.ContainerFromItem(activeTab) is TabItem item)
+                    {
+                        item.Focus();
+                    }
+
+                    break;
+                }
+            case ShellRegionKind.Editor:
+                if (workspace.ActiveGroup.ActiveTab is not { } editorTab)
+                {
+                    return false;
+                }
+
+                FocusEditorPane(workspace.ActiveGroup);
+                // Canvas and graph tabs seat focus asynchronously through their
+                // own landing; the text editor is synchronous, so its end state
+                // is judged like every other region (it can fall back to the tab
+                // item or the Files tree, which must read as a refusal).
+                return editorTab is { IsCanvas: true } or { IsGraph: true }
+                    || ((IShellRegionHost)this).FocusedRegion() == ShellRegionKind.Editor;
+            case ShellRegionKind.EmptyEditor:
+                if (workspace.ActiveGroup.ActiveTab is not null)
+                {
+                    return false;
+                }
+
+                ContentPaneBorder.Focus();
+                break;
+            case ShellRegionKind.RightPaneContent:
+                if (!workspace.IsRightPaneVisible)
+                {
+                    return false;
+                }
+
+                if (workspace.ConnectionsLeafIsActive())
+                {
+                    ConnectionsLeafSurface.FocusAnchor();
+                }
+                else if (workspace.IsGraphInspectorShown && GraphInspectorSurface.IsVisible)
+                {
+                    GraphInspectorSurface.FocusFirstStop();
+                }
+                else if (VisibleLeafBody() is { } body && FirstFocusable(body) is { } stop)
+                {
+                    stop.Focus();
+                }
+
+                break;
+            case ShellRegionKind.RightPaneRail:
+                if (!workspace.IsRightPaneVisible)
+                {
+                    return false;
+                }
+
+                if (RightPaneLeavesList.SelectedItem is { } selected
+                    && RightPaneLeavesList.ItemContainerGenerator.ContainerFromItem(selected) is ListBoxItem row)
+                {
+                    row.Focus();
+                }
+                else
+                {
+                    RightPaneLeavesList.Focus();
+                }
+
+                break;
+            case ShellRegionKind.StatusBar:
+                ShellStatusBar.Focus();
+                break;
+            default:
+                return false;
+        }
+
+        return ((IShellRegionHost)this).FocusedRegion() == region;
+    }
+
+    /// <summary>WPF's menu mode routes keys to the menu; F6 is handed to
+    /// the ring so a press from the menu-bar region moves on (spec §4).</summary>
+    private void MainMenu_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        // Only the two ring chords: Ctrl+F6, Alt+F6 and the rest are not
+        // ours to swallow (final review, #1240).
+        if (e.Key != Key.F6
+            || Keyboard.Modifiers is not (ModifierKeys.None or ModifierKeys.Shift)
+            || _viewModel.Workspace is not WorkspaceViewModel workspace)
+        {
+            return;
+        }
+
+        bool back = Keyboard.Modifiers == ModifierKeys.Shift;
+        (back ? workspace.FocusPreviousPaneCommand : workspace.FocusNextPaneCommand).Execute(null);
+        e.Handled = true;
+    }
+
+    /// <summary>The leaf body currently shown in the right pane's content
+    /// column: the visible child of <c>RightPaneLeafHost</c> in column 0
+    /// that is not the docked placeholder. The placeholder is excluded BY
+    /// REFERENCE (final review, #1240): the old <c>is not StackPanel</c>
+    /// test would silently skip any future leaf body that happened to be a
+    /// <c>StackPanel</c>.</summary>
+    private FrameworkElement? VisibleLeafBody() =>
+        RightPaneLeafHost.Children.OfType<FrameworkElement>()
+            .Where(child => Grid.GetColumn(child) == 0 && child.IsVisible)
+            .FirstOrDefault(child => !ReferenceEquals(child, RightPaneDockedPlaceholder));
+
+    private static UIElement? FirstFocusable(DependencyObject root)
+    {
+        foreach (DependencyObject candidate in FindVisualDescendants<DependencyObject>(root))
+        {
+            if (candidate is UIElement { Focusable: true, IsEnabled: true, IsVisible: true } element
+                && candidate is not Border)
+            {
+                return element;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsWithin(DependencyObject element, DependencyObject scope)
+    {
+        for (DependencyObject? current = element; current is not null; current = Parent(current))
+        {
+            if (ReferenceEquals(current, scope))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasAncestor<T>(DependencyObject element) where T : DependencyObject
+    {
+        for (DependencyObject? current = element; current is not null; current = Parent(current))
+        {
+            if (current is T)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static DependencyObject? Parent(DependencyObject current) =>
+        current is Visual or System.Windows.Media.Media3D.Visual3D
+            ? VisualTreeHelper.GetParent(current) ?? LogicalTreeHelper.GetParent(current)
+            : LogicalTreeHelper.GetParent(current);
+}

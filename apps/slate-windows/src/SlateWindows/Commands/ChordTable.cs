@@ -765,12 +765,15 @@ internal static class ChordTable
         Reg(Ids.RefreshSyncDiagnostics, "Refresh Sync Diagnostics", CommandSection.View,
             "Re-run sync-system detection and reload the LiveSync config."),
 
-        // PR-4 orphans: real capabilities with no binding at all. The
-        // disposition rule registers them so the palette becomes their surface.
-        Reg(Ids.FocusNextPane, "Focus Next Pane", CommandSection.View,
-            "Move focus to the next pane in layout order, wrapping at the end."),
-        Reg(Ids.FocusPreviousPane, "Focus Previous Pane", CommandSection.View,
-            "Move focus to the previous pane in layout order, wrapping at the start."),
+        // PR-4 orphans, chorded by W7-6 (#1240): F6 / Shift+F6 cycle the
+        // shell regions (menu bar, files, tab bar, editor, right pane,
+        // status bar). Windows-only — mac navigates panes directionally.
+        Reg(Ids.FocusNextPane, "Focus Next Region", CommandSection.View,
+            "Move focus to the next shell region: menu bar, files, tab bar, editor, right pane, status bar.",
+            null, "F6"),
+        Reg(Ids.FocusPreviousPane, "Focus Previous Region", CommandSection.View,
+            "Move focus to the previous shell region, wrapping from the menu bar to the status bar.",
+            null, "Shift+F6"),
 
         Unreg("windows.workspace.closeSpecificTab", "Close Tab (by tab)",
             CommandSection.View,

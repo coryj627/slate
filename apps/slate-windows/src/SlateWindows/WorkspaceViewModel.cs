@@ -1407,6 +1407,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     private bool _isRightPaneVisible = true;
     private readonly bool _startInteractionBackgroundWork;
 
+    /// <summary>The window's answers for F6 (W7-6); null until the window
+    /// attaches, in which case a press does nothing. Collaborator state,
+    /// not a verb — it sat in the command block by accident (final
+    /// review, #1240).</summary>
+    internal IShellRegionHost? ShellRegionHost { get; set; }
+
     /// <summary>W4-6 (#738): the per-source Bases document registry —
     /// one document per byte-exact path, shared by every tab on that
     /// source (contract C3). Documents whose last tab closed are shut
@@ -1731,8 +1737,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         FocusPaneRightCommand = new RelayCommand(_ => FocusDirectionalPane("horizontal", 1), _ => true);
         FocusPaneAboveCommand = new RelayCommand(_ => FocusDirectionalPane("vertical", -1), _ => true);
         FocusPaneBelowCommand = new RelayCommand(_ => FocusDirectionalPane("vertical", 1), _ => true);
-        FocusNextPaneCommand = new RelayCommand(_ => FocusPane(1), _ => Groups.Count > 1);
-        FocusPreviousPaneCommand = new RelayCommand(_ => FocusPane(-1), _ => Groups.Count > 1);
+        // W7-6 (#1240): F6 / Shift+F6 cycle SHELL REGIONS, not editor
+        // splits (Ctrl+Alt+Arrows keep the splits). Always executable: the
+        // ring exists whenever the workspace does; the modal no-op is
+        // decided per press, not by CanExecute.
+        FocusNextPaneCommand = new RelayCommand(_ => CycleShellRegion(1), _ => true);
+        FocusPreviousPaneCommand = new RelayCommand(_ => CycleShellRegion(-1), _ => true);
         GrowPaneCommand = new RelayCommand(_ => ResizeActivePane(0.05), _ => Groups.Count > 1);
         ShrinkPaneCommand = new RelayCommand(_ => ResizeActivePane(-0.05), _ => Groups.Count > 1);
         SaveActiveCommand = new RelayCommand(_ => SaveActive(), _ => ActiveGroup.ActiveTab?.IsMarkdown == true);

@@ -217,6 +217,11 @@
         "reason": "D-12 owner-approved Windows announcement of the published failed dashboard section. Mac DashboardDocument.load retains its failed state and the pre-dock BasesDashboardMissing check.",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
+      },
+      "ShellRegionFocused": {
+        "reason": "W7-6 (#1240): Mac has no F6 / Shift+F6 shell-region cycling and navigates panes directionally only; ShellRegionFocused is a recorded Windows-only affordance with no Mac construction site.",
+        "decision": "docs/plans/18_windows_port/specs/w7_6_f6_region_cycling_spec.md",
+        "status": "recorded"
       }
     }
   },

@@ -569,6 +569,18 @@ pub enum CanvasFilterState {
     Active { matched: u32, total: u32 },
 }
 
+/// The shell regions F6 cycling names that carry no other event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShellRegion {
+    MenuBar,
+    EmptyEditor,
+    RightPaneRail,
+    /// The status bar, with its current status text (may be empty).
+    StatusBar {
+        text: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum A11yEvent {
     // --- Regions, panes, tabs, workspace (U4) ---
@@ -578,6 +590,13 @@ pub enum A11yEvent {
     /// entering and switching read identically by design.
     LeafPanelShown {
         title: String,
+    },
+    /// F6 / Shift+F6 landed on a shell region that has no event of its
+    /// own (W7-6, #1240). Files, tab bar, editor and right-pane leaf
+    /// landings reuse `FilesRegionFocused`, `TabFocused`,
+    /// `EditorPaneFocused` and `LeafPanelShown`.
+    ShellRegionFocused {
+        region: ShellRegion,
     },
     /// Focus moved to an editor pane (⌘⌥ arrows / pane cycling).
     EditorPaneFocused {
@@ -1714,6 +1733,22 @@ impl A11yEvent {
         match self {
             FilesRegionFocused => "Files.".to_owned(),
             LeafPanelShown { title } => format!("{title} panel."),
+            ShellRegionFocused { region } => match region {
+                ShellRegion::MenuBar => "Menu bar.".to_owned(),
+                ShellRegion::EmptyEditor => "Editor pane. Empty.".to_owned(),
+                ShellRegion::RightPaneRail => "Right pane panels.".to_owned(),
+                ShellRegion::StatusBar { text } if text.trim().is_empty() => {
+                    "Status bar.".to_owned()
+                }
+                ShellRegion::StatusBar { text } => {
+                    // The trailing punctuation the renderer supplies itself:
+                    // a period, or the ellipsis a progress line ends with
+                    // ("Scanning 120 files…") - which
+                    // `trim_end_matches('.')` left in place, giving
+                    // "Status bar. Scanning 120 files….".
+                    format!("Status bar. {}.", text.trim().trim_end_matches(['.', '…']))
+                }
+            },
             EditorPaneFocused {
                 ordinal,
                 total,
@@ -3468,6 +3503,30 @@ pub fn corpus() -> Vec<A11yEvent> {
         FilesRegionFocused,
         LeafPanelShown {
             title: "Outline".into(),
+        },
+        ShellRegionFocused {
+            region: ShellRegion::MenuBar,
+        },
+        ShellRegionFocused {
+            region: ShellRegion::EmptyEditor,
+        },
+        ShellRegionFocused {
+            region: ShellRegion::RightPaneRail,
+        },
+        ShellRegionFocused {
+            region: ShellRegion::StatusBar {
+                text: "Scan finished: 90 files indexed.".into(),
+            },
+        },
+        ShellRegionFocused {
+            region: ShellRegion::StatusBar {
+                text: String::new(),
+            },
+        },
+        ShellRegionFocused {
+            region: ShellRegion::StatusBar {
+                text: "Scanning 120 files…".into(),
+            },
         },
         EditorPaneFocused {
             ordinal: 2,
@@ -5440,6 +5499,12 @@ mod tests {
         let expected: Vec<(A11yPriority, &str)> = vec![
             (Medium, "Files."),
             (Medium, "Outline panel."),
+            (Medium, "Menu bar."),
+            (Medium, "Editor pane. Empty."),
+            (Medium, "Right pane panels."),
+            (Medium, "Status bar. Scan finished: 90 files indexed."),
+            (Medium, "Status bar."),
+            (Medium, "Status bar. Scanning 120 files."),
             (Medium, "Editor pane 2 of 3, notes.md."),
             (Medium, "Now notes.md, tab 1 of 4."),
             (Medium, "Closed draft.md. notes.md is active."),
@@ -6860,7 +6925,7 @@ mod tests {
     fn a11y_event_top_level_count_is_pinned() {
         assert_eq!(
             declared_variants("A11yEvent").len(),
-            205,
+            206,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

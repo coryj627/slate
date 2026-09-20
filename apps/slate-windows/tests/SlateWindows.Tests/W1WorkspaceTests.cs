@@ -151,7 +151,7 @@ public sealed class W1WorkspaceModelTests
         workspace.FocusPaneAboveCommand.Execute(null);
         workspace.ClosePaneCommand.Execute(null);
         Assert.Equal(2, workspace.Groups.Count);
-        workspace.FocusPreviousPaneCommand.Execute(null);
+        workspace.FocusPaneLeftCommand.Execute(null);
         WorkspaceTabViewModel active = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
         workspace.CloseTabCommand.Execute(active);
         Assert.True(workspace.ReopenClosedTabCommand.CanExecute(null));

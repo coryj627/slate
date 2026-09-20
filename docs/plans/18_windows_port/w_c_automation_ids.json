@@ -1736,6 +1736,16 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "RightPaneDockedPlaceholder",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "RightPaneLeafHost",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "RightPaneLeaves",
     "Surface": "Right-pane leaf registry"
   },
@@ -1906,6 +1916,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "StatusBar",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "SyncDiagnosticsLeafBody",
     "Surface": "Sync diagnostics (W4-8)"
   },
@@ -2023,6 +2038,16 @@
     "Source": "MainWindow.xaml",
     "Expression": "WelcomeView",
     "Surface": "Welcome / Open Vault"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceFocusNextRegionMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceFocusPreviousRegionMenuItem",
+    "Surface": "Main window and menu bar"
   },
   {
     "Source": "MainWindow.xaml",
