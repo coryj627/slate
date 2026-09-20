@@ -41,6 +41,10 @@
         <KeyBinding Key="OemCloseBrackets" Modifiers="Control+Shift" Command="{Binding Workspace.NextTabCommand}" />
         <KeyBinding Key="OemOpenBrackets" Modifiers="Control+Shift" Command="{Binding Workspace.PreviousTabCommand}" />
         <KeyBinding Key="Left" Modifiers="Control+Alt" Command="{Binding Workspace.FocusPaneLeftCommand}" />
+        <!-- W7-6 (#1240): F6 / Shift+F6 cycle the shell regions; the verbs
+             were the PR-4 orphans focusNextPane / focusPreviousPane. -->
+        <KeyBinding Key="F6" Command="{Binding Workspace.FocusNextPaneCommand}" />
+        <KeyBinding Key="F6" Modifiers="Shift" Command="{Binding Workspace.FocusPreviousPaneCommand}" />
         <KeyBinding Key="Right" Modifiers="Control+Alt" Command="{Binding Workspace.FocusPaneRightCommand}" />
         <KeyBinding Key="Up" Modifiers="Control+Alt" Command="{Binding Workspace.FocusPaneAboveCommand}" />
         <KeyBinding Key="Down" Modifiers="Control+Alt" Command="{Binding Workspace.FocusPaneBelowCommand}" />
@@ -77,7 +81,8 @@
               Focusable="False"
               KeyboardNavigation.TabNavigation="None"
               Foreground="{DynamicResource MenuBarForeground}"
-              AutomationProperties.Name="Application commands">
+              AutomationProperties.Name="Application commands"
+              PreviewKeyDown="MainMenu_PreviewKeyDown">
             <!-- The menu disables under EVERY modal surface — mac
                  parity: AppKit disables the menu bar while a sheet is
                  up, which is why mac's unguarded menu commands are
@@ -262,6 +267,14 @@
                 <MenuItem Header="Focus Pane _Right" InputGestureText="{cmd:ChordText slate.workspace.focusPaneRight}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.FocusPaneRightCommand}" />
                 <MenuItem Header="Focus Pane _Above" InputGestureText="{cmd:ChordText slate.workspace.focusPaneAbove}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.FocusPaneAboveCommand}" />
                 <MenuItem Header="Focus Pane _Below" InputGestureText="{cmd:ChordText slate.workspace.focusPaneBelow}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.FocusPaneBelowCommand}" />
+                <MenuItem Header="Focus Next _Region"
+                          AutomationProperties.AutomationId="WorkspaceFocusNextRegionMenuItem"
+                          InputGestureText="{cmd:ChordText slate.workspace.focusNextPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                          Command="{Binding Workspace.FocusNextPaneCommand}" />
+                <MenuItem Header="Focus Previous Re_gion"
+                          AutomationProperties.AutomationId="WorkspaceFocusPreviousRegionMenuItem"
+                          InputGestureText="{cmd:ChordText slate.workspace.focusPreviousPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                          Command="{Binding Workspace.FocusPreviousPaneCommand}" />
                 <MenuItem Header="Move Tab Left" InputGestureText="{cmd:ChordText slate.workspace.moveTabLeft}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.MoveTabLeftCommand}" />
                 <MenuItem Header="Move Tab Right" InputGestureText="{cmd:ChordText slate.workspace.moveTabRight}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.MoveTabRightCommand}" />
                 <MenuItem Header="_Grow Pane" InputGestureText="{cmd:ChordText slate.workspace.growPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.GrowPaneCommand}" />
@@ -665,7 +678,15 @@
             </MenuItem>
         </Menu>
 
-        <StatusBar DockPanel.Dock="Bottom">
+        <!-- W7-6 (#1240): the status bar is the ring's last region — a
+             named, focusable stop whose landing speaks the status text;
+             its HelpText is the shell's F6 help. -->
+        <StatusBar x:Name="ShellStatusBar"
+                   DockPanel.Dock="Bottom"
+                   Focusable="True"
+                   AutomationProperties.AutomationId="StatusBar"
+                   AutomationProperties.Name="Status bar"
+                   AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.Shell}">
             <!-- No vault means no sidebar: an unresolved binding must keep
                  operation controls out of both layout and automation. -->
             <StatusBarItem Visibility="{Binding FileSidebar.ShowTrashProgress, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}">
@@ -1061,6 +1082,7 @@
                                   AutomationProperties.Name="Resize files sidebar" />
                     <local:AutomationLandmarkBorder x:Name="ContentPaneBorder"
                             Grid.Column="2"
+                            Focusable="True"
                             AutomationProperties.AutomationId="ContentPane"
                             AutomationProperties.Name="Editor workspace"
                             Background="{DynamicResource Slate.WindowBackgroundBrush}"
@@ -1144,7 +1166,7 @@
                                 </DataTemplate.Triggers>
                             </DataTemplate>
                         </local:AutomationLandmarkBorder.Resources>
-                        <Grid>
+                        <Grid x:Name="RightPaneLeafHost">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="92" />

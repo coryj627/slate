@@ -253,9 +253,9 @@ public sealed class MacCatalogParityTests
                 "§G GD-5: mac's canvasColorMarked has no palette row or chord — a recorded "
                 + "divergence assigned to the mac lane; Windows lands the front door.",
             ["slate.workspace.focusNextPane"] =
-                "Windows-only pane cycling; mac navigates panes directionally only.",
+                "Windows-only shell region cycling (F6 / Shift+F6, W7-6); mac navigates panes directionally only.",
             ["slate.workspace.focusPreviousPane"] =
-                "Windows-only pane cycling; mac navigates panes directionally only.",
+                "Windows-only shell region cycling (F6 / Shift+F6, W7-6); mac navigates panes directionally only.",
             ["slate.editor.activateAtCaret"] =
                 "The Windows editor's explicit activate verb; mac activates through "
                 + "its own responder chain and registers no command.",

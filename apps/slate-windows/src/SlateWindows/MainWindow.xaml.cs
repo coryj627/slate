@@ -238,6 +238,12 @@ public partial class MainWindow : Window
 
     private void ViewModel_WorkspaceReady(object? sender, EventArgs e)
     {
+        // W7-6 (#1240): the window answers F6 for THIS workspace.
+        if (_viewModel.Workspace is WorkspaceViewModel workspace)
+        {
+            workspace.ShellRegionHost = this;
+        }
+
         _ = Dispatcher.InvokeAsync(FocusActiveEditorPane, DispatcherPriority.Loaded);
     }
 

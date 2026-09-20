@@ -28,6 +28,10 @@ internal static class NavigationHelp
     public static string VerticalSplitter =>
         $"Drag, or use {Spoken("windows.splitter.growAbove")} and {Spoken("windows.splitter.growBelow")}, to resize adjacent editor panes.";
 
+    public static string Shell =>
+        $"{Spoken("slate.workspace.focusNextPane")} moves to the next region: menu bar, files, tab bar, editor, right pane, status bar. "
+        + $"{Spoken("slate.workspace.focusPreviousPane")} moves back.";
+
     internal static string Spoken(string id) => ChordTable.WindowsSpokenFor(id)
         ?? throw new InvalidOperationException($"Navigation help requires a chord-table row with a Windows chord: '{id}'.");
 }

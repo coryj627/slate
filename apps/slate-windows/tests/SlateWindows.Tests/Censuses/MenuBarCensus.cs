@@ -91,4 +91,22 @@ public sealed class MenuBarCensus
         Assert.Equal("False", (string?)menu.Attribute("Focusable"));
         Assert.Equal("None", (string?)menu.Attribute("KeyboardNavigation.TabNavigation"));
     }
+
+    /// <summary>W7-6 (#1240): F6 and Shift+F6 are delivered by window
+    /// KeyBindings bound to the two region verbs, and the menu bar hands
+    /// F6 on while in menu mode (WPF's menu mode would otherwise keep it).</summary>
+    [Fact]
+    public void F6AndShiftF6AreBoundToTheRegionVerbs()
+    {
+        XDocument window = XDocument.Load(
+            Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"));
+        var bindings = window.Descendants()
+            .Where(element => element.Name.LocalName == "KeyBinding" && (string?)element.Attribute("Key") == "F6")
+            .ToDictionary(
+                element => (string?)element.Attribute("Modifiers") ?? "",
+                element => (string?)element.Attribute("Command"));
+        Assert.Equal("{Binding Workspace.FocusNextPaneCommand}", bindings[""]);
+        Assert.Equal("{Binding Workspace.FocusPreviousPaneCommand}", bindings["Shift"]);
+        Assert.Equal("MainMenu_PreviewKeyDown", (string?)MainMenu().Attribute("PreviewKeyDown"));
+    }
 }
