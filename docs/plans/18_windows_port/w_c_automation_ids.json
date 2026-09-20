@@ -1261,6 +1261,101 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarAddToShortcutsMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarBackMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarCancelImportMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarClearRecentsMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarCollapseAllMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarExpandLoadedMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarFocusFilterMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarForwardMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarImportFilesAndFoldersMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarMenu",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarOpenInNewTabMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarOpenInSplitMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarOpenMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarPinNoteMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarRefreshMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarRemoveShortcutMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarUnpinAllInFolderMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarUnpinNoteMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarUseVaultDefaultSortMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "FilesTree",
     "Surface": "Files tree"
   },

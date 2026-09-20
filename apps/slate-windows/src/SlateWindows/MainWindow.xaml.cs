@@ -1719,7 +1719,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        tabs.Focus();
+        // W7-5 (#1239): an EMPTY tab control refuses focus (its Focusable
+        // follows HasItems, WorkspaceTemplates.xaml), so the last resort is
+        // the Files tree: the owner's launch landing when nothing is open,
+        // and the one region that always has something to say. Landing on
+        // the bare TabControl gave NVDA "Workspace tabs tab control" and
+        // let Down arrow wander into the menu bar.
+        if (!tabs.Focus())
+        {
+            FilesTree.Focus();
+        }
     }
 
     internal static T? FindAncestorDataContext<T>(DependencyObject current)

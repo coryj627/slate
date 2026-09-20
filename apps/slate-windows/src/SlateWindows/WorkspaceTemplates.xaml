@@ -573,8 +573,16 @@
                 BorderThickness="1"
                 Background="{DynamicResource Slate.WindowBackgroundBrush}"
                 AutomationProperties.Name="Editor pane">
+            <!-- W7-5 (#1239): an EMPTY tab control is not a stop. With zero
+                 restored tabs the startup focus landed here, NVDA said only
+                 "Workspace tabs tab control", and Down arrow wandered to the
+                 menu bar. Focusable and IsTabStop follow HasItems, so focus
+                 requests fail closed and the window's fallback seats the
+                 Files tree instead. -->
             <TabControl ItemsSource="{Binding Tabs}"
                         SelectedItem="{Binding ActiveTab, Mode=TwoWay}"
+                        Focusable="{Binding HasItems, RelativeSource={RelativeSource Self}}"
+                        IsTabStop="{Binding HasItems, RelativeSource={RelativeSource Self}}"
                         ItemTemplate="{StaticResource WorkspaceTabHeaderTemplate}"
                         ContentTemplate="{StaticResource WorkspaceTabContentTemplate}"
                         AutomationProperties.AutomationId="WorkspaceTabs"

@@ -1,0 +1,686 @@
+# NVDA speech log, Slate slice (2026-09-20 12:09:45 to 12:27:31 local)
+# Source: nvda.log (NVDA 2026.2, log level Debug), IO lines only; note-taking in Notepad, Snipping Tool and shell dialogs removed. Each line: NVDA timestamp | input or speech.
+
+12:09:45.568 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:09:45.907 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:09:45.915 | Speaking [LangChangeCommand ('en_US'), 'Workspace tabs', 'tab control', CancellableSpeech (still valid)]
+12:09:59.140 | Input: kb(laptop):downArrow
+12:09:59.141 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:09:59.180 | Speaking [LangChangeCommand ('en_US'), 'Canvas', 'collapsed', 'Alt+', CharacterModeCommand(True), 'N', CharacterModeCommand(False), '5 of 7', CancellableSpeech (still valid)]
+12:10:02.836 | Input: kb(laptop):downArrow
+12:10:02.836 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:10:03.052 | Speaking [LangChangeCommand ('en_US'), 'Verbosity', 'collapsed', CharacterModeCommand(True), 'V', CharacterModeCommand(False), '16 of 16', CancellableSpeech (still valid)]
+12:10:04.747 | Input: kb(laptop):escape
+12:10:04.772 | Speaking [LangChangeCommand ('en_US'), 'Canvas', 'collapsed', 'Alt+', CharacterModeCommand(True), 'N', CharacterModeCommand(False), '5 of 7', CancellableSpeech (still valid)]
+12:10:05.730 | Input: kb(laptop):escape
+12:10:05.784 | Speaking [LangChangeCommand ('en_US'), 'Workspace tabs', 'tab control', CancellableSpeech (still valid)]
+12:10:22.528 | Speaking [LangChangeCommand ('en_US'), 'edit', 'Alt+', CharacterModeCommand(True), 'o', CharacterModeCommand(False), CancellableSpeech (still valid), 'selected notepad']
+12:10:23.339 | Speaking [LangChangeCommand ('en_US'), 'selection removed']
+12:10:25.376 | Speaking [LangChangeCommand ('en_US'), 'OK', 'button', CancellableSpeech (still valid)]
+12:10:28.086 | Speaking [LangChangeCommand ('en_US'), 'Untitled. Unmodified.', 'tab', 'selected', CancellableSpeech (still valid)]
+12:10:28.108 | Speaking [LangChangeCommand ('en_US'), 'Text editor', 'document', CancellableSpeech (still valid), 'blank']
+12:10:30.189 | Input: kb(laptop):control+w
+12:10:30.189 | Speaking [LangChangeCommand ('en_US'), 'ctrl+w']
+12:10:30.331 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:10:30.339 | Speaking [LangChangeCommand ('en_US'), 'Workspace tabs', 'tab control', CancellableSpeech (still valid)]
+12:10:32.074 | Speaking [LangChangeCommand ('en_US'), 'edit', 'Alt+', CharacterModeCommand(True), 'o', CharacterModeCommand(False), CancellableSpeech (still valid), 'selected notepad']
+12:10:32.980 | Speaking [LangChangeCommand ('en_US'), 'Text editor', 'document', CancellableSpeech (still valid), 'blank']
+12:10:54.365 | Input: kb(laptop):alt+tab
+12:10:54.366 | Speaking [LangChangeCommand ('en_US'), 'alt+tab']
+12:10:54.479 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'row 1', 'column 2', '2 of 5', CancellableSpeech (still valid)]
+12:10:54.574 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:10:54.582 | Speaking [LangChangeCommand ('en_US'), 'Workspace tabs', 'tab control', CancellableSpeech (still valid)]
+12:11:01.078 | Input: kb(laptop):downArrow
+12:11:01.079 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:11:01.105 | Speaking [LangChangeCommand ('en_US'), 'Canvas', 'collapsed', 'Alt+', CharacterModeCommand(True), 'N', CharacterModeCommand(False), '5 of 7', CancellableSpeech (still valid)]
+12:11:04.544 | Speaking [LangChangeCommand ('en_US'), 'Text editor', 'document', CancellableSpeech (still valid), 'blank']
+12:11:19.582 | Input: kb(laptop):control+shift+leftArrow
+12:11:19.584 | Speaking [LangChangeCommand ('en_US'), 'ctrl+shift+left arrow']
+12:11:19.598 | Speaking [LangChangeCommand ('en_US'), 'tab selected']
+12:11:21.381 | Speaking [LangChangeCommand ('en_US'), 'n', ' unselected']
+12:11:48.196 | Input: kb(laptop):alt+tab
+12:11:48.197 | Speaking [LangChangeCommand ('en_US'), 'alt+tab']
+12:11:48.378 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:11:48.385 | Speaking [LangChangeCommand ('en_US'), 'Workspace tabs', 'tab control', CancellableSpeech (still valid)]
+12:11:51.575 | Input: kb(laptop):downArrow
+12:11:51.576 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:11:51.604 | Speaking [LangChangeCommand ('en_US'), 'Canvas', 'collapsed', 'Alt+', CharacterModeCommand(True), 'N', CharacterModeCommand(False), '5 of 7', CancellableSpeech (still valid)]
+12:11:53.599 | Input: kb(laptop):downArrow
+12:11:53.600 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:11:53.680 | Speaking [LangChangeCommand ('en_US'), 'Verbosity', 'collapsed', CharacterModeCommand(True), 'V', CharacterModeCommand(False), '16 of 16', CancellableSpeech (still valid)]
+12:11:57.299 | Input: kb(laptop):downArrow
+12:11:57.300 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:11:59.229 | Input: kb(laptop):upArrow
+12:11:59.230 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:00.730 | Input: kb(laptop):upArrow
+12:12:00.731 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:00.957 | Input: kb(laptop):upArrow
+12:12:00.958 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:03.519 | Input: kb(laptop):downArrow
+12:12:03.520 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:12:04.283 | Input: kb(laptop):upArrow
+12:12:04.284 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:05.078 | Input: kb(laptop):upArrow
+12:12:05.079 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:06.580 | Input: kb(laptop):escape
+12:12:06.605 | Speaking [LangChangeCommand ('en_US'), 'Canvas', 'collapsed', 'Alt+', CharacterModeCommand(True), 'N', CharacterModeCommand(False), '5 of 7', CancellableSpeech (still valid)]
+12:12:07.249 | Speaking [LangChangeCommand ('en_US'), 'Workspace tabs', 'tab control', CancellableSpeech (still valid)]
+12:12:07.319 | Input: kb(laptop):alt+f
+12:12:07.320 | Speaking [LangChangeCommand ('en_US'), 'alt+f']
+12:12:07.346 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:12:08.796 | Input: kb(laptop):downArrow
+12:12:08.796 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:12:08.888 | Speaking [LangChangeCommand ('en_US'), 'Open Vault…', CharacterModeCommand(True), 'O', CharacterModeCommand(False), '  Ctrl+Shift+', CharacterModeCommand(True), 'O', CharacterModeCommand(False), '1 of 6', CancellableSpeech (still valid)]
+12:12:09.761 | Input: kb(laptop):downArrow
+12:12:09.761 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:12:09.780 | Speaking [LangChangeCommand ('en_US'), 'Quick Open…', CharacterModeCommand(True), 'Q', CharacterModeCommand(False), '  Ctrl+', CharacterModeCommand(True), 'O', CharacterModeCommand(False), '2 of 6', CancellableSpeech (still valid)]
+12:12:11.926 | Input: kb(laptop):rightArrow
+12:12:11.926 | Speaking [LangChangeCommand ('en_US'), 'right arrow']
+12:12:12.104 | Speaking [LangChangeCommand ('en_US'), 'Focus Pane Left', CharacterModeCommand(True), 'L', CharacterModeCommand(False), '  Ctrl+Alt+Left', '7 of 20', CancellableSpeech (still valid)]
+12:12:14.046 | Input: kb(laptop):upArrow
+12:12:14.046 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:14.067 | Speaking [LangChangeCommand ('en_US'), 'Refresh Sync Diagnostics', CharacterModeCommand(True), 'S', CharacterModeCommand(False), '20 of 20', CancellableSpeech (still valid)]
+12:12:15.554 | Input: kb(laptop):upArrow
+12:12:15.555 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:15.573 | Speaking [LangChangeCommand ('en_US'), 'Show Changes Since Last Open', 'not checked', CharacterModeCommand(True), 'C', CharacterModeCommand(False), '19 of 20', CancellableSpeech (still valid)]
+12:12:15.922 | Input: kb(laptop):upArrow
+12:12:15.922 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:15.940 | Speaking [LangChangeCommand ('en_US'), 'Show History Panel', CharacterModeCommand(True), 'H', CharacterModeCommand(False), '18 of 20', CancellableSpeech (still valid)]
+12:12:16.171 | Input: kb(laptop):upArrow
+12:12:16.171 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:16.190 | Speaking [LangChangeCommand ('en_US'), 'Show Tasks Review', CharacterModeCommand(True), 'R', CharacterModeCommand(False), '  Ctrl+', CharacterModeCommand(True), 'R', CharacterModeCommand(False), '17 of 20', CancellableSpeech (still valid)]
+12:12:16.411 | Input: kb(laptop):upArrow
+12:12:16.411 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:16.428 | Speaking [LangChangeCommand ('en_US'), 'Search Vault…', CharacterModeCommand(True), 'V', CharacterModeCommand(False), '  Ctrl+Shift+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '16 of 20', CancellableSpeech (still valid)]
+12:12:16.627 | Input: kb(laptop):upArrow
+12:12:16.627 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:16.646 | Speaking [LangChangeCommand ('en_US'), 'Toggle Right Pane', CharacterModeCommand(True), 'P', CharacterModeCommand(False), '  Ctrl+Alt+', CharacterModeCommand(True), 'I', CharacterModeCommand(False), '15 of 20', CancellableSpeech (still valid)]
+12:12:16.851 | Input: kb(laptop):upArrow
+12:12:16.851 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:16.870 | Speaking [LangChangeCommand ('en_US'), 'Focus Pane Below', CharacterModeCommand(True), 'B', CharacterModeCommand(False), '  Ctrl+Alt+Down', '10 of 20', CancellableSpeech (still valid)]
+12:12:21.830 | Speaking [LangChangeCommand ('en_US'), 'Focus Pane Above', CharacterModeCommand(True), 'A', CharacterModeCommand(False), '  Ctrl+Alt+Up', '9 of 20', CancellableSpeech (still valid)]
+12:12:22.028 | Speaking [LangChangeCommand ('en_US'), 'Workspace', 'expanded', 'Alt+', CharacterModeCommand(True), 'W', CharacterModeCommand(False), '2 of 7', CancellableSpeech (still valid)]
+12:12:22.040 | Speaking [LangChangeCommand ('en_US'), 'Focus Pane Right', CharacterModeCommand(True), 'R', CharacterModeCommand(False), '  Ctrl+Alt+Right', '8 of 20', CancellableSpeech (still valid)]
+12:12:22.108 | Speaking [LangChangeCommand ('en_US'), 'Focus Pane Above', CharacterModeCommand(True), 'A', CharacterModeCommand(False), '  Ctrl+Alt+Up', '9 of 20', CancellableSpeech (still valid)]
+12:12:22.168 | Speaking [LangChangeCommand ('en_US'), 'Focus Pane Below', CharacterModeCommand(True), 'B', CharacterModeCommand(False), '  Ctrl+Alt+Down', '10 of 20', CancellableSpeech (still valid)]
+12:12:22.255 | Speaking [LangChangeCommand ('en_US'), 'Workspace', 'expanded', 'Alt+', CharacterModeCommand(True), 'W', CharacterModeCommand(False), '2 of 7', CancellableSpeech (still valid)]
+12:12:23.153 | Speaking [LangChangeCommand ('en_US'), 'Focus Pane Below', CharacterModeCommand(True), 'B', CharacterModeCommand(False), '  Ctrl+Alt+Down', '10 of 20', CancellableSpeech (still valid)]
+12:12:24.201 | Input: kb(laptop):upArrow
+12:12:24.202 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:24.222 | Speaking [LangChangeCommand ('en_US'), 'Focus Pane Above', CharacterModeCommand(True), 'A', CharacterModeCommand(False), '  Ctrl+Alt+Up', '9 of 20', CancellableSpeech (still valid)]
+12:12:24.659 | Input: kb(laptop):upArrow
+12:12:24.660 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:24.698 | Speaking [LangChangeCommand ('en_US'), 'Focus Pane Right', CharacterModeCommand(True), 'R', CharacterModeCommand(False), '  Ctrl+Alt+Right', '8 of 20', CancellableSpeech (still valid)]
+12:12:26.279 | Input: kb(laptop):upArrow
+12:12:26.280 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:26.299 | Speaking [LangChangeCommand ('en_US'), 'Focus Pane Left', CharacterModeCommand(True), 'L', CharacterModeCommand(False), '  Ctrl+Alt+Left', '7 of 20', CancellableSpeech (still valid)]
+12:12:26.834 | Input: kb(laptop):upArrow
+12:12:26.835 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:26.854 | Speaking [LangChangeCommand ('en_US'), 'Refresh Sync Diagnostics', CharacterModeCommand(True), 'S', CharacterModeCommand(False), '20 of 20', CancellableSpeech (still valid)]
+12:12:27.089 | Input: kb(laptop):upArrow
+12:12:27.090 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:27.108 | Speaking [LangChangeCommand ('en_US'), 'Show Changes Since Last Open', 'not checked', CharacterModeCommand(True), 'C', CharacterModeCommand(False), '19 of 20', CancellableSpeech (still valid)]
+12:12:29.497 | Input: kb(laptop):downArrow
+12:12:29.498 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:12:29.517 | Speaking [LangChangeCommand ('en_US'), 'Refresh Sync Diagnostics', CharacterModeCommand(True), 'S', CharacterModeCommand(False), '20 of 20', CancellableSpeech (still valid)]
+12:12:30.793 | Input: kb(laptop):downArrow
+12:12:30.794 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:12:30.814 | Speaking [LangChangeCommand ('en_US'), 'Focus Pane Left', CharacterModeCommand(True), 'L', CharacterModeCommand(False), '  Ctrl+Alt+Left', '7 of 20', CancellableSpeech (still valid)]
+12:12:32.370 | Input: kb(laptop):rightArrow
+12:12:32.371 | Speaking [LangChangeCommand ('en_US'), 'right arrow']
+12:12:32.549 | Speaking [LangChangeCommand ('en_US'), 'New Query…', CharacterModeCommand(True), 'Q', CharacterModeCommand(False), '19 of 20', CancellableSpeech (still valid)]
+12:12:33.653 | Input: kb(laptop):downArrow
+12:12:33.654 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:12:35.047 | Input: kb(laptop):upArrow
+12:12:35.048 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:39.569 | Speaking [LangChangeCommand ('en_US'), 'Base', 'expanded', 'Alt+', CharacterModeCommand(True), 'B', CharacterModeCommand(False), '3 of 7', CancellableSpeech (still valid)]
+12:12:40.042 | Speaking [LangChangeCommand ('en_US'), 'New Query…', CharacterModeCommand(True), 'Q', CharacterModeCommand(False), '19 of 20', CancellableSpeech (still valid)]
+12:12:40.536 | Speaking [LangChangeCommand ('en_US'), 'Base', 'expanded', 'Alt+', CharacterModeCommand(True), 'B', CharacterModeCommand(False), '3 of 7', CancellableSpeech (still valid)]
+12:12:44.577 | Input: kb(laptop):rightArrow
+12:12:44.578 | Speaking [LangChangeCommand ('en_US'), 'right arrow']
+12:12:44.741 | Speaking [LangChangeCommand ('en_US'), 'Activate at Cursor', CharacterModeCommand(True), 'A', CharacterModeCommand(False), '  Ctrl+Enter', '1 of 15', CancellableSpeech (still valid)]
+12:12:46.670 | Input: kb(laptop):downArrow
+12:12:46.671 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:12:46.690 | Speaking [LangChangeCommand ('en_US'), 'Preview Embed', CharacterModeCommand(True), 'E', CharacterModeCommand(False), '  Ctrl+', CharacterModeCommand(True), 'E', CharacterModeCommand(False), '2 of 15', CancellableSpeech (still valid)]
+12:12:47.373 | Input: kb(laptop):downArrow
+12:12:47.374 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:12:47.391 | Speaking [LangChangeCommand ('en_US'), 'Add Property…', CharacterModeCommand(True), 'P', CharacterModeCommand(False), '4 of 15', CancellableSpeech (still valid)]
+12:12:50.497 | Input: kb(laptop):upArrow
+12:12:50.498 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:50.517 | Speaking [LangChangeCommand ('en_US'), 'Preview Embed', CharacterModeCommand(True), 'E', CharacterModeCommand(False), '  Ctrl+', CharacterModeCommand(True), 'E', CharacterModeCommand(False), '2 of 15', CancellableSpeech (still valid)]
+12:12:51.481 | Input: kb(laptop):upArrow
+12:12:51.482 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:51.499 | Speaking [LangChangeCommand ('en_US'), 'Activate at Cursor', CharacterModeCommand(True), 'A', CharacterModeCommand(False), '  Ctrl+Enter', '1 of 15', CancellableSpeech (still valid)]
+12:12:52.766 | Input: kb(laptop):rightArrow
+12:12:52.767 | Speaking [LangChangeCommand ('en_US'), 'right arrow']
+12:12:52.897 | Speaking [LangChangeCommand ('en_US'), 'Verbosity', 'collapsed', CharacterModeCommand(True), 'V', CharacterModeCommand(False), '16 of 16', CancellableSpeech (still valid)]
+12:12:55.326 | Input: kb(laptop):downArrow
+12:12:55.327 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:12:55.837 | Input: kb(laptop):upArrow
+12:12:55.838 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:12:56.814 | Input: kb(laptop):escape
+12:12:56.839 | Speaking [LangChangeCommand ('en_US'), 'Canvas', 'collapsed', 'Alt+', CharacterModeCommand(True), 'N', CharacterModeCommand(False), '5 of 7', CancellableSpeech (still valid)]
+12:12:57.650 | Input: kb(laptop):rightArrow
+12:12:57.651 | Speaking [LangChangeCommand ('en_US'), 'right arrow']
+12:12:57.668 | Speaking [LangChangeCommand ('en_US'), 'Graph', 'collapsed', 'Alt+', CharacterModeCommand(True), 'G', CharacterModeCommand(False), '6 of 7', CancellableSpeech (still valid)]
+12:12:58.363 | Input: kb(laptop):downArrow
+12:12:58.364 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:12:58.493 | Speaking [LangChangeCommand ('en_US'), 'Open Graph', CharacterModeCommand(True), 'O', CharacterModeCommand(False), '1 of 10', CancellableSpeech (still valid)]
+12:12:59.536 | Input: kb(laptop):downArrow
+12:12:59.537 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:12:59.554 | Speaking [LangChangeCommand ('en_US'), 'Orphaned Notes', CharacterModeCommand(True), 'N', CharacterModeCommand(False), '2 of 10', CancellableSpeech (still valid)]
+12:13:01.555 | Input: kb(laptop):downArrow
+12:13:01.555 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:13:01.573 | Speaking [LangChangeCommand ('en_US'), 'Unresolved Links', CharacterModeCommand(True), 'U', CharacterModeCommand(False), '3 of 10', CancellableSpeech (still valid)]
+12:13:01.813 | Input: kb(laptop):downArrow
+12:13:01.813 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:13:01.830 | Speaking [LangChangeCommand ('en_US'), 'Most Linked Notes', CharacterModeCommand(True), 'M', CharacterModeCommand(False), '4 of 10', CancellableSpeech (still valid)]
+12:13:02.054 | Input: kb(laptop):downArrow
+12:13:02.055 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:13:02.071 | Speaking [LangChangeCommand ('en_US'), 'Verbosity', 'collapsed', CharacterModeCommand(True), 'V', CharacterModeCommand(False), '10 of 10', CancellableSpeech (still valid)]
+12:13:04.164 | Input: kb(laptop):escape
+12:13:04.186 | Speaking [LangChangeCommand ('en_US'), 'Graph', 'collapsed', 'Alt+', CharacterModeCommand(True), 'G', CharacterModeCommand(False), '6 of 7', CancellableSpeech (still valid)]
+12:13:04.867 | Input: kb(laptop):rightArrow
+12:13:04.867 | Speaking [LangChangeCommand ('en_US'), 'right arrow']
+12:13:04.884 | Speaking [LangChangeCommand ('en_US'), 'Files', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:13:05.996 | Input: kb(laptop):downArrow
+12:13:05.996 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:13:06.126 | Speaking [LangChangeCommand ('en_US'), 'Import Files and Folders…', CharacterModeCommand(True), 'I', CharacterModeCommand(False), '4 of 18', CancellableSpeech (still valid)]
+12:13:08.049 | Input: kb(laptop):upArrow
+12:13:08.049 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:13:08.070 | Speaking [LangChangeCommand ('en_US'), 'Focus Filter', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '  Ctrl+Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '9 of 18', CancellableSpeech (still valid)]
+12:13:10.018 | Input: kb(laptop):downArrow
+12:13:10.019 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:13:10.044 | Speaking [LangChangeCommand ('en_US'), 'Import Files and Folders…', CharacterModeCommand(True), 'I', CharacterModeCommand(False), '4 of 18', CancellableSpeech (still valid)]
+12:13:11.450 | Input: kb(laptop):downArrow
+12:13:11.450 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:13:11.470 | Speaking [LangChangeCommand ('en_US'), 'Refresh', CharacterModeCommand(True), 'R', CharacterModeCommand(False), '6 of 18', CancellableSpeech (still valid)]
+12:13:12.488 | Input: kb(laptop):escape
+12:13:12.506 | Speaking [LangChangeCommand ('en_US'), 'Files', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:13:15.933 | Input: kb(laptop):f6
+12:13:15.934 | Speaking [LangChangeCommand ('en_US'), 'f6']
+12:13:17.301 | Input: kb(laptop):control+f6
+12:13:17.302 | Speaking [LangChangeCommand ('en_US'), 'ctrl+f6']
+12:13:18.815 | Input: kb(laptop):f6
+12:13:18.816 | Speaking [LangChangeCommand ('en_US'), 'f6']
+12:13:20.888 | Speaking [LangChangeCommand ('en_US'), 'Graph', 'collapsed', 'Alt+', CharacterModeCommand(True), 'G', CharacterModeCommand(False), '6 of 7', CancellableSpeech (still valid)]
+12:13:20.903 | Speaking [LangChangeCommand ('en_US'), 'Editor', 'collapsed', 'Alt+', CharacterModeCommand(True), 'E', CharacterModeCommand(False), '4 of 7', CancellableSpeech (still valid)]
+12:13:20.918 | Speaking [LangChangeCommand ('en_US'), 'Workspace', 'collapsed', 'Alt+', CharacterModeCommand(True), 'W', CharacterModeCommand(False), '2 of 7', CancellableSpeech (still valid)]
+12:13:24.548 | Input: kb(laptop):escape
+12:13:24.581 | Speaking [LangChangeCommand ('en_US'), 'Workspace tabs', 'tab control', CancellableSpeech (still valid)]
+12:13:25.876 | Input: kb(laptop):f6
+12:13:25.876 | Speaking [LangChangeCommand ('en_US'), 'f6']
+12:13:27.689 | Input: kb(laptop):control+f6
+12:13:27.689 | Speaking [LangChangeCommand ('en_US'), 'ctrl+f6']
+12:13:31.620 | Speaking [LangChangeCommand ('en_US'), 'Text editor', 'document', CancellableSpeech (still valid), 'blank']
+12:13:38.470 | Speaking [LangChangeCommand ('en_US'), 'F6']
+12:14:44.356 | Input: kb(laptop):leftArrow
+12:14:44.357 | Speaking [LangChangeCommand ('en_US'), 'left arrow']
+12:14:44.995 | Input: kb(laptop):control+leftArrow
+12:14:44.995 | Speaking [LangChangeCommand ('en_US'), 'ctrl+left arrow']
+12:14:45.195 | Input: kb(laptop):control+leftArrow
+12:14:45.196 | Speaking [LangChangeCommand ('en_US'), 'ctrl+left arrow']
+12:14:45.209 | Speaking [LangChangeCommand ('en_US'), 'right ']
+12:14:45.410 | Input: kb(laptop):control+leftArrow
+12:14:45.410 | Speaking [LangChangeCommand ('en_US'), 'ctrl+left arrow']
+12:14:46.652 | Input: kb(laptop):control+leftArrow
+12:14:46.653 | Speaking [LangChangeCommand ('en_US'), 'ctrl+left arrow']
+12:14:46.667 | Speaking [LangChangeCommand ('en_US'), 'pane ']
+12:14:47.128 | Input: kb(laptop):control+leftArrow
+12:14:47.129 | Speaking [LangChangeCommand ('en_US'), 'ctrl+left arrow']
+12:14:47.142 | Speaking [LangChangeCommand ('en_US'), 'right ']
+12:14:51.813 | Input: kb(laptop):control+leftArrow
+12:14:51.813 | Speaking [LangChangeCommand ('en_US'), 'ctrl+left arrow']
+12:14:52.473 | Input: kb(laptop):control+shift+leftArrow
+12:14:52.473 | Speaking [LangChangeCommand ('en_US'), 'ctrl+shift+left arrow']
+12:14:52.487 | Speaking [LangChangeCommand ('en_US'), 'editor  selected']
+12:14:54.659 | Input: kb(laptop):rightArrow
+12:14:54.660 | Speaking [LangChangeCommand ('en_US'), 'right arrow']
+12:14:54.679 | Speaking [LangChangeCommand ('en_US'), 'editor  unselected']
+12:15:24.648 | Input: kb(laptop):control+rightArrow
+12:15:24.648 | Speaking [LangChangeCommand ('en_US'), 'ctrl+right arrow']
+12:15:24.662 | Speaking [LangChangeCommand ('en_US'), 'pane ']
+12:15:24.896 | Input: kb(laptop):control+rightArrow
+12:15:24.896 | Speaking [LangChangeCommand ('en_US'), 'ctrl+right arrow']
+12:15:25.213 | Input: kb(laptop):control+rightArrow
+12:15:25.213 | Speaking [LangChangeCommand ('en_US'), 'ctrl+right arrow']
+12:15:25.227 | Speaking [LangChangeCommand ('en_US'), 'editor ']
+12:15:25.902 | Input: kb(laptop):control+rightArrow
+12:15:25.902 | Speaking [LangChangeCommand ('en_US'), 'ctrl+right arrow']
+12:16:00.530 | Input: kb(laptop):end
+12:16:22.387 | Input: kb(laptop):upArrow
+12:16:22.387 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:16:22.401 | Speaking [LangChangeCommand ('en_US'), 'selected file tab > right pane > right toolbar > status bar > go back to menu bar\r']
+12:16:22.657 | Input: kb(laptop):upArrow
+12:16:22.657 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:16:22.670 | Speaking [LangChangeCommand ('en_US'), 'The F6 key should cycle the screen reader focus from app region to region, menu bar > files pane > editor pane (empty) OR tab-bar if files open > last cursor position of file editor for currently ']
+12:16:23.433 | Input: kb(laptop):control+rightArrow
+12:16:23.433 | Speaking [LangChangeCommand ('en_US'), 'ctrl+right arrow']
+12:16:23.447 | Speaking [LangChangeCommand ('en_US'), 'F6 ']
+12:16:24.778 | Input: kb(laptop):control+rightArrow
+12:16:24.779 | Speaking [LangChangeCommand ('en_US'), 'ctrl+right arrow']
+12:16:24.792 | Speaking [LangChangeCommand ('en_US'), 'key ']
+12:16:25.030 | Input: kb(laptop):control+rightArrow
+12:16:25.030 | Speaking [LangChangeCommand ('en_US'), 'ctrl+right arrow']
+12:16:25.044 | Speaking [LangChangeCommand ('en_US'), 'should ']
+12:16:28.918 | Input: kb(laptop):downArrow
+12:16:28.919 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:16:28.932 | Speaking [LangChangeCommand ('en_US'), 'selected file tab > right pane > right toolbar > status bar > go back to menu bar\r']
+12:16:29.351 | Input: kb(laptop):downArrow
+12:16:29.352 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:16:34.164 | Speaking [LangChangeCommand ('en_US'), 'F6']
+12:16:40.103 | Input: kb(laptop):alt+tab
+12:16:40.104 | Speaking [LangChangeCommand ('en_US'), 'alt+tab']
+12:16:40.295 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:16:40.304 | Speaking [LangChangeCommand ('en_US'), 'Workspace tabs', 'tab control', CancellableSpeech (still valid)]
+12:16:44.663 | Input: kb(laptop):tab
+12:16:44.687 | Speaking [LangChangeCommand ('en_US'), 'Resize right pane', 'thumb control', CancellableSpeech (still valid)]
+12:16:47.682 | Input: kb(laptop):tab
+12:16:47.712 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:16:47.724 | Speaking [LangChangeCommand ('en_US'), 'Outline', '1 of 17', CancellableSpeech (still valid)]
+12:16:50.628 | Input: kb(laptop):downArrow
+12:16:50.629 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:16:50.666 | Speaking [LangChangeCommand ('en_US'), 'Backlinks panel.']
+12:16:50.682 | Speaking [LangChangeCommand ('en_US'), 'Backlinks', '2 of 17', CancellableSpeech (still valid)]
+12:16:51.416 | Input: kb(laptop):downArrow
+12:16:51.417 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:16:51.449 | Speaking [LangChangeCommand ('en_US'), 'Outgoing links panel.']
+12:16:51.465 | Speaking [LangChangeCommand ('en_US'), 'Outgoing links', '3 of 17', CancellableSpeech (still valid)]
+12:16:52.181 | Input: kb(laptop):downArrow
+12:16:52.182 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:16:52.220 | Speaking [LangChangeCommand ('en_US'), 'Connections panel.']
+12:16:52.236 | Speaking [LangChangeCommand ('en_US'), 'Connections', '4 of 17', CancellableSpeech (still valid)]
+12:16:59.468 | Input: kb(laptop):shift+tab
+12:16:59.469 | Speaking [LangChangeCommand ('en_US'), 'shift+tab']
+12:16:59.494 | Speaking [LangChangeCommand ('en_US'), 'Select a note to see its connections.', 'grouping', CancellableSpeech (still valid)]
+12:17:02.254 | Input: kb(laptop):upArrow
+12:17:02.254 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:17:02.283 | Speaking [LangChangeCommand ('en_US'), 'Files', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:17:04.525 | Input: kb(laptop):upArrow
+12:17:04.526 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:17:04.610 | Speaking [LangChangeCommand ('en_US'), 'Import Files and Folders…', CharacterModeCommand(True), 'I', CharacterModeCommand(False), '4 of 18', CancellableSpeech (still valid)]
+12:17:05.218 | Input: kb(laptop):escape
+12:17:05.245 | Speaking [LangChangeCommand ('en_US'), 'Files', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:17:05.999 | Input: kb(laptop):tab
+12:17:06.018 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:17:07.361 | Input: kb(laptop):tab
+12:17:07.380 | Speaking [LangChangeCommand ('en_US'), 'Workspace', 'collapsed', 'Alt+', CharacterModeCommand(True), 'W', CharacterModeCommand(False), '2 of 7', CancellableSpeech (still valid)]
+12:17:07.981 | Input: kb(laptop):tab
+12:17:08.000 | Speaking [LangChangeCommand ('en_US'), 'Base', 'collapsed', 'Alt+', CharacterModeCommand(True), 'B', CharacterModeCommand(False), '3 of 7', CancellableSpeech (still valid)]
+12:17:08.186 | Input: kb(laptop):tab
+12:17:08.205 | Speaking [LangChangeCommand ('en_US'), 'Editor', 'collapsed', 'Alt+', CharacterModeCommand(True), 'E', CharacterModeCommand(False), '4 of 7', CancellableSpeech (still valid)]
+12:17:08.390 | Input: kb(laptop):tab
+12:17:08.408 | Speaking [LangChangeCommand ('en_US'), 'Canvas', 'collapsed', 'Alt+', CharacterModeCommand(True), 'N', CharacterModeCommand(False), '5 of 7', CancellableSpeech (still valid)]
+12:17:08.600 | Input: kb(laptop):tab
+12:17:08.618 | Speaking [LangChangeCommand ('en_US'), 'Graph', 'collapsed', 'Alt+', CharacterModeCommand(True), 'G', CharacterModeCommand(False), '6 of 7', CancellableSpeech (still valid)]
+12:17:08.794 | Input: kb(laptop):tab
+12:17:08.815 | Speaking [LangChangeCommand ('en_US'), 'Files', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:17:09.480 | Input: kb(laptop):tab
+12:17:09.499 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:17:10.973 | Input: kb(laptop):escape
+12:17:11.012 | Speaking [LangChangeCommand ('en_US'), 'Select a note to see its connections.', 'grouping', CancellableSpeech (still valid)]
+12:17:12.560 | Input: kb(laptop):downArrow
+12:17:12.561 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:17:12.588 | Speaking [LangChangeCommand ('en_US'), 'Files', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:17:13.966 | Input: kb(laptop):escape
+12:17:14.005 | Speaking [LangChangeCommand ('en_US'), 'Select a note to see its connections.', 'grouping', CancellableSpeech (still valid)]
+12:17:14.714 | Input: kb(laptop):tab
+12:17:14.738 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:17:14.749 | Speaking [LangChangeCommand ('en_US'), 'Connections', '4 of 17', CancellableSpeech (still valid)]
+12:17:15.584 | Input: kb(laptop):downArrow
+12:17:15.585 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:17:15.685 | Speaking [LangChangeCommand ('en_US'), 'Graph inspector panel.']
+12:17:15.700 | Speaking [LangChangeCommand ('en_US'), 'Graph inspector', '5 of 17', CancellableSpeech (still valid)]
+12:17:20.692 | Input: kb(laptop):tab
+12:17:20.722 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:17:21.464 | Input: kb(laptop):shift+tab
+12:17:21.464 | Speaking [LangChangeCommand ('en_US'), 'shift+tab']
+12:17:21.500 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:17:21.512 | Speaking [LangChangeCommand ('en_US'), 'Graph inspector', '5 of 17', CancellableSpeech (still valid)]
+12:17:22.269 | Input: kb(laptop):shift+tab
+12:17:22.269 | Speaking [LangChangeCommand ('en_US'), 'shift+tab']
+12:17:22.291 | Speaking [LangChangeCommand ('en_US'), 'Resize right pane', 'thumb control', CancellableSpeech (still valid)]
+12:17:24.107 | Input: kb(laptop):downArrow
+12:17:24.107 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:17:24.872 | Input: kb(laptop):tab
+12:17:24.901 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:17:24.912 | Speaking [LangChangeCommand ('en_US'), 'Graph inspector', '5 of 17', CancellableSpeech (still valid)]
+12:17:29.340 | Input: kb(laptop):shift+tab
+12:17:29.341 | Speaking [LangChangeCommand ('en_US'), 'shift+tab']
+12:17:29.362 | Speaking [LangChangeCommand ('en_US'), 'Resize right pane', 'thumb control', CancellableSpeech (still valid)]
+12:17:30.542 | Input: kb(laptop):tab
+12:17:30.570 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:17:30.582 | Speaking [LangChangeCommand ('en_US'), 'Graph inspector', '5 of 17', CancellableSpeech (still valid)]
+12:17:31.538 | Input: kb(laptop):downArrow
+12:17:31.538 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:17:31.562 | Speaking [LangChangeCommand ('en_US'), 'Embeds panel.']
+12:17:31.587 | Speaking [LangChangeCommand ('en_US'), 'Embeds', '6 of 17', CancellableSpeech (still valid)]
+12:17:32.165 | Input: kb(laptop):upArrow
+12:17:32.165 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:17:32.187 | Speaking [LangChangeCommand ('en_US'), 'Graph inspector panel.']
+12:17:32.210 | Speaking [LangChangeCommand ('en_US'), 'Graph inspector', '5 of 17', CancellableSpeech (still valid)]
+12:17:33.742 | Input: kb(laptop):f6
+12:17:33.743 | Speaking [LangChangeCommand ('en_US'), 'f6']
+12:17:35.661 | Input: kb(laptop):shift+tab
+12:17:35.661 | Speaking [LangChangeCommand ('en_US'), 'shift+tab']
+12:17:35.683 | Speaking [LangChangeCommand ('en_US'), 'Resize right pane', 'thumb control', CancellableSpeech (still valid)]
+12:17:36.705 | Input: kb(laptop):tab
+12:17:36.733 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:17:36.744 | Speaking [LangChangeCommand ('en_US'), 'Graph inspector', '5 of 17', CancellableSpeech (still valid)]
+12:17:38.816 | Input: kb(laptop):control+tab
+12:17:38.817 | Speaking [LangChangeCommand ('en_US'), 'ctrl+tab']
+12:17:38.841 | Speaking [LangChangeCommand ('en_US'), 'Embeds', 'not selected', '6 of 17', CancellableSpeech (still valid)]
+12:17:42.304 | Input: kb(laptop):shift+tab
+12:17:42.305 | Speaking [LangChangeCommand ('en_US'), 'shift+tab']
+12:17:42.328 | Speaking [LangChangeCommand ('en_US'), 'Resize right pane', 'thumb control', CancellableSpeech (still valid)]
+12:17:45.938 | Input: kb(laptop):tab
+12:17:45.968 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:17:45.975 | Speaking [LangChangeCommand ('en_US'), 'Embeds', 'not selected', '6 of 17', CancellableSpeech (still valid)]
+12:17:47.054 | Input: kb(laptop):tab
+12:17:47.083 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:17:48.309 | Input: kb(laptop):escape
+12:17:48.348 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:17:48.355 | Speaking [LangChangeCommand ('en_US'), 'Embeds', 'not selected', '6 of 17', CancellableSpeech (still valid)]
+12:17:50.596 | Input: kb(laptop):tab
+12:17:50.632 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:17:52.074 | Input: kb(laptop):tab
+12:17:52.094 | Speaking [LangChangeCommand ('en_US'), 'Workspace', 'collapsed', 'Alt+', CharacterModeCommand(True), 'W', CharacterModeCommand(False), '2 of 7', CancellableSpeech (still valid)]
+12:17:52.478 | Input: kb(laptop):tab
+12:17:52.497 | Speaking [LangChangeCommand ('en_US'), 'Base', 'collapsed', 'Alt+', CharacterModeCommand(True), 'B', CharacterModeCommand(False), '3 of 7', CancellableSpeech (still valid)]
+12:17:52.744 | Input: kb(laptop):tab
+12:17:52.763 | Speaking [LangChangeCommand ('en_US'), 'Editor', 'collapsed', 'Alt+', CharacterModeCommand(True), 'E', CharacterModeCommand(False), '4 of 7', CancellableSpeech (still valid)]
+12:17:52.986 | Input: kb(laptop):tab
+12:17:53.005 | Speaking [LangChangeCommand ('en_US'), 'Canvas', 'collapsed', 'Alt+', CharacterModeCommand(True), 'N', CharacterModeCommand(False), '5 of 7', CancellableSpeech (still valid)]
+12:17:53.218 | Input: kb(laptop):tab
+12:17:53.237 | Speaking [LangChangeCommand ('en_US'), 'Graph', 'collapsed', 'Alt+', CharacterModeCommand(True), 'G', CharacterModeCommand(False), '6 of 7', CancellableSpeech (still valid)]
+12:17:53.473 | Input: kb(laptop):tab
+12:17:53.492 | Speaking [LangChangeCommand ('en_US'), 'Files', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:17:54.741 | Input: kb(laptop):tab
+12:17:54.761 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:17:55.774 | Input: kb(laptop):escape
+12:17:55.814 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:17:55.821 | Speaking [LangChangeCommand ('en_US'), 'Embeds', 'not selected', '6 of 17', CancellableSpeech (still valid)]
+12:17:57.505 | Input: kb(laptop):rightArrow
+12:17:57.506 | Speaking [LangChangeCommand ('en_US'), 'right arrow']
+12:18:00.968 | Input: kb(laptop):tab
+12:18:00.999 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:18:01.497 | Input: kb(laptop):tab
+12:18:01.517 | Speaking [LangChangeCommand ('en_US'), 'Workspace', 'collapsed', 'Alt+', CharacterModeCommand(True), 'W', CharacterModeCommand(False), '2 of 7', CancellableSpeech (still valid)]
+12:18:01.709 | Input: kb(laptop):tab
+12:18:01.729 | Speaking [LangChangeCommand ('en_US'), 'Base', 'collapsed', 'Alt+', CharacterModeCommand(True), 'B', CharacterModeCommand(False), '3 of 7', CancellableSpeech (still valid)]
+12:18:01.910 | Input: kb(laptop):tab
+12:18:01.929 | Speaking [LangChangeCommand ('en_US'), 'Editor', 'collapsed', 'Alt+', CharacterModeCommand(True), 'E', CharacterModeCommand(False), '4 of 7', CancellableSpeech (still valid)]
+12:18:02.110 | Input: kb(laptop):tab
+12:18:02.130 | Speaking [LangChangeCommand ('en_US'), 'Canvas', 'collapsed', 'Alt+', CharacterModeCommand(True), 'N', CharacterModeCommand(False), '5 of 7', CancellableSpeech (still valid)]
+12:18:02.300 | Input: kb(laptop):tab
+12:18:02.320 | Speaking [LangChangeCommand ('en_US'), 'Graph', 'collapsed', 'Alt+', CharacterModeCommand(True), 'G', CharacterModeCommand(False), '6 of 7', CancellableSpeech (still valid)]
+12:18:02.538 | Input: kb(laptop):tab
+12:18:02.556 | Speaking [LangChangeCommand ('en_US'), 'Files', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:18:03.120 | Input: kb(laptop):tab
+12:18:03.140 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:18:04.707 | Input: kb(laptop):escape
+12:18:04.747 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:18:04.753 | Speaking [LangChangeCommand ('en_US'), 'Embeds', 'not selected', '6 of 17', CancellableSpeech (still valid)]
+12:18:05.388 | Input: kb(laptop):tab
+12:18:05.417 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:18:06.595 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:18:06.602 | Speaking [LangChangeCommand ('en_US'), 'Embeds', 'not selected', '6 of 17', CancellableSpeech (still valid)]
+12:18:06.614 | Input: kb(laptop):alt+tab
+12:18:06.614 | Speaking [LangChangeCommand ('en_US'), 'alt+tab']
+12:18:06.792 | Speaking [LangChangeCommand ('en_US'), 'Text editor', 'document', CancellableSpeech (still valid), 'blank']
+12:18:15.117 | Input: kb(laptop):alt+tab
+12:18:15.117 | Speaking [LangChangeCommand ('en_US'), 'alt+tab']
+12:18:15.288 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:18:15.296 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:18:15.302 | Speaking [LangChangeCommand ('en_US'), 'Embeds', 'not selected', '6 of 17', CancellableSpeech (still valid)]
+12:18:18.414 | Input: kb(laptop):alt+tab
+12:18:18.414 | Speaking [LangChangeCommand ('en_US'), 'alt+tab']
+12:18:18.584 | Speaking [LangChangeCommand ('en_US'), 'Text editor', 'document', CancellableSpeech (still valid), 'I got stuck in a loop from the \r']
+12:18:27.695 | Input: kb(laptop):alt+tab
+12:18:27.696 | Speaking [LangChangeCommand ('en_US'), 'alt+tab']
+12:18:27.818 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'row 1', 'column 2', '2 of 5', CancellableSpeech (still valid)]
+12:18:27.879 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:18:27.886 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:18:27.895 | Speaking [LangChangeCommand ('en_US'), 'Embeds', 'not selected', '6 of 17', CancellableSpeech (still valid)]
+12:18:41.401 | Speaking [LangChangeCommand ('en_US'), 'Capture mode set to snipping', 'toggle button', 'not pressed', 'Alt, ', CharacterModeCommand(True), 'S', CharacterModeCommand(False), CancellableSpeech (still valid)]
+12:18:46.977 | Speaking [LangChangeCommand ('en_US'), 'Rectangle', '1 of 4', CancellableSpeech (still valid)]
+12:18:53.510 | Input: kb(laptop):downArrow
+12:18:53.511 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:18:53.525 | Speaking [LangChangeCommand ('en_US'), 'Window', 'not selected', '2 of 4', CancellableSpeech (still valid)]
+12:18:56.475 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'button', '4 of 4', CancellableSpeech (still valid)]
+12:18:59.997 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:19:00.006 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:19:00.013 | Speaking [LangChangeCommand ('en_US'), 'Embeds', 'not selected', '6 of 17', CancellableSpeech (still valid)]
+12:19:07.516 | Speaking [LangChangeCommand ('en_US'), 'pane', CancellableSpeech (still valid)]
+12:19:12.077 | Input: kb(laptop):control+s
+12:19:12.078 | Speaking [LangChangeCommand ('en_US'), 'ctrl+s']
+12:19:21.655 | Speaking [LangChangeCommand ('en_US'), 'level 1', 'Home', '1 of 15', CancellableSpeech (still valid)]
+12:19:21.756 | Speaking [LangChangeCommand ('en_US'), 'Home', '1 of 15', 'level 1', CancellableSpeech (still valid)]
+12:19:25.204 | Speaking [LangChangeCommand ('en_US'), '.shortcut-targets-by-id', 'not selected', '1 of 4', CancellableSpeech (still valid)]
+12:19:27.116 | Speaking [LangChangeCommand ('en_US'), 'appsheet', 'not selected', '8 of 65', CancellableSpeech (still valid)]
+12:19:37.459 | Speaking [LangChangeCommand ('en_US'), 'selection removed']
+12:19:50.971 | Speaking [LangChangeCommand ('en_US'), 'selection removed']
+12:19:51.757 | Speaking [LangChangeCommand ('en_US'), '2026']
+12:19:57.144 | Speaking [LangChangeCommand ('en_US'), '2026']
+12:20:06.033 | Speaking [LangChangeCommand ('en_US'), '20']
+12:20:09.035 | Speaking [LangChangeCommand ('en_US'), '09']
+12:20:10.427 | Speaking [LangChangeCommand ('en_US'), '20']
+12:20:13.286 | Speaking [LangChangeCommand ('en_US'), '12']
+12:20:22.643 | Speaking [LangChangeCommand ('en_US'), '2']
+12:20:53.190 | Speaking [LangChangeCommand ('en_US'), 'selection removed']
+12:20:56.536 | Input: kb(laptop):control+a
+12:20:56.536 | Speaking [LangChangeCommand ('en_US'), 'ctrl+a']
+12:20:56.549 | Speaking [LangChangeCommand ('en_US'), 'Graph- selected']
+12:20:56.800 | Speaking [LangChangeCommand ('en_US'), 'selection removed']
+12:21:10.023 | Speaking [LangChangeCommand ('en_US'), 'pane', CancellableSpeech (still valid)]
+12:21:12.622 | Speaking [LangChangeCommand ('en_US'), 'unknown', CancellableSpeech (still valid)]
+12:21:12.698 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:21:12.707 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:21:12.714 | Speaking [LangChangeCommand ('en_US'), 'Embeds', 'not selected', '6 of 17', CancellableSpeech (still valid)]
+12:21:16.581 | Speaking [LangChangeCommand ('en_US'), 'Text editor', 'document', CancellableSpeech (still valid), 'blank']
+12:21:16.929 | Input: kb(laptop):control+s
+12:21:16.929 | Speaking [LangChangeCommand ('en_US'), 'ctrl+s']
+12:21:18.063 | Speaking [LangChangeCommand ('en_US'), 'edit', 'Alt+', CharacterModeCommand(True), 'n', CharacterModeCommand(False), CancellableSpeech (still valid), 'selected When window opens focus should land']
+12:21:27.926 | Speaking [LangChangeCommand ('en_US'), 'algorithm-model', '5 of 60', CancellableSpeech (still valid)]
+12:21:30.240 | Speaking [LangChangeCommand ('en_US'), 'SB-Logo', '36 of 60', CancellableSpeech (still valid)]
+12:21:35.907 | Speaking [LangChangeCommand ('en_US'), 'edit', 'Alt+', CharacterModeCommand(True), 'n', CharacterModeCommand(False), CancellableSpeech (still valid), 'selected When window opens focus should land']
+12:21:42.034 | Speaking [LangChangeCommand ('en_US'), 'selection removed']
+12:21:44.605 | Speaking [LangChangeCommand ('en_US'), 'Text editor', 'document', CancellableSpeech (still valid), 'blank']
+12:22:18.760 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:22:18.767 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:22:18.774 | Speaking [LangChangeCommand ('en_US'), 'Embeds', 'not selected', '6 of 17', CancellableSpeech (still valid)]
+12:22:22.266 | Input: kb(laptop):downArrow
+12:22:22.267 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:22:22.296 | Speaking [LangChangeCommand ('en_US'), 'Math panel.']
+12:22:22.315 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:22:23.704 | Input: kb(laptop):tab
+12:22:23.732 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:22:25.889 | Input: kb(laptop):tab
+12:22:25.911 | Speaking [LangChangeCommand ('en_US'), 'Workspace', 'collapsed', 'Alt+', CharacterModeCommand(True), 'W', CharacterModeCommand(False), '2 of 7', CancellableSpeech (still valid)]
+12:22:26.944 | Input: kb(laptop):tab
+12:22:26.964 | Speaking [LangChangeCommand ('en_US'), 'Base', 'collapsed', 'Alt+', CharacterModeCommand(True), 'B', CharacterModeCommand(False), '3 of 7', CancellableSpeech (still valid)]
+12:22:27.191 | Input: kb(laptop):tab
+12:22:27.210 | Speaking [LangChangeCommand ('en_US'), 'Editor', 'collapsed', 'Alt+', CharacterModeCommand(True), 'E', CharacterModeCommand(False), '4 of 7', CancellableSpeech (still valid)]
+12:22:27.411 | Input: kb(laptop):tab
+12:22:27.430 | Speaking [LangChangeCommand ('en_US'), 'Canvas', 'collapsed', 'Alt+', CharacterModeCommand(True), 'N', CharacterModeCommand(False), '5 of 7', CancellableSpeech (still valid)]
+12:22:27.651 | Input: kb(laptop):tab
+12:22:27.671 | Speaking [LangChangeCommand ('en_US'), 'Graph', 'collapsed', 'Alt+', CharacterModeCommand(True), 'G', CharacterModeCommand(False), '6 of 7', CancellableSpeech (still valid)]
+12:22:27.870 | Input: kb(laptop):tab
+12:22:27.890 | Speaking [LangChangeCommand ('en_US'), 'Files', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:22:28.399 | Input: kb(laptop):tab
+12:22:28.420 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:22:29.604 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:22:29.617 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:22:31.704 | Input: kb(laptop):tab
+12:22:31.733 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:22:42.489 | Input: kb(laptop):f5
+12:22:42.490 | Speaking [LangChangeCommand ('en_US'), 'f5']
+12:22:43.593 | Input: kb(laptop):f6
+12:22:43.593 | Speaking [LangChangeCommand ('en_US'), 'f6']
+12:22:44.722 | Input: kb(laptop):control+f6
+12:22:44.723 | Speaking [LangChangeCommand ('en_US'), 'ctrl+f6']
+12:22:46.295 | Input: kb(laptop):shift+f6
+12:22:46.295 | Speaking [LangChangeCommand ('en_US'), 'shift+f6']
+12:22:47.429 | Input: kb(laptop):escape
+12:22:47.469 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:22:47.481 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:22:48.900 | Input: kb(laptop):alt+f
+12:22:48.901 | Speaking [LangChangeCommand ('en_US'), 'alt+f']
+12:22:48.927 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:22:50.152 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:22:50.166 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:22:50.220 | Input: kb(laptop):alt+f
+12:22:50.221 | Speaking [LangChangeCommand ('en_US'), 'alt+f']
+12:22:50.248 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:22:50.969 | Input: kb(laptop):downArrow
+12:22:50.970 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:22:51.063 | Speaking [LangChangeCommand ('en_US'), 'Open Vault…', CharacterModeCommand(True), 'O', CharacterModeCommand(False), '  Ctrl+Shift+', CharacterModeCommand(True), 'O', CharacterModeCommand(False), '1 of 6', CancellableSpeech (still valid)]
+12:22:52.368 | Input: kb(laptop):escape
+12:22:52.399 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:22:55.082 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:22:55.095 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:22:55.213 | Input: kb(laptop):alt+f
+12:22:55.213 | Speaking [LangChangeCommand ('en_US'), 'alt+f']
+12:22:55.259 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:22:56.109 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:22:56.121 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:22:56.241 | Input: kb(laptop):alt+f
+12:22:56.242 | Speaking [LangChangeCommand ('en_US'), 'alt+f']
+12:22:56.272 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:22:57.257 | Input: kb(laptop):tab
+12:22:57.276 | Speaking [LangChangeCommand ('en_US'), 'Workspace', 'collapsed', 'Alt+', CharacterModeCommand(True), 'W', CharacterModeCommand(False), '2 of 7', CancellableSpeech (still valid)]
+12:22:57.717 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:22:57.730 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:22:58.273 | Input: kb(laptop):alt+w
+12:22:58.273 | Speaking [LangChangeCommand ('en_US'), 'alt+w']
+12:22:58.384 | Speaking [LangChangeCommand ('en_US'), 'Focus Pane Left', CharacterModeCommand(True), 'L', CharacterModeCommand(False), '  Ctrl+Alt+Left', '7 of 20', CancellableSpeech (still valid)]
+12:22:59.752 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:22:59.765 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:22:59.887 | Input: kb(laptop):alt+f
+12:22:59.887 | Speaking [LangChangeCommand ('en_US'), 'alt+f']
+12:22:59.915 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:23:05.938 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:23:05.953 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:23:06.070 | Input: kb(laptop):alt+g
+12:23:06.071 | Speaking [LangChangeCommand ('en_US'), 'alt+g']
+12:23:06.184 | Speaking [LangChangeCommand ('en_US'), 'Open Graph', CharacterModeCommand(True), 'O', CharacterModeCommand(False), '1 of 10', CancellableSpeech (still valid)]
+12:23:08.865 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:23:08.877 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:23:08.962 | Input: kb(laptop):alt+f
+12:23:08.963 | Speaking [LangChangeCommand ('en_US'), 'alt+f']
+12:23:08.991 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:23:12.968 | Speaking [LangChangeCommand ('en_US'), 'Open Vault…', CharacterModeCommand(True), 'O', CharacterModeCommand(False), '  Ctrl+Shift+', CharacterModeCommand(True), 'O', CharacterModeCommand(False), '1 of 6', CancellableSpeech (still valid)]
+12:23:15.229 | Input: kb(laptop):escape
+12:23:15.261 | Speaking [LangChangeCommand ('en_US'), 'File', 'collapsed', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:23:16.522 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:23:16.535 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:23:16.589 | Input: kb(laptop):alt+w
+12:23:16.590 | Speaking [LangChangeCommand ('en_US'), 'alt+w']
+12:23:16.678 | Speaking [LangChangeCommand ('en_US'), 'Focus Pane Left', CharacterModeCommand(True), 'L', CharacterModeCommand(False), '  Ctrl+Alt+Left', '7 of 20', CancellableSpeech (still valid)]
+12:23:19.071 | Input: kb(laptop):escape
+12:23:19.099 | Speaking [LangChangeCommand ('en_US'), 'Workspace', 'collapsed', 'Alt+', CharacterModeCommand(True), 'W', CharacterModeCommand(False), '2 of 7', CancellableSpeech (still valid)]
+12:23:19.731 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:23:19.743 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:23:20.163 | Input: kb(laptop):alt+b
+12:23:20.164 | Speaking [LangChangeCommand ('en_US'), 'alt+b']
+12:23:20.276 | Speaking [LangChangeCommand ('en_US'), 'New Query…', CharacterModeCommand(True), 'Q', CharacterModeCommand(False), '19 of 20', CancellableSpeech (still valid)]
+12:23:23.699 | Input: kb(laptop):upArrow
+12:23:23.699 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:23:27.650 | Input: kb(laptop):escape
+12:23:27.679 | Speaking [LangChangeCommand ('en_US'), 'Base', 'collapsed', 'Alt+', CharacterModeCommand(True), 'B', CharacterModeCommand(False), '3 of 7', CancellableSpeech (still valid)]
+12:23:29.194 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:23:29.206 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:23:29.321 | Input: kb(laptop):alt+e
+12:23:29.321 | Speaking [LangChangeCommand ('en_US'), 'alt+e']
+12:23:29.454 | Speaking [LangChangeCommand ('en_US'), 'Activate at Cursor', CharacterModeCommand(True), 'A', CharacterModeCommand(False), '  Ctrl+Enter', '1 of 15', CancellableSpeech (still valid)]
+12:23:30.576 | Input: kb(laptop):downArrow
+12:23:30.577 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:23:30.597 | Speaking [LangChangeCommand ('en_US'), 'Preview Embed', CharacterModeCommand(True), 'E', CharacterModeCommand(False), '  Ctrl+', CharacterModeCommand(True), 'E', CharacterModeCommand(False), '2 of 15', CancellableSpeech (still valid)]
+12:23:39.263 | Speaking [LangChangeCommand ('en_US'), 'Capture mode set to snipping', 'toggle button', 'not pressed', 'Alt, ', CharacterModeCommand(True), 'S', CharacterModeCommand(False), CancellableSpeech (still valid)]
+12:23:40.535 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'button', '4 of 5', CancellableSpeech (still valid)]
+12:23:40.895 | Speaking [LangChangeCommand ('en_US'), 'button', '5 of 5', CancellableSpeech (still valid)]
+12:23:42.989 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'button', '4 of 5', CancellableSpeech (still valid)]
+12:23:43.786 | Speaking [LangChangeCommand ('en_US'), 'button', '5 of 5', CancellableSpeech (still valid)]
+12:23:44.320 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:23:44.327 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:23:44.341 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:23:48.670 | Speaking [LangChangeCommand ('en_US'), 'pane', CancellableSpeech (still valid)]
+12:23:49.406 | Input: kb(laptop):control+s
+12:23:49.406 | Speaking [LangChangeCommand ('en_US'), 'ctrl+s']
+12:23:51.161 | Speaking [LangChangeCommand ('en_US'), 'selection removed']
+12:23:53.883 | Speaking [LangChangeCommand ('en_US'), 'selection removed']
+12:24:06.458 | Speaking [LangChangeCommand ('en_US'), 'dialog', CancellableSpeech (still valid)]
+12:24:06.487 | Speaking [LangChangeCommand ('en_US'), 'pane', CancellableSpeech (still valid)]
+12:24:08.977 | Speaking [LangChangeCommand ('en_US'), 'Text editor', 'document', CancellableSpeech (still valid), 'blank']
+12:25:05.495 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:25:05.503 | Speaking [LangChangeCommand ('en_US'), 'Files', 'expanded', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:25:06.700 | Speaking [LangChangeCommand ('en_US'), 'File', 'expanded', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:25:07.397 | Speaking [LangChangeCommand ('en_US'), 'Workspace', 'expanded', 'Alt+', CharacterModeCommand(True), 'W', CharacterModeCommand(False), '2 of 7', CancellableSpeech (still valid)]
+12:25:07.857 | Speaking [LangChangeCommand ('en_US'), 'File', 'expanded', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '1 of 7', CancellableSpeech (still valid)]
+12:25:13.282 | Speaking [LangChangeCommand ('en_US'), 'Workspace', 'collapsed', 'Alt+', CharacterModeCommand(True), 'W', CharacterModeCommand(False), '2 of 7', CancellableSpeech (still valid)]
+12:25:13.315 | Speaking [LangChangeCommand ('en_US'), 'Files', 'expanded', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:25:14.673 | Speaking [LangChangeCommand ('en_US'), 'Import Files and Folders…', CharacterModeCommand(True), 'I', CharacterModeCommand(False), '4 of 18', CancellableSpeech (still valid)]
+12:25:14.771 | Speaking [LangChangeCommand ('en_US'), 'Files', 'expanded', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:25:14.979 | Speaking [LangChangeCommand ('en_US'), 'Refresh', CharacterModeCommand(True), 'R', CharacterModeCommand(False), '6 of 18', CancellableSpeech (still valid)]
+12:25:15.238 | Speaking [LangChangeCommand ('en_US'), 'Collapse All', CharacterModeCommand(True), 'C', CharacterModeCommand(False), '7 of 18', CancellableSpeech (still valid)]
+12:25:15.256 | Speaking [LangChangeCommand ('en_US'), 'Expand Loaded', CharacterModeCommand(True), 'E', CharacterModeCommand(False), '8 of 18', CancellableSpeech (still valid)]
+12:25:15.299 | Speaking [LangChangeCommand ('en_US'), 'Focus Filter', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '  Ctrl+Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '9 of 18', CancellableSpeech (still valid)]
+12:25:15.358 | Speaking [LangChangeCommand ('en_US'), 'Files', 'expanded', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:25:17.115 | Speaking [LangChangeCommand ('en_US'), 'Text editor', 'document', CancellableSpeech (still valid), 'blank']
+12:25:36.880 | Input: kb(laptop):alt+tab
+12:25:36.881 | Speaking [LangChangeCommand ('en_US'), 'alt+tab']
+12:25:37.059 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:25:37.066 | Speaking [LangChangeCommand ('en_US'), 'Right pane panels', 'list', CancellableSpeech (still valid)]
+12:25:37.079 | Speaking [LangChangeCommand ('en_US'), 'Math', '7 of 17', CancellableSpeech (still valid)]
+12:25:53.779 | Speaking [LangChangeCommand ('en_US'), 'Batch actions', 'grouping', 'collapsed', CancellableSpeech (still valid)]
+12:25:57.531 | Speaking [LangChangeCommand ('en_US'), 'Files', 'expanded', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:26:00.305 | Speaking [LangChangeCommand ('en_US'), 'Import Files and Folders…', CharacterModeCommand(True), 'I', CharacterModeCommand(False), '4 of 18', CancellableSpeech (still valid)]
+12:26:00.592 | Speaking [LangChangeCommand ('en_US'), 'Files', 'expanded', 'Alt+', CharacterModeCommand(True), 'F', CharacterModeCommand(False), '7 of 7', CancellableSpeech (still valid)]
+12:26:01.105 | Speaking [LangChangeCommand ('en_US'), 'Import Files and Folders…', CharacterModeCommand(True), 'I', CharacterModeCommand(False), '4 of 18', CancellableSpeech (still valid)]
+12:26:01.577 | Speaking [LangChangeCommand ('en_US'), 'Import Files and Folders', 'dialog', 'Choose Yes to import files, No to import folders, or Cancel to stop.', CancellableSpeech (still valid)]
+12:26:01.579 | Speaking [LangChangeCommand ('en_US'), 'Cancel', 'button', CancellableSpeech (still valid)]
+12:26:08.695 | Speaking [LangChangeCommand ('en_US'), 'Slate', 'window', CancellableSpeech (still valid)]
+12:26:08.705 | Speaking [LangChangeCommand ('en_US'), 'Batch actions', 'grouping', 'collapsed', CancellableSpeech (still valid)]
+12:26:11.815 | Speaking [LangChangeCommand ('en_US'), 'Refresh files', 'button', 'Refresh', CancellableSpeech (still valid)]
+12:26:17.186 | Speaking [LangChangeCommand ('en_US'), 'Selected: graph, folder']
+12:26:17.209 | Speaking [LangChangeCommand ('en_US'), 'level 1', 'graph, folder', 'collapsed', '8 of 22', CancellableSpeech (still valid)]
+12:26:20.136 | Speaking [LangChangeCommand ('en_US'), 'Select graph, folder for batch actions', 'check box', 'not checked', CancellableSpeech (still valid)]
+12:26:20.253 | Speaking [LangChangeCommand ('en_US'), '1 item selected']
+12:26:20.890 | Speaking [LangChangeCommand ('en_US'), 'No items selected']
+12:26:20.892 | Speaking [LangChangeCommand ('en_US'), 'not checked']
+12:26:26.098 | Speaking [LangChangeCommand ('en_US'), '1 item selected']
+12:26:26.703 | Speaking [LangChangeCommand ('en_US'), 'No items selected']
+12:26:26.705 | Speaking [LangChangeCommand ('en_US'), 'not checked']
+12:26:38.686 | Speaking [LangChangeCommand ('en_US'), 'Selected: Golf gateway.md']
+12:26:38.718 | Speaking [LangChangeCommand ('en_US'), 'Workspace tabs', 'tab control', CancellableSpeech (still valid)]
+12:26:38.728 | Speaking [LangChangeCommand ('en_US'), 'Golf gateway', 'tab', 'selected', '1 of 1', CancellableSpeech (still valid)]
+12:26:38.752 | Speaking [LangChangeCommand ('en_US'), 'Golf gateway.md editor', 'document', CancellableSpeech (still valid), 'heading level 1', '# Golf gateway']
+12:26:48.371 | Speaking [LangChangeCommand ('en_US'), 'Selected: graph, folder']
+12:26:48.398 | Speaking [LangChangeCommand ('en_US'), 'graph, folder', 'expanded', '8 of 22', 'level 1', CancellableSpeech (still valid)]
+12:26:52.403 | Speaking [LangChangeCommand ('en_US'), 'Graph', 'expanded', 'Alt+', CharacterModeCommand(True), 'G', CharacterModeCommand(False), '6 of 7', CancellableSpeech (still valid)]
+12:26:53.209 | Speaking [LangChangeCommand ('en_US'), 'Open Graph', CharacterModeCommand(True), 'O', CharacterModeCommand(False), '1 of 10', CancellableSpeech (still valid)]
+12:26:53.665 | Speaking [LangChangeCommand ('en_US'), 'Graph', 'expanded', 'Alt+', CharacterModeCommand(True), 'G', CharacterModeCommand(False), '6 of 7', CancellableSpeech (still valid)]
+12:26:53.966 | Speaking [LangChangeCommand ('en_US'), 'Open Graph', CharacterModeCommand(True), 'O', CharacterModeCommand(False), '1 of 10', CancellableSpeech (still valid)]
+12:26:55.148 | Speaking [LangChangeCommand ('en_US'), 'Workspace tabs', 'tab control', CancellableSpeech (still valid)]
+12:26:55.158 | Speaking [LangChangeCommand ('en_US'), 'Graph', 'tab', 'selected', '2 of 2', CancellableSpeech (still valid)]
+12:26:55.164 | Speaking [LangChangeCommand ('en_US'), 'Graph, data grid', 'data grid', CancellableSpeech (still valid)]
+12:26:55.168 | Speaking [LangChangeCommand ('en_US'), 'Graph hub, 10 links in, 11 links out', 'data item', '1 of 68', CancellableSpeech (still valid)]
+12:26:55.195 | Speaking [LangChangeCommand ('en_US'), 'Note: Graph hub', 'selected', 'Graph hub', 'row 1', 'Note', 'column 1', CancellableSpeech (still valid)]
+12:26:55.271 | Speaking [LangChangeCommand ('en_US'), ' Graph, tab 2 of 2.']
+12:27:04.465 | Speaking [LangChangeCommand ('en_US'), 'Graph surface', 'grouping', CancellableSpeech (still valid)]
+12:27:04.471 | Speaking [LangChangeCommand ('en_US'), 'Diagram', 'radio button', 'not checked', CancellableSpeech (still valid)]
+12:27:04.599 | Speaking [LangChangeCommand ('en_US'), 'Diagram mode.']
+12:27:04.610 | Speaking [LangChangeCommand ('en_US'), 'Graph, visual diagram', 'grouping', 'Zoom 100 percent', CancellableSpeech (still valid)]
+12:27:06.856 | Input: kb(laptop):downArrow
+12:27:06.858 | Speaking [LangChangeCommand ('en_US'), 'down arrow']
+12:27:07.077 | Speaking [LangChangeCommand ('en_US'), 'README, 0 links in, 0 links out']
+12:27:09.322 | Input: kb(laptop):upArrow
+12:27:09.323 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:27:09.548 | Speaking [LangChangeCommand ('en_US'), 'Roasted mushrooms, 0 links in, 0 links out']
+12:27:12.743 | Input: kb(laptop):upArrow
+12:27:12.744 | Speaking [LangChangeCommand ('en_US'), 'up arrow']
+12:27:12.955 | Speaking [LangChangeCommand ('en_US'), 'Markdown features, 0 links in, 0 links out']
+12:27:17.390 | Speaking [LangChangeCommand ('en_US'), 'Text editor', 'document', CancellableSpeech (still valid), 'blank']
+12:27:19.909 | Input: kb(laptop):control+s
+12:27:19.910 | Speaking [LangChangeCommand ('en_US'), 'ctrl+s']
+12:27:22.191 | Speaking [LangChangeCommand ('en_US'), 'pane', CancellableSpeech (still valid)]
