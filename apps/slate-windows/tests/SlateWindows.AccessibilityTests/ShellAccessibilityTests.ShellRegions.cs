@@ -46,7 +46,7 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.F6);
             AssertRightPaneStop(window, automation, "F6 from the empty pane did not land in the right pane.");
             PressKey(VirtualKeyShort.F6);
-            AssertRightPaneRailOrStatus(window, automation);
+            AdvancePastTheRailIfItTookFocus(window, automation);
             AssertEventuallyFocused(WaitForElement(window, "StatusBar", TimeSpan.FromSeconds(10)), "F6 did not reach the status bar.");
             PressKey(VirtualKeyShort.F6);
             AssertEventuallyFocused(WaitForElement(window, "FileMenu", TimeSpan.FromSeconds(10)), "F6 from the status bar did not wrap to the menu bar.");
@@ -76,6 +76,21 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(tab, "F6 from Files did not land on the tab bar.");
             PressKey(VirtualKeyShort.F6);
             AssertEventuallyFocused(editor, "F6 from the tab bar did not land in the editor.");
+
+            // With a note open the right pane has a leaf body, so the ring's
+            // two right stops are both live: forward to them and the status
+            // bar, then back through them to the editor. The zero-tab walk
+            // above cannot cover this — its Outline leaf is empty.
+            PressKey(VirtualKeyShort.F6);
+            AssertRightPaneStop(window, automation, "F6 from the editor did not land in the right pane.");
+            PressKey(VirtualKeyShort.F6);
+            AdvancePastTheRailIfItTookFocus(window, automation);
+            AssertEventuallyFocused(WaitForElement(window, "StatusBar", TimeSpan.FromSeconds(10)), "F6 from the right pane did not reach the status bar.");
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
+            AssertRightPaneStop(window, automation, "Shift+F6 from the status bar did not return to the right pane.");
+            RetreatPastTheRightPane(window, automation);
+            AssertEventuallyFocused(WaitForElement(window, "MarkdownEditor", TimeSpan.FromSeconds(10)), "Shift+F6 from the right pane did not return to the editor.");
+
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
             AssertEventuallyFocused(tab, "Shift+F6 from the editor did not return to the tab bar.");
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
@@ -83,6 +98,12 @@ public sealed partial class ShellAccessibilityTests
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
             AssertEventuallyFocused(WaitForElement(window, "FileMenu", TimeSpan.FromSeconds(10)), "Shift+F6 from Files did not land on the menu bar.");
             PressKey(VirtualKeyShort.ESCAPE);
+            // Spec §4: Escape leaves menu mode and WPF restores focus to
+            // where the menu took it from — the Files region, the origin of
+            // the Shift+F6 that landed on the bar. Restored to the SELECTED
+            // alpha.md row, not the TreeView container, so this is the
+            // region check the two presses above already use.
+            AssertFilesTreeRegionFocused(window, automation, tree, "Escape from the menu bar did not return to the origin region.");
 
             // Hidden right pane: editor → status bar directly.
             editor.Focus();
@@ -152,7 +173,7 @@ public sealed partial class ShellAccessibilityTests
             $"{message} {FocusDiagnosis()}");
     }
 
-    private static void AssertRightPaneRailOrStatus(Window window, UIA3Automation automation)
+    private static void AdvancePastTheRailIfItTookFocus(Window window, UIA3Automation automation)
     {
         // With the Outline leaf empty, the content stop is skipped and this
         // press already reached the rail; one more press reaches the status
@@ -165,6 +186,24 @@ public sealed partial class ShellAccessibilityTests
         if (automation.FocusedElement() is { } focused && IsDescendantOf(focused, rail))
         {
             PressKey(VirtualKeyShort.F6);
+        }
+    }
+
+    /// <summary>The backward twin of <see
+    /// cref="AdvancePastTheRailIfItTookFocus"/>: Shift+F6 out of the right
+    /// pane, which holds one stop (the rail alone) or two (a leaf body's
+    /// first stop and the rail) depending on the shown leaf.</summary>
+    private static void RetreatPastTheRightPane(Window window, UIA3Automation automation)
+    {
+        AutomationElement pane = WaitForElement(window, "InspectorPane", TimeSpan.FromSeconds(10));
+        for (int step = 0; step < 2; step++)
+        {
+            if (automation.FocusedElement() is not { } focused || !IsDescendantOf(focused, pane))
+            {
+                return;
+            }
+
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
         }
     }
 }
