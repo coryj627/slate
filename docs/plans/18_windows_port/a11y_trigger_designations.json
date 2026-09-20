@@ -161,21 +161,6 @@
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
-      "SidebarSettingsReloaded": {
-        "reason": "Windows SidebarSettingsStore loads settings at sidebar construction and surfaces its read-only notice; it has no Mac retry-vault-preferences action. Retain the current route for this notification slice. Owner approved deferral on 2026-09-19; retry flow is tracked by #1230.",
-        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
-        "status": "recorded"
-      },
-      "SidebarSettingsReloadedStaleRefs": {
-        "reason": "Windows SidebarSettingsStore loads settings at sidebar construction and surfaces its read-only notice; it has no Mac retry-vault-preferences action. Retain the current route for this notification slice. Owner approved deferral on 2026-09-19; retry flow is tracked by #1230.",
-        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
-        "status": "recorded"
-      },
-      "SidebarSettingsStillDefaults": {
-        "reason": "Windows SidebarSettingsStore loads settings at sidebar construction and surfaces its read-only notice; it has no Mac retry-vault-preferences action. Retain the current route for this notification slice. Owner approved deferral on 2026-09-19; retry flow is tracked by #1230.",
-        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
-        "status": "recorded"
-      },
       "EditorTextSize": {
         "reason": "Windows editor preferences use absolute WPF font points (EditorPreferencesViewModel.FontSize); Mac uses percentage scale. Keep the existing points announcement in the explicit preference residue register.",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",

@@ -1756,6 +1756,16 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "SidebarSettingsNotice",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarSettingsRetry",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "SidebarShortcuts",
     "Surface": "Sidebar organization and actions"
   },

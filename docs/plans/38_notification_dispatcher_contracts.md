@@ -348,6 +348,58 @@ W7 wave reconciliation (#750) is included in this #748 PR, matching the
 committed W7-4 instrument rule and the owner's one-PR-per-issue instruction.
 Human NVDA/JAWS/IME acceptance remains a release residual; braille is deferred.
 
+## Sidebar-settings retry amendment (#1230, 2026-09-20)
+
+Supersedes the deferral recorded in the 2026-09-19 amendment above. The
+owner approved the design in chat before implementation.
+
+**D-13 — Sidebar-settings retry is a synchronous, wholesale re-adoption.**
+A read-only `.slate/sidebar.json` stands in the Files pane as a notice
+(`SidebarSettingsNotice`, the store's reason verbatim) with a Retry button
+beside it (`SidebarSettingsRetry`, "Retry sidebar settings", mac's help
+text). The row is present exactly while a reason stands: raised by the
+constructor's load or by a later write that finds the file blocked under
+its lock; removed by a successful retry. Retry calls the same store's
+`Load()` again, synchronously on the UI thread and bounded by the existing
+2 MiB read cap — the call the constructor made — so there is no pending
+state for a vault close or replacement to race; the button leaves the tree
+with the pane's DataContext, and the lifecycle already drops the old
+sidebar. Windows does not adopt mac's worker-threaded retry with its
+generation guard: the constructor already reads synchronously, and the
+guard would add races to test with no user-visible gain.
+
+Outcomes, all Medium and all core vocabulary:
+
+- Still blocked (malformed, newer version, over the cap, unreadable): the
+  notice carries the new reason, in-memory state is untouched, the store
+  stays read-only. Post `SidebarSettingsStillDefaults(detail: reason)`.
+- Readable: adopt the file's sort, grouping, pins and shortcuts wholesale,
+  discarding in-memory edits made during the outage (each was reported as
+  a failed save when made, and the file is the authority — the mac round-8
+  rule against partial salvage). Republish the tree. Post
+  `SidebarSettingsReloaded`, or `SidebarSettingsReloadedStaleRefs` when the
+  divergence memory is set.
+- The divergence memory is Windows' twin of mac's journal-overflow arm: it
+  is set when a rename, move or delete rewrote the stored paths in memory
+  but the pins or shortcuts write did not land, and cleared when a later
+  structural transform lands both sections or a retry adopts the file. No
+  existence probing of pins or shortcuts: that would be a host rule with
+  no mac twin.
+
+The three events become both-host rows in the ledger; their Windows
+designations are removed. The construction sites are the three arms of
+`FilesSidebarViewModel.RetrySettings@1`; the residue register is unchanged.
+Facts: `SidebarSettingsRetryTests` (blocked read stands as a notice; repair
+then retry adopts and speaks Reloaded; still-blocked keeps defaults and
+speaks the reason; newer version until downgraded; stale references after
+a rename during the outage; the memory clears with a successful retry;
+retry unavailable and silent while writable; a mid-life blocked write
+raises the notice). Journey:
+`SidebarSettings_RetryRecoversAReadOnlyFileReachably` (notice text, Invoke,
+keyboard reachability, both status sentences, the row leaving the tree,
+axe clean). Human NVDA/JAWS listening for the three sentences joins the
+release residual with the rest of W7.
+
 <!-- a11y-trigger-ledger:start -->
 
 ## Whole-corpus trigger ledger (D-7)
@@ -541,9 +593,9 @@ Canvas and Graph retain their separate structural-key and journey censuses.
 | `SearchResultsSummary` | posted | `AppState.swift#runSearch@1` | `Search/SearchOverlayViewModel.cs#SearchOverlayViewModel.PublishResults@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `SelectionCopied` | posted | `AppState.swift#completeSidebarCopy@1` | `FilesSidebarViewModel.FileManagement.cs#FilesSidebarViewModel.CopyPathSelected@1`; `FilesSidebarViewModel.cs#FilesSidebarViewModel.CopyWikilink@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `ShowingNote` | posted | `NoteContentView.swift#announceIfNeeded@1` | — | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Windows recorded: Windows tab/pane activation posts TabFocused/EditorPaneFocused with the note title; Mac NoteContentView separately posts ShowingNote on appearance. Retain one Windows focus route. [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
-| `SidebarSettingsReloaded` | posted | `AppState.swift#retrySidebarVaultPreferences@1` | — | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Windows recorded: Windows SidebarSettingsStore loads settings at sidebar construction and surfaces its read-only notice; it has no Mac retry-vault-preferences action. Retain the current route for this notification slice. Owner approved deferral on 2026-09-19; retry flow is tracked by #1230. [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
-| `SidebarSettingsReloadedStaleRefs` | posted | `AppState.swift#retrySidebarVaultPreferences@1` | — | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Windows recorded: Windows SidebarSettingsStore loads settings at sidebar construction and surfaces its read-only notice; it has no Mac retry-vault-preferences action. Retain the current route for this notification slice. Owner approved deferral on 2026-09-19; retry flow is tracked by #1230. [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
-| `SidebarSettingsStillDefaults` | posted | `AppState.swift#retrySidebarVaultPreferences@1` | — | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Windows recorded: Windows SidebarSettingsStore loads settings at sidebar construction and surfaces its read-only notice; it has no Mac retry-vault-preferences action. Retain the current route for this notification slice. Owner approved deferral on 2026-09-19; retry flow is tracked by #1230. [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
+| `SidebarSettingsReloaded` | posted | `AppState.swift#retrySidebarVaultPreferences@1` | `FilesSidebarViewModel.cs#FilesSidebarViewModel.RetrySettings@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `SidebarSettingsReloadedStaleRefs` | posted | `AppState.swift#retrySidebarVaultPreferences@1` | `FilesSidebarViewModel.cs#FilesSidebarViewModel.RetrySettings@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `SidebarSettingsStillDefaults` | posted | `AppState.swift#retrySidebarVaultPreferences@1` | `FilesSidebarViewModel.cs#FilesSidebarViewModel.RetrySettings@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `SourceChangesDiscarded` | posted | `NotePropertiesHeader.swift#body@1`; `NotePropertiesHeader.swift#sourceEditor@1` | — | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Windows recorded: YAML source mode is explicitly deferred; the Windows property header has no source-mode commit/discard trigger. [22_property_panel_contracts](../../docs/plans/22_property_panel_contracts.md) |
 | `SpellCheckToggled` | posted | `AppState.swift#toggleEditorSpellCheck@1` | `EditorInteractions.cs#EditorPreferencesViewModel.EditorPreferencesViewModel@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `SwitcherMatchCount` | posted | `QuickSwitcherModel.swift#publishAnnouncement@1` | — | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Windows recorded: QuickSwitcherCount is the Windows canonical envelope for the same recent/no-match/match states; a11y.rs renders it through the same vocabulary templates. [w1_spec](../../docs/plans/18_windows_port/specs/w1_spec.md) |

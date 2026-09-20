@@ -36,6 +36,12 @@ internal sealed class SidebarSettingsStore
     private JsonObject _root = new() { ["version"] = SchemaVersion };
     private string? _readOnlyReason;
 
+    /// <summary>The standing reason writes refuse, or null while the
+    /// file is writable. Set by <see cref="Load"/> and by a write that
+    /// finds the file blocked under its lock (#1230: the sidebar raises
+    /// its notice from either).</summary>
+    public string? ReadOnlyReason => _readOnlyReason;
+
     public SidebarSettingsStore(string vaultRoot, Action? afterDirectoryAnchored = null)
     {
         _vaultRoot = Path.GetFullPath(vaultRoot);
