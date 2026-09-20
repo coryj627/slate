@@ -22,4 +22,6 @@ settings; Narrator is W8-6 smoke scope. Automated twins do not prove speech.
 | 7 | W1-4 | Quick Open | Ctrl+O; type a query; Down through results; Enter opens; reopen and Escape. | Result count and selected name are spoken; Escape restores the invoking editor. | `QuickSwitcherRankCoordinatorTests` | Pending | Pending | Pending |
 | 8 | W7-6 | Region cycling | From the Files tree press F6 repeatedly through a full loop, then Shift+F6 back; hide the right pane (Ctrl+Alt+I) and repeat; repeat once on a vault with no tab open. | Each landing is spoken (Files, tab bar with the tab, editor, leaf panel, "Right pane panels", "Status bar" with its text, "Menu bar", "Editor pane. Empty"); hidden right-pane stops are skipped; the ring wraps both ways. | `ShellRegions_F6CyclesForwardAndShiftF6Back` | Pending | Pending | Pending |
 
+Production agent-operated evidence for row 8 and the W7-5 launch-focus retest: [2026-09-20 NVDA run](w7_6_nvda_production_run_2026-09-20.md) (not a human cell; the typed region announcements were not received in that session and stay Pending for the owner's pass).
+
 Residual: every unexecuted row remains Pending. Record findings and the fix commit on retest; never replace a human pass with the automated twin.
