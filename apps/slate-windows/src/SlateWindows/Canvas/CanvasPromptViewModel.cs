@@ -600,7 +600,7 @@ internal sealed class CanvasEditConnectionDirectionPrompt : CanvasPromptViewMode
         CanvasNeighbor neighbor,
         string? currentLabel,
         CanvasConnectionDirection current)
-        : base(document, "Edit Connection: Direction", string.Empty, Choices())
+        : base(document, "Edit Connection: Direction", string.Empty, DirectionChoices())
     {
         Context = context;
         Neighbor = neighbor;
@@ -645,7 +645,7 @@ internal sealed class CanvasEditConnectionDirectionPrompt : CanvasPromptViewMode
                 Document, Context, Neighbor, Enum.Parse<CanvasConnectionDirection>(chosen), CurrentLabel));
     }
 
-    private static ImmutableArray<CanvasPromptChoice> Choices() =>
+    private static ImmutableArray<CanvasPromptChoice> DirectionChoices() =>
     [
         new(nameof(CanvasConnectionDirection.ToTarget), "Points at the target"),
         new(nameof(CanvasConnectionDirection.FromTarget), "Points back at the source"),

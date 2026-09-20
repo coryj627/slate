@@ -18,6 +18,12 @@
          palette would render beneath it. Promoted rather than the claim
          softened, because the claim is the behaviour we want. -->
     <WarningsAsErrors>$(WarningsAsErrors);CS8509</WarningsAsErrors>
+    <!-- CS8524 is the weaker sibling: "an unnamed value cast to the enum
+         is not covered". The same wildcard-free switch that makes CS8509
+         bite necessarily trips it, and nothing casts integers to
+         ModalSurface. Silenced so the app builds with zero warnings and a
+         new one stands out; CS8509 stays an error. -->
+    <NoWarn>$(NoWarn);CS8524</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
