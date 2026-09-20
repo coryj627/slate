@@ -51,6 +51,11 @@ final class A11yCorpusCensusTests: XCTestCase {
         [
             .filesRegionFocused,
             .leafPanelShown(title: "Outline"),
+            .shellRegionFocused(region: .menuBar),
+            .shellRegionFocused(region: .emptyEditor),
+            .shellRegionFocused(region: .rightPaneRail),
+            .shellRegionFocused(region: .statusBar(text: "Scan finished: 90 files indexed.")),
+            .shellRegionFocused(region: .statusBar(text: "")),
             .editorPaneFocused(ordinal: 2, total: 3, title: "notes.md", prefix: ""),
             .tabFocused(prefix: "Now", filename: "notes.md", index: 1, count: 4),
             .tabClosed(closedTitle: "draft.md", successor: "notes.md"),

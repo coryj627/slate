@@ -8253,6 +8253,26 @@ impl From<core::a11y::A11yPriority> for A11yPriority {
     }
 }
 
+/// 1:1 mirror of `slate_core::a11y::ShellRegion`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum ShellRegion {
+    MenuBar,
+    EmptyEditor,
+    RightPaneRail,
+    StatusBar { text: String },
+}
+
+impl From<ShellRegion> for core::a11y::ShellRegion {
+    fn from(r: ShellRegion) -> Self {
+        match r {
+            ShellRegion::MenuBar => Self::MenuBar,
+            ShellRegion::EmptyEditor => Self::EmptyEditor,
+            ShellRegion::RightPaneRail => Self::RightPaneRail,
+            ShellRegion::StatusBar { text } => Self::StatusBar { text },
+        }
+    }
+}
+
 /// One announcement, as data — 1:1 mirror of `slate_core::a11y::A11yEvent`
 /// (see that module for per-variant docs, the copy rules, and the
 /// `HostComposed` residue contract).
@@ -8261,6 +8281,9 @@ pub enum A11yEvent {
     FilesRegionFocused,
     LeafPanelShown {
         title: String,
+    },
+    ShellRegionFocused {
+        region: ShellRegion,
     },
     EditorPaneFocused {
         ordinal: u32,
@@ -10111,6 +10134,9 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
         match e {
             F::FilesRegionFocused => C::FilesRegionFocused,
             F::LeafPanelShown { title } => C::LeafPanelShown { title },
+            F::ShellRegionFocused { region } => C::ShellRegionFocused {
+                region: region.into(),
+            },
             F::EditorPaneFocused {
                 ordinal,
                 total,

@@ -10,6 +10,31 @@
     "text": "Outline panel."
   },
   {
+    "event": "ShellRegionFocused { region: MenuBar }",
+    "priority": "medium",
+    "text": "Menu bar."
+  },
+  {
+    "event": "ShellRegionFocused { region: EmptyEditor }",
+    "priority": "medium",
+    "text": "Editor pane. Empty."
+  },
+  {
+    "event": "ShellRegionFocused { region: RightPaneRail }",
+    "priority": "medium",
+    "text": "Right pane panels."
+  },
+  {
+    "event": "ShellRegionFocused { region: StatusBar { text: \"Scan finished: 90 files indexed.\" } }",
+    "priority": "medium",
+    "text": "Status bar. Scan finished: 90 files indexed."
+  },
+  {
+    "event": "ShellRegionFocused { region: StatusBar { text: \"\" } }",
+    "priority": "medium",
+    "text": "Status bar."
+  },
+  {
     "event": "EditorPaneFocused { ordinal: 2, total: 3, title: \"notes.md\", prefix: \"\" }",
     "priority": "medium",
     "text": "Editor pane 2 of 3, notes.md."
