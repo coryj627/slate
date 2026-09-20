@@ -765,6 +765,26 @@
                                             AutomationProperties.Name="Refresh files"
                                             Command="{Binding RefreshCommand}" />
                                 </DockPanel>
+                                <!-- #1230: a read-only .slate/sidebar.json stands as a
+                                     notice with its Retry beside it (mac's
+                                     sidebarPreferencesNotice); the row leaves the tree
+                                     with the notice. -->
+                                <StackPanel Margin="0,0,0,8"
+                                            Visibility="{Binding HasSettingsNotice, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <TextBlock Text="{Binding SettingsNotice}"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource Slate.WarningBrush}"
+                                               TextWrapping="Wrap"
+                                               AutomationProperties.AutomationId="SidebarSettingsNotice" />
+                                    <Button Margin="0,4,0,0"
+                                            Padding="6,2"
+                                            HorizontalAlignment="Left"
+                                            Content="Retry"
+                                            AutomationProperties.AutomationId="SidebarSettingsRetry"
+                                            AutomationProperties.Name="Retry sidebar settings"
+                                            AutomationProperties.HelpText="Reads .slate/sidebar.json again after you repair it."
+                                            Command="{Binding RetrySettingsCommand}" />
+                                </StackPanel>
                                 <TextBox x:Name="SidebarFilterTextBox"
                                          AutomationProperties.AutomationId="SidebarFilter"
                                          AutomationProperties.Name="Filter files"

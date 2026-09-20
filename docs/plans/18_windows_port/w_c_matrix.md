@@ -125,8 +125,12 @@ for failed saves, file reopen failures and dashboard loads (D-10–D-12).
 `RecoveryAnnouncementTests` covers conflicting Save/Save All/close without
 data loss, missing and unreadable reopen outcomes, success controls, and
 production asynchronous dashboard publication with stale/shutdown guards.
-Existing platform adaptations and enumerated residue are recorded; the
-sidebar-settings retry flow is deferred to [#1230](https://github.com/coryj627/slate/issues/1230).
+Existing platform adaptations and enumerated residue are recorded. The
+sidebar-settings retry flow deferred to [#1230](https://github.com/coryj627/slate/issues/1230)
+shipped under contracts 38 D-13 (2026-09-20): a notice with a Retry in the
+Files pane, synchronous wholesale re-adoption, the three sidebar-settings
+events now both-host, `SidebarSettingsRetryTests` and the
+`SidebarSettings_RetryRecoversAReadOnlyFileReachably` journey.
 
 The [notification checklist](reports/w7_2_notification_etiquette_checklist.md)
 adds independent NVDA and JAWS queue/interruption/Say All/scan and recovery runs. All

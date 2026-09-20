@@ -351,7 +351,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private readonly Func<string, bool> _confirmDestructive;
     private readonly SidebarSettingsStore? _settingsStore;
     private readonly FileRecentsStore? _recentsStore;
-    private readonly string? _settingsNotice;
+    private string? _settingsNotice;
+    private bool _storedPathsDivergedFromFile;
     private readonly HashSet<string> _pinned = new(StringComparer.Ordinal);
     private readonly List<string> _recents = [];
     private readonly List<string> _history = [];
@@ -425,6 +426,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             StringComparer.Ordinal);
 
         RefreshCommand = new RelayCommand(_ => Refresh(reportCount: true), _ => true);
+        RetrySettingsCommand = new RelayCommand(_ => RetrySettings(), _ => _settingsNotice is not null);
         ClearFilterCommand = new RelayCommand(_ => FilterText = string.Empty, _ => FilterText.Length > 0);
         ToggleTagsCommand = new RelayCommand(_ => ShowTags = !ShowTags, _ => true);
         ToggleDualPaneCommand = new RelayCommand(_ => IsDualPaneEnabled = !IsDualPaneEnabled, _ => true);
@@ -622,6 +624,25 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         private set => SetField(ref _status, value);
     }
 
+    /// <summary>#1230: the standing reason <c>.slate/sidebar.json</c> is
+    /// read-only, or null while it is writable. It is the notice the
+    /// Retry action sits beside; the refresh count keeps carrying it as
+    /// a suffix too.</summary>
+    public string? SettingsNotice
+    {
+        get => _settingsNotice;
+        private set
+        {
+            if (SetField(ref _settingsNotice, value))
+            {
+                OnPropertyChanged(nameof(HasSettingsNotice));
+                ((RelayCommand)RetrySettingsCommand).RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public bool HasSettingsNotice => _settingsNotice is not null;
+
     public string MutationName
     {
         get => _mutationName;
@@ -712,6 +733,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         : $"{BatchSelectionCount:N0} {(BatchSelectionCount == 1 ? "file" : "files")} selected";
 
     public ICommand RefreshCommand { get; }
+    public ICommand RetrySettingsCommand { get; }
     public ICommand ClearFilterCommand { get; }
     public ICommand ToggleTagsCommand { get; }
     public ICommand ToggleDualPaneCommand { get; }
@@ -2030,6 +2052,90 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private static string CombineVaultPath(string parent, string name) =>
         string.IsNullOrEmpty(parent) ? name : $"{parent}/{name}";
 
+    /// <summary>#1230: reread <c>.slate/sidebar.json</c> after the user
+    /// repairs it. Synchronous on the UI thread and bounded by the
+    /// store's 2 MiB read cap — the same call the constructor made — so
+    /// there is no pending state for a vault close or replacement to
+    /// race. A still-blocked read keeps every in-memory default and the
+    /// notice; a readable file is adopted WHOLESALE (its sort, grouping,
+    /// pins and shortcuts replace whatever the outage accumulated in
+    /// memory — those edits were reported as failed saves when made),
+    /// and the tree republishes under the adopted ordering. The outcome
+    /// speaks core's vocabulary: StillDefaults carrying the reason,
+    /// ReloadedStaleRefs when a structural change rewrote stored paths
+    /// that never landed, Reloaded otherwise.</summary>
+    internal void RetrySettings()
+    {
+        if (_settingsStore is null || _settingsNotice is null)
+        {
+            return;
+        }
+
+        SidebarSettingsSnapshot settings = _settingsStore.Load();
+        A11yEvent outcome;
+        if (settings.ReadOnlyReason is string reason)
+        {
+            SettingsNotice = reason;
+            outcome = new A11yEvent.SidebarSettingsStillDefaults(reason);
+        }
+        else
+        {
+            AdoptSettings(settings);
+            SettingsNotice = null;
+            outcome = _storedPathsDivergedFromFile
+                ? new A11yEvent.SidebarSettingsReloadedStaleRefs()
+                : new A11yEvent.SidebarSettingsReloaded();
+            _storedPathsDivergedFromFile = false;
+            Refresh();
+        }
+
+        Status = SlateUniffiMethods.A11yRender(outcome).Text;
+        if (IsRefreshingTree)
+        {
+            // The outcome wins the turn over the republication's own
+            // status arms (the ReportResult discipline).
+            _statusToReassert = Status;
+        }
+
+        _announce(outcome);
+        RaiseCommandStates();
+    }
+
+    private void AdoptSettings(SidebarSettingsSnapshot settings)
+    {
+        // The fields, not the setters: adoption neither persists (the
+        // file is the source) nor speaks the sort.
+        _sortMode = settings.SortMode;
+        _groupByDate = settings.GroupByDate;
+        OnPropertyChanged(nameof(SortMode));
+        OnPropertyChanged(nameof(GroupByDate));
+        _pinned.Clear();
+        _pinned.UnionWith(settings.Pins);
+        SidebarShortcutViewModel? selected = SelectedShortcut;
+        Shortcuts.Clear();
+        foreach (SidebarShortcutState shortcut in settings.Shortcuts)
+        {
+            Shortcuts.Add(new SidebarShortcutViewModel(shortcut.Kind, shortcut.Path));
+        }
+
+        SelectedShortcut = selected is null
+            ? null
+            : Shortcuts.FirstOrDefault(item =>
+                item.Kind == selected.Kind && item.Path == selected.Path);
+    }
+
+    /// <summary>A write that found the file blocked under its lock
+    /// leaves the store's reason standing; raise the notice (and its
+    /// Retry) from it. A bounds refusal or an I/O failure leaves no
+    /// reason and no notice.</summary>
+    private void NoteSettingsBlocked()
+    {
+        if (_settingsStore?.ReadOnlyReason is string reason)
+        {
+            SettingsNotice = reason;
+        }
+    }
+
     private bool PersistOrganization()
     {
         try
@@ -2042,6 +2148,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         {
             ReportFailure($"Could not save sidebar organization: {exception.Message}");
             HostLog.Write(HostDiagnosticEvent.SidebarOrganizationPersistFailed, exception);
+            NoteSettingsBlocked();
             return false;
         }
     }
@@ -2110,6 +2217,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         {
             ReportFailure($"Could not save pins: {exception.Message}");
             HostLog.Write(HostDiagnosticEvent.SidebarPinsPersistFailed, exception);
+            NoteSettingsBlocked();
             return false;
         }
     }
@@ -2127,6 +2235,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         {
             ReportFailure($"Could not save shortcuts: {exception.Message}");
             HostLog.Write(HostDiagnosticEvent.SidebarShortcutsPersistFailed, exception);
+            NoteSettingsBlocked();
             return false;
         }
     }
@@ -2237,6 +2346,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         {
             RecordStoredPathPersistFailure();
         }
+
+        // #1230: the file carries the rewritten paths only once BOTH
+        // sections landed — until then a later retry that adopts the
+        // file adopts references this transform moved, and says so
+        // (mac's journal-overflow arm). A later transform that lands
+        // fully writes the whole current sets, so it clears the memory.
+        _storedPathsDivergedFromFile = !pinsPersisted || !shortcutsPersisted;
     }
 
     private void RaiseCommandStates()
