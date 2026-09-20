@@ -181,7 +181,7 @@ public sealed class CommandDriftTests
             string? invokedId = null;
             Match binding = Regex.Match(
                 item.Attribute("Command")?.Value ?? string.Empty,
-                @"^\{Binding ([A-Za-z0-9_.]+)\}$");
+                BindingPathPattern);
             if (binding.Success)
             {
                 idByPath.TryGetValue(binding.Groups[1].Value, out invokedId);
@@ -359,6 +359,15 @@ public sealed class CommandDriftTests
         };
 
     /// <summary>
+    /// A menu item's command binding: the path, optionally followed by the
+    /// W7-5 (#1239) disabled fallback that keeps an item bound through
+    /// <c>ActiveTab</c> disabled while the path has no target. The fallback
+    /// is a fixed spelling on purpose — a different fallback is drift.
+    /// </summary>
+    private const string BindingPathPattern =
+        @"^\{Binding\s+([A-Za-z0-9_.]+)(?:,\s*FallbackValue=\{x:Static cmd:DisabledCommand\.Instance\})?\}$";
+
+    /// <summary>
     /// Every <c>Command="{Binding path}"</c> under the menu bar. Scoped to
     /// the <c>Menu</c> subtree so overlay bindings elsewhere in the window
     /// cannot leak in.
@@ -376,7 +385,7 @@ public sealed class CommandDriftTests
                 continue;
             }
 
-            Match binding = Regex.Match(command, @"^\{Binding\s+([A-Za-z0-9_.]+)\}$");
+            Match binding = Regex.Match(command, BindingPathPattern);
             if (binding.Success)
             {
                 paths.Add(binding.Groups[1].Value);

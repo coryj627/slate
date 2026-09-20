@@ -55,12 +55,28 @@
              expanded, mirroring mac. -->
         <KeyBinding Key="J" Modifiers="Control" Command="{Binding Workspace.JumpToBibliographyCommand}" />
         <KeyBinding Key="J" Modifiers="Control+Shift" Command="{Binding Workspace.OpenCitationSummaryCommand}" />
-        <KeyBinding Key="Escape" Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ClosePopoverCommand}" />
+        <KeyBinding Key="Escape" Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ClosePopoverCommand, FallbackValue={x:Static cmd:DisabledCommand.Instance}}" />
     </Window.InputBindings>
 
     <DockPanel KeyDown="TrashFallback_KeyDown">
+        <!-- W7-5 (#1239): two things the first NVDA field pass found, both
+             owned here. (1) WPF's Menu defaults TabNavigation to Cycle, so a
+             Tab that enters the bar never leaves it (File > ... > Files >
+             File, five times over in the log); None keeps Tab out of the bar
+             entirely, as in every Win32 app, and Alt / Alt+letter / F6 (W7-6)
+             remain its routes. (2) The LOCAL Menu.Style below replaces
+             Fluent's implicit Menu style, and with it the style's
+             Foreground = MenuBarForeground; the bar then fell back to the
+             OS theme's dark MenuText, which every item INHERITED, so in the
+             dark theme enabled items drew near-black on the popup while
+             disabled ones kept Fluent's translucent white. The reference is
+             declared here so the inheritance chain starts at Fluent's
+             token again; MenuItemForegroundTests renders it. -->
         <Menu x:Name="MainMenu"
               DockPanel.Dock="Top"
+              Focusable="False"
+              KeyboardNavigation.TabNavigation="None"
+              Foreground="{DynamicResource MenuBarForeground}"
               AutomationProperties.Name="Application commands">
             <!-- The menu disables under EVERY modal surface — mac
                  parity: AppKit disables the menu bar while a sheet is
@@ -160,6 +176,75 @@
                 <MenuItem Header="_Close Vault"
                           AutomationProperties.AutomationId="CloseVaultMenuItem"
                           Command="{Binding CloseVaultCommand}" />
+                <Separator />
+                <Separator />
+                <!-- W7-5 (#1239): the file-sidebar verbs. They shipped as a
+                     SEVENTH top-level menu named "Files" beside "File", both on
+                     Alt+F: WPF answers a shared mnemonic by focusing the first
+                     match and waiting, so Alt+F opened nothing, and a reader
+                     heard two menus a trailing "s" apart. One File menu, the
+                     sidebar verbs a submenu of it; MenuBarCensus keeps the
+                     top level unique. -->
+                <MenuItem Header="Files _Sidebar"
+                          AutomationProperties.AutomationId="FilesSidebarMenu">
+                    <MenuItem Header="_Open"
+                              AutomationProperties.AutomationId="FilesSidebarOpenMenuItem"
+                              Command="{Binding FileSidebar.OpenCurrentCommand}" />
+                    <MenuItem Header="Open in New _Tab"
+                              AutomationProperties.AutomationId="FilesSidebarOpenInNewTabMenuItem"
+                              Command="{Binding FileSidebar.OpenNewTabCommand}" />
+                    <MenuItem Header="Open in _Split"
+                              AutomationProperties.AutomationId="FilesSidebarOpenInSplitMenuItem"
+                              Command="{Binding FileSidebar.OpenSplitCommand}" />
+                    <Separator />
+                    <MenuItem Header="_Import Files and Folders…"
+                              AutomationProperties.AutomationId="FilesSidebarImportFilesAndFoldersMenuItem"
+                              Command="{Binding FileSidebar.ImportCommand}" />
+                    <MenuItem Header="_Cancel Import"
+                              AutomationProperties.AutomationId="FilesSidebarCancelImportMenuItem"
+                              Command="{Binding FileSidebar.CancelImportCommand}" />
+                    <Separator />
+                    <MenuItem Header="_Refresh"
+                              AutomationProperties.AutomationId="FilesSidebarRefreshMenuItem"
+                              Command="{Binding FileSidebar.RefreshCommand}" />
+                    <MenuItem Header="_Collapse All"
+                              AutomationProperties.AutomationId="FilesSidebarCollapseAllMenuItem"
+                              Command="{Binding FileSidebar.CollapseAllCommand}" />
+                    <MenuItem Header="_Expand Loaded"
+                              AutomationProperties.AutomationId="FilesSidebarExpandLoadedMenuItem"
+                              Command="{Binding FileSidebar.ExpandLoadedCommand}" />
+                    <MenuItem Header="Focus _Filter"
+                              AutomationProperties.AutomationId="FilesSidebarFocusFilterMenuItem"
+                              InputGestureText="{cmd:ChordText slate.sidebar.focusFilter}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Click="FocusFilter_Click" />
+                    <MenuItem Header="_Back"
+                              AutomationProperties.AutomationId="FilesSidebarBackMenuItem"
+                              InputGestureText="{cmd:ChordText slate.sidebar.historyBack}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding FileSidebar.HistoryBackCommand}" />
+                    <MenuItem Header="_Forward"
+                              AutomationProperties.AutomationId="FilesSidebarForwardMenuItem"
+                              InputGestureText="{cmd:ChordText slate.sidebar.historyForward}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding FileSidebar.HistoryForwardCommand}" />
+                    <Separator />
+                    <MenuItem Header="_Pin Note"
+                              AutomationProperties.AutomationId="FilesSidebarPinNoteMenuItem"
+                              Command="{Binding FileSidebar.PinCommand}" />
+                    <MenuItem Header="_Unpin Note"
+                              AutomationProperties.AutomationId="FilesSidebarUnpinNoteMenuItem"
+                              Command="{Binding FileSidebar.UnpinCommand}" />
+                    <MenuItem Header="Unpin _All in Folder"
+                              AutomationProperties.AutomationId="FilesSidebarUnpinAllInFolderMenuItem"
+                              Command="{Binding FileSidebar.UnpinAllCommand}" />
+                    <MenuItem Header="Add to _Shortcuts"
+                              AutomationProperties.AutomationId="FilesSidebarAddToShortcutsMenuItem"
+                              Command="{Binding FileSidebar.AddShortcutCommand}" />
+                    <MenuItem Header="_Remove Shortcut"
+                              AutomationProperties.AutomationId="FilesSidebarRemoveShortcutMenuItem"
+                              Command="{Binding FileSidebar.RemoveShortcutCommand}" />
+                    <MenuItem Header="Use Vault Default _Sort"
+                              AutomationProperties.AutomationId="FilesSidebarUseVaultDefaultSortMenuItem"
+                              Command="{Binding FileSidebar.UseVaultDefaultSortCommand}" />
+                    <MenuItem Header="Clear _Recents"
+                              AutomationProperties.AutomationId="FilesSidebarClearRecentsMenuItem"
+                              Command="{Binding FileSidebar.ClearRecentsCommand}" />
+                </MenuItem>
                 <Separator />
                 <MenuItem Header="E_xit" Command="{x:Static ApplicationCommands.Close}" />
             </MenuItem>
@@ -300,11 +385,11 @@
                 <MenuItem Header="_Activate at Cursor"
                           AutomationProperties.AutomationId="EditorActivateMenuItem"
                           InputGestureText="{cmd:ChordText slate.editor.activateAtCaret}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ActivateAtCaretCommand}" />
+                          Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ActivateAtCaretCommand, FallbackValue={x:Static cmd:DisabledCommand.Instance}}" />
                 <MenuItem Header="Preview _Embed"
                           AutomationProperties.AutomationId="EditorPreviewEmbedMenuItem"
                           InputGestureText="{cmd:ChordText slate.editor.previewEmbed}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.PreviewEmbedCommand}" />
+                          Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.PreviewEmbedCommand, FallbackValue={x:Static cmd:DisabledCommand.Instance}}" />
                 <MenuItem Header="Toggle _Reading Mode"
                           AutomationProperties.AutomationId="EditorToggleReadingModeMenuItem"
                           InputGestureText="{cmd:ChordText slate.editor.toggleViewMode}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
@@ -577,29 +662,6 @@
                 <MenuItem x:Name="GraphVerbosityMenuItem"
                           Header="_Verbosity"
                           AutomationProperties.AutomationId="GraphVerbosityMenu" />
-            </MenuItem>
-            <MenuItem Header="_Files">
-                <MenuItem Header="_Open" Command="{Binding FileSidebar.OpenCurrentCommand}" />
-                <MenuItem Header="Open in New _Tab" Command="{Binding FileSidebar.OpenNewTabCommand}" />
-                <MenuItem Header="Open in _Split" Command="{Binding FileSidebar.OpenSplitCommand}" />
-                <Separator />
-                <MenuItem Header="_Import Files and Folders…" Command="{Binding FileSidebar.ImportCommand}" />
-                <MenuItem Header="_Cancel Import" Command="{Binding FileSidebar.CancelImportCommand}" />
-                <Separator />
-                <MenuItem Header="_Refresh" Command="{Binding FileSidebar.RefreshCommand}" />
-                <MenuItem Header="_Collapse All" Command="{Binding FileSidebar.CollapseAllCommand}" />
-                <MenuItem Header="_Expand Loaded" Command="{Binding FileSidebar.ExpandLoadedCommand}" />
-                <MenuItem Header="Focus _Filter" InputGestureText="{cmd:ChordText slate.sidebar.focusFilter}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Click="FocusFilter_Click" />
-                <MenuItem Header="_Back" InputGestureText="{cmd:ChordText slate.sidebar.historyBack}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding FileSidebar.HistoryBackCommand}" />
-                <MenuItem Header="_Forward" InputGestureText="{cmd:ChordText slate.sidebar.historyForward}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding FileSidebar.HistoryForwardCommand}" />
-                <Separator />
-                <MenuItem Header="_Pin Note" Command="{Binding FileSidebar.PinCommand}" />
-                <MenuItem Header="_Unpin Note" Command="{Binding FileSidebar.UnpinCommand}" />
-                <MenuItem Header="Unpin _All in Folder" Command="{Binding FileSidebar.UnpinAllCommand}" />
-                <MenuItem Header="Add to _Shortcuts" Command="{Binding FileSidebar.AddShortcutCommand}" />
-                <MenuItem Header="_Remove Shortcut" Command="{Binding FileSidebar.RemoveShortcutCommand}" />
-                <MenuItem Header="Use Vault Default _Sort" Command="{Binding FileSidebar.UseVaultDefaultSortCommand}" />
-                <MenuItem Header="Clear _Recents" Command="{Binding FileSidebar.ClearRecentsCommand}" />
             </MenuItem>
         </Menu>
 
@@ -2111,6 +2173,13 @@
                                             </DataTrigger>
                                             <!-- W6-2 PR B (B-13): the placeholder retires for the leaf. -->
                                             <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="connections">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                            <!-- W7-5 (#1239): the graph inspector has had a body since
+                                                 W6-2 PR E, but never retired the placeholder, so its
+                                                 heading painted over the inspector's notice. Pinned by
+                                                 RightPaneLeafBodyCensus. -->
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="inspector">
                                                 <Setter Property="Visibility" Value="Collapsed" />
                                             </DataTrigger>
                                         </Style.Triggers>

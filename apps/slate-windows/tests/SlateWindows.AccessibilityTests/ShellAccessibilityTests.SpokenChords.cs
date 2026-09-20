@@ -70,13 +70,27 @@ public sealed partial class ShellAccessibilityTests
                 && element.Attribute("InputGestureText") is not null).ToArray();
             Assert.NotEmpty(menuItems);
             int checkedMenus = 0;
-            foreach (IGrouping<string, XElement> group in menuItems.GroupBy(element =>
-                element.Ancestors().First(ancestor => ancestor.Name.LocalName == "MenuItem").Attribute("Header")!.Value.Replace("_", "")))
+            foreach (IGrouping<string, XElement> group in menuItems.GroupBy(element => string.Join(" > ",
+                element.Ancestors().Where(ancestor => ancestor.Name.LocalName == "MenuItem").Reverse()
+                    .Select(ancestor => ancestor.Attribute("Header")!.Value.Replace("_", "")))))
             {
                 AutomationElement mainMenu = WaitForElement(window, "MainMenu", TimeSpan.FromSeconds(10));
-                AutomationElement? menu = mainMenu.FindFirstChild(automation.ConditionFactory.ByName(group.Key));
-                Assert.NotNull(menu);
-                menu.Patterns.ExpandCollapse.Pattern.Expand();
+                // W7-5 (#1239): the sidebar verbs are a submenu of File, so a
+                // group's key is the header CHAIN, walked and expanded a
+                // level at a time before its leaves are looked for.
+                AutomationElement? menu = null;
+                AutomationElement? topLevel = null;
+                foreach (string header in group.Key.Split(" > "))
+                {
+                    menu = menu is null
+                        ? mainMenu.FindFirstChild(automation.ConditionFactory.ByName(header))
+                        : FindDescendantWithin(menu,
+                            automation.ConditionFactory.ByControlType(ControlType.MenuItem).And(automation.ConditionFactory.ByName(header)),
+                            TimeSpan.FromSeconds(10));
+                    Assert.True(menu is not null, "Menu did not appear: " + header + " (in " + group.Key + ")");
+                    topLevel ??= menu;
+                    menu.Patterns.ExpandCollapse.Pattern.Expand();
+                }
                 foreach (XElement declared in group)
                 {
                     string name = declared.Attribute("Header")!.Value.Replace("_", "");
@@ -90,7 +104,7 @@ public sealed partial class ShellAccessibilityTests
                     Assert.Equal(rows[id].GetProperty("windows").GetString(), item.Properties.AcceleratorKey.Value);
                     checkedMenus++;
                 }
-                menu.Patterns.ExpandCollapse.Pattern.Collapse();
+                topLevel!.Patterns.ExpandCollapse.Pattern.Collapse();
             }
             Assert.Equal(menuItems.Length, checkedMenus);
             PressKey(VirtualKeyShort.ESCAPE);

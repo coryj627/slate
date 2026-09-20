@@ -225,13 +225,19 @@ public sealed partial class ShellAccessibilityTests
                     $"{automationId} does not expose Toggle.");
             }
 
+            // W7-5 (#1239): a vault that restores no tabs lands its launch
+            // focus on the Files tree, never on the empty TabControl (which
+            // is not focusable until it has items).
             AutomationElement tabs = WaitForElement(
                 window,
                 "WorkspaceTabs",
                 TimeSpan.FromSeconds(10));
+            Assert.False(
+                tabs.Properties.IsKeyboardFocusable.Value,
+                "An empty TabControl must not be keyboard focusable.");
             AssertEventuallyFocused(
-                tabs,
-                "Opening a vault did not focus its active TabControl.");
+                WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)),
+                "Opening a vault with no restored tabs did not focus the Files tree.");
 
             AssertActionButtonCensus(
                 WaitForElement(window, "SidebarBatchActions", TimeSpan.FromSeconds(10)),

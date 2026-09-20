@@ -6,14 +6,14 @@ fixture vault. Use [_at_pass_template.md](_at_pass_template.md) for a named,
 dated record and transcript. NVDA and JAWS are independent passes with stock
 settings; Narrator is W8-6 smoke scope. Automated twins do not prove speech.
 
-**Tester:** Pending · **AT:** Pending (exact version per run) · **OS:** Pending (edition and build)
-**Build:** Pending (branch and verified commit) · **Corpus:** Pending (fixture vault and notes)
-**Method:** Pending (Speech Viewer / JAWS history, braille viewer where required)
-**Run date:** Pending · **Evidence reference:** Pending
+**Tester:** Cory Joseph (NVDA run; JAWS and Narrator runs still to come) · **AT:** NVDA 2026.2, stock settings · **OS:** Windows 11 Pro 25H2, build 10.0.26200.9457
+**Build:** main at 6b5cf96, Release executable · **Corpus:** demo-vault (90 files)
+**Method:** keyboard only; NVDA speech log at Debug as the transcript
+**Run date:** 2026-09-20 (America/New_York) · **Evidence reference:** [w7_5_nvda_field_pass_2026-09-20.md](w7_5_nvda_field_pass_2026-09-20.md)
 
 | # | Spec item | Check | How (the UIA route) | Observable outcome | Automated twin | Narrator | NVDA | JAWS |
 |---|---|---|---|---|---|---|---|---|
-| 1 | W1-1 | Welcome and menu names | Start with no vault; Tab to Open Vault; use Alt to walk the File and Workspace menus. | Window, menu and button names are spoken; focus remains visible and activation opens the folder picker. | `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` | Pending | Pending | Pending |
+| 1 | W1-1 | Welcome and menu names | Start with no vault; Tab to Open Vault; use Alt to walk the File and Workspace menus. | Window, menu and button names are spoken; focus remains visible and activation opens the folder picker. | `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` | Pending | Finding [record](w7_5_nvda_field_pass_2026-09-20.md) | Pending |
 | 2 | W1-1 | Scan progress and completion | Open a fixture vault with enough files to observe scanning; listen until completion. | Progress is announced without a focus jump and the final indexed count is heard. | `W1ShellAccessibilityContractTests` | Pending | Pending | Pending |
 | 3 | W1-2 | Tree and tag navigation | Tab to Files; use arrows and Right/Left, open a row with Enter; toggle Tags and repeat. | Levels, expanded state and selection are spoken; activation opens the named file. | `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` | Pending | Pending | Pending |
 | 4 | W1-2 | Filter and sidebar actions | Focus the file filter with Alt+Ctrl+F; type a query; walk results; tab through sort and organization controls. | Counts and result names agree; control names, values and expanded/toggled states are readable. | `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` | Pending | Pending | Pending |
