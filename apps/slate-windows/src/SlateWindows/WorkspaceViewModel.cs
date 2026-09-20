@@ -184,6 +184,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     public AvalonDocumentBufferSession? EditorSession => _editorSession;
     public EditorInteractionCoordinator? EditorInteractions => _editorInteractions;
     internal string? SavedContentHash => _contentHash;
+    internal string? LoadFailure { get; private set; }
     public EditorPreferencesViewModel EditorPreferences { get; }
     public string EditorAutomationName =>
         $"{System.IO.Path.GetFileName(Path)} editor";
@@ -606,6 +607,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         {
             Status = $"Save blocked by editor integrity check: {exception.Message}";
             _documentChanged?.Invoke(this, null);
+            _announce(new A11yEvent.NoteSaveBlocked(System.IO.Path.GetFileName(Path), exception.Message));
             return false;
         }
 
@@ -679,6 +681,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             leaseSettled = true;
             Status = $"Save blocked: {exception.Message}";
             _documentChanged?.Invoke(this, null);
+            _announce(new A11yEvent.NoteSaveBlocked(System.IO.Path.GetFileName(Path), exception.Message));
             return false;
         }
         finally
@@ -1260,6 +1263,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     private void Load()
     {
+        LoadFailure = null;
         if (!IsMarkdown)
         {
             return;
@@ -1273,6 +1277,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
         catch (VaultException exception)
         {
+            LoadFailure = exception.Message;
             Status = $"Could not open {Path}: {exception.Message}";
         }
     }

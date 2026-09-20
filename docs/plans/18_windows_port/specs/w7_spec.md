@@ -36,7 +36,7 @@ apps/slate-windows/src/SlateWindows/
   SlateTextEditor.cs                 W7-1  the peer wraps PatternInterface.Text; raises TextPatternOnTextChanged per edit batch
   AccessibilityNotificationDispatcher.cs
                                      W7-2B the mapping corrected (Medium → All); kind + activity id pinned; nothing else changes
-  ScanAnnouncementGate.cs            W7-2B constructs the typed scan events (no HostComposed); the 350 ms guard stays host-side
+  ScanAnnouncementGate.cs            W7-2B constructs the typed scan events (no HostComposed); the guard stays host-side (2.5 s on Windows since the contract 38 D-4 amendment; mac 350 ms)
   (no new announcer)                 W7-2B the coalescers are the shipped CanvasAnnouncer/GraphAnnouncer + per-surface debounces (§3.3 B3)
   Commands/ChordTable.cs             W7-3  unchanged unless the audit finds a missing row; the table is already the single source
 tests/SlateWindows.Tests/
@@ -158,7 +158,7 @@ Every announcement Windows makes is spoken with mac's **etiquette** (polite queu
 
 | Family | Mac rule (site) | Windows twin (site) | Fact to pin / gap to close |
 |---|---|---|---|
-| scan progress | 350 ms min-interval, start/finish forced (`AppState.swift:8305, 23163`) | `ScanAnnouncementGate` (350 ms, forced) | `ScanAnnouncementGateTests` — re-point at the B2 events |
+| scan progress | 350 ms min-interval, start/finish forced (`AppState.swift:8305, 23163`) | `ScanAnnouncementGate` (2.5 s on Windows, forced; contract 38 D-4 as amended) | `ScanAnnouncementGateTests` — re-point at the B2 events |
 | canvas navigation / filter | 200 ms latest-wins per class; High flushes and drops (`CanvasAnnouncer.swift`) | `Canvas/CanvasAnnouncer.cs` | shipped (`CanvasAnnouncerTests`, `CanvasAnnouncerCensus`) — cite, don't redo |
 | graph navigation / filter / forceValue / settle | 200 ms latest-wins; filter fire-time gate; settle after convergence (`GraphAnnouncer.swift:185–238`) | `Graph/GraphAnnouncer.cs` | shipped (`GraphAnnouncerTests`, `GraphAnnouncerCensus`) — cite |
 | sidebar filter count | 200 ms query debounce + `(query,total)` dedup (`Sidebar/SidebarFilterModel.swift:93,128`) | `FilesSidebarViewModel.Filter.cs:16` (200 ms) — **verify the dedup twin exists** | a fact: same query re-run → one announcement |

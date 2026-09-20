@@ -117,6 +117,9 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
         StartWork(() => LoadBody(generation));
     }
 
+    // The failure detail last spoken, cleared by a live successful publication.
+    private string? _announcedFailure;
+
     private void LoadBody(int generation)
     {
         Dashboard dashboard;
@@ -133,13 +136,24 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
                     return;
                 }
                 Sections.Clear();
+                var failedEvent = new A11yEvent.BasesDashboardLoadFailed(Name, failure.Message);
                 var failed = new DashboardSectionViewModel(
                     new DashboardSectionStatus(string.Empty, null, null, null, false))
                 {
                     State = DashboardSectionState.Failed,
-                    Message = $"Dashboard could not be loaded: {failure.Message}",
+                    // The sentence the user hears: core owns the copy (D-12).
+                    Message = SlateUniffiMethods.A11yRender(failedEvent).Text,
                 };
                 Sections.Add(failed);
+                // D-12 makes the failure audible when published; an unchanged
+                // failure re-published by the next refresh funnel is not news,
+                // so it speaks once at High until a live publication succeeds
+                // or the detail changes.
+                if (_announcedFailure != failure.Message)
+                {
+                    _announcedFailure = failure.Message;
+                    _announce(failedEvent);
+                }
                 SectionsPublished?.Invoke(this, EventArgs.Empty);
             });
             return;
@@ -204,6 +218,7 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
             {
                 return;
             }
+            _announcedFailure = null;
             Name = dashboard.Name;
             Sections.Clear();
             foreach (DashboardSectionViewModel section in projected)

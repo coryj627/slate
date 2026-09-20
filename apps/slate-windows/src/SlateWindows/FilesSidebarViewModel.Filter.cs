@@ -16,11 +16,13 @@ internal sealed partial class FilesSidebarViewModel
     private const int FilterDebounceMilliseconds = 200;
     private readonly SynchronizationContext? _filterUiContext;
     private readonly Func<Action, CancellationToken, Task> _runFilterWorker;
+    private readonly Func<CancellationToken, Task> _filterDelay;
     private readonly object _filterCancellationGate = new();
     private CancellationTokenSource? _filterCancellation;
     private Task _filterCompletion = Task.CompletedTask;
     private int _filterGeneration;
     private string _filterText = string.Empty;
+    private (string Query, ulong Total)? _lastFilterAnnouncement;
 
     public ObservableCollection<FileTreeNodeViewModel> FilterResults { get; } = [];
     internal Task FilterCompletion
@@ -94,7 +96,7 @@ internal sealed partial class FilesSidebarViewModel
                     outcome = RunFilterQuery(query, CancellationToken.None);
                 }
 
-                ApplyFilterOutcome(outcome, automatic);
+                ApplyFilterOutcome(query, outcome, automatic);
             }
             catch (Exception exception)
             {
@@ -216,7 +218,7 @@ internal sealed partial class FilesSidebarViewModel
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            await Task.Delay(FilterDebounceMilliseconds, cancellationToken).ConfigureAwait(false);
+            await _filterDelay(cancellationToken).ConfigureAwait(false);
             if (!TryBeginSessionWork(out SessionWorkLease? lease))
             {
                 return;
@@ -247,7 +249,7 @@ internal sealed partial class FilesSidebarViewModel
                             && generation == _filterGeneration
                             && string.Equals(FilterText.Trim(), query, StringComparison.Ordinal))
                         {
-                            ApplyFilterOutcome(outcome, automatic);
+                            ApplyFilterOutcome(query, outcome, automatic);
                         }
 
                         applied.TrySetResult();
@@ -366,7 +368,7 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    private void ApplyFilterOutcome(FilterOutcome outcome, bool automatic)
+    private void ApplyFilterOutcome(string query, FilterOutcome outcome, bool automatic)
     {
         FilterResults.Clear();
         foreach (FileSummary summary in outcome.Files)
@@ -401,7 +403,11 @@ internal sealed partial class FilesSidebarViewModel
             // reassert — the user asked for the summary.
             _statusToReassert = null;
             Status = outcome.AudioSummary;
-            _announce(new A11yEvent.FileListCount((uint)Math.Min(outcome.Total, uint.MaxValue)));
+            if (_lastFilterAnnouncement != (query, outcome.Total))
+            {
+                _lastFilterAnnouncement = (query, outcome.Total);
+                _announce(new A11yEvent.FileListCount((uint)Math.Min(outcome.Total, uint.MaxValue)));
+            }
         }
     }
 

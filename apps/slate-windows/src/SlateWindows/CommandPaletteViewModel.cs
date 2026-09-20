@@ -196,8 +196,16 @@ internal sealed class CommandPaletteViewModel : BindableBase
     internal const string NoMatchesTitle = "No matches";
 
 
+    /// <summary>The filter count's trailing window (P10, amended): the search
+    /// overlay's 150 ms, so a typed query speaks once for its latest state.</summary>
+    internal const int FilterCountWindowMilliseconds = 150;
+
     private readonly IPaletteCommandSource _source;
     private readonly Action<A11yEvent> _announce;
+    private readonly Func<CancellationToken, Task> _filterCountWindow;
+    private readonly SynchronizationContext? _uiContext;
+    private CancellationTokenSource? _filterCountCancellation;
+    private Task? _filterCountCompletion;
 
     private Command[] _snapshot = [];
     private string[] _recents = [];
@@ -210,10 +218,13 @@ internal sealed class CommandPaletteViewModel : BindableBase
     private bool _suppressSelectionAnnouncement;
     private int _pageSize = 10;
 
-    public CommandPaletteViewModel(IPaletteCommandSource source, Action<A11yEvent> announce)
+    public CommandPaletteViewModel(IPaletteCommandSource source, Action<A11yEvent> announce,
+        Func<CancellationToken, Task>? filterCountWindow = null)
     {
         _source = source;
         _announce = announce;
+        _filterCountWindow = filterCountWindow ?? (token => Task.Delay(FilterCountWindowMilliseconds, token));
+        _uiContext = SynchronizationContext.Current;
     }
 
     /// <summary>
@@ -416,6 +427,8 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _rows = [];
         _selectedId = null;
         _selectedRow = null;
+        // A count still in its window has nothing to say once the palette closes.
+        CancelFilterCountWindow();
         _isOpen = false;
         OnPropertyChanged(nameof(SelectedId));
         OnPropertyChanged(nameof(SelectedRow));
@@ -744,12 +757,69 @@ internal sealed class CommandPaletteViewModel : BindableBase
                 : _rows[0].Id;
         SetSelection(nextId);
 
-        // Contract P10: every non-empty keystroke, no debounce;
-        // suppressed entirely on an empty query.
+        // Contract P10 (amended): the latest non-empty query speaks once
+        // after a trailing window — every keystroke reopens it, so a typed
+        // query is one count, not a trail queued under Medium=All (D-1).
+        // Suppressed entirely on an empty query.
+        CancelFilterCountWindow();
         if (Query.Length > 0)
         {
-            _announce(new A11yEvent.PaletteFilterCount((uint)_rows.Length, Query));
+            ScheduleFilterCount(new A11yEvent.PaletteFilterCount((uint)_rows.Length, Query));
         }
+    }
+
+    /// <summary>The pending filter count's window and its posting, for the
+    /// facts that drive the window deterministically (the search overlay's
+    /// <c>SearchCompletion</c> shape).</summary>
+    internal Task FilterCountCompletion => _filterCountCompletion ?? Task.CompletedTask;
+
+    private void ScheduleFilterCount(A11yEvent count)
+    {
+        var window = new CancellationTokenSource();
+        _filterCountCancellation = window;
+        _filterCountCompletion = SpeakAfterWindowAsync(count, window.Token);
+    }
+
+    /// <summary>The search overlay's shape: wait out the window, then post
+    /// back to the owner context; a window a later keystroke cancelled, or
+    /// a palette that closed meanwhile, says nothing.</summary>
+    private async Task SpeakAfterWindowAsync(A11yEvent count, CancellationToken window)
+    {
+        try
+        {
+            await _filterCountWindow(window).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        if (window.IsCancellationRequested)
+        {
+            return;
+        }
+        if (_uiContext is null)
+        {
+            Speak();
+        }
+        else
+        {
+            _uiContext.Post(_ => Speak(), null);
+        }
+
+        void Speak()
+        {
+            if (!window.IsCancellationRequested && IsOpen)
+            {
+                _announce(count);
+            }
+        }
+    }
+
+    private void CancelFilterCountWindow()
+    {
+        _filterCountCancellation?.Cancel();
+        _filterCountCancellation?.Dispose();
+        _filterCountCancellation = null;
     }
 
     private void SetSelection(string? id)

@@ -100,7 +100,7 @@ internal static class SwiftSource
     /// <paramref name="start"/>, or <paramref name="start"/> itself if one
     /// does not start there.
     /// </summary>
-    private static int EndOfLiteral(string source, int start)
+    internal static int EndOfLiteral(string source, int start)
     {
         // Raw strings: any number of hashes, then the quote, closed by the
         // quote and the same number of hashes. Escapes inside are written

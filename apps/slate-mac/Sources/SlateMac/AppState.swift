@@ -23126,8 +23126,7 @@ final class AppState: ObservableObject {
             // started even if they just opened the vault and we
             // haven't accumulated 350 ms of cooldown yet.
             announceScan(
-                message: "Scanning vault. "
-                    + "\(CountCopy.counted(totalFiles, "file", "files")) to index.",
+                event: .vaultScanStarted(totalFiles: totalFiles),
                 force: true
             )
         case .fileIndexed(_, let indexed, let total):
@@ -23135,13 +23134,12 @@ final class AppState: ObservableObject {
             // criteria, so VoiceOver flow stays polite even on a
             // 50k-file vault.
             announceScan(
-                message: "Indexed \(indexed) of \(CountCopy.counted(total, "file", "files")).",
+                event: .vaultScanProgress(indexed: indexed, total: total),
                 force: false
             )
         case .finished(let report):
             announceScan(
-                message: "Scan complete. "
-                    + "\(CountCopy.counted(report.filesIndexed, "file", "files")) indexed.",
+                event: .vaultScanFinished(filesIndexed: report.filesIndexed),
                 force: true
             )
             // Clear so the progress bar hides; loadFiles' post-scan
@@ -23160,7 +23158,7 @@ final class AppState: ObservableObject {
     /// `force` is true the announcement always fires (used for
     /// Started/Finished). Otherwise it only fires if the clock has
     /// advanced past the configured min-interval since the last fire.
-    private func announceScan(message: String, force: Bool) {
+    private func announceScan(event: A11yEvent, force: Bool) {
         let now = scanClock()
         if !force,
             now.timeIntervalSince(scanAnnouncementLastFiredAt) < scanAnnouncementMinInterval
@@ -23169,10 +23167,8 @@ final class AppState: ObservableObject {
         }
         scanAnnouncementLastFiredAt = now
         scanAnnouncementCount += 1
-        scanAnnouncementLastMessage = message
-        // W0.5-3 residue: scan-progress announcement builder (announceScan)
-        postAccessibilityAnnouncement(
-            .hostComposed(text: message, priority: .medium))
+        scanAnnouncementLastMessage = a11yRender(event: event).text
+        postAccessibilityAnnouncement(event)
     }
 
     // MARK: - Templates (Milestone H)
@@ -23395,7 +23391,7 @@ final class AppState: ObservableObject {
                         self.templateAvailability = .available
                         if presentPicker {
                             self.announceTemplate(
-                                self.templatePickerOpenAnnouncement(summaries.count))
+                                .templatePickerOpened(count: UInt32(clamping: summaries.count)))
                         }
                     }
                 case .failure(let error):
@@ -23417,21 +23413,6 @@ final class AppState: ObservableObject {
             templatePickerTask = task
         }
         return task
-    }
-
-    /// Compose the open-picker announcement. Pulled out so the
-    /// empty-state copy stays in sync with the non-empty case and
-    /// so unit tests can hit it without standing up a real vault.
-    private func templatePickerOpenAnnouncement(_ count: Int) -> String {
-        switch count {
-        case 0:
-            return "Template picker opened. No templates found. "
-                + "Add a Markdown file to the configured template folder."
-        case 1:
-            return "Template picker opened. 1 template available."
-        default:
-            return "Template picker opened. \(count) templates available."
-        }
     }
 
     /// User chose a template row in the picker. Pulls the source off
@@ -23688,8 +23669,7 @@ final class AppState: ObservableObject {
             // win; the picker-open/cancel messages stay .medium
             // (red-team scoping note).
             announceTemplate(
-                "Created \(filename(of: relativePath)) from \(template.name).",
-                priority: .high
+                .templateNoteCreated(name: filename(of: relativePath), template: template.name)
             )
             // Open the new file. SwiftUI propagates the binding
             // change → `handleSelectionChange` kicks off a fresh
@@ -23933,11 +23913,15 @@ final class AppState: ObservableObject {
         _ message: String,
         priority: AnnouncementPriority = .medium
     ) {
-        templateAnnouncementLastMessage = message
         // W0.5-3 residue: template-flow announcement builders (via announceTemplate)
-        announcer.post(
+        announceTemplate(
             .hostComposed(
                 text: message, priority: priority == .high ? .high : .medium))
+    }
+
+    private func announceTemplate(_ event: A11yEvent) {
+        templateAnnouncementLastMessage = a11yRender(event: event).text
+        announcer.post(event)
     }
 
     // MARK: - Private

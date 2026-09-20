@@ -32,9 +32,13 @@
 //! it, so `CanvasAnnouncer` posts rendered events and its residue site
 //! is gone (the mac census drops 30 → 29). The GRAPH announcer followed
 //! in W6-2 PR 0a (#746): its family is below, `GraphAnnouncer` relays
-//! rendered events, and its residue site is gone too (29 → 28). No
-//! engine-level vocabulary remains outstanding. One shared residue
-//! site survives that neither migration could delete: the
+//! rendered events, and its residue site is gone too (29 → 28). W7-2
+//! (#748) gives the scan-progress family its three VaultScan events,
+//! removing that adapter too (28 → 27); its timing remains host-side.
+//! Remaining host-composed sites are enumerated with their producing
+//! engines in docs/plans/38_notification_dispatcher_contracts.md, rather
+//! than inferred from these migration counts. One shared residue
+//! site survives those migrations: the
 //! structural-mutation builder the mac reaches through
 //! `postMutationAnnouncement`, which serves every authoring surface —
 //! the canvas and graph call sites left it, the marker stays.
@@ -607,6 +611,10 @@ pub enum A11yEvent {
     ReopenTargetMissing {
         filename: String,
     },
+    FileReopenFailed {
+        filename: String,
+        detail: String,
+    },
     ReopenedFile {
         filename: String,
     },
@@ -632,6 +640,16 @@ pub enum A11yEvent {
     },
     CommandPaletteNeedsVault,
     SearchNeedsVault,
+    VaultScanStarted {
+        total_files: u64,
+    },
+    VaultScanProgress {
+        indexed: u64,
+        total: u64,
+    },
+    VaultScanFinished {
+        files_indexed: u64,
+    },
 
     // --- Links, search, embeds, headings, navigation ---
     /// The search panel's result-count summary. This is the §W-D
@@ -718,6 +736,10 @@ pub enum A11yEvent {
     },
     SaveConflict {
         filename: String,
+    },
+    NoteSaveBlocked {
+        filename: String,
+        detail: String,
     },
 
     // --- History restore (O-3) ---
@@ -1113,6 +1135,10 @@ pub enum A11yEvent {
         detail: String,
     },
     BasesDashboardMissing,
+    BasesDashboardLoadFailed {
+        name: String,
+        detail: String,
+    },
     /// The last group behind the `postBaseActionAnnouncement` funnel:
     /// row actions, clipboard/export, and cell editing. With these the
     /// funnel is deleted and the Bases family is fully converted.
@@ -1648,7 +1674,10 @@ impl A11yEvent {
     pub fn priority(&self) -> A11yPriority {
         use A11yEvent::*;
         match self {
-            CommandPaletteNeedsVault
+            NoteSaveBlocked { .. }
+            | FileReopenFailed { .. }
+            | BasesDashboardLoadFailed { .. }
+            | CommandPaletteNeedsVault
             | PaletteCommandFailed { .. }
             | PaletteCommandNotFound { .. }
             | PaletteCommandUnavailable { .. }
@@ -1718,6 +1747,9 @@ impl A11yEvent {
             HistoryPanelShown => "History panel.".to_owned(),
 
             ReopenTargetMissing { filename } => format!("{filename} no longer exists."),
+            FileReopenFailed { filename, detail } => {
+                format!("Could not reopen {filename}: {detail}")
+            }
             ReopenedFile { filename } => format!("Reopened {filename}."),
             ReopenedNamed { name } => format!("Reopened {name}."),
             ReopenedGraph => "Reopened Graph.".to_owned(),
@@ -1745,6 +1777,18 @@ impl A11yEvent {
             }
             CommandPaletteNeedsVault => "Open a vault to use the command palette.".to_owned(),
             SearchNeedsVault => "Open a vault first. Search works inside a vault.".to_owned(),
+            VaultScanStarted { total_files } => format!(
+                "Scanning vault. {total_files} {} to index.",
+                plural_u64(*total_files, "file", "files")
+            ),
+            VaultScanProgress { indexed, total } => format!(
+                "Indexed {indexed} of {total} {}.",
+                plural_u64(*total, "file", "files")
+            ),
+            VaultScanFinished { files_indexed } => format!(
+                "Scan complete. {files_indexed} {} indexed.",
+                plural_u64(*files_indexed, "file", "files")
+            ),
             SearchResultsSummary { count } => match *count {
                 0 => "Search returned no results.".to_owned(),
                 1 => "Search returned 1 result.".to_owned(),
@@ -1790,6 +1834,9 @@ impl A11yEvent {
             TasksFilterSet { filter_name } => format!("Filter set to {filter_name}."),
 
             NoteSaved { filename } => format!("Saved {filename}."),
+            NoteSaveBlocked { filename, detail } => format!(
+                "Save blocked. Could not save {filename}: {detail}. Your edits remain in the editor."
+            ),
             SaveConflict { filename } => {
                 format!("Save blocked. {filename} was modified externally. Resolve in the dialog.")
             }
@@ -2129,6 +2176,9 @@ impl A11yEvent {
                 format!("Dashboard could not be edited: {detail}")
             }
             BasesDashboardMissing => "Dashboard is no longer available.".to_owned(),
+            BasesDashboardLoadFailed { name, detail } => {
+                format!("Dashboard {name} could not be loaded: {detail}")
+            }
             BasesDockUpdatedForNote => "Base dock updated for active note.".to_owned(),
             BasesLinkCopied { name } => format!("Copied link to {name}."),
             BasesBacklinksFor { name } => format!("Backlinks for {name}."),
@@ -2880,7 +2930,11 @@ fn contains_field(haystack: &str, field: &str) -> bool {
 /// Delegates so the singular-at-exactly-one rule has one definition;
 /// the count is interpolated by the caller and stays ungrouped here.
 fn plural<'a>(count: u32, one: &'a str, many: &'a str) -> &'a str {
-    crate::sidebar_filter::noun(count as u64, one, many)
+    plural_u64(u64::from(count), one, many)
+}
+
+fn plural_u64<'a>(count: u64, one: &'a str, many: &'a str) -> &'a str {
+    crate::sidebar_filter::noun(count, one, many)
 }
 
 /// The same rule over a COLLECTION LENGTH. Every count payload in this
@@ -3444,6 +3498,7 @@ pub fn corpus() -> Vec<A11yEvent> {
         ReopenTargetMissing {
             filename: "gone.md".into(),
         },
+        FileReopenFailed { filename: "notes.md".into(), detail: "invalid UTF-8".into() },
         ReopenedFile {
             filename: "notes.md".into(),
         },
@@ -3469,6 +3524,12 @@ pub fn corpus() -> Vec<A11yEvent> {
         },
         CommandPaletteNeedsVault,
         SearchNeedsVault,
+        VaultScanStarted { total_files: 1 },
+        VaultScanStarted { total_files: 2 },
+        VaultScanProgress { indexed: 1, total: 1 },
+        VaultScanProgress { indexed: 1, total: 2 },
+        VaultScanFinished { files_indexed: 1 },
+        VaultScanFinished { files_indexed: 2 },
         SearchResultsSummary { count: 0 },
         SearchResultsSummary { count: 1 },
         SearchResultsSummary { count: 7 },
@@ -3538,6 +3599,7 @@ pub fn corpus() -> Vec<A11yEvent> {
         SaveConflict {
             filename: "notes.md".into(),
         },
+        NoteSaveBlocked { filename: "notes.md".into(), detail: "modified externally".into() },
         RestoredVersionFrom {
             formatted_date: "July 19, 2026 at 9:41 AM".into(),
         },
@@ -3920,6 +3982,7 @@ pub fn corpus() -> Vec<A11yEvent> {
             detail: "io error".into(),
         },
         BasesDashboardMissing,
+        BasesDashboardLoadFailed { name: "Reading".into(), detail: "unknown dashboard".into() },
         BasesDockUpdatedForNote,
         BasesLinkCopied {
             name: "Reading".into(),
@@ -5340,6 +5403,34 @@ mod tests {
     use super::*;
     use A11yPriority::{High, Medium};
 
+    #[test]
+    fn scan_counts_preserve_u64_and_singular_copy_at_medium_priority() {
+        for (count, noun) in [(0, "files"), (1, "file"), (2, "files"), (u64::MAX, "files")] {
+            for (event, expected) in [
+                (
+                    A11yEvent::VaultScanStarted { total_files: count },
+                    format!("Scanning vault. {count} {noun} to index."),
+                ),
+                (
+                    A11yEvent::VaultScanProgress {
+                        indexed: count,
+                        total: count,
+                    },
+                    format!("Indexed {count} of {count} {noun}."),
+                ),
+                (
+                    A11yEvent::VaultScanFinished {
+                        files_indexed: count,
+                    },
+                    format!("Scan complete. {count} {noun} indexed."),
+                ),
+            ] {
+                assert_eq!(event.priority(), Medium);
+                assert_eq!(event.render(), expected);
+            }
+        }
+    }
+
     /// The full corpus golden: every representative event's exact
     /// (priority, text). THIS TABLE IS THE CONTRACT — a wording change
     /// here is a product decision (and a §W-D parity change), never a
@@ -5363,6 +5454,7 @@ mod tests {
             (Medium, "Right pane hidden."),
             (Medium, "History panel."),
             (Medium, "gone.md no longer exists."),
+            (High, "Could not reopen notes.md: invalid UTF-8"),
             (Medium, "Reopened notes.md."),
             (Medium, "Reopened Open tasks."),
             (Medium, "Reopened Graph."),
@@ -5385,6 +5477,12 @@ mod tests {
             ),
             (High, "Open a vault to use the command palette."),
             (Medium, "Open a vault first. Search works inside a vault."),
+            (Medium, "Scanning vault. 1 file to index."),
+            (Medium, "Scanning vault. 2 files to index."),
+            (Medium, "Indexed 1 of 1 file."),
+            (Medium, "Indexed 1 of 2 files."),
+            (Medium, "Scan complete. 1 file indexed."),
+            (Medium, "Scan complete. 2 files indexed."),
             (Medium, "Search returned no results."),
             (Medium, "Search returned 1 result."),
             (Medium, "Search returned 7 results."),
@@ -5424,6 +5522,10 @@ mod tests {
             (
                 Medium,
                 "Save blocked. notes.md was modified externally. Resolve in the dialog.",
+            ),
+            (
+                High,
+                "Save blocked. Could not save notes.md: modified externally. Your edits remain in the editor.",
             ),
             (High, "Restored version from July 19, 2026 at 9:41 AM."),
             (High, "Restored notes.md."),
@@ -5609,6 +5711,10 @@ mod tests {
             (Medium, "Dashboard could not be deleted: io error"),
             (Medium, "Dashboard could not be edited: io error"),
             (Medium, "Dashboard is no longer available."),
+            (
+                High,
+                "Dashboard Reading could not be loaded: unknown dashboard",
+            ),
             (Medium, "Base dock updated for active note."),
             (Medium, "Copied link to Reading."),
             (Medium, "Backlinks for Reading."),
@@ -6754,7 +6860,7 @@ mod tests {
     fn a11y_event_top_level_count_is_pinned() {
         assert_eq!(
             declared_variants("A11yEvent").len(),
-            199,
+            205,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }
@@ -7540,9 +7646,9 @@ mod tests {
         }
     }
 
-    /// 0a-18: the module doc names no outstanding engine — only the
-    /// structural-mutation builder remains a named host-composed
-    /// exception — and the graph is recorded as migrated.
+    /// 0a-18 / W7 D-8: the migrated announcers and scan family are
+    /// recorded, and remaining engine sites have an explicit register.
+    /// The historic fact name is retained by the graph contract citations.
     #[test]
     fn the_module_doc_names_no_engine_but_the_mutation_builder() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/a11y.rs");
@@ -7562,6 +7668,11 @@ mod tests {
         assert!(
             doc.contains("GraphAnnouncer"),
             "the graph migration is recorded"
+        );
+        assert!(doc.contains("VaultScan"), "the scan migration is recorded");
+        assert!(
+            doc.contains("38_notification_dispatcher_contracts.md"),
+            "remaining engine sites point to the exhaustive register"
         );
         for stale in [
             "remaining named engine",

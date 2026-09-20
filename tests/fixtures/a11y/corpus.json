@@ -65,6 +65,11 @@
     "text": "gone.md no longer exists."
   },
   {
+    "event": "FileReopenFailed { filename: \"notes.md\", detail: \"invalid UTF-8\" }",
+    "priority": "high",
+    "text": "Could not reopen notes.md: invalid UTF-8"
+  },
+  {
     "event": "ReopenedFile { filename: \"notes.md\" }",
     "priority": "medium",
     "text": "Reopened notes.md."
@@ -113,6 +118,36 @@
     "event": "SearchNeedsVault",
     "priority": "medium",
     "text": "Open a vault first. Search works inside a vault."
+  },
+  {
+    "event": "VaultScanStarted { total_files: 1 }",
+    "priority": "medium",
+    "text": "Scanning vault. 1 file to index."
+  },
+  {
+    "event": "VaultScanStarted { total_files: 2 }",
+    "priority": "medium",
+    "text": "Scanning vault. 2 files to index."
+  },
+  {
+    "event": "VaultScanProgress { indexed: 1, total: 1 }",
+    "priority": "medium",
+    "text": "Indexed 1 of 1 file."
+  },
+  {
+    "event": "VaultScanProgress { indexed: 1, total: 2 }",
+    "priority": "medium",
+    "text": "Indexed 1 of 2 files."
+  },
+  {
+    "event": "VaultScanFinished { files_indexed: 1 }",
+    "priority": "medium",
+    "text": "Scan complete. 1 file indexed."
+  },
+  {
+    "event": "VaultScanFinished { files_indexed: 2 }",
+    "priority": "medium",
+    "text": "Scan complete. 2 files indexed."
   },
   {
     "event": "SearchResultsSummary { count: 0 }",
@@ -253,6 +288,11 @@
     "event": "SaveConflict { filename: \"notes.md\" }",
     "priority": "medium",
     "text": "Save blocked. notes.md was modified externally. Resolve in the dialog."
+  },
+  {
+    "event": "NoteSaveBlocked { filename: \"notes.md\", detail: \"modified externally\" }",
+    "priority": "high",
+    "text": "Save blocked. Could not save notes.md: modified externally. Your edits remain in the editor."
   },
   {
     "event": "RestoredVersionFrom { formatted_date: \"July 19, 2026 at 9:41 AM\" }",
@@ -978,6 +1018,11 @@
     "event": "BasesDashboardMissing",
     "priority": "medium",
     "text": "Dashboard is no longer available."
+  },
+  {
+    "event": "BasesDashboardLoadFailed { name: \"Reading\", detail: \"unknown dashboard\" }",
+    "priority": "high",
+    "text": "Dashboard Reading could not be loaded: unknown dashboard"
   },
   {
     "event": "BasesDockUpdatedForNote",

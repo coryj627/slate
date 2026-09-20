@@ -1,0 +1,32 @@
+# W7-2 notification etiquette — manual AT checklist (#748)
+
+Source: [W7 spec section 3](../specs/w7_spec.md) and
+[dispatcher contracts](../../38_notification_dispatcher_contracts.md).
+Use [_at_pass_template.md](_at_pass_template.md) for each independent NVDA
+and licensed JAWS pass with stock settings. Narrator is W8-6 smoke scope.
+Braille is owner-deferred (2026-09-18). No automated result below proves
+audible delivery, interruption behavior, or a human acceptance pass.
+
+**Tester:** Pending · **AT:** Pending (exact version per run) · **OS:** Pending (edition and build)
+**Build:** Pending (branch and verified commit) · **Corpus:** Pending (disposable fixture vault)
+**Method:** Pending (audio listening plus Speech Viewer / JAWS history)
+**Run date:** Pending · **Evidence reference:** Pending
+
+| # | Spec item | Check | How (the UIA route) | Observable outcome | Automated twin | Narrator | NVDA | JAWS |
+|---|---|---|---|---|---|---|---|---|
+| 1 | W7-2 B1 | Polite queue | In the sidebar filter, publish three distinct result states while speech is still active. Allow each 200 ms debounce to finish; use queries with different totals and record the published states. | All three eligible Medium announcements are heard in order and in full. Suppressed debounce states are not expected to speak. | `EveryPriorityAndBothOverloadsReachTheExactNativeTuple`, `DebouncedPublicationDedupsQueryAndTotalAcrossRefreshes` | Pending (smoke scope) | Pending | Pending |
+| 2 | W7-2 B1 | Urgent interruption | While a long polite announcement is speaking, invoke an unavailable palette command that posts PaletteCommandUnavailable. Record the exact trigger and history. | The High outcome interrupts current speech and gives the unavailable reason. | `EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority`, `CommandPaletteTests` | Pending (smoke scope) | Pending | Pending |
+| 3 | W7-2 B1 | Polite arrival during Say All | Start a delayed background operation, begin Say All, and allow its Medium completion to arrive without moving focus. Record the operation and timing; repeat if a focus change contaminated the attempt. | NVDA queues the polite line without cancelling Say All. Record JAWS behavior as its own finding, including any interruption. | `EveryPriorityAndBothOverloadsReachTheExactNativeTuple` | Pending (smoke scope) | Pending | Pending |
+| 4 | W7-2 B2 | Scan rate and completion | Open a disposable 2,000-file vault; inspect the Vault scan progress RangeValue and capture the notification transcript through completion. | Start and finish are forced; progress is no more frequent than every 2.5 s on Windows (contract 38 D-4 as amended; each line finishes before the next may queue), with the final indexed count. | `ScanAnnouncementGateTests`, `UiProgressListenerTests` | Pending (smoke scope) | Pending | Pending |
+| 5 | W7-2 B3 | Sidebar/search/palette repetition | Re-run an unchanged sidebar query, then change its total; repeat a search with unchanged then changed summary; assign the same palette query, then a different query with the same result count. | Sidebar repeats only for a new query/total, search only for a new summary, and palette only for a changed rendered query state. | `DebouncedPublicationDedupsQueryAndTotalAcrossRefreshes`, `DuplicateSummaryIsNotReAnnouncedButAChangedSummaryIs`, `UnchangedFilterStateIsSilentButANewQueryWithTheSameCountIsAnnounced` | Pending (smoke scope) | Pending | Pending |
+| 6 | W7-2 B3 | Quick Open burst | Open Quick Open, hear its initial count, then type several characters inside its 60 ms ranking window. | Initial count is announced once; only the latest eligible query result count is published. | `RankingWindowCollapsesKeystrokesAndPublishesTheInitialCountOnce` | Pending (smoke scope) | Pending | Pending |
+| 7 | W7-2 B3 | Canvas and graph bursts | Use their existing checklist navigation/filter and urgent-refusal routes. | Each 200 ms family window speaks its latest eligible state; a High outcome drops pending polite states according to that family's contract. | `CanvasAnnouncerTests`, `GraphAnnouncerTests` | Pending (smoke scope) | Pending | Pending |
+| 8 | W7-2 B3 | Bases refresh dedup | Show two Bases surfaces with identical membership summaries; edit a shared note so both refresh, then repeat the change in a later write funnel. | An identical membership summary speaks once within a funnel and can speak again in the next funnel. | `FunnelRefreshesEveryDocumentAndAnnouncesMembershipOnce` | Pending (smoke scope) | Pending | Pending |
+| 9 | W7-2 D-10 | Save failure | Edit a disposable note in Slate, change the same file externally, then use Save. Repeat through Save All or save-before-close. | One urgent failure identifies the note; local edits remain available and the external version is not overwritten. No success or nonexistent-dialog instruction is spoken. | `ConflictingSaveSpeaksOnceAndPreservesBothVersions` | Pending (smoke scope) | Pending | Pending |
+| 10 | W7-2 D-11 | Missing/unreadable file reopen | Close a disposable note, delete it externally, then use Reopen Closed Tab. Repeat with a file made unreadable without deleting it. | The recovery tab remains. A missing file is identified as missing; other load failures are identified as failures, without a misleading reopened-success announcement. | `ReopeningMissingFileKeepsTheTabAndSpeaksMissingInsteadOfSuccess`, `ReopeningUnreadableFileReportsFailureWithoutClaimingItIsMissing` | Pending (smoke scope) | Pending | Pending |
+| 11 | W7-2 D-12 | Missing dashboard | In a disposable vault, retain a dashboard entry in the UI while a second session deletes it; then open or dock that entry. | The failed section remains visible and an urgent announcement identifies the dashboard load failure. Retired background results do not announce. | `DashboardFailureSpeaksOnlyWhenItsCurrentPublicationRuns` | Pending (smoke scope) | Pending | Pending |
+
+Residual: all listening rows remain Pending. Record reader, build, outcome,
+transcript and any finding before changing a human cell. A UIA argument
+recording proves requested delivery parameters; it does not prove what the
+screen reader actually spoke.

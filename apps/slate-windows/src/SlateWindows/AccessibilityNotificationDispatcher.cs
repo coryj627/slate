@@ -12,11 +12,27 @@ namespace SlateWindows;
 internal sealed class AccessibilityNotificationDispatcher
 {
     private const string ActivityId = "slate-accessibility-announcement";
-    private readonly FrameworkElement _source;
+    private readonly Action<AutomationNotificationKind, AutomationNotificationProcessing, string, string> _raise;
 
     public AccessibilityNotificationDispatcher(FrameworkElement source)
+        : this((kind, processing, text, activityId) =>
+        {
+            AutomationPeer peer = UIElementAutomationPeer.FromElement(source)
+                ?? UIElementAutomationPeer.CreatePeerForElement(source)
+                ?? new FrameworkElementAutomationPeer(source);
+            peer.RaiseNotificationEvent(kind, processing, text, activityId);
+        })
     {
-        _source = source;
+        ArgumentNullException.ThrowIfNull(source);
+    }
+
+    // RaiseNotificationEvent is nonvirtual. Recording this required boundary
+    // tests the actual native arguments; production always supplies the peer.
+    internal AccessibilityNotificationDispatcher(
+        Action<AutomationNotificationKind, AutomationNotificationProcessing, string, string> raise)
+    {
+        ArgumentNullException.ThrowIfNull(raise);
+        _raise = raise;
     }
 
     public void Post(A11yEvent @event)
@@ -36,15 +52,17 @@ internal sealed class AccessibilityNotificationDispatcher
     public void Post(RenderedAnnouncement rendered)
     {
         ArgumentNullException.ThrowIfNull(rendered);
-        AutomationPeer peer = UIElementAutomationPeer.FromElement(_source)
-            ?? UIElementAutomationPeer.CreatePeerForElement(_source)
-            ?? new FrameworkElementAutomationPeer(_source);
         AutomationNotificationProcessing processing = rendered.Priority switch
         {
             A11yPriority.High => AutomationNotificationProcessing.ImportantMostRecent,
-            _ => AutomationNotificationProcessing.MostRecent,
+            A11yPriority.Medium => AutomationNotificationProcessing.All,
+            // D-1's exhaustiveness lives in the tests, which fail the build
+            // when a third priority appears. At runtime an unknown value is
+            // still an announcement: it degrades to the polite queue rather
+            // than throwing out of a command handler on the UI thread.
+            _ => AutomationNotificationProcessing.All,
         };
-        peer.RaiseNotificationEvent(
+        _raise(
             AutomationNotificationKind.Other,
             processing,
             rendered.Text,

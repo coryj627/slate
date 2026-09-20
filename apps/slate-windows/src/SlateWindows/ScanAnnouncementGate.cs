@@ -5,10 +5,14 @@ using uniffi.slate_uniffi;
 
 namespace SlateWindows;
 
-/// <summary>Mac-parity rate guard for polite scan progress announcements.</summary>
+/// <summary>Rate guard for polite scan progress announcements (D-4). Mac's
+/// guard is 350 ms; here Medium queues under All (D-1), so a progress line
+/// must be able to finish before the next may queue behind it, or a large
+/// vault's "Scan complete" arrives minutes after the sidebar is usable.
+/// About 2.5 s at stock reader rates; start and finish are still forced.</summary>
 internal sealed class ScanAnnouncementGate
 {
-    public static readonly TimeSpan MinimumInterval = TimeSpan.FromMilliseconds(350);
+    public static readonly TimeSpan MinimumInterval = TimeSpan.FromSeconds(2.5);
 
     private readonly Func<DateTimeOffset> _clock;
     private DateTimeOffset _lastFiredAt = DateTimeOffset.MinValue;
@@ -21,11 +25,7 @@ internal sealed class ScanAnnouncementGate
     public A11yEvent Started(ulong totalFiles)
     {
         _lastFiredAt = _clock();
-        string noun = totalFiles == 1 ? "file" : "files";
-        // W0.5-3 residue: scan-progress announcement builder.
-        return new A11yEvent.HostComposed(
-            $"Scanning vault. {totalFiles} {noun} to index.",
-            A11yPriority.Medium);
+        return new A11yEvent.VaultScanStarted(totalFiles);
     }
 
     public A11yEvent? FileIndexed(ulong indexed, ulong total)
@@ -37,20 +37,13 @@ internal sealed class ScanAnnouncementGate
         }
 
         _lastFiredAt = now;
-        // W0.5-3 residue: scan-progress announcement builder.
-        return new A11yEvent.HostComposed(
-            $"Indexed {indexed} of {total} files.",
-            A11yPriority.Medium);
+        return new A11yEvent.VaultScanProgress(indexed, total);
     }
 
     public A11yEvent Finished(ulong filesIndexed)
     {
         _lastFiredAt = _clock();
-        string noun = filesIndexed == 1 ? "file" : "files";
-        // W0.5-3 residue: scan-progress announcement builder.
-        return new A11yEvent.HostComposed(
-            $"Scan complete. {filesIndexed} {noun} indexed.",
-            A11yPriority.Medium);
+        return new A11yEvent.VaultScanFinished(filesIndexed);
     }
 
     public void Reset()

@@ -142,11 +142,15 @@ Six events, rendered by core, never composed in C#:
 `PaletteCommandFailed`, `PaletteCommandNotFound`,
 `PaletteCommandUnavailable`. Trigger rules that are easy to get wrong:
 
-- `PaletteFilterCount` fires on **every non-empty** keystroke with **no
-  debounce**, and is **suppressed entirely on an empty query** (opening the
-  palette announces nothing). It posts at Medium so the AT coalesces;
+- `PaletteFilterCount` speaks **once for the latest non-empty query** after
+  a **150 ms trailing window** (the search overlay's shape; amended with
+  contract 38 D-5 after the #1234 review): every keystroke reopens the
+  window, an empty query closes it with nothing to say (opening the palette
+  announces nothing), and a count whose palette closed meanwhile is dropped.
+  It posts at Medium, which contract 38 D-1 queues rather than coalesces;
   raising it to `ImportantMostRecent` produces interrupted mid-word garbage
-  at typing speed.
+  at typing speed, and a per-keystroke Medium count queued a trail of stale
+  counts, which is why the window exists.
 - `PaletteCommandSelected` is **suppressed for the first selection change
   after open** — the initial row is not announced before any user action.
 - `PaletteCommandUnavailable` renders the reason **verbatim, with no
