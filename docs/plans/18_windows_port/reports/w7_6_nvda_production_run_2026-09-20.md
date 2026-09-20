@@ -49,4 +49,6 @@ the W2 checklist.
 
 Pending for the owner's human pass: audibility of the typed region lines,
 `w1_shell_at_checklist.md#8` as a whole, Alt+F and Tab-from-the-rail under
-W7-5, JAWS.
+W7-5, JAWS. NVDA reads the status bar as "Status bar, status bar" followed
+by the whole F6 help sentence on every landing (Name duplicates the control
+type; HelpText is verbose): the owner decides whether D-5/§2 keep that.
