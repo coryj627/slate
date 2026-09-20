@@ -131,6 +131,22 @@ public sealed class MenuItemForegroundTests
 
             Popup popup = FindPopup(top)
                 ?? throw new Xunit.Sdk.XunitException("the submenu popup did not open.");
+
+            // A popup is its own HWND, and on a non-interactive runner
+            // (session 0, the CI shape) it opens without ever laying out
+            // its children — the items have no visual tree and no header
+            // TextBlock to measure. The brushes under test are style and
+            // trigger outputs, not pixels, so template application and one
+            // measure/arrange pass realize them identically with or without
+            // a rendered popup.
+            foreach (MenuItem item in new[] { enabledItem, disabledItem })
+            {
+                item.ApplyTemplate();
+                item.Measure(new Size(400, 40));
+                item.Arrange(new Rect(0, 0, 400, 40));
+            }
+
+            Pump();
             return new Measurement(
                 enabledItem.IsEnabled,
                 disabledItem.IsEnabled,
