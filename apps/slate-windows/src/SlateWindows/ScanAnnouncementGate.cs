@@ -5,10 +5,14 @@ using uniffi.slate_uniffi;
 
 namespace SlateWindows;
 
-/// <summary>Mac-parity rate guard for polite scan progress announcements.</summary>
+/// <summary>Rate guard for polite scan progress announcements (D-4). Mac's
+/// guard is 350 ms; here Medium queues under All (D-1), so a progress line
+/// must be able to finish before the next may queue behind it, or a large
+/// vault's "Scan complete" arrives minutes after the sidebar is usable.
+/// About 2.5 s at stock reader rates; start and finish are still forced.</summary>
 internal sealed class ScanAnnouncementGate
 {
-    public static readonly TimeSpan MinimumInterval = TimeSpan.FromMilliseconds(350);
+    public static readonly TimeSpan MinimumInterval = TimeSpan.FromSeconds(2.5);
 
     private readonly Func<DateTimeOffset> _clock;
     private DateTimeOffset _lastFiredAt = DateTimeOffset.MinValue;

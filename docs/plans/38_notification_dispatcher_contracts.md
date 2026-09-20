@@ -28,10 +28,16 @@ Core owns singular/plural grammar. Windows and Mac construct the same
 events and render through the existing funnel. Cancelled/failed scan
 progress remains silent; existing failure UI is separate.
 
-**D-4 — Host timing remains host timing.** The 350 ms injected-clock
-minimum interval suppresses only progress. Start/finish always fire and
-advance the guard; Reset re-arms it. No timer or wall-clock policy moves
-into core. Existing progress mailbox ordering/bounding remains intact.
+**D-4 — Host timing remains host timing.** The injected-clock minimum
+interval suppresses only progress. Start/finish always fire and advance the
+guard; Reset re-arms it. No timer or wall-clock policy moves into core.
+Existing progress mailbox ordering/bounding remains intact. Amended after
+the #1234 review: the Windows interval is 2.5 s, not mac's 350 ms. Under
+D-1 a Medium line queues (NVDA's All handler never cancels the current
+line), so a progress line must be able to finish before the next may queue
+behind it, or a large vault's "Scan complete" arrives minutes after the
+sidebar is usable; 2.5 s is about one line at stock reader rates. Mac keeps
+350 ms, where its announcer coalesces.
 
 **D-5 — Per-family etiquette.** Audit all nine families against their
 actual Mac paths. Pin scan, canvas, graph, sidebar, palette, search,
@@ -40,7 +46,10 @@ sync-marker watcher as refresh timing already owned by its existing tests.
 Preserve per-surface cancellation/publication rules, and add no global
 announcement scheduler. Sidebar dedup uses query and total. Palette text
 includes query, so different queries with equal counts are different
-announcements; an unchanged state must be silent. Search already dedups
+announcements; an unchanged state must be silent. Amended after the #1234
+review: the count speaks once for the latest query after a 150 ms trailing
+window, the search overlay's shape, because a per-keystroke Medium count
+queues under All as a trail of stale counts. Search already dedups
 summary text. Quick Open needs an injected delay to exercise its 60 ms
 ranking window deterministically. Bases dedups text within one refresh
 funnel and clears it for the next funnel.
@@ -98,11 +107,11 @@ not a human listening result. Braille is owner-deferred; Narrator is W8.
 
 | Family | Mac site | Windows site | Rule | Deterministic evidence |
 |---|---|---|---|---|
-| Scan | AppState.handleScanProgress / announceScan | ScanAnnouncementGate | 350 ms progress guard; forced start/finish; Reset re-arms | `ScanAnnouncementGateTests`; `UiProgressListenerTests` |
+| Scan | AppState.handleScanProgress / announceScan | ScanAnnouncementGate | 2.5 s progress guard on Windows (mac 350 ms) so a line finishes before the next may queue under All; forced start/finish; Reset re-arms | `ScanAnnouncementGateTests`; `UiProgressListenerTests` |
 | Canvas | CanvasAnnouncer | Canvas/CanvasAnnouncer | 200 ms latest per class; High drops pending polite classes | `CoalescingCollapsesRapidNavigationAndTheFinalStateWins`; `AnErrorIsAssertiveAndDropsPendingNavigationRatherThanFlushingIt`; `CanvasAnnouncerCensus` |
 | Graph | GraphAnnouncer | Graph/GraphAnnouncer | 200 ms latest; filter condition checked at fire; settle retirement remains separate | `NavigationCoalescesLatestWinsWithinTheWindow`; `TheFilterCountsGateIsStoredWithTheLineAndReadAtFire`; `AQueuedSettleLineIsDroppedAloneByTheDocumentsDrop`; `GraphAnnouncerCensus` |
 | Sidebar | SidebarFilterModel.commit / runQuery | FilesSidebarViewModel.Filter.ScheduleFilter / ApplyFilterOutcome | 200 ms query window; dedup on successful query/total; retain last key across clear, matching Mac; mutation status reassertion remains silent | `DebouncedPublicationDedupsQueryAndTotalAcrossRefreshes`; existing `FileManagementTests` mutation reassertion facts |
-| Palette | CommandPaletteModel.handleQueryChange / CommandPaletteView.onChange | CommandPaletteViewModel.Query / Rebuild | Unchanged state silent; a new query with equal count remains distinct speech (A-6/P10) | `UnchangedFilterStateIsSilentButANewQueryWithTheSameCountIsAnnounced`; `FilterCountFiresOnEveryNonEmptyKeystrokeAndIsSuppressedOnEmptyQuery` |
+| Palette | CommandPaletteModel.handleQueryChange / CommandPaletteView.onChange | CommandPaletteViewModel.Query / Rebuild | 150 ms trailing window on the latest query (the search overlay's shape); unchanged state silent; a new query with equal count remains distinct speech (A-6/P10) | `UnchangedFilterStateIsSilentButANewQueryWithTheSameCountIsAnnounced`; `FilterCountFiresOnEveryNonEmptyKeystrokeAndIsSuppressedOnEmptyQuery` |
 | Search | SearchOverlay | Search/SearchOverlayViewModel | 150 ms query debounce; last-summary dedup | `DebounceCoalescesKeystrokesIntoOneTrailingSearch`; `DuplicateSummaryIsNotReAnnouncedButAChangedSummaryIs` |
 | Quick Open | QuickSwitcherModel | QuickSwitcherViewModel.RankAsync / ApplyRanked | 60 ms ranking window; publish count once initially and once for latest query | `RankingWindowCollapsesKeystrokesAndPublishesTheInitialCountOnce` |
 | Bases | AppState+Bases refresh funnel | WorkspaceViewModel.Bases.OnBaseMembershipChanged / CompleteBasesWrite | Summary-text dedup within one funnel; cleared for next funnel | `FunnelRefreshesEveryDocumentAndAnnouncesMembershipOnce` |
