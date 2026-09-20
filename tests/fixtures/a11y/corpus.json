@@ -35,6 +35,11 @@
     "text": "Status bar."
   },
   {
+    "event": "ShellRegionFocused { region: StatusBar { text: \"Scanning 120 files…\" } }",
+    "priority": "medium",
+    "text": "Status bar. Scanning 120 files."
+  },
+  {
     "event": "EditorPaneFocused { ordinal: 2, total: 3, title: \"notes.md\", prefix: \"\" }",
     "priority": "medium",
     "text": "Editor pane 2 of 3, notes.md."

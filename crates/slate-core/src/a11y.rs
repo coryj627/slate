@@ -1741,7 +1741,15 @@ impl A11yEvent {
                     "Status bar.".to_owned()
                 }
                 ShellRegion::StatusBar { text } => {
-                    format!("Status bar. {}.", text.trim().trim_end_matches('.'))
+                    // The trailing punctuation the renderer supplies itself:
+                    // a period, or the ellipsis a progress line ends with
+                    // ("Scanning 120 files…") - which
+                    // `trim_end_matches('.')` left in place, giving
+                    // "Status bar. Scanning 120 files….".
+                    format!(
+                        "Status bar. {}.",
+                        text.trim().trim_end_matches(|c: char| c == '.' || c == '…')
+                    )
                 }
             },
             EditorPaneFocused {
@@ -3516,6 +3524,11 @@ pub fn corpus() -> Vec<A11yEvent> {
         ShellRegionFocused {
             region: ShellRegion::StatusBar {
                 text: String::new(),
+            },
+        },
+        ShellRegionFocused {
+            region: ShellRegion::StatusBar {
+                text: "Scanning 120 files…".into(),
             },
         },
         EditorPaneFocused {
@@ -5494,6 +5507,7 @@ mod tests {
             (Medium, "Right pane panels."),
             (Medium, "Status bar. Scan finished: 90 files indexed."),
             (Medium, "Status bar."),
+            (Medium, "Status bar. Scanning 120 files."),
             (Medium, "Editor pane 2 of 3, notes.md."),
             (Medium, "Now notes.md, tab 1 of 4."),
             (Medium, "Closed draft.md. notes.md is active."),
