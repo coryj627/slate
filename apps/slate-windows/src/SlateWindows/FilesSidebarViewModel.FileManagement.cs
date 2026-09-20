@@ -1020,12 +1020,12 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
-        if (_vaultRoot is null)
+        if (_vaultRoot is not string vaultRoot)
         {
             return;
         }
 
-        string absolute = AbsoluteVaultPath(node.Path);
+        string absolute = AbsoluteVaultPath(vaultRoot, node.Path);
         if (RevealRequested is { } reveal)
         {
             reveal(absolute);
@@ -1045,9 +1045,9 @@ internal sealed partial class FilesSidebarViewModel
         return slash >= 0 ? vaultPath[(slash + 1)..] : vaultPath;
     }
 
-    private string AbsoluteVaultPath(string vaultRelative) =>
+    private static string AbsoluteVaultPath(string vaultRoot, string vaultRelative) =>
         System.IO.Path.Combine(
-            _vaultRoot, vaultRelative.Replace('/', System.IO.Path.DirectorySeparatorChar));
+            vaultRoot, vaultRelative.Replace('/', System.IO.Path.DirectorySeparatorChar));
 
     private void AnnounceUndoResidue(string message)
     {
