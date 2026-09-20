@@ -70,6 +70,18 @@ public partial class MainWindow : IShellRegionHost
         return null;
     }
 
+    /// <summary>A landing succeeds when focus ENDS UP in the region, not
+    /// when a container's <c>Focus()</c> call reports true (W7-6 fix
+    /// round 1, #1240): WPF redirects keyboard focus to a
+    /// <c>TreeViewItem</c>'s or <c>ListBoxItem</c>'s selected container, so
+    /// <c>Focus()</c> on the <c>TreeView</c>/<c>ListBox</c> itself can
+    /// report false even though the press landed inside it — the ring then
+    /// treated the landing as refused and skipped the region entirely. Each
+    /// case still performs the same landing call(s); only the guard clauses
+    /// (no workspace, hidden right pane, no tab) return false before any of
+    /// them run. <see cref="ShellRegionKind.Editor"/> keeps its own early
+    /// true: <c>FocusEditorPane</c> may seat focus asynchronously for
+    /// canvas/graph tabs, so its end state cannot be checked synchronously.</summary>
     bool IShellRegionHost.TryLand(ShellRegionKind region)
     {
         if (_viewModel.Workspace is not WorkspaceViewModel workspace)
@@ -80,11 +92,25 @@ public partial class MainWindow : IShellRegionHost
         switch (region)
         {
             case ShellRegionKind.MenuBar:
-                return MainMenu.Items.Count > 0
-                    && MainMenu.ItemContainerGenerator.ContainerFromIndex(0) is MenuItem first
-                    && first.Focus();
+                if (MainMenu.Items.Count == 0
+                    || MainMenu.ItemContainerGenerator.ContainerFromIndex(0) is not MenuItem first)
+                {
+                    return false;
+                }
+
+                first.Focus();
+                break;
             case ShellRegionKind.Files:
-                return FilterResultsList.IsVisible ? FilterResultsList.Focus() : FilesTree.Focus();
+                if (FilterResultsList.IsVisible)
+                {
+                    FilterResultsList.Focus();
+                }
+                else
+                {
+                    FilesTree.Focus();
+                }
+
+                break;
             case ShellRegionKind.TabBar:
                 {
                     WorkspaceGroupViewModel group = workspace.ActiveGroup;
@@ -96,7 +122,12 @@ public partial class MainWindow : IShellRegionHost
                     TabControl? tabs = FindVisualDescendants<TabControl>(ContentPaneBorder)
                         .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, group));
                     tabs?.UpdateLayout();
-                    return tabs?.ItemContainerGenerator.ContainerFromItem(activeTab) is TabItem item && item.Focus();
+                    if (tabs?.ItemContainerGenerator.ContainerFromItem(activeTab) is TabItem item)
+                    {
+                        item.Focus();
+                    }
+
+                    break;
                 }
             case ShellRegionKind.Editor:
                 if (workspace.ActiveGroup.ActiveTab is null)
@@ -107,39 +138,58 @@ public partial class MainWindow : IShellRegionHost
                 FocusEditorPane(workspace.ActiveGroup);
                 return true;
             case ShellRegionKind.EmptyEditor:
-                return workspace.ActiveGroup.ActiveTab is null && ContentPaneBorder.Focus();
+                if (workspace.ActiveGroup.ActiveTab is not null)
+                {
+                    return false;
+                }
+
+                ContentPaneBorder.Focus();
+                break;
             case ShellRegionKind.RightPaneContent:
                 if (!workspace.IsRightPaneVisible)
                 {
                     return false;
                 }
 
-                if (workspace.ConnectionsLeafIsActive() && ConnectionsLeafSurface.FocusAnchor())
+                if (workspace.ConnectionsLeafIsActive())
                 {
-                    return true;
+                    ConnectionsLeafSurface.FocusAnchor();
+                }
+                else if (workspace.IsGraphInspectorShown)
+                {
+                    GraphInspectorSurface.FocusFirstStop();
+                }
+                else if (VisibleLeafBody() is { } body && FirstFocusable(body) is { } stop)
+                {
+                    stop.Focus();
                 }
 
-                if (workspace.IsGraphInspectorShown && GraphInspectorSurface.FocusFirstStop())
-                {
-                    return true;
-                }
-
-                return VisibleLeafBody() is { } body && FirstFocusable(body) is { } stop && stop.Focus();
+                break;
             case ShellRegionKind.RightPaneRail:
                 if (!workspace.IsRightPaneVisible)
                 {
                     return false;
                 }
 
-                return (RightPaneLeavesList.SelectedItem is { } selected
-                        && RightPaneLeavesList.ItemContainerGenerator.ContainerFromItem(selected) is ListBoxItem row
-                        && row.Focus())
-                    || RightPaneLeavesList.Focus();
+                if (RightPaneLeavesList.SelectedItem is { } selected
+                    && RightPaneLeavesList.ItemContainerGenerator.ContainerFromItem(selected) is ListBoxItem row)
+                {
+                    row.Focus();
+                }
+                else
+                {
+                    RightPaneLeavesList.Focus();
+                }
+
+                break;
             case ShellRegionKind.StatusBar:
-                return ShellStatusBar.Focus();
+                ShellStatusBar.Focus();
+                break;
             default:
                 return false;
         }
+
+        return ((IShellRegionHost)this).FocusedRegion() == region;
     }
 
     /// <summary>WPF's menu mode routes keys to the menu; F6 is handed to
