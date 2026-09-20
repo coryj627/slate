@@ -19,5 +19,7 @@ internal sealed class PublicationContext : SynchronizationContext
 
     internal Task<Action> Next() => _posts.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
 
+    internal bool HasPending => _posts.Reader.TryPeek(out _);
+
     internal async Task PublishNext() => (await Next())();
 }

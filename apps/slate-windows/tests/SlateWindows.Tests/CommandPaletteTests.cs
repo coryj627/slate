@@ -733,9 +733,81 @@ public sealed class CommandPaletteTests
         Assert.Equal("sav", changed.Query);
     }
 
+    /// <summary>P10 (amended): the latest non-empty query speaks once after a
+    /// trailing window, the search overlay's shape. Every keystroke reopens
+    /// the window, so a typed query is one count rather than a trail queued
+    /// under Medium=All (D-1).</summary>
+    [Fact]
+    public async Task FilterCountSpeaksOnceForTheLatestQueryAfterTheTrailingWindow()
+    {
+        var windows = new List<TaskCompletionSource>();
+        PaletteHarness harness = StandardHarness();
+        harness.Window = token =>
+        {
+            var window = new TaskCompletionSource();
+            token.Register(() => window.TrySetCanceled(token));
+            windows.Add(window);
+            return window.Task;
+        };
+
+        harness.Palette.Open();
+        harness.Palette.Query = "s";
+        harness.Palette.Query = "sa";
+        harness.Palette.Query = "sav";
+        Assert.Empty(harness.Announcements.OfType<A11yEvent.PaletteFilterCount>());
+        Assert.Equal(3, windows.Count);
+        Assert.True(windows[0].Task.IsCanceled);
+        Assert.True(windows[1].Task.IsCanceled);
+
+        windows[2].SetResult();
+        await harness.Palette.FilterCountCompletion;
+        A11yEvent.PaletteFilterCount spoken = Assert.Single(harness.Announcements.OfType<A11yEvent.PaletteFilterCount>());
+        Assert.Equal(("sav", 1u), (spoken.Query, spoken.Count));
+
+        // Clearing the field opens no window and says nothing.
+        harness.Announcements.Clear();
+        harness.Palette.Query = string.Empty;
+        await harness.Palette.FilterCountCompletion;
+        Assert.Equal(3, windows.Count);
+        Assert.Empty(harness.Announcements.OfType<A11yEvent.PaletteFilterCount>());
+    }
+
+    /// <summary>The production path posts the count back to the owner
+    /// context once the window elapses; a count for a closed palette is
+    /// dropped there rather than spoken late.</summary>
+    [Fact]
+    public async Task TheTrailingWindowPostsToTheOwnerContextAndDropsACountForAClosedPalette()
+    {
+        var context = new PublicationContext();
+        var window = new TaskCompletionSource();
+        PaletteHarness harness = new(context, StandardCommands());
+        harness.Window = _ => window.Task;
+
+        harness.Palette.Open();
+        harness.Palette.Query = "sa";
+        window.SetResult();
+        await harness.Palette.FilterCountCompletion;
+        Assert.Empty(harness.Announcements.OfType<A11yEvent.PaletteFilterCount>());
+        await context.PublishNext();
+        Assert.Equal("sa", Assert.Single(harness.Announcements.OfType<A11yEvent.PaletteFilterCount>()).Query);
+
+        harness.Announcements.Clear();
+        var late = new TaskCompletionSource();
+        harness.Window = _ => late.Task;
+        harness.Palette.Query = "sav";
+        harness.Palette.Dismiss();
+        late.SetResult();
+        await harness.Palette.FilterCountCompletion;
+        if (context.HasPending) { await context.PublishNext(); }
+        Assert.Empty(harness.Announcements.OfType<A11yEvent.PaletteFilterCount>());
+    }
+
     [Fact]
     public void FilterCountFiresOnEveryNonEmptyKeystrokeAndIsSuppressedOnEmptyQuery()
     {
+        // The harness's default window elapses at once, so each keystroke's
+        // count speaks in turn; the trailing-window facts above pin the
+        // production shape.
         PaletteHarness harness = StandardHarness();
 
         harness.Palette.Open();
@@ -876,12 +948,16 @@ public sealed class CommandPaletteTests
 
     // --- helpers ----------------------------------------------------------
 
-    private static PaletteHarness StandardHarness() => new(
+    private static PaletteHarness StandardHarness() => new(StandardCommands());
+
+    private static Command[] StandardCommands() =>
+    [
         Cmd("slate.file.newNote", "New Note", CommandSection.File),
         Cmd("slate.file.save", "Save", CommandSection.File),
         Cmd("slate.nav.quickOpen", "Quick Open", CommandSection.Navigation),
         Cmd("slate.editor.bold", "Toggle Bold", CommandSection.Editor),
-        Cmd("slate.tasks.review", "Tasks Review", CommandSection.Tasks));
+        Cmd("slate.tasks.review", "Tasks Review", CommandSection.Tasks),
+    ];
 
     private static Command Cmd(
         string id,
@@ -893,14 +969,31 @@ public sealed class CommandPaletteTests
 
     private sealed class PaletteHarness
     {
-        public PaletteHarness(params Command[] commands)
+        public PaletteHarness(params Command[] commands) : this(null, commands) { }
+
+        /// <summary>The view model captures the owner context at construction:
+        /// none by default, so every fact here runs synchronously; a
+        /// <see cref="PublicationContext"/> to exercise the posted path.</summary>
+        public PaletteHarness(SynchronizationContext? context, Command[] commands)
         {
             Source = new FakePaletteCommandSource(Log);
             Source.Commands.AddRange(commands);
-            Palette = new CommandPaletteViewModel(Source, Record);
+            SynchronizationContext? previous = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(context);
+            try
+            {
+                Palette = new CommandPaletteViewModel(Source, Record, token => Window(token));
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(previous);
+            }
             Palette.SearchFocusRequested += (_, _) => Log.Add("focus");
             Palette.Dismissed += (_, _) => Log.Add("dismiss");
         }
+
+        /// <summary>The filter-count window: elapsed at once unless a fact holds it.</summary>
+        public Func<CancellationToken, Task> Window { get; set; } = _ => Task.CompletedTask;
 
         public FakePaletteCommandSource Source { get; }
 

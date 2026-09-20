@@ -28,23 +28,29 @@ public sealed class ScanAnnouncementGateTests
         Assert.Equal(A11yPriority.Medium, finished.Priority);
     }
 
+    /// <summary>D-4 (amended): Medium queues under All (D-1), so a progress
+    /// line must be able to finish before the next may queue behind it. At
+    /// stock reader rates that is about 2.5 s; a 350 ms cadence built a
+    /// backlog that spoke "Scan complete" long after the sidebar was usable.</summary>
     [Fact]
-    public void FileProgressIsLimitedToAboutThreeAnnouncementsPerSecond()
+    public void ProgressIsNoMoreFrequentThanEveryTwoAndAHalfSeconds()
     {
+        Assert.Equal(TimeSpan.FromSeconds(2.5), ScanAnnouncementGate.MinimumInterval);
         var gate = new ScanAnnouncementGate(() => _now);
-        var announcements = new List<A11yEvent> { gate.Started(30) };
+        var announcements = new List<A11yEvent> { gate.Started(400) };
 
-        for (ulong index = 1; index <= 30; index++)
+        // A 12 s scan at 30 ms per file.
+        for (ulong index = 1; index <= 400; index++)
         {
-            _now += TimeSpan.FromTicks(TimeSpan.TicksPerSecond / 30);
-            A11yEvent? announcement = gate.FileIndexed(index, 30);
+            _now += TimeSpan.FromMilliseconds(30);
+            A11yEvent? announcement = gate.FileIndexed(index, 400);
             if (announcement is not null)
             {
                 announcements.Add(announcement);
             }
         }
 
-        Assert.InRange(announcements.Count, 2, 4);
+        Assert.InRange(announcements.Count(a => a is A11yEvent.VaultScanProgress), 4, 5);
         Assert.All(announcements, announcement =>
             Assert.Equal(A11yPriority.Medium, Render(announcement).Priority));
     }
