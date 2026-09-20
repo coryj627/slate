@@ -591,14 +591,68 @@ internal sealed partial class WorkspaceViewModel
         ActiveGroup.ActiveTab = ActiveGroup.Tabs[(index + delta + ActiveGroup.Tabs.Count) % ActiveGroup.Tabs.Count];
     }
 
-    private void FocusPane(int delta)
+    /// <summary>One F6 (<paramref name="direction"/> +1) or Shift+F6 (-1)
+    /// press: spec §1 ring, §3 announcements, §4 no-op and fall-through.</summary>
+    private void CycleShellRegion(int direction)
     {
-        IReadOnlyList<WorkspaceGroupViewModel> groups = Groups;
-        int index = Array.IndexOf(groups.ToArray(), ActiveGroup);
-        ActiveGroup = groups[(index + delta + groups.Count) % groups.Count];
-        AnnounceActivePane();
-        RequestActiveEditorFocus();
-        Persist();
+        if (ShellRegionHost is not { } host || host.ModalSurfaceOpen)
+        {
+            return;
+        }
+
+        var layout = new ShellRegionLayout(
+            HasTabs: ActiveGroup.Tabs.Count > 0,
+            RightPaneVisible: IsRightPaneVisible,
+            RightPaneHasContentStop: host.RightPaneHasContentStop);
+        ShellRegionKind? current = host.FocusedRegion();
+        int attempts = ShellRegionRing.Ring(layout).Count;
+        for (int attempt = 0; attempt < attempts; attempt++)
+        {
+            ShellRegionKind target = ShellRegionRing.Next(layout, current, direction);
+            if (host.TryLand(target))
+            {
+                AnnounceShellRegion(target, host);
+                return;
+            }
+
+            current = target;
+        }
+    }
+
+    private void AnnounceShellRegion(ShellRegionKind region, IShellRegionHost host)
+    {
+        switch (region)
+        {
+            case ShellRegionKind.MenuBar:
+                _announce(new A11yEvent.ShellRegionFocused(new ShellRegion.MenuBar()));
+                break;
+            case ShellRegionKind.Files:
+                _announce(new A11yEvent.FilesRegionFocused());
+                break;
+            case ShellRegionKind.TabBar:
+                WorkspaceTabViewModel? tab = ActiveGroup.ActiveTab;
+                _announce(new A11yEvent.TabFocused(
+                    Prefix: "Tab bar. ",
+                    Filename: tab is null ? string.Empty : System.IO.Path.GetFileName(tab.Path),
+                    Index: (uint)Math.Max(1, tab is null ? 1 : ActiveGroup.Tabs.IndexOf(tab) + 1),
+                    Count: (uint)ActiveGroup.Tabs.Count));
+                break;
+            case ShellRegionKind.Editor:
+                AnnounceActivePane();
+                break;
+            case ShellRegionKind.EmptyEditor:
+                _announce(new A11yEvent.ShellRegionFocused(new ShellRegion.EmptyEditor()));
+                break;
+            case ShellRegionKind.RightPaneContent:
+                _announce(new A11yEvent.LeafPanelShown(ActiveLeaf.Title));
+                break;
+            case ShellRegionKind.RightPaneRail:
+                _announce(new A11yEvent.ShellRegionFocused(new ShellRegion.RightPaneRail()));
+                break;
+            case ShellRegionKind.StatusBar:
+                _announce(new A11yEvent.ShellRegionFocused(new ShellRegion.StatusBar(host.StatusText)));
+                break;
+        }
     }
 
     public bool FocusDirectionalPane(string axis, int direction)
