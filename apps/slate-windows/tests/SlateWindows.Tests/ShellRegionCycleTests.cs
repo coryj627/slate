@@ -65,7 +65,9 @@ public sealed class ShellRegionCycleTests
             Assert.Equal([ShellRegionKind.TabBar], host.Landed);
             A11yEvent.TabFocused tab = Assert.IsType<A11yEvent.TabFocused>(Assert.Single(announced));
             Assert.Equal("Tab bar. ", tab.Prefix);
-            Assert.Equal("note0.md", tab.Filename);
+            // The tab bar reads like a tab activation: Activate() (Layout.cs)
+            // announces TabFocused with tab.Title, which strips the extension.
+            Assert.Equal("note0", tab.Filename);
         }
     }
 

@@ -633,7 +633,7 @@ internal sealed partial class WorkspaceViewModel
                 WorkspaceTabViewModel? tab = ActiveGroup.ActiveTab;
                 _announce(new A11yEvent.TabFocused(
                     Prefix: "Tab bar. ",
-                    Filename: tab is null ? string.Empty : System.IO.Path.GetFileName(tab.Path),
+                    Filename: tab?.Title ?? string.Empty,
                     Index: (uint)Math.Max(1, tab is null ? 1 : ActiveGroup.Tabs.IndexOf(tab) + 1),
                     Count: (uint)ActiveGroup.Tabs.Count));
                 break;
