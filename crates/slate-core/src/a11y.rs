@@ -1746,10 +1746,7 @@ impl A11yEvent {
                     // ("Scanning 120 files…") - which
                     // `trim_end_matches('.')` left in place, giving
                     // "Status bar. Scanning 120 files….".
-                    format!(
-                        "Status bar. {}.",
-                        text.trim().trim_end_matches(|c: char| c == '.' || c == '…')
-                    )
+                    format!("Status bar. {}.", text.trim().trim_end_matches(['.', '…']))
                 }
             },
             EditorPaneFocused {
