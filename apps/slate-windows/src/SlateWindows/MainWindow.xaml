@@ -681,9 +681,11 @@
         <!-- W7-6 (#1240): the status bar is the ring's last region — a
              named, focusable stop whose landing speaks the status text;
              its HelpText is the shell's F6 help. -->
+        <!-- W7-6 (#1240): F6 lands here; Tab never does. -->
         <StatusBar x:Name="ShellStatusBar"
                    DockPanel.Dock="Bottom"
                    Focusable="True"
+                   KeyboardNavigation.IsTabStop="False"
                    AutomationProperties.AutomationId="StatusBar"
                    AutomationProperties.Name="Status bar"
                    AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.Shell}">
@@ -1080,9 +1082,11 @@
                                   HorizontalAlignment="Stretch"
                                   ResizeDirection="Columns"
                                   AutomationProperties.Name="Resize files sidebar" />
+                    <!-- W7-6 (#1240): F6 lands here; Tab never does. -->
                     <local:AutomationLandmarkBorder x:Name="ContentPaneBorder"
                             Grid.Column="2"
                             Focusable="True"
+                            KeyboardNavigation.IsTabStop="False"
                             AutomationProperties.AutomationId="ContentPane"
                             AutomationProperties.Name="Editor workspace"
                             Background="{DynamicResource Slate.WindowBackgroundBrush}"
@@ -2153,7 +2157,8 @@
                                 <panels:SyncDiagnosticsSurfaceView Model="{Binding SyncDiagnostics}" />
                             </DockPanel>
 
-                            <StackPanel Grid.Column="0" Margin="12">
+                            <StackPanel x:Name="RightPaneDockedPlaceholder"
+                                        Grid.Column="0" Margin="12">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
                                         <Style.Triggers>

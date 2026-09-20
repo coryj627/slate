@@ -652,6 +652,8 @@ internal sealed partial class WorkspaceViewModel
             case ShellRegionKind.StatusBar:
                 _announce(new A11yEvent.ShellRegionFocused(new ShellRegion.StatusBar(host.StatusText)));
                 break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(region), region, "every shell region announces");
         }
     }
 

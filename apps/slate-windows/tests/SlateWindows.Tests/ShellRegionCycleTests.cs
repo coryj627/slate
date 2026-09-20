@@ -189,6 +189,86 @@ public sealed class ShellRegionCycleTests
     }
 
     [Fact]
+    public void LandingOnFilesAnnouncesFilesRegionFocused()
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            host.Focused = ShellRegionKind.EmptyEditor;
+
+            workspace.FocusPreviousPaneCommand.Execute(null);
+
+            Assert.Equal([ShellRegionKind.Files], host.Landed);
+            Assert.IsType<A11yEvent.FilesRegionFocused>(Assert.Single(announced));
+        }
+    }
+
+    [Fact]
+    public void LandingOnTheEditorAnnouncesTheActivePane()
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            announced.Clear();
+            host.Focused = ShellRegionKind.TabBar;
+
+            workspace.FocusNextPaneCommand.Execute(null);
+
+            Assert.Equal([ShellRegionKind.Editor], host.Landed);
+            // AnnounceActivePane (Layout.cs) speaks the pane, not the region:
+            // ordinal of total, then the active tab's title (extension stripped).
+            A11yEvent.EditorPaneFocused pane =
+                Assert.IsType<A11yEvent.EditorPaneFocused>(Assert.Single(announced));
+            Assert.Equal("note0", pane.Title);
+        }
+    }
+
+    [Fact]
+    public void LandingOnRightPaneContentAnnouncesTheLeaf()
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            announced.Clear();
+            host.Focused = ShellRegionKind.Editor;
+
+            workspace.FocusNextPaneCommand.Execute(null);
+
+            Assert.Equal([ShellRegionKind.RightPaneContent], host.Landed);
+            A11yEvent.LeafPanelShown leaf =
+                Assert.IsType<A11yEvent.LeafPanelShown>(Assert.Single(announced));
+            Assert.Equal(workspace.ActiveLeaf.Title, leaf.Title);
+        }
+    }
+
+    [Fact]
+    public void LandingOnTheMenuBarAnnouncesIt()
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            host.Focused = ShellRegionKind.StatusBar;
+
+            workspace.FocusNextPaneCommand.Execute(null);
+
+            Assert.Equal([ShellRegionKind.MenuBar], host.Landed);
+            A11yEvent.ShellRegionFocused region =
+                Assert.IsType<A11yEvent.ShellRegionFocused>(Assert.Single(announced));
+            Assert.IsType<ShellRegion.MenuBar>(region.Region);
+        }
+    }
+
+    [Fact]
     public void TheVerbsAreAlwaysExecutable()
     {
         (WorkspaceViewModel workspace, FakeHost _, List<A11yEvent> _, FixtureVault fixture, VaultSession session) = Open();

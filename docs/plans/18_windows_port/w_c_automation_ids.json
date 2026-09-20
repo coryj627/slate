@@ -1736,6 +1736,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "RightPaneDockedPlaceholder",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "RightPaneLeafHost",
     "Surface": "Right-pane leaf registry"
   },

@@ -1407,6 +1407,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     private bool _isRightPaneVisible = true;
     private readonly bool _startInteractionBackgroundWork;
 
+    /// <summary>The window's answers for F6 (W7-6); null until the window
+    /// attaches, in which case a press does nothing. Collaborator state,
+    /// not a verb — it sat in the command block by accident (final
+    /// review, #1240).</summary>
+    internal IShellRegionHost? ShellRegionHost { get; set; }
+
     /// <summary>W4-6 (#738): the per-source Bases document registry —
     /// one document per byte-exact path, shared by every tab on that
     /// source (contract C3). Documents whose last tab closed are shut
@@ -1970,10 +1976,6 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     public ICommand FocusPaneBelowCommand { get; }
     public ICommand FocusNextPaneCommand { get; }
     public ICommand FocusPreviousPaneCommand { get; }
-
-    /// <summary>The window's answers for F6 (W7-6); null until the window
-    /// attaches, in which case a press does nothing.</summary>
-    internal IShellRegionHost? ShellRegionHost { get; set; }
     public ICommand GrowPaneCommand { get; }
     public ICommand ShrinkPaneCommand { get; }
     public ICommand SaveActiveCommand { get; }

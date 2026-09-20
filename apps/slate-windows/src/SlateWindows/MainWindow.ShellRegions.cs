@@ -45,7 +45,13 @@ public partial class MainWindow : IShellRegionHost
 
         if (IsWithin(focused, ContentPaneBorder))
         {
-            if (ReferenceEquals(focused, ContentPaneBorder))
+            // The border itself is the EMPTY pane's stop, and only then
+            // (final review, #1240): with tabs open it is just the content
+            // pane's own chrome, and calling that EmptyEditor made the ring
+            // believe the tabless shape while a note was open.
+            if (ReferenceEquals(focused, ContentPaneBorder)
+                && _viewModel.Workspace is WorkspaceViewModel { } w
+                && w.ActiveGroup.Tabs.Count == 0)
             {
                 return ShellRegionKind.EmptyEditor;
             }
@@ -79,9 +85,10 @@ public partial class MainWindow : IShellRegionHost
     /// treated the landing as refused and skipped the region entirely. Each
     /// case still performs the same landing call(s); only the guard clauses
     /// (no workspace, hidden right pane, no tab) return false before any of
-    /// them run. <see cref="ShellRegionKind.Editor"/> keeps its own early
-    /// true: <c>FocusEditorPane</c> may seat focus asynchronously for
-    /// canvas/graph tabs, so its end state cannot be checked synchronously.</summary>
+    /// them run. <see cref="ShellRegionKind.Editor"/> answers early only
+    /// for canvas and graph tabs, whose <c>FocusEditorPane</c> landing is
+    /// asynchronous; a text tab's end state is checked like every other
+    /// region's (final review, #1240).</summary>
     bool IShellRegionHost.TryLand(ShellRegionKind region)
     {
         if (_viewModel.Workspace is not WorkspaceViewModel workspace)
@@ -101,15 +108,9 @@ public partial class MainWindow : IShellRegionHost
                 first.Focus();
                 break;
             case ShellRegionKind.Files:
-                if (FilterResultsList.IsVisible)
-                {
-                    FilterResultsList.Focus();
-                }
-                else
-                {
-                    FilesTree.Focus();
-                }
-
+                _ = FilterResultsList.IsVisible
+                    ? FilterResultsList.Focus() || FilesTree.Focus()
+                    : FilesTree.Focus();
                 break;
             case ShellRegionKind.TabBar:
                 {
@@ -130,13 +131,18 @@ public partial class MainWindow : IShellRegionHost
                     break;
                 }
             case ShellRegionKind.Editor:
-                if (workspace.ActiveGroup.ActiveTab is null)
+                if (workspace.ActiveGroup.ActiveTab is not { } editorTab)
                 {
                     return false;
                 }
 
                 FocusEditorPane(workspace.ActiveGroup);
-                return true;
+                // Canvas and graph tabs seat focus asynchronously through their
+                // own landing; the text editor is synchronous, so its end state
+                // is judged like every other region (it can fall back to the tab
+                // item or the Files tree, which must read as a refusal).
+                return editorTab is { IsCanvas: true } or { IsGraph: true }
+                    || ((IShellRegionHost)this).FocusedRegion() == ShellRegionKind.Editor;
             case ShellRegionKind.EmptyEditor:
                 if (workspace.ActiveGroup.ActiveTab is not null)
                 {
@@ -155,7 +161,7 @@ public partial class MainWindow : IShellRegionHost
                 {
                     ConnectionsLeafSurface.FocusAnchor();
                 }
-                else if (workspace.IsGraphInspectorShown)
+                else if (workspace.IsGraphInspectorShown && GraphInspectorSurface.IsVisible)
                 {
                     GraphInspectorSurface.FocusFirstStop();
                 }
@@ -196,23 +202,30 @@ public partial class MainWindow : IShellRegionHost
     /// the ring so a press from the menu-bar region moves on (spec §4).</summary>
     private void MainMenu_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.F6 || _viewModel.Workspace is not WorkspaceViewModel workspace)
+        // Only the two ring chords: Ctrl+F6, Alt+F6 and the rest are not
+        // ours to swallow (final review, #1240).
+        if (e.Key != Key.F6
+            || Keyboard.Modifiers is not (ModifierKeys.None or ModifierKeys.Shift)
+            || _viewModel.Workspace is not WorkspaceViewModel workspace)
         {
             return;
         }
 
-        bool back = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+        bool back = Keyboard.Modifiers == ModifierKeys.Shift;
         (back ? workspace.FocusPreviousPaneCommand : workspace.FocusNextPaneCommand).Execute(null);
         e.Handled = true;
     }
 
     /// <summary>The leaf body currently shown in the right pane's content
     /// column: the visible child of <c>RightPaneLeafHost</c> in column 0
-    /// that is not the docked placeholder.</summary>
+    /// that is not the docked placeholder. The placeholder is excluded BY
+    /// REFERENCE (final review, #1240): the old <c>is not StackPanel</c>
+    /// test would silently skip any future leaf body that happened to be a
+    /// <c>StackPanel</c>.</summary>
     private FrameworkElement? VisibleLeafBody() =>
         RightPaneLeafHost.Children.OfType<FrameworkElement>()
             .Where(child => Grid.GetColumn(child) == 0 && child.IsVisible)
-            .FirstOrDefault(child => child is not StackPanel);
+            .FirstOrDefault(child => !ReferenceEquals(child, RightPaneDockedPlaceholder));
 
     private static UIElement? FirstFocusable(DependencyObject root)
     {
