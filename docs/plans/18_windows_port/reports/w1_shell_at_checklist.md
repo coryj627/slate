@@ -25,3 +25,5 @@ settings; Narrator is W8-6 smoke scope. Automated twins do not prove speech.
 Production agent-operated evidence for row 8 and the W7-5 launch-focus retest: [2026-09-20 NVDA run](w7_6_nvda_production_run_2026-09-20.md) (not a human cell; the typed region announcements were not received in that session and stay Pending for the owner's pass).
 
 Residual: every unexecuted row remains Pending. Record findings and the fix commit on retest; never replace a human pass with the automated twin.
+
+Agent-operated NVDA evidence for every row here (not a human cell; no cell above changed): [2026-09-22 matrix pass](nvda_agent_matrix_pass_2026-09-22.md), with per-row results, findings F1–F14 and the rows it could not execute.

@@ -21,3 +21,5 @@ settings; Narrator is W8-6 smoke scope. Automated twins do not prove speech.
 | 6 | W3-5 | Resolved and unresolved embeds | Say-all across note, section, block, image and unresolved embeds; activate Jump to source. | Header, body, alt text and unresolved explanation read in order; activation opens the correct source. | `ReadingEmbedTests` | Pending | Pending | Pending |
 
 Residual: every unexecuted row remains Pending. Record findings and the fix commit on retest; never replace a human pass with the automated twin.
+
+Agent-operated NVDA evidence for every row here (not a human cell; no cell above changed): [2026-09-22 matrix pass](nvda_agent_matrix_pass_2026-09-22.md), with per-row results, findings F1–F14 and the rows it could not execute.

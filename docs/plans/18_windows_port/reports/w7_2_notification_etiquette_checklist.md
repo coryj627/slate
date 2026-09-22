@@ -31,3 +31,5 @@ Residual: all listening rows remain Pending. Record reader, build, outcome,
 transcript and any finding before changing a human cell. A UIA argument
 recording proves requested delivery parameters; it does not prove what the
 screen reader actually spoke.
+
+Agent-operated NVDA evidence for every row here (not a human cell; no cell above changed): [2026-09-22 matrix pass](nvda_agent_matrix_pass_2026-09-22.md), with per-row results, findings F1–F14 and the rows it could not execute.

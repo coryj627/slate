@@ -34,3 +34,5 @@ verifies complete Say All termination, required semantic speech output, native
 object Invoke, destination reporting and selected-link deletion/undo. It records
 the EOF-loop finding and passing retest. Human audio confirmation, the complete
 manual reading routes, live IME and licensed JAWS remain Pending. Braille is owner-deferred (2026-09-18), unverified, and is not a current blocker.
+
+Agent-operated NVDA evidence for every row here (not a human cell; no cell above changed): [2026-09-22 matrix pass](nvda_agent_matrix_pass_2026-09-22.md), with per-row results, findings F1–F14 and the rows it could not execute.

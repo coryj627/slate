@@ -25,3 +25,5 @@ settings; Narrator is W8-6 smoke scope. Automated twins do not prove speech.
 | 10 | W7-3 navigation map | Graph node actions and pinning | On a graph diagram node open its context menu; walk the node actions, invoke Show connections, return, then Pin and Unpin the same node. | Menu actions operate on the named node; its pin state changes and the menu label switches between Pin and Unpin. | `GraphMenuTests`, `GraphDiagramTests`, `GraphSurfaces_DiagramPeersTiersAndZoom_AreClean` | Pending | Pending | Pending |
 
 Residual: every unexecuted row remains Pending. Record findings and the fix commit on retest; never replace a human pass with the automated twin.
+
+Agent-operated NVDA evidence for every row here (not a human cell; no cell above changed): [2026-09-22 matrix pass](nvda_agent_matrix_pass_2026-09-22.md), with per-row results, findings F1–F14 and the rows it could not execute.
