@@ -282,56 +282,163 @@ public sealed class W2EditorInteractionTests
         Assert.EndsWith(shown.Title, interactions.PopoverAutomationName, StringComparison.Ordinal);
     }
 
-    /// <summary>R-8: an embed that resolves to nothing says why, in the
-    /// same publish, for every reason the resolver gives a top-level
-    /// preview. The event carries the SEMANTIC reason and core words it;
-    /// the popover's body and name are that same rendering, so the host's
-    /// card wording (Describe) reaches none of them: rewording it leaves
-    /// this fact green, and pointing a surface back at it turns it red.</summary>
+    /// <summary>R-8: every outcome the resolver can give a top-level preview
+    /// other than a card — each structured unresolved result, and a
+    /// resolver that throws (a vault error, raw or structured, and any
+    /// other exception) — is announced with ITS reason, through the real
+    /// path: the resolve runs or throws, and the catch, the publish and
+    /// the presenter run as shipped. The exact event and its fields come
+    /// first, so a mapping that collapsed failures into one reason — and
+    /// spoke false recovery information — fails every other row. Only
+    /// then the surfaces: the popover's body, its name and the live tree's
+    /// UIA name are that one core rendering, so the host's card wording
+    /// (Describe) reaches none of them. (The depth limit is unreachable at
+    /// the top level; the presenter fact below covers it.)</summary>
     [Theory]
-    [InlineData("![[missing]]", "TargetNotFound", "Embed preview for missing. Target not found: missing.")]
-    [InlineData("![[target#Nope]]", "HeadingNotFound", "Embed preview for target. Heading not found: Nope in target.md.")]
-    [InlineData("![[target#^nope]]", "BlockNotFound", "Embed preview for target. Block not found: nope in target.md.")]
-    [InlineData("![[unreadable]]", "ReadError", null)]
-    public void AnUnresolvedEmbedIsWordedByCoreOnEverySurface(
-        string embed,
-        string reasonKind,
-        string? expected)
+    [InlineData("target-not-found")]
+    [InlineData("heading-not-found")]
+    [InlineData("block-not-found")]
+    [InlineData("read-error")]
+    [InlineData("thrown-vault-db")]
+    [InlineData("thrown-vault-structured")]
+    [InlineData("thrown-other")]
+    public void AnUnresolvedEmbedIsWordedByCoreOnEverySurface(string outcome) =>
+        RunOnSta(() =>
+        {
+            (string Embed, string Target, EmbedUnresolvedReason Reason, Exception? Thrown, string Expected) row =
+                outcome switch
+                {
+                    "target-not-found" => (
+                        "![[missing]]",
+                        "missing",
+                        new EmbedUnresolvedReason.TargetNotFound("missing"),
+                        null,
+                        "Embed preview for missing. Target not found: missing."),
+                    "heading-not-found" => (
+                        "![[target#Nope]]",
+                        "target",
+                        new EmbedUnresolvedReason.HeadingNotFound("target.md", "Nope"),
+                        null,
+                        "Embed preview for target. Heading not found: Nope in target.md."),
+                    "block-not-found" => (
+                        "![[target#^nope]]",
+                        "target",
+                        new EmbedUnresolvedReason.BlockNotFound("target.md", "nope"),
+                        null,
+                        "Embed preview for target. Block not found: nope in target.md."),
+                    // Indexed while readable, then made invalid UTF-8 below:
+                    // the link resolves and core's read fails.
+                    "read-error" => (
+                        "![[unreadable]]",
+                        "unreadable",
+                        new EmbedUnresolvedReason.ReadError("file at \"unreadable.md\" is not valid UTF-8"),
+                        null,
+                        "Embed preview for unreadable. Could not read embed: file at \"unreadable.md\" is not valid UTF-8."),
+                    // A corrupt index fails core's first lookup; Db's detail is
+                    // its own text.
+                    "thrown-vault-db" => (
+                        "![[target]]",
+                        "target",
+                        new EmbedUnresolvedReason.ReadError("sqlite error: database disk image is malformed"),
+                        new VaultException.Db("sqlite error: database disk image is malformed"),
+                        "Embed preview for target. Could not read embed: sqlite error: database disk image is malformed."),
+                    // A structured error reads as core words it, never as the
+                    // binding's "@path=…, @reason=…".
+                    "thrown-vault-structured" => (
+                        "![[target]]",
+                        "target",
+                        new EmbedUnresolvedReason.ReadError("Invalid path ../out.md: escapes the vault"),
+                        new VaultException.InvalidPath("../out.md", "escapes the vault"),
+                        "Embed preview for target. Could not read embed: Invalid path ../out.md: escapes the vault."),
+                    "thrown-other" => (
+                        "![[target]]",
+                        "target",
+                        new EmbedUnresolvedReason.ReadError("The resolver was torn down."),
+                        new InvalidOperationException("The resolver was torn down."),
+                        "Embed preview for target. Could not read embed: The resolver was torn down."),
+                    _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, null),
+                };
+            using InteractionFixture fixture = InteractionFixture.Create($"# Source\n\n{row.Embed}\n");
+            File.WriteAllText(Path.Combine(fixture.Root, "unreadable.md"), "# Readable at scan time\n");
+            using VaultSession session = ScannedSession(fixture);
+            File.WriteAllBytes(Path.Combine(fixture.Root, "unreadable.md"), [0xff, 0xfe, 0xff]);
+            var announcements = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+                announce: announcements.Add,
+                startInteractionBackgroundWork: false,
+                interactionBackgroundFaultForTests: worker =>
+                    worker is EditorInteractionWorkerKind.EmbedPreview ? row.Thrown : null);
+            EditorInteractionCoordinator interactions = tab.EditorInteractions!;
+            interactions.RefreshMathRangesForTests();
+            interactions.RefreshArtifactCacheForTests();
+
+            Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, row.Embed)));
+            Assert.Empty(announcements);
+            WaitForUi(() => !interactions.PopoverTitle.StartsWith("Loading", StringComparison.Ordinal));
+
+            // The event and its fields first: this reason variant with this
+            // payload, not merely some unavailable line.
+            var unavailable = Assert.IsType<A11yEvent.EmbedPreviewUnavailable>(Assert.Single(announcements));
+            Assert.Equal(row.Target, unavailable.Target);
+            Assert.Equal(row.Reason, unavailable.Reason);
+            if (row.Thrown is VaultException error)
+            {
+                Assert.Equal(
+                    SlateUniffiMethods.VaultErrorDetail(error),
+                    Assert.IsType<EmbedUnresolvedReason.ReadError>(unavailable.Reason).Message);
+            }
+
+            // Then every surface: one core rendering.
+            Assert.Equal(row.Expected, SlateUniffiMethods.A11yRender(unavailable).Text);
+            Assert.Equal(row.Expected, interactions.PopoverBody);
+            Assert.Equal(row.Expected, interactions.PopoverAutomationName);
+            Assert.Null(interactions.PopoverEmbedRoot);
+            AssertTheLiveTreeExposes(tab, row.Expected);
+        });
+
+    /// <summary>The shipped popover template, bound to the tab, exposes
+    /// <paramref name="sentence"/> as the popover's UIA name and as the
+    /// text of its body.</summary>
+    private static void AssertTheLiveTreeExposes(WorkspaceTabViewModel tab, string sentence)
     {
-        using InteractionFixture fixture = InteractionFixture.Create($"# Source\n\n{embed}\n");
-        File.WriteAllText(Path.Combine(fixture.Root, "unreadable.md"), "# Readable at scan time\n");
-        using VaultSession session = ScannedSession(fixture);
-        // Unreadable only AFTER the scan indexed it, so the link resolves
-        // and the read fails (invalid UTF-8).
-        File.WriteAllBytes(Path.Combine(fixture.Root, "unreadable.md"), [0xff, 0xfe, 0xff]);
-        var announcements = new List<A11yEvent>();
-        using WorkspaceTabViewModel tab = OpenSourceTab(session, announcements);
-        EditorInteractionCoordinator interactions = tab.EditorInteractions!;
-
-        Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, embed)));
-        Assert.Empty(announcements);
-        WaitForUi(() => !interactions.PopoverTitle.StartsWith("Loading", StringComparison.Ordinal));
-
-        var unavailable = Assert.IsType<A11yEvent.EmbedPreviewUnavailable>(Assert.Single(announcements));
-        Assert.Equal(reasonKind, unavailable.Reason?.GetType().Name);
-        string sentence = SlateUniffiMethods.A11yRender(unavailable).Text;
-        if (expected is not null)
+        var resources = (System.Windows.ResourceDictionary)System.Windows.Application.LoadComponent(
+            new Uri("/SlateWindows;component/WorkspaceTemplates.xaml", UriKind.Relative));
+        var template = (System.Windows.DataTemplate)resources["WorkspaceTabContentTemplate"];
+        var root = (System.Windows.FrameworkElement)template.LoadContent();
+        root.DataContext = tab;
+        var window = new System.Windows.Window { Content = root };
+        try
         {
-            Assert.Equal(expected, sentence);
+            window.Show();
+            root.UpdateLayout();
+            root.Dispatcher.Invoke(DispatcherPriority.DataBind, new Action(() => { }));
+            root.UpdateLayout();
+
+            var popover = (System.Windows.UIElement)Assert.Single(
+                LogicalDescendants(root),
+                element => System.Windows.Automation.AutomationProperties.GetAutomationId(element)
+                    == "EditorInteractionPopover");
+            System.Windows.Automation.Peers.AutomationPeer peer =
+                System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(popover);
+            Assert.Equal(sentence, peer.GetName());
+            System.Windows.Controls.TextBox body = Assert.Single(
+                LogicalDescendants(popover).OfType<System.Windows.Controls.TextBox>(),
+                box => System.Windows.Automation.AutomationProperties.GetName(box) == "Preview content");
+            Assert.Equal(sentence, body.Text);
         }
-        else
+        finally
         {
-            Assert.StartsWith("Embed preview for unreadable. Could not read embed: ", sentence, StringComparison.Ordinal);
+            window.Close();
         }
-        Assert.Equal(sentence, interactions.PopoverBody);
-        Assert.Equal(sentence, interactions.PopoverAutomationName);
-        Assert.Null(interactions.PopoverEmbedRoot);
     }
 
-    /// <summary>R-8, every case the presenter can be handed — including the
-    /// two a top-level preview cannot reach through the resolver (the depth
-    /// limit, and a resolve that failed outright): announcement, body and
-    /// name are one core rendering.</summary>
+    /// <summary>R-8, every reason the presenter can be handed — including the
+    /// depth limit, which a top-level preview cannot reach through the
+    /// resolver: announcement, body and name are one core rendering.</summary>
     [Fact]
     public void EveryUnavailableReasonIsOneCoreRenderingOnEverySurface()
     {
@@ -341,14 +448,13 @@ public sealed class W2EditorInteractionTests
         using WorkspaceTabViewModel tab = OpenSourceTab(session, announcements);
         EditorInteractionCoordinator interactions = tab.EditorInteractions!;
 
-        foreach ((EmbedUnresolvedReason? reason, string expected) in new (EmbedUnresolvedReason?, string)[]
+        foreach ((EmbedUnresolvedReason reason, string expected) in new (EmbedUnresolvedReason, string)[]
         {
             (new EmbedUnresolvedReason.TargetNotFound("X"), "Embed preview for X. Target not found: X."),
             (new EmbedUnresolvedReason.HeadingNotFound("x.md", "H"), "Embed preview for X. Heading not found: H in x.md."),
             (new EmbedUnresolvedReason.BlockNotFound("x.md", "b1"), "Embed preview for X. Block not found: b1 in x.md."),
             (new EmbedUnresolvedReason.DepthLimitReached(), "Embed preview for X. Nested embed depth limit reached."),
             (new EmbedUnresolvedReason.ReadError("disk on fire"), "Embed preview for X. Could not read embed: disk on fire."),
-            (null, "Embed preview for X. The embedded content could not be resolved."),
         })
         {
             announcements.Clear();
@@ -362,55 +468,6 @@ public sealed class W2EditorInteractionTests
             Assert.Null(interactions.PopoverEmbedRoot);
         }
     }
-
-    /// <summary>R-8 in the live tree: the shipped popover template, bound to
-    /// a tab whose preview resolved to nothing, exposes core's sentence as
-    /// the popover's UIA name and as the text of its body.</summary>
-    [Fact]
-    public void AnUnavailablePreviewExposesCoresSentenceInTheLiveTree() =>
-        RunOnSta(() =>
-        {
-            using InteractionFixture fixture = InteractionFixture.Create("# Source\n\n![[missing]]\n");
-            using VaultSession session = ScannedSession(fixture);
-            var announcements = new List<A11yEvent>();
-            using WorkspaceTabViewModel tab = OpenSourceTab(session, announcements);
-            EditorInteractionCoordinator interactions = tab.EditorInteractions!;
-            Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, "![[missing]]")));
-            WaitForUi(() => !interactions.PopoverTitle.StartsWith("Loading", StringComparison.Ordinal));
-            string sentence = SlateUniffiMethods.A11yRender(
-                Assert.IsType<A11yEvent.EmbedPreviewUnavailable>(Assert.Single(announcements))).Text;
-            Assert.Equal("Embed preview for missing. Target not found: missing.", sentence);
-
-            var resources = (System.Windows.ResourceDictionary)System.Windows.Application.LoadComponent(
-                new Uri("/SlateWindows;component/WorkspaceTemplates.xaml", UriKind.Relative));
-            var template = (System.Windows.DataTemplate)resources["WorkspaceTabContentTemplate"];
-            var root = (System.Windows.FrameworkElement)template.LoadContent();
-            root.DataContext = tab;
-            var window = new System.Windows.Window { Content = root };
-            try
-            {
-                window.Show();
-                root.UpdateLayout();
-                root.Dispatcher.Invoke(DispatcherPriority.DataBind, new Action(() => { }));
-                root.UpdateLayout();
-
-                var popover = (System.Windows.UIElement)Assert.Single(
-                    LogicalDescendants(root),
-                    element => System.Windows.Automation.AutomationProperties.GetAutomationId(element)
-                        == "EditorInteractionPopover");
-                System.Windows.Automation.Peers.AutomationPeer peer =
-                    System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(popover);
-                Assert.Equal(sentence, peer.GetName());
-                System.Windows.Controls.TextBox body = Assert.Single(
-                    LogicalDescendants(popover).OfType<System.Windows.Controls.TextBox>(),
-                    box => System.Windows.Automation.AutomationProperties.GetName(box) == "Preview content");
-                Assert.Equal(sentence, body.Text);
-            }
-            finally
-            {
-                window.Close();
-            }
-        });
 
     /// <summary>W7-7 (#1251, R-8): WPF disables caret navigation in a
     /// read-only TextBox that hides its caret, so Down scrolled the
@@ -645,13 +702,16 @@ public sealed class W2EditorInteractionTests
         using var cancel = new CancelToken();
         session.ScanInitial(cancel);
         var attempts = new int[3];
+        // The preview's own resolve is single-shot, not one of the retrying
+        // workers this fact counts (W7-7 R-8).
         using var tab = new WorkspaceTabViewModel(
             session,
             new WorkspaceTabState(
                 Guid.NewGuid(),
                 new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
             interactionBackgroundFaultForTests: kind =>
-                Interlocked.Increment(ref attempts[(int)kind]) <= 2
+                kind is not EditorInteractionWorkerKind.EmbedPreview
+                && Interlocked.Increment(ref attempts[(int)kind]) <= 2
                     ? new IOException("Injected transient worker fault.")
                     : null);
         EditorInteractionCoordinator interactions = tab.EditorInteractions!;
@@ -768,6 +828,12 @@ public sealed class W2EditorInteractionTests
             startInteractionBackgroundWork: false,
             interactionBackgroundFaultForTests: kind =>
             {
+                // The preview's own resolve is single-shot, not one of the
+                // retrying workers this fact counts (W7-7 R-8).
+                if (kind is EditorInteractionWorkerKind.EmbedPreview)
+                {
+                    return null;
+                }
                 if (kind is not EditorInteractionWorkerKind.Math
                     || Volatile.Read(ref fail) == 0)
                 {
@@ -924,6 +990,11 @@ public sealed class W2EditorInteractionTests
                     Assert.True(tab.EditorInteractions.ActivateAt(
                         Inside(tab.Text, "[@doe]")));
                     break;
+                case EditorInteractionWorkerKind.EmbedPreview:
+                    tab.EditorInteractions!.RefreshMathRangesForTests();
+                    tab.EditorInteractions.RefreshArtifactCacheForTests();
+                    Assert.True(tab.EditorInteractions.PreviewEmbedAt(0));
+                    break;
             }
 
             Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
@@ -935,6 +1006,9 @@ public sealed class W2EditorInteractionTests
                 announcements,
                 item => item is A11yEvent.HostComposed composed
                     && composed.Priority is A11yPriority.High);
+            // A preview whose resolver failed after disposal is retired, not
+            // announced (W7-7 R-8).
+            Assert.DoesNotContain(announcements, item => item is A11yEvent.EmbedPreviewUnavailable);
         }
     }
     [Fact]

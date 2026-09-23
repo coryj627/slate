@@ -73,9 +73,11 @@ public sealed class RecoveryAnnouncementTests
     }
 
     /// <summary>R-7's other half: every other save failure keeps
-    /// NoteSaveBlocked and its detail, and the detail is the error's own
-    /// text rather than the binding's field-labelled message
-    /// ("@message=…"). A read-only note refuses the atomic replace.</summary>
+    /// NoteSaveBlocked and its detail, and the detail is core's rendering
+    /// of the error (vault_error_detail) rather than host copy or the
+    /// binding's field-labelled message ("@message=…"); the status shows
+    /// the sentence that is spoken. A read-only note refuses the atomic
+    /// replace.</summary>
     [Theory]
     [InlineData("save")]
     [InlineData("save-all")]
@@ -88,9 +90,15 @@ public sealed class RecoveryAnnouncementTests
         string local = tab.Text;
         File.SetAttributes(host.NotePath, FileAttributes.ReadOnly);
         host.Announced.Clear();
+        string coreDetail;
         try
         {
             Act(host, tab, action);
+            // The same refusal, straight from core, rendered by core: the
+            // announced detail must be these bytes.
+            VaultException refusal = Assert.ThrowsAny<VaultException>(
+                () => host.Session.SaveText("note0.md", local, tab.SavedContentHash));
+            coreDetail = SlateUniffiMethods.VaultErrorDetail(refusal);
         }
         finally
         {
@@ -100,9 +108,12 @@ public sealed class RecoveryAnnouncementTests
         var blocked = Assert.IsType<A11yEvent.NoteSaveBlocked>(Assert.Single(host.Announced));
         Assert.Equal("note0.md", blocked.Filename);
         Assert.False(string.IsNullOrWhiteSpace(blocked.Detail));
+        Assert.Equal(coreDetail, blocked.Detail);
         Assert.Equal(local, tab.Text);
         Assert.True(tab.IsDirty);
-        AssertNoDiagnostics(SlateUniffiMethods.A11yRender(blocked).Text);
+        string spoken = SlateUniffiMethods.A11yRender(blocked).Text;
+        Assert.Equal(spoken, tab.Status);
+        AssertNoDiagnostics(spoken);
         AssertNoDiagnostics(tab.Status);
     }
 
@@ -314,6 +325,7 @@ public sealed class RecoveryAnnouncementTests
         internal IEnumerable<RenderedAnnouncement> Rendered => Announced.Select(SlateUniffiMethods.A11yRender);
         internal WorkspaceViewModel Workspace { get; }
         internal string NotePath => Path.Combine(_fixture.Root, "note0.md");
+        internal VaultSession Session => _session;
         internal Host()
         {
             _session = VaultSession.OpenFilesystem(_fixture.Root);

@@ -122,7 +122,7 @@ public sealed class A11yCorpusCensus
         new A11yEvent.EmbedPreviewUnavailable(Target: "recipes^step-3", Reason: new EmbedUnresolvedReason.BlockNotFound(TargetPath: "recipes.md", BlockId: "step-3")),
         new A11yEvent.EmbedPreviewUnavailable(Target: "Deep", Reason: new EmbedUnresolvedReason.DepthLimitReached()),
         new A11yEvent.EmbedPreviewUnavailable(Target: "Locked", Reason: new EmbedUnresolvedReason.ReadError(Message: "Access is denied. (os error 5)")),
-        new A11yEvent.EmbedPreviewUnavailable(Target: "Target", Reason: null),
+        new A11yEvent.EmbedPreviewUnavailable(Target: "Target", Reason: new EmbedUnresolvedReason.ReadError(Message: "sqlite error: database disk image is malformed")),
         new A11yEvent.CitationSummaryShown(Citations: 0, Sources: 0),
         new A11yEvent.CitationSummaryShown(Citations: 1, Sources: 2),
         new A11yEvent.CitationSummaryShown(Citations: 2, Sources: 1),
