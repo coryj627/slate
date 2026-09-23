@@ -8731,20 +8731,22 @@ public sealed partial class ShellAccessibilityTests
 
     /// <summary>
     /// W7-7 R-12 (#1256; owner decision OD-3; the NVDA pass's F13): the
-    /// KEYBOARD opens the CARD's menu — Shift+F10 on a FRESH outline row
-    /// (never asked for a menu, and not the first) and the Applications
-    /// key on the visual board — and never the workspace tab's (Duplicate
-    /// Tab … Close Pane). The row's menu used to be assigned inside the
-    /// opening event, too late for the request that asked, and the board
-    /// had none, so both requests climbed to the tab's.
+    /// KEYBOARD opens the CARD's menu — BOTH keys, Shift+F10 and the
+    /// Applications key, on BOTH surfaces: each on a FRESH outline row
+    /// (never asked for a menu, and not the first), and each on the visual
+    /// board's seated card (not the first) — and never the workspace tab's
+    /// (Duplicate Tab … Close Pane). The row's menu used to be assigned
+    /// inside the opening event, too late for the request that asked, and
+    /// the board had none, so both requests climbed to the tab's. Every
+    /// key is its own leg: a route broken for one key alone fails that leg.
     /// </summary>
     /// <remarks>
     /// <para>
     /// The witness DISCRIMINATES targeting: the labels are the same on
     /// every card, so a menu built for the wrong card would pass a label
-    /// check. Toggle Mark is invoked from each menu, and exactly the
-    /// focused row, then exactly the seated card, gains its mark — the
-    /// first card, and the other card, untouched.
+    /// check. Toggle Mark is invoked from each of the four menus, and the
+    /// outline then reads exactly those four cards marked — the first
+    /// card, and every other card, untouched.
     /// </para>
     /// <para>
     /// A ContextMenu is its own popup HWND, so it is read from the desktop,
@@ -8801,70 +8803,81 @@ public sealed partial class ShellAccessibilityTests
                 window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
             AutomationElement[] rows = WaitForTreeItems(automation, tree, 5);
 
-            // ---- The outline: Shift+F10 on a fresh row that is not the first.
-            AutomationElement firstRow = rows[0];
-            AutomationElement evidenceRow = rows.FirstOrDefault(row => row.Properties.Name.Value
-                    .StartsWith("Text card \"Evidence so far\"", StringComparison.Ordinal))
-                ?? throw new Xunit.Sdk.XunitException(
-                    "the \"Evidence so far\" row is absent from the outline.");
-            Assert.NotEqual(firstRow.Properties.Name.Value, evidenceRow.Properties.Name.Value);
-            ReassertForegroundForAChord(window);
-            evidenceRow.Focus();
-            AssertEventuallyFocused(evidenceRow, "the fresh outline row never took keyboard focus");
-            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F10);
-            AssertTheCardMenuOpened(
-                WaitForCardOrTabMenu(automation, process.Id), "Shift+F10 on a fresh outline row");
-            InvokeCardMenuRow(automation, process.Id, "Toggle Mark");
-            string[] marked = [];
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        marked = MarkedRows(automation, tree);
-                        return marked.SequenceEqual(["Text card \"Evidence so far\""]);
-                    },
-                    TimeSpan.FromSeconds(10)),
-                "Toggle Mark from the fresh row's menu marked [" + string.Join(", ", marked)
-                + "], not exactly the row it opened on.");
+            // ---- The outline: BOTH keys, each on a FRESH row that is not
+            // the first — never asked for a menu before, which is the case
+            // the old opening-time assignment failed.
+            string firstRow = rows[0].Properties.Name.Value;
+            foreach ((string name, string leg, Action press) in new (string, string, Action)[]
+            {
+                ("Text card \"Evidence so far\"", "Shift+F10 on a fresh outline row",
+                    () => PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F10)),
+                ("Text card \"Unfiled thought\"", "the Applications key on a fresh outline row",
+                    () => PressKey(VirtualKeyShort.APPS)),
+            })
+            {
+                AutomationElement row = tree
+                    .FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                    .FirstOrDefault(candidate => candidate.Properties.Name.Value.StartsWith(name, StringComparison.Ordinal))
+                    ?? throw new Xunit.Sdk.XunitException($"premise ({leg}): the {name} row is absent from the outline.");
+                Assert.NotEqual(firstRow, row.Properties.Name.Value);
+                ReassertForegroundForAChord(window);
+                row.Focus();
+                AssertEventuallyFocused(row, $"premise ({leg}): the row never took keyboard focus");
+                press();
+                AssertTheCardMenuOpened(WaitForCardOrTabMenu(automation, process.Id, leg), leg);
+                InvokeCardMenuRow(automation, process.Id, "Toggle Mark");
+            }
+            AssertExactlyTheseRowsAreMarked(
+                automation,
+                tree,
+                ["Text card \"Evidence so far\"", "Text card \"Unfiled thought\""],
+                "Toggle Mark from the two fresh rows' menus");
 
-            // ---- The board: the Applications key on a seated card that is not the first.
+            // ---- The board: BOTH keys, each on a seated card that is not
+            // the first. The seat the outline left is "Unfiled thought";
+            // Up reads back to "Image: architecture diagram" and then to
+            // "jsoncanvas.org" (R-12's reading-order move). Their marks are
+            // read back from the OUTLINE rather than from the cards' peers:
+            // the board's peer tree is not refreshed after an install, so a
+            // peer outside the board's first child list cannot be reached
+            // through UIA.
             AutomationElement visualChoice = WaitForElement(
                 window, "CanvasShowVisual", TimeSpan.FromSeconds(10));
             visualChoice.AsRadioButton().IsChecked = true;
             AutomationElement board = WaitForElement(
                 window, "CanvasVisualBoard", TimeSpan.FromSeconds(20));
-            ReassertForegroundForAChord(window);
-            board.Focus();
-            AssertEventuallyFocused(board, "the visual board never took the keys for its menu");
-            // The seat the outline leg left is "Evidence so far"; Down reads
-            // on to "canvas research" (R-12's reading-order move), which is
-            // not the first card. Its mark is read back from the OUTLINE
-            // below rather than from the card's peer: the board's peer tree
-            // is not refreshed after an install, so a peer for a card outside
-            // the board's first child list cannot be reached through UIA.
-            PressKey(VirtualKeyShort.DOWN);
-            PressKey(VirtualKeyShort.APPS);
-            AssertTheCardMenuOpened(
-                WaitForCardOrTabMenu(automation, process.Id), "the Applications key on the board");
-            InvokeCardMenuRow(automation, process.Id, "Toggle Mark");
+            foreach ((string leg, Action press) in new (string, Action)[]
+            {
+                ("Shift+F10 on the board's seated card",
+                    () => PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F10)),
+                ("the Applications key on the board's seated card",
+                    () => PressKey(VirtualKeyShort.APPS)),
+            })
+            {
+                ReassertForegroundForAChord(window);
+                board.Focus();
+                AssertEventuallyFocused(board, $"premise ({leg}): the visual board never took the keys");
+                PressKey(VirtualKeyShort.UP);
+                press();
+                AssertTheCardMenuOpened(WaitForCardOrTabMenu(automation, process.Id, leg), leg);
+                InvokeCardMenuRow(automation, process.Id, "Toggle Mark");
+            }
 
-            // The outline reads every card's mark: exactly the focused row's
-            // and the seated card's — never the first card, never another.
+            // The outline reads every card's mark: exactly the two focused
+            // rows and the two seated cards — never the first card, never
+            // another.
             WaitForElement(window, "CanvasShowOutline", TimeSpan.FromSeconds(10))
                 .AsRadioButton().IsChecked = true;
-            AutomationElement outline = WaitForElement(
-                window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        marked = MarkedRows(automation, outline);
-                        return marked.SequenceEqual(
-                            ["File card \"canvas research\"", "Text card \"Evidence so far\""]);
-                    },
-                    TimeSpan.FromSeconds(10)),
-                "the marks are [" + string.Join(", ", marked) + "], not exactly the focused row's "
-                + "and the seated card's: a keyboard menu acted on a card it was not opened for.");
+            AssertExactlyTheseRowsAreMarked(
+                automation,
+                WaitForElement(window, "CanvasOutlineTree", TimeSpan.FromSeconds(20)),
+                [
+                    "Image card \"Image: architecture diagram\"",
+                    "Link card \"jsoncanvas.org\"",
+                    "Text card \"Evidence so far\"",
+                    "Text card \"Unfiled thought\"",
+                ],
+                "Toggle Mark from the rows' and the seated cards' menus");
         }
         finally
         {
@@ -8878,6 +8891,24 @@ public sealed partial class ShellAccessibilityTests
             {
             }
         }
+    }
+
+    /// <summary>R-12: exactly these outline rows carry the mark — the cards
+    /// the keyboard menus were opened for, and no other.</summary>
+    private static void AssertExactlyTheseRowsAreMarked(
+        UIA3Automation automation, AutomationElement outline, string[] expected, string leg)
+    {
+        string[] marked = [];
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    marked = MarkedRows(automation, outline);
+                    return marked.SequenceEqual(expected);
+                },
+                TimeSpan.FromSeconds(10)),
+            $"{leg} marked [{string.Join(", ", marked)}], not exactly "
+            + $"[{string.Join(", ", expected)}]: a keyboard menu acted on a card it was not opened for.");
     }
 
     /// <summary>The outline rows whose status carries the mark, by name,
@@ -8909,7 +8940,7 @@ public sealed partial class ShellAccessibilityTests
     /// from the DESKTOP, filtered to this process, because a ContextMenu is
     /// its own popup HWND (<see cref="FindRowActionItems"/>'s discipline).
     /// </summary>
-    private static string[] WaitForCardOrTabMenu(UIA3Automation automation, int processId)
+    private static string[] WaitForCardOrTabMenu(UIA3Automation automation, int processId, string leg)
     {
         string[] names = [];
         Assert.True(
@@ -8920,7 +8951,7 @@ public sealed partial class ShellAccessibilityTests
                     return names.Length > 0;
                 },
                 TimeSpan.FromSeconds(15)),
-            "the keyboard request opened no context menu at all");
+            $"{leg}: the keyboard request opened no context menu at all");
         return names;
     }
 

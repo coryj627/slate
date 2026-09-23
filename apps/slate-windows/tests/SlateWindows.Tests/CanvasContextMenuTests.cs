@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using SlateWindows.Canvas;
 using uniffi.slate_uniffi;
+using Verb = SlateWindows.Canvas.CanvasContextVerb;
 
 namespace SlateWindows.Tests;
 
@@ -197,6 +198,115 @@ public sealed class CanvasContextMenuTests
                 CanvasRendererView.BuildMenuFromPlan(target, _ => { }));
         }
     });
+
+    /// <summary>
+    /// R-12 (OD-3), contract 34 E17's applicable-verb inventory: the
+    /// board's card menu per node kind, in and out of a group, pinned
+    /// INDEPENDENTLY of the plan — every row written out, in mac's outline
+    /// order (<c>CanvasOutlineView.swift</c>, IG2-29) — and nothing for a
+    /// connection, which a board request never targets.
+    /// </summary>
+    /// <remarks>
+    /// The plan DEFINES the renderer's projection, so the consumer census
+    /// (<see cref="TheBoardMenuEqualsThePlan"/>) follows a projection that
+    /// lost a verb straight down with it: a board menu of two rows would
+    /// equal a two-row plan. This table is the inventory itself, spelled
+    /// out rather than derived, and a missing or extra verb fails by name.
+    /// </remarks>
+    [Fact]
+    public void TheBoardsCardMenuIsTheApplicableVerbInventoryPerKind()
+    {
+        var inventory = new (string Kind, bool InGroup, Verb[] Verbs)[]
+        {
+            ("text", false,
+            [
+                Verb.Open, Verb.EditCard, Verb.ConvertToNote, Verb.CreateConnectedCard, Verb.Duplicate,
+                Verb.ToggleMark, Verb.ConnectTo, Verb.SetColor, Verb.MoveIntoGroup, Verb.Delete,
+            ]),
+            ("text", true,
+            [
+                Verb.Open, Verb.EditCard, Verb.ConvertToNote, Verb.CreateConnectedCard, Verb.Duplicate,
+                Verb.ToggleMark, Verb.ConnectTo, Verb.SetColor, Verb.MoveIntoGroup, Verb.RemoveFromGroup,
+                Verb.Delete,
+            ]),
+            ("file", false,
+            [
+                Verb.Open, Verb.CreateConnectedCard, Verb.Duplicate, Verb.LocateFile,
+                Verb.ToggleMark, Verb.ConnectTo, Verb.SetColor, Verb.MoveIntoGroup, Verb.Delete,
+            ]),
+            ("file", true,
+            [
+                Verb.Open, Verb.CreateConnectedCard, Verb.Duplicate, Verb.LocateFile,
+                Verb.ToggleMark, Verb.ConnectTo, Verb.SetColor, Verb.MoveIntoGroup, Verb.RemoveFromGroup,
+                Verb.Delete,
+            ]),
+            ("image", false,
+            [
+                Verb.Open, Verb.CreateConnectedCard, Verb.Duplicate, Verb.LocateFile,
+                Verb.ToggleMark, Verb.ConnectTo, Verb.SetColor, Verb.MoveIntoGroup, Verb.Delete,
+            ]),
+            ("image", true,
+            [
+                Verb.Open, Verb.CreateConnectedCard, Verb.Duplicate, Verb.LocateFile,
+                Verb.ToggleMark, Verb.ConnectTo, Verb.SetColor, Verb.MoveIntoGroup, Verb.RemoveFromGroup,
+                Verb.Delete,
+            ]),
+            ("link", false,
+            [
+                Verb.Open, Verb.CreateConnectedCard, Verb.Duplicate,
+                Verb.ToggleMark, Verb.ConnectTo, Verb.SetColor, Verb.MoveIntoGroup, Verb.Delete,
+            ]),
+            ("link", true,
+            [
+                Verb.Open, Verb.CreateConnectedCard, Verb.Duplicate,
+                Verb.ToggleMark, Verb.ConnectTo, Verb.SetColor, Verb.MoveIntoGroup, Verb.RemoveFromGroup,
+                Verb.Delete,
+            ]),
+            ("group", false,
+            [
+                Verb.Open, Verb.CreateConnectedCard, Verb.Duplicate, Verb.RenameGroup,
+                Verb.ToggleMark, Verb.ConnectTo, Verb.SetColor, Verb.MoveIntoGroup, Verb.Ungroup,
+            ]),
+            ("group", true,
+            [
+                Verb.Open, Verb.CreateConnectedCard, Verb.Duplicate, Verb.RenameGroup,
+                Verb.ToggleMark, Verb.ConnectTo, Verb.SetColor, Verb.MoveIntoGroup, Verb.RemoveFromGroup,
+                Verb.Ungroup,
+            ]),
+        };
+        // The table covers every kind core names, in and out of a group.
+        Assert.Equal(
+            CanvasContextMenuPlan.NodeKinds.Order(StringComparer.Ordinal),
+            inventory.Select(entry => entry.Kind).Distinct().Order(StringComparer.Ordinal));
+        Assert.Equal(CanvasContextMenuPlan.NodeKinds.Length * 2, inventory.Length);
+
+        var failures = new List<string>();
+        foreach ((string kind, bool inGroup, Verb[] verbs) in inventory)
+        {
+            Verb[] board =
+            [
+                .. CanvasContextMenuPlan.RowsFor(
+                    CanvasContextSurface.Renderer, new CanvasContextTarget.Node("n1", kind, inGroup))
+                    .Select(row => row.Verb),
+            ];
+            if (!board.SequenceEqual(verbs))
+            {
+                failures.Add(
+                    $"{kind}{(inGroup ? " in a group" : string.Empty)}: missing ["
+                    + string.Join(", ", verbs.Except(board)) + "], extra ["
+                    + string.Join(", ", board.Except(verbs)) + "], order ["
+                    + string.Join(", ", board) + "]");
+            }
+        }
+        Assert.True(
+            CanvasContextMenuPlan.RowsFor(
+                CanvasContextSurface.Renderer, new CanvasContextTarget.Connection("n1", Captured)).IsEmpty,
+            "the board placed rows on a connection, which none of its requests can target.");
+        Assert.True(
+            failures.Count == 0,
+            "the board's card menu is not the applicable-verb inventory (contract 34 E17):\n"
+            + string.Join("\n", failures));
+    }
 
     /// <summary>OD-3 (R-12; G2D-12 lifted, contract 34 E17's "renderer
     /// card"): the visual board carries the SAME derived card menu as the
