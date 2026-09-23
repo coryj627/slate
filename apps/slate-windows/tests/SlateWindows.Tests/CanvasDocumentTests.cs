@@ -3686,20 +3686,33 @@ public sealed class CanvasDocumentTests : IDisposable
     /// shutdown can interleave at all, so this fact only exists in the
     /// production mode.
     /// </summary>
+    /// <remarks>
+    /// The body is PARKED behind a work gate until the shutdown has
+    /// landed, so "in flight" is arranged rather than hoped for. Called
+    /// back to back, Load and Shutdown left the body free to run first:
+    /// a test thread descheduled between them watched the whole load
+    /// publish before the teardown began (CI, 2026-09-22, the retarget
+    /// fact below). The interleavings INSIDE a running delivery are the
+    /// pipeline's barrier facts (ADeliveryRacingTeardownIsSafeInBothOrders).
+    /// </remarks>
     [Fact]
     public async Task AShutdownDuringAnInFlightLoadNeverPublishesAndClosesTheHandle()
     {
         CanvasDocumentViewModel document = NewAsyncDocument("board.canvas");
         int published = 0;
         document.OutlinePublished += (_, _) => published++;
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        document.GateWorkOn(parked.Task);
 
         document.Load();
         document.Shutdown();
+        parked.SetResult();
         await QuiesceAsync(document);
         await document.WhenHandleClosed();
 
-        // Either the body bailed at its generation check or its publish
-        // did; what must never happen is a Ready surface after teardown.
+        // The parked body is refused when the gate opens (the scheduler's
+        // post-wait check); what must never happen is a Ready surface
+        // after teardown.
         Assert.NotEqual(CanvasLoadState.Ready, document.State);
         Assert.Equal(0, published);
         Assert.Empty(document.Outline);
@@ -3744,8 +3757,14 @@ public sealed class CanvasDocumentTests : IDisposable
         CanvasDocumentViewModel stale = NewAsyncDocument("board.canvas");
         int stalePublished = 0;
         stale.OutlinePublished += (_, _) => stalePublished++;
+        // Parked until the retarget's shutdown has landed (see the
+        // teardown fact above): unparked, a descheduled test thread let
+        // this load publish first, and CI failed on it.
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        stale.GateWorkOn(parked.Task);
         stale.Load();
         stale.Shutdown();
+        parked.SetResult();
 
         CanvasDocumentViewModel fresh = NewAsyncDocument("skipped.canvas");
         int freshPublished = 0;
