@@ -193,6 +193,7 @@ public sealed class A11yCorpusCensus
         new A11yEvent.FileListCount(Count: 12, ScopeTag: null),
         new A11yEvent.FileListCount(Count: 1, ScopeTag: "two words"),
         new A11yEvent.FileListCount(Count: 0, ScopeTag: "project alpha"),
+        new A11yEvent.SidebarFilterCleared(),
         new A11yEvent.ItemsSelected(Count: 4),
         new A11yEvent.ItemsSelected(Count: 1),
         new A11yEvent.NoItemsSelected(),

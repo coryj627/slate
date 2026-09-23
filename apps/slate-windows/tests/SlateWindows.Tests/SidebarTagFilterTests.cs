@@ -142,6 +142,73 @@ public sealed class SidebarTagFilterTests
             "File list, 1 item. Filtered by tag blue sky.");
     }
 
+    /// <summary>
+    /// Only an EMPTY field is the user's clear (codex PR 2 round 1). A
+    /// whitespace-only edit — a leading space before the words — keeps
+    /// the scope: core runs the trimmed query, so the results stay scoped
+    /// and the words then narrow within it, never across the vault.
+    /// </summary>
+    [Fact]
+    public async Task ActivateTag_ScopeSurvivesAWhitespaceOnlyEdit()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "tag-scope-space");
+        Write(fixture, "spaced.md", "---\ntags: [\"two words\"]\n---\n\n# Spaced\n");
+        Write(fixture, "spaced note.md", "---\ntags: [\"two words\"]\n---\n\n# Second\n");
+        Write(fixture, "note.md", "---\ntags: [two]\n---\n\n# Outside the scope\n");
+        using VaultSession session = OpenScanned(fixture);
+        FilesSidebarViewModel sidebar = await NewSidebar(session, fixture, _ => { });
+        sidebar.ActivateTag("two words");
+        await sidebar.FilterCompletion;
+
+        sidebar.FilterText = " ";
+        Assert.Equal("two words", sidebar.ScopeTag);
+        Assert.True(sidebar.IsFilterActive);
+        await sidebar.FilterCompletion;
+        Assert.Equal(new[] { "spaced.md", "spaced note.md" }, Paths(sidebar));
+
+        sidebar.FilterText = " note";
+        Assert.Equal("two words", sidebar.ScopeTag);
+        await sidebar.FilterCompletion;
+        Assert.Equal(new[] { "spaced note.md" }, Paths(sidebar));
+    }
+
+    /// <summary>
+    /// Clear Sidebar Filter is seen and heard (codex PR 2 round 1). With
+    /// the text and scope gone no filter run follows, so the status line
+    /// kept the cleared filter's summary and nothing was said. Now the
+    /// status shows core's SidebarFilterCleared sentence and that event is
+    /// spoken exactly once — and, the listener having heard the filter
+    /// end, the same scope activated again speaks its count again.
+    /// </summary>
+    [Fact]
+    public async Task ClearFilterCommand_ShowsAndSpeaksTheClearOnce()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "tag-scope-clear");
+        Write(fixture, "spaced.md", "---\ntags: [\"two words\"]\n---\n\n# Spaced\n");
+        Write(fixture, "spaced note.md", "---\ntags: [\"two words\"]\n---\n\n# Second\n");
+        using VaultSession session = OpenScanned(fixture);
+        var announced = new List<A11yEvent>();
+        FilesSidebarViewModel sidebar = await NewSidebar(session, fixture, announced.Add);
+        sidebar.ActivateTag("two words");
+        await sidebar.FilterCompletion;
+        Assert.Equal("2 results for #two words.", sidebar.Status);
+        int before = announced.Count;
+
+        sidebar.ClearFilterCommand.Execute(null);
+        await sidebar.FilterCompletion;
+
+        A11yEvent cleared = Assert.Single(announced.Skip(before));
+        Assert.IsType<A11yEvent.SidebarFilterCleared>(cleared);
+        Assert.Equal("Filter cleared.", SlateUniffiMethods.A11yRender(cleared).Text);
+        Assert.Equal("Filter cleared.", sidebar.Status);
+        Assert.Empty(sidebar.FilterResults);
+
+        sidebar.ActivateTag("two words");
+        await sidebar.FilterCompletion;
+        AssertSpoke(announced, new A11yEvent.FileListCount(2, "two words"),
+            "File list, 2 items. Filtered by tag two words.");
+    }
+
     /// <summary>The last announcement is the typed event carrying the
     /// scope, and core's rendering of it names the tag — the text a
     /// screen reader hears, not a host composition.</summary>

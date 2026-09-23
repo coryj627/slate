@@ -8583,6 +8583,8 @@ pub enum A11yEvent {
         count: u32,
         scope_tag: Option<String>,
     },
+    /// W7-7 (#1250): Clear Sidebar Filter emptied the text and the scope.
+    SidebarFilterCleared,
     ItemsSelected {
         count: u32,
     },
@@ -10367,6 +10369,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::CitationsCount { count } => C::CitationsCount { count },
             F::OutlineCount { count } => C::OutlineCount { count },
             F::FileListCount { count, scope_tag } => C::FileListCount { count, scope_tag },
+            F::SidebarFilterCleared => C::SidebarFilterCleared,
             F::ItemsSelected { count } => C::ItemsSelected { count },
             F::NoItemsSelected => C::NoItemsSelected,
             F::TreeFolderSelected { name } => C::TreeFolderSelected { name },
