@@ -290,6 +290,81 @@
     "text": "Showing notes."
   },
   {
+    "event": "CitationPopoverShown { speech: \"Citation: Mack et al. 2021, page 42\" }",
+    "priority": "high",
+    "text": "Citation: Mack et al. 2021, page 42"
+  },
+  {
+    "event": "CitationPopoverShown { speech: \"Unresolved citation: smith2020\" }",
+    "priority": "high",
+    "text": "Citation. Unresolved citation: smith2020"
+  },
+  {
+    "event": "EmbedPreviewShown { target: \"Whipped cream\", title: \"Embedded note: recipes/Whipped cream.md\" }",
+    "priority": "high",
+    "text": "Embed preview for Whipped cream. Embedded note: recipes/Whipped cream.md."
+  },
+  {
+    "event": "EmbedPreviewUnavailable { target: \"Target\", reason: Some(TargetNotFound { target: \"Target\" }) }",
+    "priority": "high",
+    "text": "Embed preview for Target. Target not found: Target."
+  },
+  {
+    "event": "EmbedPreviewUnavailable { target: \"recipes#Glaze\", reason: Some(HeadingNotFound { target_path: \"recipes.md\", heading: \"Glaze\" }) }",
+    "priority": "high",
+    "text": "Embed preview for recipes#Glaze. Heading not found: Glaze in recipes.md."
+  },
+  {
+    "event": "EmbedPreviewUnavailable { target: \"recipes^step-3\", reason: Some(BlockNotFound { target_path: \"recipes.md\", block_id: \"step-3\" }) }",
+    "priority": "high",
+    "text": "Embed preview for recipes^step-3. Block not found: step-3 in recipes.md."
+  },
+  {
+    "event": "EmbedPreviewUnavailable { target: \"Deep\", reason: Some(DepthLimitReached) }",
+    "priority": "high",
+    "text": "Embed preview for Deep. Nested embed depth limit reached."
+  },
+  {
+    "event": "EmbedPreviewUnavailable { target: \"Locked\", reason: Some(ReadError { message: \"Access is denied. (os error 5)\" }) }",
+    "priority": "high",
+    "text": "Embed preview for Locked. Could not read embed: Access is denied. (os error 5)."
+  },
+  {
+    "event": "EmbedPreviewUnavailable { target: \"Target\", reason: None }",
+    "priority": "high",
+    "text": "Embed preview for Target. The embedded content could not be resolved."
+  },
+  {
+    "event": "CitationSummaryShown { citations: 0, sources: 0 }",
+    "priority": "high",
+    "text": "Citation summary. 0 citations referencing 0 unique sources."
+  },
+  {
+    "event": "CitationSummaryShown { citations: 1, sources: 2 }",
+    "priority": "high",
+    "text": "Citation summary. 1 citation referencing 2 unique sources."
+  },
+  {
+    "event": "CitationSummaryShown { citations: 2, sources: 1 }",
+    "priority": "high",
+    "text": "Citation summary. 2 citations referencing 1 unique source."
+  },
+  {
+    "event": "CitationDetailsShown { title: \"VizWiz: Nearly Real-Time Answers to Visual Questions\" }",
+    "priority": "high",
+    "text": "Citation expanded. VizWiz: Nearly Real-Time Answers to Visual Questions."
+  },
+  {
+    "event": "CitationDetailsShown { title: \"\" }",
+    "priority": "high",
+    "text": "Citation expanded."
+  },
+  {
+    "event": "CitationDetailsUnresolved { key: \"smith2020\" }",
+    "priority": "high",
+    "text": "Unresolved citation: smith2020. This key isn't in any bibliography source."
+  },
+  {
     "event": "TaskToggleUnsaved { filename: \"notes.md\" }",
     "priority": "high",
     "text": "Cannot toggle task. The editor has unsaved changes in notes.md. Save the note first."
@@ -323,6 +398,16 @@
     "event": "NoteSaveBlocked { filename: \"notes.md\", detail: \"modified externally\" }",
     "priority": "high",
     "text": "Save blocked. Could not save notes.md: modified externally. Your edits remain in the editor."
+  },
+  {
+    "event": "NoteSaveBlocked { filename: \"notes.md\", detail: \"Something named notes.md already exists there.\" }",
+    "priority": "high",
+    "text": "Save blocked. Could not save notes.md: Something named notes.md already exists there. Your edits remain in the editor."
+  },
+  {
+    "event": "NoteSaveConflict { filename: \"notes.md\" }",
+    "priority": "high",
+    "text": "Save blocked. notes.md was modified externally. Your edits remain in the editor."
   },
   {
     "event": "RestoredVersionFrom { formatted_date: \"July 19, 2026 at 9:41 AM\" }",

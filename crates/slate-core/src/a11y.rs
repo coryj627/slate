@@ -57,6 +57,7 @@
 //! identically on both platforms (`Return`, `Escape`) stay literal in
 //! the template — they are not chords.
 
+use crate::EmbedUnresolvedReason;
 use crate::canvas::CanvasColor;
 use crate::canvas::model::EdgeDirection;
 use crate::canvas::placement::RelativeDesc;
@@ -735,6 +736,55 @@ pub enum A11yEvent {
         display_name: String,
     },
 
+    // --- Popover and sheet outcomes (W7-7, #1251) ---
+    // A screen reader does not speak a pane's name when focus lands on a
+    // control inside it, so an editor popover or a citation sheet that
+    // opens on its Close button says its outcome as an announcement.
+    // The Windows host posts these; mac's popovers and sheets speak their
+    // accessibility labels on appear and construct none of them.
+    /// An activated citation popover. `speech` is the preview's speech as
+    /// it arrived (core's rendered citation speech, or the unstyled
+    /// placeholder), never host-prefixed: the sentence names itself a
+    /// citation exactly once, verbatim when the speech already begins
+    /// with "Citation" and prefixed otherwise. The popover's UIA name is
+    /// rendered from this same event, so the two cannot drift.
+    CitationPopoverShown {
+        speech: String,
+    },
+    /// An embed preview's result landed; `title` is the resolved card's
+    /// title ("Embedded note: …"). Announced when the result lands, not
+    /// at open, where the only outcome is "Loading".
+    EmbedPreviewShown {
+        target: String,
+        title: String,
+    },
+    /// An embed preview resolved to nothing. `reason` is the resolver's
+    /// SEMANTIC reason, not its card's text: core renders the sentence
+    /// for every case, so no host wording reaches speech. `None` is a
+    /// resolution that failed outright or came back in a shape the host
+    /// does not render.
+    EmbedPreviewUnavailable {
+        target: String,
+        reason: Option<EmbedUnresolvedReason>,
+    },
+    /// The citation summary sheet opened on its counts.
+    CitationSummaryShown {
+        citations: u32,
+        sources: u32,
+    },
+    /// The citation details sheet opened on a resolved citation or a
+    /// bibliography entry: the expanded entry's title (empty for none).
+    CitationDetailsShown {
+        title: String,
+    },
+    /// The citation details sheet opened on a key no bibliography holds:
+    /// there is nothing expanded, so it says so. The sheet's own spoken
+    /// sentence (mac `CitationPopover`'s label, verbatim), moved into
+    /// core so the sheet's name and its announcement are one rendering.
+    CitationDetailsUnresolved {
+        key: String,
+    },
+
     // --- Tasks ---
     TaskToggleUnsaved {
         filename: String,
@@ -759,6 +809,15 @@ pub enum A11yEvent {
     NoteSaveBlocked {
         filename: String,
         detail: String,
+    },
+    /// A write conflict at the Windows save boundary (W7-7, #1249;
+    /// contract 38 D-10 as amended): mac's `SaveConflict` sentence
+    /// without its dialog clause, because Windows has no resolve dialog
+    /// and the edits stay in the editor. Carrying the conflict as a
+    /// `NoteSaveBlocked` detail read out the binding's error text — two
+    /// content hashes and a modification time.
+    NoteSaveConflict {
+        filename: String,
     },
 
     // --- History restore (O-3) ---
@@ -1694,6 +1753,7 @@ impl A11yEvent {
         use A11yEvent::*;
         match self {
             NoteSaveBlocked { .. }
+            | NoteSaveConflict { .. }
             | FileReopenFailed { .. }
             | BasesDashboardLoadFailed { .. }
             | CommandPaletteNeedsVault
@@ -1713,6 +1773,14 @@ impl A11yEvent {
             | PropertyLoadCurrentFailed { .. }
             | AddPropertySheetShown
             | BulkRenameSheetShown
+            // Opening outcomes, at the sheet-shown pair's tier: each one
+            // answers the keystroke that opened its surface (#1251).
+            | CitationPopoverShown { .. }
+            | EmbedPreviewShown { .. }
+            | EmbedPreviewUnavailable { .. }
+            | CitationSummaryShown { .. }
+            | CitationDetailsShown { .. }
+            | CitationDetailsUnresolved { .. }
             | RenameReloadFailed { .. }
             | RenameFailed { .. }
             | RestoredVersionFrom { .. }
@@ -1858,6 +1926,37 @@ impl A11yEvent {
             OpenedFile { filename } => format!("Opened {filename}."),
             ShowingNote { display_name } => format!("Showing {display_name}."),
 
+            CitationPopoverShown { speech } => {
+                // Core's citation speech usually names itself ("Citation:
+                // Mack et al. 2021"); an unresolved key's does not
+                // ("Unresolved citation: smith2020"). One prefix, never
+                // two, and never the host's to add.
+                if speech
+                    .get(..8)
+                    .is_some_and(|head| head.eq_ignore_ascii_case("citation"))
+                {
+                    speech.clone()
+                } else {
+                    format!("Citation. {speech}")
+                }
+            }
+            EmbedPreviewShown { target, title } => {
+                lead_then_sentence(&format!("Embed preview for {target}."), title)
+            }
+            EmbedPreviewUnavailable { target, reason } => lead_then_sentence(
+                &format!("Embed preview for {target}."),
+                &embed_unavailable_reason(reason.as_ref()),
+            ),
+            CitationSummaryShown { citations, sources } => format!(
+                "Citation summary. {citations} {} referencing {sources} unique {}.",
+                plural(*citations, "citation", "citations"),
+                plural(*sources, "source", "sources")
+            ),
+            CitationDetailsShown { title } => lead_then_sentence("Citation expanded.", title),
+            CitationDetailsUnresolved { key } => {
+                format!("Unresolved citation: {key}. This key isn't in any bibliography source.")
+            }
+
             TaskToggleUnsaved { filename } => format!(
                 "Cannot toggle task. The editor has unsaved changes in {filename}. \
                  Save the note first."
@@ -1869,12 +1968,19 @@ impl A11yEvent {
             TasksFilterSet { filter_name } => format!("Filter set to {filter_name}."),
 
             NoteSaved { filename } => format!("Saved {filename}."),
+            // The detail closes its own sentence (W7-7, #1249): an error's
+            // text often ends in a period already, and "…there.. Your
+            // edits" is not a sentence either.
             NoteSaveBlocked { filename, detail } => format!(
-                "Save blocked. Could not save {filename}: {detail}. Your edits remain in the editor."
+                "{} Your edits remain in the editor.",
+                lead_then_sentence(&format!("Save blocked. Could not save {filename}:"), detail)
             ),
             SaveConflict { filename } => {
                 format!("Save blocked. {filename} was modified externally. Resolve in the dialog.")
             }
+            NoteSaveConflict { filename } => format!(
+                "Save blocked. {filename} was modified externally. Your edits remain in the editor."
+            ),
 
             RestoredVersionFrom { formatted_date } => {
                 format!("Restored version from {formatted_date}.")
@@ -2961,6 +3067,51 @@ fn contains_field(haystack: &str, field: &str) -> bool {
     })
 }
 
+/// `lead`, then carried text closed as a sentence (W7-7, #1251). An
+/// embed resolver's reason arrives with or without its own terminal
+/// punctuation ("Target not found: X" has none, the depth notice ends in
+/// a period), and so does an authored title, so the template closes the
+/// sentence only when the text has not: never "..", and the lead alone
+/// for an empty text rather than a dangling separator.
+fn lead_then_sentence(lead: &str, text: &str) -> String {
+    let text = text.trim();
+    if text.is_empty() {
+        lead.to_owned()
+    } else if text.ends_with(['.', '?', '!', '…']) {
+        format!("{lead} {text}")
+    } else {
+        format!("{lead} {text}.")
+    }
+}
+
+/// Why an embed preview has nothing to show, from the resolver's own
+/// reason (W7-7, #1251). The wording is the preview card's shipped copy,
+/// moved here so the host passes the reason and never a sentence; the
+/// match is exhaustive, so a reason core gains cannot reach speech
+/// unphrased.
+fn embed_unavailable_reason(reason: Option<&EmbedUnresolvedReason>) -> String {
+    match reason {
+        Some(EmbedUnresolvedReason::TargetNotFound { target }) => {
+            format!("Target not found: {target}")
+        }
+        Some(EmbedUnresolvedReason::HeadingNotFound {
+            target_path,
+            heading,
+        }) => format!("Heading not found: {heading} in {target_path}"),
+        Some(EmbedUnresolvedReason::BlockNotFound {
+            target_path,
+            block_id,
+        }) => format!("Block not found: {block_id} in {target_path}"),
+        Some(EmbedUnresolvedReason::DepthLimitReached) => {
+            "Nested embed depth limit reached.".to_owned()
+        }
+        Some(EmbedUnresolvedReason::ReadError { message }) => {
+            format!("Could not read embed: {message}")
+        }
+        None => "The embedded content could not be resolved.".to_owned(),
+    }
+}
+
 /// en-US count noun (this vocabulary is V1 English; #264 owns l10n).
 /// Delegates so the singular-at-exactly-one rule has one definition;
 /// the count is interpolated by the caller and stays ungrouped here.
@@ -3640,6 +3791,76 @@ pub fn corpus() -> Vec<A11yEvent> {
         ShowingNote {
             display_name: "notes".into(),
         },
+        // Both prefix arms: speech that already names the citation, and
+        // an unresolved key's speech that does not.
+        CitationPopoverShown {
+            speech: "Citation: Mack et al. 2021, page 42".into(),
+        },
+        CitationPopoverShown {
+            speech: "Unresolved citation: smith2020".into(),
+        },
+        EmbedPreviewShown {
+            target: "Whipped cream".into(),
+            title: "Embedded note: recipes/Whipped cream.md".into(),
+        },
+        // Every resolver reason, and a resolution that failed outright.
+        EmbedPreviewUnavailable {
+            target: "Target".into(),
+            reason: Some(EmbedUnresolvedReason::TargetNotFound {
+                target: "Target".into(),
+            }),
+        },
+        EmbedPreviewUnavailable {
+            target: "recipes#Glaze".into(),
+            reason: Some(EmbedUnresolvedReason::HeadingNotFound {
+                target_path: "recipes.md".into(),
+                heading: "Glaze".into(),
+            }),
+        },
+        EmbedPreviewUnavailable {
+            target: "recipes^step-3".into(),
+            reason: Some(EmbedUnresolvedReason::BlockNotFound {
+                target_path: "recipes.md".into(),
+                block_id: "step-3".into(),
+            }),
+        },
+        EmbedPreviewUnavailable {
+            target: "Deep".into(),
+            reason: Some(EmbedUnresolvedReason::DepthLimitReached),
+        },
+        EmbedPreviewUnavailable {
+            target: "Locked".into(),
+            reason: Some(EmbedUnresolvedReason::ReadError {
+                message: "Access is denied. (os error 5)".into(),
+            }),
+        },
+        EmbedPreviewUnavailable {
+            target: "Target".into(),
+            reason: None,
+        },
+        // Each count takes its own number: one site can cite several
+        // keys ([@a; @b]), so either count may be the singular one.
+        CitationSummaryShown {
+            citations: 0,
+            sources: 0,
+        },
+        CitationSummaryShown {
+            citations: 1,
+            sources: 2,
+        },
+        CitationSummaryShown {
+            citations: 2,
+            sources: 1,
+        },
+        CitationDetailsShown {
+            title: "VizWiz: Nearly Real-Time Answers to Visual Questions".into(),
+        },
+        CitationDetailsShown {
+            title: String::new(),
+        },
+        CitationDetailsUnresolved {
+            key: "smith2020".into(),
+        },
         TaskToggleUnsaved {
             filename: "notes.md".into(),
         },
@@ -3659,6 +3880,14 @@ pub fn corpus() -> Vec<A11yEvent> {
             filename: "notes.md".into(),
         },
         NoteSaveBlocked { filename: "notes.md".into(), detail: "modified externally".into() },
+        // A detail that already ends its sentence is not closed twice.
+        NoteSaveBlocked {
+            filename: "notes.md".into(),
+            detail: "Something named notes.md already exists there.".into(),
+        },
+        NoteSaveConflict {
+            filename: "notes.md".into(),
+        },
         RestoredVersionFrom {
             formatted_date: "July 19, 2026 at 9:41 AM".into(),
         },
@@ -5490,6 +5719,95 @@ mod tests {
         }
     }
 
+    /// W7-7 (#1251): the popover sentence names the citation exactly
+    /// once, whatever case core's speech opens with. The host passes the
+    /// speech untouched, so a missing prefix and a doubled one are both
+    /// core's to prevent.
+    #[test]
+    fn citation_popover_names_the_citation_exactly_once() {
+        for (speech, expected) in [
+            ("Citation: Knuth 1984", "Citation: Knuth 1984"),
+            ("citation: knuth 1984", "citation: knuth 1984"),
+            ("CITATION", "CITATION"),
+            (
+                "Unresolved citation: smith2020",
+                "Citation. Unresolved citation: smith2020",
+            ),
+            ("Cite me", "Citation. Cite me"),
+            ("\u{c7}itation 2020", "Citation. \u{c7}itation 2020"),
+        ] {
+            let event = A11yEvent::CitationPopoverShown {
+                speech: speech.into(),
+            };
+            assert_eq!(event.render(), expected, "{speech:?}");
+            assert_eq!(event.priority(), High, "{speech:?}");
+        }
+    }
+
+    /// W7-7 (#1251): every reason the embed resolver can give has an
+    /// EmbedPreviewUnavailable corpus witness, so its sentence is pinned
+    /// by the golden, the artifact and both host censuses; so does a
+    /// resolution that failed outright (`None`). The render match is
+    /// exhaustive already — this makes the corpus keep up with it.
+    #[test]
+    fn every_embed_unresolved_reason_has_an_unavailable_witness() {
+        let declared = declared_variants_in("src/embeds.rs", "EmbedUnresolvedReason");
+        assert!(
+            declared.len() >= 5,
+            "parsed only {declared:?} — the parser broke, not the vocabulary"
+        );
+        let mut witnessed = std::collections::BTreeSet::new();
+        let mut outright = false;
+        for event in corpus() {
+            if let A11yEvent::EmbedPreviewUnavailable { reason, .. } = event {
+                match reason {
+                    Some(reason) => {
+                        witnessed.insert(
+                            format!("{reason:?}")
+                                .chars()
+                                .take_while(char::is_ascii_alphanumeric)
+                                .collect::<String>(),
+                        );
+                    }
+                    None => outright = true,
+                }
+            }
+        }
+        assert_eq!(
+            witnessed, declared,
+            "EmbedUnresolvedReason arms without an EmbedPreviewUnavailable witness"
+        );
+        assert!(outright, "no witness for a resolution that failed outright");
+    }
+
+    /// W7-7 (#1251): carried titles and reasons close their sentence
+    /// exactly once, and an empty one leaves the lead alone.
+    #[test]
+    fn carried_text_closes_its_sentence_exactly_once() {
+        let lead = "Embed preview for X.";
+        for (text, expected) in [
+            (
+                "Target not found: X",
+                "Embed preview for X. Target not found: X.",
+            ),
+            (
+                "Nested embed depth limit reached.",
+                "Embed preview for X. Nested embed depth limit reached.",
+            ),
+            ("Why?", "Embed preview for X. Why?"),
+            ("Stop!", "Embed preview for X. Stop!"),
+            (
+                "A long title\u{2026}",
+                "Embed preview for X. A long title\u{2026}",
+            ),
+            ("  padded  ", "Embed preview for X. padded."),
+            ("", "Embed preview for X."),
+            ("   ", "Embed preview for X."),
+        ] {
+            assert_eq!(lead_then_sentence(lead, text), expected, "{text:?}");
+        }
+    }
+
     /// The full corpus golden: every representative event's exact
     /// (priority, text). THIS TABLE IS THE CONTRACT — a wording change
     /// here is a product decision (and a §W-D parity change), never a
@@ -5573,6 +5891,54 @@ mod tests {
             (Medium, "Opened notes.md, line 40."),
             (Medium, "Opened notes.md."),
             (Medium, "Showing notes."),
+            (High, "Citation: Mack et al. 2021, page 42"),
+            (High, "Citation. Unresolved citation: smith2020"),
+            (
+                High,
+                "Embed preview for Whipped cream. Embedded note: recipes/Whipped cream.md.",
+            ),
+            (High, "Embed preview for Target. Target not found: Target."),
+            (
+                High,
+                "Embed preview for recipes#Glaze. Heading not found: Glaze in recipes.md.",
+            ),
+            (
+                High,
+                "Embed preview for recipes^step-3. Block not found: step-3 in recipes.md.",
+            ),
+            (
+                High,
+                "Embed preview for Deep. Nested embed depth limit reached.",
+            ),
+            (
+                High,
+                "Embed preview for Locked. Could not read embed: Access is denied. (os error 5).",
+            ),
+            (
+                High,
+                "Embed preview for Target. The embedded content could not be resolved.",
+            ),
+            (
+                High,
+                "Citation summary. 0 citations referencing 0 unique sources.",
+            ),
+            (
+                High,
+                "Citation summary. 1 citation referencing 2 unique sources.",
+            ),
+            (
+                High,
+                "Citation summary. 2 citations referencing 1 unique source.",
+            ),
+            (
+                High,
+                "Citation expanded. VizWiz: Nearly Real-Time Answers to Visual Questions.",
+            ),
+            (High, "Citation expanded."),
+            (
+                High,
+                "Unresolved citation: smith2020. This key isn't in any bibliography source.",
+            ),
             (
                 High,
                 "Cannot toggle task. The editor has unsaved changes in notes.md. Save the note first.",
@@ -5591,6 +5957,14 @@ mod tests {
             (
                 High,
                 "Save blocked. Could not save notes.md: modified externally. Your edits remain in the editor.",
+            ),
+            (
+                High,
+                "Save blocked. Could not save notes.md: Something named notes.md already exists there. Your edits remain in the editor.",
+            ),
+            (
+                High,
+                "Save blocked. notes.md was modified externally. Your edits remain in the editor.",
             ),
             (High, "Restored version from July 19, 2026 at 9:41 AM."),
             (High, "Restored notes.md."),
@@ -6925,7 +7299,9 @@ mod tests {
     fn a11y_event_top_level_count_is_pinned() {
         assert_eq!(
             declared_variants("A11yEvent").len(),
-            206,
+            // W7-7 (#1249, #1251): NoteSaveConflict and the six
+            // popover/sheet outcome events, 206 → 213.
+            213,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }
