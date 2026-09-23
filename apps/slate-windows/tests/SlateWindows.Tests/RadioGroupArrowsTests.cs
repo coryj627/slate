@@ -143,6 +143,8 @@ public sealed class RadioGroupArrowsTests
             group.Elements().Select(radio => (string?)radio.Attribute(name)));
         Assert.Equal("Cycle", (string?)group.Attribute("KeyboardNavigation.DirectionalNavigation"));
         Assert.Equal("True", (string?)group.Attribute(XName.Get("RadioGroupArrows.IsEnabled", "clr-namespace:SlateWindows")));
+        // ONE Tab stop: Tab leaves the group (codex round 2).
+        Assert.Equal("Once", (string?)group.Attribute("KeyboardNavigation.TabNavigation"));
     }
 
     [Fact]
@@ -150,6 +152,7 @@ public sealed class RadioGroupArrowsTests
     {
         var surface = new CanvasSurfaceView();
         Assert.Equal(KeyboardNavigationMode.Cycle, KeyboardNavigation.GetDirectionalNavigation(surface.SwitcherForTests));
+        Assert.Equal(KeyboardNavigationMode.Once, KeyboardNavigation.GetTabNavigation(surface.SwitcherForTests));
         Assert.True(RadioGroupArrows.GetIsEnabled(surface.SwitcherForTests));
     });
 
@@ -158,6 +161,7 @@ public sealed class RadioGroupArrowsTests
     {
         var surface = new GraphSurfaceView();
         Assert.Equal(KeyboardNavigationMode.Cycle, KeyboardNavigation.GetDirectionalNavigation(surface.SwitcherForTests));
+        Assert.Equal(KeyboardNavigationMode.Once, KeyboardNavigation.GetTabNavigation(surface.SwitcherForTests));
         Assert.True(RadioGroupArrows.GetIsEnabled(surface.SwitcherForTests));
     });
 

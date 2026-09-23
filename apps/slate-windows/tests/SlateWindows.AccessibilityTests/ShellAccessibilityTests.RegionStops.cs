@@ -95,9 +95,27 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.ESCAPE);
             AssertEventuallyFocused(statusBar, "Escape from the menu bar did not return to the status bar.");
 
+            //    With no file open, the Citations leaf's stop is its "Select a
+            //    file" notice, which reads the reason; the bare empty list
+            //    said only "Citations, list" (spec §5.2.2).
+            SelectRailLeaf(window, automation, "Citations");
+            AutomationElement noFile = WaitForElement(window, "PanelCitationsNoFile", TimeSpan.FromSeconds(15));
+            ReassertForegroundForAChord(window);
+            statusBar.Focus();
+            AssertEventuallyFocused(statusBar, "The status bar did not take focus.");
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
+            AssertFocusedListItem(automation, rail, "Citations", "Shift+F6 from the status bar did not land on the rail's row.");
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
+            AssertEventuallyFocused(noFile, "Shift+F6 into the Citations leaf with no file open did not land on its notice.");
+            AutomationElement focusedNotice = automation.FocusedElement();
+            Assert.Equal("PanelCitationsNoFile", focusedNotice.Properties.AutomationId.ValueOrDefault);
+            Assert.Equal("Select a file to see its citations.", focusedNotice.Properties.Name.ValueOrDefault);
+
             // 2. Ctrl+R lands on the review's filter, not on the bare rail;
             //    Down checks Due today (a Windows radio group), the review
-            //    re-filters, and F6 moves on to the rail's row.
+            //    re-filters; Tab leaves the group (one Tab stop) and
+            //    Shift+Tab returns to the checked filter; F6 moves on to the
+            //    rail's row.
             ReassertForegroundForAChord(window);
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_R);
             AutomationElement all = WaitForElement(window, "PanelReviewFilterAll", TimeSpan.FromSeconds(10));
@@ -116,6 +134,28 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 $"the review did not re-filter to Due today: the chip reads '{dueToday.Properties.Name.ValueOrDefault}', "
                 + $"the rows are [{string.Join(" | ", ListItemNames(automation, reviewList))}]");
+            string[] filterIds = ["PanelReviewFilterAll", "PanelReviewFilterDueToday", "PanelReviewFilterOverdue", "PanelReviewFilterThisWeek"];
+            AutomationElement inspector = WaitForElement(window, "InspectorPane", TimeSpan.FromSeconds(10));
+            PressKey(VirtualKeyShort.TAB);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return automation.FocusedElement() is { } focused
+                                && !filterIds.Contains(focused.Properties.AutomationId.ValueOrDefault)
+                                && IsDescendantOf(focused, inspector);
+                        }
+                        catch (Exception exception) when (IsTransientUiaFault(exception))
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromSeconds(10)),
+                $"Tab from the checked filter did not leave the group; focus is on {DescribeFocusedElement(automation)}");
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.TAB);
+            AssertEventuallyFocused(dueToday, "Shift+Tab did not return to the checked filter.");
             PressKey(VirtualKeyShort.F6);
             AssertFocusedListItem(automation, rail, "Tasks Review", "F6 from the review's filter did not land on the rail's row.");
 
