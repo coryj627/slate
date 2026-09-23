@@ -3932,6 +3932,424 @@ public sealed class CanvasNavigatorTests : IDisposable
         Assert.True(surface.CanMoveWithinProjection(forward: false));
     });
 
+    // --- R-12 (#1255): the visual board's arrows --------------------------
+
+    /// <summary>
+    /// R-12 (#1255; the NVDA pass's F12), contract 34 D15 honoured: the
+    /// visual board has no row control to move the reader, so its Down
+    /// and Up ARE the navigator's reading-order move — Next Card and
+    /// Previous Card through the announced door, the same seat and the
+    /// same lines — over the whole filtered reading order, both ways.
+    /// </summary>
+    /// <remarks>
+    /// Each step's owed lines are the VERB's, taken from the same seat
+    /// first: the board's arrow is that move, not a second composition of
+    /// it. The pass heard the opposite — "End of canvas." for Down and
+    /// "Start of canvas." for Up from one position, the seat never
+    /// moving — because the arrow asked a projection with no rows whether
+    /// IT could move, and read its "no" as the boundary.
+    /// </remarks>
+    [Fact]
+    public void TheBoardsDownAndUpAreTheReadingOrderMoveThroughTheAnnouncedDoor() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        IReadOnlyList<CanvasOutlineRow> rows = document.FilteredOutline;
+        Assert.True(rows.Count >= 4, "premise: the fixture's reading order is too short to walk.");
+
+        foreach ((Key key, int offset, Action verb) in new (Key, int, Action)[]
+        {
+            (Key.Down, 1, document.Navigator.NextCard),
+            (Key.Up, -1, document.Navigator.PreviousCard),
+        })
+        {
+            for (int from = offset > 0 ? 0 : rows.Count - 1;
+                from + offset >= 0 && from + offset < rows.Count;
+                from += offset)
+            {
+                CanvasOutlineRow arrival = rows[from + offset];
+                IReadOnlyList<string> owed = LinesOf(document, rows[from].NodeId, verb);
+                Assert.Contains(arrival.SpeakableName, string.Join(" | ", owed), StringComparison.Ordinal);
+                document.SeatSelectionSilently(rows[from].NodeId);
+                Drain(document);
+
+                Assert.True(
+                    PressKey(surface, key, ModifierKeys.None),
+                    $"the board left {key} unconsumed: with no row control of its own, "
+                    + "the arrow IS the navigator's reading-order move (R-12).");
+                Assert.Equal(arrival.NodeId, document.Selection.Selected);
+                Assert.Equal(owed, Lines(document));
+            }
+        }
+    });
+
+    /// <summary>
+    /// R-12 (#1255): the board's arrows answer at the ends with the
+    /// reading-order move's own boundary — "End of canvas." past the last
+    /// card and "Start of canvas." before the first, the seat unmoved —
+    /// and a canvas with nothing to move through keeps the two sentences
+    /// every projection already had: the needle that matched nothing, and
+    /// the empty canvas.
+    /// </summary>
+    [Fact]
+    public void TheBoardsArrowsAnswerAtTheEndsAndWithNothingToMoveThrough() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        IReadOnlyList<CanvasOutlineRow> rows = document.FilteredOutline;
+
+        foreach ((Key key, CanvasOutlineRow end, CanvasStatusNote boundary) in
+            new (Key, CanvasOutlineRow, CanvasStatusNote)[]
+            {
+                (Key.Down, rows[^1], new CanvasStatusNote.EndOfCanvas()),
+                (Key.Up, rows[0], new CanvasStatusNote.StartOfCanvas()),
+            })
+        {
+            document.SeatSelectionSilently(end.NodeId);
+            Drain(document);
+            Assert.True(
+                PressKey(surface, key, ModifierKeys.None),
+                $"the board left {key} unconsumed at the end of the canvas.");
+            Assert.Equal(Rendered(boundary), OneLine(document));
+            Assert.Equal(end.NodeId, document.Selection.Selected);
+        }
+
+        // A needle that matches nothing: the filter's sentence, never a
+        // boundary. The board DIMS rather than hides (D4), so the keys stay
+        // on it while the move walks what the needle kept — nothing.
+        document.FilterText = "zzzz-no-such-card";
+        host.UpdateLayout();
+        Assert.True(surface.ProjectionHasFocus, "premise: the needle took the keys off the board.");
+        Drain(document);
+        Assert.True(PressKey(surface, Key.Down, ModifierKeys.None));
+        Assert.Equal(Rendered(new CanvasStatusNote.NoCardsMatchFilter()), OneLine(document));
+
+        CanvasDocumentViewModel empty = Open("empty.canvas");
+        using HostedWindow emptyHost = HostBoard(empty, out CanvasSurfaceView emptySurface);
+        Assert.True(PressKey(emptySurface, Key.Up, ModifierKeys.None));
+        Assert.Equal(Rendered(new CanvasStatusNote.Empty()), OneLine(empty));
+    });
+
+    /// <summary>
+    /// R-12 (#1255), owner decision OD-5: Right and Left on the board
+    /// FOLLOW connections — the chord table's canvas-scope Follow
+    /// Connection rows, delivered where the reader is (contract 39 N-3;
+    /// D15's "the outline's" clause amended) — with the verb's own lines
+    /// and seat, and a direction with no connection answering rather than
+    /// falling silent. Every board move brings its seat INTO VIEW, from a
+    /// viewport panned so it showed none of it: the pan a peer's Invoke
+    /// makes (D4), reached through the presenter's reveal.
+    /// </summary>
+    [Fact]
+    public void TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        CanvasRendererView board = surface.VisualForTests;
+
+        foreach ((Key key, bool forward, string arrival) in new (Key, bool, string)[]
+        {
+            (Key.Right, true, "evidence"),
+            (Key.Left, false, "loose"),
+        })
+        {
+            IReadOnlyList<string> owed = LinesOf(
+                document, "question", () => document.Navigator.FollowConnection(forward));
+            document.SeatSelectionSilently("question");
+            board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+            CanvasViewportState before = board.Engine.CommittedViewport;
+            Assert.False(
+                InView(board, arrival),
+                "premise: the destination was already in view, so its reveal would prove nothing.");
+            Drain(document);
+
+            Assert.True(
+                PressKey(surface, key, ModifierKeys.None),
+                $"the board left {key} unconsumed: Right and Left follow connections there (OD-5).");
+            Assert.Equal(arrival, document.Selection.Selected);
+            Assert.Equal(owed, Lines(document));
+            Assert.False(
+                before.SameGeometry(board.Engine.CommittedViewport),
+                $"{key} left the board's transform where the pan-away put it: nothing "
+                + $"revealed \"{arrival}\" (D4).");
+            Assert.True(
+                InView(board, arrival),
+                $"{key} followed to \"{arrival}\" and left it outside the board: the move "
+                + "never revealed its seat (D4).");
+        }
+
+        // A direction with no connection still answers, and moves nothing.
+        document.SeatSelectionSilently("evidence");
+        Drain(document);
+        Assert.True(PressKey(surface, Key.Right, ModifierKeys.None));
+        Assert.Equal(Rendered(new CanvasStatusNote.NoConnection(true, null)), OneLine(document));
+        Assert.Equal("evidence", document.Selection.Selected);
+
+        // The reading-order move reveals its seat the same way.
+        IReadOnlyList<CanvasOutlineRow> rows = document.FilteredOutline;
+        document.SeatSelectionSilently(rows[^2].NodeId);
+        board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+        CanvasViewportState panned = board.Engine.CommittedViewport;
+        Assert.False(InView(board, rows[^1].NodeId), "premise: the last card was already in view.");
+        Assert.True(PressKey(surface, Key.Down, ModifierKeys.None));
+        Assert.Equal(rows[^1].NodeId, document.Selection.Selected);
+        Assert.False(
+            panned.SameGeometry(board.Engine.CommittedViewport),
+            "Down left the board's transform where the pan-away put it (D4).");
+        Assert.True(
+            InView(board, rows[^1].NodeId),
+            "Down moved the seat and left it outside the board: the move never revealed it (D4).");
+
+        // The PALETTE's moves are board moves too (R-12: every move on the
+        // board reveals its seat) — Next Card and Follow Connection with no
+        // key pressed, each from a viewport that showed none of its
+        // destination.
+        foreach ((string verb, Action move, string from, string arrival) in
+            new (string, Action, string, string)[]
+            {
+                ("Next Card", document.Navigator.NextCard, "question", "evidence"),
+                ("Follow Connection Back", () => document.Navigator.FollowConnection(forward: false), "question", "loose"),
+            })
+        {
+            document.SeatSelectionSilently(from);
+            board.Engine.CommitViewport(view => view.PannedTo(-5000, -5000));
+            CanvasViewportState before = board.Engine.CommittedViewport;
+            Assert.False(InView(board, arrival), $"premise: {verb}'s destination was already in view.");
+            move();
+            Assert.Equal(arrival, document.Selection.Selected);
+            Assert.False(
+                before.SameGeometry(board.Engine.CommittedViewport),
+                $"the palette's {verb} left the board's transform where the pan-away put it (D4).");
+            Assert.True(
+                InView(board, arrival),
+                $"the palette's {verb} moved the seat and left it outside the board (D4).");
+        }
+    });
+
+    /// <summary>
+    /// R-12 (#1255): every move the board's arrows make ends by asking the
+    /// presenter to REVEAL the new seat — the reading-order move and the
+    /// follow alike — and so does every move the palette's verbs make there
+    /// (Next and Previous Card, Follow Connection, Enter and Exit Group,
+    /// Trace Path); a press that moved nothing asks for none. Pinned at the
+    /// seam the real board implements, through a recording presenter; the
+    /// hosted fact above pins the board's own pan.
+    /// </summary>
+    [Fact]
+    public void EveryBoardMoveAsksThePresenterToRevealItsSeat()
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        var board = new RevealingBoard();
+        document.Navigator.AttachPresenter(board);
+        IReadOnlyList<CanvasOutlineRow> rows = document.FilteredOutline;
+
+        document.SeatSelectionSilently(rows[0].NodeId);
+        Assert.True(document.Navigator.HandleKey(Key.Down, ModifierKeys.None, board));
+        Assert.True(document.Navigator.HandleKey(Key.Up, ModifierKeys.None, board));
+        document.SeatSelectionSilently("question");
+        Assert.True(document.Navigator.HandleKey(Key.Right, ModifierKeys.None, board));
+        document.SeatSelectionSilently("question");
+        Assert.True(document.Navigator.HandleKey(Key.Left, ModifierKeys.None, board));
+        Assert.Equal(new[] { rows[1].NodeId, rows[0].NodeId, "evidence", "loose" }, board.Revealed);
+
+        // A press that moved nothing reveals nothing: the end of the
+        // canvas, and a direction with no connection.
+        document.SeatSelectionSilently(rows[^1].NodeId);
+        Assert.True(document.Navigator.HandleKey(Key.Down, ModifierKeys.None, board));
+        document.SeatSelectionSilently("evidence");
+        Assert.True(document.Navigator.HandleKey(Key.Right, ModifierKeys.None, board));
+        Assert.Equal(4, board.Revealed.Count);
+
+        // The palette's verbs move the seat on the board too, with no key:
+        // every one of them reveals where it went (R-12).
+        board.Revealed.Clear();
+        document.SeatSelectionSilently("grp");
+        document.Navigator.NextCard();
+        document.Navigator.PreviousCard();
+        document.SeatSelectionSilently("question");
+        document.Navigator.FollowConnection(forward: true);
+        document.SeatSelectionSilently("grp");
+        document.Navigator.EnterGroup();
+        document.Navigator.ExitGroup();
+        document.SeatSelectionSilently("question");
+        document.Navigator.TracePath();
+        Assert.Equal(
+            new[] { "question", "grp", "evidence", "question", "grp", "evidence" },
+            board.Revealed);
+    }
+
+    /// <summary>
+    /// R-12 (#1255), m5 parity: a seat the filter does not keep (m5 — the
+    /// movement verbs can seat one) is no caret in the filtered set, so the
+    /// board's Down enters the set at its top and Up at its bottom — the
+    /// seat and the lines Next Card and Previous Card give from there, the
+    /// verbs every projection's palette runs (and mac's
+    /// <c>canvasSelectAdjacent</c>, which mac's board runs) — never a
+    /// boundary claim about a set the seat is not in.
+    /// </summary>
+    [Fact]
+    public void AFilteredOutSeatEntersTheFilteredSetFromTheBoardAsTheVerbsDo() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        document.FilterText = "zeta";
+        host.UpdateLayout();
+        IReadOnlyList<CanvasOutlineRow> kept = document.FilteredOutline;
+        Assert.True(
+            kept.Count >= 2 && kept.All(row => row.NodeId != "question"),
+            "premise: the needle must keep two cards and not the seat.");
+        Assert.True(surface.ProjectionHasFocus, "premise: the needle took the keys off the board.");
+
+        foreach ((Key key, Action verb, string arrival, CanvasStatusNote boundary) in
+            new (Key, Action, string, CanvasStatusNote)[]
+            {
+                (Key.Down, document.Navigator.NextCard, kept[0].NodeId, new CanvasStatusNote.EndOfCanvas()),
+                (Key.Up, document.Navigator.PreviousCard, kept[^1].NodeId, new CanvasStatusNote.StartOfCanvas()),
+            })
+        {
+            IReadOnlyList<string> owed = LinesOf(document, "question", verb);
+            Assert.DoesNotContain(Rendered(boundary), owed);
+            document.SeatSelectionSilently("question");
+            Drain(document);
+
+            Assert.True(PressKey(surface, key, ModifierKeys.None));
+            Assert.Equal(arrival, document.Selection.Selected);
+            Assert.Equal(owed, Lines(document));
+        }
+    });
+
+    /// <summary>
+    /// Rule R2 holds on the board: with the visual projection SHOWING and
+    /// the keys in the filter field, the arrows stay the field's — the
+    /// board's arms ask who owns the keys before they ask what is showing.
+    /// </summary>
+    [Fact]
+    public void TheBoardsArrowsActOnlyWhileTheBoardHoldsTheKeys() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("board.canvas");
+        using HostedWindow host = HostBoard(document, out CanvasSurfaceView surface);
+        document.SeatSelectionSilently("question");
+        Assert.True(
+            surface.FilterFieldForTests.Focus(),
+            "premise: the filter field refused keyboard focus.");
+        host.UpdateLayout();
+        Assert.False(surface.ProjectionHasFocus, "premise: the board still holds the keys.");
+        Drain(document);
+
+        foreach (Key key in new[] { Key.Down, Key.Up, Key.Right, Key.Left })
+        {
+            Assert.False(
+                PressKey(surface, key, ModifierKeys.None),
+                $"{key} in the filter field was taken by the board (R2).");
+        }
+        Assert.Equal("question", document.Selection.Selected);
+        Assert.Empty(Lines(document));
+    });
+
+    /// <summary>
+    /// A surface showing the VISUAL projection with the keys on the board —
+    /// the arrangement every board-arrow fact stands on. Rule R2 gates
+    /// every arrow on the projection owning the keys, so both halves are
+    /// premises with their leg named: a board that never took the keys
+    /// would pass "not consumed" for the wrong reason.
+    /// </summary>
+    private HostedWindow HostBoard(CanvasDocumentViewModel document, out CanvasSurfaceView surface)
+    {
+        var view = new CanvasSurfaceView { Model = document };
+        HostedWindow host = Host(view);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        CanvasRendererView board = view.VisualForTests;
+        PumpUntil(
+            () => board.Engine.Current is not null,
+            "premise: the board never installed its first presentation state.");
+        Assert.True(board.Focus(), "premise: the visual board refused keyboard focus.");
+        host.UpdateLayout();
+        Assert.True(
+            view.ProjectionHasFocus,
+            "premise: the board holds the keys and the surface does not read them as the projection's.");
+        Drain(document);
+        surface = view;
+        return host;
+    }
+
+    /// <summary>
+    /// The lines a verb owes from a seat, taken through the verb itself and
+    /// the seat restored after — so a chord's fact asserts "the same move"
+    /// without composing its sentence a second time.
+    /// </summary>
+    private IReadOnlyList<string> LinesOf(
+        CanvasDocumentViewModel document, string seat, Action verb)
+    {
+        document.SeatSelectionSilently(seat);
+        Drain(document);
+        verb();
+        IReadOnlyList<string> lines = Lines(document);
+        document.SeatSelectionSilently(seat);
+        Drain(document);
+        return lines;
+    }
+
+    /// <summary>
+    /// Whether the board's COMMITTED viewport shows the whole card — the
+    /// containment the reveal's pan establishes, read from the value the
+    /// next build carries rather than from a build still in flight.
+    /// </summary>
+    private static bool InView(CanvasRendererView board, string nodeId)
+    {
+        CanvasViewportState view = board.Engine.CommittedViewport;
+        CanvasSceneNode node =
+            board.Engine.Current!.Source.Loaded!.Population.SceneByNode[nodeId];
+        double left = (node.X * view.Zoom) + view.PanX;
+        double top = (node.Y * view.Zoom) + view.PanY;
+        const double Slack = 1e-6;
+        return view.ViewWidth > 0
+            && left >= -Slack
+            && top >= -Slack
+            && left + (node.Width * view.Zoom) <= view.ViewWidth + Slack
+            && top + (node.Height * view.Zoom) <= view.ViewHeight + Slack;
+    }
+
+    /// <summary>Pump until the condition holds — the renderer's engine
+    /// installs on a pool continuation, so one drained frame can beat it
+    /// (the windowed facts' loop in <c>CanvasDocumentTests</c>) — and name
+    /// the premise that never held.</summary>
+    private static void PumpUntil(Func<bool> condition, string premise)
+    {
+        var budget = System.Diagnostics.Stopwatch.StartNew();
+        while (!condition() && budget.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            Pump();
+            Thread.Yield();
+        }
+        Assert.True(condition(), premise);
+    }
+
+    /// <summary>The visual board, presenter-side, holding the keys: it
+    /// records every reveal the navigator asks of it.</summary>
+    private sealed class RevealingBoard : ICanvasSurfacePresenter
+    {
+        public List<string> Revealed { get; } = [];
+
+        public CanvasSurfaceKind Projection => CanvasSurfaceKind.Visual;
+
+        public bool ProjectionHasFocus => true;
+
+        public bool CanMoveWithinProjection(bool forward) => false;
+
+        public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) => CanvasViewportOutcome.Silent;
+
+        public bool FocusRow(string nodeId) => false;
+
+        public void RevealSeat(string nodeId) => Revealed.Add(nodeId);
+
+        public bool FocusProjection() => false;
+
+        public bool DismissTransientRegion() => false;
+
+        public object? Owner => null;
+    }
+
     // --- C12 / CD-40: the carried A14 focus-delivery defect ---------------
 
     /// <summary>
@@ -4394,6 +4812,10 @@ public sealed class CanvasNavigatorTests : IDisposable
 
         public bool FocusRow(string nodeId) => false;
 
+        public void RevealSeat(string nodeId)
+        {
+        }
+
         public bool FocusProjection() => false;
 
         public bool DismissTransientRegion() => false;
@@ -4451,6 +4873,10 @@ public sealed class CanvasNavigatorTests : IDisposable
         public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) => CanvasViewportOutcome.Refused;
 
         public bool FocusRow(string nodeId) => false;
+
+        public void RevealSeat(string nodeId)
+        {
+        }
 
         public bool FocusProjection() => false;
 
@@ -4519,6 +4945,10 @@ public sealed class CanvasNavigatorTests : IDisposable
         public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) => CanvasViewportOutcome.Silent;
 
         public bool FocusRow(string nodeId) => false;
+
+        public void RevealSeat(string nodeId)
+        {
+        }
 
         public bool FocusProjection() => false;
 

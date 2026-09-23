@@ -249,6 +249,26 @@ internal sealed class CanvasOutlineRowDataPeer
 /// </summary>
 internal sealed class CanvasOutlineItem : TreeViewItem
 {
+    /// <summary>
+    /// R-12 (#1256): the row's context menu EXISTS from the container's
+    /// construction — every row's, top level and nested alike, because
+    /// every container is made here — and the outline's opening handler
+    /// refills it per request.
+    /// </summary>
+    /// <remarks>
+    /// WPF opens the menu that exists when a request arrives: the first
+    /// element up the route that carries one. The menu used to be
+    /// ASSIGNED inside the opening handler, which is too late for the
+    /// request that asked, so the first Shift+F10 or Applications key on
+    /// a fresh row climbed past it to the workspace tab's menu (Duplicate
+    /// Tab … Close Pane) — the NVDA pass's F13 — and only the next request
+    /// found the row's.
+    /// </remarks>
+    public CanvasOutlineItem()
+    {
+        ContextMenu = new ContextMenu();
+    }
+
     protected override DependencyObject GetContainerForItemOverride() =>
         new CanvasOutlineItem();
 
@@ -345,10 +365,13 @@ internal sealed class CanvasOutlineView : UserControl
             ItemsSource = _roots,
             ItemTemplate = RowTemplate(),
             ItemContainerStyle = RowContainerStyle(),
-            // §E TE-8: the context menu builds lazily, per row, from
-            // the ONE plan — assigned during ContextMenuOpening so the
-            // Menu key, Shift+F10 and the pointer all take the same
-            // derived rows (IE-31; the census asserts equality).
+            // §E TE-8: the context menu's rows build per request, per
+            // row, from the ONE plan, so the Applications key, Shift+F10
+            // and the pointer all take the same derived rows (IE-31; the
+            // census asserts equality) — into the row's PERSISTENT menu,
+            // which exists from the container's construction (R-12,
+            // `CanvasOutlineItem`), because WPF opens the menu that
+            // exists when the request arrives.
             BorderThickness = new Thickness(0),
         };
         _tree.AddHandler(
@@ -999,50 +1022,59 @@ internal sealed class CanvasOutlineView : UserControl
         return null;
     }
 
-    /// <summary>The ONE plan-to-menu mapping — the opening handler and
-    /// the census fact share it, so the built rows cannot drift from
-    /// the plan (IE-31, G2-12).</summary>
+    /// <summary>The ONE plan-to-menu mapping, over the OUTLINE's
+    /// projection — the opening handler and the census fact share it, so
+    /// the built rows cannot drift from the plan (IE-31, G2-12; the
+    /// mapping itself is <see cref="CanvasContextMenuBuilder"/>, which
+    /// the board shares too).</summary>
     internal static System.Windows.Controls.ContextMenu BuildMenuFromPlan(
-        CanvasContextTarget target, Action<CanvasContextVerb> execute)
-    {
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(execute);
-        var menu = new System.Windows.Controls.ContextMenu();
-        foreach (CanvasContextMenuRow planned in
-            CanvasContextMenuPlan.RowsFor(CanvasContextSurface.Outline, target))
-        {
-            var item = new System.Windows.Controls.MenuItem
-            {
-                Header = planned.Name,
-                IsEnabled = planned.Enabled,
-                ToolTip = planned.DisabledReason,
-            };
-            if (planned.DisabledReason is { } reason)
-            {
-                System.Windows.Automation.AutomationProperties.SetHelpText(item, reason);
-                System.Windows.Controls.ToolTipService.SetShowOnDisabled(item, true);
-            }
-            CanvasContextVerb verb = planned.Verb;
-            item.Click += (_, _) => execute(verb);
-            menu.Items.Add(item);
-        }
-        return menu;
-    }
+        CanvasContextTarget target, Action<CanvasContextVerb> execute) =>
+        CanvasContextMenuBuilder.Build(CanvasContextSurface.Outline, target, execute);
 
+    /// <summary>
+    /// WPF's request for a row's menu — the Applications key, Shift+F10,
+    /// a right-click (R-12, #1256).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The row's menu is PERSISTENT (<see cref="CanvasOutlineItem"/>) and
+    /// is refilled here from the plan, never replaced: WPF opens the menu
+    /// that exists when the request arrives, so assigning one here — which
+    /// is what this handler did — was too late for the request that asked,
+    /// and it climbed to the workspace tab's menu instead (F13). The grid's
+    /// mutate-never-replace rule (<c>AccessibleDataGrid</c>), one surface
+    /// over.
+    /// </para>
+    /// <para>
+    /// The row is read from the request's SOURCE, which is the row the
+    /// request is about in both of its forms: a keyboard request (−1, −1)
+    /// is raised on the FOCUSED element, the focused row's container; a
+    /// pointer request on the element under the pointer, inside the hit
+    /// row. Either way it is the row whose menu WPF will open — the
+    /// innermost element on the route carrying one, which every row now
+    /// is — so the menu refilled here is the menu that opens, never a
+    /// neighbour's.
+    /// </para>
+    /// <para>
+    /// A request that resolves to no row — the tree's own chrome, an empty
+    /// tree — or to a row the plan gives nothing is answered HERE with no
+    /// menu, so it never climbs to the tab's (R-12; the grid's rule for a
+    /// pointer request over no row).
+    /// </para>
+    /// </remarks>
     private void OnRowContextMenuOpening(
         object sender, System.Windows.Controls.ContextMenuEventArgs e)
     {
-        if (e.OriginalSource is System.Windows.DependencyObject source
-            && ItemFromSource(source) is { } item
-            && item.DataContext is CanvasOutlineRowViewModel rowModel)
-        {
-            System.Windows.Controls.ContextMenu? menu = BuildContextMenu(rowModel);
-            if (menu is null)
+        if (e.OriginalSource is not System.Windows.DependencyObject source
+            || ItemFromSource(source) is not
             {
-                e.Handled = true;
-                return;
+                DataContext: CanvasOutlineRowViewModel rowModel,
+                ContextMenu: { } persistent,
             }
-            item.ContextMenu = menu;
+            || BuildContextMenu(rowModel) is not { } built
+            || !CanvasContextMenuBuilder.Refill(persistent, built))
+        {
+            e.Handled = true;
         }
     }
 

@@ -1175,6 +1175,9 @@ public sealed class CanvasMutationTests : IDisposable
 
         Assert.Equal("a", document.Selection.Selected);
         Assert.Contains("a", pane.FocusedRows);
+        // R-12 (#1255): and the origin is brought back INTO VIEW, which on
+        // the visual board is a pan rather than a row taking focus.
+        Assert.Equal(["a"], pane.RevealedRows);
         Assert.Null(document.ConnectOrigin);
         document.AnnouncerForTests.FlushForTests();
         Assert.Contains(
@@ -1207,6 +1210,8 @@ public sealed class CanvasMutationTests : IDisposable
     {
         public List<string> FocusedRows { get; } = [];
 
+        public List<string> RevealedRows { get; } = [];
+
         public CanvasSurfaceKind Projection => CanvasSurfaceKind.Outline;
 
         public bool ProjectionHasFocus => true;
@@ -1224,6 +1229,8 @@ public sealed class CanvasMutationTests : IDisposable
             FocusedRows.Add(nodeId);
             return true;
         }
+
+        public void RevealSeat(string nodeId) => RevealedRows.Add(nodeId);
 
         public bool FocusProjection() => false;
     }
@@ -2174,6 +2181,10 @@ public sealed class CanvasMutationTests : IDisposable
 
         public bool FocusRow(string nodeId) => false;
 
+        public void RevealSeat(string nodeId)
+        {
+        }
+
         public bool FocusProjection() => false;
     }
 
@@ -2540,6 +2551,10 @@ public sealed class CanvasMutationTests : IDisposable
         public CanvasViewportOutcome ViewportCommand(CanvasViewportVerb verb) => CanvasViewportOutcome.Refused;
 
         public bool FocusRow(string nodeId) => false;
+
+        public void RevealSeat(string nodeId)
+        {
+        }
 
         public bool FocusProjection() => false;
     }

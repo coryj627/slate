@@ -66,7 +66,10 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["Edit", "Text", "Group", "Button"],
             ["Value", "Invoke"],
             ["Filter cards", "Filter results"],
-            ["CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean", "CanvasModes_MoveResizeAndConnectPicker_AreReachable", "TheZoomVerbsSpeakCoresZoomEventWithTheirContext"],
+            // W7-7 R-12 (#1255): the visual board's arrows, pinned here as the
+            // row now cites them.
+            ["CanvasSurfaces_NavigatorFilterAndWhereAmI_AreClean", "CanvasModes_MoveResizeAndConnectPicker_AreReachable", "TheZoomVerbsSpeakCoresZoomEventWithTheirContext",
+                "CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheBoardsDownAndUpAreTheReadingOrderMoveThroughTheAnnouncedDoor", "EveryBoardMoveAsksThePresenterToRevealItsSeat"],
             ["canvas-navigator", "canvas-move-mode-active"]),
         new(
             "Canvas visual (W6-1 §D)",
@@ -78,7 +81,8 @@ public sealed class WcMatrixCanvasEvidenceCensus
             [],
             [],
             ["speakable_name", "Zoom N percent"],
-            ["CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheZoomValueIsCoresRenderMinusItsPeriod", "FitCanvasContainsAndCentresCoresBounds"],
+            ["CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheZoomValueIsCoresRenderMinusItsPeriod", "FitCanvasContainsAndCentresCoresBounds",
+                "TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat"],
             ["canvas-visual"]),
         new(
             "Canvas card editor (W6-1 §E)",
@@ -114,7 +118,11 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["Menu", "MenuItem"],
             ["Invoke"],
             ["CanvasContextMenuPlan.Label"],
-            ["TheOutlineMenuEqualsThePlan", "TheRowMenuEqualsThePlansGridProjectionAndToggleMarkIsLive", "AConnectionRowsVerbsActOnTheCapturedEdgeFromItsSeatedSource", "CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean"],
+            // W7-7 R-12 (#1256, OD-3): the board's card menu and the keyboard
+            // request that opens a fresh row's or the seated card's menu.
+            ["TheOutlineMenuEqualsThePlan", "TheRowMenuEqualsThePlansGridProjectionAndToggleMarkIsLive", "AConnectionRowsVerbsActOnTheCapturedEdgeFromItsSeatedSource", "CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean",
+                "TheBoardMenuEqualsThePlan", "TheBoardsCardMenuIsTheApplicableVerbInventoryPerKind", "AKeyboardRequestOnAFreshRowOpensThatRowsMenu", "AKeyboardRequestOnTheBoardOpensTheSeatedCardsMenu", "ARightClickOnAnUnseatedCardOpensItsMenuAndActsOnItAlone",
+                "ARightClickOnEmptyBoardOpensNoMenu", "Canvas_ContextMenus_OpenTheCardMenuByKeyboard"],
             []),
     ];
 

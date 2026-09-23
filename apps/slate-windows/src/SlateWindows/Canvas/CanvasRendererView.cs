@@ -69,6 +69,14 @@ internal sealed class CanvasRendererView : FrameworkElement
             _pointerOnTooltip = false;
             UpdateTooltip();
         };
+        // R-12 (#1256, OD-3): the board's card menu EXISTS from here and
+        // is refilled per request (see OnMenuOpening) — WPF opens the menu
+        // that exists when a request arrives.
+        ContextMenu = _menu;
+        AddHandler(
+            ContextMenuOpeningEvent,
+            new System.Windows.Controls.ContextMenuEventHandler(OnMenuOpening),
+            handledEventsToo: false);
     }
 
     /// <summary>The pane's document. Attach subscribes the engine to
@@ -589,6 +597,18 @@ internal sealed class CanvasRendererView : FrameworkElement
             return;
         }
         model.SelectNode(nodeId);
+        RevealNode(nodeId);
+    }
+
+    /// <summary>The pan that brings a card into the window (D4 — a
+    /// selection made ON this surface always scrolls into view): the
+    /// peer door's above, and since R-12 (#1255) the navigator's — the
+    /// board's arrows and follow chords move the seat through the
+    /// navigator, which has already announced the move and asks the
+    /// presenter only to reveal it. A card the installed population does
+    /// not know has nothing to pan to.</summary>
+    internal void RevealNode(string nodeId)
+    {
         if (_engine.Current?.Source.Loaded?.Population is { } population
             && population.SceneByNode.TryGetValue(nodeId, out CanvasSceneNode? node))
         {
@@ -613,6 +633,108 @@ internal sealed class CanvasRendererView : FrameworkElement
         System.Windows.Point bottomRight = PointToScreen(view.BottomRight);
         return new System.Windows.Rect(topLeft, bottomRight);
     }
+
+    // --- The card menu (W7-7 R-12, #1256; owner decision OD-3) -----------
+
+    /// <summary>The board's card menu: PERSISTENT from construction and
+    /// refilled per request, never replaced (the grid's rule). G2D-12's
+    /// "the renderer carries no context menu" is lifted and contract 34
+    /// E17's "renderer card" delivered.</summary>
+    private readonly System.Windows.Controls.ContextMenu _menu = new();
+
+    /// <summary>
+    /// WPF's request for the board's menu: the Applications key or
+    /// Shift+F10 while the board holds the keys, or a right-click on it
+    /// (R-12, #1256; OD-3).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The board had no menu at all, so the NVDA pass's Shift+F10 on it
+    /// climbed to the workspace tab's (Duplicate Tab … Close Pane — F13).
+    /// The menu now exists from construction and is refilled here, because
+    /// WPF opens the menu that exists when a request arrives.
+    /// </para>
+    /// <para>
+    /// WPF raises the event on the element under the pointer with the
+    /// cursor relative to it (the popup service reads the position against
+    /// that element); the board hosts no child elements, so a pointer
+    /// request's cursor is in the view space <see cref="HitTest"/> reads,
+    /// and a keyboard request carries −1, −1 — the diagram's reading of the
+    /// same event (<c>GraphDiagramView</c>).
+    /// </para>
+    /// <para>
+    /// No card to answer for — nothing under the pointer, no seat, a seat
+    /// the document no longer knows — is answered HERE with no menu, so
+    /// the request never climbs to the tab's.
+    /// </para>
+    /// <para>
+    /// A pointer request SEATS the hit card, silently, before its menu
+    /// opens — contract 34 G2-12's rule for every context consumer (a row
+    /// is seated silently before its verb), so the card the menu acts on
+    /// and the selected card are one card while the menu is up, as the
+    /// outline and the grid consumers keep them. A keyboard request needs
+    /// no seat: it opens on the seat already.
+    /// </para>
+    /// </remarks>
+    private void OnMenuOpening(object sender, System.Windows.Controls.ContextMenuEventArgs e)
+    {
+        bool pointerRequest = e.CursorLeft >= 0 || e.CursorTop >= 0;
+        if (MenuTargetFor(pointerRequest, e.CursorLeft, e.CursorTop) is not { } nodeId
+            || !RebuildMenu(nodeId))
+        {
+            e.Handled = true;
+            return;
+        }
+        if (pointerRequest)
+        {
+            _model?.SeatSelectionSilently(nodeId);
+        }
+    }
+
+    /// <summary>OD-3's target rule, the diagram's: a pointer request
+    /// opens on the card HIT at the view point, and on nothing over empty
+    /// space; a keyboard request opens on the SEAT — the document's
+    /// selection, the card the arrows moved to.</summary>
+    internal string? MenuTargetFor(bool pointerRequest, double left, double top) =>
+        pointerRequest ? HitTest(new Point(left, top)) : _model?.Selection.Selected;
+
+    /// <summary>
+    /// The persistent menu refilled with the plan's card menu for ONE
+    /// card, every row acting on that card through the one dispatch.
+    /// False, with the menu emptied, for a card the document does not
+    /// know.
+    /// </summary>
+    /// <remarks>
+    /// The card is the seat by the time a row runs — a keyboard request
+    /// opened on it, a pointer request seated it (G2-12) — and the dispatch
+    /// seats it silently again before its verb (TG-0), so a menu action
+    /// changes that card and no other (R-12). Open runs the document's one
+    /// activation seam, the table's route: a group has nothing to expand
+    /// on the board, so its Open does nothing there, as on the table.
+    /// </remarks>
+    internal bool RebuildMenu(string nodeId)
+    {
+        if (_model is not { } model || model.RowFor(nodeId) is not { } row)
+        {
+            _menu.Items.Clear();
+            return false;
+        }
+        var target = new CanvasContextTarget.Node(row.NodeId, row.Kind, row.GroupPath.Length > 0);
+        object? owner = DataContext;
+        return CanvasContextMenuBuilder.Refill(
+            _menu,
+            BuildMenuFromPlan(
+                target,
+                verb => CanvasContextDispatch.Execute(
+                    model, target, verb, owner, () => _ = model.Activate(row))));
+    }
+
+    /// <summary>The ONE plan-to-menu mapping over the RENDERER's
+    /// projection — the opening handler and the census fact share it
+    /// (IE-31).</summary>
+    internal static System.Windows.Controls.ContextMenu BuildMenuFromPlan(
+        CanvasContextTarget target, Action<CanvasContextVerb> execute) =>
+        CanvasContextMenuBuilder.Build(CanvasContextSurface.Renderer, target, execute);
 
     // --- The truncated-label tooltip (§D D11, obligation ID-9) ----------
 

@@ -40,13 +40,19 @@ internal enum CanvasContextVerb
     DeleteConnection,
 }
 
-/// <summary>§G2 TG2-7 (G2-12): the consumer asking for rows. The
-/// renderer carries no context menu (G2D-12) and is not a surface
-/// here.</summary>
+/// <summary>§G2 TG2-7 (G2-12): the consumer asking for rows. W7-7 R-12
+/// (#1256, owner decision OD-3) adds the visual board: G2D-12's "the
+/// renderer carries no context menu" is lifted and contract 34 E17's
+/// "renderer card" delivered.</summary>
 internal enum CanvasContextSurface
 {
     Outline,
     Grid,
+
+    /// <summary>The visual board's card menu (R-12, OD-3) — the outline
+    /// row's card menu, on the seated card or the card under the
+    /// pointer.</summary>
+    Renderer,
 }
 
 /// <summary>§G2 TG2-7 (G2-12, IG2-28): the plan's DISCRIMINATED
@@ -74,10 +80,11 @@ internal abstract record CanvasContextTarget
 /// <summary>
 /// W6-1 §E TE-8 (IE-31), widened by §G2 TG2-7 (G2-12): the ONE
 /// applicability table — rows derived from (surface, target), feeding
-/// the outline's context menu AND the grid's row actions, so no
-/// surface can drift from the other or from the verb inventory (the
-/// derived-consumer discipline; the censuses assert bidirectional
-/// equality per surface and per target kind).
+/// the outline's context menu AND the grid's row actions, and since
+/// W7-7 R-12 (OD-3) the visual board's card menu, so no surface can
+/// drift from another or from the verb inventory (the derived-consumer
+/// discipline; the censuses assert bidirectional equality per surface
+/// and per target kind).
 /// </summary>
 internal static class CanvasContextMenuPlan
 {
@@ -125,7 +132,10 @@ internal static class CanvasContextMenuPlan
     /// LIVE: the last staged reason retired with the grid's Toggle Mark
     /// (G2-12). A group's removal is Ungroup (ED-3 — the algebra's one
     /// group removal, no button promising more); the grid has no
-    /// connection rows, so a connection target there yields none.</summary>
+    /// connection rows, so a connection target there yields none. The
+    /// board (R-12, OD-3) carries the outline row's CARD menu row for
+    /// row, and no connection rows either: its requests target a card —
+    /// the seat, or the card under the pointer — never an edge.</summary>
     internal static ImmutableArray<CanvasContextMenuRow> RowsFor(
         CanvasContextSurface surface, CanvasContextTarget target)
     {
@@ -136,6 +146,8 @@ internal static class CanvasContextMenuPlan
             (CanvasContextSurface.Outline, CanvasContextTarget.Connection) => ConnectionRows(),
             (CanvasContextSurface.Grid, CanvasContextTarget.Node node) => GridNodeRows(node),
             (CanvasContextSurface.Grid, CanvasContextTarget.Connection) => [],
+            (CanvasContextSurface.Renderer, CanvasContextTarget.Node node) => OutlineNodeRows(node),
+            (CanvasContextSurface.Renderer, CanvasContextTarget.Connection) => [],
             _ => throw new ArgumentOutOfRangeException(nameof(surface), surface, "no such surface"),
         };
     }
@@ -191,6 +203,74 @@ internal static class CanvasContextMenuPlan
 
     private static CanvasContextMenuRow Live(CanvasContextVerb verb) =>
         new(Label(verb), true, null, verb);
+}
+
+/// <summary>
+/// W7-7 R-12 (#1256, OD-3): the ONE plan-to-menu mapping, shared by
+/// every WPF menu the plan feeds — the outline row's and the visual
+/// board's — so a consumer can neither hand-list a subset nor carry a
+/// row the plan did not give it (IE-31, G2-12): headers, enabled flags
+/// and reasons verbatim, every row running its verb through the
+/// caller's dispatch.
+/// </summary>
+/// <remarks>
+/// A consumer's own menu is PERSISTENT and is refilled, never replaced
+/// (<see cref="Refill"/>): WPF opens the menu that EXISTS when a
+/// request arrives — the first element up the route carrying one — so
+/// a menu first assigned while the request is being answered is too
+/// late for it, and the request climbs to an ancestor's (the workspace
+/// tab's, the NVDA pass's F13). The grid's rule
+/// (<c>AccessibleDataGrid</c>) and the Connections leaf's.
+/// </remarks>
+internal static class CanvasContextMenuBuilder
+{
+    /// <summary>A menu holding the plan's rows for (surface, target).</summary>
+    internal static System.Windows.Controls.ContextMenu Build(
+        CanvasContextSurface surface,
+        CanvasContextTarget target,
+        Action<CanvasContextVerb> execute)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(execute);
+        var menu = new System.Windows.Controls.ContextMenu();
+        foreach (CanvasContextMenuRow planned in CanvasContextMenuPlan.RowsFor(surface, target))
+        {
+            var item = new System.Windows.Controls.MenuItem
+            {
+                Header = planned.Name,
+                IsEnabled = planned.Enabled,
+                ToolTip = planned.DisabledReason,
+            };
+            if (planned.DisabledReason is { } reason)
+            {
+                System.Windows.Automation.AutomationProperties.SetHelpText(item, reason);
+                System.Windows.Controls.ToolTipService.SetShowOnDisabled(item, true);
+            }
+            CanvasContextVerb verb = planned.Verb;
+            item.Click += (_, _) => execute(verb);
+            menu.Items.Add(item);
+        }
+        return menu;
+    }
+
+    /// <summary>Move a built menu's rows into the consumer's persistent
+    /// menu — mutated, never replaced — and answer whether it has any to
+    /// open with.</summary>
+    internal static bool Refill(
+        System.Windows.Controls.ContextMenu persistent,
+        System.Windows.Controls.ContextMenu built)
+    {
+        ArgumentNullException.ThrowIfNull(persistent);
+        ArgumentNullException.ThrowIfNull(built);
+        persistent.Items.Clear();
+        while (built.Items.Count > 0)
+        {
+            object row = built.Items[0];
+            built.Items.RemoveAt(0);
+            _ = persistent.Items.Add(row);
+        }
+        return persistent.Items.Count > 0;
+    }
 }
 
 /// <summary>
