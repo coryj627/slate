@@ -97,6 +97,30 @@ public sealed class LayoutItemsControlTests
         Assert.Equal("Editor panes", AutomationProperties.GetName(host));
     });
 
+    /// <summary>With the split containers out of the control view, each
+    /// pane's content would surface directly under "Editor panes" — two
+    /// focusable "Workspace tabs" siblings, which axe fails
+    /// (SiblingUniqueAndFocusable, measured on the shell journey's
+    /// workspace scan). Each pane is therefore one structural Pane: axe's
+    /// sibling rules exclude Panes and NVDA does not speak an unnamed one,
+    /// so the pane stays as silent as the spec wants it (W7-6's announcer
+    /// speaks "Editor pane 1 of 2, {title}."). It is UNNAMED because a
+    /// Pane named "Editor pane" fails axe's NameExcludesControlType
+    /// (measured); that name sat on a plain Border, which creates no peer,
+    /// so it had never reached UIA (the W4-5 class).</summary>
+    [Fact]
+    public void EachPaneIsOneSilentStructuralPane() => RunSta(() =>
+    {
+        var resources = Assert.IsType<ResourceDictionary>(Application.LoadComponent(
+            new Uri("/SlateWindows;component/WorkspaceTemplates.xaml", UriKind.Relative)));
+        DataTemplate template = Assert.IsType<DataTemplate>(resources["WorkspaceGroupTemplate"]);
+        AutomationLandmarkBorder pane = Assert.IsType<AutomationLandmarkBorder>(template.LoadContent());
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(pane);
+        Assert.Equal(AutomationControlType.Pane, peer.GetAutomationControlType());
+        Assert.Equal(string.Empty, peer.GetName());
+        Assert.IsType<TabControl>(pane.Child);
+    });
+
     private static void RunSta(Action body)
     {
         Exception? failure = null;

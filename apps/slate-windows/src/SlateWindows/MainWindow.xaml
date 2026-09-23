@@ -775,12 +775,20 @@
                             <local:LayoutItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Button Margin="0,2"
-                                            AutomationProperties.Name="{Binding DisplayName}"
                                             Padding="10,7"
                                             HorizontalContentAlignment="Left"
                                             Command="{Binding DataContext.OpenRecentCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                             CommandParameter="{Binding}"
                                             ToolTip="{Binding Path}">
+                                        <!-- The buttons are siblings now: a shared
+                                             display name also carries the path. -->
+                                        <AutomationProperties.Name>
+                                            <MultiBinding Converter="{StaticResource RecentVaultNameConverter}">
+                                                <Binding />
+                                                <Binding Path="DataContext.RecentVaults" RelativeSource="{RelativeSource AncestorType=Window}" />
+                                                <Binding Path="DataContext.RecentVaults.Count" RelativeSource="{RelativeSource AncestorType=Window}" />
+                                            </MultiBinding>
+                                        </AutomationProperties.Name>
                                         <StackPanel>
                                             <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
                                             <TextBlock Text="{Binding Path}" FontSize="12" Foreground="{DynamicResource Slate.SecondaryTextBrush}" TextTrimming="CharacterEllipsis" />

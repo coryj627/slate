@@ -13,6 +13,7 @@
     <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
     <local:IsNotNullConverter x:Key="IsNotNullConverter" />
     <local:SidebarSortModeLabelConverter x:Key="SidebarSortModeLabelConverter" />
+    <local:RecentVaultNameConverter x:Key="RecentVaultNameConverter" />
 
     <HierarchicalDataTemplate x:Key="SidebarTagTemplate"
                               DataType="{x:Type local:SidebarTagViewModel}"
@@ -584,11 +585,19 @@
 
     <DataTemplate x:Key="WorkspaceGroupTemplate"
                   DataType="{x:Type local:WorkspaceGroupViewModel}">
-        <Border Margin="2"
-                BorderBrush="{DynamicResource Slate.BorderBrush}"
-                BorderThickness="1"
-                Background="{DynamicResource Slate.WindowBackgroundBrush}"
-                AutomationProperties.Name="Editor pane">
+        <!-- W7-7 PR 3 (#1246, R-4): each pane is one silent structural
+             Pane. With the split's containers out of the control view
+             (the "Editor panes" group below), two panes' tab controls
+             would otherwise be sibling "Workspace tabs" — axe's
+             SiblingUniqueAndFocusable failure. Unnamed on purpose: a Pane
+             named "Editor pane" fails NameExcludesControlType, NVDA does
+             not speak an unnamed Pane, and W7-6's announcer already says
+             "Editor pane 1 of 2, {title}.". (The old name sat on a plain
+             Border, which creates no peer, so it never reached UIA.) -->
+        <local:AutomationLandmarkBorder Margin="2"
+                                        BorderBrush="{DynamicResource Slate.BorderBrush}"
+                                        BorderThickness="1"
+                                        Background="{DynamicResource Slate.WindowBackgroundBrush}">
             <!-- W7-5 (#1239): an EMPTY tab control is not a stop. With zero
                  restored tabs the startup focus landed here, NVDA said only
                  "Workspace tabs tab control", and Down arrow wandered to the
@@ -644,7 +653,7 @@
                     </Style>
                 </TabControl.ItemContainerStyle>
             </TabControl>
-        </Border>
+        </local:AutomationLandmarkBorder>
     </DataTemplate>
 
     <DataTemplate x:Key="WorkspaceNodeChildTemplate"
