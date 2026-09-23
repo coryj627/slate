@@ -526,6 +526,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// <summary>Terminal-failure injection seam for tests.</summary>
     internal Func<Exception?>? FetchFaultForTests { get; set; }
 
+    /// <summary>W7-7 PR 8 (R-10): the published document is the terminal
+    /// failure notice, not a projection of the note, so the reading surface
+    /// is no editor stop while it shows it (the failure was announced when
+    /// it happened).</summary>
+    internal bool PublishedFailureNotice { get; private set; }
+
     /// <summary>Dispatcher-side (publish/chunk-build) fault injection
     /// seam for tests.</summary>
     internal Func<Exception?>? PublishFaultForTests { get; set; }
@@ -589,6 +595,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         System.Windows.Automation.AutomationProperties.SetAutomationId(
             paragraph, "ReadingRefreshFailedNotice");
         document.Blocks.Add(paragraph);
+        PublishedFailureNotice = true;
         Document = document;
     }
 
@@ -1136,6 +1143,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _publishedTasks = fetched.Tasks;
         CollectEmbedDependencies(fetched.Embeds);
         _projectionComplete = false;
+        PublishedFailureNotice = false;
         // Only the DOCUMENT is published. The built model's landmarks
         // point into a container the surface's merge empties — the
         // surface re-collects over the live container, and a second
@@ -1310,6 +1318,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     }
 
 
+    /// <summary>W7-7 PR 8 (R-10): raised once, when this projection is torn
+    /// down (its tab navigated in place or closed). A surface holding a
+    /// landing for its apply refuses it: none is coming.</summary>
+    internal event Action? TornDown;
+
     public void Dispose()
     {
         if (_disposed)
@@ -1321,6 +1334,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _editDebounce = null;
         _dependencyDebounce?.Stop();
         _dependencyDebounce = null;
+        TornDown?.Invoke();
     }
 
     private sealed record FetchResult(
