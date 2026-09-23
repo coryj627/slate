@@ -6652,6 +6652,25 @@ them: the OUTLINE's. No spatial-move authority exists in core, and
 query, requested as an owner decision if wanted. Escape and
 Where-am-I remain the two ungated rows.
 
+> **Amended by W7-7 R-12 (#1255; owner decision OD-5).** The Down/Up
+> half stood and is now delivered: the board has no row control, so the
+> navigator answers its Down and Up with the reading-order move itself
+> (`SelectAdjacent` — the announced door, End/Start of canvas at the real
+> bounds, the empty and filtered sentences) instead of asking the board
+> whether it could move, whose "no" had read as the boundary (the NVDA
+> pass's F12). The Right/Left clause is amended: on the board Right and
+> Left follow connections, as mac's board does and as the chord table's
+> canvas-scope Follow Connection rows say (contract 39 N-3); the outline
+> keeps its unconditional follow and the table its cell navigation. Every
+> navigator move on the board then reveals its seat through the
+> presenter's `RevealSeat` — the pan a peer's Invoke makes (D4) — because
+> no card takes focus there. Still no spatial-move authority: the arrows
+> walk core's reading order and core's adjacency. Pinned by
+> `TheBoardsDownAndUpAreTheReadingOrderMoveThroughTheAnnouncedDoor`,
+> `TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat`,
+> `EveryBoardMoveAsksThePresenterToRevealItsSeat` and the journey
+> `CanvasSurfaces_VisualBoardPeersAndZoom_AreClean`.
+
 **D16 — §K budgets are asserted, not aspirational.** The renderer
 benchmarks run the 2,000-node fixture and ASSERT the mac budgets:
 first windowed rebuild under 500 ms, a pan's window hop under 100
@@ -7638,6 +7657,22 @@ ContextMenu. The ENVIRONMENT FACT binds — the CI desktop refuses
 menu focus; the facts host a focusable element in the menu row, keep
 the real MenuBase in the chain, name the leg in the premise message,
 and budget a CI round trip for the first popup.
+
+> **Amended by W7-7 R-12 (#1256; owner decision OD-3).** The "renderer
+> card" is delivered: `CanvasContextSurface.Renderer` joins the plan, and
+> the board's card menu is the outline row's card menu row for row, with
+> no connection rows — a board request targets the seated card (the
+> keyboard) or the card under the pointer, never an edge. Every consumer's
+> menu now EXISTS from its element's construction and is refilled per
+> request: WPF opens the menu that exists when a request arrives, so the
+> outline's menu, first assigned inside the opening event, was too late
+> for a fresh row's first Shift+F10 or Applications key, which climbed to
+> the workspace tab's menu (the NVDA pass's F13). Pinned by
+> `TheBoardMenuEqualsThePlan`,
+> `TheBoardsCardMenuIsTheApplicableVerbInventoryPerKind`,
+> `AKeyboardRequestOnAFreshRowOpensThatRowsMenu`,
+> `AKeyboardRequestOnTheBoardOpensTheSeatedCardsMenu` and the journey
+> `Canvas_ContextMenus_OpenTheCardMenuByKeyboard`.
 
 **E18 — The §W-A canvas scenarios claim what the serializer
 guarantees.** Scripted `CanvasAction` sequences per fixture, executed
@@ -10956,11 +10991,17 @@ and flips only the surface row.
 - **G2D-12 — The renderer carries no context menu in this PR.** The
   palette and the outline carry every verb and the peers keep Invoke;
   recorded as owed with the spec's "renderer card" wording.
+  > **Lifted by W7-7 R-12 (#1256; owner decision OD-3).** The renderer
+  > carries the derived card menu — the outline row's, opened for the
+  > seated card by Shift+F10 and the Applications key and for the card
+  > under the pointer by a right-click (E17's amendment above).
 
 ### Recorded divergences (owner-recorded; off-limits for re-litigation)
 
 - G2D-2's shape; G2D-3's pairing; G2D-10's scheme policy; G2D-12's
   renderer. #1172 resolves the former G2D-7 deep-copy divergence.
+  > **Amended by W7-7 R-12 (OD-3).** G2D-12's renderer is no longer a
+  > divergence: the board carries the card menu (G2D-12 is lifted).
 - Mac's `canvasDuplicate` seats no particular copy after a bulk
   duplicate; Windows seats the first in reading order.
 - The vault file picker names rows by display name with the path as
