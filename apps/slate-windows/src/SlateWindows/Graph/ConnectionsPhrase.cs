@@ -6,8 +6,9 @@ namespace SlateWindows.Graph;
 /// <summary>
 /// W6-2 PR B, slice B1 (#746), contract B-16: the leaf's label inventory
 /// T1–T17, the mac's strings byte for byte (`ConnectionsPanel.swift`),
-/// plus the one Windows-only B1 string (B-D6). Labels, never announced —
-/// every spoken line is core's through the relay.
+/// plus one Windows-only sentence, the second of a note row's hint (W7-7
+/// R-13; B1's Windows-only B-D6 string went with B2). Labels, never
+/// announced — every spoken line is core's through the relay.
 /// </summary>
 internal static class ConnectionsPhrase
 {
@@ -47,6 +48,14 @@ internal static class ConnectionsPhrase
     /// <summary>T15, T16 — the row hints (`:250`).</summary>
     public const string GhostHint = "Unresolved. Choose Create note to add it.";
     public const string NoteHint = "Opens the note.";
+
+    /// <summary>W7-7 R-13 (#1257), Windows-only: a file-backed row's hint —
+    /// T16, then the new-tab activation, whose key name is the caller's
+    /// spoken chord from the table (contract 39 N-2), never a literal. The
+    /// mac's hint is T16 alone; its ⌘Return opens a new tab unadvertised
+    /// (`:159–165`).</summary>
+    public static string NoteHintWithNewTab(string spokenNewTabChord) =>
+        NoteHint + " " + spokenNewTabChord + " opens it in a new tab.";
 
     /// <summary>T17 — the depth control (`:97`, `:108`) and its tags (`:102–104`).</summary>
     public const string DepthName = "Local graph depth";

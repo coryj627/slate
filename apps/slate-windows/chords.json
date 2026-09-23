@@ -3266,6 +3266,19 @@
       "reason": "PR-4, the math-verbosity precedent: the three canvas verbosity levels are selected by one parameterized setter the Canvas menu binds with the level as its CommandParameter. Each level is a row so the catalog records the closed set, and none is registered because a palette row cannot supply the parameter. mac declares no SlateCommandID for these either."
     },
     {
+      "id": "windows.connections.openInNewTab",
+      "label": "Connections: open in a new tab",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Ctrl+Enter",
+      "windowsSpoken": "Control Enter",
+      "scope": "Connections",
+      "registered": false,
+      "reason": "W7-7 R-13 (#1257), contract 35 B-9: Ctrl+Enter on a Connections row opens its note in a new tab; Enter opens it in the current tab. Neither re-roots: only the row's Show connections action does. Delivered by ConnectionsLeafView.OnTreeKeyDown and recorded so the row's hint composes the chord from the table (contract 39 N-2). The mac's ⌘Return (ConnectionsPanel.swift's onKeyPress) is a panel key, not a catalog command."
+    },
+    {
       "id": "windows.graph.escapeLadder",
       "label": "Graph: Escape ladder",
       "section": "View",

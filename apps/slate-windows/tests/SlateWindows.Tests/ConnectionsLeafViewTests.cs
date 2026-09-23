@@ -588,8 +588,10 @@ public sealed class ConnectionsLeafViewTests
                 // Since B2 (B-D6 withdrawn): enabled, its help text the title.
                 Assert.True(show.IsEnabled);
                 Assert.Equal((string)show.Header, AutomationProperties.GetHelpText(show));
-                // The ROW's hint is its activation's, never the action's reason (B-9).
-                Assert.Equal(ConnectionsPhrase.NoteHint, note.Hint);
+                // The ROW's hint is its activation's, never the action's reason
+                // (B-9): the model's hint, T16 then the new-tab gesture (W7-7 R-13).
+                Assert.Equal(host.Leaf.RowHint(note.Row!), note.Hint);
+                Assert.StartsWith(ConnectionsPhrase.NoteHint + " ", note.Hint, StringComparison.Ordinal);
                 MenuItem open = menu.Items.Cast<MenuItem>().First();
                 Assert.True(open.IsEnabled);
             }
