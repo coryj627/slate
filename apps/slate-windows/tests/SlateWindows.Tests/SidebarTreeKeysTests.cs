@@ -258,13 +258,54 @@ public sealed class SidebarTreeKeysTests : IDisposable
         Assert.True(host.Press(row, Key.Enter));
         Assert.Equal(("alpha.md", WorkspaceOpenTarget.CurrentTab, true), host.Requests[^1]);
         Assert.Equal(2, host.Requests.Count);
-
-        // A placeholder or a group header has no check box: Space is not
-        // this route's to take.
-        Assert.False(host.Sidebar.ToggleBatchSelection(FileTreeNodeViewModel.Loading()));
-        Assert.False(host.Sidebar.ToggleBatchSelection(FileTreeNodeViewModel.Group("Today", [])));
         Assert.Equal(NavigationHelpText(), AutomationProperties.GetHelpText(host.Tree));
     });
+
+    /// <summary>
+    /// R-2 (spec 3.2 item 2, codex PR 2 round 3): Space on a focused tree
+    /// row that has no check box — a group header of the date-grouped
+    /// tree, the "Loading…" placeholder a level shows while it loads — is
+    /// a consumed no-op, through the shipped key route: the key is handled
+    /// and nothing moves — the row's batch state and ItemStatus, the
+    /// selection, the expansion, the scroll offset — and nothing is said.
+    /// </summary>
+    [Fact]
+    public void Space_IsAConsumedNoOpOnARowWithoutACheckBox() => RunSta(() =>
+    {
+        using var host = new TreeHost(NewVault("space-no-box"));
+        host.Initialize();
+        host.Sidebar.GroupByDate = true;
+        PumpedDispatcher.PumpUntilDrained(host.Sidebar.TreeRefreshCompletion);
+        FileTreeNodeViewModel group = Assert.IsType<FileTreeNodeViewModel>(
+            host.Sidebar.RootNodes.FirstOrDefault(node => node.IsGroupHeader));
+        FileTreeNodeViewModel placeholder = FileTreeNodeViewModel.Loading();
+        host.Sidebar.RootNodes.Add(placeholder);
+
+        foreach (FileTreeNodeViewModel node in new[] { group, placeholder })
+        {
+            TreeViewItem row = host.FocusRow(node);
+            var before = RowState(host, node, row);
+            int announced = host.AnnouncementCount;
+            int requests = host.Requests.Count;
+
+            Assert.True(host.Press(row, Key.Space), $"Space on '{node.DisplayName}' went unhandled.");
+
+            Assert.Equal(before, RowState(host, node, row));
+            Assert.Equal(announced, host.AnnouncementCount);
+            Assert.Equal(requests, host.Requests.Count);
+            Assert.Same(row, Keyboard.FocusedElement);
+        }
+    });
+
+    private static (bool Batch, string ItemStatus, bool Selected, bool Expanded, FileTreeNodeViewModel? SelectedNode, int Checked, double Offset)
+        RowState(TreeHost host, FileTreeNodeViewModel node, TreeViewItem row) =>
+        (node.IsBatchSelected,
+            AutomationProperties.GetItemStatus(row),
+            row.IsSelected,
+            row.IsExpanded,
+            host.Sidebar.SelectedNode,
+            host.Sidebar.BatchSelectionCount,
+            host.ScrollOffset);
 
     /// <summary>
     /// R-2 on every Files surface: Enter on a focused row of the tree, the
@@ -508,6 +549,10 @@ public sealed class SidebarTreeKeysTests : IDisposable
         public TreeView TagsTree { get; private set; } = null!;
         public List<(string Path, WorkspaceOpenTarget Target, bool FocusEditor)> Requests { get; } = [];
         public A11yEvent LastAnnouncement => _announced[^1];
+        public int AnnouncementCount => _announced.Count;
+
+        /// <summary>The Files tree's own scroll position.</summary>
+        public double ScrollOffset => Descendants<ScrollViewer>(Tree).First().VerticalOffset;
 
         public void Initialize()
         {
