@@ -692,12 +692,16 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                 _announce(conflict);
                 return false;
             }
-            // R-7: any other failure keeps its detail, as text rather than
-            // the binding's field-labelled message ("@message=…").
-            string detail = VaultErrorText.HumanReadable(exception);
-            Status = $"Save blocked: {detail}";
+            // R-7: any other failure keeps its detail — core's rendering of
+            // the error (vault_error_detail), never the binding's
+            // field-labelled message ("@message=…") — and the status shows
+            // the sentence that is spoken.
+            var blocked = new A11yEvent.NoteSaveBlocked(
+                filename,
+                SlateUniffiMethods.VaultErrorDetail(exception));
+            Status = SlateUniffiMethods.A11yRender(blocked).Text;
             _documentChanged?.Invoke(this, null);
-            _announce(new A11yEvent.NoteSaveBlocked(filename, detail));
+            _announce(blocked);
             return false;
         }
         finally

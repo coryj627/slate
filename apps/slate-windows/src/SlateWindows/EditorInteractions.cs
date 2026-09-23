@@ -35,6 +35,9 @@ internal enum EditorInteractionWorkerKind
     Math,
     Artifact,
     Citation,
+    /// <summary>The embed preview resolve (W7-7 R-8): a fault injected
+    /// here is the resolver throwing.</summary>
+    EmbedPreview,
 }
 
 internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
@@ -1302,19 +1305,24 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             link));
         return true;
     }
-    /// <summary><paramref name="Resolved"/> is false when the embed resolved
-    /// to nothing (W7-7 R-8). The preview then announces as unavailable
-    /// from <paramref name="UnresolvedReason"/>, the resolver's own reason
-    /// (null for a shape this host does not render): core words it, and the
-    /// card's text never reaches speech.</summary>
+
     private sealed record EmbedPreviewContent(
         string Title,
         string Body,
         string? SourcePath,
         ImageSource? Image,
-        EditorEmbedPreviewNode Root,
-        bool Resolved,
-        EmbedUnresolvedReason? UnresolvedReason);
+        EditorEmbedPreviewNode Root);
+
+    /// <summary>What one preview resolve produced (W7-7 R-8): a card to
+    /// show, or the reason there is none. Never neither — the reason is the
+    /// resolver's own, or, when the resolver threw, a ReadError carrying
+    /// the error's detail as core renders it.</summary>
+    private abstract record EmbedPreviewOutcome
+    {
+        internal sealed record Shown(EmbedPreviewContent Content) : EmbedPreviewOutcome;
+
+        internal sealed record Unavailable(EmbedUnresolvedReason Reason) : EmbedPreviewOutcome;
+    }
 
     private void ResolveEmbedPreview(
         int generation,
@@ -1326,20 +1334,41 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         int sourceLine,
         OutgoingLink link)
     {
-        EmbedPreviewContent? content = null;
+        EmbedPreviewOutcome outcome;
         try
         {
+            if (_backgroundFaultForTests?.Invoke(
+                    EditorInteractionWorkerKind.EmbedPreview) is Exception injected)
+            {
+                throw injected;
+            }
             EmbedPreviewResolution preview = _session.ResolveEmbedPreview(
                 path,
                 ComposeAnchoredTarget(link),
                 link.DisplayText);
-            content = BuildEmbedPreview(preview.Resolution, preview.Truncated);
+            outcome = preview.Resolution is EmbedResolution.Unresolved unresolved
+                ? new EmbedPreviewOutcome.Unavailable(unresolved.Reason)
+                : new EmbedPreviewOutcome.Shown(
+                    BuildEmbedPreview(preview.Resolution, preview.Truncated));
+        }
+        catch (VaultException error)
+        {
+            // A resolver that throws (a corrupt or unavailable index fails
+            // core's first lookup) still has a reason, as on mac's preview
+            // (AppState.requestEmbedPreview): ReadError with the error's
+            // detail — core's rendering, never the binding's field dump.
+            outcome = new EmbedPreviewOutcome.Unavailable(
+                new EmbedUnresolvedReason.ReadError(SlateUniffiMethods.VaultErrorDetail(error)));
         }
         catch (Exception exception) when (
             exception is not OutOfMemoryException
                 and not StackOverflowException
                 and not AccessViolationException)
         {
+            // Anything else is not core's error to word: its own message
+            // is the detail, mac's localizedDescription arm.
+            outcome = new EmbedPreviewOutcome.Unavailable(
+                new EmbedUnresolvedReason.ReadError(exception.Message));
         }
 
         if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished)
@@ -1358,7 +1387,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 sessionGeneration,
                 sourceLine,
                 link.TargetRaw,
-                content)));
+                outcome)));
     }
 
     private void PublishEmbedPreview(
@@ -1370,7 +1399,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         ulong sessionGeneration,
         int sourceLine,
         string targetRaw,
-        EmbedPreviewContent? content)
+        EmbedPreviewOutcome outcome)
     {
         if (_disposed
             || generation != _embedGeneration
@@ -1389,11 +1418,13 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         // lands — focus has sat on Close since the open, where the pane's
         // name is not read, and announcing at open would have said
         // "Loading". A superseded result returned above, unspoken.
-        if (content is null || !content.Resolved)
+        if (outcome is EmbedPreviewOutcome.Unavailable { Reason: var reason })
         {
-            // A null content is a resolve that failed outright: there is
-            // no reason to hand core.
-            PresentUnavailableEmbed(targetRaw, sourceLine, content?.UnresolvedReason);
+            PresentUnavailableEmbed(targetRaw, sourceLine, reason);
+            return;
+        }
+        if (outcome is not EmbedPreviewOutcome.Shown { Content: var content })
+        {
             return;
         }
 
@@ -1416,7 +1447,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private void PresentUnavailableEmbed(
         string targetRaw,
         int sourceLine,
-        EmbedUnresolvedReason? reason)
+        EmbedUnresolvedReason reason)
     {
         var unavailable = new A11yEvent.EmbedPreviewUnavailable(targetRaw, reason);
         string sentence = SlateUniffiMethods.A11yRender(unavailable).Text;
@@ -1430,13 +1461,12 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     }
 
     /// <summary>W7-7 R-8 test seam: the unavailable surface through the
-    /// same presenter the publish uses, for the reasons a top-level
-    /// preview cannot produce through the resolver (the depth limit, and a
-    /// resolve that fails outright).</summary>
+    /// same presenter the publish uses, for a reason a top-level preview
+    /// cannot produce through the resolver (the depth limit).</summary>
     internal void PresentUnavailableEmbedForTests(
         string targetRaw,
         int sourceLine,
-        EmbedUnresolvedReason? reason)
+        EmbedUnresolvedReason reason)
     {
         ThrowIfDisposed();
         OpenPopover(requestFocus: false);
@@ -1475,12 +1505,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             body,
             root.SourcePath,
             root.Image,
-            root,
-            Resolved: resolution is EmbedResolution.FullNote
-                or EmbedResolution.Section
-                or EmbedResolution.Block
-                or EmbedResolution.Image,
-            UnresolvedReason: (resolution as EmbedResolution.Unresolved)?.Reason);
+            root);
     }
 
     /// <summary>The decoded-pixel bound for one built card (W4-2
