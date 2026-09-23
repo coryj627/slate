@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using ICSharpCode.AvalonEdit;
@@ -19,6 +20,7 @@ public partial class MainWindow : Window
     private readonly VaultLifecycleViewModel _viewModel;
     private readonly WindowPlacementManager _windowPlacement;
     private readonly AccessibilityNotificationDispatcher _announcer;
+    private readonly ForegroundRescanRoute _foregroundRescan;
     private IInputElement? _focusBeforeSwitcher;
     private QuickSwitcherViewModel? _observedQuickSwitcher;
     private WorkspaceViewModel? _observedWorkspace;
@@ -68,6 +70,14 @@ public partial class MainWindow : Window
         ObservePalette();
         ObserveSearch();
         RecentVaultJumpList.Apply(_viewModel.RecentVaults);
+        // W7-7 PR 7 (#1252, OD-1, R-9): coming back to the window rescans —
+        // no modal in the way, not on the first activation — and the
+        // lifecycle coalescer decides the rest.
+        _foregroundRescan = new ForegroundRescanRoute(
+            _viewModel.RescanAsync,
+            () => OpenModalSurface is not null || ComponentDispatcher.IsThreadModal);
+        Activated += (_, _) => _ = _foregroundRescan.OnActivated();
+        Deactivated += (_, _) => _foregroundRescan.OnDeactivated();
     }
 
     internal async Task ActivateFromExternalRequestAsync(string? vaultPath)

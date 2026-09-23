@@ -16,15 +16,15 @@ public sealed class ScanAnnouncementGateTests
         var gate = new ScanAnnouncementGate(() => _now);
 
         A11yEvent.VaultScanStarted start = Assert.IsType<A11yEvent.VaultScanStarted>(gate.Started(1));
-        A11yEvent.VaultScanFinished finish = Assert.IsType<A11yEvent.VaultScanFinished>(gate.Finished(1));
+        A11yEvent.VaultScanFinished finish = Assert.IsType<A11yEvent.VaultScanFinished>(gate.Finished(1, 1));
         Assert.Equal(1UL, start.TotalFiles);
-        Assert.Equal(1UL, finish.FilesIndexed);
+        Assert.Equal((1UL, 1UL), (finish.FilesSeen, finish.FilesChanged));
         RenderedAnnouncement started = Render(start);
         RenderedAnnouncement finished = Render(finish);
 
         Assert.Equal("Scanning vault. 1 file to index.", started.Text);
         Assert.Equal(A11yPriority.Medium, started.Priority);
-        Assert.Equal("Scan complete. 1 file indexed.", finished.Text);
+        Assert.Equal("Scan complete. 1 file, 1 new or changed.", finished.Text);
         Assert.Equal(A11yPriority.Medium, finished.Priority);
     }
 
@@ -76,7 +76,7 @@ public sealed class ScanAnnouncementGateTests
         var gate = new ScanAnnouncementGate(() => _now);
         _ = gate.Started(5);
 
-        Assert.Equal("Scan complete. 5 files indexed.", Render(gate.Finished(5)).Text);
+        Assert.Equal("Scan complete. 5 files, 2 new or changed.", Render(gate.Finished(5, 2)).Text);
 
         gate.Reset();
         A11yEvent announcement = Assert.IsAssignableFrom<A11yEvent>(gate.FileIndexed(1, 5));
@@ -95,7 +95,7 @@ public sealed class UiProgressListenerTests
         var queued = new List<Action>();
         var emitted = new List<ScanProgress>();
         var listener = new UiProgressListener(queued.Add, emitted.Add);
-        var report = new ScanReport(2, 2, 0, 32, []);
+        var report = new ScanReport(2, 2, 0, 32, [], 2, 0, true, null);
 
         listener.OnProgress(new ScanProgress.Started(2));
         listener.OnProgress(new ScanProgress.FileIndexed("a.md", 1, 2));
@@ -128,7 +128,7 @@ public sealed class UiProgressListenerTests
     {
         var queued = new List<Action>();
         var emitted = new List<ScanProgress>();
-        var report = new ScanReport(2, 0, 2, 0, []);
+        var report = new ScanReport(2, 0, 2, 0, [], 0, 0, true, null);
         UiProgressListener listener = null!;
         listener = new UiProgressListener(
             queued.Add,
@@ -202,7 +202,7 @@ public sealed class UiProgressListenerTests
                 [
                     $"Vault {lifecycle.VaultDisplayName} opened. Scanning files for the sidebar.",
                     "Scanning vault. 2 files to index.",
-                    "Scan complete. 0 files indexed.",
+                    "Scan complete. 2 files, 0 new or changed.",
                 ],
                 announcements
                     .Select(SlateUniffiMethods.A11yRender)

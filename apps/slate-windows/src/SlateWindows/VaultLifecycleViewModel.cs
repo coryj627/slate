@@ -32,7 +32,7 @@ internal enum VaultCloseDecision
 /// the registry. The interface names members this type already exposed —
 /// implementing it added no surface.
 /// </remarks>
-internal sealed class VaultLifecycleViewModel
+internal sealed partial class VaultLifecycleViewModel
     : INotifyPropertyChanged, IDisposable, ISlateCommandHost
 {
     private readonly Func<Task<string?>> _pickVault;
@@ -60,6 +60,10 @@ internal sealed class VaultLifecycleViewModel
         Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>> _runSessionLoad;
     private readonly Func<Action, Task> _runSyncMarkerArm;
     private readonly TimeSpan? _syncMarkerDebounce;
+    // W7-7 PR 7 (R-9): the rescan's clock, its delta channel and page size.
+    private readonly Func<DateTimeOffset> _scanClock;
+    private readonly Func<VaultSession, IScanDeltaChannel> _scanDeltaChannel;
+    private readonly uint _scanDeltaPageLimit;
 
     /// <summary>
     /// W4-8 (SD6/SDR-5): the once-per-vault-PATH announce gate, keyed
@@ -151,7 +155,9 @@ internal sealed class VaultLifecycleViewModel
             Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>>? sessionLoadWorker = null,
         Func<Action, Task>? syncArmWorker = null,
         TimeSpan? syncMarkerDebounce = null,
-        Action<RenderedAnnouncement>? announceRendered = null)
+        Action<RenderedAnnouncement>? announceRendered = null,
+        Func<VaultSession, IScanDeltaChannel>? scanDeltaChannel = null,
+        uint scanDeltaPageLimit = DefaultScanDeltaPageLimit)
     {
         _pickVault = pickVault;
         _enqueueUi = enqueueUi;
@@ -173,6 +179,9 @@ internal sealed class VaultLifecycleViewModel
             ?? (_ => Task.FromResult(false));
         _recentVaultsStore = recentVaultsStore ?? new RecentVaultsStore();
         _scanAnnouncements = new ScanAnnouncementGate(scanClock);
+        _scanClock = scanClock ?? (() => DateTimeOffset.UtcNow);
+        _scanDeltaChannel = scanDeltaChannel ?? (session => new SessionScanDeltaChannel(session));
+        _scanDeltaPageLimit = scanDeltaPageLimit;
         _filterUiContext = filterUiContext;
         SynchronizationContext? currentUiContext = SynchronizationContext.Current;
         _lifecycleDispatcher = currentUiContext is DispatcherSynchronizationContext
@@ -464,7 +473,10 @@ internal sealed class VaultLifecycleViewModel
             (ScanReport Report, SwitcherFile[] SwitcherFiles) loaded = await loadTask;
             if (generation == _generation)
             {
-                StatusText = $"Scan finished: {loaded.Report.FilesIndexed} files indexed.";
+                StatusText = ScanFinishedStatus(loaded.Report);
+                // The foreground rescan's cooldown counts from the open
+                // scan too: the vault was just read (W7-7 PR 7).
+                _lastScanEndedAt = _scanClock();
                 ProgressMaximum = Math.Max(1, loaded.Report.FilesSeen);
                 ProgressValue = ProgressMaximum;
                 IsProgressIndeterminate = false;
@@ -675,8 +687,10 @@ internal sealed class VaultLifecycleViewModel
                 ProgressMaximum = Math.Max(1, finished.Report.FilesSeen);
                 ProgressValue = ProgressMaximum;
                 IsProgressIndeterminate = false;
-                StatusText = $"Scan finished: {finished.Report.FilesIndexed} files indexed.";
-                _announce(_scanAnnouncements.Finished(finished.Report.FilesIndexed));
+                StatusText = ScanFinishedStatus(finished.Report);
+                _announce(_scanAnnouncements.Finished(
+                    finished.Report.FilesSeen,
+                    finished.Report.FilesChanged));
                 break;
             case ScanProgress.Cancelled:
                 IsProgressIndeterminate = false;
@@ -930,6 +944,7 @@ internal sealed class VaultLifecycleViewModel
         _scanCancel?.Dispose();
         _scanCancel = null;
         _progressListener = null;
+        ResetRescanState();
 
         if (QuickSwitcher is not null)
         {
@@ -942,6 +957,8 @@ internal sealed class VaultLifecycleViewModel
         {
             FileSidebar.OpenTargetRequested -= FileSidebar_OpenTargetRequested;
             FileSidebar.PropertyChanged -= FileSidebar_SheetPresented;
+            FileSidebar.PropertyChanged -= FileSidebar_RescanBlockersChanged;
+            FileSidebar.RescanRequested = null;
         }
 
         if (Workspace is not null)
@@ -1068,6 +1085,11 @@ internal sealed class VaultLifecycleViewModel
         FileSidebar = sidebar;
         // The sidebar twin, same post-assignment ordering rationale.
         sidebar.PropertyChanged += FileSidebar_SheetPresented;
+        // W7-7 PR 7 (#1252, R-9): Files Sidebar → Refresh is the explicit
+        // rescan; a follow-up an import or trash blocked runs when they
+        // settle.
+        sidebar.RescanRequested = () => RescanAsync(RescanReason.Explicit);
+        sidebar.PropertyChanged += FileSidebar_RescanBlockersChanged;
         QuickSwitcher = switcher;
         WorkspaceReady?.Invoke(this, EventArgs.Empty);
     }

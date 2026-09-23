@@ -2263,26 +2263,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             return;
         }
 
-        int affected = 0;
-        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
-        {
-            if (IsPathBacked(tab.Item) && IsSameOrDescendantPath(tab.Path, invalidated))
-            {
-                tab.InvalidatePath();
-                affected++;
-            }
-        }
-
-        _closedTabs.RemoveAll(entry =>
-            IsPathBacked(entry.Item) && IsSameOrDescendantPath(entry.Item.Path, invalidated));
-        // W6-2 PR B2 (rule D, the delete hook; B2D-9): the leaf's stack
-        // entries under the deleted path are pruned, so Back never opens a
-        // note that is gone; the pin and the note in view are kept (the
-        // Error presentation, B1's delete route).
-        Connections.Prune(invalidated);
+        int affected = InvalidatePathWithoutPersisting(invalidated);
         RaiseCommandStates();
         Persist();
-        if (affected > 0)
+        // W7-7 PR 7 (R-9): silent under a rescan's reconciliation, which
+        // speaks only its one core-rendered completion sentence.
+        if (affected > 0 && !IsReconcilingSilently)
         {
             // W0.5-3 residue: Windows missing-editor availability copy.
             _announce(new A11yEvent.HostComposed(

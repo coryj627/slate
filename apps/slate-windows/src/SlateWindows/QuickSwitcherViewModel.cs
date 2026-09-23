@@ -259,6 +259,24 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         }
     }
 
+    /// <summary>
+    /// W7-7 PR 7 (#1252, R-9): a rescan replaces the whole list with the
+    /// index's openable documents (the same paged <c>ListFiles</c> read the
+    /// open does), so a file created or deleted outside Slate is found — or
+    /// gone — after one Refresh. An open switcher re-ranks at once.
+    /// </summary>
+    public void ReplaceFiles(IEnumerable<SwitcherFile> files)
+    {
+        _files = [.. files];
+        if (IsOpen)
+        {
+            ScheduleRefresh();
+        }
+    }
+
+    /// <summary>The paths Quick Open ranks over — for the rescan facts.</summary>
+    internal IReadOnlyList<string> FilePathsForTests => [.. _files.Select(file => file.Path)];
+
     private static bool IsOpenablePath(string path) =>
         System.IO.Path.GetExtension(path).ToLowerInvariant() is ".md" or ".markdown" or ".canvas" or ".base";
 

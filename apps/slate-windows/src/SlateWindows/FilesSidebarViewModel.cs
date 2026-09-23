@@ -425,7 +425,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             restoredExpandedPaths ?? [],
             StringComparer.Ordinal);
 
-        RefreshCommand = new RelayCommand(_ => Refresh(reportCount: true), _ => true);
+        RefreshCommand = new RelayCommand(_ => RequestRefresh(), _ => true);
         RetrySettingsCommand = new RelayCommand(_ => RetrySettings(), _ => _settingsNotice is not null);
         ClearFilterCommand = new RelayCommand(_ => FilterText = string.Empty, _ => FilterText.Length > 0);
         ToggleTagsCommand = new RelayCommand(_ => ShowTags = !ShowTags, _ => true);
@@ -732,7 +732,30 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         ? "No files selected"
         : $"{BatchSelectionCount:N0} {(BatchSelectionCount == 1 ? "file" : "files")} selected";
 
+    /// <summary>
+    /// Files Sidebar → Refresh — the "Refresh files" button, the Files
+    /// Sidebar menu item and the registered command all run it. W7-7 PR 7
+    /// (#1252, R-9): it is the lifecycle's EXPLICIT rescan, which reconciles
+    /// what changed outside Slate and always speaks its outcome; a sidebar
+    /// with no lifecycle behind it (headless facts) keeps the tree refresh.
+    /// </summary>
     public ICommand RefreshCommand { get; }
+
+    /// <summary>W7-7 PR 7: installed by the vault lifecycle — the explicit
+    /// rescan <see cref="RefreshCommand"/> runs.</summary>
+    internal Func<Task>? RescanRequested { get; set; }
+
+    private void RequestRefresh()
+    {
+        if (RescanRequested is Func<Task> rescan)
+        {
+            _ = rescan();
+            return;
+        }
+
+        Refresh(reportCount: true);
+    }
+
     public ICommand RetrySettingsCommand { get; }
     public ICommand ClearFilterCommand { get; }
     public ICommand ToggleTagsCommand { get; }
