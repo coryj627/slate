@@ -35,13 +35,14 @@ namespace SlateWindows;
 /// Loaded priority, so the list is laid out first — which generates the
 /// viewport's containers — and the item is then brought in, which a
 /// virtualizing panel realizes. Only a row that still has no container
-/// (the list is not laid out at all) is left to a deferred seat, and the
-/// call answers false so the caller lands on its own stable stop. The
-/// seat is for the NEWEST request only — any later landing, the caller's
-/// fallback among them, supersedes it — and runs only while the keys are
-/// still exactly where the caller left them. Codex round 3: the list
-/// itself used to hold the keys meanwhile, and NVDA announced the bare
-/// list before the row.
+/// (the list is not laid out, or has no items host) is left to a deferred
+/// seat, and the call answers false so the caller lands on its own stable
+/// stop. The seat serves the NEWEST request only — a later landing through
+/// here, a caller's fallback to the rail among them, supersedes it — and
+/// runs only while the keys are exactly where they were when the call was
+/// made, so a fallback that moved them retires it too. Codex round 3: the
+/// list itself used to hold the keys meanwhile — a real focus change,
+/// which UIA reports, on the very element R-5 keeps the keys off.
 /// </para>
 /// <para>
 /// An EMPTY list's stop is its notice when one is showing (spec §5.2.2):
