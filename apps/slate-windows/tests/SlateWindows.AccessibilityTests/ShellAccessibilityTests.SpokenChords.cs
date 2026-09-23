@@ -135,19 +135,18 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement results = WaitForElement(window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
             JsonElement[] registered = rows.Values.Where(row => row.GetProperty("registered").GetBoolean()).ToArray();
             Assert.NotEmpty(registered);
-            // Filtering realizes every row independently; offscreen virtual
-            // item peers must not let this check silently cover only page one.
+            // Filtering by each label brings most rows onto page one, and
+            // the grouped rows virtualize (R-11): a row the filter leaves
+            // below the viewport is reached through ItemContainer and
+            // realized, so offscreen virtual item peers cannot let this check
+            // silently cover only page one.
             foreach (JsonElement row in registered)
             {
                 string label = row.GetProperty("label").GetString()!;
                 string? spoken = row.GetProperty("windowsSpoken").GetString();
                 string expected = spoken is null ? label : label + ", " + spoken;
                 palette.Patterns.Value.Pattern.SetValue(label);
-                // One provider-side FindFirst per poll, not every row's Name
-                // read cross-process on every spin, for each of the rows.
-                AutomationElement? found = FindDescendantWithin(results,
-                    automation.ConditionFactory.ByControlType(ControlType.ListItem).And(automation.ConditionFactory.ByName(expected)),
-                    TimeSpan.FromSeconds(5));
+                AutomationElement? found = FindPaletteRow(results, automation, expected);
                 Assert.True(found is not null, "No palette row with its composed Name: " + expected);
             }
             AssertAxeClean(process, "spoken-chords-palette");
@@ -193,6 +192,43 @@ public sealed partial class ShellAccessibilityTests
         string expression = declared.Attribute("InputGestureText")!.Value;
         Assert.StartsWith("{cmd:ChordText ", expression);
         return expression[15..^1];
+    }
+
+    /// <summary>
+    /// The palette row named <paramref name="name"/>, realized. R-11
+    /// virtualizes the grouped rows, so a row outside the viewport has no
+    /// container until something brings it in: after the realized rows the
+    /// search asks the list's ItemContainer pattern for the row and
+    /// realizes it — the route any UIA client takes to a virtualized item.
+    /// </summary>
+    private static AutomationElement? FindPaletteRow(
+        AutomationElement results, UIA3Automation automation, string name)
+    {
+        ConditionBase row = automation.ConditionFactory
+            .ByControlType(ControlType.ListItem)
+            .And(automation.ConditionFactory.ByName(name));
+
+        // One provider-side FindFirst per poll, not every row's Name read
+        // cross-process on every spin.
+        AutomationElement? found = FindDescendantWithin(results, row, TimeSpan.FromSeconds(2));
+        if (found is not null || !results.Patterns.ItemContainer.IsSupported)
+        {
+            return found;
+        }
+
+        AutomationElement? virtualized = results.Patterns.ItemContainer.Pattern.FindItemByProperty(
+            null, automation.PropertyLibrary.Element.Name, name);
+        if (virtualized is null)
+        {
+            return null;
+        }
+
+        if (virtualized.Patterns.VirtualizedItem.IsSupported)
+        {
+            virtualized.Patterns.VirtualizedItem.Pattern.Realize();
+        }
+
+        return FindDescendantWithin(results, row, TimeSpan.FromSeconds(5));
     }
 
     /// <summary>A descendant UIA finds for the condition, polled with an

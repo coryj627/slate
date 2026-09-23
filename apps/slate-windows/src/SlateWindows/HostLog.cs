@@ -47,6 +47,7 @@ internal enum HostDiagnosticEvent
     GraphLayoutRefreshFailed,
     GraphTopologyFetchFailed,
     MonitorEnumerationFailed,
+    PaletteQueryChangeTimed,
     QuickOpenRankingFailed,
     RecentVaultJumpListUpdateFailed,
     RecentVaultsPayloadRejected,
@@ -155,13 +156,19 @@ internal static class HostLog
         WriteWithoutThrowing(message);
     }
 
+    /// <summary>Whether <c>SLATE_UIA_DIAGNOSTICS=1</c> is set. A diagnostic
+    /// that must do work to exist — read a clock, queue a callback — asks
+    /// first, so an unset variable changes no behaviour.</summary>
+    public static bool UiAutomationDiagnosticsEnabled =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("SLATE_UIA_DIAGNOSTICS"),
+            "1",
+            StringComparison.Ordinal);
+
     public static void WriteUiAutomationDiagnostic(
         HostDiagnosticEvent diagnosticEvent)
     {
-        if (string.Equals(
-                Environment.GetEnvironmentVariable("SLATE_UIA_DIAGNOSTICS"),
-                "1",
-                StringComparison.Ordinal))
+        if (UiAutomationDiagnosticsEnabled)
         {
             Write(diagnosticEvent);
         }
@@ -172,10 +179,7 @@ internal static class HostLog
     public static void WriteUiAutomationDiagnostic(
         HostDiagnosticEvent diagnosticEvent, string detail)
     {
-        if (string.Equals(
-                Environment.GetEnvironmentVariable("SLATE_UIA_DIAGNOSTICS"),
-                "1",
-                StringComparison.Ordinal))
+        if (UiAutomationDiagnosticsEnabled)
         {
             WriteWithoutThrowing($"SlateWindows.{diagnosticEvent} ({detail})");
         }
