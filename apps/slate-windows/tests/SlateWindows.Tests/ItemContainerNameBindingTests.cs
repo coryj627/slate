@@ -96,12 +96,12 @@ public sealed class ItemContainerNameBindingTests
         (string file, XElement host) = ItemContainerNameCensus.XamlHost(label);
         XElement authored = ItemContainerNameCensus.ContainerStyle(host, ItemContainerNameCensus.KeyedStyles())
             ?? throw new Xunit.Sdk.XunitException($"{label}: {file} gives it no container style");
-        (Style style, ResourceDictionary resources) = LoadStyle(authored, file);
+        Style style = LoadStyle(authored, file);
         Type hostType = ItemContainerNameCensus.ResolveType(host)
             ?? throw new Xunit.Sdk.XunitException($"{label}: the host type does not resolve");
-        IValueConverter? converter = bound.Converter is null
-            ? null
-            : (IValueConverter)resources[bound.Converter];
+        // The pinned converter, loaded apart from the style: a style that
+        // drops it must read differently, not switch this fact's mode.
+        IValueConverter? converter = bound.Converter is null ? null : LoadConverter(bound.Converter);
         Exercise(label, hostType, style, bound, converter);
     });
 
@@ -138,10 +138,11 @@ public sealed class ItemContainerNameBindingTests
             expectedSecond = SecondName;
             rename = () => fields[bound.Path] = SecondName;
         }
-        else if (converter is not null)
+        else if (bound.ItemType.IsEnum)
         {
             // An enum item speaks through its converter: its label, never
             // its member name.
+            Assert.True(converter is not null, $"{label}: an enum item needs a pinned converter to speak");
             object[] values = Enum.GetValues(bound.ItemType).Cast<object>().ToArray();
             items.Add(values[0]);
             expectedFirst = (string)converter.Convert(values[0], typeof(string), null!, CultureInfo.InvariantCulture);
@@ -152,6 +153,7 @@ public sealed class ItemContainerNameBindingTests
         else
         {
             // A string item names its container by itself.
+            Assert.Equal(typeof(string), bound.ItemType);
             items.Add(FirstName);
             expectedFirst = FirstName;
             expectedSecond = SecondName;
@@ -200,15 +202,11 @@ public sealed class ItemContainerNameBindingTests
     /// document's namespace prefixes (clr mappings bound to the shell
     /// assembly), any converter it names from WorkspaceTemplates.xaml, and
     /// no event setters (a handler needs its code-behind; naming does not).</summary>
-    private static (Style Style, ResourceDictionary Resources) LoadStyle(XElement authored, string file)
+    private static Style LoadStyle(XElement authored, string file)
     {
         XElement documentRoot = authored.Document?.Root
             ?? throw new InvalidOperationException("the style has no document");
-        var root = new XElement(
-            Presentation + "ResourceDictionary",
-            documentRoot.Attributes()
-                .Where(attribute => attribute.IsNamespaceDeclaration)
-                .Select(attribute => new XAttribute(attribute.Name, Remap(attribute.Value))));
+        XElement root = Dictionary(documentRoot);
         var style = new XElement(authored);
         style.Descendants().Where(element => element.Name.LocalName == "EventSetter").Remove();
         foreach (XElement element in style.DescendantsAndSelf())
@@ -216,30 +214,58 @@ public sealed class ItemContainerNameBindingTests
             element.Name = XNamespace.Get(Remap(element.Name.NamespaceName)) + element.Name.LocalName;
         }
         style.SetAttributeValue(Xaml + "Key", "__pinned");
-
-        XDocument templates = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "WorkspaceTemplates.xaml"));
         foreach (string key in Regex.Matches(style.ToString(), @"\{StaticResource ([\w.]+)\}")
             .Select(match => match.Groups[1].Value)
             .Distinct(StringComparer.Ordinal))
         {
-            XElement? declared = templates.Root!.Elements()
-                .FirstOrDefault(element => (string?)element.Attribute(Xaml + "Key") == key)
-                ?? throw new Xunit.Sdk.XunitException($"{file}: the style uses {key}, which WorkspaceTemplates.xaml does not declare");
-            var copy = new XElement(declared);
-            copy.Name = XNamespace.Get(Remap(copy.Name.NamespaceName)) + copy.Name.LocalName;
-            root.Add(copy);
+            root.Add(TemplatesResource(key, file));
         }
         root.Add(style);
-        // The shell as the LOCAL assembly, as its compiled XAML is: its
-        // converters are internal, which a plain XamlReader.Parse refuses.
+        return (Style)Load(root)["__pinned"];
+    }
+
+    /// <summary>A converter as WorkspaceTemplates.xaml declares it.</summary>
+    private static IValueConverter LoadConverter(string key)
+    {
+        XElement root = Dictionary(TemplatesDocument().Root!);
+        root.Add(TemplatesResource(key, "the pin"));
+        return Assert.IsAssignableFrom<IValueConverter>(Load(root)[key]);
+    }
+
+    /// <summary>An empty ResourceDictionary carrying the namespace
+    /// declarations of <paramref name="documentRoot"/>.</summary>
+    private static XElement Dictionary(XElement documentRoot) =>
+        new(
+            Presentation + "ResourceDictionary",
+            documentRoot.Attributes()
+                .Where(attribute => attribute.IsNamespaceDeclaration)
+                .Select(attribute => new XAttribute(attribute.Name, Remap(attribute.Value))));
+
+    private static XDocument TemplatesDocument() =>
+        XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "WorkspaceTemplates.xaml"));
+
+    private static XElement TemplatesResource(string key, string user)
+    {
+        XElement declared = TemplatesDocument().Root!.Elements()
+            .FirstOrDefault(element => (string?)element.Attribute(Xaml + "Key") == key)
+            ?? throw new Xunit.Sdk.XunitException($"{user}: {key} is not declared in WorkspaceTemplates.xaml");
+        var copy = new XElement(declared);
+        copy.Name = XNamespace.Get(Remap(copy.Name.NamespaceName)) + copy.Name.LocalName;
+        return copy;
+    }
+
+    /// <summary>Loads a dictionary with the shell as the LOCAL assembly, as
+    /// its compiled XAML is: its converters are internal, which a plain
+    /// XamlReader.Parse refuses.</summary>
+    private static ResourceDictionary Load(XElement root)
+    {
         using var text = new StringReader(root.ToString());
         using var xml = System.Xml.XmlReader.Create(text);
         using var reader = new System.Xaml.XamlXmlReader(
             xml,
             XamlReader.GetWpfSchemaContext(),
             new System.Xaml.XamlXmlReaderSettings { LocalAssembly = typeof(MainWindow).Assembly });
-        var resources = (ResourceDictionary)XamlReader.Load(reader);
-        return ((Style)resources["__pinned"], resources);
+        return (ResourceDictionary)XamlReader.Load(reader);
     }
 
     private static string Remap(string xmlNamespace) =>
