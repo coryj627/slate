@@ -752,8 +752,11 @@ public sealed class ReadingFocusTests
         }
 
         host.ReleaseProjection();
-
-        Assert.False(surface.IsFocusLandingPending);
+        // A vault-wide save (the edit's own, say) can drift the tuple again
+        // and cost one more retry; the landing waits through every one.
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !surface.IsFocusLandingPending),
+            $"the landing held for the refresh never settled ({refresh})");
         if (refresh == "failed")
         {
             Assert.Equal(1, fellThrough);
