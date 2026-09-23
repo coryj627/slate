@@ -1104,6 +1104,108 @@ public sealed class AccessibleDataGridTests
         });
     }
 
+    // W7-7 PR 3 (#1246, contract R-4): every caller names its rows by
+    // identity. Each fact below drives the caller's own bind and reads
+    // the realized rows' UIA NAMES — the DataItem a reader lands on, so
+    // WPF's ToString() fallback is what a missing name would show (the
+    // record: "SlateWindows.Bases.BaseGridRowViewModel, data item").
+
+    /// <summary>A delegate that answers blank never lets WPF name the
+    /// row — the peer would read the item's ToString() — so the row's
+    /// 1-based position stands in.</summary>
+    [Fact]
+    public void ABlankRowNameFallsBackToThePositionNotTheItem() => RunSta(() =>
+    {
+        var grid = new AccessibleDataGrid { Announce = _ => { } };
+        grid.Bind(
+            Columns(), People, "3 rows.", "People",
+            rowAutomationName: row => ((Person)row).Name == "Alice" ? " " : ((Person)row).Name);
+
+        Assert.Equal(
+            ["Charlie", "Row 2", "Bora"],
+            GridRowNames.Realized(grid).Select(row => row.Name));
+    });
+
+    /// <summary>The reading table names a row by its first cell, the row
+    /// header's text; a blank first cell reads its position. Unnamed, a
+    /// row of cells read "System.String[]".</summary>
+    [Fact]
+    public void ReadingTableRowsAreNamedByTheirFirstCell() => RunSta(() =>
+    {
+        AccessibleDataGrid grid = Assert.IsType<AccessibleDataGrid>(Reading.ReadingTableGrid.Build(
+            "| Name | Status |\n| --- | --- |\n| alpha | Open |\n|  | Done |\n"));
+
+        Assert.Equal(
+            ["alpha", "Row 2"],
+            GridRowNames.Realized(grid).Select(row => row.Name));
+    });
+
+    /// <summary>A bibliography entry row is its entry: "Title (year)",
+    /// the text its row header carries — the key when there is no title,
+    /// no parenthesis when there is no year.</summary>
+    [Fact]
+    public void BibliographyEntryRowsAreNamedByTitleAndYear() => RunSta(() =>
+    {
+        var grid = new AccessibleDataGrid { Announce = _ => { } };
+        MainWindow.BindBibliographyEntries(
+            grid,
+            [
+                new Panels.BibliographyRowViewModel(Entry("doe2021", "Accessible grids", 2021)),
+                new Panels.BibliographyRowViewModel(Entry("roe", string.Empty, null)),
+            ],
+            "2 entries.");
+
+        Assert.Equal(
+            ["Accessible grids (2021)", "roe"],
+            GridRowNames.Realized(grid).Select(row => row.Name));
+    });
+
+    /// <summary>An unresolved-citation row is its key, the row header.</summary>
+    [Fact]
+    public void BibliographyUnresolvedRowsAreNamedByTheirKey() => RunSta(() =>
+    {
+        var grid = new AccessibleDataGrid { Announce = _ => { } };
+        MainWindow.BindBibliographyUnresolved(
+            grid,
+            [new Panels.UnresolvedRowViewModel(new UnresolvedCitation(Path: "notes/a.md", Key: "smith2020"))],
+            "1 unresolved citation.");
+
+        Assert.Equal(
+            ["smith2020"],
+            GridRowNames.Realized(grid).Select(row => row.Name));
+    });
+
+    /// <summary>A bulk-rename preview row is the note it renames.</summary>
+    [Fact]
+    public void BulkRenamePreviewRowsAreNamedByTheNoteTheyRename() => RunSta(() =>
+    {
+        var grid = new AccessibleDataGrid { Announce = _ => { } };
+        MainWindow.BindBulkRenamePreview(
+            grid,
+            [
+                new Panels.BulkRenameViewModel.PreviewRow("notes/a.md", "Will rename", "title", "heading"),
+                new Panels.BulkRenameViewModel.PreviewRow("b.md", "Skipped", "", ""),
+            ],
+            string.Empty);
+
+        Assert.Equal(
+            ["notes/a.md", "b.md"],
+            GridRowNames.Realized(grid).Select(row => row.Name));
+    });
+
+    private static BibEntry Entry(string key, string title, int? year) =>
+        new(
+            Key: key,
+            ItemType: "article",
+            Title: title,
+            Authors: [],
+            Year: year,
+            Journal: null,
+            Doi: null,
+            Url: null,
+            Publisher: null,
+            AbstractText: null);
+
     private static void RunSta(Action body)
     {
         Exception? failure = null;
@@ -1124,6 +1226,174 @@ public sealed class AccessibleDataGridTests
         if (failure is not null)
         {
             ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+}
+
+/// <summary>W7-7 PR 3 (#1246, contract R-4), the surface callers: the
+/// Base tab and dock grids, a dashboard section and the canvas table, each
+/// driven over a real session.</summary>
+public sealed class AccessibleDataGridSurfaceRowNameTests : IDisposable
+{
+    private readonly FixtureVault _fixture;
+    private readonly VaultSession _session;
+
+    public AccessibleDataGridSurfaceRowNameTests()
+    {
+        _fixture = FixtureVault.Create(3, "grid-row-names");
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "Notes.base"),
+            "filters: 'file.ext == \"md\"'\n"
+            + "views:\n"
+            + "  - type: table\n"
+            + "    name: Main\n"
+            + "    order:\n"
+            + "      - file.name\n");
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "board.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"grp","type":"group","x":-40,"y":-40,"width":480,"height":240,"label":"Research"},
+                {"id":"q","type":"text","text":"Core question","x":0,"y":0,"width":200,"height":100},
+                {"id":"e","type":"text","text":"Evidence so far","x":220,"y":0,"width":200,"height":100}
+              ],
+              "edges": []
+            }
+            """);
+        _session = VaultSession.OpenFilesystem(_fixture.Root);
+        using var cancel = new CancelToken();
+        _session.ScanInitial(cancel);
+    }
+
+    public void Dispose()
+    {
+        _session.Dispose();
+        _fixture.Dispose();
+    }
+
+    /// <summary>Both of the Base surface's binds — the tab's and the
+    /// read-only dock's — name a row by its note's file name. Unnamed, NVDA
+    /// read "SlateWindows.Bases.BaseGridRowViewModel, data item".</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BasesRowsAreNamedByTheirFile(bool readOnlySurface) => RunSta(() =>
+    {
+        var document = new Bases.BaseDocumentViewModel(
+            _session, "Notes.base", _ => { }, synchronousForTests: true);
+        document.Load();
+        var surface = new Bases.BaseSurfaceView
+        {
+            IsReadOnlySurface = readOnlySurface,
+            Model = document,
+        };
+
+        List<(object Item, string Name)> rows =
+            GridRowNames.Realized(surface.GridForTests, surface);
+        Assert.Equal(
+            ["note0.md", "note1.md", "note2.md"],
+            rows.Select(row => row.Name).Order(StringComparer.Ordinal));
+        Assert.All(rows, row => Assert.Equal(
+            Path.GetFileName(((Bases.BaseGridRowViewModel)row.Item).Row.FilePath), row.Name));
+        document.Shutdown();
+    });
+
+    /// <summary>A dashboard section's read-only grid names rows as the
+    /// Base tab does.</summary>
+    [Fact]
+    public void DashboardSectionRowsAreNamedByTheirFile() => RunSta(() =>
+    {
+        var document = new Bases.BaseDocumentViewModel(
+            _session, "Notes.base", _ => { }, synchronousForTests: true);
+        document.Load();
+        AccessibleDataGrid grid = Bases.DashboardSurfaceView.BuildSectionGrid(
+            "RowNames", 0, Assert.IsType<BasesResultSet>(document.Result));
+
+        Assert.Equal(
+            ["note0.md", "note1.md", "note2.md"],
+            GridRowNames.Realized(grid).Select(row => row.Name).Order(StringComparer.Ordinal));
+        document.Shutdown();
+    });
+
+    /// <summary>A canvas table row is core's speakable name, its row
+    /// header. Unnamed, NVDA read the record: "CanvasTableRow { NodeId =
+    /// grp-research, … GroupPath = System.String[] … }".</summary>
+    [Fact]
+    public void CanvasTableRowsAreNamedByTheirSpeakableName() => RunSta(() =>
+    {
+        var document = new Canvas.CanvasDocumentViewModel(
+            _session,
+            "board.canvas",
+            new Canvas.CanvasAnnouncer(_ => { }, TimeSpan.FromMinutes(1)),
+            synchronousForTests: true);
+        document.Load();
+        var table = new Canvas.CanvasTableView { Model = document };
+
+        List<(object Item, string Name)> rows = GridRowNames.Realized(table.GridForTests, table);
+        Assert.Contains("Core question", rows.Select(row => row.Name));
+        Assert.Equal(3, rows.Count);
+        Assert.All(rows, row => Assert.Equal(((CanvasTableRow)row.Item).SpeakableName, row.Name));
+        document.Shutdown();
+    });
+
+    private static void RunSta(Action body)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                body();
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "STA test body timed out.");
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+}
+
+/// <summary>The realized rows of a grid, as UIA reads them.</summary>
+internal static class GridRowNames
+{
+    /// <summary>Show <paramref name="root"/> (the grid itself by
+    /// default), realize, and read each realized row's item and the NAME
+    /// of its DataItem peer — not the property the hook set.</summary>
+    internal static List<(object Item, string Name)> Realized(
+        AccessibleDataGrid grid, System.Windows.FrameworkElement? root = null)
+    {
+        var window = new System.Windows.Window
+        {
+            Content = root ?? grid,
+            Width = 640,
+            Height = 480,
+            ShowInTaskbar = false,
+            WindowStyle = System.Windows.WindowStyle.None,
+        };
+        window.Show();
+        try
+        {
+            window.UpdateLayout();
+            var peer = (System.Windows.Automation.Peers.DataGridAutomationPeer)
+                System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(grid.Grid);
+            List<(object Item, string Name)> rows = peer.GetChildren()
+                .OfType<System.Windows.Automation.Peers.DataGridItemAutomationPeer>()
+                .Select(row => (row.Item, row.GetName()))
+                .ToList();
+            Assert.NotEmpty(rows);
+            return rows;
+        }
+        finally
+        {
+            window.Close();
         }
     }
 }

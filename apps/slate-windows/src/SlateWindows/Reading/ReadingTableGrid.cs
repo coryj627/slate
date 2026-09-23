@@ -68,7 +68,15 @@ internal static class ReadingTableGrid
             return null;
         }
         var grid = new AccessibleDataGrid();
-        grid.Bind(model.Columns, model.Rows, model.Summary, model.Label);
+        // R-4 (#1246): a row is named by its first cell, the row header's
+        // text; unnamed, a row of cells read "System.String[]". A blank
+        // first cell falls back to the row's position in the substrate.
+        grid.Bind(
+            model.Columns,
+            model.Rows,
+            model.Summary,
+            model.Label,
+            rowAutomationName: static row => CellText(row, 0));
         return grid;
     }
 
