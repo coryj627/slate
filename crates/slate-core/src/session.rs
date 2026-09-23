@@ -2272,10 +2272,6 @@ impl VaultSession {
         // to prevent. Only a rebuild legitimately orphans bindings.
         let cache_created_this_open = db::current_version(&conn)? == 0;
         db::migrate(&mut conn)?;
-        // W7-7 PR 7: the rescan delta ledger lives in TEMP tables on this
-        // connection — session-side, transactional with the index, and gone
-        // with the connection, so no other session ever sees an orphan.
-        crate::scan_delta::ensure_tables(&conn)?;
 
         let math_prefs = Mutex::new(config.math_prefs);
         let diagram_cache = Mutex::new(DiagramCompletedCache::default());
@@ -2990,16 +2986,20 @@ impl VaultSession {
             // The restart protocol: a generation retained by this session
             // (a TEMP table, so nothing from any other session) is
             // discarded before the open scan rebuilds the index.
+            // Best-effort: a TEMP ledger never outlives its connection, so
+            // no other session's orphan can reach this one whatever happens
+            // here, and opening a vault must never fail on the temp store.
             ScanMode::InitialOpen => {
                 if let Err(e) = crate::scan_delta::discard_all(&conn) {
-                    drop(conn);
-                    self.notify_index_phase(IndexPhase::ScanFinished, 0);
-                    return Err(e);
+                    log::warn!("scan delta ledger discard failed");
+                    log::debug!("scan delta ledger discard failure detail: {e}");
                 }
                 None
             }
+            // The ledger's TEMP tables are created by the first rescan.
             ScanMode::Rescan => {
-                let pending = crate::scan_delta::has_pending(&conn);
+                let pending = crate::scan_delta::ensure_tables(&conn)
+                    .and_then(|()| crate::scan_delta::has_pending(&conn));
                 if !matches!(pending, Ok(false)) {
                     drop(conn);
                     self.notify_index_phase(IndexPhase::ScanFinished, 0);
