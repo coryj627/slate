@@ -90,6 +90,12 @@ public sealed partial class W77RemediationDocsCensus
             looseContracts == strictContracts,
             $"{looseContracts - strictContracts} contract-shaped line(s) in {ContractsDoc} do not parse as `**R-n — … (PR m, …)**`.");
 
+        int looseRecords = LooseReviewRecordHeading().Matches(contracts).Count;
+        int strictRecords = ReviewRecordHeading().Matches(contracts).Count;
+        Assert.True(
+            looseRecords == strictRecords,
+            $"{looseRecords - strictRecords} review-record heading(s) in {ContractsDoc} do not parse as `### PR n — …`.");
+
         string spec = ReadPlan(SpecDoc);
         int loosePrSections = LoosePrSectionHeading().Matches(spec).Count;
         int strictPrSections = SectionHeading().Matches(spec).Count(m => m.Groups[1].Success);
@@ -213,4 +219,9 @@ public sealed partial class W77RemediationDocsCensus
 
     [GeneratedRegex(@"^### PR (\d+) — ", RegexOptions.Multiline)]
     private static partial Regex ReviewRecordHeading();
+
+    // Anything that starts a heading like a review record, however it is
+    // punctuated after the PR number.
+    [GeneratedRegex(@"^### PR \d+\b", RegexOptions.Multiline)]
+    private static partial Regex LooseReviewRecordHeading();
 }
