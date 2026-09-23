@@ -8277,6 +8277,10 @@ final class AppState: ObservableObject {
     /// Most recent message passed to `postAccessibilityAnnouncement`.
     /// Same role as `scanAnnouncementCount` — for tests only.
     private(set) var scanAnnouncementLastMessage: String?
+    /// The typed event behind `scanAnnouncementLastMessage` — for tests
+    /// only (W7-7 PR 7, OD-6: the finished event must carry the report's
+    /// two DISTINCT counts, which the rendered text alone cannot prove).
+    private(set) var scanAnnouncementLastEvent: A11yEvent?
 
     /// Times `loadBibliographyEntries` has run its fetch since the current
     /// vault opened. Internal, for tests only (the UI never reads it): the
@@ -10033,6 +10037,7 @@ final class AppState: ObservableObject {
             scanProgress = nil
             scanAnnouncementCount = 0
             scanAnnouncementLastMessage = nil
+            scanAnnouncementLastEvent = nil
             scanAnnouncementLastFiredAt = .distantPast
             bibliographyLoadCount = 0
             recordOpened(url: url)
@@ -10149,6 +10154,7 @@ final class AppState: ObservableObject {
         scanProgress = nil
         scanAnnouncementCount = 0
         scanAnnouncementLastMessage = nil
+        scanAnnouncementLastEvent = nil
         scanAnnouncementLastFiredAt = .distantPast
         bibliographyLoadCount = 0
     }
@@ -23138,8 +23144,15 @@ final class AppState: ObservableObject {
                 force: false
             )
         case .finished(let report):
+            // OD-6 (W7-7 PR 7): both counts from the report — files seen,
+            // and core's hash-authoritative "new or changed" count, never
+            // `filesIndexed` (a read count: a touched-but-unchanged vault
+            // must say "0 new or changed").
             announceScan(
-                event: .vaultScanFinished(filesIndexed: report.filesIndexed),
+                event: .vaultScanFinished(
+                    filesSeen: report.filesSeen,
+                    filesChanged: report.filesChanged
+                ),
                 force: true
             )
             // Clear so the progress bar hides; loadFiles' post-scan
@@ -23167,6 +23180,7 @@ final class AppState: ObservableObject {
         }
         scanAnnouncementLastFiredAt = now
         scanAnnouncementCount += 1
+        scanAnnouncementLastEvent = event
         scanAnnouncementLastMessage = a11yRender(event: event).text
         postAccessibilityAnnouncement(event)
     }

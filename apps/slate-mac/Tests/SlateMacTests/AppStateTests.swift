@@ -768,12 +768,26 @@ final class AppStateTests: XCTestCase {
     // MARK: - Scan progress
 
     private func makeReport(filesIndexed: UInt64 = 0) -> ScanReport {
+        makeReport(filesSeen: filesIndexed, filesIndexed: filesIndexed, filesChanged: filesIndexed)
+    }
+
+    /// OD-6 (W7-7 PR 7): the three counts independently, so a fact can
+    /// prove which one the post site forwards.
+    private func makeReport(
+        filesSeen: UInt64,
+        filesIndexed: UInt64,
+        filesChanged: UInt64
+    ) -> ScanReport {
         ScanReport(
-            filesSeen: filesIndexed,
+            filesSeen: filesSeen,
             filesIndexed: filesIndexed,
-            filesSkipped: 0,
+            filesSkipped: filesSeen - filesIndexed,
             bytesProcessed: 0,
-            errors: []
+            errors: [],
+            filesChanged: filesChanged,
+            filesRemoved: 0,
+            complete: true,
+            deltaGeneration: nil
         )
     }
 
@@ -852,7 +866,48 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(state.scanProgress)
         XCTAssertEqual(
             state.scanAnnouncementLastMessage,
-            "Scan complete. 5 files indexed."
+            "Scan complete. 5 files, 5 new or changed."
+        )
+    }
+
+    /// OD-6 (W7-7 PR 7, contract 38 D-3 as amended): the finished event
+    /// carries the report's files SEEN and its hash-authoritative files
+    /// CHANGED — distinct counts (9 seen, 2 changed, 4 read), so a post
+    /// site that forwards one count twice, or the read count, fails —
+    /// and speaks both.
+    func testFinishedCarriesSeenAndChangedAsDistinctCounts() throws {
+        let state = try makeAppState()
+        state.handleScanProgress(.started(totalFiles: 9))
+        state.handleScanProgress(
+            .finished(report: makeReport(filesSeen: 9, filesIndexed: 4, filesChanged: 2))
+        )
+
+        guard case .vaultScanFinished(let seen, let changed)? = state.scanAnnouncementLastEvent
+        else {
+            return XCTFail(
+                "expected vaultScanFinished, got \(String(describing: state.scanAnnouncementLastEvent))"
+            )
+        }
+        XCTAssertEqual(seen, 9)
+        XCTAssertEqual(changed, 2)
+        XCTAssertEqual(
+            state.scanAnnouncementLastMessage,
+            "Scan complete. 9 files, 2 new or changed."
+        )
+    }
+
+    /// OD-6 / R-9: a touched-but-unchanged vault — every file re-read,
+    /// none changed — says "0 new or changed", never the read count.
+    func testTouchedUnchangedVaultSaysZeroNewOrChanged() throws {
+        let state = try makeAppState()
+        state.handleScanProgress(.started(totalFiles: 3))
+        state.handleScanProgress(
+            .finished(report: makeReport(filesSeen: 3, filesIndexed: 3, filesChanged: 0))
+        )
+
+        XCTAssertEqual(
+            state.scanAnnouncementLastMessage,
+            "Scan complete. 3 files, 0 new or changed."
         )
     }
 
