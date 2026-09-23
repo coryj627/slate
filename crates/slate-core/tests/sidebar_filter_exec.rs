@@ -564,6 +564,38 @@ mod scope_tag {
         );
     }
 
+    // W7-7 (#1250, R-3): what a tag activation writes, executed — the
+    // plain tag's `#tag` query and the spaced tag's out-of-band scope
+    // each find exactly the tag's files (descendants included).
+    #[test]
+    fn tag_activation_finds_the_tags_files_in_both_shapes() {
+        let (_tmp, session) = spaced_fixture();
+        for (tag, expected) in [
+            ("project", vec!["a/truncated.md"]),
+            ("project alpha", vec!["a/child.md", "a/spaced.md"]),
+        ] {
+            let written = slate_core::sidebar_tag_filter_activation(tag);
+            assert_eq!(
+                scoped(&session, &written.filter_text, written.scope_tag.as_deref()),
+                expected,
+                "{tag}"
+            );
+        }
+        // Text typed within a scope that matches nothing still names the
+        // scope: the field never shows it.
+        let page = session
+            .filter_files(
+                "nosuchword",
+                None,
+                Some("project alpha"),
+                &[],
+                Paging::first(10),
+            )
+            .unwrap();
+        assert_eq!(page.total, 0);
+        assert_eq!(page.audio_summary, "No results for #project alpha.");
+    }
+
     #[test]
     fn scope_tag_composes_with_query_terms_and_normalizes() {
         let (_tmp, session) = spaced_fixture();

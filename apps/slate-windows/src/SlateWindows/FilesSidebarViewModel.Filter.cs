@@ -22,6 +22,7 @@ internal sealed partial class FilesSidebarViewModel
     private Task _filterCompletion = Task.CompletedTask;
     private int _filterGeneration;
     private string _filterText = string.Empty;
+    private string? _scopeTag;
     private (string Query, ulong Total)? _lastFilterAnnouncement;
 
     public ObservableCollection<FileTreeNodeViewModel> FilterResults { get; } = [];
@@ -45,6 +46,15 @@ internal sealed partial class FilesSidebarViewModel
         {
             if (SetField(ref _filterText, value))
             {
+                // W7-7 (R-3): typing narrows WITHIN a tag scope (core ANDs
+                // the query with scope_tag); emptying the field is the
+                // user's clear, and the scope goes with the text.
+                if (string.IsNullOrWhiteSpace(value) && _scopeTag is not null)
+                {
+                    _scopeTag = null;
+                    OnPropertyChanged(nameof(ScopeTag));
+                }
+
                 OnPropertyChanged(nameof(IsFilterActive));
                 ScheduleFilter();
                 RaiseCommandStates();
@@ -52,7 +62,48 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    public bool IsFilterActive => !string.IsNullOrWhiteSpace(FilterText);
+    /// <summary>W7-7 (R-3): the out-of-band tag scope, passed as core's
+    /// <c>filter_files</c> <c>scope_tag</c>, for a tag the query grammar
+    /// cannot express because it contains whitespace. Set by a tag
+    /// activation with the field emptied; text typed afterwards filters
+    /// within it; emptying the field or Clear Sidebar Filter drops it. Both
+    /// core renderings name the tag: the status line's summary and the
+    /// count announcement, which carries the scope.</summary>
+    public string? ScopeTag => _scopeTag;
+
+    public bool IsFilterActive => !string.IsNullOrWhiteSpace(FilterText) || _scopeTag is not null;
+
+    /// <summary>One filter change for a tag activation (core's answer) or
+    /// a clear: the field's text and the scope together, one run.</summary>
+    private void ApplyTagActivation(string filterText, string? scopeTag)
+    {
+        bool textChanged = !string.Equals(_filterText, filterText, StringComparison.Ordinal);
+        bool scopeChanged = !string.Equals(_scopeTag, scopeTag, StringComparison.Ordinal);
+        if (!textChanged && !scopeChanged)
+        {
+            return;
+        }
+
+        // Written past the FilterText setter, whose emptied-field rule
+        // would drop the scope being entered.
+        _filterText = filterText;
+        _scopeTag = scopeTag;
+        if (textChanged)
+        {
+            OnPropertyChanged(nameof(FilterText));
+        }
+
+        if (scopeChanged)
+        {
+            OnPropertyChanged(nameof(ScopeTag));
+        }
+
+        OnPropertyChanged(nameof(IsFilterActive));
+        ScheduleFilter();
+        RaiseCommandStates();
+    }
+
+    private void ClearFilter() => ApplyTagActivation(string.Empty, scopeTag: null);
 
     private void ScheduleFilter(bool automatic = false)
     {
@@ -60,7 +111,8 @@ internal sealed partial class FilesSidebarViewModel
         CancelFilterCore();
         int generation = ++_filterGeneration;
         string query = FilterText.Trim();
-        if (query.Length == 0)
+        string? scopeTag = _scopeTag;
+        if (query.Length == 0 && scopeTag is null)
         {
             // Codex round 6: a USER clearing the filter cancels the
             // automatic refilter that would have consumed the pending
@@ -93,10 +145,10 @@ internal sealed partial class FilesSidebarViewModel
                 FilterOutcome outcome;
                 using (lease)
                 {
-                    outcome = RunFilterQuery(query, CancellationToken.None);
+                    outcome = RunFilterQuery(query, scopeTag, CancellationToken.None);
                 }
 
-                ApplyFilterOutcome(query, outcome, automatic);
+                ApplyFilterOutcome(query, scopeTag, outcome, automatic);
             }
             catch (Exception exception)
             {
@@ -134,6 +186,7 @@ internal sealed partial class FilesSidebarViewModel
         Task completion = FilterAfterDelayAsync(
             previous,
             query,
+            scopeTag,
             generation,
             automatic,
             cancellation,
@@ -198,6 +251,7 @@ internal sealed partial class FilesSidebarViewModel
     private async Task FilterAfterDelayAsync(
         Task previous,
         string query,
+        string? scopeTag,
         int generation,
         bool automatic,
         CancellationTokenSource cancellation,
@@ -228,7 +282,7 @@ internal sealed partial class FilesSidebarViewModel
             using (lease)
             {
                 await _runFilterWorker(
-                    () => outcome = RunFilterQuery(query, cancellationToken),
+                    () => outcome = RunFilterQuery(query, scopeTag, cancellationToken),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -247,9 +301,10 @@ internal sealed partial class FilesSidebarViewModel
                     {
                         if (!cancellationToken.IsCancellationRequested
                             && generation == _filterGeneration
-                            && string.Equals(FilterText.Trim(), query, StringComparison.Ordinal))
+                            && string.Equals(FilterText.Trim(), query, StringComparison.Ordinal)
+                            && string.Equals(_scopeTag, scopeTag, StringComparison.Ordinal))
                         {
-                            ApplyFilterOutcome(query, outcome, automatic);
+                            ApplyFilterOutcome(query, scopeTag, outcome, automatic);
                         }
 
                         applied.TrySetResult();
@@ -332,7 +387,7 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    private FilterOutcome RunFilterQuery(string query, CancellationToken cancellationToken)
+    private FilterOutcome RunFilterQuery(string query, string? scopeTag, CancellationToken cancellationToken)
     {
         try
         {
@@ -348,7 +403,7 @@ internal sealed partial class FilesSidebarViewModel
                 SidebarFilterPage page = _session.FilterFiles(
                     query,
                     null,
-                    null,
+                    scopeTag,
                     windows,
                     new Paging(cursor, PageLimit));
                 files.AddRange(page.Files.Take((int)PageLimit - files.Count));
@@ -368,7 +423,7 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    private void ApplyFilterOutcome(string query, FilterOutcome outcome, bool automatic)
+    private void ApplyFilterOutcome(string query, string? scopeTag, FilterOutcome outcome, bool automatic)
     {
         FilterResults.Clear();
         foreach (FileSummary summary in outcome.Files)
@@ -403,10 +458,18 @@ internal sealed partial class FilesSidebarViewModel
             // reassert — the user asked for the summary.
             _statusToReassert = null;
             Status = outcome.AudioSummary;
-            if (_lastFilterAnnouncement != (query, outcome.Total))
+            // A scope's dedup key cannot collide with a typed query: NUL
+            // never reaches the field (mac's tagScopeAnnounceKey).
+            string announcementKey = scopeTag is null ? query : $"\0tag:{scopeTag}\0{query}";
+            if (_lastFilterAnnouncement != (announcementKey, outcome.Total))
             {
-                _lastFilterAnnouncement = (query, outcome.Total);
-                _announce(new A11yEvent.FileListCount((uint)Math.Min(outcome.Total, uint.MaxValue)));
+                _lastFilterAnnouncement = (announcementKey, outcome.Total);
+                // W7-7 (R-3): the field never shows a tag scope, so the
+                // count carries it and core renders the tag into the
+                // sentence ("File list, 1 item. Filtered by tag two words.").
+                _announce(new A11yEvent.FileListCount(
+                    (uint)Math.Min(outcome.Total, uint.MaxValue),
+                    scopeTag));
             }
         }
     }

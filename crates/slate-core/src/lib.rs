@@ -176,8 +176,9 @@ pub use session::{
 pub use session::{SkippedFile, TagCount, TagEditReport};
 pub use sidebar_filter::{
     FilterParseError, SidebarFilterDateWindow, SidebarFilterNamedWindow, SidebarFilterQueryTerm,
-    SidebarFilterTerm, parse_sidebar_filter, sidebar_filter_audio_summary,
-    sidebar_filter_date_requirements, validate_date_windows,
+    SidebarFilterTerm, SidebarTagFilterActivation, parse_sidebar_filter,
+    sidebar_filter_audio_summary, sidebar_filter_date_requirements, sidebar_tag_filter_activation,
+    validate_date_windows,
 };
 pub use tag_tree::{TagTree, TagTreeNode};
 pub use vault::{

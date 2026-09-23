@@ -875,7 +875,7 @@
                                          AutomationProperties.Name="Filter files"
                                          Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
                                          Padding="6,4"
-                                         ToolTip="Filter by words, tag:, path:, or @date." />
+                                         ToolTip="Filter by words, #tag, path:, ext:, has:task, or @date." />
                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,6">
                                     <ComboBox Width="145"
                                               ItemsSource="{Binding SortModes}"

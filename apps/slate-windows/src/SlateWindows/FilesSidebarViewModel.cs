@@ -427,7 +427,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         RefreshCommand = new RelayCommand(_ => Refresh(reportCount: true), _ => true);
         RetrySettingsCommand = new RelayCommand(_ => RetrySettings(), _ => _settingsNotice is not null);
-        ClearFilterCommand = new RelayCommand(_ => FilterText = string.Empty, _ => FilterText.Length > 0);
+        // W7-7 (R-3): Clear covers the tag scope too — text and scope in
+        // one change (a whitespace-only field stays clearable as before).
+        ClearFilterCommand = new RelayCommand(_ => ClearFilter(), _ => IsFilterActive || FilterText.Length > 0);
         ToggleTagsCommand = new RelayCommand(_ => ShowTags = !ShowTags, _ => true);
         ToggleDualPaneCommand = new RelayCommand(_ => IsDualPaneEnabled = !IsDualPaneEnabled, _ => true);
         AddTagCommand = new RelayCommand(_ => EditTag(add: true), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0 && TagInput.Length > 0);
@@ -827,12 +829,23 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
     }
 
+    /// <summary>W7-7 (R-3, #1250): a tag activation — the Tags tree, the
+    /// editor's Ctrl+Enter on a tag — writes what core's
+    /// <c>sidebar_tag_filter_activation</c> answers (mac's
+    /// <c>activateSidebarTagScope</c>, as a pure core query): the query
+    /// <c>#tag</c> the grammar understands, or, for a tag containing
+    /// whitespace, an empty field and the out-of-band tag scope. The split
+    /// is core's tokenizer rule, never decided here. The old
+    /// <c>tag:"x"</c> parsed as a name word and matched nothing.</summary>
     public void ActivateTag(string tag)
     {
-        if (!string.IsNullOrWhiteSpace(tag))
+        if (string.IsNullOrWhiteSpace(tag))
         {
-            FilterText = $"tag:\"{tag}\"";
+            return;
         }
+
+        SidebarTagFilterActivation written = SlateUniffiMethods.SidebarTagFilterActivation(tag);
+        ApplyTagActivation(written.FilterText, written.ScopeTag);
     }
 
     public void AssignShortcut(int index)

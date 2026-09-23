@@ -107,7 +107,10 @@ public sealed class ReadingTagSearchRerouteTests : IDisposable
         int inTag = tab.Text.IndexOf("#atag", StringComparison.Ordinal) + 2;
         Assert.True(tab.EditorInteractions.ActivateAt(inTag));
 
-        Assert.Equal("tag:\"atag\"", lifecycle.FileSidebar!.FilterText);
+        // W7-7 (R-3): core's grammar, #tag — and it finds the tagged note.
+        Assert.Equal("#atag", lifecycle.FileSidebar!.FilterText);
+        await lifecycle.FileSidebar.FilterCompletion;
+        Assert.Contains(lifecycle.FileSidebar.FilterResults, row => row.Path == "note0.md");
         A11yEvent.HostComposed residue = Assert.Single(
             AnnouncedSince(announcedBefore).OfType<A11yEvent.HostComposed>());
         Assert.Equal("Filtered files by tag atag.", residue.Text);

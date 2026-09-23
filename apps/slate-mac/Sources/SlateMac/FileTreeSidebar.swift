@@ -4893,7 +4893,7 @@ struct FileTreeSidebar: View {
             if !scanning && !didAnnounceCount && appState.scanError == nil {
                 didAnnounceCount = true
                 postAccessibilityAnnouncement(
-                    .fileListCount(count: UInt32(appState.files.count)))
+                    .fileListCount(count: UInt32(appState.files.count), scopeTag: nil))
             }
             // A finished (re)scan can add/remove files and folders anywhere in
             // the tree — invalidate so the root (and any expanded levels)

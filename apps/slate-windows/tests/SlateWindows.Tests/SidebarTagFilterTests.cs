@@ -1,0 +1,178 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using uniffi.slate_uniffi;
+
+namespace SlateWindows.Tests;
+
+/// <summary>
+/// W7-7 PR 2 (#1250, contract R-3): a tag activation writes what core's
+/// <c>sidebar_tag_filter_activation</c> answers — the query <c>#tag</c>
+/// in core's grammar (<c>sidebar_filter.rs</c>, <c>parse_sidebar_filter</c>),
+/// or an out-of-band tag scope for a tag containing whitespace — exactly
+/// as mac's <c>activateSidebarTagScope</c>. The host used to write
+/// <c>tag:"x"</c>, which the grammar reads as a name word, so every tag
+/// route filtered to zero files. These facts run the real core filter
+/// through the FFI, so a composition the grammar does not understand
+/// fails on the results, not only on the text.
+/// </summary>
+public sealed class SidebarTagFilterTests
+{
+    [Fact]
+    public async Task ActivateTag_ComposesCoreGrammar()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "tag-grammar");
+        Write(fixture, "tagged.md", "---\ntags: [atag]\n---\n\n# Tagged\n");
+        Write(fixture, "nested.md", "---\ntags: [atag/child]\n---\n\n# Nested\n");
+        Write(fixture, "atag.md", "# Name only\n\nNo tags.\n");
+        using VaultSession session = OpenScanned(fixture);
+        FilesSidebarViewModel sidebar = await NewSidebar(session, fixture, _ => { });
+
+        // The query #tag, shown in the field (editable, and it teaches the
+        // grammar), finds the tag and its descendants — and not the note
+        // that merely has the tag's word for a name.
+        sidebar.ActivateTag("atag");
+        Assert.Equal("#atag", sidebar.FilterText);
+        Assert.Null(sidebar.ScopeTag);
+        await sidebar.FilterCompletion;
+        Assert.Equal(new[] { "nested.md", "tagged.md" }, Paths(sidebar));
+
+        // A second activation replaces the first.
+        sidebar.ActivateTag("atag/child");
+        Assert.Equal("#atag/child", sidebar.FilterText);
+        await sidebar.FilterCompletion;
+        Assert.Equal(new[] { "nested.md" }, Paths(sidebar));
+
+        // Whitespace is core's call: the answer for a spaced tag is the
+        // empty field and the scope (the next fact runs that shape).
+        SidebarTagFilterActivation spaced = SlateUniffiMethods.SidebarTagFilterActivation("two words");
+        Assert.Equal(string.Empty, spaced.FilterText);
+        Assert.Equal("two words", spaced.ScopeTag);
+    }
+
+    /// <summary>
+    /// The whitespace route actually filters, and the scope is complete
+    /// filter state: it makes the filter active with an empty field; the
+    /// status line (core's summary) and the spoken count (core's
+    /// FileListCount with the scope) both name the tag, even when nothing
+    /// matches; text typed afterwards narrows within the scope; the request
+    /// is (query, scope), so a switch between two scopes of equal count
+    /// still speaks, naming the new tag; and a user clear — the field
+    /// emptied, or Clear Sidebar Filter through its command — drops text
+    /// and scope together.
+    /// </summary>
+    [Fact]
+    public async Task ActivateTag_ScopesAWhitespaceTagAndTypingNarrowsWithinIt()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "tag-scope");
+        Write(fixture, "spaced.md", "---\ntags: [\"two words\"]\n---\n\n# Spaced\n");
+        Write(fixture, "spaced note.md", "---\ntags: [\"two words\"]\n---\n\n# Second\n");
+        Write(fixture, "note.md", "---\ntags: [two]\n---\n\n# Untagged by the scope\n");
+        Write(fixture, "fox.md", "---\ntags: [\"red fox\"]\n---\n\n# Fox\n");
+        Write(fixture, "sky.md", "---\ntags: [\"blue sky\"]\n---\n\n# Sky\n");
+        using VaultSession session = OpenScanned(fixture);
+        var announced = new List<A11yEvent>();
+        FilesSidebarViewModel sidebar = await NewSidebar(session, fixture, announced.Add);
+
+        sidebar.ActivateTag("two words");
+        Assert.Equal(string.Empty, sidebar.FilterText);
+        Assert.Equal("two words", sidebar.ScopeTag);
+        Assert.True(sidebar.IsFilterActive);
+        await sidebar.FilterCompletion;
+        Assert.Equal(new[] { "spaced.md", "spaced note.md" }, Paths(sidebar));
+        Assert.Equal("2 results for #two words.", sidebar.Status);
+        AssertSpoke(announced, new A11yEvent.FileListCount(2, "two words"),
+            "File list, 2 items. Filtered by tag two words.");
+
+        // Typing filters within the scope: core ANDs the query with it.
+        sidebar.FilterText = "note";
+        Assert.Equal("two words", sidebar.ScopeTag);
+        await sidebar.FilterCompletion;
+        Assert.Equal(new[] { "spaced note.md" }, Paths(sidebar));
+        Assert.Equal("1 result for #two words.", sidebar.Status);
+
+        // Nothing matching within the scope still names it: shown (core's
+        // summary) and spoken (core's count with the scope).
+        sidebar.FilterText = "nosuchword";
+        await sidebar.FilterCompletion;
+        Assert.Empty(sidebar.FilterResults);
+        Assert.Equal("No results for #two words.", sidebar.Status);
+        AssertSpoke(announced, new A11yEvent.FileListCount(0, "two words"),
+            "File list, 0 items. Filtered by tag two words.");
+
+        // Emptying the field is the user's clear: the scope goes too.
+        sidebar.FilterText = string.Empty;
+        Assert.Null(sidebar.ScopeTag);
+        Assert.False(sidebar.IsFilterActive);
+        await sidebar.FilterCompletion;
+        Assert.Empty(sidebar.FilterResults);
+
+        // Clear Sidebar Filter drops both, from either state.
+        sidebar.ActivateTag("two words");
+        Assert.True(sidebar.ClearFilterCommand.CanExecute(null));
+        sidebar.ClearFilterCommand.Execute(null);
+        Assert.Null(sidebar.ScopeTag);
+        Assert.False(sidebar.IsFilterActive);
+        sidebar.ActivateTag("two words");
+        sidebar.FilterText = "note";
+        sidebar.ClearFilterCommand.Execute(null);
+        Assert.Equal(string.Empty, sidebar.FilterText);
+        Assert.Null(sidebar.ScopeTag);
+        Assert.False(sidebar.IsFilterActive);
+        Assert.False(sidebar.ClearFilterCommand.CanExecute(null));
+
+        // A plain tag after a scope replaces it.
+        sidebar.ActivateTag("two words");
+        sidebar.ActivateTag("two");
+        Assert.Null(sidebar.ScopeTag);
+        Assert.Equal("#two", sidebar.FilterText);
+        await sidebar.FilterCompletion;
+        Assert.Equal(new[] { "note.md" }, Paths(sidebar));
+
+        // The request is (query, scope): switching between two scopes with
+        // the same count still speaks the new one.
+        sidebar.ActivateTag("red fox");
+        await sidebar.FilterCompletion;
+        AssertSpoke(announced, new A11yEvent.FileListCount(1, "red fox"),
+            "File list, 1 item. Filtered by tag red fox.");
+        sidebar.ActivateTag("blue sky");
+        await sidebar.FilterCompletion;
+        Assert.Equal(new[] { "sky.md" }, Paths(sidebar));
+        AssertSpoke(announced, new A11yEvent.FileListCount(1, "blue sky"),
+            "File list, 1 item. Filtered by tag blue sky.");
+    }
+
+    /// <summary>The last announcement is the typed event carrying the
+    /// scope, and core's rendering of it names the tag — the text a
+    /// screen reader hears, not a host composition.</summary>
+    private static void AssertSpoke(List<A11yEvent> announced, A11yEvent expected, string speech)
+    {
+        Assert.Equal(expected, announced[^1]);
+        Assert.Equal(speech, SlateUniffiMethods.A11yRender(announced[^1]).Text);
+    }
+
+    private static string[] Paths(FilesSidebarViewModel sidebar) =>
+        [.. sidebar.FilterResults.Select(row => row.Path)];
+
+    private static void Write(FixtureVault fixture, string name, string content) =>
+        File.WriteAllText(Path.Combine(fixture.Root, name), content);
+
+    private static VaultSession OpenScanned(FixtureVault fixture)
+    {
+        VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        return session;
+    }
+
+    private static async Task<FilesSidebarViewModel> NewSidebar(
+        VaultSession session, FixtureVault fixture, Action<A11yEvent> announce)
+    {
+        var sidebar = new FilesSidebarViewModel(
+            session,
+            announce,
+            localAppDataRoot: Path.Combine(fixture.Root, "device-state"));
+        await sidebar.TreeRefreshCompletion;
+        return sidebar;
+    }
+}
