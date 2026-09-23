@@ -1632,41 +1632,6 @@ public sealed class ReadingViewTests
     }
 
     /// <summary>
-    /// Adversarial-review fix: a prose-only note has content but ZERO
-    /// landmarks, and the old landmark-gated focus rule stranded its
-    /// readers on the collapsed editor. Blocks, not landmarks, are the
-    /// focus condition.
-    /// </summary>
-    [Fact]
-    public void ProseOnlyNotesClaimFocusWhenContentArrives()
-    {
-        RunSta(() =>
-        {
-            ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(
-                "Just a paragraph.\n\nAnother paragraph.\n");
-            ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
-                "Just a paragraph.\n\nAnother paragraph.\n",
-                Array.Empty<RenderedCitation>(),
-                Array.Empty<OutgoingLink>());
-            var model = new List<(ReadingBlock, ReadingBlockInlines)>();
-            for (int i = 0; i < blocks.Length && i < inlines.Length; i++)
-            {
-                model.Add((blocks[i], inlines[i]));
-            }
-
-            var surface = new ReadingSurface();
-            surface.ApplyBuiltDocument(ReadingDocumentBuilder.Build(model).Document);
-
-            Assert.Empty(surface.LandmarksForTests);
-            Assert.True(surface.Document.Blocks.Count > 0);
-            Assert.True(ReadingSurface.ClaimsFocusAfterApply(
-                isVisible: true,
-                isKeyboardFocusWithin: false,
-                surface.Document.Blocks.Count));
-        });
-    }
-
-    /// <summary>
     /// Adversarial-review fix: nested lists build from the exact
     /// core-provided depth — an ordered sublist nests INSIDE its bullet
     /// parent without resetting it, and three levels chain instead of

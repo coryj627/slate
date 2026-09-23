@@ -23,7 +23,22 @@ internal interface IShellRegionHost
     /// is on the window root, an overlay, or nowhere.</summary>
     ShellRegionKind? FocusedRegion();
 
-    /// <summary>Put keyboard focus in the region; false when it cannot
-    /// (the view model then tries the next region).</summary>
-    bool TryLand(ShellRegionKind region);
+    /// <summary>Put keyboard focus in the region: <see
+    /// cref="ShellRegionLanding.Refused"/> when it cannot (the view model
+    /// then tries the next region), <see cref="ShellRegionLanding.Pending"/>
+    /// when the region holds the landing for content still arriving — the
+    /// host then calls <paramref name="announceWhenLanded"/> once focus is
+    /// actually in the region, or <paramref name="fallThroughWhenRefused"/>
+    /// once the held landing turns out to be untakeable (the view model
+    /// resumes the ring past it), and neither when it is withdrawn.</summary>
+    ShellRegionLanding TryLand(
+        ShellRegionKind region, Action announceWhenLanded, Action fallThroughWhenRefused);
+
+    /// <summary>Let go of the landing the last <see
+    /// cref="ShellRegionLanding.Pending"/> answer is holding (W7-7 PR 8, R-10:
+    /// a newer press cancels it): no line, no fall-through, and focus is not
+    /// moved for it. Answers whether it was still held — false when the
+    /// region already let go of it (it completed, the reader moved on, the
+    /// view changed).</summary>
+    bool WithdrawHeldLanding();
 }

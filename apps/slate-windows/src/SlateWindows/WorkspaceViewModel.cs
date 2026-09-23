@@ -1740,7 +1740,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             _ => RunWorkspaceMutation(ReopenClosedTab),
             _ => _closedTabs.Count > 0);
         ToggleReadingModeCommand = new RelayCommand(
-            _ => RunWorkspaceMutation(() => ActiveGroup.ActiveTab?.ToggleViewMode()),
+            _ => RunWorkspaceMutation(ToggleActiveViewMode),
             _ => ActiveGroup.ActiveTab?.IsMarkdown == true);
         MoveTabLeftCommand = new RelayCommand(
             _ => RunWorkspaceMutation(() => MoveActiveTab(-1)),
@@ -2011,6 +2011,25 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     public ICommand SaveActiveCommand { get; }
     public ICommand ToggleRightPaneCommand { get; }
     public ICommand OpenTasksReviewCommand { get; }
+
+    /// <summary>
+    /// `slate.editor.toggleViewMode` on the active tab: Ctrl+Shift+E, the
+    /// Editor menu item and the palette row. W7-7 PR 8 (#1253, contract
+    /// R-10): focus moves with the view in BOTH directions, through the one
+    /// focus funnel. The tab's own <see cref="WorkspaceTabViewModel.ToggleViewMode"/>
+    /// has no route to the funnel, and its other caller, the
+    /// create-from-template normalization, owns its landing already.
+    /// </summary>
+    private void ToggleActiveViewMode()
+    {
+        if (ActiveGroup.ActiveTab is not { IsMarkdown: true } tab)
+        {
+            return;
+        }
+
+        tab.ToggleViewMode();
+        RequestActiveEditorFocus();
+    }
 
     public void OpenPath(string path, WorkspaceOpenTarget target = WorkspaceOpenTarget.CurrentTab) =>
         RunWorkspaceMutation(() => OpenPathCore(path, target));

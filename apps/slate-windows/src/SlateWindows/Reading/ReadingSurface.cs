@@ -192,15 +192,19 @@ internal sealed class ReadingSurface : RichTextBox
                 }
             }));
 
-        // Entering reading mode swaps this surface in for the editor;
-        // focus must land in the document or the mode toggle strands
-        // keyboard users on a hidden control. (IsVisibleChanged is an
-        // event, not a virtual, on UIElement.)
+        // W7-7 PR 8 (R-10): the surface takes focus only through the
+        // landing the shell asks for (RequestFocusLanding) — the mode toggle
+        // and every tab switch ask. It used to focus itself whenever it was
+        // shown over merged content, which also pulled focus off a tab header
+        // the reader had clicked or arrowed to. Hidden (the tab left reading
+        // mode, another view took the cell, the surface unloaded), a held
+        // landing is withdrawn so a later merge seats nobody.
+        // (IsVisibleChanged is an event, not a virtual, on UIElement.)
         IsVisibleChanged += (_, args) =>
         {
-            if (args.NewValue is true && _lastMerged is not null)
+            if (args.NewValue is false)
             {
-                _ = Focus();
+                WithdrawFocusLanding();
             }
         };
     }
@@ -230,6 +234,9 @@ internal sealed class ReadingSurface : RichTextBox
         DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var surface = (ReadingSurface)d;
+        // A held landing (R-10) was asked of the OUTGOING projection; the
+        // incoming one's route asks again for itself.
+        surface.WithdrawFocusLanding();
         if (surface._model is { } previous)
         {
             // Remember where the reader WAS (field, 2026-07-30: the
@@ -241,6 +248,7 @@ internal sealed class ReadingSurface : RichTextBox
                     surface.CaretPosition);
             previous.PropertyChanged -= surface.Model_PropertyChanged;
             previous.BlocksAppended -= surface.Model_BlocksAppended;
+            previous.TornDown -= surface.Model_TornDown;
             // Kill the outgoing model's stream BEFORE anything else:
             // its chunk continuations hold list objects that live in
             // THIS surface's document and would keep growing them
@@ -253,6 +261,7 @@ internal sealed class ReadingSurface : RichTextBox
             surface._navigator ??= new ReadingNavigator(surface, model.Announce);
             model.PropertyChanged += surface.Model_PropertyChanged;
             model.BlocksAppended += surface.Model_BlocksAppended;
+            model.TornDown += surface.Model_TornDown;
             if (ReferenceEquals(surface._lastMerged, model.Document)
                 && model.Document is not null
                 && model.ProjectionComplete)
@@ -342,6 +351,11 @@ internal sealed class ReadingSurface : RichTextBox
 
     private FlowDocument? _lastMerged;
     private IReadOnlyList<ReadingLandmark> _landmarks = Array.Empty<ReadingLandmark>();
+    private bool _focusLandingPending;
+    private IInputElement? _focusLandingOrigin;
+    private Action? _focusLandingAnnouncement;
+    private Action? _focusLandingRefusal;
+    private int _focusLandingRequest;
 
     internal IReadOnlyList<ReadingLandmark> LandmarksForTests => _landmarks;
 
@@ -355,6 +369,10 @@ internal sealed class ReadingSurface : RichTextBox
         {
             ApplyBuiltDocument(built);
             _lastMerged = built;
+            // After the merge: the landing asked for while the placeholder
+            // showed arrives with the content, and only if one is held — the
+            // apply path never claims focus on its own.
+            DeliverFocusLanding();
         }
     }
 
@@ -416,27 +434,191 @@ internal sealed class ReadingSurface : RichTextBox
             {
                 CaretPosition = Document.ContentStart;
             }
+        }
+
+        // No focus claim here (W7-7 PR 8, R-10). This merge used to focus
+        // the surface whenever it was shown and focus sat elsewhere — the
+        // state a reader who moved away leaves behind, so a late merge could
+        // steal focus back. The landing the shell asked for is delivered by
+        // ApplyModel after the merge, and nothing else lands.
+    }
+
+    /// <summary>Whether a shell landing is held for this surface's first
+    /// merged projection (<see cref="RequestFocusLanding"/>).</summary>
+    internal bool IsFocusLandingPending => _focusLandingPending;
+
+    /// <summary>
+    /// W7-7 PR 8 (#1253, contract R-10): the shell's editor landing for a
+    /// reading-mode tab — <c>MainWindow.FocusEditorPane</c>'s reading arm,
+    /// behind Ctrl+Shift+E, F6/Shift+F6, tab cycling, Quick Open and the
+    /// dismissal fallbacks. A surface showing its model's applied projection —
+    /// an empty note's included — takes focus NOW and keeps the caret where
+    /// the rebind restore or the merge seated it. A surface still showing the loading placeholder HOLDS the
+    /// landing for the merge that brings the content: focused early, NVDA
+    /// reads the placeholder (or "blank") and never re-reads what replaces
+    /// it. A held landing calls <paramref name="announceWhenHeldLandingArrives"/>
+    /// once focus is really here (the F6 ring's deferred line), or
+    /// <paramref name="fallThroughWhenHeldLandingRefused"/> when the content
+    /// arrives and focus cannot be taken (the F6 ring moves on); a withdrawn
+    /// one calls neither. Answers whether focus is here or held; a hidden
+    /// surface, or one showing the load-failure notice (no note to read),
+    /// answers false, so the caller's fallbacks run.
+    /// </summary>
+    internal bool RequestFocusLanding(
+        Action? announceWhenHeldLandingArrives = null,
+        Action? fallThroughWhenHeldLandingRefused = null)
+    {
+        WithdrawFocusLanding();
+        if (!IsVisible)
+        {
+            return false;
+        }
+        if (IsKeyboardFocusWithin)
+        {
+            // Already the stop — a link inside it may hold the keys, and
+            // the reader's place outranks a re-seat.
+            return true;
+        }
+        if (!ShowsAppliedProjection)
+        {
+            HoldFocusLanding(announceWhenHeldLandingArrives, fallThroughWhenHeldLandingRefused);
+            return true;
+        }
+        return !ShowsFailureNotice && Focus();
+    }
+
+    /// <summary>Ready to land: the BOUND model's projection has been applied
+    /// — the merge sets <see cref="_lastMerged"/> for the model it merged,
+    /// and a switch to another model clears it as it installs the
+    /// placeholder. Never the block count: the placeholder is a block. The
+    /// first applied chunk of a streamed note is ready, because appends only
+    /// grow the tail and the reader starts at the top, which is there.</summary>
+    private bool ShowsAppliedProjection => _lastMerged is not null;
+
+    /// <summary>The merged document is the model's terminal-failure notice.</summary>
+    private bool ShowsFailureNotice => _model is { PublishedFailureNotice: true };
+
+    private void HoldFocusLanding(Action? announceWhenLanded, Action? fallThroughWhenRefused)
+    {
+        _focusLandingPending = true;
+        _focusLandingOrigin = System.Windows.Input.Keyboard.FocusedElement;
+        _focusLandingAnnouncement = announceWhenLanded;
+        _focusLandingRefusal = fallThroughWhenRefused;
+        int request = ++_focusLandingRequest;
+        // Re-read where the reader is once the moves already queued behind
+        // this request have run — WPF's recovery off a view the toggle just
+        // collapsed, a closing overlay's restore — so a later departure is
+        // judged from there, not from an element that was on its way out.
+        _ = Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Background,
+            () =>
+            {
+                if (_focusLandingPending && request == _focusLandingRequest)
+                {
+                    _focusLandingOrigin = System.Windows.Input.Keyboard.FocusedElement;
+                }
+            });
+    }
+
+    /// <summary>Let go of the held landing that <paramref name="owner"/>
+    /// (its announcement) was requested with — a newer F6 press cancels it —
+    /// and of nothing a later request holds. Answers whether it was still
+    /// wanted: held for that owner, and focus still where the request found
+    /// it.</summary>
+    internal bool CancelFocusLanding(Action owner)
+    {
+        if (!_focusLandingPending || !ReferenceEquals(_focusLandingAnnouncement, owner))
+        {
+            return false;
+        }
+
+        bool wanted = !FocusLeft(_focusLandingOrigin);
+        WithdrawFocusLanding();
+        return wanted;
+    }
+
+    /// <summary>Focus has left where a held landing's request found it, for
+    /// somewhere still shown — the reader's move. A move off an origin that
+    /// is no longer shown was WPF's recovery, not the reader's.</summary>
+    private static bool FocusLeft(IInputElement? origin) =>
+        !ReferenceEquals(System.Windows.Input.Keyboard.FocusedElement, origin)
+        && origin is not UIElement { IsVisible: false };
+
+    /// <summary>R-10: the bound model was torn down (its tab navigated in
+    /// place or closed) before its projection applied. No apply is coming,
+    /// so a held landing is REFUSED — the F6 ring resumes past the editor —
+    /// rather than stranded.</summary>
+    private void Model_TornDown()
+    {
+        if (!_focusLandingPending)
+        {
             return;
         }
 
-        // Focus lands only once real content exists: focusing the empty
-        // surface made NVDA announce "Reading view document blank" and
-        // the arriving content was never re-announced. Presence of
-        // BLOCKS is the condition — a prose-only note has content but
-        // zero landmarks, and gating on landmarks stranded its readers
-        // on the collapsed editor.
-        if (ClaimsFocusAfterApply(IsVisible, IsKeyboardFocusWithin, Document.Blocks.Count))
-        {
-            CaretPosition = Document.ContentStart;
-            _ = Focus();
-        }
+        Action? refuse = _focusLandingRefusal;
+        WithdrawFocusLanding();
+        refuse?.Invoke();
     }
 
-    /// <summary>The focus-claim rule, extracted so the prose-only-note
-    /// regression is pinned without a presentation source.</summary>
-    internal static bool ClaimsFocusAfterApply(
-        bool isVisible, bool isKeyboardFocusWithin, int blockCount) =>
-        isVisible && !isKeyboardFocusWithin && blockCount > 0;
+    private void WithdrawFocusLanding()
+    {
+        _focusLandingPending = false;
+        _focusLandingOrigin = null;
+        _focusLandingAnnouncement = null;
+        _focusLandingRefusal = null;
+    }
+
+    /// <summary>
+    /// A held landing lands with the model's first applied projection, the
+    /// caret at the start (the placeholder's park is no reader's place), and
+    /// only then speaks its announcement. An empty note's merge delivers too:
+    /// the empty document is the note, like the ring's empty editor pane.
+    /// When the landing cannot be taken — the load failed and only its notice
+    /// arrived, or focus is refused (or, before any apply, the model was torn
+    /// down: <see cref="Model_TornDown"/>) — it is REFUSED: the caller falls through
+    /// (the F6 ring moves on from the editor's position) and nothing is
+    /// spoken. It is WITHDRAWN, with neither, when focus left where the
+    /// request found it — the reader took another region, tab or window
+    /// while the content was arriving, and a request is not a claim. A move
+    /// off an origin that is no longer shown was WPF's recovery, not the
+    /// reader's, and the landing stands. (Hidden, which includes unloaded,
+    /// and rebinding withdraw it outright: the view left under a move the
+    /// reader or the shell made, and falling through over it would pull focus
+    /// away from where that move put it.)
+    /// </summary>
+    private void DeliverFocusLanding()
+    {
+        if (!_focusLandingPending)
+        {
+            return;
+        }
+        IInputElement? origin = _focusLandingOrigin;
+        Action? announce = _focusLandingAnnouncement;
+        Action? refuse = _focusLandingRefusal;
+        WithdrawFocusLanding();
+        if (!IsVisible || IsKeyboardFocusWithin)
+        {
+            return;
+        }
+        if (FocusLeft(origin))
+        {
+            return;
+        }
+        if (ShowsFailureNotice)
+        {
+            refuse?.Invoke();
+            return;
+        }
+        CaretPosition = Document.ContentStart;
+        if (Focus() && IsKeyboardFocusWithin)
+        {
+            announce?.Invoke();
+        }
+        else
+        {
+            refuse?.Invoke();
+        }
+    }
 
     /// <summary>
     /// Bring the surface peer's child list current after a content

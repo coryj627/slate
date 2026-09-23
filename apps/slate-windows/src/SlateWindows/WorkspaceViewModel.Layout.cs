@@ -589,6 +589,13 @@ internal sealed partial class WorkspaceViewModel
 
         int index = ActiveGroup.ActiveTab is null ? 0 : ActiveGroup.Tabs.IndexOf(ActiveGroup.ActiveTab);
         ActiveGroup.ActiveTab = ActiveGroup.Tabs[(index + delta + ActiveGroup.Tabs.Count) % ActiveGroup.Tabs.Count];
+        // W7-7 PR 8 (R-10): a user's tab switch lands the new tab's editor
+        // stop. Cycling into a reading tab used to rely on the reading
+        // surface focusing itself when shown; the surface now takes focus
+        // only through the landing this funnel asks for, and without the
+        // request WPF's recovery off the collapsed editor seats the tab
+        // control — record F10's "Workspace tabs, tab control".
+        RequestActiveEditorFocus();
     }
 
     /// <summary>One F6 (<paramref name="direction"/> +1) or Shift+F6 (-1)
@@ -600,16 +607,100 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
 
+        // A newer press CANCELS a held one (R-10): withdrawn — no line, no
+        // fall-through, and the host lets go of it — so a late completion can
+        // never finish a second traversal. The ring stands on the held region:
+        // while its landing is still held and focus is where the held press
+        // left it, the new press goes on from THAT ring position in its own
+        // direction (F6 → the region after the editor, Shift+F6 → the tab
+        // bar) and never asks it again. A landing the region already let go
+        // of (it completed, the view changed), or one the reader walked away
+        // from, holds no position: the press starts from where focus is.
+        ShellRegionKind? from = host.FocusedRegion();
+        if (_heldShellRegionPress is { } held)
+        {
+            _heldShellRegionPress = null;
+            if (host.WithdrawHeldLanding() && from == held.Origin)
+            {
+                from = held.Region;
+            }
+        }
+
+        CycleShellRegionFrom(host, from, direction, attemptsTaken: 0);
+    }
+
+    /// <summary>W7-7 PR 8 (R-10): the one press whose landing a region is
+    /// holding. Its completions act only while it is still this.</summary>
+    private HeldShellRegionPress? _heldShellRegionPress;
+
+    /// <summary>A press's landing attempt: the region it asked, and — once
+    /// that region answered Pending — where focus stood while it held.</summary>
+    private sealed class HeldShellRegionPress(ShellRegionKind region)
+    {
+        public ShellRegionKind Region { get; } = region;
+
+        public ShellRegionKind? Origin { get; set; }
+    }
+
+    /// <summary>The press's traversal from <paramref name="current"/>, at most
+    /// one full ring. W7-7 PR 8 (R-10): a held landing that is refused later
+    /// resumes this same traversal from its own position, reading the ring
+    /// from live state again — the next region receives focus once, and the
+    /// held region is never spoken.</summary>
+    private void CycleShellRegionFrom(
+        IShellRegionHost host, ShellRegionKind? current, int direction, int attemptsTaken)
+    {
+        if (host.ModalSurfaceOpen)
+        {
+            return;
+        }
+
         var layout = new ShellRegionLayout(
             HasTabs: ActiveGroup.Tabs.Count > 0,
             RightPaneVisible: IsRightPaneVisible,
             RightPaneHasContentStop: host.RightPaneHasContentStop);
-        ShellRegionKind? current = host.FocusedRegion();
         int attempts = ShellRegionRing.Ring(layout).Count;
-        for (int attempt = 0; attempt < attempts; attempt++)
+        for (int attempt = attemptsTaken; attempt < attempts; attempt++)
         {
             ShellRegionKind target = ShellRegionRing.Next(layout, current, direction);
-            if (host.TryLand(target))
+            int taken = attempt + 1;
+            var press = new HeldShellRegionPress(target);
+            _heldShellRegionPress = press;
+            ShellRegionLanding landing = host.TryLand(
+                target,
+                () =>
+                {
+                    if (ReferenceEquals(_heldShellRegionPress, press))
+                    {
+                        _heldShellRegionPress = null;
+                        AnnounceShellRegion(target, host);
+                    }
+                },
+                () =>
+                {
+                    if (ReferenceEquals(_heldShellRegionPress, press))
+                    {
+                        _heldShellRegionPress = null;
+                        CycleShellRegionFrom(host, target, direction, taken);
+                    }
+                });
+            if (landing == ShellRegionLanding.Pending)
+            {
+                // W7-7 PR 8 (R-10): the region holds the landing for its
+                // content. The line is spoken when focus arrives, the ring
+                // resumes here if the landing is refused, and a withdrawn
+                // landing does neither; moving on now would land a second
+                // region under the held one.
+                press.Origin = host.FocusedRegion();
+                return;
+            }
+
+            if (ReferenceEquals(_heldShellRegionPress, press))
+            {
+                _heldShellRegionPress = null;
+            }
+
+            if (landing == ShellRegionLanding.Landed)
             {
                 AnnounceShellRegion(target, host);
                 return;

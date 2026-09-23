@@ -1676,7 +1676,10 @@ public partial class MainWindow : Window
         workspace.AnnounceActivePaneFocus();
     }
 
-    private void FocusEditorPane(WorkspaceGroupViewModel group)
+    private void FocusEditorPane(
+        WorkspaceGroupViewModel group,
+        Action? announceWhenHeldLandingArrives = null,
+        Action? fallThroughWhenHeldLandingRefused = null)
     {
         WorkspaceTabViewModel? activeTab = group.ActiveTab;
         // W6-1 PR A (contract A14): a canvas tab's focus belongs to the
@@ -1705,6 +1708,24 @@ public partial class MainWindow : Window
         if (activeTab is { IsGraph: true, Graph: { } graph })
         {
             graph.RequestFocusLanding(activeTab);
+            return;
+        }
+        // W7-7 PR 8 (#1253, contract R-10): a reading-mode tab's editor is
+        // COLLAPSED (the template swaps the two by visibility), so the text
+        // arm below could never seat it and the landing fell to the TabItem:
+        // NVDA heard "Workspace tabs, tab control" after Ctrl+Shift+E, and
+        // the F6 ring read the tab bar as a refusal and skipped the document
+        // (record F10). The reading surface is the stop. It lands at once
+        // when its projection is merged, and otherwise holds the landing for
+        // the content, never focusing the loading placeholder; a held landing
+        // speaks announceWhenHeldLandingArrives (the F6 ring's editor line)
+        // only once focus is really there, and one it cannot complete (focus
+        // refused, the load failed, the model torn down first) calls
+        // fallThroughWhenHeldLandingRefused (the ring moves on).
+        if (activeTab is { IsReadingMode: true }
+            && ReadingSurfaceOf(activeTab) is { IsVisible: true, IsEnabled: true } surface
+            && surface.RequestFocusLanding(announceWhenHeldLandingArrives, fallThroughWhenHeldLandingRefused))
+        {
             return;
         }
         SlateTextEditor? editor = FindVisualDescendants<SlateTextEditor>(ContentPaneBorder)
@@ -1740,6 +1761,13 @@ public partial class MainWindow : Window
             FilesTree.Focus();
         }
     }
+
+    /// <summary>The reading surface showing <paramref name="tab"/> (R-10):
+    /// one per tab control, shared by its tabs, so the DataContext names the
+    /// tab it shows now.</summary>
+    private Reading.ReadingSurface? ReadingSurfaceOf(WorkspaceTabViewModel tab) =>
+        FindVisualDescendants<Reading.ReadingSurface>(ContentPaneBorder)
+            .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, tab));
 
     internal static T? FindAncestorDataContext<T>(DependencyObject current)
         where T : class

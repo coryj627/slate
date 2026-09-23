@@ -88,12 +88,19 @@ public partial class MainWindow : IShellRegionHost
     /// them run. <see cref="ShellRegionKind.Editor"/> answers early only
     /// for canvas and graph tabs, whose <c>FocusEditorPane</c> landing is
     /// asynchronous; a text tab's end state is checked like every other
-    /// region's (final review, #1240).</summary>
-    bool IShellRegionHost.TryLand(ShellRegionKind region)
+    /// region's (final review, #1240). W7-7 PR 8 (R-10): every editor arm is
+    /// verified by focus in its stop; one whose content is still arriving (a
+    /// reading projection, a canvas load, a graph surface not yet shown)
+    /// answers <see cref="ShellRegionLanding.Pending"/> and later either
+    /// speaks through <paramref name="announceWhenLanded"/> when focus
+    /// arrives or calls <paramref name="fallThroughWhenRefused"/> when the
+    /// landing cannot be completed.</summary>
+    ShellRegionLanding IShellRegionHost.TryLand(
+        ShellRegionKind region, Action announceWhenLanded, Action fallThroughWhenRefused)
     {
         if (_viewModel.Workspace is not WorkspaceViewModel workspace)
         {
-            return false;
+            return ShellRegionLanding.Refused;
         }
 
         switch (region)
@@ -102,7 +109,7 @@ public partial class MainWindow : IShellRegionHost
                 if (MainMenu.Items.Count == 0
                     || MainMenu.ItemContainerGenerator.ContainerFromIndex(0) is not MenuItem first)
                 {
-                    return false;
+                    return ShellRegionLanding.Refused;
                 }
 
                 first.Focus();
@@ -117,7 +124,7 @@ public partial class MainWindow : IShellRegionHost
                     WorkspaceGroupViewModel group = workspace.ActiveGroup;
                     if (group.ActiveTab is not { } activeTab)
                     {
-                        return false;
+                        return ShellRegionLanding.Refused;
                     }
 
                     TabControl? tabs = FindVisualDescendants<TabControl>(ContentPaneBorder)
@@ -133,20 +140,54 @@ public partial class MainWindow : IShellRegionHost
             case ShellRegionKind.Editor:
                 if (workspace.ActiveGroup.ActiveTab is not { } editorTab)
                 {
-                    return false;
+                    return ShellRegionLanding.Refused;
                 }
 
-                FocusEditorPane(workspace.ActiveGroup);
-                // Canvas and graph tabs seat focus asynchronously through their
-                // own landing; the text editor is synchronous, so its end state
-                // is judged like every other region (it can fall back to the tab
-                // item or the Files tree, which must read as a refusal).
-                return editorTab is { IsCanvas: true } or { IsGraph: true }
-                    || ((IShellRegionHost)this).FocusedRegion() == ShellRegionKind.Editor;
+                FocusEditorPane(workspace.ActiveGroup, announceWhenLanded, fallThroughWhenRefused);
+                // Canvas and graph tabs seat focus through their document's own
+                // landing, most often inside the request itself; R-10 verifies it
+                // before the ring speaks and holds what is still to come.
+                if (editorTab is { IsCanvas: true } or { IsGraph: true })
+                {
+                    return DocumentLanding(editorTab, announceWhenLanded, fallThroughWhenRefused);
+                }
+
+                // A reading-mode tab's stop is its surface (R-10), verified by
+                // focus in it: an applied note — the empty one included — lands
+                // now. One whose projection is still arriving HOLDS the landing:
+                // no line until focus arrives, and no refusal — the ring would
+                // move on and the held landing then pull focus back.
+                if (editorTab.IsReadingMode)
+                {
+                    if (ReadingSurfaceOf(editorTab) is not { } reading)
+                    {
+                        return ShellRegionLanding.Refused;
+                    }
+
+                    if (reading.IsKeyboardFocusWithin)
+                    {
+                        return ShellRegionLanding.Landed;
+                    }
+
+                    if (reading.IsFocusLandingPending)
+                    {
+                        _withdrawHeldLanding = () => reading.CancelFocusLanding(announceWhenLanded);
+                        return ShellRegionLanding.Pending;
+                    }
+
+                    return ShellRegionLanding.Refused;
+                }
+
+                // The text editor is synchronous, so its end state is judged like
+                // every other region (it can fall back to the tab item or the
+                // Files tree, which must read as a refusal).
+                return ((IShellRegionHost)this).FocusedRegion() == ShellRegionKind.Editor
+                    ? ShellRegionLanding.Landed
+                    : ShellRegionLanding.Refused;
             case ShellRegionKind.EmptyEditor:
                 if (workspace.ActiveGroup.ActiveTab is not null)
                 {
-                    return false;
+                    return ShellRegionLanding.Refused;
                 }
 
                 ContentPaneBorder.Focus();
@@ -154,7 +195,7 @@ public partial class MainWindow : IShellRegionHost
             case ShellRegionKind.RightPaneContent:
                 if (!workspace.IsRightPaneVisible)
                 {
-                    return false;
+                    return ShellRegionLanding.Refused;
                 }
 
                 if (workspace.ConnectionsLeafIsActive())
@@ -174,7 +215,7 @@ public partial class MainWindow : IShellRegionHost
             case ShellRegionKind.RightPaneRail:
                 if (!workspace.IsRightPaneVisible)
                 {
-                    return false;
+                    return ShellRegionLanding.Refused;
                 }
 
                 if (RightPaneLeavesList.SelectedItem is { } selected
@@ -192,10 +233,180 @@ public partial class MainWindow : IShellRegionHost
                 ShellStatusBar.Focus();
                 break;
             default:
-                return false;
+                return ShellRegionLanding.Refused;
         }
 
-        return ((IShellRegionHost)this).FocusedRegion() == region;
+        return ((IShellRegionHost)this).FocusedRegion() == region
+            ? ShellRegionLanding.Landed
+            : ShellRegionLanding.Refused;
+    }
+
+    bool IShellRegionHost.WithdrawHeldLanding()
+    {
+        Func<bool>? withdraw = _withdrawHeldLanding;
+        _withdrawHeldLanding = null;
+        return withdraw?.Invoke() ?? false;
+    }
+
+    /// <summary>How the landing the last Pending answer holds is let go of
+    /// (R-10), answering whether it was still held; a stale one is harmless —
+    /// each lets go of its own request only.</summary>
+    private Func<bool>? _withdrawHeldLanding;
+
+    /// <summary>R-10's canvas and graph arms. FocusEditorPane asked the tab's
+    /// document for its landing, which the document's surface seats — usually
+    /// inside that request. Focus in THIS tab's surface is Landed. A request
+    /// the document still holds for the tab is Pending: its line is spoken
+    /// when the document seats it, it falls through when the document lets
+    /// go of it unseated, and a newer request in its place withdraws it
+    /// silently. Anything else is Refused (the document would not take the
+    /// landing: retired, shut down).</summary>
+    private ShellRegionLanding DocumentLanding(
+        WorkspaceTabViewModel tab, Action announceWhenLanded, Action fallThroughWhenRefused)
+    {
+        FrameworkElement? surface = tab.IsCanvas
+            ? FindVisualDescendants<Canvas.CanvasSurfaceView>(ContentPaneBorder)
+                .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, tab))
+            : FindVisualDescendants<Graph.GraphSurfaceView>(ContentPaneBorder)
+                .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, tab));
+        if (surface is null)
+        {
+            return ShellRegionLanding.Refused;
+        }
+
+        if (surface.IsKeyboardFocusWithin)
+        {
+            return ShellRegionLanding.Landed;
+        }
+
+        HeldDocumentLanding? held = tab switch
+        {
+            { IsCanvas: true, Canvas: { FocusRequest: { } request } canvas }
+                when ReferenceEquals(request.Owner, tab)
+                => new HeldDocumentLanding(
+                    surface, canvas, nameof(canvas.FocusRequest), request, () => canvas.FocusRequest,
+                    () => canvas.CompleteFocusLanding(request), announceWhenLanded, fallThroughWhenRefused),
+            { IsGraph: true, Graph: { FocusRequest: { } request } graph }
+                when ReferenceEquals(request.Owner, tab)
+                => new HeldDocumentLanding(
+                    surface, graph, nameof(graph.FocusRequest), request, () => graph.FocusRequest,
+                    () => graph.CompleteFocus(request), announceWhenLanded, fallThroughWhenRefused),
+            _ => null,
+        };
+        if (held is null)
+        {
+            return ShellRegionLanding.Refused;
+        }
+
+        _withdrawHeldLanding = held.Withdraw;
+        return ShellRegionLanding.Pending;
+    }
+
+    /// <summary>A canvas or graph landing the ring is waiting on (R-10). The
+    /// document completing the request is its one signal — the surface seats
+    /// a request, then completes it, from every edge that re-asks, its own
+    /// focus-within edge included, so focus arriving is never seen first: the
+    /// line when the completion finds focus in the surface, the fall-through
+    /// when the document let go of the request unseated (a failure, or the
+    /// document torn down — a pane closed under it drops the tab's request
+    /// with the tab). It is withdrawn instead, releasing the request so the
+    /// document seats nobody later, by a newer press, by a newer request in
+    /// its place, or by the surface leaving the tab (the shared cell rebinds
+    /// on a tab switch).</summary>
+    private sealed class HeldDocumentLanding
+    {
+        private readonly FrameworkElement _surface;
+        private readonly System.ComponentModel.INotifyPropertyChanged _document;
+        private readonly string _requestProperty;
+        private readonly object _request;
+        private readonly Func<object?> _currentRequest;
+        private readonly Action _release;
+        private readonly Action _announce;
+        private readonly Action _fallThrough;
+        private bool _done;
+
+        public HeldDocumentLanding(
+            FrameworkElement surface,
+            System.ComponentModel.INotifyPropertyChanged document,
+            string requestProperty,
+            object request,
+            Func<object?> currentRequest,
+            Action release,
+            Action announce,
+            Action fallThrough)
+        {
+            _surface = surface;
+            _document = document;
+            _requestProperty = requestProperty;
+            _request = request;
+            _currentRequest = currentRequest;
+            _release = release;
+            _announce = announce;
+            _fallThrough = fallThrough;
+            _surface.DataContextChanged += SurfaceRebound;
+            _document.PropertyChanged += RequestChanged;
+        }
+
+        /// <summary>Withdraw the landing; answers whether it was still held.</summary>
+        public bool Withdraw()
+        {
+            if (!Stop())
+            {
+                return false;
+            }
+
+            _release();
+            return true;
+        }
+
+        private bool Stop()
+        {
+            if (_done)
+            {
+                return false;
+            }
+
+            _done = true;
+            _surface.DataContextChanged -= SurfaceRebound;
+            _document.PropertyChanged -= RequestChanged;
+            return true;
+        }
+
+        private void SurfaceRebound(object sender, DependencyPropertyChangedEventArgs e) => _ = Withdraw();
+
+        private void RequestChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName != _requestProperty || ReferenceEquals(_currentRequest(), _request))
+            {
+                return;
+            }
+
+            if (!Stop())
+            {
+                return;
+            }
+
+            // Replaced by a newer request — another route asked — it is a
+            // withdrawal, silent, wherever focus is: the ring's line belongs
+            // to its own landing. Completed, it is the landing when the
+            // completion finds focus in the surface (the document completes
+            // only after the seat), and the refusal when it does not — let
+            // go of unseated, a failure or the document torn down: the press
+            // resumes past the editor.
+            if (_currentRequest() is not null)
+            {
+                return;
+            }
+
+            if (_surface.IsKeyboardFocusWithin)
+            {
+                _announce();
+            }
+            else
+            {
+                _fallThrough();
+            }
+        }
     }
 
     /// <summary>WPF's menu mode routes keys to the menu; F6 is handed to
