@@ -27,18 +27,32 @@ public sealed class ItemNameCensusTests
     [InlineData("System.String[]")]
     [InlineData("System.Collections.Generic.List`1[System.String]")]
     [InlineData("uniffi.slate_uniffi.SlateSession")]
-    // Record dumps, as a C# record's synthesized ToString() prints them.
+    // Every root the discriminator knows reaches the type shape.
+    [InlineData("ICSharpCode.AvalonEdit.Document.TextDocument")]
+    [InlineData("Microsoft.Win32.OpenFileDialog")]
+    [InlineData("GridConformanceHost.Program+FixtureRow")]
+    // Record dumps, as a C# record's synthesized ToString() prints them —
+    // the type name qualified or not (codex PR 3 round 1).
     [InlineData(@"RecentVault { Path = C:\Vaults\at-vault, DisplayName = at-vault, LastOpenedMs = 1790112463550 }")]
     [InlineData("KeyTypeChoice { Label = Any key type, Kind =  }")]
     [InlineData("CanvasTableRow { NodeId = grp-research, Kind = group, Title = Research, SpeakableName = Research, GroupPath = System.String[] }")]
     [InlineData("FixtureRow { Index = 0, Name = Note 00000, Status = Open, Notes = fixture row 0 }")]
+    [InlineData("SlateWindows.Foo.BarRow { Name = value }")]
+    [InlineData("Outer+InnerRow { Name = value }")]
     public void TypeNamesAndRecordDumpsAreUnspeakable(string name) =>
         Assert.True(ShellAccessibilityTests.IsUnspeakableItemName(name), name);
 
     [Theory]
-    // File names are row identities (the Bases grid, the file trees):
-    // spec §4.2's pattern matched these, which is why it was narrowed.
+    // File names and other dotted user content are row identities (the
+    // Bases grid, the file trees, the rename preview): spec §4.2's pattern
+    // matched these, and so did a capitalised-last-segment rule, which is
+    // why a type name must start from one of the app's roots to count.
     [InlineData("note.md")]
+    [InlineData("notes.v2.md")]
+    [InlineData("README.MD")]
+    [InlineData("Part.One")]
+    [InlineData("Smith.Jones")]
+    [InlineData("Systems.Thinking")]
     [InlineData("child.md")]
     [InlineData("Folder/child.md")]
     [InlineData("child.md, file")]

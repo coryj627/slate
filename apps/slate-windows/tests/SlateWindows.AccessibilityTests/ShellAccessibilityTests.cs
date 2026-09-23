@@ -206,6 +206,12 @@ public sealed partial class ShellAccessibilityTests
                 TimeSpan.FromSeconds(10));
             Assert.Equal(ControlType.ComboBox, sortOrder.ControlType);
             Assert.True(sortOrder.Patterns.Selection.IsSupported);
+            // W7-7 PR 3 (#1246, R-4): NVDA reads a combo's value from its
+            // selected item's name — the label, never the enum member
+            // ("NameAscending"), which no type/record census pattern sees.
+            Assert.Equal(
+                "Name (A to Z)",
+                Assert.Single(sortOrder.Patterns.Selection.Pattern.Selection.Value).Name);
 
             AutomationElement groupDates = WaitForElement(
                 window,
@@ -982,25 +988,29 @@ public sealed partial class ShellAccessibilityTests
         ControlType.Group,
     ];
 
-    /// <summary>A .NET type name as <c>ToString()</c> prints one: dotted or
-    /// <c>+</c>-nested identifiers ending in a PascalCase type, with an
-    /// optional generic arity and bracketed element or argument types —
-    /// "SlateWindows.FileTreeNodeViewModel", "Outer+Row", "System.String[]".
-    /// Spec §4.2's <c>^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$</c> is narrowed to
-    /// the PascalCase final segment because it matched "note.md", and a
-    /// file name is a legitimate row name (the Bases grid's own identity);
-    /// it is widened to <c>+</c>, arity and brackets because those are
-    /// type names too ("System.String[]" is a markdown table row's). The
-    /// residual false positive is an extension written in capitals
-    /// ("README.MD").</summary>
+    /// <summary>A .NET type name as <c>ToString()</c> prints one: ROOTED in a
+    /// namespace this app's types come from, then dotted or <c>+</c>-nested
+    /// identifiers with an optional generic arity and bracketed element or
+    /// argument types — "SlateWindows.Panels.PropertyRowViewModel",
+    /// "System.String[]" (a markdown table row's). The root is the
+    /// discriminator, not the spelling (codex PR 3 round 1): spec §4.2's
+    /// <c>^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$</c> matched "note.md", and a
+    /// lexical narrowing (a capitalised last segment) still flagged dotted
+    /// user content — "README.MD", "Part.One", "Smith.Jones" — that a row
+    /// is legitimately named by. The roots are those the shell's sources
+    /// import, plus the conformance host's; the residual is a user name
+    /// that is a root and a dot ("System.md").</summary>
     private static readonly Regex TypeNamePattern = new(
-        @"^[A-Za-z_]\w*(?:[.+][A-Za-z_]\w*)*[.+][A-Z]\w*(?:`\d+)?(?:\[.*\])?$",
+        @"^(?:SlateWindows|GridConformanceHost|System|Microsoft|ICSharpCode|uniffi|Svg|SkiaSharp|WpfMath)"
+        + @"(?:[.+][A-Za-z_]\w*)+(?:`\d+)?(?:\[.*\])?$",
         RegexOptions.CultureInvariant);
 
     /// <summary>A C# record's synthesized <c>ToString()</c>:
-    /// "RecentVault { Path = …, LastOpenedMs = … }" (spec §4.2).</summary>
+    /// "RecentVault { Path = …, LastOpenedMs = … }" (spec §4.2), its type
+    /// name namespace- or nesting-qualified or not
+    /// ("SlateWindows.Foo.BarRow { Name = value }").</summary>
     private static readonly Regex RecordDumpPattern = new(
-        @"^\w+ \{ .* = ",
+        @"^[\w.+]+ \{ .* = ",
         RegexOptions.CultureInvariant);
 
     /// <summary>The census's verdict on one name — a pure function, pinned
@@ -1016,8 +1026,11 @@ public sealed partial class ShellAccessibilityTests
     /// journey runs it; journeys also call it at states no scan sees (a
     /// filter's results, an open sheet). A ComboBox is also judged by
     /// what NVDA reads as its VALUE — the selected item's name, which
-    /// exists while the drop-down's containers do not, and its Value when
-    /// editable. A failure names each element by its path.
+    /// exists while the drop-down's containers do not, and must not be
+    /// EMPTY either (codex PR 3 round 1) — and its Value when editable. A
+    /// name that is a bare identifier ("NameAscending", an enum's
+    /// ToString) is neither shape: the journeys pin each combo's exact
+    /// selected name. A failure names each element by its path.
     /// </summary>
     internal static void AssertItemNamesAreSpeakable(Process process, string surface)
     {
@@ -1046,7 +1059,8 @@ public sealed partial class ShellAccessibilityTests
             $"{surface}: the item-name census could not read the tree: {lastFault?.Message}");
         Assert.True(
             offenders.Length == 0,
-            $"{surface}: items named by a .NET type name or a record dump (R-4, #1246):"
+            $"{surface}: items named by a .NET type name or a record dump, or a selected "
+            + "combo item with no name (R-4, #1246):"
             + Environment.NewLine + "  "
             + string.Join(Environment.NewLine + "  ", offenders));
     }
@@ -1075,8 +1089,14 @@ public sealed partial class ShellAccessibilityTests
                 {
                     foreach (AutomationElement selected in selection.Selection.ValueOrDefault ?? [])
                     {
-                        string? value = SelectedItemName(selected);
-                        if (IsUnspeakableItemName(value))
+                        // A transient fault here propagates: the whole
+                        // state is re-read, never judged as "no name".
+                        string? value = selected.Properties.Name.ValueOrDefault;
+                        if (string.IsNullOrWhiteSpace(value))
+                        {
+                            offenders.Add($"{ElementPath(automation, element)} → a selected item with no name");
+                        }
+                        else if (IsUnspeakableItemName(value))
                         {
                             offenders.Add($"{ElementPath(automation, element)} → selected item '{value}'");
                         }
@@ -1091,23 +1111,6 @@ public sealed partial class ShellAccessibilityTests
             }
         }
         return [.. offenders];
-    }
-
-    /// <summary>A combo's selected item may have no container yet, and an
-    /// item peer without one can refuse its Name (an unrealized grid row
-    /// throws ElementNotAvailable). An item that cannot answer speaks
-    /// nothing, so it is no dump — unlike an element found in the tree,
-    /// whose failure means the tree changed and the census re-reads.</summary>
-    private static string? SelectedItemName(AutomationElement selected)
-    {
-        try
-        {
-            return selected.Properties.Name.ValueOrDefault;
-        }
-        catch (Exception exception) when (IsTransientUiaFault(exception))
-        {
-            return null;
-        }
     }
 
     /// <summary>"Window 'Slate' › Pane 'Workspace' [WorkspaceView] › …"
@@ -2861,6 +2864,12 @@ public sealed partial class ShellAccessibilityTests
                 window, "AddPropertySheet", TimeSpan.FromSeconds(10));
             Assert.Equal(
                 "Add property", addSheet.Properties.Name.ValueOrDefault);
+            // W7-7 PR 3 (#1246, R-4): the type combo's value is its
+            // selected item's name — the kind, exactly.
+            Assert.Equal(
+                "text",
+                Assert.Single(WaitForElement(window, "AddPropertyType", TimeSpan.FromSeconds(10))
+                    .Patterns.Selection.Pattern.Selection.Value).Name);
             WaitForElement(window, "AddPropertyCancel", TimeSpan.FromSeconds(10))
                 .Patterns.Invoke.Pattern.Invoke();
 
@@ -3738,7 +3747,13 @@ public sealed partial class ShellAccessibilityTests
             "    name: Main\n" +
             "    order:\n" +
             "      - file.name\n" +
-            "      - note.status\n");
+            "      - note.status\n" +
+            // W7-7 PR 3 (#1246): a second view shows the view picker
+            // (collapsed for a single view) so its value can be asserted.
+            "  - type: list\n" +
+            "    name: Rows\n" +
+            "    order:\n" +
+            "      - file.name\n");
 
         Process? process = null;
         try
@@ -3797,6 +3812,12 @@ public sealed partial class ShellAccessibilityTests
                         .IsSupersetOf(["file.name", "note.status"]),
                     TimeSpan.FromSeconds(15)),
                 "the base grid's core-labelled headers never materialized");
+            // W7-7 PR 3 (#1246, R-4): the view picker's value is the active
+            // view's name, never the BaseViewSummary record's dump.
+            Assert.Equal(
+                "Main",
+                Assert.Single(WaitForElement(window, "BaseViewPicker", TimeSpan.FromSeconds(10))
+                    .Patterns.Selection.Pattern.Selection.Value).Name);
             AssertAxeClean(process, "bases-tab");
 
             // Quick filter: grid-scoped Ctrl+F focuses the transient
@@ -4155,6 +4176,14 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)),
                 "the saved query never appeared in the section picker");
             pickerItem!.Patterns.SelectionItem.Pattern.Select();
+            // W7-7 PR 3 (#1246, R-4): the picker's value is the query's
+            // name, exactly — never the SavedQuerySummary record's dump.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => queryPicker.Patterns.Selection.Pattern.Selection.Value is [{ } chosen]
+                        && chosen.Name == "Journey query",
+                    TimeSpan.FromSeconds(10)),
+                "the section picker's selected item does not read the query's name");
             WaitForElement(window, "DashboardEditorAddSection", TimeSpan.FromSeconds(10))
                 .Patterns.Invoke.Pattern.Invoke();
             AssertAxeClean(process, "bases-dashboard-editor");
