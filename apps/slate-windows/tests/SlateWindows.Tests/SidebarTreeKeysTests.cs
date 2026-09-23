@@ -204,15 +204,13 @@ public sealed class SidebarTreeKeysTests : IDisposable
 
     /// <summary>
     /// R-2 (design review): the row arm acts on a focused ROW container,
-    /// never on a text field. A text box inside a row keeps its Enter and
-    /// Space, and the shipped inline rename field still reverts on Escape
-    /// and commits on Enter with the arm installed.
+    /// never on a text field: a text box inside a row keeps its Enter and
+    /// Space.
     /// </summary>
     [Fact]
     public void TextFieldsKeepTheirKeysWithTheRowArmInstalled() => RunSta(() =>
     {
-        string root = NewVault("text-fields");
-        using var host = new TreeHost(root);
+        using var host = new TreeHost(NewVault("text-fields"));
         host.Initialize();
         FileTreeNodeViewModel alpha = Node(host.Sidebar, "alpha.md");
         TreeViewItem row = host.FocusRow(alpha);
@@ -229,6 +227,22 @@ public sealed class SidebarTreeKeysTests : IDisposable
         Assert.Empty(host.Requests);
         Assert.False(alpha.IsBatchSelected);
         template.Children.Remove(inRow);
+    });
+
+    /// <summary>
+    /// R-2 (spec §3.2 item 2): with the row arm installed, the shipped
+    /// inline rename field still cancels on Escape — the name reverts and
+    /// nothing is renamed — and commits on Enter; neither asks for the
+    /// editor's focus.
+    /// </summary>
+    [Fact]
+    public void InlineRename_EnterCommitsAndEscapeCancelsWithTheArmInstalled() => RunSta(() =>
+    {
+        string root = NewVault("inline-rename");
+        using var host = new TreeHost(root);
+        host.Initialize();
+        _ = host.FocusRow(Node(host.Sidebar, "alpha.md"));
+        host.Requests.Clear();
 
         TextBox rename = host.RenameField;
         Assert.True(rename.Focus());
@@ -241,8 +255,8 @@ public sealed class SidebarTreeKeysTests : IDisposable
         Assert.True(host.Press(rename, Key.Enter));
         Assert.True(PumpedDispatcher.PumpUntil(() => File.Exists(Path.Combine(root, "gamma.md"))));
         Assert.False(File.Exists(Path.Combine(root, "alpha.md")));
-        Assert.DoesNotContain(host.Requests, request => request.FocusEditor);
         Assert.False(File.Exists(Path.Combine(root, "discarded.md")));
+        Assert.DoesNotContain(host.Requests, request => request.FocusEditor);
     });
 
     private static string NavigationHelpText() => Commands.NavigationHelp.FilesTree;
