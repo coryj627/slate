@@ -757,7 +757,70 @@ public sealed class ChordTableTests
             [ChordScope.Canvas] = CanvasChords(),
             [ChordScope.Connections] = ConnectionsChords(),
             [ChordScope.Graph] = GraphChords(),
+            [ChordScope.FilesTree] = FilesTreeChords(),
         };
+
+    /// <summary>W7-7 (R-2): the Files rows' own key route,
+    /// <c>MainWindow.FilesRows_PreviewKeyDown</c> — flat if-arms, each
+    /// naming one key and its EXACT modifier state — compared both ways
+    /// against the table's FilesTree rows, so a gesture handled with no
+    /// row, or a row nothing delivers, fails here.</summary>
+    private static HashSet<string> FilesTreeChords()
+    {
+        MethodDeclarationSyntax route =
+            CSharpSource.Load("MainWindow.xaml.cs").Method("FilesRows_PreviewKeyDown");
+        AssertLocalMeans(route, "modifiers", "Keyboard.Modifiers");
+        var chords = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (IfStatementSyntax arm in route.DescendantNodes().OfType<IfStatementSyntax>())
+        {
+            string[] keys = [.. CSharpSource.KeyNames(arm.Condition)];
+            if (keys.Length == 0)
+            {
+                continue;
+            }
+
+            Assert.Single(keys);
+            Match exact = Regex.Match(
+                CSharpSource.Normalize(arm.Condition), @"modifiers==ModifierKeys\.(\w+)");
+            Assert.True(
+                exact.Success,
+                $"Files row arm `{arm.Condition}` names no exact modifier state; the "
+                + "scrape reads `modifiers == ModifierKeys.X` and would misattribute it.");
+            chords.Add(Canonical(
+                exact.Groups[1].Value == "None" ? null : exact.Groups[1].Value, keys[0]));
+        }
+
+        Assert.NotEmpty(chords);
+        return chords;
+    }
+
+    /// <summary>W7-7 (R-2, OD-2): the Files region's three row gestures
+    /// are surface rows in their own scope — the scoped scrape above pins
+    /// their delivery both ways — unregistered and claiming no mac
+    /// chord (mac's tree multi-selects; its Space is folder
+    /// disclosure).</summary>
+    [Fact]
+    public void FilesTreeRowGesturesAreSurfaceRowsInTheirOwnScope()
+    {
+        var expected = new Dictionary<string, string>(System.StringComparer.Ordinal)
+        {
+            ["windows.filesTree.openSelected"] = "Enter",
+            ["windows.filesTree.openSelectedInNewTab"] = "Ctrl+Enter",
+            ["windows.filesTree.toggleBatchSelection"] = "Space",
+        };
+        ChordTableEntry[] rows = [.. ChordTable.Entries.Where(row => row.Scope == ChordScope.FilesTree)];
+        Assert.Equal(
+            expected.Keys.OrderBy(id => id, System.StringComparer.Ordinal),
+            rows.Select(row => row.Id).OrderBy(id => id, System.StringComparer.Ordinal));
+        foreach (ChordTableEntry row in rows)
+        {
+            Assert.Equal(expected[row.Id], row.WindowsChord);
+            Assert.False(row.IsCommandId);
+            Assert.False(row.IsRegistered);
+            Assert.Null(row.MacChord);
+            Assert.False(string.IsNullOrWhiteSpace(row.Reason));
+        }
+    }
 
     /// <summary>W6-2 PR C (C-11): the graph navigator's map, scraped from
     /// <c>GraphNavigator.Bind</c>'s three-argument <c>AddChord</c> calls as a

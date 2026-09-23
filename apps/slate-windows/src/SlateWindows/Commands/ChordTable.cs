@@ -82,6 +82,13 @@ internal enum ChordScope
     /// W7-7 R-13: the tree's own key handler delivers the row's new-tab
     /// activation, <c>Ctrl+Enter</c>.</summary>
     Connections,
+
+    /// <summary>The Files region's rows (W7-7, R-2): the Files tree, the
+    /// filter results and the dual pane, whose explicit opens and batch
+    /// toggle are delivered by the rows' own tunnelling handler
+    /// (<c>MainWindow.FilesRows_PreviewKeyDown</c>) while one of their rows
+    /// has focus.</summary>
+    FilesTree,
 }
 
 /// <summary>
@@ -1536,6 +1543,12 @@ internal static class ChordTable
         const string quickOpenReason =
             OverlayReason + " Delivered by the Quick Open overlay's key handler "
             + "(MainWindow.xaml.cs:543-555).";
+        const string filesTreeReason =
+            "W7-7 (R-2, OD-2): a row interaction of the Files tree, the filter "
+            + "results and the dual pane, delivered by their own tunnelling handler "
+            + "(MainWindow.FilesRows_PreviewKeyDown) while a row has focus; opens the "
+            + "row and moves focus into the note. The File actions Open and New tab "
+            + "buttons run the same verbs (Open is slate.sidebar.open, chordless).";
 
         var rows = new List<ChordTableEntry>();
 
@@ -1624,6 +1637,24 @@ internal static class ChordTable
             Chord("windows.quickOpen.dismiss", "Quick Open: dismiss",
                 "Escape", ChordScope.QuickOpen,
                 quickOpenReason + " PR-2 records its place in the Escape chain."),
+
+            // W7-7 (R-2, OD-2): the Files region's row gestures. Arrow
+            // selection keeps opening the note (mac parity) but leaves focus
+            // on the row, so the open that moves focus is explicit; the
+            // batch check box left the arrow order for Space.
+            Chord("windows.filesTree.openSelected", "Files tree: open the selected row",
+                "Enter", ChordScope.FilesTree, filesTreeReason),
+            Chord("windows.filesTree.openSelectedInNewTab",
+                "Files tree: open the selected row in a new tab",
+                "Ctrl+Enter", ChordScope.FilesTree, filesTreeReason),
+            Chord("windows.filesTree.toggleBatchSelection",
+                "Files tree: check or uncheck the row for batch actions",
+                "Space", ChordScope.FilesTree,
+                "W7-7 (R-2, OD-2): tree rows only (the result lists carry no check "
+                + "box), delivered by MainWindow.FilesRows_PreviewKeyDown; the count "
+                + "is announced and the row's ItemStatus reports the state. No mac "
+                + "twin: mac's tree multi-selects, and Space there is folder "
+                + "disclosure."),
 
             // §E TE-11 (E19/ED-1, D-6 adopted): the canvas history
             // domain. Chord-only rows like the structural pair below: mac

@@ -1284,6 +1284,41 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>W7-7 (R-2, OD-2): the Files region's explicit gestures,
+    /// delivered by the rows' own lists — the Files tree, the filter
+    /// results and the dual pane — while one of their rows has focus
+    /// (a rename field, outside the lists, never sees them). Arrow
+    /// selection only shows the note and keeps focus on the row; Enter
+    /// opens the row and moves focus into the note, Ctrl+Enter opens it in
+    /// a new tab, and Space on a tree row toggles its batch check box,
+    /// which left the arrow order. These are the
+    /// <c>windows.filesTree.*</c> chord rows (<c>ChordScope.FilesTree</c>),
+    /// and the tree's HelpText speaks them (contract 39 N-1). A row with
+    /// nothing to open, or no check box, leaves the key unhandled.</summary>
+    private void FilesRows_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_viewModel.FileSidebar is not FilesSidebarViewModel sidebar
+            || e.OriginalSource is not FrameworkElement { DataContext: FileTreeNodeViewModel row } source
+            || source is not (TreeViewItem or ListBoxItem))
+        {
+            return;
+        }
+
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (e.Key == Key.Enter && modifiers == ModifierKeys.None)
+        {
+            e.Handled = sidebar.OpenNode(row, WorkspaceOpenTarget.CurrentTab);
+        }
+        else if (e.Key == Key.Enter && modifiers == ModifierKeys.Control)
+        {
+            e.Handled = sidebar.OpenNode(row, WorkspaceOpenTarget.NewTab);
+        }
+        else if (e.Key == Key.Space && modifiers == ModifierKeys.None && source is TreeViewItem)
+        {
+            e.Handled = sidebar.ToggleBatchSelection(row);
+        }
+    }
+
     private void Tags_SelectedItemChanged(
         object sender,
         RoutedPropertyChangedEventArgs<object> e)

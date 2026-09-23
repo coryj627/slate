@@ -1707,7 +1707,7 @@ public sealed class FileManagementTests
         var announced = new SynchronizedAnnouncements();
         SidebarRig rig = await NewSidebar(session, fixture, announced);
         var opened = new List<(string Path, WorkspaceOpenTarget Target)>();
-        rig.Sidebar.OpenTargetRequested += (_, request) => opened.Add(request);
+        rig.Sidebar.OpenTargetRequested += (_, request) => opened.Add((request.Path, request.Target));
 
         rig.Sidebar.CreateCanvasCommand.Execute(null);
         await rig.Settle();

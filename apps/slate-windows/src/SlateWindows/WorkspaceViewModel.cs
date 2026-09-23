@@ -2012,8 +2012,16 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     public ICommand ToggleRightPaneCommand { get; }
     public ICommand OpenTasksReviewCommand { get; }
 
-    public void OpenPath(string path, WorkspaceOpenTarget target = WorkspaceOpenTarget.CurrentTab) =>
-        RunWorkspaceMutation(() => OpenPathCore(path, target));
+    /// <summary>Opens a path. <paramref name="requestEditorFocus"/> false
+    /// shows the note without asking for the editor's focus: the Files
+    /// sidebar's selection-driven opens (W7-7, R-2), whose keyboard focus
+    /// stays on the row; <see cref="TryOpenItem"/> honours it on every
+    /// arm.</summary>
+    public void OpenPath(
+        string path,
+        WorkspaceOpenTarget target = WorkspaceOpenTarget.CurrentTab,
+        bool requestEditorFocus = true) =>
+        RunWorkspaceMutation(() => OpenPathCore(path, target, requestEditorFocus));
 
     private void OpenEditorNavigation(EditorNavigationRequest request) =>
         RunWorkspaceMutation(() =>

@@ -3838,6 +3838,45 @@
       "reason": "PR-4: overlay-scoped interaction of an already-open surface (the arrow-keys-in-a-list rule), not an app command. Delivered by the Quick Open overlay's key handler (MainWindow.xaml.cs:543-555). PR-2 records its place in the Escape chain."
     },
     {
+      "id": "windows.filesTree.openSelected",
+      "label": "Files tree: open the selected row",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Enter",
+      "windowsSpoken": "Enter",
+      "scope": "FilesTree",
+      "registered": false,
+      "reason": "W7-7 (R-2, OD-2): a row interaction of the Files tree, the filter results and the dual pane, delivered by their own tunnelling handler (MainWindow.FilesRows_PreviewKeyDown) while a row has focus; opens the row and moves focus into the note. The File actions Open and New tab buttons run the same verbs (Open is slate.sidebar.open, chordless)."
+    },
+    {
+      "id": "windows.filesTree.openSelectedInNewTab",
+      "label": "Files tree: open the selected row in a new tab",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Ctrl+Enter",
+      "windowsSpoken": "Control Enter",
+      "scope": "FilesTree",
+      "registered": false,
+      "reason": "W7-7 (R-2, OD-2): a row interaction of the Files tree, the filter results and the dual pane, delivered by their own tunnelling handler (MainWindow.FilesRows_PreviewKeyDown) while a row has focus; opens the row and moves focus into the note. The File actions Open and New tab buttons run the same verbs (Open is slate.sidebar.open, chordless)."
+    },
+    {
+      "id": "windows.filesTree.toggleBatchSelection",
+      "label": "Files tree: check or uncheck the row for batch actions",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Space",
+      "windowsSpoken": "Space",
+      "scope": "FilesTree",
+      "registered": false,
+      "reason": "W7-7 (R-2, OD-2): tree rows only (the result lists carry no check box), delivered by MainWindow.FilesRows_PreviewKeyDown; the count is announced and the row's ItemStatus reports the state. No mac twin: mac's tree multi-selects, and Space there is folder disclosure."
+    },
+    {
       "id": "windows.canvas.undoHistory",
       "label": "Canvas: undo the last canvas action",
       "section": "View",
