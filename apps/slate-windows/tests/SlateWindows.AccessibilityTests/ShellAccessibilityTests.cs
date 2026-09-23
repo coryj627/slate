@@ -8380,7 +8380,16 @@ public sealed partial class ShellAccessibilityTests
             OpenCanvasFromTree(window, automation, "sample");
             AutomationElement tree = WaitForElement(
                 window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
-            int unfiltered = WaitForTreeItems(automation, tree, 5).Length;
+            AutomationElement[] cards = WaitForTreeItems(automation, tree, 5);
+            int unfiltered = cards.Length;
+
+            // W7-7 (R-2): selecting the canvas's Files row shows it and
+            // leaves focus on that row, so the canvas chords below first
+            // need focus in the canvas — on a row, since the outline
+            // container refuses SetFocus once it has rows.
+            cards[0].Focus();
+            AssertEventuallyFocused(
+                cards[0], "the canvas outline's first row never took focus");
 
             // Ctrl+F reaches the ONE canvas filter field (contract C10).
             ReassertForegroundForAChord(window);
