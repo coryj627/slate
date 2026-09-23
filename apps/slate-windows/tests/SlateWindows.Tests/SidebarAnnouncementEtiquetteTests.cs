@@ -66,11 +66,18 @@ public sealed class SidebarAnnouncementEtiquetteTests
         await CompleteNext();
         Assert.Equal([2u, 2u, 3u], announcements.OfType<A11yEvent.FileListCount>().Select(e => e.Count));
 
-        // Mac keeps the last successful key when the field is cleared.
+        // W7-7 (R-3, codex PR 2 round 2): the emptied field is the user's
+        // clear, heard once as core's SidebarFilterCleared — and after the
+        // listener heard the filter end, the same query is news again, so
+        // its count is spoken. (Mac keeps the last key across its silent
+        // clear; Windows speaks the clear, so the de-duplication starts
+        // over.)
         sidebar.FilterText = string.Empty;
+        Assert.IsType<A11yEvent.SidebarFilterCleared>(announcements[^1]);
         sidebar.FilterText = "not";
         await CompleteNext();
-        Assert.Equal(3, announcements.OfType<A11yEvent.FileListCount>().Count());
+        Assert.Equal([2u, 2u, 3u, 3u], announcements.OfType<A11yEvent.FileListCount>().Select(e => e.Count));
+        Assert.Single(announcements.OfType<A11yEvent.SidebarFilterCleared>());
     }
 
     /// <summary>W7-7 (R-3, codex round 4): a tag scope's count is

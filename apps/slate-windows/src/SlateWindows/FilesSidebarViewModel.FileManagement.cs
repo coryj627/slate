@@ -125,6 +125,17 @@ internal sealed partial class FilesSidebarViewModel
     /// refresh.</summary>
     private string? _statusToReassert;
 
+    /// <summary>Hold the status just written for the tree publication
+    /// still to come — or for none. W7-7 (codex PR 2 round 2): a
+    /// reassertion belongs to a pending publication, the refresh
+    /// generation that has not yet published. A status written after
+    /// that publication (the refresh still finishing) has nothing to
+    /// guard against, and holding it let a LATER refresh resurrect it
+    /// over whatever the status said by then; an older hold is
+    /// superseded by this status either way.</summary>
+    private void HoldStatusForPendingPublication() =>
+        _statusToReassert = IsTreePublicationPending ? Status : null;
+
     private void ReassertStatusAfterPublication()
     {
         if (_statusToReassert is string reassert)
@@ -149,10 +160,7 @@ internal sealed partial class FilesSidebarViewModel
     private void ReportMutationResult(string sentence)
     {
         Status = WithRewriteFailureDetail(sentence);
-        if (IsRefreshingTree)
-        {
-            _statusToReassert = Status;
-        }
+        HoldStatusForPendingPublication();
 
         // W0.5-3 residue: Windows sidebar action-result copy.
         _announce(new A11yEvent.HostComposed(sentence, A11yPriority.Medium));

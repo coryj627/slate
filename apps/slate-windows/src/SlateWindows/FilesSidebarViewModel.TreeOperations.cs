@@ -27,6 +27,11 @@ internal sealed partial class FilesSidebarViewModel
     private Task _treeRefreshCompletion = Task.CompletedTask;
     private Task _expandLoadedCompletion = Task.CompletedTask;
     private int _treeGeneration;
+    /// <summary>The tree generation whose outcome — its publication, or
+    /// its failure report — has been applied (W7-7, codex PR 2 round 2):
+    /// a refresh still running after that has nothing left to
+    /// overwrite.</summary>
+    private int _settledTreeGeneration;
     private ObservableCollection<FileTreeNodeViewModel> _rootNodes = [];
     private bool _isExpandingLoaded;
 
@@ -39,6 +44,8 @@ internal sealed partial class FilesSidebarViewModel
     public IReadOnlySet<string> RestoredExpandedPaths => _expandedPaths;
     internal Task TreeRefreshCompletion => _treeRefreshCompletion;
     internal bool IsRefreshingTree => !_treeRefreshCompletion.IsCompleted;
+    internal bool IsTreePublicationPending =>
+        IsRefreshingTree && _settledTreeGeneration != _treeGeneration;
     internal Task ExpandLoadedCompletion => _expandLoadedCompletion;
 
     public bool IsExpandingLoaded
@@ -277,6 +284,10 @@ internal sealed partial class FilesSidebarViewModel
                     {
                         if (generation == _treeGeneration)
                         {
+                            // Settled before the report: this generation will
+                            // never publish, so its failure is not held for a
+                            // publication — a later refresh must not revive it.
+                            _settledTreeGeneration = generation;
                             ReportFailure(message);
                         }
 
@@ -375,6 +386,7 @@ internal sealed partial class FilesSidebarViewModel
 
     private void ApplyTreeRefresh(TreeRefreshOutcome outcome, bool reportCount)
     {
+        _settledTreeGeneration = _treeGeneration;
         RootNodes = outcome.RootNodes;
         if (outcome.TagGeneration == _tagGeneration)
         {

@@ -915,6 +915,9 @@
                                     <TreeView.ItemContainerStyle>
                                         <Style TargetType="TreeViewItem">
                                             <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                            <!-- W7-7 (R-3): two-way, so a filter clear releases the
+                                                 selection and the same tag can be applied again. -->
+                                            <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
                                         </Style>
                                     </TreeView.ItemContainerStyle>
                                 </TreeView>

@@ -319,8 +319,10 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     }
 }
 
-internal sealed class SidebarTagViewModel
+internal sealed class SidebarTagViewModel : BindableBase
 {
+    private bool _isSelected;
+
     public SidebarTagViewModel(
         string segment,
         string full,
@@ -343,6 +345,16 @@ internal sealed class SidebarTagViewModel
     public string DisplayLabel => $"{Segment} ({FileCount:N0})";
     public string AutomationName => $"{Segment}, {FileCount:N0} {(FileCount == 1 ? "file" : "files")}";
     public ObservableCollection<SidebarTagViewModel> Children { get; } = [];
+
+    /// <summary>The Tags tree's selection, bound two-way (W7-7 R-3, codex
+    /// PR 2 round 2). The tree applies a tag on a selection CHANGE, so
+    /// every filter clear releases it — or the tag just cleared, still
+    /// selected, could never be applied again.</summary>
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => SetField(ref _isSelected, value);
+    }
 }
 
 internal sealed record SidebarShortcutViewModel(string Kind, string Path)
@@ -863,22 +875,20 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         return true;
     }
 
+    /// <summary>The Tags tree's selection: its row stays selected while its
+    /// tag is the filter.</summary>
     public void ActivateTag(SidebarTagViewModel? tag)
     {
-        if (tag is not null)
+        if (tag is not null && !string.IsNullOrWhiteSpace(tag.Full))
         {
-            ActivateTag(tag.Full);
+            ApplyTagFilter(tag.Full);
         }
     }
 
-    /// <summary>W7-7 (R-3, #1250): a tag activation — the Tags tree, the
-    /// editor's Ctrl+Enter on a tag — writes what core's
-    /// <c>sidebar_tag_filter_activation</c> answers (mac's
-    /// <c>activateSidebarTagScope</c>, as a pure core query): the query
-    /// <c>#tag</c> the grammar understands, or, for a tag containing
-    /// whitespace, an empty field and the out-of-band tag scope. The split
-    /// is core's tokenizer rule, never decided here. The old
-    /// <c>tag:"x"</c> parsed as a name word and matched nothing.</summary>
+    /// <summary>A tag activation from outside the Tags tree — the editor's
+    /// Ctrl+Enter on a tag. Whatever the tree has selected no longer
+    /// describes the filter, so its selection is released (W7-7 R-3, codex
+    /// PR 2 round 2).</summary>
     public void ActivateTag(string tag)
     {
         if (string.IsNullOrWhiteSpace(tag))
@@ -886,6 +896,19 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return;
         }
 
+        ReleaseTagSelection();
+        ApplyTagFilter(tag);
+    }
+
+    /// <summary>W7-7 (R-3, #1250): a tag activation writes what core's
+    /// <c>sidebar_tag_filter_activation</c> answers (mac's
+    /// <c>activateSidebarTagScope</c>, as a pure core query): the query
+    /// <c>#tag</c> the grammar understands, or, for a tag containing
+    /// whitespace, an empty field and the out-of-band tag scope. The split
+    /// is core's tokenizer rule, never decided here. The old
+    /// <c>tag:"x"</c> parsed as a name word and matched nothing.</summary>
+    private void ApplyTagFilter(string tag)
+    {
         SidebarTagFilterActivation written = SlateUniffiMethods.SidebarTagFilterActivation(tag);
         ApplyTagActivation(written.FilterText, written.ScopeTag);
     }
@@ -1439,10 +1462,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 new CanvasA11yEvent.CanvasFileCreated(
                     System.IO.Path.GetFileNameWithoutExtension(created)));
             Status = SlateUniffiMethods.A11yRender(sentence).Text;
-            if (IsRefreshingTree)
-            {
-                _statusToReassert = Status;
-            }
+            HoldStatusForPendingPublication();
             _announce(sentence);
             if (caveat is not null)
             {
@@ -1475,10 +1495,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     {
         ArgumentNullException.ThrowIfNull(failure);
         Status = SlateUniffiMethods.A11yRender(failure).Text;
-        if (IsRefreshingTree)
-        {
-            _statusToReassert = Status;
-        }
+        HoldStatusForPendingPublication();
         _announce(failure);
     }
 
@@ -2157,12 +2174,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
 
         Status = SlateUniffiMethods.A11yRender(outcome).Text;
-        if (IsRefreshingTree)
-        {
-            // The outcome wins the turn over the republication's own
-            // status arms (the ReportResult discipline).
-            _statusToReassert = Status;
-        }
+        // The outcome wins the turn over the republication's own
+        // status arms (the ReportResult discipline).
+        HoldStatusForPendingPublication();
 
         _announce(outcome);
         RaiseCommandStates();
@@ -2248,11 +2262,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private void ReportFailure(string message)
     {
         Status = message;
-        if (IsRefreshingTree)
-        {
-            // Codex round 2: same reassert discipline as results.
-            _statusToReassert = Status;
-        }
+        // Codex round 2: same reassert discipline as results.
+        HoldStatusForPendingPublication();
 
         // W0.5-3 residue: Windows sidebar availability/error copy.
         _announce(new A11yEvent.HostComposed(message, A11yPriority.High));
@@ -2261,12 +2272,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private void ReportResult(string message)
     {
         Status = message;
-        if (IsRefreshingTree)
-        {
-            // Codex round 2: the in-flight refresh's publication arms
-            // must not erase the result the user just heard.
-            _statusToReassert = Status;
-        }
+        // Codex round 2: the in-flight refresh's publication arms
+        // must not erase the result the user just heard.
+        HoldStatusForPendingPublication();
 
         // W0.5-3 residue: Windows sidebar action-result copy.
         _announce(new A11yEvent.HostComposed(message, A11yPriority.Medium));
