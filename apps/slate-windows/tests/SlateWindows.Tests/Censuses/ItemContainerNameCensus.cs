@@ -673,6 +673,14 @@ public sealed class ItemContainerNameCensus
                     yield return $"{site}: an ItemsSource host the census cannot identify";
                     continue;
                 }
+                // A presenter handed the host (the palette's results list,
+                // W7-7 PR 9): follow the field back to what its constructor
+                // was passed.
+                if (host is IFieldSymbol field && ForwardedHost(field) is { } forwarded)
+                {
+                    host = forwarded;
+                    creation = null;
+                }
                 if (!checkedHosts.Add(host))
                 {
                     continue;
@@ -802,6 +810,63 @@ public sealed class ItemContainerNameCensus
         return string.Equals(path, expected.Path, StringComparison.Ordinal) && expected.Converter is null
             ? null
             : $"{method.Name} binds Name to `{(path.Length == 0 ? "(the item)" : path)}` but R-4 pins {Describe(expected)}";
+    }
+
+    /// <summary>When <paramref name="field"/> is only ever assigned a
+    /// constructor parameter of its type, the one symbol every construction
+    /// of that type passes for it — the host a presenter was handed — else
+    /// null.</summary>
+    private static ISymbol? ForwardedHost(IFieldSymbol field)
+    {
+        var parameters = new HashSet<IParameterSymbol>(SymbolEqualityComparer.Default);
+        foreach ((_, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (AssignmentExpressionSyntax assignment in source.Root
+                .DescendantNodes()
+                .OfType<AssignmentExpressionSyntax>()
+                .Where(assignment => SymbolEqualityComparer.Default.Equals(
+                    model.GetSymbolInfo(assignment.Left).Symbol, field)))
+            {
+                if (model.GetSymbolInfo(assignment.Right).Symbol is not IParameterSymbol
+                    {
+                        ContainingSymbol: IMethodSymbol { MethodKind: MethodKind.Constructor },
+                    } parameter)
+                {
+                    return null;
+                }
+                _ = parameters.Add(parameter);
+            }
+        }
+        if (parameters.Count != 1)
+        {
+            return null;
+        }
+        IParameterSymbol forwarded = parameters.Single();
+        var passed = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        foreach ((_, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (BaseObjectCreationExpressionSyntax creation in source.Root
+                .DescendantNodes()
+                .OfType<BaseObjectCreationExpressionSyntax>()
+                .Where(creation => SymbolEqualityComparer.Default.Equals(
+                    model.GetSymbolInfo(creation).Symbol, forwarded.ContainingSymbol)))
+            {
+                SeparatedSyntaxList<ArgumentSyntax> arguments = creation.ArgumentList?.Arguments ?? default;
+                ArgumentSyntax? argument = arguments.FirstOrDefault(
+                    candidate => candidate.NameColon?.Name.Identifier.ValueText == forwarded.Name)
+                    ?? (forwarded.Ordinal < arguments.Count && arguments[forwarded.Ordinal].NameColon is null
+                        ? arguments[forwarded.Ordinal]
+                        : null);
+                if (argument is null || model.GetSymbolInfo(argument.Expression).Symbol is not { } symbol)
+                {
+                    return null;
+                }
+                _ = passed.Add(symbol);
+            }
+        }
+        return passed.Count == 1 ? passed.Single() : null;
     }
 
     /// <summary>The host an ItemsSource assignment targets, and the object
