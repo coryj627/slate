@@ -245,8 +245,8 @@ public partial class MainWindow : IShellRegionHost
     /// of its own: the leaf's first stop, the same landing as the ring's
     /// right-pane content stop, so Ctrl+R puts the reader on the review's
     /// "All, N tasks" filter; the rail's selected row when the leaf has no
-    /// stop. It was the bare rail, from which Down walked into the menu
-    /// bar. Ctrl+Alt+Right's edge is not a reveal and keeps the rail
+    /// stop, or its stop took nothing. It was the bare rail, from which Down
+    /// walked into the menu bar. Ctrl+Alt+Right's edge is not a reveal and keeps the rail
     /// (<see cref="WorkspaceFocusBoundary.RightPaneEdge"/>).</summary>
     private void LandInRightPane()
     {
@@ -255,8 +255,9 @@ public partial class MainWindow : IShellRegionHost
             return;
         }
 
-        // The leaf has no stop, or its list's row cannot be landed yet: the
-        // pane's stable stop, the rail's row.
+        // The leaf has no stop, or its stop took nothing (a list whose row
+        // cannot be landed yet among them): the pane's stable stop, the
+        // rail's row.
         _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
     }
 
