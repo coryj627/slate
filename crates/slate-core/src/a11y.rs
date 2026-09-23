@@ -57,10 +57,10 @@
 //! identically on both platforms (`Return`, `Escape`) stay literal in
 //! the template — they are not chords.
 
-use crate::EmbedUnresolvedReason;
 use crate::canvas::CanvasColor;
 use crate::canvas::model::EdgeDirection;
 use crate::canvas::placement::RelativeDesc;
+use crate::{EmbedUnresolvedReason, VaultError};
 
 /// How urgently a host should speak an event. `High` interrupts
 /// current speech (assertive); `Medium` queues politely — mirroring the
@@ -760,12 +760,13 @@ pub enum A11yEvent {
     },
     /// An embed preview resolved to nothing. `reason` is the resolver's
     /// SEMANTIC reason, not its card's text: core renders the sentence
-    /// for every case, so no host wording reaches speech. `None` is a
-    /// resolution that failed outright or came back in a shape the host
-    /// does not render.
+    /// for every case, so no host wording reaches speech. There is always
+    /// one: a resolver that throws is `ReadError` carrying the error's
+    /// detail as core renders it ([`vault_error_detail`]), which is how
+    /// mac's preview already reports a thrown resolve.
     EmbedPreviewUnavailable {
         target: String,
-        reason: Option<EmbedUnresolvedReason>,
+        reason: EmbedUnresolvedReason,
     },
     /// The citation summary sheet opened on its counts.
     CitationSummaryShown {
@@ -1945,7 +1946,7 @@ impl A11yEvent {
             }
             EmbedPreviewUnavailable { target, reason } => lead_then_sentence(
                 &format!("Embed preview for {target}."),
-                &embed_unavailable_reason(reason.as_ref()),
+                &embed_unavailable_reason(reason),
             ),
             CitationSummaryShown { citations, sources } => format!(
                 "Citation summary. {citations} {} referencing {sources} unique {}.",
@@ -3089,26 +3090,73 @@ fn lead_then_sentence(lead: &str, text: &str) -> String {
 /// moved here so the host passes the reason and never a sentence; the
 /// match is exhaustive, so a reason core gains cannot reach speech
 /// unphrased.
-fn embed_unavailable_reason(reason: Option<&EmbedUnresolvedReason>) -> String {
+fn embed_unavailable_reason(reason: &EmbedUnresolvedReason) -> String {
     match reason {
-        Some(EmbedUnresolvedReason::TargetNotFound { target }) => {
+        EmbedUnresolvedReason::TargetNotFound { target } => {
             format!("Target not found: {target}")
         }
-        Some(EmbedUnresolvedReason::HeadingNotFound {
+        EmbedUnresolvedReason::HeadingNotFound {
             target_path,
             heading,
-        }) => format!("Heading not found: {heading} in {target_path}"),
-        Some(EmbedUnresolvedReason::BlockNotFound {
+        } => format!("Heading not found: {heading} in {target_path}"),
+        EmbedUnresolvedReason::BlockNotFound {
             target_path,
             block_id,
-        }) => format!("Block not found: {block_id} in {target_path}"),
-        Some(EmbedUnresolvedReason::DepthLimitReached) => {
-            "Nested embed depth limit reached.".to_owned()
-        }
-        Some(EmbedUnresolvedReason::ReadError { message }) => {
+        } => format!("Block not found: {block_id} in {target_path}"),
+        EmbedUnresolvedReason::DepthLimitReached => "Nested embed depth limit reached.".to_owned(),
+        EmbedUnresolvedReason::ReadError { message } => {
             format!("Could not read embed: {message}")
         }
-        None => "The embedded content could not be resolved.".to_owned(),
+    }
+}
+
+/// A vault error as the detail a person hears or reads (W7-7, #1249):
+/// the words of mac's `humanReadableVaultError`, arm for arm, rendered
+/// here so the Windows host spells none of them (mac keeps its own copy
+/// until it adopts this). A host that catches an error hands it back
+/// through the FFI (`vault_error_detail`) and speaks or shows the text it
+/// gets, never the binding's field dump ("@message=…"). `Io` and `Db`
+/// are the inner error's own text, which is what the FFI flattens them to
+/// at the boundary. The match is exhaustive, so a variant core gains
+/// cannot reach a host unphrased.
+pub fn vault_error_detail(error: &VaultError) -> String {
+    match error {
+        VaultError::Io(error) => error.to_string(),
+        VaultError::Db(error) => error.to_string(),
+        VaultError::Trash { message }
+        | VaultError::InvalidQuery { message }
+        | VaultError::InvalidArgument { message }
+        | VaultError::TrashConfirmationChanged { message }
+        | VaultError::StructuralMutationIncomplete { message, .. } => message.clone(),
+        VaultError::InvalidPath { path, reason } => format!("Invalid path {path}: {reason}"),
+        VaultError::Cancelled => "Operation cancelled.".to_owned(),
+        VaultError::InvalidUtf8 { path } => format!("File at {path} is not valid UTF-8."),
+        VaultError::FileTooLarge { path, size } => format!(
+            "File at {path} is {size} bytes \u{2014} larger than this build's refuse threshold."
+        ),
+        VaultError::Unsupported { feature } => format!("{feature} is not implemented yet."),
+        VaultError::WriteConflict { .. } => "File changed externally.".to_owned(),
+        VaultError::SavedButUnindexed { detail, .. } => {
+            format!("Saved, but not indexed yet: {detail} It will appear after the next scan.")
+        }
+        VaultError::HistoryUnavailable { path, .. } => {
+            format!("History for {path} is unavailable: it failed an integrity check.")
+        }
+        VaultError::MalformedFrontmatter { path, reason } => {
+            format!("Frontmatter at {path} is malformed: {reason}.")
+        }
+        VaultError::BibSourceUnreadable { path, reason } => {
+            format!("Bibliography source {path} couldn't be opened: {reason}.")
+        }
+        VaultError::CslStyleUnreadable { path, reason } => {
+            format!("Citation style {path} couldn't be loaded: {reason}.")
+        }
+        VaultError::PrefsUnreadable { path, reason } => {
+            format!("Preferences file {path} couldn't be loaded: {reason}.")
+        }
+        VaultError::DestinationExists { path } => {
+            format!("Something named {path} already exists there.")
+        }
     }
 }
 
@@ -3803,40 +3851,43 @@ pub fn corpus() -> Vec<A11yEvent> {
             target: "Whipped cream".into(),
             title: "Embedded note: recipes/Whipped cream.md".into(),
         },
-        // Every resolver reason, and a resolution that failed outright.
+        // Every resolver reason. A resolver that throws is a ReadError too,
+        // carrying its error's core-rendered detail (the index witness).
         EmbedPreviewUnavailable {
             target: "Target".into(),
-            reason: Some(EmbedUnresolvedReason::TargetNotFound {
+            reason: EmbedUnresolvedReason::TargetNotFound {
                 target: "Target".into(),
-            }),
+            },
         },
         EmbedPreviewUnavailable {
             target: "recipes#Glaze".into(),
-            reason: Some(EmbedUnresolvedReason::HeadingNotFound {
+            reason: EmbedUnresolvedReason::HeadingNotFound {
                 target_path: "recipes.md".into(),
                 heading: "Glaze".into(),
-            }),
+            },
         },
         EmbedPreviewUnavailable {
             target: "recipes^step-3".into(),
-            reason: Some(EmbedUnresolvedReason::BlockNotFound {
+            reason: EmbedUnresolvedReason::BlockNotFound {
                 target_path: "recipes.md".into(),
                 block_id: "step-3".into(),
-            }),
+            },
         },
         EmbedPreviewUnavailable {
             target: "Deep".into(),
-            reason: Some(EmbedUnresolvedReason::DepthLimitReached),
+            reason: EmbedUnresolvedReason::DepthLimitReached,
         },
         EmbedPreviewUnavailable {
             target: "Locked".into(),
-            reason: Some(EmbedUnresolvedReason::ReadError {
+            reason: EmbedUnresolvedReason::ReadError {
                 message: "Access is denied. (os error 5)".into(),
-            }),
+            },
         },
         EmbedPreviewUnavailable {
             target: "Target".into(),
-            reason: None,
+            reason: EmbedUnresolvedReason::ReadError {
+                message: "sqlite error: database disk image is malformed".into(),
+            },
         },
         // Each count takes its own number: one site can cite several
         // keys ([@a; @b]), so either count may be the singular one.
@@ -5746,9 +5797,8 @@ mod tests {
 
     /// W7-7 (#1251): every reason the embed resolver can give has an
     /// EmbedPreviewUnavailable corpus witness, so its sentence is pinned
-    /// by the golden, the artifact and both host censuses; so does a
-    /// resolution that failed outright (`None`). The render match is
-    /// exhaustive already — this makes the corpus keep up with it.
+    /// by the golden, the artifact and both host censuses. The render
+    /// match is exhaustive already — this makes the corpus keep up.
     #[test]
     fn every_embed_unresolved_reason_has_an_unavailable_witness() {
         let declared = declared_variants_in("src/embeds.rs", "EmbedUnresolvedReason");
@@ -5756,28 +5806,188 @@ mod tests {
             declared.len() >= 5,
             "parsed only {declared:?} — the parser broke, not the vocabulary"
         );
-        let mut witnessed = std::collections::BTreeSet::new();
-        let mut outright = false;
-        for event in corpus() {
-            if let A11yEvent::EmbedPreviewUnavailable { reason, .. } = event {
-                match reason {
-                    Some(reason) => {
-                        witnessed.insert(
-                            format!("{reason:?}")
-                                .chars()
-                                .take_while(char::is_ascii_alphanumeric)
-                                .collect::<String>(),
-                        );
-                    }
-                    None => outright = true,
-                }
-            }
-        }
+        let witnessed: std::collections::BTreeSet<String> = corpus()
+            .iter()
+            .filter_map(|event| match event {
+                A11yEvent::EmbedPreviewUnavailable { reason, .. } => Some(
+                    format!("{reason:?}")
+                        .chars()
+                        .take_while(char::is_ascii_alphanumeric)
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .collect();
         assert_eq!(
             witnessed, declared,
             "EmbedUnresolvedReason arms without an EmbedPreviewUnavailable witness"
         );
-        assert!(outright, "no witness for a resolution that failed outright");
+    }
+
+    /// One witness per `VaultError` variant, freshly built (the error is
+    /// not `Clone`: `Io` holds an `io::Error`), with the detail core
+    /// speaks for it.
+    fn vault_error_detail_witnesses() -> Vec<(VaultError, &'static str)> {
+        vec![
+            (
+                VaultError::Io(std::io::Error::other("Access is denied. (os error 5)")),
+                "Access is denied. (os error 5)",
+            ),
+            (
+                VaultError::Db(crate::db::DbError::UnsupportedVersion {
+                    db_version: 9,
+                    runner_max: 8,
+                }),
+                "database is at schema version 9, newer than this build's max version 8; \
+                 upgrade Slate or restore the vault from a backup",
+            ),
+            (
+                VaultError::InvalidPath {
+                    path: "../out.md".into(),
+                    reason: "escapes the vault".into(),
+                },
+                "Invalid path ../out.md: escapes the vault",
+            ),
+            (
+                VaultError::Trash {
+                    message: "the Recycle Bin refused the move".into(),
+                },
+                "the Recycle Bin refused the move",
+            ),
+            (VaultError::Cancelled, "Operation cancelled."),
+            (
+                VaultError::InvalidUtf8 {
+                    path: "notes.md".into(),
+                },
+                "File at notes.md is not valid UTF-8.",
+            ),
+            (
+                VaultError::FileTooLarge {
+                    path: "notes.md".into(),
+                    size: 104_857_600,
+                },
+                "File at notes.md is 104857600 bytes \u{2014} larger than this build's refuse threshold.",
+            ),
+            (
+                VaultError::InvalidQuery {
+                    message: "fts5: syntax error near \"AND\"".into(),
+                },
+                "fts5: syntax error near \"AND\"",
+            ),
+            (
+                VaultError::Unsupported {
+                    feature: "Tag scope".into(),
+                },
+                "Tag scope is not implemented yet.",
+            ),
+            (
+                VaultError::InvalidArgument {
+                    message: "ordinal 9 is out of range".into(),
+                },
+                "ordinal 9 is out of range",
+            ),
+            (
+                VaultError::TrashConfirmationChanged {
+                    message: "The selection changed.".into(),
+                },
+                "The selection changed.",
+            ),
+            (
+                VaultError::StructuralMutationIncomplete {
+                    path: "a.md".into(),
+                    message: "The move could not be undone.".into(),
+                },
+                "The move could not be undone.",
+            ),
+            (
+                VaultError::DestinationExists {
+                    path: "notes.md".into(),
+                },
+                "Something named notes.md already exists there.",
+            ),
+            (
+                VaultError::WriteConflict {
+                    current_content_hash: "a".repeat(64),
+                    expected_content_hash: "b".repeat(64),
+                    current_mtime_ms: 1_790_116_253_121,
+                },
+                "File changed externally.",
+            ),
+            (
+                VaultError::SavedButUnindexed {
+                    new_content_hash: "c".repeat(64),
+                    detail: "the index is locked.".into(),
+                },
+                "Saved, but not indexed yet: the index is locked. It will appear after the next scan.",
+            ),
+            (
+                VaultError::HistoryUnavailable {
+                    path: "notes.md".into(),
+                    reason: "hash mismatch".into(),
+                },
+                "History for notes.md is unavailable: it failed an integrity check.",
+            ),
+            (
+                VaultError::MalformedFrontmatter {
+                    path: "notes.md".into(),
+                    reason: "unterminated string".into(),
+                },
+                "Frontmatter at notes.md is malformed: unterminated string.",
+            ),
+            (
+                VaultError::BibSourceUnreadable {
+                    path: "library.bib".into(),
+                    reason: "no such file".into(),
+                },
+                "Bibliography source library.bib couldn't be opened: no such file.",
+            ),
+            (
+                VaultError::CslStyleUnreadable {
+                    path: "ieee.csl".into(),
+                    reason: "not XML".into(),
+                },
+                "Citation style ieee.csl couldn't be loaded: not XML.",
+            ),
+            (
+                VaultError::PrefsUnreadable {
+                    path: ".slate/prefs.json".into(),
+                    reason: "not JSON".into(),
+                },
+                "Preferences file .slate/prefs.json couldn't be loaded: not JSON.",
+            ),
+        ]
+    }
+
+    /// W7-7 (#1249): core speaks every vault error as a sentence — the
+    /// golden for each variant's detail — and the witnesses cover every
+    /// variant `VaultError` declares, so one added without a witness fails
+    /// here. None of the text is a binding's field dump, a hash or an
+    /// mtime.
+    #[test]
+    fn vault_error_detail_speaks_every_variant() {
+        let declared = declared_variants_in("src/lib.rs", "VaultError");
+        assert!(
+            declared.len() >= 20,
+            "parsed only {declared:?} — the parser broke, not the vocabulary"
+        );
+        let mut witnessed = std::collections::BTreeSet::new();
+        for (error, expected) in vault_error_detail_witnesses() {
+            let detail = vault_error_detail(&error);
+            assert_eq!(detail, expected, "{error:?}");
+            assert!(!detail.contains('@'), "{detail:?}");
+            assert!(!detail.contains(&"a".repeat(64)), "{detail:?}");
+            assert!(!detail.contains("1790116253121"), "{detail:?}");
+            witnessed.insert(
+                format!("{error:?}")
+                    .chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .collect::<String>(),
+            );
+        }
+        assert_eq!(
+            witnessed, declared,
+            "VaultError variants without a detail witness"
+        );
     }
 
     /// W7-7 (#1251): carried titles and reasons close their sentence
@@ -5916,7 +6126,7 @@ mod tests {
             ),
             (
                 High,
-                "Embed preview for Target. The embedded content could not be resolved.",
+                "Embed preview for Target. Could not read embed: sqlite error: database disk image is malformed.",
             ),
             (
                 High,
