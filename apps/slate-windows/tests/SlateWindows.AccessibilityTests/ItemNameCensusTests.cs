@@ -43,6 +43,8 @@ public sealed class ItemNameCensusTests
     [InlineData("FixtureRow { Index = 0, Name = Note 00000, Status = Open, Notes = fixture row 0 }")]
     [InlineData("SlateWindows.Foo.BarRow { Name = value }")]
     [InlineData("Outer+InnerRow { Name = value }")]
+    // A dump broken over lines is still a dump (the spec review, round 21).
+    [InlineData("RecentVault {\n  Path = C:\\Vaults\\at-vault,\n  DisplayName = at-vault\n}")]
     public void TypeNamesAndRecordDumpsAreUnspeakable(string name) =>
         Assert.True(ShellAccessibilityTests.IsUnspeakableItemName(name), name);
 
