@@ -19,6 +19,20 @@ the sole authored RaiseNotificationEvent caller. Extend the existing
 AnnouncementSeamCensus: the real MainWindow still passes both typed and
 rendered seams into the workspace and all family announcers retain the
 same production destination. No default no-op sink can satisfy a test.
+Amended by W7-7 (#1244; contract 40 R-1, owner decision OD-7): the one
+raiser calls AutomationInteropProvider.RaiseAutomationEvent with
+NotificationEvent on the status peer's connected provider, guarded by
+ClientsAreListening, and no authored shell code calls
+RaiseNotificationEvent, which WPF gates on a listener map that only a UIA
+advise fills. The dispatcher starts in a monotonic launch phase,
+Unadvised then Done. While Unadvised (no listening client, no advise in
+that map, or no connected provider) a line is queued, never raised, and
+the queue keeps the last 16. The first check that finds all three (every
+post, and a 250 ms poll on the UI thread) raises each queued line once,
+in order, through the same raiser; the phase is then Done and every later
+line is raised at once. No advise within 30 s of the first frame also ends
+the phase, and the queue is dropped unspoken. AnnouncementSeamCensus pins
+the raise, the phase's production inputs and the forbidden gated call.
 
 **D-3 — Typed scan identity and copy.** VaultScanStarted(total_files),
 VaultScanProgress(indexed,total), VaultScanFinished(files_indexed) are
