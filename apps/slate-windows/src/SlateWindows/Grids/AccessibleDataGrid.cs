@@ -61,11 +61,12 @@ internal sealed class AccessibleDataGrid : UserControl
     private Action<object>? _rowActivatedModified;
     private string _typeAheadBuffer = string.Empty;
     private DateTime _typeAheadLast = DateTime.MinValue;
-    private AccessibilityNotificationDispatcher? _dispatcher;
 
     /// <summary>Injectable announce seam (the mac hook's twin). The
-    /// default posts through the canonical dispatcher; tests and
-    /// specialized surfaces (graph/canvas funnels) swap it.</summary>
+    /// default posts through the canonical dispatcher — the window's one,
+    /// found when the grid announces (OD-7: one launch phase and one
+    /// provider per window, never a dispatcher of the grid's own); tests
+    /// and specialized surfaces (graph/canvas funnels) swap it.</summary>
     public Action<A11yEvent> Announce { get; set; }
 
     /// <summary>Raised when an export command produced text — the
@@ -176,8 +177,7 @@ internal sealed class AccessibleDataGrid : UserControl
         layout.Children.Add(_grid);
         Content = layout;
 
-        Announce = @event => (_dispatcher ??= new AccessibilityNotificationDispatcher(this))
-            .Post(@event);
+        Announce = @event => AccessibilityNotificationDispatcher.For(this)?.Post(@event);
 
         CommandBindings.Add(new CommandBinding(
             ToggleSortCommand, (_, _) => ToggleSortOnCurrentColumn()));
