@@ -87,13 +87,11 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
-    private static void RunShellAccessibilityGate()
+    /// <summary>The shell gate's fixture vault: a tagged note that embeds
+    /// <c>Folder/child</c> and cites <c>@doe</c>, and that child — two
+    /// files, so a first scan indexes 2 of 2.</summary>
+    private static void WriteShellFixtureVault(string vaultRoot)
     {
-        string testRoot = Path.Combine(
-            Path.GetTempPath(),
-            $"slate-shell-accessibility-{Guid.NewGuid():N}");
-        string vaultRoot = Path.Combine(testRoot, "Accessible Vault");
-        string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
         File.WriteAllText(
             Path.Combine(vaultRoot, "note.md"),
@@ -104,23 +102,42 @@ public sealed partial class ShellAccessibilityTests
         File.WriteAllText(
             Path.Combine(vaultRoot, "Folder", "child.md"),
             "# Child note\nSecond line of the child note.\n");
+    }
+
+    /// <summary>Starts the production executable on <paramref
+    /// name="vaultRoot"/> the way the shell gate always has: its own
+    /// single-instance identity, the app log in <paramref
+    /// name="logDirectory"/>, and the UIA diagnostics on.</summary>
+    private static Process StartShellProcess(string vaultRoot, string logDirectory)
+    {
+        var startInfo = new ProcessStartInfo(SlateWindowsExe())
+        {
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add(vaultRoot);
+        startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+            $"slate-accessibility-{Guid.NewGuid():N}";
+        startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+        startInfo.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
+        return Process.Start(startInfo)
+            ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+    }
+
+    private static void RunShellAccessibilityGate()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"slate-shell-accessibility-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Accessible Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        WriteShellFixtureVault(vaultRoot);
 
         Process? process = null;
         try
         {
-            var startInfo = new ProcessStartInfo(SlateWindowsExe())
-            {
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-            };
-            startInfo.ArgumentList.Add(vaultRoot);
-            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
-                $"slate-accessibility-{Guid.NewGuid():N}";
-            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
-            startInfo.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
-            process = Process.Start(startInfo)
-                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+            process = StartShellProcess(vaultRoot, logDirectory);
 
             if (!Environment.UserInteractive)
             {
