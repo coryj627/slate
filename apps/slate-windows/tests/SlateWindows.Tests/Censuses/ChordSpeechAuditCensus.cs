@@ -53,7 +53,9 @@ public sealed class ChordSpeechAuditCensus
         }
     }
 
-    private static string? TextOf(ExpressionSyntax expression, SemanticModel model)
+    /// <summary>An expression's composed text, holes as "A" — shared with
+    /// <c>ConnectionsLeafCensus</c>'s display-chord check (W7-7 R-13).</summary>
+    internal static string? TextOf(ExpressionSyntax expression, SemanticModel model)
     {
         Optional<object?> constant = model.GetConstantValue(expression);
         if (constant.HasValue && constant.Value is string text) { return text; }

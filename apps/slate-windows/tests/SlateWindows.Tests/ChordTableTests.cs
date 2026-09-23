@@ -801,15 +801,23 @@ public sealed class ChordTableTests
         return listed.ToHashSet(System.StringComparer.Ordinal);
     }
 
-    /// <summary>The Connections leaf's own key route (W6-2 PR B2, B2-4):
-    /// the one chord its body delivers, read from <c>IsTheBackChord</c>'s
-    /// expression — the key as <c>Key.X</c>, the modifiers as
-    /// <c>ModifierKeys.Y</c> — so a chord added to the view without a table
-    /// row, or a row without a delivering site, fails here.</summary>
+    /// <summary>The Connections leaf's own key routes: Back's chord (W6-2
+    /// PR B2, B2-4), which its body delivers, read from
+    /// <c>IsTheBackChord</c>'s expression — the key as <c>Key.X</c>, the
+    /// modifiers as <c>ModifierKeys.Y</c> — and the tree's new-tab
+    /// activation (W7-7 R-13), read the same way from
+    /// <c>TryActivationFromKey</c>, once the route that ships is shown to
+    /// run through it: <c>OnTreeKeyDown</c> hands the live
+    /// <c>Keyboard.Modifiers</c> to the tree's key owner, which decides
+    /// through <c>TryActivationFromKey</c> and activates with ITS
+    /// <c>newTab</c>. A chord added to either without a table row, or a row
+    /// without a delivering site, fails here; the decision's behaviour is
+    /// <c>ConnectionsLeafViewTests</c>'. The bare Enter is the row's default
+    /// action (B-9), not a table row.</summary>
     private static HashSet<string> ConnectionsChords()
     {
-        MethodDeclarationSyntax owner =
-            CSharpSource.Load("Graph", "ConnectionsLeafView.cs").Method("IsTheBackChord");
+        CSharpSource view = CSharpSource.Load("Graph", "ConnectionsLeafView.cs");
+        MethodDeclarationSyntax owner = view.Method("IsTheBackChord");
         MemberAccessExpressionSyntax[] accesses = [.. owner.DescendantNodes().OfType<MemberAccessExpressionSyntax>()];
         string[] keys = [.. accesses
             .Where(access => CSharpSource.Normalize(access.Expression) == "Key")
@@ -819,7 +827,30 @@ public sealed class ChordTableTests
             .Select(access => access.Name.Identifier.ValueText)];
         Assert.Single(keys);
         Assert.NotEmpty(modifiers);
-        return [Canonical(string.Join("+", modifiers), keys[0])];
+
+        InvocationExpressionSyntax toOwner = Assert.Single(
+            view.Method("OnTreeKeyDown").DescendantNodes().OfType<InvocationExpressionSyntax>(),
+            call => CSharpSource.Normalize(call.Expression) == "TryHandleTreeKey");
+        Assert.Equal(
+            ["e.Key==Key.System?e.SystemKey:e.Key", "Keyboard.Modifiers"],
+            toOwner.ArgumentList.Arguments.Select(argument => CSharpSource.Normalize(argument.Expression)));
+        MethodDeclarationSyntax treeOwner = view.Method("TryHandleTreeKey");
+        InvocationExpressionSyntax decide = Assert.Single(
+            treeOwner.DescendantNodes().OfType<InvocationExpressionSyntax>(),
+            call => CSharpSource.Normalize(call.Expression) == "TryActivationFromKey");
+        Assert.Equal(
+            ["key", "modifiers", "boolnewTab"],
+            decide.ArgumentList.Arguments.Select(argument => CSharpSource.Normalize(argument.Expression)));
+        InvocationExpressionSyntax activation = Assert.Single(
+            treeOwner.DescendantNodes().OfType<InvocationExpressionSyntax>(),
+            call => call.Expression is MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Activate" });
+        Assert.Equal("newTab", CSharpSource.Normalize(activation.ArgumentList.Arguments.Last().Expression));
+
+        MethodDeclarationSyntax decision = view.Method("TryActivationFromKey");
+        string activationKey = Assert.Single(CSharpSource.KeyNames(decision).Distinct());
+        string newTabModifier = Assert.Single(CSharpSource.MemberAccesses(decision, "ModifierKeys")
+            .Select(access => access.Name.Identifier.ValueText).Distinct());
+        return [Canonical(string.Join("+", modifiers), keys[0]), Canonical(newTabModifier, activationKey)];
     }
 
     /// <summary>W6-2 PR B2, B2-4 / B2D-3: Back is a registered graph row in
@@ -839,8 +870,34 @@ public sealed class ChordTableTests
         // The chord follows the ⌘→Ctrl rule; the modifier-matching
         // divergence (B2-D11) is the key owner's, recorded in the contracts.
         Assert.Null(row.Divergence);
-        Assert.Single(ChordTable.Entries, entry => entry.Scope == ChordScope.Connections);
+        // The scope's rows: Back and, since W7-7 R-13, the tree's new-tab
+        // activation.
+        Assert.Equal(
+            new[] { ChordTable.Ids.GraphConnectionsBack, "windows.connections.openInNewTab" },
+            ChordTable.Entries.Where(entry => entry.Scope == ChordScope.Connections).Select(entry => entry.Id).ToArray());
         Assert.DoesNotContain(ChordTable.Entries, entry => entry.WindowsChord == "Ctrl+[" && entry.Scope != ChordScope.Connections);
+    }
+
+    /// <summary>W7-7 R-13 (#1257): the tree's new-tab activation is a
+    /// chord-only row in the Connections scope — Ctrl+Enter, delivered by
+    /// the tree's own key handler (the scope scrape above reads its arm) —
+    /// so the row's hint composes the key name from the table (contract 39
+    /// N-2). No mac chord is recorded: the mac's ⌘Return is a panel key, not
+    /// a catalog command, and its Return glyph has no word in the mac
+    /// column (the Quick Open rows' precedent).</summary>
+    [Fact]
+    public void ConnectionsOpenInNewTabIsAChordOnlyConnectionsScopedRow()
+    {
+        ChordTableEntry row = RequireRow("windows.connections.openInNewTab");
+        Assert.False(row.IsCommandId);
+        Assert.False(row.IsRegistered);
+        Assert.Equal("Ctrl+Enter", row.WindowsChord);
+        Assert.Equal(ChordScope.Connections, row.Scope);
+        Assert.Null(row.MacChord);
+        Assert.Null(row.Divergence);
+        Assert.False(string.IsNullOrWhiteSpace(row.Reason));
+        Assert.Equal("Control Enter", row.WindowsSpoken);
+        Assert.Equal(row.WindowsSpoken, NavigationHelp.Spoken(row.Id));
     }
 
     /// <summary>

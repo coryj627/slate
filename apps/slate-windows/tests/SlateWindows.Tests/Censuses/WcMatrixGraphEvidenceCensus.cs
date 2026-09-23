@@ -212,6 +212,41 @@ public sealed class WcMatrixGraphEvidenceCensus
         Assert.Contains("reports/w6_2_graph_at_checklist.md", matrix);
     }
 
+    /// <summary>W7-7 R-13 (#1257): the checklist's leaf item says what the
+    /// leaf does — Enter opens the note and Ctrl+Enter opens it in a new tab
+    /// (contract 35 B-9), only a row's Show connections action re-roots (the
+    /// palette row reveals the leaf and never reaches the re-root funnel,
+    /// <c>ConnectionsLeafCensus.TheReRootFunnelAndBackAreReachedByTheirEntrancesAlone</c>),
+    /// and Back is Ctrl+[ from inside the leaf. The shared gate reads the
+    /// row's shape, never this text: "Enter on a child row (re-root)" passed it.</summary>
+    [Fact]
+    public void TheAtChecklistsLeafItemSaysEnterOpensAndOnlyShowConnectionsReRoots()
+    {
+        const string Item = "w6_2_graph_at_checklist.md#2";
+        string path = Path.Combine(RepoRoot, "docs", "plans", "18_windows_port", "reports", "w6_2_graph_at_checklist.md");
+        string[] row = File.ReadAllText(path).Split('\n')
+            .Where(line => line.StartsWith("| 2 |", StringComparison.Ordinal))
+            .Select(line => line.Trim().Trim('|').Split('|').Select(cell => cell.Trim()).ToArray())
+            .Single();
+        (string Cell, string Claim)[] claims =
+        [
+            (row[3], "re-root through a child row's own Show connections action (Applications key or Shift+F10"),
+            (row[3], "the palette row `slate.graph.showConnections` only reveals the leaf for the note in view and never re-roots"),
+            (row[3], "Ctrl+[ from inside the leaf (Back)"),
+            (row[3], "Enter on a child row"),
+            (row[4], "Enter opens the note"),
+            (row[4], "Ctrl+Enter opens it in a new tab"),
+            (row[4], "neither re-roots"),
+        ];
+        foreach ((string cell, string claim) in claims)
+        {
+            Assert.True(cell.Contains(claim, StringComparison.Ordinal), $"{Item} no longer says \"{claim}\"; it reads: {cell}");
+        }
+        Assert.False(
+            Regex.IsMatch(row[3], @"\bEnter\b[^;]*\(re-root\)"),
+            $"{Item} gives Enter the re-root again (F14); it reads: {row[3]}");
+    }
+
     // --- W6-2 §F (F5, IGZ-3, IHB-2): every graph automation id has a row ------
 
     /// <summary>The one reviewed exclusion: the shell's right pane, W1's

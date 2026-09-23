@@ -149,6 +149,101 @@ public sealed class ConnectionsLeafViewTests
         });
     }
 
+    /// <summary>W7-7 R-13 (#1257): the row activation's key decision, each
+    /// modifier combination pinned as it stands — Return activates, Control
+    /// (with Shift or Alt or not) opens the note in a new tab, Shift or Alt
+    /// alone changes nothing, and no other key activates.</summary>
+    [Theory]
+    [InlineData(Key.Return, ModifierKeys.None, true, false)]
+    [InlineData(Key.Return, ModifierKeys.Control, true, true)]
+    [InlineData(Key.Return, ModifierKeys.Shift, true, false)]
+    [InlineData(Key.Return, ModifierKeys.Control | ModifierKeys.Shift, true, true)]
+    [InlineData(Key.Return, ModifierKeys.Alt, true, false)]
+    [InlineData(Key.Return, ModifierKeys.Control | ModifierKeys.Alt, true, true)]
+    [InlineData(Key.Space, ModifierKeys.None, false, false)]
+    [InlineData(Key.Space, ModifierKeys.Control, false, false)]
+    [InlineData(Key.Down, ModifierKeys.Control, false, false)]
+    [InlineData(Key.Apps, ModifierKeys.None, false, false)]
+    public void TheRowActivationKeyIsReturnAndControlOpensANewTab(Key key, ModifierKeys modifiers, bool activates, bool newTab)
+    {
+        Assert.Equal(activates, ConnectionsLeafView.TryActivationFromKey(key, modifiers, out bool opensANewTab));
+        Assert.Equal(newTab, opensANewTab);
+    }
+
+    /// <summary>W7-7 R-13 (#1257): the tree's key owner hands that decision
+    /// to the selected row — with the modifiers the key handler reads
+    /// injected, Control+Enter opens the note in a new tab and Enter opens
+    /// the next in the current tab — and a real Enter raised through the
+    /// tree reaches that owner and opens the selected note (its tab is the
+    /// live modifiers' business, which another process's input can hold).
+    /// No activation moves the pin or the Back stack (only Show connections
+    /// re-roots).</summary>
+    [Fact]
+    public void TheTreeOpensTheSelectedNoteInANewTabOnControlEnterAndInTheCurrentTabOnEnter()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host("activation-keys");
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            // Pinned on the hub, as the checklist's route leaves it, so an
+            // open keeps the hub's tree in view.
+            Assert.True(host.Workspace.ReRootConnectionsOn(Hub));
+            host.Settle();
+            int backSteps = host.Leaf.BackStack.Count;
+            (Window window, ConnectionsLeafView view) = Show(host.Leaf);
+            try
+            {
+                WorkspaceGroupViewModel group = host.Workspace.ActiveGroup;
+                WorkspaceTabViewModel hubTab = group.ActiveTab!;
+                ConnectionsRowViewModel Select(string path)
+                {
+                    ConnectionsRowViewModel row = view.RootsForTests[1].Children.Single(r => r.Row?.Path == path);
+                    Assert.NotNull(view.RealizeContainer(row));
+                    row.IsSelected = true;
+                    Assert.Same(row, view.TreeForTests.SelectedItem);
+                    return row;
+                }
+
+                Select("10.md");
+                int tabs = group.Tabs.Count;
+                Assert.True(view.TryHandleTreeKey(Key.Return, ModifierKeys.Control));
+                Assert.Equal(tabs + 1, group.Tabs.Count);
+                Assert.Equal("10.md", group.ActiveTab!.Path);
+                Assert.Contains(hubTab, group.Tabs);
+
+                host.Settle();
+                view.UpdateLayout();
+                Select("010.md");
+                WorkspaceTabViewModel inView = group.ActiveTab!;
+                Assert.True(view.TryHandleTreeKey(Key.Return, ModifierKeys.None));
+                Assert.Equal(tabs + 1, group.Tabs.Count);
+                Assert.Same(inView, group.ActiveTab);
+                Assert.Equal("010.md", inView.Path);
+
+                // The key event's route: OnTreeKeyDown to the same owner.
+                host.Settle();
+                view.UpdateLayout();
+                Select(Two);
+                var enter = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window)!, 0, Key.Return)
+                {
+                    RoutedEvent = Keyboard.KeyDownEvent,
+                };
+                view.TreeForTests.RaiseEvent(enter);
+                Assert.True(enter.Handled);
+                Assert.Equal(Two, group.ActiveTab!.Path);
+
+                Assert.Equal(Hub, host.Leaf.Pin);
+                Assert.Equal(backSteps, host.Leaf.BackStack.Count);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
     /// <summary>A window hosts the view so containers realise and peers
     /// project (a detached control has no automation tree).</summary>
     private static (Window Window, ConnectionsLeafView View) Show(ConnectionsLeafViewModel model)
@@ -588,8 +683,10 @@ public sealed class ConnectionsLeafViewTests
                 // Since B2 (B-D6 withdrawn): enabled, its help text the title.
                 Assert.True(show.IsEnabled);
                 Assert.Equal((string)show.Header, AutomationProperties.GetHelpText(show));
-                // The ROW's hint is its activation's, never the action's reason (B-9).
-                Assert.Equal(ConnectionsPhrase.NoteHint, note.Hint);
+                // The ROW's hint is its activation's, never the action's reason
+                // (B-9): the model's hint, T16 then the new-tab gesture (W7-7 R-13).
+                Assert.Equal(host.Leaf.RowHint(note.Row!), note.Hint);
+                Assert.StartsWith(ConnectionsPhrase.NoteHint + " ", note.Hint, StringComparison.Ordinal);
                 MenuItem open = menu.Items.Cast<MenuItem>().First();
                 Assert.True(open.IsEnabled);
             }

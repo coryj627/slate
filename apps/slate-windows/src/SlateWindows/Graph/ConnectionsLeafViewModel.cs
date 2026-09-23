@@ -1032,7 +1032,11 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         _actionsByKind[GraphNodeKind.Note].First(spec => spec.Action == action).Title;
 
     /// <summary>B-9: the ROW's hint is its activation's — T15 for a ghost,
-    /// T16 otherwise; a disabled create's reason replaces the ghost's.</summary>
+    /// T16 otherwise; a disabled create's reason replaces the ghost's. W7-7
+    /// R-13 (#1257): a file-backed row's hint says BOTH activations — T16,
+    /// then the new-tab chord composed from its table row through
+    /// NavigationHelp (contract 39 N-2) — because activation opens the note
+    /// and never re-roots (contract 35 B-9); only Show connections does.</summary>
     public string RowHint(GraphConnectionRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
@@ -1040,7 +1044,8 @@ internal sealed class ConnectionsLeafViewModel : PanelWorkScheduler
         {
             return CreateAdmissionReason?.Invoke() ?? ConnectionsPhrase.GhostHint;
         }
-        return ConnectionsPhrase.NoteHint;
+        return ConnectionsPhrase.NoteHintWithNewTab(
+            Commands.NavigationHelp.Spoken("windows.connections.openInNewTab"));
     }
 
     /// <summary>Whether the current publication's tree still lists the

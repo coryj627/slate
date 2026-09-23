@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using SlateWindows.Commands;
 using SlateWindows.Graph;
 using uniffi.slate_uniffi;
 
@@ -220,7 +221,15 @@ public sealed partial class ConnectionsLeafTests
             Assert.Equal(
                 Render(new GraphA11yEvent.GraphRow(GraphVerbosity.Standard, ConnectionsLeafViewModel.RowCopy(note))),
                 leaf.RowName(note));
-            Assert.Equal(ConnectionsPhrase.NoteHint, leaf.RowHint(note));
+            // W7-7 R-13 (#1257; contract 35 B-9's hint, amended): a file-backed
+            // row's hint says BOTH of its activations — the mac's T16, then
+            // the new-tab gesture, its key name the chord row's spoken column
+            // (contract 39 N-2), never a literal. A ghost keeps T15.
+            string newTab = ChordTable.WindowsSpokenFor("windows.connections.openInNewTab")
+                ?? throw new Xunit.Sdk.XunitException("no spoken chord for windows.connections.openInNewTab");
+            string hint = leaf.RowHint(note);
+            Assert.Equal("Opens the note. " + newTab + " opens it in a new tab.", hint);
+            Assert.Contains(newTab, hint, StringComparison.Ordinal);
             Assert.Equal(ConnectionsPhrase.GhostHint, leaf.RowHint(ghost));
             Assert.Equal(ghost.References, ConnectionsLeafViewModel.RowCopy(ghost).References);
 
@@ -261,6 +270,41 @@ public sealed partial class ConnectionsLeafTests
             Assert.Equal(Two, leaf.Root);
             host.Settle();
             Assert.Contains(Summary(leaf), host.RelayLines);
+        });
+    }
+
+    /// <summary>W7-7 R-13 (#1257): the gesture the row's hint names — an
+    /// activation with Control opens the note in a NEW tab of the active
+    /// pane (contract 35 B-9's Open in a new tab), leaving the tab that was
+    /// in view where it was; like the plain activation it never re-roots —
+    /// no pin, no Back step (only Show connections re-roots).</summary>
+    [Fact]
+    public void ActivationWithControlOpensTheNoteInANewTabAndNeverReRoots()
+    {
+        using GraphVault vault = GraphVault.Copy("open-row-new-tab");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            ConnectionsLeafViewModel leaf = host.Leaf;
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            GraphConnectionRow note = leaf.Publication.Tree!.Outgoing.First(row => row.Path == Two);
+            WorkspaceTabViewModel inView = host.Workspace.ActiveGroup.ActiveTab!;
+            int tabs = host.Workspace.ActiveGroup.Tabs.Count;
+            host.Clear();
+
+            leaf.Activate(note, newTab: true);
+
+            Assert.Equal(tabs + 1, host.Workspace.ActiveGroup.Tabs.Count);
+            Assert.Equal(Two, host.Workspace.ActiveGroup.ActiveTab!.Path);
+            Assert.Contains(inView, host.Workspace.ActiveGroup.Tabs);
+            Assert.Equal(Hub, inView.Path);
+            Assert.Contains(host.ShellEvents, e => e is A11yEvent.OpenedFile);
+            Assert.Null(leaf.Pin);
+            Assert.Empty(leaf.BackStack);
+            host.Settle();
+            Assert.DoesNotContain(ReRooted(Two), host.RelayLines);
         });
     }
 
