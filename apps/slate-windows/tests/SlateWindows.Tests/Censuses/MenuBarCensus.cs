@@ -19,6 +19,16 @@
 //    TabNavigation=None keeps Tab out of the bar entirely (the Win32
 //    shape); the menu bar is reached by Alt, Alt+letter and F6 (W7-6,
 //    #1240), never by Tab.
+//
+// 3. W7-7 PR 4 (#1247, contract R-5): nor by an arrow key. WPF's Menu
+//    defaults DirectionalNavigation to Cycle, which makes the bar a
+//    directional GROUP that every arrow search in the window can pick —
+//    from the empty editor stop Down and Up reached Canvas, Left Graph
+//    and Right File (NVDA pass F4). None keeps the arrows out. The bar's
+//    own Left/Right between headers is directional navigation inside the
+//    header's nearest group, which that same Cycle used to be: with the
+//    Menu None the ends stopped wrapping (measured: Left on File and Right
+//    on Graph went nowhere), so the items panel carries the Cycle now.
 
 using System.Xml.Linq;
 
@@ -85,11 +95,36 @@ public sealed class MenuBarCensus
     }
 
     [Fact]
-    public void TheMenuBarIsOutOfTheTabOrder()
+    public void NeitherTabNorAnArrowEntersTheMenuBar()
     {
         XElement menu = MainMenu();
         Assert.Equal("False", (string?)menu.Attribute("Focusable"));
         Assert.Equal("None", (string?)menu.Attribute("KeyboardNavigation.TabNavigation"));
+        Assert.Equal("None", (string?)menu.Attribute("KeyboardNavigation.DirectionalNavigation"));
+    }
+
+    /// <summary>W7-7 PR 4 (#1247): the headers' own panel cycles, so Left
+    /// on File still reaches the last menu and Right on the last reaches
+    /// File with the Menu itself closed to arrows.</summary>
+    [Fact]
+    public void TheMenuBarsOwnArrowsStillWrap()
+    {
+        XElement panels = Assert.Single(MainMenu().Elements(), element => element.Name.LocalName == "Menu.ItemsPanel");
+        XElement panel = Assert.Single(panels.Descendants(), element => element.Name.LocalName == "WrapPanel");
+        Assert.Equal("Cycle", (string?)panel.Attribute("KeyboardNavigation.DirectionalNavigation"));
+    }
+
+    /// <summary>W7-7 PR 4 (#1247, R-5): the editor region keeps its arrows
+    /// — none walks from inside the content pane into the next region or
+    /// the menu bar.</summary>
+    [Fact]
+    public void TheEditorRegionContainsItsArrows()
+    {
+        XDocument window = XDocument.Load(
+            Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"));
+        XElement contentPane = window.Descendants().Single(
+            element => (string?)element.Attribute("AutomationProperties.AutomationId") == "ContentPane");
+        Assert.Equal("Contained", (string?)contentPane.Attribute("KeyboardNavigation.DirectionalNavigation"));
     }
 
     /// <summary>W7-6 (#1240): F6 and Shift+F6 are delivered by window

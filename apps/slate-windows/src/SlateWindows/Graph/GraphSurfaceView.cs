@@ -136,6 +136,12 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
             Margin = new Thickness(12, 4, 12, 4),
         };
         KeyboardNavigation.SetTabNavigation(_switcher, KeyboardNavigationMode.Once);
+        // W7-7 PR 4 (#1247, R-5): a Windows radio group — arrows stay in
+        // it and wrap, and the one an arrow reaches is checked, so Right
+        // on Table IS the user's switch to Diagram (Term M4 then hands the
+        // keys to the renderer); WPF's radios moved focus alone.
+        KeyboardNavigation.SetDirectionalNavigation(_switcher, KeyboardNavigationMode.Cycle);
+        RadioGroupArrows.SetIsEnabled(_switcher, true);
         KeyboardNavigation.SetTabIndex(_switcher, 4);
         AutomationProperties.SetName(_switcher, "Graph surface");
         AutomationProperties.SetAutomationId(_switcher, "GraphSurfaceSwitcher");
@@ -329,6 +335,8 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     internal GraphFocusDeparture? AwayBecauseForTests => _awayBecause;
 
     internal IReadOnlyList<RadioButton> ModeChoicesForTests => _modeChoices;
+
+    internal Panel SwitcherForTests => _switcher;
 
     internal System.Windows.Controls.Primitives.ToggleButton InspectorToggleForTests => _inspectorToggle;
 

@@ -75,11 +75,19 @@
              dark theme enabled items drew near-black on the popup while
              disabled ones kept Fluent's translucent white. The reference is
              declared here so the inheritance chain starts at Fluent's
-             token again; MenuItemForegroundTests renders it. -->
+             token again; MenuItemForegroundTests renders it. (3) W7-7
+             PR 4 (#1247, R-5): the arrows stay out as well. Menu's
+             default DirectionalNavigation is Cycle, which makes the bar a
+             directional GROUP any arrow search in the window can choose:
+             from the empty editor stop Down and Up reached Canvas, Left
+             Graph and Right File (NVDA pass F4). None refuses entry from
+             outside; Left/Right between the headers, wrap included, is the
+             items panel's (below). MenuBarCensus pins all of it. -->
         <Menu x:Name="MainMenu"
               DockPanel.Dock="Top"
               Focusable="False"
               KeyboardNavigation.TabNavigation="None"
+              KeyboardNavigation.DirectionalNavigation="None"
               Foreground="{DynamicResource MenuBarForeground}"
               AutomationProperties.Name="Application commands"
               PreviewKeyDown="MainMenu_PreviewKeyDown">
@@ -150,6 +158,19 @@
                     </Style.Triggers>
                 </Style>
             </Menu.Style>
+            <!-- W7-7 PR 4 (#1247, R-5): the bar's own Left/Right still wrap.
+                 A header's arrow is found by directional navigation inside
+                 its nearest directional group, which was the Menu (Cycle by
+                 default); with the Menu None, Right on the last header and
+                 Left on File went nowhere. This panel — Menu's default
+                 WrapPanel — is now that group, and cycles; the Menu's None
+                 still refuses every arrow from outside. MenuBarCensus pins
+                 it. -->
+            <Menu.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <WrapPanel KeyboardNavigation.DirectionalNavigation="Cycle" />
+                </ItemsPanelTemplate>
+            </Menu.ItemsPanel>
             <MenuItem Header="_File"
                       AutomationProperties.AutomationId="FileMenu">
                 <MenuItem Header="_Open Vault…"
@@ -1082,11 +1103,14 @@
                                   HorizontalAlignment="Stretch"
                                   ResizeDirection="Columns"
                                   AutomationProperties.Name="Resize files sidebar" />
-                    <!-- W7-6 (#1240): F6 lands here; Tab never does. -->
+                    <!-- W7-6 (#1240): F6 lands here; Tab never does. W7-7
+                         PR 4 (#1247, R-5): and no arrow leaves the editor
+                         region from inside it. -->
                     <local:AutomationLandmarkBorder x:Name="ContentPaneBorder"
                             Grid.Column="2"
                             Focusable="True"
                             KeyboardNavigation.IsTabStop="False"
+                            KeyboardNavigation.DirectionalNavigation="Contained"
                             AutomationProperties.AutomationId="ContentPane"
                             AutomationProperties.Name="Editor workspace"
                             Background="{DynamicResource Slate.WindowBackgroundBrush}"
@@ -1454,8 +1478,7 @@
                                 </ScrollViewer>
                             </DockPanel>
                             <!-- W4-3 (#735): the vault-wide Tasks Review leaf — the
-                                 mac TasksReviewPanel flow: pinned filter chips
-                                 (focus-then-activate, never commit-on-arrow), a
+                                 mac TasksReviewPanel flow: pinned filter chips, a
                                  paged row list, and an explicit Load more row. -->
                             <DockPanel Grid.Column="0" Margin="12">
                                 <DockPanel.Style>
@@ -1473,12 +1496,17 @@
                                            Text="{Binding TasksReview.Header}" />
                                 <!-- Radio buttons, not plain buttons (adversarial
                                      round 3): the active filter is a real UIA
-                                     selection state with a non-color visual, and
-                                     WPF radios keep the mac chip semantics — arrow
-                                     keys move focus without committing; Space or
-                                     click commits. -->
+                                     selection state with a non-color visual.
+                                     W7-7 PR 4 (#1247, R-5): and a Windows radio
+                                     group — an arrow checks the filter it moves
+                                     to (RadioGroupArrows), where WPF's radios
+                                     moved focus alone and Down from "All" walked
+                                     into the menu bar (NVDA pass F4); Cycle keeps
+                                     every other arrow inside the group. -->
                                 <WrapPanel DockPanel.Dock="Top"
                                            Margin="0,0,0,6"
+                                           KeyboardNavigation.DirectionalNavigation="Cycle"
+                                           local:RadioGroupArrows.IsEnabled="True"
                                            AutomationProperties.Name="Filter">
                                     <RadioButton x:Name="PanelReviewFilterAll"
                                                  Content="All"
