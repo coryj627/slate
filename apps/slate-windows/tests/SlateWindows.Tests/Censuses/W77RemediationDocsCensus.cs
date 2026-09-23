@@ -137,15 +137,25 @@ public sealed partial class W77RemediationDocsCensus
         var recordHeadings = ReviewRecordHeading().Matches(ReadPlan(ContractsDoc))
             .ToDictionary(m => int.Parse(m.Groups[1].Value), m => IssueTokens(m.Value));
 
+        // PR 0 (the docs PR) owns no contract and closes no issue, yet its
+        // record heading is required: it is held to an explicit empty set
+        // (codex round 20).
+        expected[0] = [];
+
         var drifted = new List<string>();
         foreach ((int pr, int[] issues) in expected.OrderBy(pair => pair.Key))
         {
-            if (!specHeadings.TryGetValue(pr, out int[]? specIssues) || !specIssues.SequenceEqual(issues))
+            if (pr != 0)
             {
-                drifted.Add($"spec heading for PR {pr} shows #{string.Join(", #", specIssues ?? [])}, expected #{string.Join(", #", issues)}");
+                specHeadings.TryGetValue(pr, out int[]? specIssues);
+                if (specIssues is null || !specIssues.SequenceEqual(issues))
+                {
+                    drifted.Add($"spec heading for PR {pr} shows #{string.Join(", #", specIssues ?? [])}, expected #{string.Join(", #", issues)}");
+                }
             }
 
-            if (!recordHeadings.TryGetValue(pr, out int[]? recordIssues) || !recordIssues.SequenceEqual(issues))
+            recordHeadings.TryGetValue(pr, out int[]? recordIssues);
+            if (recordIssues is null || !recordIssues.SequenceEqual(issues))
             {
                 drifted.Add($"record heading for PR {pr} shows #{string.Join(", #", recordIssues ?? [])}, expected #{string.Join(", #", issues)}");
             }
@@ -154,8 +164,10 @@ public sealed partial class W77RemediationDocsCensus
         Assert.True(drifted.Count == 0, "PR headings whose issues drift from their contracts: " + string.Join("; ", drifted));
     }
 
+    // Every token counts — a duplicated issue in a heading is a drift too
+    // (codex round 20), so no Distinct() here.
     private static int[] IssueTokens(string headingLine) =>
-        IssueToken().Matches(headingLine).Select(m => int.Parse(m.Groups[1].Value)).Distinct().Order().ToArray();
+        IssueToken().Matches(headingLine).Select(m => int.Parse(m.Groups[1].Value)).Order().ToArray();
 
     [Fact]
     public void TheSpecHasOneSectionPerFeaturePrAndTheRecordOneSectionPerPr()
@@ -292,10 +304,10 @@ public sealed partial class W77RemediationDocsCensus
     // closing `.**`: a full stop then the bold delimiter, followed by
     // whitespace, with no other asterisk before it, so an interior bold
     // span cannot pose as the closing delimiter (codex rounds 6 and 7).
-    // The owner clause's suffix (after the issue list) may not carry an
-    // issue token, so an extra `#issue` cannot hide behind the canonical
-    // list (codex round 19).
-    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*]*?\(PR (\d+), (#\d+(?:, #\d+)*)[^)\n*#]*\)[^\n*]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
+    // No `#issue` token anywhere outside the owner clause's canonical list
+    // — not in its suffix, not in the title, not after the clause — so an
+    // extra issue cannot hide anywhere in the heading (codex rounds 19–20).
+    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*#]*?\(PR (\d+), (#\d+(?:, #\d+)*)[^)\n*#]*\)[^\n*#]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
     private static partial Regex ContractHeading();
 
     // Anything that starts a line like a contract definition, however it
