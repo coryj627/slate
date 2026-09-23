@@ -470,7 +470,8 @@ internal sealed class ReadingSurface : RichTextBox
     /// arrives and focus cannot be taken (the F6 ring moves on); a withdrawn
     /// one calls neither. Answers whether focus is here or held; a hidden
     /// surface, or one showing the load-failure notice (no note to read),
-    /// answers false, so the caller's fallbacks run.
+    /// answers false, so the caller's fallbacks run (as does one still
+    /// showing what a failed refresh kept).
     /// </summary>
     internal bool RequestFocusLanding(
         Action? announceWhenHeldLandingArrives = null,
@@ -492,7 +493,7 @@ internal sealed class ReadingSurface : RichTextBox
             HoldFocusLanding(announceWhenHeldLandingArrives, fallThroughWhenHeldLandingRefused);
             return true;
         }
-        return !ShowsFailureNotice && Focus();
+        return !ShowsFailure && Focus();
     }
 
     /// <summary>Ready to land: the BOUND model's projection has been applied
@@ -503,8 +504,12 @@ internal sealed class ReadingSurface : RichTextBox
     /// grow the tail and the reader starts at the top, which is there.</summary>
     private bool ShowsAppliedProjection => _lastMerged is not null;
 
-    /// <summary>The merged document is the model's terminal-failure notice.</summary>
-    private bool ShowsFailureNotice => _model is { PublishedFailureNotice: true };
+    /// <summary>What the surface shows is a failure, not the note: the
+    /// model's terminal-failure notice, or the content a failed refresh kept
+    /// on screen (stale by the failure's own account). No stop either way —
+    /// the failure was announced when it happened.</summary>
+    private bool ShowsFailure =>
+        _model is { PublishedFailureNotice: true } or { LastRefreshFailed: true };
 
     /// <summary>Hold the landing. The reader's leaving is latched from the
     /// element this request found them on (<see cref="FocusDepartureWatch"/>):
@@ -633,11 +638,14 @@ internal sealed class ReadingSurface : RichTextBox
         Action? announce = _focusLandingAnnouncement;
         Action? refuse = _focusLandingRefusal;
         WithdrawFocusLanding();
-        if (!IsVisible || IsKeyboardFocusWithin)
+        if (!IsVisible)
         {
             return;
         }
-        if (Focus() && IsKeyboardFocusWithin)
+        // Focus already here — the reader moved in while the content arrived
+        // (a move into the landing's own target is followed, not a departure)
+        // — is the landing: its line is spoken, once, like one this seats.
+        if (IsKeyboardFocusWithin || (Focus() && IsKeyboardFocusWithin))
         {
             announce?.Invoke();
         }
