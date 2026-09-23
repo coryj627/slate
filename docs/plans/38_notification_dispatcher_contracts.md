@@ -21,18 +21,26 @@ rendered seams into the workspace and all family announcers retain the
 same production destination. No default no-op sink can satisfy a test.
 Amended by W7-7 (#1244; contract 40 R-1, owner decision OD-7): the one
 raiser calls AutomationInteropProvider.RaiseAutomationEvent with
-NotificationEvent on the status peer's connected provider, guarded by
-ClientsAreListening, and no authored shell code calls
-RaiseNotificationEvent, which WPF gates on a listener map that only a UIA
-advise fills. The dispatcher starts in a monotonic launch phase,
-Unadvised then Done. While Unadvised (no listening client, no advise in
-that map, or no connected provider) a line is queued, never raised, and
-the queue keeps the last 16. The first check that finds all three (every
-post, and a 250 ms poll on the UI thread) raises each queued line once,
-in order, through the same raiser; the phase is then Done and every later
-line is raised at once. No advise within 30 s of the first frame also ends
-the phase, and the queue is dropped unspoken. AnnouncementSeamCensus pins
-the raise, the phase's production inputs and the forbidden gated call.
+NotificationEvent on the status peer's connected provider, and no
+authored shell code calls RaiseNotificationEvent, which WPF gates on a
+listener map that only a UIA advise fills. MainWindow's dispatcher is the
+window's only one. A line is raised only when readiness holds — a
+listening client (ClientsAreListening), the Notification advise in that
+map and a connected provider, all three asked on every check, in every
+phase — and is otherwise queued, the queue keeping the last 16. While
+lines are queued and readiness is false a 250 ms poll on the UI thread
+checks again (the only wake-up; it stops when the queue empties), and the
+first ready check, a tick or a post, raises each queued line once, in
+order, through the same raiser. Every queued line is dropped 30 s after
+its own post, never raised late and never in a wholesale clear, so the
+poll always ends. The launch phase is bookkeeping only and moves forward
+once: Unadvised, then Done when readiness is first observed, or Expired
+when 30 s pass after the window's first frame without it — which is only
+the launch lines, posted by the first frame, reaching their own deadline.
+Neither raises without readiness: a client that stops listening or an
+advise removed after Done queues the line again. AnnouncementSeamCensus
+pins the raise, the readiness inputs, the one construction and the
+forbidden gated call.
 
 **D-3 — Typed scan identity and copy.** VaultScanStarted(total_files),
 VaultScanProgress(indexed,total), VaultScanFinished(files_indexed) are
