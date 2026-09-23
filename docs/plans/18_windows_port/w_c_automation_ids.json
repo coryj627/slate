@@ -1511,12 +1511,22 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "PanelCitationsEmpty",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "PanelCitationsError",
     "Surface": "Citation surfaces (W4-5)"
   },
   {
     "Source": "MainWindow.xaml",
     "Expression": "PanelCitationsList",
+    "Surface": "Citation surfaces (W4-5)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "PanelCitationsNoFile",
     "Surface": "Citation surfaces (W4-5)"
   },
   {

@@ -100,9 +100,10 @@ public sealed class CitationsFocusRestoreTests
             "OpenModalSurface",
             "PanelCitationsList.IsKeyboardFocusWithin",
             // The landing itself: the restored row, else the first, seated
-            // once its container exists — through the one list-landing
-            // helper, never the bare list (W7-7 PR 4, #1247, R-5).
-            "FocusFirstOrSelectedItem(PanelCitationsList)",
+            // once its container exists — or the notice of an emptied list —
+            // through the one list-landing helper, never the bare list
+            // (W7-7 PR 4, #1247, R-5).
+            "SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList,CitationNotices)",
         })
         {
             Assert.Contains(guard, restoreText, StringComparison.Ordinal);

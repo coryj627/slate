@@ -1624,21 +1624,36 @@
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelHeading}"
                                            Text="{x:Static panels:CitationPhrase.CitationsHeading}" />
-                                <TextBlock DockPanel.Dock="Top"
+                                <!-- W7-7 PR 4 (#1247, R-5; spec §5.2.2): an EMPTY list's
+                                     stop is its notice — the no-file and no-citations
+                                     sentences take the keys and read their reason
+                                     (their text is their name), where the bare empty
+                                     list said only "Citations, list". Loading stays a
+                                     decoration: it collapses under the keys within
+                                     moments. The ring reaches them as the leaf's first
+                                     stop; the restores through SelectorFocus. -->
+                                <TextBlock x:Name="PanelCitationsNoFile"
+                                           DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Citations.NoFileText}"
-                                           Visibility="{Binding Citations.ShowNoFileState, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                           Visibility="{Binding Citations.ShowNoFileState, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                           Focusable="True"
+                                           AutomationProperties.AutomationId="PanelCitationsNoFile" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Citations.LoadingVisibleText}"
                                            Visibility="{Binding Citations.IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                                <TextBlock DockPanel.Dock="Top"
+                                <TextBlock x:Name="PanelCitationsEmpty"
+                                           DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Citations.EmptyText}"
-                                           Visibility="{Binding Citations.ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                           Visibility="{Binding Citations.ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                           Focusable="True"
+                                           AutomationProperties.AutomationId="PanelCitationsEmpty" />
                                 <!-- Load notices are surfaced verbatim and
                                      never swallowed (contract 5). -->
-                                <TextBlock DockPanel.Dock="Top"
+                                <TextBlock x:Name="PanelCitationsError"
+                                           DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Citations.ErrorSpoken}"
                                            TextWrapping="Wrap"

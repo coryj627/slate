@@ -710,8 +710,8 @@ internal sealed partial class WorkspaceViewModel
         {
             WorkspaceFocusBoundary boundary = direction < 0
                 ? WorkspaceFocusBoundary.Files
-                : WorkspaceFocusBoundary.RightPane;
-            if (boundary == WorkspaceFocusBoundary.RightPane && !IsRightPaneVisible)
+                : WorkspaceFocusBoundary.RightPaneEdge;
+            if (boundary == WorkspaceFocusBoundary.RightPaneEdge && !IsRightPaneVisible)
             {
                 IsRightPaneVisible = true;
             }

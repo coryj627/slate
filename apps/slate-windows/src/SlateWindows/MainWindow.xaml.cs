@@ -439,7 +439,7 @@ public partial class MainWindow : Window
         if (CanvasPromptChoicesList.IsVisible && CanvasPromptChoicesList.Focusable)
         {
             // R-5 (#1247): the selected choice's row, never the bare list.
-            _ = FocusFirstOrSelectedItem(CanvasPromptChoicesList);
+            _ = SelectorFocus.FocusFirstOrSelectedItem(CanvasPromptChoicesList);
             return;
         }
         _ = TryFocus(CanvasPromptClearMarksButton);
@@ -668,13 +668,21 @@ public partial class MainWindow : Window
                     Graph.GraphInspectorView.LandBoundary(
                         _viewModel.Workspace is WorkspaceViewModel current && current.IsGraphInspectorShown,
                         GraphInspectorSurface.FocusFirstStop,
-                        () => _ = FocusFirstOrSelectedItem(RightPaneLeavesList)));
+                        () => _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList)));
+            }
+            else if (boundary == WorkspaceFocusBoundary.RightPaneEdge)
+            {
+                // Ctrl+Alt+Right at the edge keeps its landing, the rail
+                // (W7-6 §6: Ctrl+Alt+Arrow's semantics unchanged) — on the
+                // shown leaf's row, never the bare rail, from which Down
+                // walked into the menu bar (W7-7 PR 4, #1247, R-5).
+                _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
             }
             else
             {
-                // W7-7 PR 4 (#1247, R-5): IN the leaf — Ctrl+R on the
-                // review's filter — or on the rail's row; never the bare
-                // rail, from which Down walked into the menu bar.
+                // A leaf reveal (Ctrl+R, Show History) puts the reader IN
+                // the leaf — Ctrl+R on the review's filter — or on the
+                // rail's row when the leaf has no stop (R-5).
                 LandInRightPane();
             }
         });
@@ -1732,7 +1740,7 @@ public partial class MainWindow : Window
         // the bare TabControl gave NVDA "Workspace tabs tab control" and
         // let Down arrow wander into the menu bar — so a tab control that
         // HAS tabs lands on one (W7-7 PR 4, #1247, R-5).
-        if (!FocusFirstOrSelectedItem(tabs) && !tabs.IsKeyboardFocusWithin)
+        if (!SelectorFocus.FocusFirstOrSelectedItem(tabs) && !tabs.IsKeyboardFocusWithin)
         {
             FilesTree.Focus();
         }

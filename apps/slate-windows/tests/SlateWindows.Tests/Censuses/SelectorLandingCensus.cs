@@ -1,25 +1,28 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// W7-7 PR 4 (#1247, contract R-5): no focus landing in the window's code
+// W7-7 PR 4 (#1247, contract R-5): no focus landing anywhere in the shell
 // puts the keys on a bare list.
 //
 // A bare ListBox has no row for an arrow to move from, so the arrow goes
 // to WPF's directional navigation, which searches the whole window: from
 // Ctrl+R's "Right pane panels" and Shift+F6's Citations list, Down reached
-// a top-level menu (NVDA pass F4). MainWindow.FocusFirstOrSelectedItem
+// a top-level menu (NVDA pass F4). SelectorFocus.FocusFirstOrSelectedItem
 // lands on the selected row, else the first; this census holds every other
-// landing in MainWindow*.cs to it.
+// landing in every source file of the shell to it — the window's partials
+// and the views alike (codex round 1: the Bases quick filter's Escape
+// landed on the bare list from BaseSurfaceView, which a window-only scope
+// could not see).
 //
 // BOUND, not read: a landing is a call that binds to a parameterless
-// Focus(), to Keyboard.Focus, or to one of the window's own focus funnels
+// Focus(), to Keyboard.Focus, or to one of the shell's own focus funnels
 // (a method that focuses its parameter, such as TryFocus), and the target
 // is judged by its bound static type — an x:Name field binds through the
 // XAML-generated partial (ShellCompilation), so `TryFocus(SomeList)` is
 // caught as surely as `SomeList.Focus()`. A combo box is not a list
 // landing (its items live in its drop-down, and the box is the stop), nor
 // is a grid (its stop is a cell, which AccessibleDataGrid seats) — the
-// window's own IsListLanding rule. A target typed as a base class (a
+// helper's own IsListLanding rule. A target typed as a base class (a
 // leaf's first stop is a UIElement) is out of a static census's reach;
 // LandOnStop routes those, and the FlaUI journey
 // RegionStops_ArrowsStayInRegion witnesses the Citations case.
@@ -44,31 +47,38 @@ public sealed class SelectorLandingCensus
                 .Select(method => (entry.Relative, entry.Source, Method: method)))
             .ToArray();
         var declaration = Assert.Single(declarations);
-        Assert.Equal("MainWindow.ShellRegions.cs", declaration.Relative);
+        Assert.Equal("SelectorFocus.cs", declaration.Relative);
         IMethodSymbol symbol = ShellCompilation.ModelFor(declaration.Source).GetDeclaredSymbol(declaration.Method)
             ?? throw new Xunit.Sdk.XunitException($"{Helper} did not bind.");
-        Assert.True(symbol.IsStatic, $"{Helper} must be static: it lands any selector, not the window's own.");
+        Assert.True(symbol.IsStatic, $"{Helper} must be static: any view lands its lists through it.");
         Assert.Equal(
             "System.Windows.Controls.Primitives.Selector",
-            Assert.Single(symbol.Parameters).Type.ToDisplayString());
+            symbol.Parameters[0].Type.ToDisplayString());
+        // The rest are an empty list's notices, and nothing else.
+        Assert.All(
+            symbol.Parameters.Skip(1),
+            parameter => Assert.True(parameter.IsParams, $"{Helper}'s {parameter.Name} is not the notices"));
         Assert.Equal(SpecialType.System_Boolean, symbol.ReturnType.SpecialType);
     }
 
     [Fact]
-    public void EveryListLandingInTheWindowGoesThroughTheHelper()
+    public void EveryListLandingInTheShellGoesThroughTheHelper()
     {
-        SyntaxTree[] partials = WindowPartials(ShellCompilation.Compilation).ToArray();
-        Assert.True(partials.Length >= 10, $"only {partials.Length} MainWindow partials were found; the census would read too little.");
-        string[] offenders = Offenders(ShellCompilation.Compilation, partials).ToArray();
+        CSharpCompilation compilation = BindingCompilation();
+        SyntaxTree[] sources = ShellSources(compilation).ToArray();
+        Assert.True(sources.Length >= 200, $"only {sources.Length} shell sources were found; the census would read too little.");
+        Assert.Contains(sources, tree => tree.FilePath.EndsWith("BaseSurfaceView.cs", StringComparison.OrdinalIgnoreCase));
+        string[] offenders = Offenders(compilation, sources).ToArray();
         Assert.True(
             offenders.Length == 0,
-            "Focus landings on a bare list (route them through " + Helper + "):\n  "
+            "Focus landings on a bare list (route them through SelectorFocus." + Helper + "):\n  "
             + string.Join("\n  ", offenders));
     }
 
     /// <summary>The census's own witness: each landing shape it exists to
-    /// catch, planted in a partial of the real window, is caught — and the
-    /// combo box, the grid and the helper's own route are not.</summary>
+    /// catch, planted in a partial of the real window and in a view of its
+    /// own, is caught — and the combo box, the grid and the helper's own
+    /// route are not.</summary>
     [Fact]
     public void ThePlantedBareLandingsAreCaught()
     {
@@ -85,13 +95,21 @@ public sealed class SelectorLandingCensus
                     System.Windows.Input.Keyboard.Focus(QueriesSavedList);
                     BuilderCombinatorBox.Focus();
                     new System.Windows.Controls.DataGrid().Focus();
-                    _ = FocusFirstOrSelectedItem(RightPaneLeavesList);
+                    _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
                 }
             }
+
+            internal sealed class PlantedView : System.Windows.Controls.UserControl
+            {
+                private readonly System.Windows.Controls.ListBox _list = new();
+
+                private void Land() => _list.Focus();
+            }
             """;
-        var options = (CSharpParseOptions)WindowPartials(ShellCompilation.Compilation).First().Options;
+        CSharpCompilation shell = BindingCompilation();
+        var options = (CSharpParseOptions)ShellSources(shell).First().Options;
         SyntaxTree tree = CSharpSyntaxTree.ParseText(planted, options, path: "Planted.cs");
-        CSharpCompilation compilation = ShellCompilation.Compilation.AddSyntaxTrees(tree);
+        CSharpCompilation compilation = shell.AddSyntaxTrees(tree);
 
         string[] offenders = Offenders(compilation, [tree]).ToArray();
 
@@ -101,21 +119,40 @@ public sealed class SelectorLandingCensus
                 "Planted.cs:8: TryFocus(PanelCitationsList) lands on a bare ListBox",
                 "Planted.cs:9: list?.Focus() lands on a bare ListBox",
                 "Planted.cs:10: System.Windows.Input.Keyboard.Focus(QueriesSavedList) lands on a bare ListBox",
+                "Planted.cs:21: _list.Focus() lands on a bare ListBox",
             ],
             offenders);
     }
 
-    private static IEnumerable<SyntaxTree> WindowPartials(CSharpCompilation compilation)
+    /// <summary>The shared shell compilation, with the editor's assembly
+    /// referenced whatever this process has loaded so far: the shared one
+    /// references the assemblies loaded when it was first built, so whether
+    /// AvalonEdit's <c>TextArea</c> bound — <c>SlateTextEditor</c>'s
+    /// <c>TextArea.Focus()</c> is a landing like any other — depended on
+    /// which test ran first.</summary>
+    private static CSharpCompilation BindingCompilation()
     {
-        string root = Path.GetFullPath(SourceText.ShellSourceRoot()).TrimEnd(Path.DirectorySeparatorChar);
+        CSharpCompilation compilation = ShellCompilation.Compilation;
+        string avalon = typeof(ICSharpCode.AvalonEdit.Editing.TextArea).Assembly.Location;
+        return compilation.References.OfType<PortableExecutableReference>()
+            .Any(reference => string.Equals(reference.FilePath, avalon, StringComparison.OrdinalIgnoreCase))
+            ? compilation
+            : compilation.AddReferences(MetadataReference.CreateFromFile(avalon));
+    }
+
+    /// <summary>The shell's own source files — every .cs under the source
+    /// root, the XAML-generated partials under obj/ excluded: they bind the
+    /// x:Name fields, and nobody wrote a landing in them.</summary>
+    private static IEnumerable<SyntaxTree> ShellSources(CSharpCompilation compilation)
+    {
+        string root = Path.GetFullPath(SourceText.ShellSourceRoot()).TrimEnd(Path.DirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
         return compilation.SyntaxTrees.Where(tree =>
-            Path.GetFileName(tree.FilePath) is { } name
-            && name.StartsWith("MainWindow", StringComparison.Ordinal)
-            && name.EndsWith(".cs", StringComparison.Ordinal)
-            && string.Equals(
-                Path.GetDirectoryName(Path.GetFullPath(tree.FilePath)),
-                root,
-                StringComparison.OrdinalIgnoreCase));
+            tree.FilePath.EndsWith(".cs", StringComparison.Ordinal)
+            && Path.GetFullPath(tree.FilePath) is { } full
+            && full.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+            && !Path.GetRelativePath(root, full).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .Any(segment => segment is "obj" or "bin"));
     }
 
     private static IEnumerable<string> Offenders(CSharpCompilation compilation, IReadOnlyCollection<SyntaxTree> scanned)
@@ -129,7 +166,7 @@ public sealed class SelectorLandingCensus
         ];
         INamedTypeSymbol keyboard = compilation.GetTypeByMetadataName("System.Windows.Input.Keyboard")!;
         Dictionary<IMethodSymbol, int> funnels = Funnels(
-            compilation, WindowPartials(compilation).Concat(scanned).Distinct().ToArray(), selector);
+            compilation, ShellSources(compilation).Concat(scanned).Distinct().ToArray(), selector);
 
         foreach (SyntaxTree tree in scanned)
         {
