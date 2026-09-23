@@ -38,13 +38,17 @@ public sealed class SheetKeyboardFenceTests
 
     /// <summary>
     /// Tab moves Topic → Attendees and Shift+Tab moves back, inside the
-    /// sheet, and neither key changes the note behind it.
+    /// sheet, and neither key changes the note behind it. The traversal is
+    /// WPF's own: the fence refuses the command at the sheet's edge and
+    /// lets the key route on (<c>ContinueRouting</c>), so KeyboardNavigation
+    /// moves focus in the sheet's Cycle scope — with the key stopped too,
+    /// focus would never leave Topic.
     /// </summary>
     [Fact]
     public void TabInsideASheetNeverReachesTheEditor() => RunSta(() =>
     {
         using var harness = new Harness(fenced: true);
-        harness.FocusTopicAfterTheEditor();
+        harness.FocusAfterTheEditor(harness.Topic);
 
         harness.Press(Key.Tab);
         Assert.Equal(Note, harness.Editor.Text);
@@ -67,28 +71,28 @@ public sealed class SheetKeyboardFenceTests
     /// <summary>
     /// The harness reproduces F5 without the fence: Tab types into the
     /// note and focus never moves, and Shift+Tab unindents the note's
-    /// caret line. This is what makes the fact above evidence rather than
+    /// caret line. This is what makes the facts here evidence rather than
     /// a harness that could not have leaked in the first place.
     /// </summary>
     [Fact]
     public void WithoutTheFenceTabReachesTheEditorBehindTheSheet() => RunSta(() =>
     {
         using var harness = new Harness(fenced: false);
-        harness.FocusTopicAfterTheEditor();
+        harness.FocusAfterTheEditor(harness.Topic);
 
         harness.Press(Key.Tab);
         Assert.Same(harness.Topic, Keyboard.FocusedElement);
         Assert.Equal(Note.Insert(1, "\t"), harness.Editor.Text);
 
         harness.ResetNote();
-        harness.FocusTopicAfterTheEditor();
+        harness.FocusAfterTheEditor(harness.Topic);
         harness.Press(Key.Tab, ModifierKeys.Shift);
         Assert.Same(harness.Topic, Keyboard.FocusedElement);
         Assert.Equal("Indented first line\nSecond line\n", harness.Editor.Text);
 
         // The IME route arrives too, so the IME fact is not vacuous.
         harness.ResetNote();
-        harness.FocusTopicAfterTheEditor();
+        harness.FocusAfterTheEditor(harness.Topic);
         harness.Press(Key.Tab, imeProcessed: true);
         Assert.Equal(Note.Insert(1, "\t"), harness.Editor.Text);
 
@@ -96,41 +100,35 @@ public sealed class SheetKeyboardFenceTests
         // scope hands the query to the editor, which answers yes, and the
         // execution follows it there.
         harness.ResetNote();
-        harness.FocusTopicAfterTheEditor();
-        Assert.True(harness.RunAsACommandSource(EditingCommands.TabForward));
+        harness.FocusAfterTheEditor(harness.Topic);
+        Assert.True(harness.RunAsACommandSource(EditingCommands.TabForward, harness.Topic));
         Assert.Equal(Note.Insert(1, "\t"), harness.Editor.Text);
         harness.ResetNote();
-        harness.FocusTopicAfterTheEditor();
-        Assert.True(harness.RunAsACommandSource(EditingCommands.TabBackward));
+        harness.FocusAfterTheEditor(harness.Topic);
+        Assert.True(harness.RunAsACommandSource(EditingCommands.TabBackward, harness.Topic));
         Assert.Equal("Indented first line\nSecond line\n", harness.Editor.Text);
     });
 
     /// <summary>
-    /// The CanExecute hook, driven the way a command source drives a
-    /// command — ask, and execute only on yes. While the keyboard is in
-    /// the sheet neither Tab command is answered for a field inside it:
-    /// unfenced, the sheet's focus scope hands the query to the editor,
-    /// which answers yes, and the execution that follows reaches it (the
-    /// control fact below). The editor asked directly still answers: the
-    /// fence is the sheet's, not the editor's.
+    /// The edge's refusal, driven the way a command source drives a
+    /// command — ask, and execute only on yes. Neither Tab command is
+    /// answered for a field inside the sheet that does not answer it
+    /// itself: unfenced, the sheet's focus scope hands the query to the
+    /// editor, which answers yes, and the execution that follows reaches
+    /// it (the control fact above). The editor asked directly still
+    /// answers: the fence is the sheet's, not the editor's.
     /// </summary>
-    /// <remarks>
-    /// With only this hook removed the answer is yes but the note is
-    /// untouched: the Executed hook stops the execution the answer let
-    /// through. Either command hook alone stops a command source; the
-    /// note changes only with both removed.
-    /// </remarks>
     [Fact]
     public void ACommandSourceInsideAFencedSheetGetsNoAnswerForEitherTabCommand() => RunSta(() =>
     {
         using var harness = new Harness(fenced: true);
-        harness.FocusTopicAfterTheEditor();
+        harness.FocusAfterTheEditor(harness.Topic);
 
         // The note first, after each command: what reaches the editor is
-        // the defect; the answer is how the hook is seen doing its part.
-        bool forward = harness.RunAsACommandSource(EditingCommands.TabForward);
+        // the defect; the answer is how the edge is seen doing its part.
+        bool forward = harness.RunAsACommandSource(EditingCommands.TabForward, harness.Topic);
         Assert.Equal(Note, harness.Editor.Text);
-        bool backward = harness.RunAsACommandSource(EditingCommands.TabBackward);
+        bool backward = harness.RunAsACommandSource(EditingCommands.TabBackward, harness.Topic);
         Assert.Equal(Note, harness.Editor.Text);
         Assert.False(forward, "TabForward was answered inside the sheet");
         Assert.False(backward, "TabBackward was answered inside the sheet");
@@ -138,16 +136,16 @@ public sealed class SheetKeyboardFenceTests
     });
 
     /// <summary>
-    /// The Executed hook. A direct Execute never asks CanExecute —
+    /// The PreviewExecuted guard. A direct Execute never asks CanExecute —
     /// RoutedCommand.ExecuteImpl raises PreviewExecuted and Executed and
-    /// nothing else — so the CanExecute hook cannot stop one; without the
-    /// Executed hook the sheet's focus scope hands it to the editor.
+    /// nothing else — so the edge's refusal is never consulted, and an
+    /// unhandled Executed that reaches the sheet is handed to the editor.
     /// </summary>
     [Fact]
     public void ExecutingEitherTabCommandInsideAFencedSheetLeavesTheEditorAlone() => RunSta(() =>
     {
         using var harness = new Harness(fenced: true);
-        harness.FocusTopicAfterTheEditor();
+        harness.FocusAfterTheEditor(harness.Topic);
 
         // One at a time: a leaked TabForward indents the caret line and a
         // leaked TabBackward unindents it again, so checking only after
@@ -160,30 +158,114 @@ public sealed class SheetKeyboardFenceTests
     });
 
     /// <summary>
-    /// A Tab the key hook never sees: an IME-processed key reports
-    /// <c>Key.ImeProcessed</c>, but its gesture still matches TabForward
-    /// through the real key, so it reaches the command layer — where the
-    /// two command hooks stop it (either one alone suffices; each is
-    /// pinned by its own fact above).
+    /// A Tab the IME has claimed stays the IME's, and still never reaches
+    /// the note. <c>Key.ImeProcessed</c> means the IME claimed the key; TSF
+    /// hands it to the IME only if the preview reaches the end of its route
+    /// unhandled (TextServicesManager.PostProcessInput), and WPF's own
+    /// navigation never moves on it — so the fence takes no key, and the
+    /// preview arrives at the field unhandled. When the keyboard device
+    /// promotes the key anyway (no TSF, or an IMM32 IME), its gesture
+    /// matches TabForward/TabBackward through the real key, and the edge
+    /// refuses both.
     /// </summary>
     [Fact]
-    public void AnImeProcessedTabStopsAtTheCommandLayer() => RunSta(() =>
+    public void AnImeClaimedTabStaysWithTheImeAndNeverReachesTheEditor() => RunSta(() =>
     {
         using var harness = new Harness(fenced: true);
-        harness.FocusTopicAfterTheEditor();
+        harness.FocusAfterTheEditor(harness.Topic);
+        var previews = new List<(Key Key, bool Handled)>();
+        harness.Topic.AddHandler(
+            Keyboard.PreviewKeyDownEvent,
+            new KeyEventHandler((_, e) => previews.Add((e.ImeProcessedKey, e.Handled))),
+            handledEventsToo: true);
 
         harness.Press(Key.Tab, imeProcessed: true);
-
         Assert.Equal(Note, harness.Editor.Text);
+        harness.Press(Key.Tab, ModifierKeys.Shift, imeProcessed: true);
+        Assert.Equal(Note, harness.Editor.Text);
+
+        Assert.Equal([(Key.Tab, false), (Key.Tab, false)], previews);
         Assert.Same(harness.Topic, Keyboard.FocusedElement);
     });
 
     /// <summary>
-    /// The fence takes Tab only from text fields, the one kind of stop
-    /// that turns Tab into a command. A grid in a sheet keeps WPF's own
-    /// Tab handling: DataGrid.OnTabKeyDown moves the cell selection with
-    /// focus, and a fence that preempted it left the selection behind on
-    /// the first cell (measured before the fence was narrowed).
+    /// A field that accepts Tab keeps it: the tab lands in the field
+    /// itself — from the key, from Shift+Tab (a plain TextBox inserts a
+    /// tab for both), and from a command source — never in the note, and
+    /// focus stays put. The field answers the command before its query can
+    /// reach the edge, which is why the refusal sits at the edge (a
+    /// refusal on the way DOWN would reach it first); the guard lets the
+    /// execution through because the field answers.
+    /// </summary>
+    [Fact]
+    public void AnAcceptsTabFieldInASheetKeepsItsOwnTab() => RunSta(() =>
+    {
+        using var harness = new Harness(fenced: true, withNotes: true);
+        TextBox notes = harness.Notes!;
+        harness.FocusAfterTheEditor(notes);
+
+        harness.Press(Key.Tab);
+        Assert.Equal(Note, harness.Editor.Text);
+        Assert.Equal("\t", notes.Text);
+        Assert.Same(notes, Keyboard.FocusedElement);
+
+        harness.Press(Key.Tab, ModifierKeys.Shift);
+        Assert.Equal(Note, harness.Editor.Text);
+        Assert.Equal("\t\t", notes.Text);
+
+        Assert.True(harness.RunAsACommandSource(EditingCommands.TabForward, notes), "the field did not answer its own TabForward");
+        Assert.Equal(Note, harness.Editor.Text);
+        Assert.Equal("\t\t\t", notes.Text);
+        Assert.Same(notes, Keyboard.FocusedElement);
+    });
+
+    /// <summary>
+    /// An editing grid cell keeps its Tab: the AccessibleDataGrid's cell
+    /// editor commits its draft and moves to the next cell on Tab and the
+    /// previous one on Shift+Tab (the mac keys, contract C7/C8), inside the
+    /// sheet, with the note untouched. The editor's own PreviewKeyDown
+    /// handles the key — nothing on the way down may take it first.
+    /// </summary>
+    [Fact]
+    public void AnEditingGridCellInASheetCommitsAndMovesOnTab() => RunSta(() =>
+    {
+        using var harness = new Harness(fenced: true, withGrid: true);
+        AccessibleDataGrid grid = harness.Grid!;
+        var commits = new List<(object Row, int Column, string Text, GridEditCommitNavigation Navigation)>();
+        int cancels = 0;
+        grid.ConfigureEditing(
+            editDraft: (row, column) => column == 0 ? ((Person)row).Name : ((Person)row).Role,
+            editCommit: (row, column, text, navigation) =>
+            {
+                commits.Add((row, column, text, navigation));
+                grid.MoveCurrentCell(navigation);
+            },
+            editCancel: () => cancels++,
+            editRefused: (_, _) => { });
+        Assert.True(grid.FocusFirstCell(), "the grid's first cell did not take focus");
+        Person charlie = harness.People[0];
+
+        harness.EditCell(charlie, 0).Text = "Dana";
+        harness.Press(Key.Tab);
+        Assert.Equal(Note, harness.Editor.Text);
+        Assert.Equal([(charlie, 0, "Dana", GridEditCommitNavigation.Next)], commits);
+        Assert.Equal("Role", Assert.IsType<DataGridCell>(Keyboard.FocusedElement).Column.Header);
+        Assert.Equal(1, grid.CurrentColumnIndexForTests());
+
+        harness.EditCell(charlie, 1).Text = "Lead";
+        harness.Press(Key.Tab, ModifierKeys.Shift);
+        Assert.Equal(Note, harness.Editor.Text);
+        Assert.Equal((charlie, 1, "Lead", GridEditCommitNavigation.Previous), commits[^1]);
+        Assert.Equal("Name", Assert.IsType<DataGridCell>(Keyboard.FocusedElement).Column.Header);
+        Assert.Equal(0, cancels);
+        Assert.False(grid.IsEditSessionOpen);
+    });
+
+    /// <summary>
+    /// A grid's cells keep WPF's own Tab handling: DataGrid.OnTabKeyDown
+    /// moves the cell selection with focus. A fence that took Tab on the
+    /// way down left the selection behind on the first cell while focus
+    /// walked on (measured, 2026-09-22).
     /// </summary>
     [Fact]
     public void AGridInASheetKeepsItsOwnTabTraversal() => RunSta(() =>
@@ -210,7 +292,7 @@ public sealed class SheetKeyboardFenceTests
     public void TheSheetsOwnEditingChordsStillReachItsField() => RunSta(() =>
     {
         using var harness = new Harness(fenced: true);
-        harness.FocusTopicAfterTheEditor();
+        harness.FocusAfterTheEditor(harness.Topic);
         harness.Topic.Text = "Quarterly sync";
         harness.Topic.CaretIndex = 0;
 
@@ -233,10 +315,9 @@ public sealed class SheetKeyboardFenceTests
     /// <remarks>
     /// This pins the ROUTING's side of the coexistence: each leg fails
     /// when the shipped routing swallows the editing chord under a sheet
-    /// or admits the shell chord beneath one. An unshown shell cannot
-    /// hold keyboard focus, so the fence's focus guard leaves it inert
-    /// here; the fence's own side — that it intercepts nothing but the
-    /// two Tab commands — is <see cref="TheSheetsOwnEditingChordsStillReachItsField"/>.
+    /// or admits the shell chord beneath one. The fence's own side — that
+    /// it intercepts nothing but the two Tab commands — is
+    /// <see cref="TheSheetsOwnEditingChordsStillReachItsField"/>.
     /// </remarks>
     [Fact]
     public void TheShippedModalRoutingStillGovernsChordsInsideAFencedSheet() => RunSta(() =>
@@ -271,12 +352,13 @@ public sealed class SheetKeyboardFenceTests
 
     /// <summary>The F5 shape: a SlateTextEditor that last held focus, and
     /// a focus-scope sheet over it holding two prompt fields and a button
-    /// (optionally a grid), cycling like every shell sheet.</summary>
+    /// (optionally a Tab-accepting notes field and a grid), cycling like
+    /// every shell sheet.</summary>
     private sealed class Harness : IDisposable
     {
         private readonly Window _window;
 
-        public Harness(bool fenced, bool withGrid = false)
+        public Harness(bool fenced, bool withGrid = false, bool withNotes = false)
         {
             // Application's static constructor registers the pack:
             // scheme without constructing an Application (see
@@ -292,6 +374,12 @@ public sealed class SheetKeyboardFenceTests
             var fields = new StackPanel();
             fields.Children.Add(Topic);
             fields.Children.Add(Attendees);
+            if (withNotes)
+            {
+                Notes = new TextBox { Name = "Notes", AcceptsTab = true, AcceptsReturn = true };
+                fields.Children.Add(Notes);
+            }
+
             if (withGrid)
             {
                 Grid = new AccessibleDataGrid { Announce = _ => { } };
@@ -300,7 +388,7 @@ public sealed class SheetKeyboardFenceTests
                         new AccessibleGridColumn { Header = "Name", Cell = row => ((Person)row).Name, IsRowHeader = true },
                         new AccessibleGridColumn { Header = "Role", Cell = row => ((Person)row).Role },
                     ],
-                    [new Person("Charlie", "Ops"), new Person("Alice", "Dev")],
+                    People,
                     "2 rows.",
                     "People");
                 fields.Children.Add(Grid);
@@ -331,7 +419,12 @@ public sealed class SheetKeyboardFenceTests
 
         public Button Done { get; }
 
+        public TextBox? Notes { get; }
+
         public AccessibleDataGrid? Grid { get; }
+
+        public IReadOnlyList<Person> People { get; } =
+            [new Person("Charlie", "Ops"), new Person("Alice", "Dev")];
 
         public void ResetNote()
         {
@@ -342,14 +435,26 @@ public sealed class SheetKeyboardFenceTests
 
         /// <summary>The editor takes focus first — it is then the window
         /// scope's logical focus, the element the sheet's focus scope
-        /// hands unanswered commands to — and the sheet's first field
-        /// takes it next, as when a sheet opens from the editor.</summary>
-        public void FocusTopicAfterTheEditor()
+        /// hands unanswered commands to — and a field in the sheet takes
+        /// it next, as when a sheet opens from the editor.</summary>
+        public void FocusAfterTheEditor(TextBox field)
         {
             Assert.True(Editor.FocusInputOwner(), "the editor did not take focus");
-            Assert.True(Topic.Focus(), "the sheet's first field did not take focus");
+            Assert.True(field.Focus(), $"the sheet's {field.Name} field did not take focus");
             Assert.Same(Editor.TextArea, FocusManager.GetFocusedElement(_window));
-            Assert.Same(Topic, Keyboard.FocusedElement);
+            Assert.Same(field, Keyboard.FocusedElement);
+        }
+
+        /// <summary>Opens the grid's editor on one cell — the way F2 does —
+        /// and waits for it to take the keyboard, which it does when it
+        /// loads.</summary>
+        public TextBox EditCell(Person row, int column)
+        {
+            Assert.True(Grid!.BeginEditAt(row, column), $"the grid refused to edit {row.Name}, column {column}");
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => Keyboard.FocusedElement is TextBox box && Grid.IsAncestorOf(box)),
+                "the cell editor never took the keyboard");
+            return (TextBox)Keyboard.FocusedElement;
         }
 
         /// <summary>One key press through the input system, delivered to
@@ -381,15 +486,15 @@ public sealed class SheetKeyboardFenceTests
             });
 
         /// <summary>What a command source does with <paramref name="command"/>
-        /// targeted at the sheet's focused field (CommandHelpers'
+        /// targeted at the focused <paramref name="field"/> (CommandHelpers'
         /// shape): ask, and execute only on yes. Returns the answer.</summary>
-        public bool RunAsACommandSource(RoutedCommand command)
+        public bool RunAsACommandSource(RoutedCommand command, TextBox field)
         {
-            Assert.Same(Topic, Keyboard.FocusedElement);
-            bool answered = command.CanExecute(null, Topic);
+            Assert.Same(field, Keyboard.FocusedElement);
+            bool answered = command.CanExecute(null, field);
             if (answered)
             {
-                command.Execute(null, Topic);
+                command.Execute(null, field);
             }
 
             return answered;
