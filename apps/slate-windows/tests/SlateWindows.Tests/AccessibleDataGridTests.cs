@@ -1162,8 +1162,12 @@ public sealed class AccessibleDataGridTests
     /// <summary>The reading table names a row by its first non-empty
     /// cell — the first cell is the row header, but a markdown row may
     /// leave it blank, run short, or hold nothing at all, and
-    /// <c>CellText</c> reads those as "" by design; a row with no text
-    /// reads its ordinal. Unnamed, a row of cells read "System.String[]".</summary>
+    /// <c>CellText</c> reads those as "" by design. A row with no text
+    /// reads its place in the parsed table, so two such rows read
+    /// differently, and a sort — which re-populates the grid — leaves every
+    /// name on the source row it was given to (codex PR 0 round 6: a
+    /// non-empty check alone accepts a constant or a display index).
+    /// Unnamed, a row of cells read "System.String[]".</summary>
     [Fact]
     public void ReadingTableRowsAreNamedByTheirFirstNonEmptyCell() => RunSta(() =>
     {
@@ -1171,13 +1175,94 @@ public sealed class AccessibleDataGridTests
             "| Name | Status |\n"
             + "| --- | --- |\n"
             + "| alpha | Open |\n"
+            + "|  |  |\n"
             + "|  | Done |\n"
-            + "| gamma |\n"
-            + "|  |  |\n"));
+            + "|  |\n"
+            + "| gamma |\n"));
+        GridRowNames.Hosted(grid, () =>
+        {
+            // Source order: a full row, a wholly empty row, an empty first
+            // cell, a ragged empty row, a ragged row.
+            List<(object Item, string Name)> source = GridRowNames.Read(grid);
+            Assert.Equal(["alpha", "Row 2", "Done", "Row 4", "gamma"], source.Select(row => row.Name));
 
-        List<(object Item, string Name)> rows = GridRowNames.Realized(grid);
-        Assert.Equal(["alpha", "Done", "gamma", "Row 4"], rows.Select(row => row.Name));
-        Assert.All(rows, row => Assert.False(string.IsNullOrWhiteSpace(row.Name)));
+            // Ascending by Name brings the three blank first cells to the
+            // top; every row keeps the name it had.
+            Assert.NotNull(grid.ApplySort(0, ascending: true));
+            grid.UpdateLayout();
+            List<(object Item, string Name)> sorted = GridRowNames.Read(grid);
+            Assert.Equal(["Row 2", "Done", "Row 4", "alpha", "gamma"], sorted.Select(row => row.Name));
+            Assert.All(sorted, row => Assert.Equal(
+                source.Single(before => ReferenceEquals(before.Item, row.Item)).Name, row.Name));
+        });
+    });
+
+    /// <summary>The same attachment across re-realization and a rebind:
+    /// with virtualization a scrolled-away row loses its container and a
+    /// new one is named when it returns, and a rebind hands the grid fresh
+    /// row objects — both times a text-less row reads the ordinal of its
+    /// place in the parsed table, never of where it now sits.</summary>
+    [Fact]
+    public void ReadingTableFallbackNamesStayOnTheirSourceRows() => RunSta(() =>
+    {
+        var markdown = new System.Text.StringBuilder("| Name | Status |\n| --- | --- |\n");
+        for (int row = 1; row <= 300; row++)
+        {
+            markdown.Append(row is 2 or 4 or 250 ? "|  |  |\n" : $"| note {row:D3} | Open |\n");
+        }
+        string table = markdown.ToString();
+        var model = Reading.ReadingTableGrid.BuildModel(table)!.Value;
+        var grid = new AccessibleDataGrid { Announce = _ => { } };
+        Reading.ReadingTableGrid.Bind(grid, model);
+        GridRowNames.Hosted(grid, () =>
+        {
+            Assert.Equal("Row 2", GridRowNames.NameOf(grid, model.Rows[1]));
+            Assert.Equal("Row 4", GridRowNames.NameOf(grid, model.Rows[3]));
+            DataGridRow firstContainer = Assert.IsType<DataGridRow>(
+                grid.Grid.ItemContainerGenerator.ContainerFromItem(model.Rows[1]));
+
+            // Scroll far away; row 250 is named. The panel discards the top
+            // rows' containers on a later scroll pass (measured: the third).
+            grid.Grid.ScrollIntoView(model.Rows[249]);
+            Settle(grid);
+            Assert.Equal("Row 250", GridRowNames.NameOf(grid, model.Rows[249]));
+            grid.Grid.ScrollIntoView(model.Rows[280]);
+            Settle(grid);
+            grid.Grid.ScrollIntoView(model.Rows[200]);
+            Settle(grid);
+            Assert.True(
+                PumpedDispatcher.PumpUntil(
+                    () => grid.Grid.ItemContainerGenerator.ContainerFromItem(model.Rows[1]) is null,
+                    TimeSpan.FromSeconds(5)),
+                "row 2's container was never discarded, so nothing re-realized it");
+
+            // And back: a new container for the same row, the same name.
+            grid.Grid.ScrollIntoView(model.Rows[0]);
+            Settle(grid);
+            Assert.NotSame(
+                firstContainer,
+                grid.Grid.ItemContainerGenerator.ContainerFromItem(model.Rows[1]));
+            Assert.Equal("Row 2", GridRowNames.NameOf(grid, model.Rows[1]));
+            Assert.Equal("Row 4", GridRowNames.NameOf(grid, model.Rows[3]));
+
+            // Sorted, the three text-less rows lead in source order.
+            Assert.NotNull(grid.ApplySort(0, ascending: true));
+            grid.Grid.ScrollIntoView(model.Rows[1]);
+            Settle(grid);
+            Assert.Equal(
+                ["Row 2", "Row 4", "Row 250"],
+                GridRowNames.Read(grid).Take(3).Select(row => row.Name));
+
+            // A rebind brings new row objects and keeps the sort: each
+            // text-less row still reads its place in the parsed table.
+            var rebound = Reading.ReadingTableGrid.BuildModel(table)!.Value;
+            Reading.ReadingTableGrid.Bind(grid, rebound);
+            grid.Grid.ScrollIntoView(rebound.Rows[1]);
+            Settle(grid);
+            Assert.Equal("Row 2", GridRowNames.NameOf(grid, rebound.Rows[1]));
+            Assert.Equal("Row 4", GridRowNames.NameOf(grid, rebound.Rows[3]));
+            Assert.Equal("Row 250", GridRowNames.NameOf(grid, rebound.Rows[249]));
+        });
     });
 
     /// <summary>A bibliography entry row is its entry: "Title (year)",
@@ -1232,6 +1317,16 @@ public sealed class AccessibleDataGridTests
             ["notes/a.md", "b.md"],
             GridRowNames.Realized(grid).Select(row => row.Name));
     });
+
+    /// <summary>Let a scroll or re-population finish: layout, then the
+    /// dispatcher work it queued (realization runs at Background), then
+    /// layout again.</summary>
+    private static void Settle(AccessibleDataGrid grid)
+    {
+        grid.UpdateLayout();
+        PumpedDispatcher.Drain();
+        grid.UpdateLayout();
+    }
 
     private static BibEntry Entry(string key, string title, int? year) =>
         new(
@@ -1429,6 +1524,34 @@ internal static class GridRowNames
             window.Close();
         }
     }
+
+    /// <summary>Run <paramref name="body"/> with <paramref name="grid"/>
+    /// shown — short enough that a long table virtualizes.</summary>
+    internal static void Hosted(AccessibleDataGrid grid, Action body)
+    {
+        var window = new System.Windows.Window
+        {
+            Content = grid,
+            Width = 640,
+            Height = 240,
+            ShowInTaskbar = false,
+            WindowStyle = System.Windows.WindowStyle.None,
+        };
+        window.Show();
+        try
+        {
+            window.UpdateLayout();
+            body();
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>The UIA name of <paramref name="item"/>'s realized row.</summary>
+    internal static string NameOf(AccessibleDataGrid grid, object item) =>
+        Read(grid).Single(row => ReferenceEquals(row.Item, item)).Name;
 
     /// <summary>The realized rows of a grid already shown, in view order.</summary>
     internal static List<(object Item, string Name)> Read(AccessibleDataGrid grid)

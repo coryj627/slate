@@ -230,14 +230,16 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 
     /// <summary>
-    /// W7-7 PR 3 (#1246, contract R-4 as amended after codex PR 0 round 5):
-    /// the name a realized row carries is never empty. A blank name is no
-    /// name — DataGridItemAutomationPeer then falls back to the item's
+    /// W7-7 PR 3 (#1246, contract R-4 as amended after codex PR 0 rounds 5
+    /// and 6): the name a realized row carries is never empty. A blank name
+    /// is no name — DataGridItemAutomationPeer then falls back to the item's
     /// <c>ToString()</c>, and a reading-table row whose first cell is blank
     /// read "System.String[]" — so when the surface's identity is blank the
     /// first non-empty cell stands in, else "Row {n}", n the row's place in
-    /// the rows the surface bound. That ordinal is stable: a sort
-    /// re-populates the grid, so the view position is not.
+    /// the rows the surface bound: its source order (a reading table's
+    /// parsed order). That ordinal survives a sort (which re-populates the
+    /// grid and moves the view position), re-realization (the map outlives
+    /// the containers) and a re-bind (recomputed from the rows passed).
     /// </summary>
     private string RowName(object item)
     {
@@ -254,11 +256,11 @@ internal sealed class AccessibleDataGrid : UserControl
                 return text;
             }
         }
-        int ordinal = _boundOrdinals.TryGetValue(item, out int index)
-            ? index
-            : _items.IndexOf(item);
+        // Every row the grid holds came through Bind — ApplySort only
+        // reorders them — so its bound ordinal exists; the view position
+        // is never consulted.
         return string.Create(
-            System.Globalization.CultureInfo.InvariantCulture, $"Row {ordinal + 1}");
+            System.Globalization.CultureInfo.InvariantCulture, $"Row {_boundOrdinals[item] + 1}");
     }
 
     /// <summary>The unloading half of the row seams: a container that

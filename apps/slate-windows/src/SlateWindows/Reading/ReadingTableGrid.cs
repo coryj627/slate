@@ -68,18 +68,29 @@ internal static class ReadingTableGrid
             return null;
         }
         var grid = new AccessibleDataGrid();
-        // R-4 (#1246): a row is named by its first cell, the row header's
-        // text; unnamed, a row of cells read "System.String[]". CellText
-        // reads a blank or missing cell as "", so the substrate names such
-        // a row by its first non-empty cell, else "Row {n}".
+        Bind(grid, model);
+        return grid;
+    }
+
+    /// <summary>The table's bind, and any re-bind. R-4 (#1246): a row is
+    /// named by its first cell, the row header's text; unnamed, a row of
+    /// cells read "System.String[]". CellText reads a blank or missing cell
+    /// as "", so the substrate names such a row by its first non-empty
+    /// cell, else "Row {n}" — n its place in the parsed table, which the
+    /// rows arrive in, so a sort, a scroll or a re-bind never renumbers
+    /// it.</summary>
+    internal static void Bind(
+        AccessibleDataGrid grid,
+        (IReadOnlyList<AccessibleGridColumn> Columns,
+            IReadOnlyList<object> Rows,
+            string Summary,
+            string Label) model) =>
         grid.Bind(
             model.Columns,
             model.Rows,
             model.Summary,
             model.Label,
             rowAutomationName: static row => CellText(row, 0));
-        return grid;
-    }
 
     /// <summary>Null when core cannot derive cells — the caller must
     /// let Enter fall through rather than open an empty window.</summary>
