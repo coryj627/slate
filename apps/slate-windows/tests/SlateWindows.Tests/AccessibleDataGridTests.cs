@@ -54,6 +54,16 @@ public sealed class AccessibleDataGridTests
         new Person("Bora", "Docs"),
     };
 
+    /// <summary>The row identity every bind now requires (codex PR 3
+    /// round 2): a person's name, a widget's id, else the first
+    /// non-empty cell the grid falls back to.</summary>
+    private static string? Identity(object row) => row switch
+    {
+        Person person => person.Name,
+        Widget widget => widget.Id,
+        _ => null,
+    };
+
     private static IReadOnlyList<AccessibleGridColumn> Columns() => new[]
     {
         new AccessibleGridColumn
@@ -84,9 +94,10 @@ public sealed class AccessibleDataGridTests
             People,
             "3 rows, 2 columns.",
             "People, data grid",
-            rowAudioDescription,
-            rowActions,
-            exportProducer);
+            rowAutomationName: Identity,
+            rowAudioDescription: rowAudioDescription,
+            rowActions: rowActions,
+            exportProducer: exportProducer);
         return grid;
     }
 
@@ -182,11 +193,11 @@ public sealed class AccessibleDataGridTests
         {
             var grid = new AccessibleDataGrid { Announce = _ => { } };
             IReadOnlyList<object> first = FreshWidgets();
-            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets");
+            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets", rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(first[1], grid.Grid.Columns[1]);
 
             // Fresh instances, same identities — a real re-publish.
-            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets");
+            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets", rowAutomationName: Identity);
 
             Assert.Equal("two", Assert.IsType<Widget>(grid.Grid.CurrentCell.Item).Id);
             Assert.Same(grid.Grid.Columns[1], grid.Grid.CurrentCell.Column);
@@ -203,11 +214,11 @@ public sealed class AccessibleDataGridTests
         {
             var grid = new AccessibleDataGrid { Announce = _ => { } };
             IReadOnlyList<object> first = FreshWidgets();
-            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets");
+            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets", rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(first[2], grid.Grid.Columns[0]);
 
             grid.Bind(
-                WidgetColumns(), [new Widget("one")], "1 row.", "Widgets");
+                WidgetColumns(), [new Widget("one")], "1 row.", "Widgets", rowAutomationName: Identity);
 
             Assert.DoesNotContain(
                 grid.Grid.Items.Cast<object>(),
@@ -228,11 +239,11 @@ public sealed class AccessibleDataGridTests
             var announced = new List<A11yEvent>();
             var grid = new AccessibleDataGrid { Announce = announced.Add };
             IReadOnlyList<object> rows = FreshWidgets();
-            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets");
+            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets", rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(rows[1], grid.Grid.Columns[1]);
             announced.Clear();
 
-            grid.Bind([WidgetColumns()[0]], FreshWidgets(), "3 rows.", "Widgets");
+            grid.Bind([WidgetColumns()[0]], FreshWidgets(), "3 rows.", "Widgets", rowAutomationName: Identity);
 
             Assert.False(grid.Grid.CurrentCell.IsValid);
             Assert.Empty(grid.Grid.SelectedCells);
@@ -250,14 +261,14 @@ public sealed class AccessibleDataGridTests
         {
             var grid = new AccessibleDataGrid { Announce = _ => { } };
             IReadOnlyList<object> rows = FreshWidgets();
-            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets");
+            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets", rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(rows[2], grid.Grid.Columns[1]);
 
-            grid.Bind([], [], "No rows.", "Widgets");
+            grid.Bind([], [], "No rows.", "Widgets", rowAutomationName: Identity);
             Assert.False(grid.Grid.CurrentCell.IsValid);
             Assert.Empty(grid.Grid.SelectedCells);
 
-            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets");
+            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets", rowAutomationName: Identity);
             Assert.True(grid.SelectRow(_ => true));
             Assert.Same(grid.Grid.Columns[0], grid.Grid.CurrentCell.Column);
             Assert.Equal("one", Assert.IsType<Widget>(grid.Grid.CurrentCell.Item).Id);
@@ -316,11 +327,11 @@ public sealed class AccessibleDataGridTests
             var announced = new List<A11yEvent>();
             var grid = new AccessibleDataGrid { Announce = announced.Add };
             IReadOnlyList<object> rows = FreshWidgets();
-            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets");
+            grid.Bind(WidgetColumns(), rows, "3 rows.", "Widgets", rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(rows[1], grid.Grid.Columns[1]);
             announced.Clear();
 
-            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets");
+            grid.Bind(WidgetColumns(), FreshWidgets(), "3 rows.", "Widgets", rowAutomationName: Identity);
 
             Assert.Equal("two", Assert.IsType<Widget>(grid.Grid.CurrentCell.Item).Id);
             Assert.Empty(announced);
@@ -348,14 +359,14 @@ public sealed class AccessibleDataGridTests
                 [.. Enumerable.Range(0, count).Select(i => (object)new CountingRow($"r{i}"))];
 
             IReadOnlyList<object> rows = First();
-            grid.Bind(CountingColumns(), rows, "rows.", "Rows");
+            grid.Bind(CountingColumns(), rows, "rows.", "Rows", rowAutomationName: Identity);
             // Worst case: the reader is on the LAST row, so the restore
             // scan runs to the end.
             grid.Grid.CurrentCell =
                 new DataGridCellInfo(rows[count - 1], grid.Grid.Columns[0]);
 
             CountingRow.EqualsCalls = 0;
-            grid.Bind(CountingColumns(), First(), "rows.", "Rows");
+            grid.Bind(CountingColumns(), First(), "rows.", "Rows", rowAutomationName: Identity);
 
             Assert.Equal($"r{count - 1}", Assert.IsType<CountingRow>(grid.Grid.CurrentCell.Item).Id);
             // Quadratic would be ~count²/2 ≈ 1,800 here.
@@ -377,7 +388,7 @@ public sealed class AccessibleDataGridTests
             var grid = new AccessibleDataGrid { Announce = _ => { } };
             grid.Bind(
                 Columns(), People, "3 rows.", "People",
-                rowActivated: row => activated = row);
+                rowActivated: row => activated = row, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(People[1], grid.Grid.Columns[0]);
 
             grid.Grid.RaiseEvent(new KeyEventArgs(
@@ -412,7 +423,7 @@ public sealed class AccessibleDataGridTests
             var grid = new AccessibleDataGrid { Announce = _ => { } };
             grid.Bind(
                 Columns(), People, "3 rows.", "People",
-                rowActivated: row => activated = row);
+                rowActivated: row => activated = row, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(People[0], grid.Grid.Columns[0]);
 
             // Source is the grid itself: no cell, no row — a header or
@@ -447,7 +458,7 @@ public sealed class AccessibleDataGridTests
             Assert.Equal("Alice", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
             int afterUserSort = announced.Count;
 
-            grid.Bind(Columns(), People, "3 rows, 2 columns.", "People, data grid");
+            grid.Bind(Columns(), People, "3 rows, 2 columns.", "People, data grid", rowAutomationName: Identity);
 
             Assert.Equal("Alice", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
             Assert.Equal((0, true), grid.ActiveSort);
@@ -480,7 +491,7 @@ public sealed class AccessibleDataGridTests
                 ],
                 People,
                 "3 rows, 1 column.",
-                "People, data grid");
+                "People, data grid", rowAutomationName: Identity);
 
             Assert.Null(grid.ActiveSort);
             Assert.Equal("Charlie", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
@@ -719,7 +730,7 @@ public sealed class AccessibleDataGridTests
                 },
                 People,
                 "3 rows, 1 column.",
-                "People, data grid");
+                "People, data grid", rowAutomationName: Identity);
             Assert.Equal(DataGridHeadersVisibility.All, grid.Grid.HeadersVisibility);
 
             // Entry lands on the FIRST CELL (round 1: MoveFocus(First)
@@ -853,7 +864,7 @@ public sealed class AccessibleDataGridTests
             var grid = new AccessibleDataGrid { Announce = _ => { } };
             grid.Bind(
                 Columns(), People, "3 rows.", "People",
-                rowActions: actions, rowActivated: row => activated = row);
+                rowActions: actions, rowActivated: row => activated = row, rowAutomationName: Identity);
             var window = new System.Windows.Window
             {
                 Content = grid,
@@ -954,12 +965,12 @@ public sealed class AccessibleDataGridTests
                     (x, y) => string.CompareOrdinal(((Person)x).Role, ((Person)y).Role)),
             };
             var grid = new AccessibleDataGrid { Announce = _ => { } };
-            grid.Bind([name, role], people, "3 rows.", "People");
+            grid.Bind([name, role], people, "3 rows.", "People", rowAutomationName: Identity);
             _ = grid.ApplySort(1, ascending: true);
             Assert.Equal("Charlie", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
 
             // Same grid instance, columns swapped.
-            grid.Bind([role, name], people, "3 rows.", "People");
+            grid.Bind([role, name], people, "3 rows.", "People", rowAutomationName: Identity);
 
             Assert.Equal((0, true), grid.ActiveSort);
             Assert.Equal("Charlie", Assert.IsType<Person>(grid.Grid.Items[0]).Name);
@@ -990,13 +1001,13 @@ public sealed class AccessibleDataGridTests
             IReadOnlyList<object> first =
                 [new Widget("dup"), new Widget("dup"), new Widget("tail")];
             var grid = new AccessibleDataGrid { Announce = _ => { } };
-            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets");
+            grid.Bind(WidgetColumns(), first, "3 rows.", "Widgets", rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(first[1], grid.Grid.Columns[1]);
             Assert.Same(first[1], grid.Grid.CurrentCell.Item);
 
             IReadOnlyList<object> second =
                 [new Widget("dup"), new Widget("dup"), new Widget("tail")];
-            grid.Bind(WidgetColumns(), second, "3 rows.", "Widgets");
+            grid.Bind(WidgetColumns(), second, "3 rows.", "Widgets", rowAutomationName: Identity);
 
             Assert.Same(second[1], grid.Grid.CurrentCell.Item);
         });
@@ -1056,6 +1067,36 @@ public sealed class AccessibleDataGridTests
         });
     }
 
+    /// <summary>Codex PR 3 round 2: a teardown takes the rows' names with
+    /// the rows. A bind of no rows swapped the naming delegate out BEFORE
+    /// the rows unloaded, so OnUnloadingRow — which clears only what a bound
+    /// delegate set — left every realized row its name and status, and a
+    /// peer a client still held read the torn-down row.</summary>
+    [Fact]
+    public void ATeardownLeavesNoRealizedRowItsName() => RunSta(() =>
+    {
+        var grid = new AccessibleDataGrid { Announce = _ => { } };
+        grid.Bind(
+            Columns(), People, "3 rows.", "People",
+            rowAutomationName: row => ((Person)row).Name,
+            rowItemStatus: row => ((Person)row).Role);
+        GridRowNames.Hosted(grid, () =>
+        {
+            DataGridRow[] realized = [.. People.Select(person =>
+                Assert.IsType<DataGridRow>(grid.Grid.ItemContainerGenerator.ContainerFromItem(person)))];
+            Assert.All(realized, row => Assert.NotEqual(string.Empty, AutomationProperties.GetName(row)));
+
+            grid.Clear();
+            grid.UpdateLayout();
+
+            Assert.All(realized, row =>
+            {
+                Assert.Equal(string.Empty, AutomationProperties.GetName(row));
+                Assert.Equal(string.Empty, AutomationProperties.GetItemStatus(row));
+            });
+        });
+    });
+
     /// <summary>W6-2 PR A (contract A-9): the modified activation seam.
     /// Ctrl+Enter and Ctrl+double-click reach the modified handler when
     /// the surface bound one; a surface that bound none keeps the plain
@@ -1071,7 +1112,7 @@ public sealed class AccessibleDataGridTests
             grid.Bind(
                 Columns(), People, "3 rows.", "People",
                 rowActivated: row => plain = row,
-                rowActivatedModified: row => modified = row);
+                rowActivatedModified: row => modified = row, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(People[2], grid.Grid.Columns[0]);
 
             Assert.True(grid.ActivateCurrentRow(modified: true));
@@ -1084,7 +1125,7 @@ public sealed class AccessibleDataGridTests
             // Without a modified handler the modifier is ignored.
             plain = null;
             modified = null;
-            grid.Bind(Columns(), People, "3 rows.", "People", rowActivated: row => plain = row);
+            grid.Bind(Columns(), People, "3 rows.", "People", rowActivated: row => plain = row, rowAutomationName: Identity);
             grid.Grid.CurrentCell = new DataGridCellInfo(People[0], grid.Grid.Columns[0]);
             Assert.True(grid.ActivateCurrentRow(modified: true));
             Assert.Same(People[0], plain);
@@ -1265,6 +1306,97 @@ public sealed class AccessibleDataGridTests
         });
     });
 
+    /// <summary>Codex PR 3 round 2: rows that share an identity — here a
+    /// reading table's first cell — would read alike, so each carries its
+    /// source row: "same, row 2". Only the colliding rows do, and the
+    /// suffix stays on its source row through a sort, re-realization and
+    /// a rebind; a rebind that leaves one carrier drops its suffix.</summary>
+    [Fact]
+    public void DuplicateIdentitiesAreToldApartByTheirSourceRow() => RunSta(() =>
+    {
+        static string Table(IEnumerable<int> duplicated)
+        {
+            var markdown = new System.Text.StringBuilder("| Name | Status |\n| --- | --- |\n");
+            var same = new HashSet<int>(duplicated);
+            for (int row = 1; row <= 300; row++)
+            {
+                markdown.Append(same.Contains(row) ? $"| same | {row} |\n" : $"| note {row:D3} | Open |\n");
+            }
+            return markdown.ToString();
+        }
+        var model = Reading.ReadingTableGrid.BuildModel(Table([2, 150, 299]))!.Value;
+        var grid = new AccessibleDataGrid { Announce = _ => { } };
+        Reading.ReadingTableGrid.Bind(grid, model);
+        GridRowNames.Hosted(grid, () =>
+        {
+            Assert.Equal("note 001", GridRowNames.NameOf(grid, model.Rows[0]));
+            Assert.Equal("same, row 2", GridRowNames.NameOf(grid, model.Rows[1]));
+            DataGridRow firstContainer = Assert.IsType<DataGridRow>(
+                grid.Grid.ItemContainerGenerator.ContainerFromItem(model.Rows[1]));
+
+            // Scroll far away and back: a new container, the same name.
+            grid.Grid.ScrollIntoView(model.Rows[298]);
+            Settle(grid);
+            Assert.Equal("same, row 299", GridRowNames.NameOf(grid, model.Rows[298]));
+            grid.Grid.ScrollIntoView(model.Rows[149]);
+            Settle(grid);
+            Assert.Equal("same, row 150", GridRowNames.NameOf(grid, model.Rows[149]));
+            grid.Grid.ScrollIntoView(model.Rows[200]);
+            Settle(grid);
+            Assert.True(
+                PumpedDispatcher.PumpUntil(
+                    () => grid.Grid.ItemContainerGenerator.ContainerFromItem(model.Rows[1]) is null,
+                    TimeSpan.FromSeconds(5)),
+                "row 2's container was never discarded, so nothing re-realized it");
+            grid.Grid.ScrollIntoView(model.Rows[0]);
+            Settle(grid);
+            Assert.NotSame(firstContainer, grid.Grid.ItemContainerGenerator.ContainerFromItem(model.Rows[1]));
+            Assert.Equal("same, row 2", GridRowNames.NameOf(grid, model.Rows[1]));
+
+            // Sorted descending, the three carriers lead ("same" sorts after
+            // every "note …"), each still with its own source row.
+            Assert.NotNull(grid.ApplySort(0, ascending: false));
+            grid.Grid.ScrollIntoView(model.Rows[1]);
+            Settle(grid);
+            Assert.Equal(
+                ["same, row 150", "same, row 2", "same, row 299"],
+                GridRowNames.Read(grid).Take(3).Select(row => row.Name).Order(StringComparer.Ordinal));
+
+            // A rebind recomputes from the rows passed: the same table keeps
+            // every suffix; a table with one carrier left drops it.
+            var rebound = Reading.ReadingTableGrid.BuildModel(Table([2, 150, 299]))!.Value;
+            Reading.ReadingTableGrid.Bind(grid, rebound);
+            grid.Grid.ScrollIntoView(rebound.Rows[1]);
+            Settle(grid);
+            Assert.Equal("same, row 2", GridRowNames.NameOf(grid, rebound.Rows[1]));
+            var single = Reading.ReadingTableGrid.BuildModel(Table([150]))!.Value;
+            Reading.ReadingTableGrid.Bind(grid, single);
+            grid.Grid.ScrollIntoView(single.Rows[149]);
+            Settle(grid);
+            Assert.Equal("same", GridRowNames.NameOf(grid, single.Rows[149]));
+        });
+    });
+
+    /// <summary>Two bibliography entries with one title and year read
+    /// apart by their source row; a lone entry reads bare.</summary>
+    [Fact]
+    public void BibliographyEntriesSharingATitleAndYearAreToldApart() => RunSta(() =>
+    {
+        var grid = new AccessibleDataGrid { Announce = _ => { } };
+        MainWindow.BindBibliographyEntries(
+            grid,
+            [
+                new Panels.BibliographyRowViewModel(Entry("doe2021a", "Accessible grids", 2021)),
+                new Panels.BibliographyRowViewModel(Entry("roe2020", "Reading tables", 2020)),
+                new Panels.BibliographyRowViewModel(Entry("doe2021b", "Accessible grids", 2021)),
+            ],
+            "3 entries.");
+
+        Assert.Equal(
+            ["Accessible grids (2021), row 1", "Accessible grids (2021), row 3", "Reading tables (2020)"],
+            GridRowNames.Realized(grid).Select(row => row.Name).Order(StringComparer.Ordinal));
+    });
+
     /// <summary>A bibliography entry row is its entry: "Title (year)",
     /// the text its row header carries — the key when there is no title,
     /// no parenthesis when there is no year.</summary>
@@ -1431,6 +1563,43 @@ public sealed class AccessibleDataGridSurfaceRowNameTests : IDisposable
             rows.Select(row => row.Name).Order(StringComparer.Ordinal));
         Assert.All(rows, row => Assert.Equal(
             Path.GetFileName(((Bases.BaseGridRowViewModel)row.Item).Row.FilePath), row.Name));
+        document.Shutdown();
+    });
+
+    /// <summary>Codex PR 3 round 2: one file name in two folders would read
+    /// alike, so each row carries its source row.</summary>
+    [Fact]
+    public void BasesRowsSharingAFileNameAreToldApart() => RunSta(() =>
+    {
+        using FixtureVault vault = FixtureVault.Create(0, "grid-shared-file-names");
+        foreach (string folder in new[] { "A", "B" })
+        {
+            Directory.CreateDirectory(Path.Combine(vault.Root, folder));
+            File.WriteAllText(Path.Combine(vault.Root, folder, "same.md"), $"# In {folder}\n");
+        }
+        File.WriteAllText(
+            Path.Combine(vault.Root, "Same.base"),
+            "filters: 'file.ext == \"md\"'\n"
+            + "views:\n"
+            + "  - type: table\n"
+            + "    name: Main\n"
+            + "    order:\n"
+            + "      - file.name\n");
+        using VaultSession session = VaultSession.OpenFilesystem(vault.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        var document = new Bases.BaseDocumentViewModel(
+            session, "Same.base", _ => { }, synchronousForTests: true);
+        document.Load();
+        var surface = new Bases.BaseSurfaceView { Model = document };
+
+        List<(object Item, string Name)> rows =
+            GridRowNames.Realized(surface.GridForTests, surface);
+        Assert.Equal(
+            ["same.md, row 1", "same.md, row 2"],
+            rows.Select(row => row.Name).Order(StringComparer.Ordinal));
         document.Shutdown();
     });
 

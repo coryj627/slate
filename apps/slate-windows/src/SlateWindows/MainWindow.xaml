@@ -3449,10 +3449,12 @@
                              HorizontalContentAlignment="Stretch"
                              AutomationProperties.AutomationId="DashboardEditorSections"
                              AutomationProperties.Name="Dashboard sections">
-                        <!-- R-4 (#1246): a section row is named by its query. -->
+                        <!-- R-4 (#1246): a section row is named by its query and
+                             its place, and so is every control in it: Add
+                             section takes one query twice (codex PR 3 round 2). -->
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
-                                <Setter Property="AutomationProperties.Name" Value="{Binding SavedQueryName}" />
+                                <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
                             </Style>
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
@@ -3460,11 +3462,11 @@
                                 <DockPanel Margin="0,2">
                                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                                         <Button Content="Up" Click="DashboardEditorMoveUp_Click"
-                                                AutomationProperties.Name="{Binding SavedQueryName, StringFormat=Move {0} up}" />
+                                                AutomationProperties.Name="{Binding AutomationName, StringFormat=Move {0} up}" />
                                         <Button Content="Down" Margin="4,0,0,0" Click="DashboardEditorMoveDown_Click"
-                                                AutomationProperties.Name="{Binding SavedQueryName, StringFormat=Move {0} down}" />
+                                                AutomationProperties.Name="{Binding AutomationName, StringFormat=Move {0} down}" />
                                         <Button Content="Remove" Margin="4,0,0,0" Click="DashboardEditorRemoveSection_Click"
-                                                AutomationProperties.Name="{Binding SavedQueryName, StringFormat=Remove {0}}" />
+                                                AutomationProperties.Name="{Binding AutomationName, StringFormat=Remove {0}}" />
                                     </StackPanel>
                                     <StackPanel>
                                         <TextBlock Text="{Binding SavedQueryName}" FontWeight="SemiBold" />
@@ -3472,7 +3474,7 @@
                                             <TextBlock Text="Heading:" VerticalAlignment="Center" />
                                             <TextBox Margin="6,0,0,0"
                                                      Text="{Binding HeadingOverride, UpdateSourceTrigger=PropertyChanged}"
-                                                     AutomationProperties.Name="{Binding SavedQueryName, StringFormat=Heading override for {0}}" />
+                                                     AutomationProperties.Name="{Binding AutomationName, StringFormat=Heading override for {0}}" />
                                         </DockPanel>
                                         <DockPanel Margin="0,2,0,0">
                                             <TextBlock Text="View:" VerticalAlignment="Center" />
@@ -3480,7 +3482,7 @@
                                                       MinWidth="120"
                                                       SelectedValuePath="Tag"
                                                       SelectedValue="{Binding ViewOverride}"
-                                                      AutomationProperties.Name="{Binding SavedQueryName, StringFormat=View override for {0}}">
+                                                      AutomationProperties.Name="{Binding AutomationName, StringFormat=View override for {0}}">
                                                 <ComboBoxItem Content="Default" Tag="" />
                                                 <ComboBoxItem Content="Table" Tag="table" />
                                                 <ComboBoxItem Content="List" Tag="list" />

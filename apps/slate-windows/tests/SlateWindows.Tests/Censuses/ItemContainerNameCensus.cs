@@ -68,9 +68,21 @@ internal abstract record ContainerNaming
     /// <summary>A container style whose Name setter binds
     /// <paramref name="Path"/> ("" = the item itself) of
     /// <paramref name="ItemType"/>, through <paramref name="Converter"/>
-    /// (a resource key) when one is named.</summary>
-    internal sealed record Bound(Type ItemType, string Path, string? Converter = null) : ContainerNaming;
+    /// (a resource key) when one is named — and, in each of
+    /// <see cref="Triggers"/>, exactly the pinned variant (codex PR 3 round
+    /// 2: a state's name is pinned as tightly as the resting one).</summary>
+    internal sealed record Bound(Type ItemType, string Path, string? Converter = null) : ContainerNaming
+    {
+        public IReadOnlyList<TriggerNaming> Triggers { get; init; } = [];
+    }
 }
+
+/// <summary>One trigger state's name: when <paramref name="When"/> holds
+/// ("IsDirty=True", conditions joined by " &amp; " in document order), the
+/// container's Name binds <paramref name="Path"/> through
+/// <paramref name="Converter"/> with <paramref name="Format"/> as authored
+/// (the XAML <c>{}</c> escape included).</summary>
+internal sealed record TriggerNaming(string When, string Path, string? Converter, string? Format);
 
 [Trait("census", "item-container-names")]
 public sealed class ItemContainerNameCensus
@@ -125,7 +137,7 @@ public sealed class ItemContainerNameCensus
             ["CitationDetailsFields"] = Named(typeof(CitationField), nameof(CitationField.AutomationName)),
             ["FilesCitingList"] = Self(typeof(string)),
             ["DashboardEditorQueryPicker"] = Named(typeof(SavedQuerySummary), nameof(SavedQuerySummary.Name)),
-            ["DashboardEditorSections"] = Named(typeof(DashboardEditorSection), nameof(DashboardEditorSection.SavedQueryName)),
+            ["DashboardEditorSections"] = Named(typeof(DashboardEditorSection), nameof(DashboardEditorSection.AutomationName)),
             ["BuilderConditions"] = new ContainerNaming.Layout(),
             ["MainWindow.xaml#{Binding GroupMembers}"] = new ContainerNaming.Layout(),
             ["TemplatePickerList"] = Named(typeof(TemplatePickerRowViewModel), nameof(TemplatePickerRowViewModel.AccessibleName)),
@@ -137,7 +149,18 @@ public sealed class ItemContainerNameCensus
             // --- authored XAML: WorkspaceTemplates.xaml ---
             ["WorkspaceTemplates.xaml#{Binding Items}"] = new ContainerNaming.Layout(),
             ["PropertiesRows"] = new ContainerNaming.Layout(),
-            ["WorkspaceTabs"] = Named(typeof(WorkspaceTabViewModel), nameof(WorkspaceTabViewModel.Title)),
+            ["WorkspaceTabs"] = Named(typeof(WorkspaceTabViewModel), nameof(WorkspaceTabViewModel.Title)) with
+            {
+                Triggers =
+                [
+                    new($"{nameof(WorkspaceTabViewModel.IsDirty)}=True",
+                        nameof(WorkspaceTabViewModel.Title), null, "{}{0}, unsaved changes"),
+                    new($"{nameof(WorkspaceTabViewModel.IsMissingFromDisk)}=True",
+                        nameof(WorkspaceTabViewModel.Title), null, "{}{0}, missing from disk"),
+                    new($"{nameof(WorkspaceTabViewModel.IsDirty)}=True & {nameof(WorkspaceTabViewModel.IsMissingFromDisk)}=True",
+                        nameof(WorkspaceTabViewModel.Title), null, "{}{0}, missing from disk, unsaved changes"),
+                ],
+            },
             ["Editor panes"] = new ContainerNaming.Layout(),
 
             // --- built in code (codex PR 3 round 1) ---
@@ -201,8 +224,9 @@ public sealed class ItemContainerNameCensus
     /// missing one does). Calls are BOUND, not matched by spelling (three
     /// navigators declare a Bind of their own; the bibliography and
     /// bulk-rename grids are x:Name fields), and the GridConformanceHost
-    /// fixture must model the rule too. A bind whose rows are the empty
-    /// collection literal has no row to name and is counted apart.</summary>
+    /// fixture must model the rule too. No bind is exempt (codex PR 3 round
+    /// 2): an empty bind was a teardown that skipped the rows' name cleanup,
+    /// and a teardown is <c>AccessibleDataGrid.Clear</c> now.</summary>
     [Fact]
     public void EveryGridBindNamesItsRows()
     {
@@ -229,7 +253,6 @@ public sealed class ItemContainerNameCensus
 
         var offenders = new List<string>();
         int named = 0;
-        int empty = 0;
         foreach ((string file, CSharpSource source) in sources)
         {
             SemanticModel model = compilation.GetSemanticModel(source.Root.SyntaxTree);
@@ -252,13 +275,7 @@ public sealed class ItemContainerNameCensus
                 {
                     continue;
                 }
-                if (RowsArgument(invocation) is CollectionExpressionSyntax { Elements.Count: 0 })
-                {
-                    empty++;
-                    continue;
-                }
-                ArgumentSyntax? name = invocation.ArgumentList.Arguments.FirstOrDefault(
-                    argument => argument.NameColon?.Name.Identifier.ValueText == "rowAutomationName");
+                ArgumentSyntax? name = ArgumentFor(invocation, method, "rowAutomationName");
                 if (name is null || name.Expression.IsKind(SyntaxKind.NullLiteralExpression))
                 {
                     offenders.Add($"{file}:{line}: `{invocation.Expression}` binds rows without rowAutomationName");
@@ -284,7 +301,6 @@ public sealed class ItemContainerNameCensus
         }
 
         Assert.True(named + offenders.Count >= 10, $"only {named + offenders.Count} row-bearing grid binds found — the scrape is broken");
-        Assert.True(empty > 0, "no empty grid binds found — the rows-argument read is broken");
         Assert.True(
             offenders.Count == 0,
             "grid binds whose rows would not read their identity:\n  "
@@ -391,8 +407,10 @@ public sealed class ItemContainerNameCensus
     /// <summary>Why <paramref name="style"/> does not name containers by
     /// <paramref name="expected"/>, or null. The top-level Name setter (on
     /// the style or the chain it is BasedOn) must be a binding of exactly
-    /// the pinned path and converter, with nothing else; a Name setter in a
-    /// trigger must bind the same path (a StringFormat may decorate it).</summary>
+    /// the pinned path and converter, with nothing else; the triggers that
+    /// set a Name must be exactly the pinned states, in order, each binding
+    /// its pinned path, converter and format (codex PR 3 round 2: a format
+    /// with no {0} names every dirty tab alike).</summary>
     private static string? BoundProblem(
         XElement? style, ContainerNaming.Bound expected, Dictionary<string, List<XElement>> keyedStyles)
     {
@@ -417,18 +435,31 @@ public sealed class ItemContainerNameCensus
         {
             return $"its Name setter binds {binding} but R-4 pins {Describe(expected)}";
         }
-        foreach (XElement triggered in TriggerNameSetters(style))
+        var states = new List<TriggerNaming>();
+        foreach ((string when, XElement triggered) in TriggerNameSetters(style))
         {
             BindingText? variant = SetterBinding(triggered);
-            if (variant is null
-                || !string.Equals(variant.Path, expected.Path, StringComparison.Ordinal)
-                || variant.Extras.Any(extra => extra != "StringFormat"))
+            if (variant is null || variant.Extras.Any(extra => extra != "StringFormat"))
             {
-                return $"a trigger's Name setter (`{SetterValueText(triggered)}`) does not bind the pinned {Describe(expected)}";
+                return $"the Name setter when {when} (`{SetterValueText(triggered)}`) is not a binding the census can pin";
             }
+            states.Add(new TriggerNaming(when, variant.Path, variant.Converter, variant.Format));
+        }
+        if (!states.SequenceEqual(expected.Triggers))
+        {
+            return "its triggers name "
+                + (states.Count == 0 ? "no state" : string.Join("; ", states.Select(Describe)))
+                + " but R-4 pins "
+                + (expected.Triggers.Count == 0 ? "none" : string.Join("; ", expected.Triggers.Select(Describe)));
         }
         return null;
     }
+
+    private static string Describe(TriggerNaming state) =>
+        $"{state.When} → {{Binding {state.Path}"
+        + (state.Converter is null ? string.Empty : $", Converter={state.Converter}")
+        + (state.Format is null ? string.Empty : $", StringFormat='{state.Format}'")
+        + "}";
 
     private static string Describe(ContainerNaming.Bound bound) =>
         (bound.Path.Length == 0 ? "the item itself" : $"{bound.ItemType.Name}.{bound.Path}")
@@ -453,16 +484,36 @@ public sealed class ItemContainerNameCensus
                 : null;
     }
 
-    private static IEnumerable<XElement> TriggerNameSetters(XElement style) =>
+    /// <summary>Every trigger's Name setter with the trigger's conditions:
+    /// a DataTrigger's binding path and value, a property Trigger's
+    /// property and value, and a Multi*Trigger's conditions joined by
+    /// " &amp; " in document order.</summary>
+    private static IEnumerable<(string When, XElement Setter)> TriggerNameSetters(XElement style) =>
         style.Elements()
             .Where(child => child.Name.LocalName == "Style.Triggers")
-            .SelectMany(triggers => triggers.Descendants())
-            .Where(element => element.Name.LocalName == "Setter"
-                && (string?)element.Attribute("Property") == "AutomationProperties.Name");
+            .SelectMany(triggers => triggers.Elements())
+            .SelectMany(trigger => trigger.Descendants()
+                .Where(element => element.Name.LocalName == "Setter"
+                    && (string?)element.Attribute("Property") == "AutomationProperties.Name")
+                .Select(setter => (When(trigger), setter)));
 
-    /// <summary>A binding's path, converter key and any other named
-    /// arguments, as authored.</summary>
-    internal sealed record BindingText(string Path, string? Converter, IReadOnlyList<string> Extras)
+    private static string When(XElement trigger)
+    {
+        IEnumerable<XElement> conditions = trigger.Name.LocalName is "MultiDataTrigger" or "MultiTrigger"
+            ? trigger.Elements()
+                .Where(child => child.Name.LocalName.EndsWith(".Conditions", StringComparison.Ordinal))
+                .SelectMany(child => child.Elements())
+            : [trigger];
+        return string.Join(" & ", conditions.Select(condition =>
+            ((string?)condition.Attribute("Binding") is { } binding
+                ? ParseBindingMarkup(binding)?.Path ?? binding
+                : (string?)condition.Attribute("Property") ?? "?")
+            + "=" + ((string?)condition.Attribute("Value") ?? "?")));
+    }
+
+    /// <summary>A binding's path, converter key, StringFormat (unquoted,
+    /// as authored) and the names of its other arguments.</summary>
+    internal sealed record BindingText(string Path, string? Converter, IReadOnlyList<string> Extras, string? Format = null)
     {
         public override string ToString() =>
             $"{{Binding {(Path.Length == 0 ? "(the item)" : Path)}"
@@ -494,7 +545,7 @@ public sealed class ItemContainerNameCensus
                 && attribute.Name.LocalName is not ("Path" or "Converter"))
             .Select(attribute => attribute.Name.LocalName)
             .ToArray();
-        return new BindingText(path, converter, extras);
+        return new BindingText(path, converter, extras, (string?)element.Attribute("StringFormat"));
     }
 
     private static string SetterValueText(XElement setter) =>
@@ -515,6 +566,7 @@ public sealed class ItemContainerNameCensus
         string body = text["{Binding".Length..^1].Trim();
         string path = string.Empty;
         string? converter = null;
+        string? format = null;
         var extras = new List<string>();
         int depth = 0;
         int start = 0;
@@ -569,12 +621,18 @@ public sealed class ItemContainerNameCensus
                 case "Converter":
                     converter = ResourceKey(argument) ?? argument;
                     break;
+                case "StringFormat":
+                    format = argument.Length >= 2 && argument[0] == '\'' && argument[^1] == '\''
+                        ? argument[1..^1]
+                        : argument;
+                    extras.Add(key);
+                    break;
                 default:
                     extras.Add(key);
                     break;
             }
         }
-        return new BindingText(path, converter, extras);
+        return new BindingText(path, converter, extras, format);
     }
 
     // ---------------------------------------------------------------- code
@@ -855,17 +913,25 @@ public sealed class ItemContainerNameCensus
             _ => false,
         };
 
-    /// <summary>The <c>rows</c> argument: named, else the second positional.</summary>
-    private static ExpressionSyntax? RowsArgument(InvocationExpressionSyntax invocation)
+    /// <summary>The argument an invocation passes for
+    /// <paramref name="parameter"/>: named, else in that parameter's
+    /// position (the name delegate is a required parameter now, which a
+    /// caller may pass positionally).</summary>
+    private static ArgumentSyntax? ArgumentFor(
+        InvocationExpressionSyntax invocation, IMethodSymbol method, string parameter)
     {
         SeparatedSyntaxList<ArgumentSyntax> arguments = invocation.ArgumentList.Arguments;
         ArgumentSyntax? named = arguments.FirstOrDefault(
-            argument => argument.NameColon?.Name.Identifier.ValueText == "rows");
+            argument => argument.NameColon?.Name.Identifier.ValueText == parameter);
         if (named is not null)
         {
-            return named.Expression;
+            return named;
         }
-        return arguments.Count > 1 && arguments[1].NameColon is null ? arguments[1].Expression : null;
+        int position = method.Parameters.IndexOf(
+            method.Parameters.FirstOrDefault(candidate => candidate.Name == parameter)!);
+        return position >= 0 && position < arguments.Count && arguments[position].NameColon is null
+            ? arguments[position]
+            : null;
     }
 
     // ---------------------------------------------------------------- files

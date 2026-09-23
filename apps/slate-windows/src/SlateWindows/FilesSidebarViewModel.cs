@@ -37,6 +37,7 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     private ObservableCollection<FileTreeNodeViewModel> _children = [];
     private FileTreeChildLoadState _childLoadState;
     private object? _treeIdentity;
+    private bool _nameIsShared;
 
     private FileTreeNodeViewModel(string loadingLabel)
     {
@@ -112,7 +113,28 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     public string KindLabel => IsGroupHeader ? "group" : IsDirectory ? "folder" : "file";
     public string AutomationName => IsPlaceholder
         ? Name
-        : $"{DisplayName}, {KindLabel}{(HasFolderNote ? ", has folder note" : string.Empty)}";
+        : NameIsShared ? $"{BaseAutomationName}, {Path}" : BaseAutomationName;
+
+    /// <summary>The name before any list is considered.</summary>
+    internal string BaseAutomationName =>
+        $"{DisplayName}, {KindLabel}{(HasFolderNote ? ", has folder note" : string.Empty)}";
+
+    /// <summary>R-4 (#1246; codex PR 3 round 2): set by a FLAT list of
+    /// nodes — the filter results — where another row carries this row's
+    /// name; the row then also speaks the path its second line shows.
+    /// Tree rows are never marked.</summary>
+    internal bool NameIsShared
+    {
+        get => _nameIsShared;
+        set
+        {
+            if (_nameIsShared != value)
+            {
+                _nameIsShared = value;
+                OnPropertyChanged(nameof(AutomationName));
+            }
+        }
+    }
     public string MetadataText
     {
         get
@@ -331,10 +353,69 @@ internal sealed class SidebarTagViewModel
 }
 
 internal sealed record SidebarShortcutViewModel(string Kind, string Path)
+    : System.ComponentModel.INotifyPropertyChanged
 {
+    private bool _nameIsShared;
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
     public string DisplayName => System.IO.Path.GetFileName(Path.TrimEnd('/'));
     public string KindLabel => Kind == "folder" ? "folder" : "file";
-    public string AutomationName => $"{DisplayName}, {KindLabel} shortcut";
+
+    /// <summary>The name before its list is considered.</summary>
+    internal string BaseAutomationName => $"{DisplayName}, {KindLabel} shortcut";
+
+    /// <summary>R-4 (#1246; codex PR 3 round 2): the shortcut list is flat,
+    /// so two shortcuts to one file name in two folders read alike — each
+    /// such shortcut also speaks its path.</summary>
+    public string AutomationName => NameIsShared ? $"{BaseAutomationName}, {Path}" : BaseAutomationName;
+
+    /// <summary>Set by the shortcut list (<see cref="SharedNames"/>).</summary>
+    internal bool NameIsShared
+    {
+        get => _nameIsShared;
+        set
+        {
+            if (_nameIsShared != value)
+            {
+                _nameIsShared = value;
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(AutomationName)));
+            }
+        }
+    }
+
+    /// <summary>A shortcut IS its kind and path: the list's presentation
+    /// state and subscribers are no part of its equality.</summary>
+    public bool Equals(SidebarShortcutViewModel? other) =>
+        other is not null
+        && string.Equals(Kind, other.Kind, StringComparison.Ordinal)
+        && string.Equals(Path, other.Path, StringComparison.Ordinal);
+
+    public override int GetHashCode() => HashCode.Combine(Kind, Path);
+}
+
+/// <summary>
+/// W7-7 PR 3 (#1246, R-4; codex PR 3 round 2): a flat list's rows are told
+/// apart by name. A row whose name another row of the same list carries —
+/// ignoring case, as speech does — is marked, and a marked row also speaks
+/// the path it shows (two notes called "note.md" in two folders, a filter
+/// result and a shortcut alike).
+/// </summary>
+internal static class SharedNames
+{
+    internal static void Mark<T>(IReadOnlyList<T> rows, Func<T, string> name, Action<T, bool> setShared)
+    {
+        var carriers = new Dictionary<string, int>(StringComparer.CurrentCultureIgnoreCase);
+        foreach (T row in rows)
+        {
+            string key = name(row);
+            carriers[key] = carriers.GetValueOrDefault(key) + 1;
+        }
+        foreach (T row in rows)
+        {
+            setShared(row, carriers[name(row)] > 1);
+        }
+    }
 }
 
 /// <summary>
@@ -402,6 +483,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         _runImportWorker = importWorker ?? ((work, token) => Task.Run(work, token));
         _runMoveToWorker = moveToWorker ?? ((work, token) => Task.Run(work, token));
         _vaultRoot = vaultRoot;
+        // R-4 (#1246; codex PR 3 round 2): every change to the shortcuts —
+        // an add, a slot replaced, a removal, a reload — re-tells apart the
+        // ones that share a name.
+        Shortcuts.CollectionChanged += (_, _) => SharedNames.Mark(
+            Shortcuts, shortcut => shortcut.BaseAutomationName, (shortcut, shared) => shortcut.NameIsShared = shared);
         if (vaultRoot is not null)
         {
             _settingsStore = new SidebarSettingsStore(vaultRoot);
