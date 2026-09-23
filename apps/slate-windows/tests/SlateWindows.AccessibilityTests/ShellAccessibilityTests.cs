@@ -8434,7 +8434,9 @@ public sealed partial class ShellAccessibilityTests
     /// and card peers through the real UIA bridge, the declared Value
     /// pattern, a rectangle that CHANGES after Ctrl+= (the stale-frame
     /// classic, asserted at the level it is true), and axe over peered
-    /// elements only (the recorded trap).</summary>
+    /// elements only (the recorded trap). W7-7 R-12 (#1255) adds the
+    /// board's ARROWS: Down, Up, Right and Left each move the seat, and
+    /// each leaves the selected card's peer on screen inside the board.</summary>
     [Fact]
     [Trait("gate", "W-C")]
     public void CanvasSurfaces_VisualBoardPeersAndZoom_AreClean()
@@ -8536,6 +8538,66 @@ public sealed partial class ShellAccessibilityTests
                 "the selected card does not report IsSelected.");
 
             AssertAxeClean(process, "canvas-visual");
+
+            // W7-7 R-12 (#1255; the NVDA pass's F12): the board's ARROWS
+            // move the seat — Down/Up the reading-order move (contract 34
+            // D15), Right/Left the connections (owner decision OD-5) — and
+            // every move brings its seat INTO VIEW (the presenter's reveal,
+            // D4). The pass heard "End of canvas." for Down and "Start of
+            // canvas." for Up with the seat never moving, and nothing at all
+            // for Right and Left. Cards are reached through the board's
+            // Selection pattern rather than its child list: a peer is
+            // identity-stable (D3) and reads its rectangle live, while the
+            // list can still be the one the board's first, unlaid-out
+            // install produced.
+            AutomationElement question = Retry.WhileNull(
+                () => board.FindAllChildren(
+                        finder => finder.ByControlType(ControlType.Button))
+                    .FirstOrDefault(card => card.Properties.Name.Value == "Core question"),
+                TimeSpan.FromSeconds(10)).Result
+                ?? throw new Xunit.Sdk.XunitException(
+                    "the \"Core question\" card peer never materialized.");
+            question.Patterns.SelectionItem.Pattern.Select();
+            Assert.True(
+                Retry.WhileFalse(
+                    () => question.Patterns.SelectionItem.Pattern.IsSelected.Value,
+                    TimeSpan.FromSeconds(10)).Success,
+                "premise: \"Core question\" never took the seat through its peer.");
+            ReassertForegroundForAChord(window);
+            board.Focus();
+            AssertEventuallyFocused(board, "the visual board never took the keys for its arrows");
+
+            // Down and Up, each leaving its seat on the board; the round trip
+            // also hands this journey the "Evidence so far" peer.
+            PressKey(VirtualKeyShort.DOWN);
+            AssertTheSeatIsOnTheBoard(board, "Evidence so far", "DOWN");
+            AutomationElement evidence = SeatedCard(board)
+                ?? throw new Xunit.Sdk.XunitException("the board reports no seat after Down.");
+            PressKey(VirtualKeyShort.UP);
+            AssertTheSeatIsOnTheBoard(board, "Core question", "UP");
+
+            // Zoom to the seat (Shift+2): "Core question" centred and large,
+            // so its neighbours start OUTSIDE the board — the premise the two
+            // measured blocks below need.
+            System.Drawing.Rectangle beforeZoom = CardRectangle(question);
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_2);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => CardRectangle(question) != beforeZoom,
+                    TimeSpan.FromSeconds(10)),
+                "premise: Shift+2 never zoomed the board to the seat.");
+
+            // A MOVE whose destination starts outside the board: Down, to
+            // "Evidence so far".
+            AssertAnArrowRevealsAnOffBoardDestination(
+                board, VirtualKeyShort.DOWN, question, evidence, "the move (Down)");
+            // A FOLLOW whose destination starts outside the board: Left, back
+            // along the "supports" connection to "Core question".
+            AssertAnArrowRevealsAnOffBoardDestination(
+                board, VirtualKeyShort.LEFT, evidence, question, "the follow (Left)");
+            // Right follows "supports" forward again.
+            PressKey(VirtualKeyShort.RIGHT);
+            AssertTheSeatIsOnTheBoard(board, "Evidence so far", "RIGHT");
         }
         finally
         {
@@ -8549,6 +8611,379 @@ public sealed partial class ShellAccessibilityTests
             {
             }
         }
+    }
+
+    /// <summary>
+    /// W7-7 R-12 (#1255): after a board move the SEATED card is the
+    /// expected card and lies on screen inside the board — a non-empty
+    /// rectangle within the renderer's own. Polled, because the peer reads
+    /// the installed state and the install trails the key.
+    /// </summary>
+    private static void AssertTheSeatIsOnTheBoard(
+        AutomationElement board, string expected, string leg)
+    {
+        string seen = "(nothing)";
+        System.Drawing.Rectangle card = default;
+        bool onTheBoard = SpinWait.SpinUntil(
+            () =>
+            {
+                AutomationElement? seat = SeatedCard(board);
+                seen = seat?.Properties.Name.ValueOrDefault ?? "(nothing)";
+                card = seat is null ? default : CardRectangle(seat);
+                return seen == expected && IsOnTheBoard(board, card);
+            },
+            TimeSpan.FromSeconds(10));
+        Assert.True(
+            onTheBoard,
+            $"{leg}: the seat is '{seen}' at {card}, not '{expected}' on screen inside the "
+            + $"board at {board.Properties.BoundingRectangle.ValueOrDefault} — the arrow did "
+            + "not move the seat, or the move never revealed it (R-12, D4).");
+    }
+
+    /// <summary>
+    /// W7-7 R-12 (#1255), the reveal's discriminating witness: one board
+    /// arrow whose destination STARTS OUTSIDE the board. The premise is
+    /// asserted — zoomed in (centre-preserving, at most three steps) until
+    /// the destination's rectangle is not inside the board — and after the
+    /// press, BOTH that the viewport changed (the origin card's rectangle
+    /// moved while the zoom did not) and that the destination now lies
+    /// inside the board. A reveal that did nothing fails both; a
+    /// destination that started in view would prove nothing, so it fails
+    /// the premise instead of passing.
+    /// </summary>
+    private static void AssertAnArrowRevealsAnOffBoardDestination(
+        AutomationElement board,
+        VirtualKeyShort key,
+        AutomationElement origin,
+        AutomationElement destination,
+        string leg)
+    {
+        string arrival = destination.Properties.Name.Value;
+        for (int step = 0; step < 3 && IsOnTheBoard(board, CardRectangle(destination)); step++)
+        {
+            System.Drawing.Rectangle beforeStep = CardRectangle(origin);
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_PLUS);
+            Wait.UntilInputIsProcessed();
+            _ = SpinWait.SpinUntil(
+                () => CardRectangle(origin) != beforeStep, TimeSpan.FromSeconds(5));
+        }
+        System.Drawing.Rectangle destinationBefore = CardRectangle(destination);
+        Assert.False(
+            IsOnTheBoard(board, destinationBefore),
+            $"premise ({leg}): \"{arrival}\" already lay inside the board at "
+            + $"{destinationBefore}, so revealing it would prove nothing.");
+        System.Drawing.Rectangle originBefore = CardRectangle(origin);
+
+        PressKey(key);
+        AssertTheSeatIsOnTheBoard(board, arrival, leg);
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => CardRectangle(origin) != originBefore, TimeSpan.FromSeconds(10)),
+            $"{leg}: the viewport never moved — \"{origin.Properties.Name.ValueOrDefault}\" "
+            + $"still sits at {originBefore} — so nothing panned \"{arrival}\" in (D4).");
+    }
+
+    /// <summary>The seated card's peer, through the board's Selection
+    /// pattern — which answers for the seat whether or not the board's
+    /// cached child list holds it, a peer being identity-stable (D3).</summary>
+    private static AutomationElement? SeatedCard(AutomationElement board)
+    {
+        try
+        {
+            return board.Patterns.Selection.Pattern.Selection.Value.FirstOrDefault();
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A card peer's rectangle, read live from the installed state
+    /// — empty while the card is not materialized.</summary>
+    private static System.Drawing.Rectangle CardRectangle(AutomationElement card)
+    {
+        try
+        {
+            return card.Properties.BoundingRectangle.ValueOrDefault;
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            return System.Drawing.Rectangle.Empty;
+        }
+    }
+
+    /// <summary>Whether a card's rectangle is non-empty and inside the
+    /// board's. Two pixels of slack: a reveal lands an edge ON the board's,
+    /// and the two rectangles round separately.</summary>
+    private static bool IsOnTheBoard(AutomationElement board, System.Drawing.Rectangle card)
+    {
+        try
+        {
+            System.Drawing.Rectangle bounds = board.Properties.BoundingRectangle.Value;
+            bounds.Inflate(2, 2);
+            return !card.IsEmpty && bounds.Contains(card);
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// W7-7 R-12 (#1256; owner decision OD-3; the NVDA pass's F13): the
+    /// KEYBOARD opens the CARD's menu — Shift+F10 on a FRESH outline row
+    /// (never asked for a menu, and not the first) and the Applications
+    /// key on the visual board — and never the workspace tab's (Duplicate
+    /// Tab … Close Pane). The row's menu used to be assigned inside the
+    /// opening event, too late for the request that asked, and the board
+    /// had none, so both requests climbed to the tab's.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The witness DISCRIMINATES targeting: the labels are the same on
+    /// every card, so a menu built for the wrong card would pass a label
+    /// check. Toggle Mark is invoked from each menu, and exactly the
+    /// focused row, then exactly the seated card, gains its mark — the
+    /// first card, and the other card, untouched.
+    /// </para>
+    /// <para>
+    /// A ContextMenu is its own popup HWND, so it is read from the desktop,
+    /// filtered to this process (the suite's popup discipline), and its row
+    /// is INVOKED through the pattern rather than focused: the CI desktop
+    /// refuses a menu the keys (contract 34 E17's environment fact), while
+    /// the popup still opens and its rows still act — the table journey's
+    /// Menu-key leg and the diagram's.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    [Trait("gate", "W-C")]
+    public void Canvas_ContextMenus_OpenTheCardMenuByKeyboard()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-canvas-menus-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Canvas Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.Copy(
+            Path.Combine(DemoVaultCanvasDirectory(), "sample.canvas"),
+            Path.Combine(vaultRoot, "sample.canvas"));
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-canvas-menus-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!HasInteractiveDesktop(process, "Canvas context menus"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            window.Focus();
+
+            OpenCanvasFromTree(window, automation, "sample");
+            AutomationElement tree = WaitForElement(
+                window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
+            AutomationElement[] rows = WaitForTreeItems(automation, tree, 5);
+
+            // ---- The outline: Shift+F10 on a fresh row that is not the first.
+            AutomationElement firstRow = rows[0];
+            AutomationElement evidenceRow = rows.FirstOrDefault(row => row.Properties.Name.Value
+                    .StartsWith("Text card \"Evidence so far\"", StringComparison.Ordinal))
+                ?? throw new Xunit.Sdk.XunitException(
+                    "the \"Evidence so far\" row is absent from the outline.");
+            Assert.NotEqual(firstRow.Properties.Name.Value, evidenceRow.Properties.Name.Value);
+            ReassertForegroundForAChord(window);
+            evidenceRow.Focus();
+            AssertEventuallyFocused(evidenceRow, "the fresh outline row never took keyboard focus");
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F10);
+            AssertTheCardMenuOpened(
+                WaitForCardOrTabMenu(automation, process.Id), "Shift+F10 on a fresh outline row");
+            InvokeCardMenuRow(automation, process.Id, "Toggle Mark");
+            string[] marked = [];
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        marked = MarkedRows(automation, tree);
+                        return marked.SequenceEqual(["Text card \"Evidence so far\""]);
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "Toggle Mark from the fresh row's menu marked [" + string.Join(", ", marked)
+                + "], not exactly the row it opened on.");
+
+            // ---- The board: the Applications key on a seated card that is not the first.
+            AutomationElement visualChoice = WaitForElement(
+                window, "CanvasShowVisual", TimeSpan.FromSeconds(10));
+            visualChoice.AsRadioButton().IsChecked = true;
+            AutomationElement board = WaitForElement(
+                window, "CanvasVisualBoard", TimeSpan.FromSeconds(20));
+            ReassertForegroundForAChord(window);
+            board.Focus();
+            AssertEventuallyFocused(board, "the visual board never took the keys for its menu");
+            // The seat the outline leg left is "Evidence so far"; Down reads
+            // on to "canvas research" (R-12's reading-order move), which is
+            // not the first card. Its mark is read back from the OUTLINE
+            // below rather than from the card's peer: the board's peer tree
+            // is not refreshed after an install, so a peer for a card outside
+            // the board's first child list cannot be reached through UIA.
+            PressKey(VirtualKeyShort.DOWN);
+            PressKey(VirtualKeyShort.APPS);
+            AssertTheCardMenuOpened(
+                WaitForCardOrTabMenu(automation, process.Id), "the Applications key on the board");
+            InvokeCardMenuRow(automation, process.Id, "Toggle Mark");
+
+            // The outline reads every card's mark: exactly the focused row's
+            // and the seated card's — never the first card, never another.
+            WaitForElement(window, "CanvasShowOutline", TimeSpan.FromSeconds(10))
+                .AsRadioButton().IsChecked = true;
+            AutomationElement outline = WaitForElement(
+                window, "CanvasOutlineTree", TimeSpan.FromSeconds(20));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        marked = MarkedRows(automation, outline);
+                        return marked.SequenceEqual(
+                            ["File card \"canvas research\"", "Text card \"Evidence so far\""]);
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the marks are [" + string.Join(", ", marked) + "], not exactly the focused row's "
+                + "and the seated card's: a keyboard menu acted on a card it was not opened for.");
+        }
+        finally
+        {
+            process?.Kill(entireProcessTree: true);
+            process?.Dispose();
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    /// <summary>The outline rows whose status carries the mark, by name,
+    /// in ordinal order.</summary>
+    private static string[] MarkedRows(UIA3Automation automation, AutomationElement outline)
+    {
+        try
+        {
+            return [.. outline
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .Where(row => (row.Properties.ItemStatus.ValueOrDefault ?? string.Empty)
+                    .Contains("marked", StringComparison.Ordinal))
+                .Select(row => row.Properties.Name.ValueOrDefault ?? string.Empty)
+                .Order(StringComparer.Ordinal)];
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// The item names of the context menu a keyboard request opened in
+    /// THIS process — the card's, whose first row is "Open", or (the F13
+    /// defect) the workspace tab's, whose first is "Duplicate Tab" — waited
+    /// for. Returning the tab's too is the point: a request that climbed to
+    /// the wrong menu fails on what it opened, not on a timeout. Searched
+    /// from the DESKTOP, filtered to this process, because a ContextMenu is
+    /// its own popup HWND (<see cref="FindRowActionItems"/>'s discipline).
+    /// </summary>
+    private static string[] WaitForCardOrTabMenu(UIA3Automation automation, int processId)
+    {
+        string[] names = [];
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    names = OpenCardOrTabMenu(automation, processId);
+                    return names.Length > 0;
+                },
+                TimeSpan.FromSeconds(15)),
+            "the keyboard request opened no context menu at all");
+        return names;
+    }
+
+    private static string[] OpenCardOrTabMenu(UIA3Automation automation, int processId)
+    {
+        try
+        {
+            foreach (AutomationElement menu in automation.GetDesktop()
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.Menu)
+                        .And(automation.ConditionFactory.ByProcessId(processId))))
+            {
+                string[] names = [.. menu
+                    .FindAllDescendants(
+                        automation.ConditionFactory.ByControlType(ControlType.MenuItem))
+                    .Select(item => item.Properties.Name.ValueOrDefault ?? string.Empty)];
+                if (names.Contains("Open") || names.Contains("Duplicate Tab"))
+                {
+                    return names;
+                }
+            }
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+        }
+        return [];
+    }
+
+    /// <summary>R-12: the menu that opened is the CARD's — its rows include
+    /// Toggle Mark and Delete — and not the workspace tab's.</summary>
+    private static void AssertTheCardMenuOpened(string[] names, string leg)
+    {
+        string opened = string.Join(", ", names);
+        Assert.False(
+            names.Contains("Duplicate Tab"),
+            $"{leg} opened the workspace TAB's menu [{opened}], not the card's (F13).");
+        Assert.True(
+            names.Contains("Toggle Mark") && names.Contains("Delete"),
+            $"{leg} opened a menu without the card's rows: [{opened}].");
+    }
+
+    /// <summary>Invoke one row of the open card menu through its pattern —
+    /// never by focus, which the CI desktop refuses a menu — and wait for
+    /// the menu to close behind it.</summary>
+    private static void InvokeCardMenuRow(UIA3Automation automation, int processId, string name)
+    {
+        AutomationElement? row = null;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    row = FindRowActionItems(automation, processId).FirstOrDefault(item =>
+                        string.Equals(item.Properties.Name.ValueOrDefault, name, StringComparison.Ordinal));
+                    return row is not null;
+                },
+                TimeSpan.FromSeconds(10)),
+            $"the card menu has no \"{name}\" row to invoke");
+        row!.Patterns.Invoke.Pattern.Invoke();
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => FindRowActionItems(automation, processId).Length == 0,
+                TimeSpan.FromSeconds(10)),
+            $"the card menu did not close after \"{name}\"");
     }
 
     private static AutomationElement[] WaitForRowActionItems(
