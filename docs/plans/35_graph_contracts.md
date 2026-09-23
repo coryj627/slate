@@ -5143,7 +5143,12 @@ and its title, and its own comment says runtime admission is the host's
 (`graph_queries.rs:806–819`, IGD-23). Invoke, SelectionItem,
 ExpandCollapse and ScrollItem on the DATA peer of every row, top-level
 and nested; Alt+Up and Alt+Down between the groups; Menu and Shift+F10
-for the actions.
+for the actions. **Amended by the owner on 2026-09-23 (#1257, W7-7
+R-13):** a file-backed row's Windows hint composes a second sentence
+for Ctrl+Enter from a chord row, "Control Enter opens it in a new
+tab.", its key name the `windows.connections.openInNewTab` row's
+spoken column through `NavigationHelp` (contract 39 N-2); the first
+sentence stays T16 byte for byte, and a ghost's hint stays T15.
 
 **B-10 — The announcements: a generative rule, pinned by a model; the
 graph family's projection; worked rows.** `LeafPanelShown{title}`
