@@ -206,7 +206,7 @@ public sealed partial class W77RemediationDocsCensus
     // then the bold delimiter, followed by whitespace — with no other
     // asterisk before it, so an interior bold span cannot pose as the
     // closing delimiter (codex rounds 6 and 7).
-    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*]*?\(PR (\d+)[,;)][^\n*]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*]*?\(PR (\d+)[^)\n*]*\)[^\n*]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
     private static partial Regex ContractHeading();
 
     // Anything that starts a line like a contract definition, however it
@@ -215,9 +215,10 @@ public sealed partial class W77RemediationDocsCensus
     [GeneratedRegex(@"^[ \t]{0,3}\*\*[ \t]*R\p{Pd}\d+", RegexOptions.Multiline)]
     private static partial Regex LooseContractHeading();
 
-    // Every canonical level-two heading terminates the previous section;
-    // only the `## n. PR m · …` shape carries a PR number.
-    [GeneratedRegex(@"^## (?:\d+\. PR (\d+) · )?[^\n]*", RegexOptions.Multiline)]
+    // Every level-two heading, however indented or spaced (CommonMark allows
+    // up to three leading spaces), terminates the previous section; only the
+    // canonical `## n. PR m · …` shape carries a PR number.
+    [GeneratedRegex(@"^[ \t]{0,3}##[ \t]+(?:(?<=^## )\d+\. PR (\d+) · )?[^\n]*", RegexOptions.Multiline)]
     private static partial Regex SectionHeading();
 
     // Anything that starts a heading like a PR section, however it is
