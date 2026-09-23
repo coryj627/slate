@@ -165,9 +165,14 @@ public sealed partial class W77RemediationDocsCensus
     }
 
     // Every token counts — a duplicated issue in a heading is a drift too
-    // (codex round 20), so no Distinct() here.
+    // (codex round 20), so no Distinct() here — and an issue-shaped
+    // substring the grammar does not fully consume (`#1244x` beside a valid
+    // `#1244`) makes the whole heading drift instead of vanishing (codex
+    // round 22): the sentinel never equals an expected set.
     private static int[] IssueTokens(string headingLine) =>
-        IssueToken().Matches(headingLine).Select(m => int.Parse(m.Groups[1].Value)).Order().ToArray();
+        MalformedIssueToken().IsMatch(headingLine)
+            ? [-1]
+            : IssueToken().Matches(headingLine).Select(m => int.Parse(m.Groups[1].Value)).Order().ToArray();
 
     [Fact]
     public void TheSpecHasOneSectionPerFeaturePrAndTheRecordOneSectionPerPr()
@@ -307,9 +312,10 @@ public sealed partial class W77RemediationDocsCensus
     // No `#issue` token anywhere outside the owner clause's canonical list
     // — not in its suffix, not in the title, not after the clause — so an
     // extra issue cannot hide anywhere in the heading (codex rounds 19–20).
-    // Every issue token ends at an identifier boundary, so `#1244x` is a
-    // malformed heading rather than issue 1244 (codex round 21).
-    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*#]*?\(PR (\d+), (#\d+(?:, #\d+)*)(?![A-Za-z0-9_])[^)\n*#]*\)[^\n*#]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
+    // Every issue token ends at a Unicode identifier boundary, so `#1244x`
+    // and `#1244é` are malformed headings rather than issue 1244 (codex
+    // rounds 21–22).
+    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*#]*?\(PR (\d+), (#\d+(?:, #\d+)*)(?!\w)[^)\n*#]*\)[^\n*#]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
     private static partial Regex ContractHeading();
 
     // Anything that starts a line like a contract definition, however it
@@ -335,10 +341,16 @@ public sealed partial class W77RemediationDocsCensus
     [GeneratedRegex(@"^### PR (\d+) — [^\n]*", RegexOptions.Multiline)]
     private static partial Regex ReviewRecordHeading();
 
-    // A token is `#` plus digits up to an identifier boundary: `#1244x`
-    // yields no token, so a heading carrying it drifts (codex round 21).
-    [GeneratedRegex(@"#(\d+)(?![A-Za-z0-9_])")]
+    // A token is `#` plus digits up to a Unicode identifier boundary
+    // (codex rounds 21–22: `#1244x` and `#1244é` are both malformed).
+    [GeneratedRegex(@"#(\d+)(?!\w)")]
     private static partial Regex IssueToken();
+
+    // An issue-shaped substring running into an identifier character —
+    // a non-digit word character, so the digits cannot backtrack into it
+    // and turn `#1244` itself into a "malformed" token.
+    [GeneratedRegex(@"#\d+[^\W\d]")]
+    private static partial Regex MalformedIssueToken();
 
     // Anything that starts a heading like a review record, however it is
     // indented, spaced or punctuated after the PR number.
