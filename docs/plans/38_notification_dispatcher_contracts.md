@@ -27,6 +27,25 @@ index.; Indexed I of T file/files.; Scan complete. N file/files indexed.
 Core owns singular/plural grammar. Windows and Mac construct the same
 events and render through the existing funnel. Cancelled/failed scan
 progress remains silent; existing failure UI is separate.
+Amended by W7-7 PR 7 (#1252; contract R-9 in
+`40_nvda_matrix_remediation_contracts.md`; OD-6): VaultScanFinished is
+(files_seen, files_changed) and its copy is Scan complete. N file/files,
+M new or changed. — files_changed is core's hash-authoritative count
+(new rows plus rows whose committed content hash differs), never
+files_indexed, which counts reads, so a touched-but-unchanged vault says
+"0 new or changed". Both hosts pass both counts from the report (a
+cross-host signature change; the Mac post site and its distinct-count
+fact move with it), and the Windows status line reads Scan finished: N
+files, M new or changed. A rescan of the open vault (Windows: Files
+Sidebar Refresh and the foreground rescan) never speaks this family: it
+posts exactly one Medium completion sentence, VaultRescanFinished(reason,
+changed, removed) — Files refreshed. C new or changed, R removed. / Files
+refreshed. No changes. — or, when the walk was partial, any file or delta
+page failed, or the scan call threw, VaultRescanIncomplete(errors) —
+Files refreshed with errors. E error/errors; results may be incomplete.
+An explicit Refresh always speaks; a foreground rescan only when
+something changed or the scan was incomplete. Mac has no rescan trigger
+in this wave (the two events are recorded Windows-only designations).
 
 **D-4 — Host timing remains host timing.** The injected-clock minimum
 interval suppresses only progress. Start/finish always fire and advance the
@@ -637,6 +656,8 @@ Canvas and Graph retain their separate structural-key and journey censuses.
 | `VaultClosedAllSaved` | posted | `AppState.swift#resolveVaultCloseSaveAll@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.TryCloseWorkspace@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultClosedChangesDiscarded` | posted | `AppState.swift#resolveVaultCloseDiscardAll@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.TryCloseWorkspace@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultOpened` | posted | `AppState.swift#announceDirectVaultSwitch@1`; `MainSplitView.swift#splitViewWithSheets@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.OpenVaultAsync@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
+| `VaultRescanFinished` | posted | — | `VaultLifecycleViewModel.Rescan.cs#VaultLifecycleViewModel.RunOneRescanAsync@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Mac recorded: OD-1 / W7-7 PR 7 (#1252, R-9): with no live watcher, Windows reconciles files changed outside Slate through Files Sidebar Refresh and the foreground rescan; Mac has no rescan trigger in this wave (the spec's mac non-goal; OD-6 carves out only VaultScanFinished). [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
+| `VaultRescanIncomplete` | posted | — | `VaultLifecycleViewModel.Rescan.cs#VaultLifecycleViewModel.PostRescanIncomplete@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Mac recorded: OD-1 / W7-7 PR 7 (#1252, R-9): with no live watcher, Windows reconciles files changed outside Slate through Files Sidebar Refresh and the foreground rescan; Mac has no rescan trigger in this wave (the spec's mac non-goal; OD-6 carves out only VaultScanFinished). [38_notification_dispatcher_contracts](../../docs/plans/38_notification_dispatcher_contracts.md) |
 | `VaultScanFinished` | posted | `AppState.swift#handleScanProgress@1` | `ScanAnnouncementGate.cs#ScanAnnouncementGate.Finished@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultScanProgress` | posted | `AppState.swift#handleScanProgress@1` | `ScanAnnouncementGate.cs#ScanAnnouncementGate.FileIndexed@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultScanStarted` | posted | `AppState.swift#handleScanProgress@1` | `ScanAnnouncementGate.cs#ScanAnnouncementGate.Started@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |

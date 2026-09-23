@@ -257,6 +257,16 @@
         "reason": "W7-7 (#1251): the Windows citation details sheet opens on Close, where its name is not read, so a key no bibliography holds announces as unresolved, in mac CitationPopover's own label sentence moved into core. Mac carries that sentence as the popover's accessibility label and moves VoiceOver focus to the unresolved notice on appear; Mac constructs no such event in this wave and its owner decides. Current Windows evidence is hosted (`OpeningCitationDetailsAnnouncesTheExpandedCitation`); no journey opens an unresolved key's details, and none observes its delivery until PR 1's desktop listener (#1244).",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
+      },
+      "VaultRescanFinished": {
+        "reason": "OD-1 / W7-7 PR 7 (#1252, R-9): with no live watcher, Windows reconciles files changed outside Slate through Files Sidebar Refresh and the foreground rescan; Mac has no rescan trigger in this wave (the spec's mac non-goal; OD-6 carves out only VaultScanFinished).",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "VaultRescanIncomplete": {
+        "reason": "OD-1 / W7-7 PR 7 (#1252, R-9): with no live watcher, Windows reconciles files changed outside Slate through Files Sidebar Refresh and the foreground rescan; Mac has no rescan trigger in this wave (the spec's mac non-goal; OD-6 carves out only VaultScanFinished).",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
       }
     }
   },
