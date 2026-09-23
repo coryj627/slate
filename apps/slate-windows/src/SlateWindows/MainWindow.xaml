@@ -2696,18 +2696,30 @@
                          invisible elements from the CONTROL view that hides
                          them, not these bindings. Kept for consistency with
                          Quick Open; they are redundant, not load-bearing. -->
-                    <!-- R-11 (#1254): never synchronized with the view's
-                         current item. Every query change swaps in a fresh
+                    <!-- R-11 (#1254), two settings the palette's speed and
+                         speech depend on. Never synchronized with the view's
+                         current item: every query change swaps in a fresh
                          grouped view, and a synchronized list selects that
                          view's FIRST row on the swap — the stale "Selected:
                          New Canvas" the NVDA pass heard. The view model's
                          selection is the only one; the presenter pushes it
-                         in (CommandPaletteResultsPresenter). -->
+                         in (CommandPaletteResultsPresenter). And the grouped
+                         rows virtualize: a grouped ListBox otherwise
+                         realizes EVERY row, so the first keystroke
+                         re-templated 174 of them before one could be read.
+                         Standard mode, never Recycling — recycled containers
+                         are the UIA crash class the data grid pins against
+                         (dotnet/wpf #8528) — and pixel scrolling, which
+                         grouped virtualization wants. -->
                     <local:AutomationVisibilityListBox x:Name="CommandPaletteResultsList"
                              Grid.Row="1"
                              Margin="0,8"
                              Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
                              IsSynchronizedWithCurrentItem="False"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.IsVirtualizingWhenGrouping="True"
+                             VirtualizingPanel.VirtualizationMode="Standard"
+                             VirtualizingPanel.ScrollUnit="Pixel"
                              MouseDoubleClick="CommandPaletteResults_MouseDoubleClick"
                              AutomationProperties.AutomationId="CommandPaletteResults"
                              AutomationProperties.Name="Command results">

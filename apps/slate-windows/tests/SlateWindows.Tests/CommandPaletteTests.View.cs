@@ -164,6 +164,41 @@ public sealed partial class CommandPaletteTests
         Assert.Equal(SyntheticId(last), highlighted.Id);
     });
 
+    // --- R-11: grouped rows virtualize --------------------------------------
+
+    /// <summary>
+    /// Only the rows near the viewport are realized, grouped as they are,
+    /// and a row two thousand down is realized — and its section heading
+    /// rendered — when the selection travels there.
+    /// </summary>
+    /// <remarks>
+    /// A grouped <c>ListBox</c> stops virtualizing unless
+    /// <c>VirtualizingPanel.IsVirtualizingWhenGrouping</c> says otherwise,
+    /// and then every keystroke re-templated every matching row: the NVDA
+    /// pass's first keystroke was 174 of them, with each row's segment
+    /// template, before a single one could be read.
+    /// </remarks>
+    [Fact]
+    public void GroupedRowsVirtualize() => RunSta(() =>
+    {
+        using var host = new ShippedResultsList(SyntheticCommands(2_000));
+        CommandPaletteViewModel palette = host.Palette;
+        palette.Open();
+        host.Settle();
+        Assert.Equal(2_000, palette.Rows.Count);
+
+        int realizedAtTheTop = host.RealizedContainers().Length;
+        Assert.InRange(realizedAtTheTop, 1, 150);
+        Assert.Contains(SyntheticSections[0].Title, host.RenderedHeadings());
+
+        host.ClearObservations();
+        palette.SelectLast();
+        host.Settle();
+        host.AssertShowsTheViewModelsSelection();
+        Assert.InRange(host.RealizedContainers().Length, 1, 150);
+        Assert.Contains(SyntheticSections[^1].Title, host.RenderedHeadings());
+    });
+
     // --- helpers -------------------------------------------------------------
 
     private static readonly (CommandSection Section, string Title)[] SyntheticSections =
@@ -310,6 +345,15 @@ public sealed partial class CommandPaletteTests
 
         public ListBoxItem[] RealizedContainers() => [.. Descendants<ListBoxItem>(List)];
 
+        /// <summary>The section headings the grouped list has rendered.</summary>
+        public string[] RenderedHeadings() =>
+        [
+            .. Descendants<GroupItem>(List)
+                .SelectMany(Descendants<TextBlock>)
+                .Where(text => AutomationPropertiesHeading(text))
+                .Select(text => text.Text),
+        ];
+
         public void Dispose()
         {
             List.SelectionChanged -= List_SelectionChanged;
@@ -317,6 +361,10 @@ public sealed partial class CommandPaletteTests
             _window.Close();
             _shell.Close();
         }
+
+        private static bool AutomationPropertiesHeading(TextBlock text) =>
+            System.Windows.Automation.AutomationProperties.GetHeadingLevel(text)
+                != System.Windows.Automation.AutomationHeadingLevel.None;
 
         private void List_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
