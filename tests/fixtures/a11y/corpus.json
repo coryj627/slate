@@ -170,14 +170,44 @@
     "text": "Indexed 1 of 2 files."
   },
   {
-    "event": "VaultScanFinished { files_indexed: 1 }",
+    "event": "VaultScanFinished { files_seen: 1, files_changed: 1 }",
     "priority": "medium",
-    "text": "Scan complete. 1 file indexed."
+    "text": "Scan complete. 1 file, 1 new or changed."
   },
   {
-    "event": "VaultScanFinished { files_indexed: 2 }",
+    "event": "VaultScanFinished { files_seen: 9, files_changed: 2 }",
     "priority": "medium",
-    "text": "Scan complete. 2 files indexed."
+    "text": "Scan complete. 9 files, 2 new or changed."
+  },
+  {
+    "event": "VaultScanFinished { files_seen: 2, files_changed: 0 }",
+    "priority": "medium",
+    "text": "Scan complete. 2 files, 0 new or changed."
+  },
+  {
+    "event": "VaultRescanFinished { reason: Explicit, changed: 1, removed: 0 }",
+    "priority": "medium",
+    "text": "Files refreshed. 1 new or changed, 0 removed."
+  },
+  {
+    "event": "VaultRescanFinished { reason: Explicit, changed: 0, removed: 0 }",
+    "priority": "medium",
+    "text": "Files refreshed. No changes."
+  },
+  {
+    "event": "VaultRescanFinished { reason: Foreground, changed: 2, removed: 1 }",
+    "priority": "medium",
+    "text": "Files refreshed. 2 new or changed, 1 removed."
+  },
+  {
+    "event": "VaultRescanIncomplete { errors: 1 }",
+    "priority": "medium",
+    "text": "Files refreshed with errors. 1 error; results may be incomplete."
+  },
+  {
+    "event": "VaultRescanIncomplete { errors: 3 }",
+    "priority": "medium",
+    "text": "Files refreshed with errors. 3 errors; results may be incomplete."
   },
   {
     "event": "SearchResultsSummary { count: 0 }",

@@ -570,6 +570,19 @@ pub enum CanvasFilterState {
     Active { matched: u32, total: u32 },
 }
 
+/// Why a rescan of the open vault ran (W7-7 PR 7, #1252; R-9). Hosts
+/// own the trigger and the gate — an explicit Refresh always speaks its
+/// outcome, a foreground rescan only when something changed or the scan
+/// was incomplete — and core owns the sentence, which is the same for
+/// both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RescanReason {
+    /// Files Sidebar → Refresh (the button, the menu item, the command).
+    Explicit,
+    /// The main window came back to the foreground after being away.
+    Foreground,
+}
+
 /// The shell regions F6 cycling names that carry no other event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellRegion {
@@ -667,8 +680,26 @@ pub enum A11yEvent {
         indexed: u64,
         total: u64,
     },
+    /// The open scan finished (OD-6, W7-7 PR 7 — contract 38 D-3 as
+    /// amended): both counts, `files_changed` being core's hash-
+    /// authoritative "new or changed" count and never the read count, so
+    /// a touched-but-unchanged vault says "0 new or changed".
     VaultScanFinished {
-        files_indexed: u64,
+        files_seen: u64,
+        files_changed: u64,
+    },
+    /// A rescan of the open vault reconciled what changed outside Slate
+    /// (R-9): its one completion sentence, reduced per path by core.
+    VaultRescanFinished {
+        reason: RescanReason,
+        changed: u64,
+        removed: u64,
+    },
+    /// A rescan that was partial — the walk, a per-file stat / read /
+    /// index, a delta page, or the scan call itself failed — with an
+    /// honest error count. Never "No changes".
+    VaultRescanIncomplete {
+        errors: u64,
     },
 
     // --- Links, search, embeds, headings, navigation ---
@@ -1889,9 +1920,25 @@ impl A11yEvent {
                 "Indexed {indexed} of {total} {}.",
                 plural_u64(*total, "file", "files")
             ),
-            VaultScanFinished { files_indexed } => format!(
-                "Scan complete. {files_indexed} {} indexed.",
-                plural_u64(*files_indexed, "file", "files")
+            VaultScanFinished {
+                files_seen,
+                files_changed,
+            } => format!(
+                "Scan complete. {files_seen} {}, {files_changed} new or changed.",
+                plural_u64(*files_seen, "file", "files")
+            ),
+            VaultRescanFinished {
+                changed, removed, ..
+            } => {
+                if *changed == 0 && *removed == 0 {
+                    "Files refreshed. No changes.".to_owned()
+                } else {
+                    format!("Files refreshed. {changed} new or changed, {removed} removed.")
+                }
+            }
+            VaultRescanIncomplete { errors } => format!(
+                "Files refreshed with errors. {errors} {}; results may be incomplete.",
+                plural_u64(*errors, "error", "errors")
             ),
             SearchResultsSummary { count } => match *count {
                 0 => "Search returned no results.".to_owned(),
@@ -3802,8 +3849,35 @@ pub fn corpus() -> Vec<A11yEvent> {
         VaultScanStarted { total_files: 2 },
         VaultScanProgress { indexed: 1, total: 1 },
         VaultScanProgress { indexed: 1, total: 2 },
-        VaultScanFinished { files_indexed: 1 },
-        VaultScanFinished { files_indexed: 2 },
+        VaultScanFinished {
+            files_seen: 1,
+            files_changed: 1,
+        },
+        VaultScanFinished {
+            files_seen: 9,
+            files_changed: 2,
+        },
+        VaultScanFinished {
+            files_seen: 2,
+            files_changed: 0,
+        },
+        VaultRescanFinished {
+            reason: RescanReason::Explicit,
+            changed: 1,
+            removed: 0,
+        },
+        VaultRescanFinished {
+            reason: RescanReason::Explicit,
+            changed: 0,
+            removed: 0,
+        },
+        VaultRescanFinished {
+            reason: RescanReason::Foreground,
+            changed: 2,
+            removed: 1,
+        },
+        VaultRescanIncomplete { errors: 1 },
+        VaultRescanIncomplete { errors: 3 },
         SearchResultsSummary { count: 0 },
         SearchResultsSummary { count: 1 },
         SearchResultsSummary { count: 7 },
@@ -5775,9 +5849,10 @@ mod tests {
                 ),
                 (
                     A11yEvent::VaultScanFinished {
-                        files_indexed: count,
+                        files_seen: count,
+                        files_changed: count,
                     },
-                    format!("Scan complete. {count} {noun} indexed."),
+                    format!("Scan complete. {count} {noun}, {count} new or changed."),
                 ),
             ] {
                 assert_eq!(event.priority(), Medium);
@@ -6101,6 +6176,76 @@ mod tests {
         }
     }
 
+    /// Contract 38 D-3 as amended by W7-7 PR 7 (OD-6, R-9): the open
+    /// scan speaks BOTH counts — distinct ones, so a host forwarding one
+    /// count twice is caught — and a touched-but-unchanged vault says
+    /// "0 new or changed".
+    #[test]
+    fn the_scan_finished_copy_speaks_seen_and_changed_as_two_counts() {
+        let render = |files_seen, files_changed| {
+            A11yEvent::VaultScanFinished {
+                files_seen,
+                files_changed,
+            }
+            .render()
+        };
+        assert_eq!(render(9, 2), "Scan complete. 9 files, 2 new or changed.");
+        assert_eq!(render(1, 0), "Scan complete. 1 file, 0 new or changed.");
+        assert_eq!(
+            render(120, 0),
+            "Scan complete. 120 files, 0 new or changed."
+        );
+        assert_eq!(render(0, 0), "Scan complete. 0 files, 0 new or changed.");
+    }
+
+    /// R-9: one completion sentence per rescan, the same for both
+    /// reasons (hosts own the foreground gate); "No changes" only for a
+    /// complete scan with nothing new, changed or removed — a partial one
+    /// speaks its honest error count instead.
+    #[test]
+    fn a_rescan_speaks_one_sentence_and_a_partial_one_never_says_no_changes() {
+        for reason in [RescanReason::Explicit, RescanReason::Foreground] {
+            let finished = |changed, removed| A11yEvent::VaultRescanFinished {
+                reason,
+                changed,
+                removed,
+            };
+            for (event, expected) in [
+                (finished(0, 0), "Files refreshed. No changes."),
+                (
+                    finished(1, 0),
+                    "Files refreshed. 1 new or changed, 0 removed.",
+                ),
+                (
+                    finished(0, 1),
+                    "Files refreshed. 0 new or changed, 1 removed.",
+                ),
+                (
+                    finished(5, 2),
+                    "Files refreshed. 5 new or changed, 2 removed.",
+                ),
+            ] {
+                assert_eq!(event.priority(), Medium, "{event:?}");
+                assert_eq!(event.render(), expected, "{event:?}");
+            }
+        }
+        for (errors, expected) in [
+            (
+                1,
+                "Files refreshed with errors. 1 error; results may be incomplete.",
+            ),
+            (
+                4,
+                "Files refreshed with errors. 4 errors; results may be incomplete.",
+            ),
+        ] {
+            let event = A11yEvent::VaultRescanIncomplete { errors };
+            assert_eq!(event.priority(), Medium);
+            assert_eq!(event.render(), expected);
+            assert!(!event.render().contains("No changes"));
+        }
+    }
+
     /// The full corpus golden: every representative event's exact
     /// (priority, text). THIS TABLE IS THE CONTRACT — a wording change
     /// here is a product decision (and a §W-D parity change), never a
@@ -6157,8 +6302,20 @@ mod tests {
             (Medium, "Scanning vault. 2 files to index."),
             (Medium, "Indexed 1 of 1 file."),
             (Medium, "Indexed 1 of 2 files."),
-            (Medium, "Scan complete. 1 file indexed."),
-            (Medium, "Scan complete. 2 files indexed."),
+            (Medium, "Scan complete. 1 file, 1 new or changed."),
+            (Medium, "Scan complete. 9 files, 2 new or changed."),
+            (Medium, "Scan complete. 2 files, 0 new or changed."),
+            (Medium, "Files refreshed. 1 new or changed, 0 removed."),
+            (Medium, "Files refreshed. No changes."),
+            (Medium, "Files refreshed. 2 new or changed, 1 removed."),
+            (
+                Medium,
+                "Files refreshed with errors. 1 error; results may be incomplete.",
+            ),
+            (
+                Medium,
+                "Files refreshed with errors. 3 errors; results may be incomplete.",
+            ),
             (Medium, "Search returned no results."),
             (Medium, "Search returned 1 result."),
             (Medium, "Search returned 7 results."),
@@ -7593,8 +7750,10 @@ mod tests {
         assert_eq!(
             declared_variants("A11yEvent").len(),
             // W7-7 (#1249, #1251): NoteSaveConflict and the six
-            // popover/sheet outcome events, 206 → 213.
-            213,
+            // popover/sheet outcome events, 206 → 213; W7-7 PR 7
+            // (#1252): VaultRescanFinished and VaultRescanIncomplete,
+            // 213 → 215.
+            215,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

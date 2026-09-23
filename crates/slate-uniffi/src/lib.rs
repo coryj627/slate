@@ -1299,6 +1299,67 @@ impl VaultSession {
         Ok(report.into())
     }
 
+    /// W7-7 PR 7 (#1252, R-9): rescan the OPEN vault and retain its delta
+    /// as a Pending generation (`ScanReport.delta_generation`) for the
+    /// host to reconcile through `scan_delta_page`. Refused while a
+    /// Pending generation exists — resume it first.
+    pub fn rescan_with_progress(
+        &self,
+        cancel: Arc<CancelToken>,
+        listener: Arc<dyn ScanProgressListener>,
+    ) -> Result<ScanReport, VaultError> {
+        let adapter: Arc<dyn core::ScanProgressListener> =
+            Arc::new(ScanProgressListenerAdapter { foreign: listener });
+        let report = self
+            .inner
+            .rescan_with_progress(&cancel.inner, Some(adapter))?;
+        Ok(report.into())
+    }
+
+    /// The listener-less rescan (a foreground rescan shows no progress).
+    pub fn rescan(&self, cancel: Arc<CancelToken>) -> Result<ScanReport, VaultError> {
+        Ok(self.inner.rescan_with_progress(&cancel.inner, None)?.into())
+    }
+
+    /// The Pending delta generation and the cursor its effects reached.
+    pub fn scan_delta_pending(&self) -> Result<Option<ScanDeltaPending>, VaultError> {
+        Ok(self.inner.scan_delta_pending()?.map(Into::into))
+    }
+
+    /// The retained ledger: at most one Pending and one Applied generation.
+    pub fn scan_delta_ledger(&self) -> Result<ScanDeltaLedger, VaultError> {
+        Ok(self.inner.scan_delta_ledger()?.into())
+    }
+
+    /// One bounded, removal-first page of the Pending generation.
+    pub fn scan_delta_page(
+        &self,
+        generation: u64,
+        paging: Paging,
+    ) -> Result<ScanDeltaPage, VaultError> {
+        Ok(self
+            .inner
+            .scan_delta_page(generation, paging.into())?
+            .into())
+    }
+
+    /// Every entry before `next_cursor` has had its effects applied;
+    /// `None` after the LAST page marks the generation Applied.
+    pub fn scan_delta_page_applied(
+        &self,
+        generation: u64,
+        next_cursor: Option<String>,
+    ) -> Result<(), VaultError> {
+        Ok(self
+            .inner
+            .scan_delta_page_applied(generation, next_cursor.as_deref())?)
+    }
+
+    /// Reduce the Applied generation into the spoken counts and release it.
+    pub fn scan_delta_release(&self) -> Result<ScanDeltaOutcome, VaultError> {
+        Ok(self.inner.scan_delta_release()?.into())
+    }
+
     /// Register a session-event listener (O-2 #540). Returns an opaque
     /// token for `unregister_event_listener`. Events arrive on
     /// background worker threads — marshal to the main actor inside
@@ -6221,10 +6282,20 @@ impl From<core::Page<core::TaskWithLocation>> for TaskWithLocationPage {
 #[derive(uniffi::Record)]
 pub struct ScanReport {
     pub files_seen: u64,
+    /// Files the scanner read and hashed this pass — a READ count, never
+    /// copy (W7-7 PR 7): use `files_changed` for "new or changed".
     pub files_indexed: u64,
     pub files_skipped: u64,
     pub bytes_processed: u64,
     pub errors: Vec<String>,
+    /// New rows plus rows whose committed content hash differs (R-9).
+    pub files_changed: u64,
+    /// Rows removed because their files left the disk.
+    pub files_removed: u64,
+    /// False when the walk was partial or any error was recorded.
+    pub complete: bool,
+    /// A rescan's retained delta generation; `None` for the open scan.
+    pub delta_generation: Option<u64>,
 }
 
 impl From<core::ScanReport> for ScanReport {
@@ -6235,6 +6306,121 @@ impl From<core::ScanReport> for ScanReport {
             files_skipped: r.files_skipped,
             bytes_processed: r.bytes_processed,
             errors: r.errors,
+            files_changed: r.files_changed,
+            files_removed: r.files_removed,
+            complete: r.complete,
+            delta_generation: r.delta_generation,
+        }
+    }
+}
+
+/// What one delta entry did to its path (W7-7 PR 7, R-9). No `Renamed`:
+/// an external rename is a removal plus a creation (AR-8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ScanDeltaKind {
+    Removed,
+    Created,
+    Modified,
+}
+
+impl From<core::ScanDeltaKind> for ScanDeltaKind {
+    fn from(k: core::ScanDeltaKind) -> Self {
+        match k {
+            core::ScanDeltaKind::Removed => Self::Removed,
+            core::ScanDeltaKind::Created => Self::Created,
+            core::ScanDeltaKind::Modified => Self::Modified,
+        }
+    }
+}
+
+/// One entry of a rescan delta page.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ScanDeltaEntry {
+    pub kind: ScanDeltaKind,
+    pub path: String,
+}
+
+/// A bounded, removal-first page of the Pending delta generation.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ScanDeltaPage {
+    pub generation: u64,
+    pub entries: Vec<ScanDeltaEntry>,
+    pub next_cursor: Option<String>,
+}
+
+impl From<core::ScanDeltaPage> for ScanDeltaPage {
+    fn from(p: core::ScanDeltaPage) -> Self {
+        Self {
+            generation: p.generation,
+            entries: p
+                .entries
+                .into_iter()
+                .map(|e| ScanDeltaEntry {
+                    kind: e.kind.into(),
+                    path: e.path,
+                })
+                .collect(),
+            next_cursor: p.next_cursor,
+        }
+    }
+}
+
+/// The Pending delta generation and the cursor its effects reached.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ScanDeltaPending {
+    pub generation: u64,
+    pub cursor: Option<String>,
+    pub rows: u64,
+}
+
+impl From<core::ScanDeltaPending> for ScanDeltaPending {
+    fn from(p: core::ScanDeltaPending) -> Self {
+        Self {
+            generation: p.generation,
+            cursor: p.cursor,
+            rows: p.rows,
+        }
+    }
+}
+
+/// The one retained Applied delta generation.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ScanDeltaApplied {
+    pub generation: u64,
+    pub rows: u64,
+}
+
+/// The whole retained ledger: at most one Pending and one Applied.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ScanDeltaLedger {
+    pub pending: Option<ScanDeltaPending>,
+    pub applied: Option<ScanDeltaApplied>,
+}
+
+impl From<core::ScanDeltaLedger> for ScanDeltaLedger {
+    fn from(l: core::ScanDeltaLedger) -> Self {
+        Self {
+            pending: l.pending.map(Into::into),
+            applied: l.applied.map(|a| ScanDeltaApplied {
+                generation: a.generation,
+                rows: a.rows,
+            }),
+        }
+    }
+}
+
+/// A release's spoken counts, net per path since the previous release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ScanDeltaOutcome {
+    pub changed: u64,
+    pub removed: u64,
+}
+
+impl From<core::ScanDeltaOutcome> for ScanDeltaOutcome {
+    fn from(o: core::ScanDeltaOutcome) -> Self {
+        Self {
+            changed: o.changed,
+            removed: o.removed,
         }
     }
 }
@@ -8303,6 +8489,22 @@ impl From<ShellRegion> for core::a11y::ShellRegion {
     }
 }
 
+/// 1:1 mirror of `slate_core::a11y::RescanReason` (W7-7 PR 7, R-9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RescanReason {
+    Explicit,
+    Foreground,
+}
+
+impl From<RescanReason> for core::a11y::RescanReason {
+    fn from(r: RescanReason) -> Self {
+        match r {
+            RescanReason::Explicit => Self::Explicit,
+            RescanReason::Foreground => Self::Foreground,
+        }
+    }
+}
+
 /// One announcement, as data — 1:1 mirror of `slate_core::a11y::A11yEvent`
 /// (see that module for per-variant docs, the copy rules, and the
 /// `HostComposed` residue contract).
@@ -8373,7 +8575,16 @@ pub enum A11yEvent {
         total: u64,
     },
     VaultScanFinished {
-        files_indexed: u64,
+        files_seen: u64,
+        files_changed: u64,
+    },
+    VaultRescanFinished {
+        reason: RescanReason,
+        changed: u64,
+        removed: u64,
+    },
+    VaultRescanIncomplete {
+        errors: u64,
     },
     SearchResultsSummary {
         count: u32,
@@ -10244,7 +10455,23 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::SearchNeedsVault => C::SearchNeedsVault,
             F::VaultScanStarted { total_files } => C::VaultScanStarted { total_files },
             F::VaultScanProgress { indexed, total } => C::VaultScanProgress { indexed, total },
-            F::VaultScanFinished { files_indexed } => C::VaultScanFinished { files_indexed },
+            F::VaultScanFinished {
+                files_seen,
+                files_changed,
+            } => C::VaultScanFinished {
+                files_seen,
+                files_changed,
+            },
+            F::VaultRescanFinished {
+                reason,
+                changed,
+                removed,
+            } => C::VaultRescanFinished {
+                reason: reason.into(),
+                changed,
+                removed,
+            },
+            F::VaultRescanIncomplete { errors } => C::VaultRescanIncomplete { errors },
             F::SearchResultsSummary { count } => C::SearchResultsSummary { count },
             F::SearchFailed { message } => C::SearchFailed { message },
             F::SearchResultOpened {
