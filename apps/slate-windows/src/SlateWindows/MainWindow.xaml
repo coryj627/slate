@@ -1502,9 +1502,13 @@
                                      to (RadioGroupArrows), where WPF's radios
                                      moved focus alone and Down from "All" walked
                                      into the menu bar (NVDA pass F4); Cycle keeps
-                                     every other arrow inside the group. -->
+                                     every other arrow inside the group, and the
+                                     group is ONE Tab stop (Once), as the canvas
+                                     and graph switchers are: Tab visited all four
+                                     filters. -->
                                 <WrapPanel DockPanel.Dock="Top"
                                            Margin="0,0,0,6"
+                                           KeyboardNavigation.TabNavigation="Once"
                                            KeyboardNavigation.DirectionalNavigation="Cycle"
                                            local:RadioGroupArrows.IsEnabled="True"
                                            AutomationProperties.Name="Filter">
