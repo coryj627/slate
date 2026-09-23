@@ -862,8 +862,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     /// <summary>W7-7 (R-2, OD-2): Space on a tree row toggles its batch
     /// check box, which left the arrow order. The check's own path
     /// announces the count ("1 item selected"). A placeholder or a group
-    /// header has no box and answers false, so the key falls
-    /// through.</summary>
+    /// header has no box: it answers false and changes nothing, and the
+    /// tree's key route consumes Space regardless (codex PR 2 round
+    /// 3).</summary>
     internal bool ToggleBatchSelection(FileTreeNodeViewModel node)
     {
         if (!node.IsBatchSelectable)

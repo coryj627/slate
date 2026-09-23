@@ -1294,7 +1294,10 @@ public partial class MainWindow : Window
     /// which left the arrow order. These are the
     /// <c>windows.filesTree.*</c> chord rows (<c>ChordScope.FilesTree</c>),
     /// and the tree's HelpText speaks them (contract 39 N-1). A row with
-    /// nothing to open, or no check box, leaves the key unhandled.</summary>
+    /// nothing to open leaves Enter unhandled. Space is consumed on every
+    /// tree row: a row without a check box — a placeholder, a group
+    /// header — changes nothing, and the key goes no further (spec 3.2
+    /// item 2, codex PR 2 round 3).</summary>
     private void FilesRows_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (_viewModel.FileSidebar is not FilesSidebarViewModel sidebar
@@ -1315,7 +1318,8 @@ public partial class MainWindow : Window
         }
         else if (e.Key == Key.Space && modifiers == ModifierKeys.None && source is TreeViewItem)
         {
-            e.Handled = sidebar.ToggleBatchSelection(row);
+            _ = sidebar.ToggleBatchSelection(row);
+            e.Handled = true;
         }
     }
 
