@@ -1971,7 +1971,11 @@ impl A11yEvent {
             NoteSaved { filename } => format!("Saved {filename}."),
             // The detail closes its own sentence (W7-7, #1249): an error's
             // text often ends in a period already, and "…there.. Your
-            // edits" is not a sentence either.
+            // edits" is not a sentence either. No detail at all drops the
+            // colon rather than leave "notes.md: Your edits".
+            NoteSaveBlocked { filename, detail } if detail.trim().is_empty() => {
+                format!("Save blocked. Could not save {filename}. Your edits remain in the editor.")
+            }
             NoteSaveBlocked { filename, detail } => format!(
                 "{} Your edits remain in the editor.",
                 lead_then_sentence(&format!("Save blocked. Could not save {filename}:"), detail)
@@ -3104,9 +3108,12 @@ fn embed_unavailable_reason(reason: &EmbedUnresolvedReason) -> String {
             block_id,
         } => format!("Block not found: {block_id} in {target_path}"),
         EmbedUnresolvedReason::DepthLimitReached => "Nested embed depth limit reached.".to_owned(),
-        EmbedUnresolvedReason::ReadError { message } => {
-            format!("Could not read embed: {message}")
-        }
+        // An error with no message (an exception whose message is empty)
+        // is core's own sentence, never "Could not read embed:.".
+        EmbedUnresolvedReason::ReadError { message } => match message.trim() {
+            "" => "Could not read embed.".to_owned(),
+            message => format!("Could not read embed: {message}"),
+        },
     }
 }
 
@@ -3158,6 +3165,15 @@ pub fn vault_error_detail(error: &VaultError) -> String {
             format!("Something named {path} already exists there.")
         }
     }
+}
+
+/// The detail of a save the Windows host refused before it reached core
+/// (W7-7, #1249): its editor produced no verified snapshot of the text —
+/// the buffer integrity check failed, or the text kept changing while it
+/// was being verified. Worded here like every other failed save's detail,
+/// so the host passes it to `NoteSaveBlocked` and composes none of it.
+pub fn editor_integrity_detail() -> String {
+    "The editor's text failed its integrity check.".to_owned()
 }
 
 /// en-US count noun (this vocabulary is V1 English; #264 owns l10n).
@@ -5988,6 +6004,73 @@ mod tests {
             witnessed, declared,
             "VaultError variants without a detail witness"
         );
+    }
+
+    /// W7-7 (#1249): a save the host refused because its editor produced
+    /// no verified snapshot reads in core's sentence, not the host's
+    /// exception text, inside the same NoteSaveBlocked template as every
+    /// other failed save.
+    #[test]
+    fn editor_integrity_detail_is_cores_sentence() {
+        assert_eq!(
+            editor_integrity_detail(),
+            "The editor's text failed its integrity check."
+        );
+        assert_eq!(
+            A11yEvent::NoteSaveBlocked {
+                filename: "notes.md".into(),
+                detail: editor_integrity_detail(),
+            }
+            .render(),
+            "Save blocked. Could not save notes.md: The editor's text failed its \
+             integrity check. Your edits remain in the editor."
+        );
+    }
+
+    /// W7-7 (#1249, #1251): an empty or blank carried detail never leaves
+    /// a dangling separator. A read error with no message (an exception
+    /// whose message is empty) is core's own sentence, and a save failure
+    /// with no detail drops the colon; a padded one is trimmed.
+    #[test]
+    fn an_empty_detail_leaves_no_dangling_separator() {
+        for (message, expected) in [
+            ("", "Embed preview for X. Could not read embed."),
+            ("   ", "Embed preview for X. Could not read embed."),
+            ("\n", "Embed preview for X. Could not read embed."),
+            (
+                "  disk on fire  ",
+                "Embed preview for X. Could not read embed: disk on fire.",
+            ),
+        ] {
+            let event = A11yEvent::EmbedPreviewUnavailable {
+                target: "X".into(),
+                reason: EmbedUnresolvedReason::ReadError {
+                    message: message.into(),
+                },
+            };
+            assert_eq!(event.render(), expected, "{message:?}");
+        }
+        for (detail, expected) in [
+            (
+                "",
+                "Save blocked. Could not save notes.md. Your edits remain in the editor.",
+            ),
+            (
+                "  ",
+                "Save blocked. Could not save notes.md. Your edits remain in the editor.",
+            ),
+            (
+                " Access is denied. (os error 5) ",
+                "Save blocked. Could not save notes.md: Access is denied. (os error 5). \
+                 Your edits remain in the editor.",
+            ),
+        ] {
+            let event = A11yEvent::NoteSaveBlocked {
+                filename: "notes.md".into(),
+                detail: detail.into(),
+            };
+            assert_eq!(event.render(), expected, "{detail:?}");
+        }
     }
 
     /// W7-7 (#1251): carried titles and reasons close their sentence
