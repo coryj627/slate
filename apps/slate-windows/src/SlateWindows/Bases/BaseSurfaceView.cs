@@ -45,7 +45,7 @@ internal sealed class BaseSurfaceView : UserControl
     private readonly Button _refresh;
     private readonly StackPanel _banners;
     private readonly TextBlock _stateBanner;
-    private readonly ItemsControl _warningBanners;
+    private readonly LayoutItemsControl _warningBanners;
     private readonly TextBlock _emptyState;
     private readonly AccessibleDataGrid _grid;
     private readonly ListBox _list;
@@ -144,7 +144,10 @@ internal sealed class BaseSurfaceView : UserControl
 
         _stateBanner = BannerText();
         AutomationProperties.SetAutomationId(_stateBanner, "BaseStateBanner");
-        _warningBanners = new ItemsControl
+        // W7-7 PR 3 (#1246, R-4; codex PR 3 round 1): each warning's
+        // focusable text is the stop, so its container is layout — a plain
+        // ItemsControl published a DataItem wrapper per warning.
+        _warningBanners = new LayoutItemsControl
         {
             Focusable = false,
             ItemTemplate = WarningTemplate(),
@@ -265,6 +268,8 @@ internal sealed class BaseSurfaceView : UserControl
     internal AccessibleDataGrid GridForTests => _grid;
 
     internal ListBox ListForTests => _list;
+
+    internal LayoutItemsControl WarningBannersForTests => _warningBanners;
 
     internal TextBox QuickFilterForTests => _quickFilter;
 

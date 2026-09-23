@@ -2,10 +2,28 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
+using System.Windows.Data;
 
 namespace SlateWindows;
+
+/// <summary>
+/// W7-7 PR 3 (#1246, R-4): item container styles built in code. Every
+/// items host names its containers explicitly (ItemContainerNameCensus);
+/// a host whose items are strings names each container by the string
+/// itself, which is also what it shows.
+/// </summary>
+internal static class ItemContainerNames
+{
+    internal static Style BySelf(Type containerType)
+    {
+        var style = new Style(containerType);
+        style.Setters.Add(new Setter(AutomationProperties.NameProperty, new Binding()));
+        return style;
+    }
+}
 
 /// <summary>
 /// Layout containers do not create WPF automation peers by default. These
