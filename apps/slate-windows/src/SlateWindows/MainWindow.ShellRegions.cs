@@ -269,12 +269,17 @@ public partial class MainWindow : IShellRegionHost
 
     /// <summary>R-10's canvas and graph arms. FocusEditorPane asked the tab's
     /// document for its landing, which the document's surface seats — usually
-    /// inside that request. Focus in THIS tab's surface is Landed. A request
-    /// the document still holds for the tab is Pending: its line is spoken
-    /// when the document seats it, it falls through when the document lets
-    /// go of it unseated, and a newer request in its place withdraws it
-    /// silently. Anything else is Refused (the document would not take the
-    /// landing: retired, shut down).</summary>
+    /// inside that request, completing it. A request the document still
+    /// holds for the tab is Pending, EVEN with focus already in the surface:
+    /// a graph whose load is in flight seats a shell request PROVISIONALLY
+    /// (its state host, or the grid it still shows) and keeps the request
+    /// live for the terminal delivery to re-seat. Its line is spoken when the
+    /// document completes it seated, it falls through when the document lets
+    /// go of it unseated, and a newer press or request withdraws it —
+    /// releasing it, so the terminal delivery reclaims nothing. Completed
+    /// inside the request with focus in THIS tab's surface is Landed; anything
+    /// else is Refused (the document would not take the landing: retired,
+    /// shut down).</summary>
     private ShellRegionLanding DocumentLanding(
         WorkspaceTabViewModel tab, Action announceWhenLanded, Action fallThroughWhenRefused)
     {
@@ -286,11 +291,6 @@ public partial class MainWindow : IShellRegionHost
         if (surface is null)
         {
             return ShellRegionLanding.Refused;
-        }
-
-        if (surface.IsKeyboardFocusWithin)
-        {
-            return ShellRegionLanding.Landed;
         }
 
         HeldDocumentLanding? held = tab switch
@@ -307,13 +307,13 @@ public partial class MainWindow : IShellRegionHost
                     () => graph.CompleteFocus(request), announceWhenLanded, fallThroughWhenRefused),
             _ => null,
         };
-        if (held is null)
+        if (held is not null)
         {
-            return ShellRegionLanding.Refused;
+            _withdrawHeldLanding = held.Withdraw;
+            return ShellRegionLanding.Pending;
         }
 
-        _withdrawHeldLanding = held.Withdraw;
-        return ShellRegionLanding.Pending;
+        return surface.IsKeyboardFocusWithin ? ShellRegionLanding.Landed : ShellRegionLanding.Refused;
     }
 
     /// <summary>A canvas or graph landing the ring is waiting on (R-10). The
@@ -483,7 +483,7 @@ public partial class MainWindow : IShellRegionHost
 
     private static bool IsWithin(DependencyObject element, DependencyObject scope)
     {
-        for (DependencyObject? current = element; current is not null; current = Parent(current))
+        for (DependencyObject? current = element; current is not null; current = ParentOf(current))
         {
             if (ReferenceEquals(current, scope))
             {
@@ -496,7 +496,7 @@ public partial class MainWindow : IShellRegionHost
 
     private static bool HasAncestor<T>(DependencyObject element) where T : DependencyObject
     {
-        for (DependencyObject? current = element; current is not null; current = Parent(current))
+        for (DependencyObject? current = element; current is not null; current = ParentOf(current))
         {
             if (current is T)
             {
@@ -507,7 +507,9 @@ public partial class MainWindow : IShellRegionHost
         return false;
     }
 
-    private static DependencyObject? Parent(DependencyObject current) =>
+    // Named apart from FrameworkElement.Parent, which a same-named
+    // method would hide (CS0108).
+    private static DependencyObject? ParentOf(DependencyObject current) =>
         current is Visual or System.Windows.Media.Media3D.Visual3D
             ? VisualTreeHelper.GetParent(current) ?? LogicalTreeHelper.GetParent(current)
             : LogicalTreeHelper.GetParent(current);

@@ -687,7 +687,8 @@ public sealed class ReadingFocusTests
     /// seated on text it is about to replace — and settles with it: on the
     /// edited note, the line spoken over the new text (through a retry, when
     /// the note changed again under the fetch); on the unchanged note, the
-    /// reader's caret kept; and a refresh that fails is a refusal.</summary>
+    /// reader's caret kept; and a refresh that fails is a refusal — and so is
+    /// every later landing while the content it kept is shown.</summary>
     [Theory]
     [InlineData("edited")]
     [InlineData("edited while it fetched")]
@@ -758,6 +759,14 @@ public sealed class ReadingFocusTests
             Assert.Equal(1, fellThrough);
             Assert.Equal(0, spoken);
             Assert.Same(host.Sentinel, Keyboard.FocusedElement);
+            // What stays on screen is the failed refresh's stale projection:
+            // no stop at all, so a later landing is refused at once.
+            Assert.Equal(
+                ShellRegionLanding.Refused,
+                ((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.Editor, () => spoken++, () => fellThrough++));
+            Assert.False(surface.IsKeyboardFocusWithin);
+            Assert.Equal(1, fellThrough);
+            Assert.Equal(0, spoken);
             return;
         }
 
@@ -987,6 +996,123 @@ public sealed class ReadingFocusTests
         Assert.Null(host.EditorLandingRequest());
         Assert.False(surface?.IsFocusLandingPending ?? false);
         Assert.False(host.EditorStopOrNull()?.IsKeyboardFocusWithin ?? false);
+    });
+
+    /// <summary>R-10: a reader who moves INTO the held reading surface while
+    /// its content arrives (a move into the landing's own target is followed,
+    /// not a departure) has landed: when the content settles the ring's line
+    /// is spoken, exactly once, and the press is complete.</summary>
+    [Fact]
+    public void AMoveIntoTheHeldSurfaceIsTheLanding() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: true);
+        RingHost ring = host.UseRing();
+        host.HoldEditorLanding();
+        host.FocusTabBar();
+        host.Workspace.FocusNextPaneCommand.Execute(null);
+        PumpedDispatcher.Drain();
+        Assert.Equal(ShellRegionLanding.Pending, Assert.Single(ring.Attempts).Outcome);
+        ReadingSurface surface = host.ShownSurface();
+
+        Assert.True(surface.Focus());
+        PumpedDispatcher.Drain();
+        Assert.True(surface.IsFocusLandingPending);
+        Assert.Empty(host.Announced);
+
+        host.ReleaseProjection();
+
+        Assert.False(surface.IsFocusLandingPending);
+        Assert.True(surface.IsKeyboardFocusWithin);
+        Assert.Equal([host.EditorLine()], host.Announced);
+        Assert.False(host.Workspace.HoldsShellRegionLanding);
+        Assert.Single(ring.Attempts);
+    });
+
+    /// <summary>R-10: a note longer than one build chunk streams, and a later
+    /// chunk can still fail after the first is on screen. The landing held
+    /// for that refresh waits for the WHOLE projection, so the failure
+    /// refuses it: no focus, no line, and the ring resumed exactly once.</summary>
+    [Fact]
+    public void ALaterChunkFailingRefusesTheHeldLanding() => RunSta(() =>
+    {
+        string longNote = string.Join(
+            "\n\n",
+            Enumerable.Range(1, ReadingContentViewModel.BuildChunkBlocks + 50).Select(i => $"Paragraph {i}."));
+        using var host = new Host();
+        host.Initialize(readingMode: true, longNote);
+        ReadingSurface surface = host.ShownSurface();
+        ReadingContentViewModel model = host.BindProjectionInFlight(surface);
+        int publishSteps = 0;
+        model.PublishFaultForTests = () =>
+            ++publishSteps >= 2 ? new InvalidOperationException("A later chunk fails.") : null;
+        Assert.True(host.Sentinel.Focus());
+        int spoken = 0;
+        int fellThrough = 0;
+        Assert.Equal(
+            ShellRegionLanding.Pending,
+            ((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.Editor, () => spoken++, () => fellThrough++));
+        PumpedDispatcher.Drain();
+
+        host.ReleaseProjection();
+        Assert.True(PumpedDispatcher.PumpUntil(() => !surface.IsFocusLandingPending), "the held landing never settled");
+        PumpedDispatcher.Drain();
+
+        Assert.True(publishSteps >= 2, "the fixture's note did not stream");
+        Assert.Equal(1, fellThrough);
+        Assert.Equal(0, spoken);
+        Assert.False(surface.IsKeyboardFocusWithin);
+        Assert.Same(host.Sentinel, Keyboard.FocusedElement);
+    });
+
+    /// <summary>R-10: a graph whose load is in flight seats a SHELL landing
+    /// provisionally — the keys go into its surface while the request stays
+    /// live for the terminal delivery to re-seat. That is not the landing:
+    /// the ring holds it (Pending, nothing spoken), and the next F6 cancels
+    /// it — the request released — and goes on from the editor, so the
+    /// load's terminal publication cannot pull focus back from the region
+    /// the reader moved to.</summary>
+    [Fact]
+    public void AnInFlightGraphsProvisionalSeatIsNotTheLanding() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize("graph");
+        RingHost ring = host.UseRing();
+        GraphDocumentViewModel graph = host.Tab.Graph!;
+        using var computing = new ManualResetEventSlim(false);
+        graph.BeforeComputeForTests = () => computing.Wait(TimeSpan.FromSeconds(30));
+        try
+        {
+            Assert.True(graph.Request(new GraphRequest.Needle()));
+            Assert.True(graph.IsRequestInFlight);
+            host.FocusTabBar();
+
+            host.Workspace.FocusNextPaneCommand.Execute(null);
+            PumpedDispatcher.Drain();
+
+            Assert.Equal(ShellRegionLanding.Pending, Assert.Single(ring.Attempts).Outcome);
+            Assert.True(host.EditorStop().IsKeyboardFocusWithin, "the in-flight graph gave no provisional seat");
+            Assert.NotNull(host.EditorLandingRequest());
+            Assert.Empty(host.Announced);
+
+            host.Workspace.FocusNextPaneCommand.Execute(null);
+            PumpedDispatcher.Drain();
+
+            Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.RightPaneContent], ring.Tried);
+            AssertFocused(host.Elsewhere, "F6 on from the provisional seat");
+            Assert.Null(host.EditorLandingRequest());
+            Assert.Equal([host.RightPaneLine()], host.Announced);
+        }
+        finally
+        {
+            computing.Set();
+        }
+
+        PumpedDispatcher.PumpUntilDrained(graph.WhenAllWorkDrained());
+        PumpedDispatcher.Drain();
+        Assert.False(graph.IsRequestInFlight);
+        AssertFocused(host.Elsewhere, "the graph load's terminal publication");
+        Assert.Equal([host.RightPaneLine()], host.Announced);
     });
 
     /// <summary>R-10's one owner: the surface takes focus only through a

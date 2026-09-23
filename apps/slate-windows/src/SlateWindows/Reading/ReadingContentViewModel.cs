@@ -1116,8 +1116,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             // (and re-marked itself live); nothing to repair here.
             return;
         }
-        // Whatever happens below, THIS generation's refresh has landed.
-        LiveRefreshGeneration = -1;
+        // THIS generation's refresh stays live until its projection is
+        // complete — the memo hit below, the last streamed chunk
+        // (FinishPublish), or a terminal failure (a later chunk can still
+        // fault): a landing held for it must not be seated on chunk one.
         if (!string.Equals(_tab.Path, path, StringComparison.Ordinal)
             || (_tab.EditorSession?.Revision ?? -1) != revision
             || _session.InteractionGeneration() != sessionGeneration)
@@ -1141,6 +1143,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             fetched.ArtifactDigest);
         if (Document is not null && _memo is { } memo && memo.Matches(key))
         {
+            LiveRefreshGeneration = -1;
             return;
         }
 
@@ -1316,6 +1319,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
     private void FinishPublish(MemoKey key, bool degraded, int renderedBlocks, bool streamed)
     {
+        // The projection is complete: the refresh has landed (R-10).
+        LiveRefreshGeneration = -1;
         // A stream nobody heard delivered nothing past chunk 1: leave
         // the memo empty so the next binding's EnsureProjected (or any
         // refresh) rebuilds instead of memo-matching a torso, and say
