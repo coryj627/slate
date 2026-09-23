@@ -282,14 +282,25 @@ public partial class MainWindow
 
     private void BindBulkRenameGrid(BulkRenameViewModel sheet)
     {
-        BulkRenamePreviewGrid.Bind(
-            BulkRenameColumns,
+        BindBulkRenamePreview(
+            BulkRenamePreviewGrid,
             sheet.Rows.Cast<object>().ToArray(),
-            summary: sheet.FooterText.Length > 0
-                ? sheet.FooterText
-                : PropertyPhrase.BulkRenameEmptyState,
-            accessibilityLabel: "Rename preview");
+            sheet.FooterText);
     }
+
+    /// <summary>The preview grid's one bind — static, so a fact drives the
+    /// production call. W7-7 PR 3 (#1246, R-4): a row is named by the
+    /// note it renames; unnamed it read the PreviewRow record's dump.</summary>
+    internal static void BindBulkRenamePreview(
+        AccessibleDataGrid grid, IReadOnlyList<object> rows, string footerText) =>
+        grid.Bind(
+            BulkRenameColumns,
+            rows,
+            summary: footerText.Length > 0
+                ? footerText
+                : PropertyPhrase.BulkRenameEmptyState,
+            accessibilityLabel: "Rename preview",
+            rowAutomationName: row => ((BulkRenameViewModel.PreviewRow)row).Path);
 
     private void AddPropertyAdd_Click(object sender, RoutedEventArgs e) =>
         _ = _observedWorkspace?.AddPropertySheet?.Add();

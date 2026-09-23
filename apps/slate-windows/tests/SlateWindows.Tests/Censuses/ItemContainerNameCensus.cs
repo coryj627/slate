@@ -22,11 +22,19 @@
 // runtime twin is the name census inside the FlaUI axe helper, which
 // every journey runs; the CanvasDocumentTests TG2-9 check was this
 // census's first, single-site shape.
+//
+// The grid substrate names its rows only when the host passes
+// rowAutomationName (Grids/AccessibleDataGrid.cs OnLoadingRow): the
+// second fact pins every Bind call through the syntax tree, never a
+// regex over C#.
 
 using System.Windows.Controls;
 using System.Xaml.Schema;
 using System.Xml;
 using System.Xml.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace SlateWindows.Tests.Censuses;
 
@@ -119,6 +127,98 @@ public sealed class ItemContainerNameCensus
             offenders.Count == 0,
             "items hosts whose containers would be named by ToString():\n  "
             + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>R-4: every <c>AccessibleDataGrid.Bind</c> call passes
+    /// <c>rowAutomationName</c>. Without it the realized DataGridRow's
+    /// name is its item's ToString() — "SlateWindows.Bases.BaseGridRowViewModel,
+    /// data item" in the Bases grid. Calls are BOUND, not matched by
+    /// spelling (three navigators declare a Bind of their own; the
+    /// bibliography and bulk-rename grids are x:Name fields), and the
+    /// GridConformanceHost fixture must model the rule too. A bind whose
+    /// rows are the empty collection literal has no row to name and is
+    /// counted apart.</summary>
+    [Fact]
+    public void EveryGridBindNamesItsRows()
+    {
+        string hostPath = Path.Combine(
+            SourceText.RepoRoot(), "apps", "slate-windows", "tools",
+            "GridConformanceHost", "Program.cs");
+        CSharpSource host = CSharpSource.LoadPath(hostPath);
+        CSharpCompilation compilation = ShellCompilation.Compilation
+            .AddSyntaxTrees(host.Root.SyntaxTree);
+        IEnumerable<(string File, CSharpSource Source)> sources = ShellCompilation.Sources
+            .Select(source => (source.Relative, source.Source))
+            .Append(("tools/GridConformanceHost/Program.cs", host));
+
+        var offenders = new List<string>();
+        int named = 0;
+        int empty = 0;
+        foreach ((string file, CSharpSource source) in sources)
+        {
+            SemanticModel model = compilation.GetSemanticModel(source.Root.SyntaxTree);
+            foreach (InvocationExpressionSyntax invocation in source.Root
+                .DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Where(IsBindCall))
+            {
+                int line = invocation.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                SymbolInfo bound = model.GetSymbolInfo(invocation);
+                IMethodSymbol? method = bound.Symbol as IMethodSymbol
+                    ?? bound.CandidateSymbols.OfType<IMethodSymbol>().FirstOrDefault();
+                if (method is null)
+                {
+                    // Fail-closed: an unbindable Bind could be the grid's.
+                    offenders.Add($"{file}:{line}: `{invocation.Expression}` does not bind, so the census cannot tell whose Bind it is");
+                    continue;
+                }
+                if (method.ContainingType.Name != "AccessibleDataGrid")
+                {
+                    continue;
+                }
+                if (RowsArgument(invocation) is CollectionExpressionSyntax { Elements.Count: 0 })
+                {
+                    empty++;
+                    continue;
+                }
+                ArgumentSyntax? name = invocation.ArgumentList.Arguments.FirstOrDefault(
+                    argument => argument.NameColon?.Name.Identifier.ValueText == "rowAutomationName");
+                if (name is null || name.Expression.IsKind(SyntaxKind.NullLiteralExpression))
+                {
+                    offenders.Add($"{file}:{line}: `{invocation.Expression}` binds rows without rowAutomationName");
+                    continue;
+                }
+                named++;
+            }
+        }
+
+        Assert.True(named + offenders.Count >= 10, $"only {named + offenders.Count} row-bearing grid binds found — the scrape is broken");
+        Assert.True(empty > 0, "no empty grid binds found — the rows-argument read is broken");
+        Assert.True(
+            offenders.Count == 0,
+            "grid binds whose rows would be named by ToString():\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    private static bool IsBindCall(InvocationExpressionSyntax invocation) =>
+        invocation.Expression switch
+        {
+            MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText == "Bind",
+            MemberBindingExpressionSyntax binding => binding.Name.Identifier.ValueText == "Bind",
+            _ => false,
+        };
+
+    /// <summary>The <c>rows</c> argument: named, else the second positional.</summary>
+    private static ExpressionSyntax? RowsArgument(InvocationExpressionSyntax invocation)
+    {
+        SeparatedSyntaxList<ArgumentSyntax> arguments = invocation.ArgumentList.Arguments;
+        ArgumentSyntax? named = arguments.FirstOrDefault(
+            argument => argument.NameColon?.Name.Identifier.ValueText == "rows");
+        if (named is not null)
+        {
+            return named.Expression;
+        }
+        return arguments.Count > 1 && arguments[1].NameColon is null ? arguments[1].Expression : null;
     }
 
     private static bool IsBuildOutput(string path, string root)

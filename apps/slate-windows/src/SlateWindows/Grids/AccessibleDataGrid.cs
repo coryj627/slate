@@ -218,13 +218,24 @@ internal sealed class AccessibleDataGrid : UserControl
         // reuses them, so every container carries its own row's values.
         if (_rowAutomationName is { } name)
         {
-            AutomationProperties.SetName(e.Row, name(e.Row.Item) ?? string.Empty);
+            AutomationProperties.SetName(e.Row, RowName(name(e.Row.Item), e.Row.GetIndex()));
         }
         if (_rowItemStatus is { } status)
         {
             AutomationProperties.SetItemStatus(e.Row, status(e.Row.Item) ?? string.Empty);
         }
     }
+
+    /// <summary>W7-7 PR 3 (#1246, contract R-4): a surface that names its
+    /// rows never lets WPF name one. An EMPTY name is no name —
+    /// DataGridItemAutomationPeer then falls back to the item's
+    /// <c>ToString()</c>, so a reading-table row whose first cell is blank
+    /// would read "System.String[]" — and the row's 1-based position
+    /// stands in.</summary>
+    internal static string RowName(string? name, int index) =>
+        string.IsNullOrWhiteSpace(name)
+            ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"Row {index + 1}")
+            : name;
 
     /// <summary>The unloading half of the row seams: a container that
     /// leaves the viewport drops the name and status it carried, so a
@@ -461,6 +472,11 @@ internal sealed class AccessibleDataGrid : UserControl
     /// text columns whose cells carry the mac "Header: value" label
     /// contract; <paramref name="rowAudioDescription"/> is the core
     /// `audio_description` the row-move announcement consumes.
+    /// <paramref name="rowAutomationName"/> is the row's IDENTITY (a file
+    /// name, a title, a first cell — not the whole description): every
+    /// row-bearing caller passes it (W7-7 PR 3, #1246, R-4; pinned by
+    /// ItemContainerNameCensus), because an unnamed DataGridRow reads its
+    /// item's <c>ToString()</c>.
     /// </summary>
     public void Bind(
         IReadOnlyList<AccessibleGridColumn> columns,

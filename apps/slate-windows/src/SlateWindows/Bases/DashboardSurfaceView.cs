@@ -176,7 +176,7 @@ internal sealed class DashboardSurfaceView : UserControl
     /// <summary>A READ-ONLY thin grid configuration (contract C2): no
     /// editing seam, no row actions, no activation — the mac
     /// BaseReadOnlyResultView.</summary>
-    private static AccessibleDataGrid BuildSectionGrid(
+    internal static AccessibleDataGrid BuildSectionGrid(
         string idRoot, int index, BasesResultSet result)
     {
         var grid = new AccessibleDataGrid
@@ -206,7 +206,9 @@ internal sealed class DashboardSurfaceView : UserControl
             summary: BaseSummaryFormatter.SummaryText(result, quickFilterActive: false),
             accessibilityLabel: result.AudioSummary,
             rowAudioDescription: static row =>
-                ((BaseGridRowViewModel)row).AudioDescription);
+                ((BaseGridRowViewModel)row).AudioDescription,
+            // R-4 (#1246): the Base tab's row identity.
+            rowAutomationName: static row => ((BaseGridRowViewModel)row).FileName);
         return grid;
     }
 

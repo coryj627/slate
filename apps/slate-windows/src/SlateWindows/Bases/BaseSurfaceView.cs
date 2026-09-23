@@ -72,6 +72,10 @@ internal sealed class BaseSurfaceView : UserControl
             MinWidth = 120,
             VerticalAlignment = VerticalAlignment.Center,
             DisplayMemberPath = nameof(BaseViewSummary.Name),
+            // W7-7 PR 3 (#1246, R-4): DisplayMemberPath templates the text
+            // only; NVDA reads a combo's value from the selected item's
+            // name, which was the BaseViewSummary record's dump.
+            ItemContainerStyle = ViewPickerItemStyle(),
         };
         AutomationProperties.SetAutomationId(_viewPicker, "BaseViewPicker");
         AutomationProperties.SetName(_viewPicker, "Base view");
@@ -696,7 +700,10 @@ internal sealed class BaseSurfaceView : UserControl
                 summary: BaseSummaryFormatter.SummaryText(result, model.QuickFilterActive),
                 accessibilityLabel: result.AudioSummary,
                 rowAudioDescription: static row =>
-                    ((BaseGridRowViewModel)row).AudioDescription);
+                    ((BaseGridRowViewModel)row).AudioDescription,
+                // R-4 (#1246): unnamed, a row read
+                // "SlateWindows.Bases.BaseGridRowViewModel, data item".
+                rowAutomationName: static row => ((BaseGridRowViewModel)row).FileName);
             _grid.SetSortIndicator(model.SortState);
             _grid.CurrentRowChanged -= OnCurrentRowChanged;
             _grid.CurrentRowChanged += OnCurrentRowChanged;
@@ -753,6 +760,7 @@ internal sealed class BaseSurfaceView : UserControl
             accessibilityLabel: result.AudioSummary,
             rowAudioDescription: static row =>
                 ((BaseGridRowViewModel)row).AudioDescription,
+            rowAutomationName: static row => ((BaseGridRowViewModel)row).FileName,
             rowActions: rowActions,
             // No exportProducer: export/copy route through the menu
             // commands, which own the C14 scope prompt and compose off
@@ -1056,6 +1064,17 @@ internal sealed class BaseSurfaceView : UserControl
                     + $"{cell.Summary}: "
                     + (cell.Value.Display.Length > 0 ? cell.Value.Display : "empty")));
 
+    /// <summary>The view picker's items are named by the view's name —
+    /// the GraphInspectorView picker precedent.</summary>
+    private static Style ViewPickerItemStyle()
+    {
+        var style = new Style(typeof(ComboBoxItem));
+        style.Setters.Add(new Setter(
+            AutomationProperties.NameProperty,
+            new System.Windows.Data.Binding(nameof(BaseViewSummary.Name))));
+        return style;
+    }
+
     private static Style BuildListItemStyle()
     {
         // Group headers are separators, not selectable rows: they stay
@@ -1149,6 +1168,11 @@ internal sealed class BaseGridRowViewModel
             : string.Empty;
 
     public string AudioDescription => Row.AudioDescription;
+
+    /// <summary>The row's identity for its UIA name (W7-7 PR 3, #1246,
+    /// R-4): the note's file name — core's <c>file.name</c>, extension
+    /// included.</summary>
+    public string FileName => System.IO.Path.GetFileName(Row.FilePath);
 }
 
 /// <summary>The mac BaseSummaryFormatter twin: custom summary cells,
