@@ -115,9 +115,6 @@ public sealed class AnnouncementSeamCensus
             Assert.Single(of.DescendantNodes().OfType<VariableDeclaratorSyntax>(), local => local.Identifier.ValueText == "peer")
                 .Initializer!.Value.NormalizeWhitespace().ToFullString());
         Assert.Equal("NotificationProviderPeer.Current.ProviderOf(peer)",
-            Assert.Single(of.DescendantNodes().OfType<VariableDeclaratorSyntax>(), local => local.Identifier.ValueText == "provider")
-                .Initializer!.Value.NormalizeWhitespace().ToFullString());
-        Assert.Equal("provider",
             Assert.IsType<ReturnStatementSyntax>(of.Body!.Statements.Last()).Expression!.NormalizeWhitespace().ToFullString());
 
         // The one door to a peer's provider: a peer, handing the peer it was
@@ -243,7 +240,7 @@ public sealed class AnnouncementSeamCensus
             Mutate(original, "provider is not null", "provider is null"),
             Mutate(original, "() => AutomationInteropProvider.ClientsAreListening", "() => true"),
             // OD-7: the launch seams swapped for ones that never see an advise.
-            Mutate(original, "LaunchSeams.ForProduction(source)", "new LaunchSeams(() => false, () => false, _ => null!, () => TimeSpan.Zero, _ => { })"),
+            Mutate(original, "LaunchSeams.ForProduction(source)", "new LaunchSeams(() => false, () => false, _ => null!, () => TimeSpan.Zero, (_, _) => { })"),
         })
         {
             Assert.NotEqual(original, mutation);

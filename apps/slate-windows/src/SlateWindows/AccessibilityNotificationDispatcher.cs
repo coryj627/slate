@@ -25,19 +25,29 @@ namespace SlateWindows;
 /// raised on is <see cref="NotificationSource"/>'s.
 /// </para>
 /// <para>
-/// OD-7 (2026-09-24), the launch phase: a monotonic Unadvised → Done. While
-/// Unadvised — no listening client, no advise in WPF's map, or no connected
-/// status provider — a line is QUEUED, never raised: raising it could reach a
-/// client UIA already knows of (measured: it did, on every unadvised launch)
-/// and then be raised again. The first check that finds all three (every
-/// post, and a <see cref="LaunchPollInterval"/> poll on the UI thread) drains
-/// the queue once, in order, through the same raiser, and the phase is Done:
-/// every later line is raised at once, as before. No advise within
-/// <see cref="LaunchWindow"/> of the first frame ends the phase too, dropping
-/// the queue unspoken — a deaf process stays deaf and nothing stale is raised
-/// later. The queue keeps the last <see cref="LaunchQueueCapacity"/> lines
-/// (the launch lines are about five). Nothing is composed: the drain raises
-/// core's rendered tuples.
+/// OD-7 (2026-09-24), readiness: ONE predicate in every phase — a listening
+/// client, the Notification advise in WPF's map, and a connected status
+/// provider. A line is raised only when all three hold; otherwise it is
+/// QUEUED, never raised: a raise before the advise lands can reach a client
+/// UIA already knows of (measured: it did, on every unadvised launch) and be
+/// raised again at the drain, and one without the advise is deaf. The queue
+/// keeps the last <see cref="LaunchQueueCapacity"/> lines (the launch lines
+/// are about five). While it holds any, a <see cref="LaunchPollInterval"/>
+/// poll on the UI thread checks again — the only production wake-up, so it
+/// runs during the launch and after it alike and stops when the queue
+/// empties — and the first ready check (a tick or a post) drains the queue
+/// once, in order, through the same raiser. Every queued line expires
+/// <see cref="LaunchWindow"/> after its own post and is dropped unspoken,
+/// never raised late — never a wholesale clear — so the poll always ends.
+/// The launch phase is bookkeeping only and moves forward once: from
+/// Unadvised to Done when readiness is first observed and the queue drained,
+/// or to Expired when <see cref="LaunchWindow"/> passes after the first frame
+/// first. That expiry is only the launch lines, posted by the first frame,
+/// reaching their own deadline; a line posted at 29 s survives until 59 s.
+/// Both are final, and neither raises without readiness: a client that
+/// stops listening or an advise removed after Done queues the line again,
+/// and the poll restarts. Nothing is composed: the drain raises core's
+/// rendered tuples.
 /// </para>
 /// </remarks>
 internal sealed class AccessibilityNotificationDispatcher
@@ -56,12 +66,13 @@ internal sealed class AccessibilityNotificationDispatcher
         typeof(AccessibilityNotificationDispatcher),
         new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.Inherits));
 
-    /// <summary>OD-7: how many lines the unadvised launch phase keeps; the
+    /// <summary>OD-7: how many lines the queue keeps while not ready; the
     /// oldest drops first.</summary>
     internal const int LaunchQueueCapacity = 16;
 
-    /// <summary>OD-7: how long after the first frame the launch phase waits
-    /// for the advise before it ends and drops what it queued.</summary>
+    /// <summary>OD-7: how long a queued line waits for readiness after its
+    /// own post before it is dropped — and so how long after the first frame
+    /// the launch phase lasts, its lines being posted by then.</summary>
     internal static readonly TimeSpan LaunchWindow = TimeSpan.FromSeconds(30);
 
     private const string ActivityId = "slate-accessibility-announcement";
@@ -78,11 +89,17 @@ internal sealed class AccessibilityNotificationDispatcher
     private readonly Func<bool> _clientsAreListening;
     private readonly LaunchSeams _launch;
 
-    // OD-7: the lines posted while Unadvised, oldest first; null once the
-    // phase is Done (drained, or expired) — it never starts again.
-    private Queue<QueuedLine>? _launchQueue = new();
+    // OD-7: the launch phase (Unadvised, then Done or Expired, both final)
+    // and the one bounded queue, oldest first, that holds every line posted
+    // while not ready.
+    private LaunchPhase _phase = LaunchPhase.Unadvised;
+    private readonly Queue<QueuedLine> _queue = new();
     private int _droppedOldest;
-    private IDisposable? _launchPoll;
+    private IDisposable? _poll;
+
+    // The status provider's state last recorded by a check: 1 or 0, -1
+    // before the first.
+    private int _recordedProviderState = -1;
 
     public AccessibilityNotificationDispatcher(FrameworkElement source)
         : this(
@@ -107,8 +124,11 @@ internal sealed class AccessibilityNotificationDispatcher
     // Recording this required boundary tests the actual native arguments;
     // production always supplies NotificationSource's provider. The
     // listener probe and the launch seams are injected beside it, so the
-    // guard and the launch phase are facts (ProductionRaiseSkipsWhenNoClientListens,
-    // LinesPostedBeforeTheAdviseAreQueuedThenRaisedOnceInOrder) rather than
+    // readiness predicate and the launch phase are facts
+    // (ProductionRaiseWaitsWhileNoClientListens,
+    // WithoutTheAdviseNoLineIsRaisedInAnyPhase,
+    // AfterDoneALineWaitsWhileReadinessRegressesAndOneTickDeliversIt,
+    // AfterExpiryALineWaitsForTheProviderInsteadOfBeingLost) rather than
     // comments.
     internal AccessibilityNotificationDispatcher(
         Action<AutomationNotificationKind, AutomationNotificationProcessing, string, string> raise,
@@ -181,103 +201,137 @@ internal sealed class AccessibilityNotificationDispatcher
             // than throwing out of a command handler on the UI thread.
             _ => AutomationNotificationProcessing.All,
         };
-        var line = new QueuedLine(AutomationNotificationKind.Other, processing, rendered.Text, ActivityId);
-        // R-1: cheap when nobody listens, and asked of UIA, which knows —
-        // never of WPF's listener map, the gate this raise exists to skip.
-        // The map decides only when the launch phase ends (OD-7).
-        bool clientsListening = _clientsAreListening();
-        if (StillUnadvised(clientsListening))
-        {
-            QueueUntilAdvised(line);
-            return;
-        }
-
-        if (!clientsListening)
-        {
-            return;
-        }
-
-        _raise(line.Kind, line.Processing, line.Text, line.ActivityId);
+        Check(new QueuedLine(AutomationNotificationKind.Other, processing, rendered.Text, ActivityId));
     }
 
-    /// <summary>OD-7: whether the launch phase is still Unadvised after this
-    /// check — which ends it when a listening client, an advise and a
-    /// connected status provider are all there (the queue drains), or when
-    /// the launch window has closed (the queue is dropped).</summary>
-    private bool StillUnadvised(bool clientsListening)
+    /// <summary>
+    /// One check (every post, and every tick of the poll): the ONE readiness
+    /// predicate, the same in every phase — R-1's listening client (UIA's own
+    /// answer), the Notification advise in WPF's map, and a connected status
+    /// provider, each asked every time and never short-circuited (codex round
+    /// 2). Ready, the queue drains once, in order, and then the posted line is
+    /// raised. Unready, the posted line is queued and nothing is raised: a
+    /// raise without the advise is deaf, and one before it lands can be heard
+    /// twice. Lines past their own deadline go first, so none is raised late.
+    /// The phase is bookkeeping only, never a path that raises without
+    /// readiness (codex round 19).
+    /// </summary>
+    private void Check(QueuedLine? posted)
     {
+        bool clientsListening = _clientsAreListening();
         bool advised = _launch.Advised();
         LogListenerState(clientsListening, advised);
-        if (_launchQueue is null)
+        bool connected = _launch.Connected();
+        if (NotificationSource.SourceChange(ref _recordedProviderState, connected) is { } provider)
         {
-            return false;
+            _launch.Diagnose(HostDiagnosticEvent.AnnouncementSource, provider);
         }
 
-        if (clientsListening && advised && _launch.Connected())
+        bool ready = clientsListening && advised && connected;
+        TimeSpan now = _launch.Elapsed();
+        DropExpiredLines(now);
+        if (_phase == LaunchPhase.Unadvised)
         {
-            DrainLaunchQueue();
-            return false;
+            if (ready)
+            {
+                _phase = LaunchPhase.Done;
+            }
+            else if (now >= LaunchWindow)
+            {
+                _phase = LaunchPhase.Expired;
+                _launch.Diagnose(HostDiagnosticEvent.AnnouncementReplay, "expired, never ready");
+            }
         }
 
-        if (_launch.Elapsed() >= LaunchWindow)
+        if (ready)
         {
-            ExpireLaunchQueue();
-            return false;
+            Drain();
+            if (posted is { } line)
+            {
+                _raise(line.Kind, line.Processing, line.Text, line.ActivityId);
+            }
+
+            return;
         }
 
-        return true;
+        if (posted is { } unready)
+        {
+            Enqueue(unready with { PostedAt = now });
+        }
     }
 
-    private void QueueUntilAdvised(QueuedLine line)
+    /// <summary>Queues a line posted while not ready — the last
+    /// <see cref="LaunchQueueCapacity"/> kept — and starts the poll unless it
+    /// runs: the poll runs exactly while lines wait, during the launch and
+    /// after it alike, because nothing else ever wakes the queue (neither an
+    /// advise nor a provider connecting calls in).</summary>
+    private void Enqueue(QueuedLine line)
     {
-        Queue<QueuedLine> queued = _launchQueue!;
-        if (queued.Count == LaunchQueueCapacity)
+        if (_queue.Count == LaunchQueueCapacity)
         {
-            _ = queued.Dequeue();
+            _ = _queue.Dequeue();
             _droppedOldest++;
         }
 
-        queued.Enqueue(line);
-        _launchPoll ??= _launch.StartPoll(() => _ = StillUnadvised(_clientsAreListening()));
+        _queue.Enqueue(line);
+        _poll ??= _launch.StartPoll(() => Check(null));
     }
 
-    /// <summary>OD-7's flip: each queued line raised exactly once, in order,
-    /// through the same raiser; the phase is Done before the first of them.</summary>
-    private void DrainLaunchQueue()
+    /// <summary>Each queued line raised exactly once, in order, through the
+    /// same raiser at the first ready check — the launch's lines and later
+    /// ones alike — and the poll stopped with the queue empty.</summary>
+    private void Drain()
     {
-        Queue<QueuedLine> queued = _launchQueue!;
-        _launchQueue = null;
-        StopLaunchPoll();
+        StopPoll();
+        if (_queue.Count == 0 && _droppedOldest == 0)
+        {
+            return;
+        }
+
+        QueuedLine[] queued = [.. _queue];
+        int dropped = _droppedOldest;
+        _queue.Clear();
+        _droppedOldest = 0;
         foreach (QueuedLine line in queued)
         {
             _raise(line.Kind, line.Processing, line.Text, line.ActivityId);
         }
 
-        if (queued.Count > 0 || _droppedOldest > 0)
-        {
-            _launch.Diagnose(
-                $"drained={queued.Count}, droppedOldest={_droppedOldest}, at={(int)_launch.Elapsed().TotalMilliseconds}ms");
-        }
+        _launch.Diagnose(
+            HostDiagnosticEvent.AnnouncementReplay,
+            $"drained={queued.Length}, droppedOldest={dropped}, at={(int)_launch.Elapsed().TotalMilliseconds}ms");
     }
 
-    /// <summary>OD-7: a launch window that closes unadvised drops its queue
-    /// unspoken; later lines are raised at once, as before.</summary>
-    private void ExpireLaunchQueue()
+    /// <summary>OD-7, codex round 20: each queued line expires
+    /// <see cref="LaunchWindow"/> after its own post, in every phase, and is
+    /// dropped unspoken — oldest first, never the whole queue at once — which
+    /// is what ends the poll when readiness never comes.</summary>
+    private void DropExpiredLines(TimeSpan now)
     {
-        Queue<QueuedLine> queued = _launchQueue!;
-        _launchQueue = null;
-        StopLaunchPoll();
-        int dropped = queued.Count + _droppedOldest;
+        int dropped = 0;
+        while (_queue.TryPeek(out QueuedLine oldest) && now - oldest.PostedAt >= LaunchWindow)
+        {
+            _ = _queue.Dequeue();
+            dropped++;
+        }
+
+        if (_queue.Count == 0)
+        {
+            dropped += _droppedOldest;
+            _droppedOldest = 0;
+            StopPoll();
+        }
+
         if (dropped > 0)
         {
-            _launch.Diagnose($"expired={dropped}, never advised");
+            _launch.Diagnose(HostDiagnosticEvent.AnnouncementReplay, $"dropped={dropped}, unready too long");
         }
     }
 
-    private void StopLaunchPoll()
+    private void StopPoll()
     {
-        _launchPoll?.Dispose();
-        _launchPoll = null;
+        _poll?.Dispose();
+        _poll = null;
     }
 
     /// <summary>
@@ -309,27 +363,53 @@ internal sealed class AccessibilityNotificationDispatcher
     /// <summary>
     /// OD-7's seams: whether UIA has advised the process of a notification
     /// listener (WPF's map, which only an advise fills), whether the status
-    /// element has a connected provider to raise on, a poll for both, the
+    /// element has a connected provider to raise on, the readiness poll, the
     /// time since the first frame, and the diagnostics sink. Production reads
-    /// the map and <see cref="NotificationSource"/>, polls on the UI thread
-    /// and logs under SLATE_UIA_DIAGNOSTICS=1; the launch facts hold each one.
+    /// the map and <see cref="NotificationSource"/>, polls on the UI thread,
+    /// counts from the window's first frame and logs under
+    /// SLATE_UIA_DIAGNOSTICS=1; the facts hold each one.
     /// </summary>
     internal sealed record LaunchSeams(
         Func<bool> Advised,
         Func<bool> Connected,
         Func<Action, IDisposable> StartPoll,
         Func<TimeSpan> Elapsed,
-        Action<string> Diagnose)
+        Action<HostDiagnosticEvent, string> Diagnose)
     {
-        internal static LaunchSeams ForProduction(FrameworkElement source)
+        internal static LaunchSeams ForProduction(FrameworkElement source) => new(
+            () => AutomationPeer.ListenerExists(AutomationEvents.Notification),
+            () => NotificationSource.Of(source) is not null,
+            PollOnThisThread,
+            SinceFirstFrame(source),
+            HostLog.WriteUiAutomationDiagnostic);
+
+        /// <summary>
+        /// The time since the source's window first rendered — zero before
+        /// its <c>ContentRendered</c> — so the launch window is measured from
+        /// the first frame, not from construction (codex round 2): MainWindow
+        /// builds its dispatcher well before <c>App</c> shows it. An element
+        /// in no window, or in one already showing, counts from now.
+        /// </summary>
+        private static Func<TimeSpan> SinceFirstFrame(FrameworkElement source)
         {
-            var started = Stopwatch.StartNew();
-            return new LaunchSeams(
-                () => AutomationPeer.ListenerExists(AutomationEvents.Notification),
-                () => NotificationSource.Of(source) is not null,
-                PollOnThisThread,
-                () => started.Elapsed,
-                line => HostLog.WriteUiAutomationDiagnostic(HostDiagnosticEvent.AnnouncementReplay, line));
+            Stopwatch? sinceFirstFrame = null;
+            Window? window = Window.GetWindow(source);
+            if (window is null || window.IsVisible)
+            {
+                sinceFirstFrame = Stopwatch.StartNew();
+            }
+            else
+            {
+                EventHandler? firstFrame = null;
+                firstFrame = (_, _) =>
+                {
+                    window.ContentRendered -= firstFrame;
+                    sinceFirstFrame ??= Stopwatch.StartNew();
+                };
+                window.ContentRendered += firstFrame;
+            }
+
+            return () => sinceFirstFrame?.Elapsed ?? TimeSpan.Zero;
         }
 
         // Posts arrive on the UI thread, so the poll ticks there too, beside
@@ -344,13 +424,30 @@ internal sealed class AccessibilityNotificationDispatcher
         }
     }
 
+    /// <summary>OD-7's launch phase, bookkeeping only: Unadvised until
+    /// readiness is first observed (then Done, the queue drained) or the
+    /// launch window closes first (then Expired, logged once; its lines
+    /// expire at their own deadlines like every other). Done and Expired are
+    /// final.</summary>
+    private enum LaunchPhase
+    {
+        Unadvised,
+        Done,
+        Expired,
+    }
+
     /// <summary>One posted tuple, queued as rendered, so the drain raises
-    /// exactly what core rendered.</summary>
+    /// exactly what core rendered; <see cref="PostedAt"/>, when it was
+    /// queued (the first frame for a line posted before it), sets its own
+    /// deadline.</summary>
     private readonly record struct QueuedLine(
         AutomationNotificationKind Kind,
         AutomationNotificationProcessing Processing,
         string Text,
-        string ActivityId);
+        string ActivityId)
+    {
+        public TimeSpan PostedAt { get; init; }
+    }
 
     /// <summary>
     /// R-1: the provider a notification is raised on — the source element's
@@ -365,27 +462,18 @@ internal sealed class AccessibilityNotificationDispatcher
     /// </summary>
     internal static class NotificationSource
     {
-        // Whether the status peer had a provider when last asked: 1 or 0, -1
-        // before the first. Process-wide, like the listener state.
-        private static int s_loggedSource = -1;
-
         internal static IRawElementProviderSimple? Of(FrameworkElement source)
         {
             AutomationPeer peer = UIElementAutomationPeer.FromElement(source)
                 ?? UIElementAutomationPeer.CreatePeerForElement(source)
                 ?? new FrameworkElementAutomationPeer(source);
-            IRawElementProviderSimple? provider = NotificationProviderPeer.Current.ProviderOf(peer);
-            if (SourceChange(ref s_loggedSource, provider is not null) is { } change)
-            {
-                HostLog.WriteUiAutomationDiagnostic(HostDiagnosticEvent.AnnouncementSource, change);
-            }
-
-            return provider;
+            return NotificationProviderPeer.Current.ProviderOf(peer);
         }
 
-        /// <summary>Under SLATE_UIA_DIAGNOSTICS=1, the line for the status
-        /// provider's state, or null when it matches the one <paramref
-        /// name="last"/> holds — once per change, never once per ask.</summary>
+        /// <summary>The diagnostics line (SLATE_UIA_DIAGNOSTICS=1) for the
+        /// status provider's state as a check found it, or null
+        /// when it matches the one <paramref name="last"/> holds — once per
+        /// change, never once per check.</summary>
         internal static string? SourceChange(ref int last, bool connected) =>
             Interlocked.Exchange(ref last, connected ? 1 : 0) == (connected ? 1 : 0)
                 ? null
