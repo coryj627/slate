@@ -51,6 +51,7 @@ internal sealed partial class FilesSidebarViewModel
         get => _filterText;
         set
         {
+            bool wasActive = IsFilterActive;
             if (SetField(ref _filterText, value))
             {
                 // W7-7 (R-3): typing narrows WITHIN a tag scope (core ANDs
@@ -65,9 +66,18 @@ internal sealed partial class FilesSidebarViewModel
                     OnPropertyChanged(nameof(ScopeTag));
                 }
 
+                // A Tags-tree selection stands for "this tag is the filter";
+                // a typed change ends that, and an emptied field is a clear.
+                ReleaseTagSelection();
                 OnPropertyChanged(nameof(IsFilterActive));
                 ScheduleFilter();
                 RaiseCommandStates();
+                if (wasActive && string.IsNullOrEmpty(value))
+                {
+                    // The field emptied by typing is the same clear as the
+                    // command: seen and heard once (codex PR 2 round 2).
+                    ShowAndSpeakFilterCleared();
+                }
             }
         }
     }
@@ -113,14 +123,8 @@ internal sealed partial class FilesSidebarViewModel
         RaiseCommandStates();
     }
 
-    /// <summary>Clear Sidebar Filter: the text and the scope in one change.
-    /// No filter run follows an empty, unscoped field, so the clear speaks
-    /// for itself (W7-7 R-3, codex PR 2 round 1): the status line — which
-    /// still carried the cleared filter's summary — shows core's
-    /// SidebarFilterCleared sentence, and that event is announced once.
-    /// The listener heard the filter end, so the next filter, even the
-    /// same one again, is news: the count de-duplication starts
-    /// over.</summary>
+    /// <summary>Clear Sidebar Filter: the text and the scope in one change,
+    /// then the clear's own voice.</summary>
     private void ClearFilter()
     {
         if (!IsFilterActive && FilterText.Length == 0)
@@ -129,21 +133,59 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         ApplyTagActivation(string.Empty, scopeTag: null);
+        ReleaseTagSelection();
+        ShowAndSpeakFilterCleared();
+    }
+
+    /// <summary>A filter clear — Clear Sidebar Filter, or the field emptied
+    /// by the user — speaks for itself (W7-7 R-3, codex PR 2 rounds 1–2):
+    /// no filter run follows an empty, unscoped field, so the status line,
+    /// which still carried the cleared filter's summary, shows core's
+    /// SidebarFilterCleared sentence and that event is announced once. The
+    /// listener heard the filter end, so the next filter, even the same one
+    /// again, is news: the count de-duplication starts over.</summary>
+    private void ShowAndSpeakFilterCleared()
+    {
         var cleared = new A11yEvent.SidebarFilterCleared();
         Status = SlateUniffiMethods.A11yRender(cleared).Text;
-        if (IsRefreshingTree)
-        {
-            // A tree republication in flight would otherwise restore the
-            // status it captured — the one this replaces.
-            _statusToReassert = Status;
-        }
-
+        // A tree publication still to come would otherwise overwrite the
+        // sentence; one that has already published has nothing to take
+        // (codex PR 2 round 2).
+        HoldStatusForPendingPublication();
         _lastFilterAnnouncement = null;
         _announce(cleared);
     }
 
+    /// <summary>W7-7 (R-3, codex PR 2 round 2): a filter clear — and any
+    /// filter change that is not the Tags tree's own row — releases the
+    /// tree's selection. The tree applies a tag only when its selection
+    /// CHANGES, so a tag still selected after its filter ended could never
+    /// be applied again — in a one-tag vault, not at all.</summary>
+    private void ReleaseTagSelection()
+    {
+        var pending = new Stack<SidebarTagViewModel>(Tags);
+        while (pending.TryPop(out SidebarTagViewModel? tag))
+        {
+            tag.IsSelected = false;
+            foreach (SidebarTagViewModel child in tag.Children)
+            {
+                pending.Push(child);
+            }
+        }
+    }
+
     private void ScheduleFilter(bool automatic = false)
     {
+        if (!automatic)
+        {
+            // Every user-driven request — typing, a tag, a clear — owns the
+            // status line from here: a status held for a publication is
+            // obsolete (codex round 6, for a clear; codex PR 2 round 2 for
+            // every request — a held "Filter cleared." must not outlive the
+            // tag the user activated next and silence its count).
+            _statusToReassert = null;
+        }
+
         Task previous = FilterCompletion;
         CancelFilterCore();
         int generation = ++_filterGeneration;
@@ -151,16 +193,6 @@ internal sealed partial class FilesSidebarViewModel
         string? scopeTag = _scopeTag;
         if (query.Length == 0 && scopeTag is null)
         {
-            // Codex round 6: a USER clearing the filter cancels the
-            // automatic refilter that would have consumed the pending
-            // mutation reassert — clear it here, or a later organic
-            // refresh resurrects the obsolete status. The automatic
-            // path preserves it for its own publication.
-            if (!automatic)
-            {
-                _statusToReassert = null;
-            }
-
             FilterResults.Clear();
             lock (_filterCancellationGate)
             {

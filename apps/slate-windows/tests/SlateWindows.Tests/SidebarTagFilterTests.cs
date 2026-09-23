@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Reflection;
+using System.Threading.Channels;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -207,6 +209,183 @@ public sealed class SidebarTagFilterTests
         await sidebar.FilterCompletion;
         AssertSpoke(announced, new A11yEvent.FileListCount(2, "two words"),
             "File list, 2 items. Filtered by tag two words.");
+    }
+
+    /// <summary>
+    /// The field emptied by the user — typed or backspaced to nothing — is
+    /// the promised second clear route, and it clears exactly like the
+    /// command (codex PR 2 round 2): the scope drops, the status line's
+    /// stale scoped summary gives way to core's "Filter cleared.", and that
+    /// is spoken exactly once.
+    /// </summary>
+    [Fact]
+    public async Task EmptyingTheField_ClearsLikeTheCommand()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "tag-scope-emptied");
+        Write(fixture, "spaced.md", "---\ntags: [\"two words\"]\n---\n\n# Spaced\n");
+        Write(fixture, "spaced note.md", "---\ntags: [\"two words\"]\n---\n\n# Second\n");
+        using VaultSession session = OpenScanned(fixture);
+        var announced = new List<A11yEvent>();
+        FilesSidebarViewModel sidebar = await NewSidebar(session, fixture, announced.Add);
+        sidebar.ActivateTag("two words");
+        sidebar.FilterText = "n";
+        await sidebar.FilterCompletion;
+        Assert.Equal("1 result for #two words.", sidebar.Status);
+        int before = announced.Count;
+
+        sidebar.FilterText = string.Empty;
+        await sidebar.FilterCompletion;
+
+        Assert.Null(sidebar.ScopeTag);
+        Assert.False(sidebar.IsFilterActive);
+        Assert.Empty(sidebar.FilterResults);
+        Assert.Equal("Filter cleared.", sidebar.Status);
+        Assert.IsType<A11yEvent.SidebarFilterCleared>(Assert.Single(announced.Skip(before)));
+    }
+
+    /// <summary>
+    /// Codex PR 2 round 2, interleaving 1: Clear while a tree refresh is
+    /// still to publish holds "Filter cleared." for that publication — and
+    /// the next tag the user activates, before the publication, owns the
+    /// status line. The publication's automatic refilter must then show and
+    /// speak the tag's scoped count, not restore the cleared sentence over
+    /// it in silence.
+    /// </summary>
+    [Fact]
+    public async Task AClearHeldForAPublicationYieldsToTheNextTag()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "tag-clear-held");
+        Write(fixture, "spaced.md", "---\ntags: [\"two words\"]\n---\n\n# Spaced\n");
+        Write(fixture, "spaced note.md", "---\ntags: [\"two words\"]\n---\n\n# Second\n");
+        Write(fixture, "sky.md", "---\ntags: [\"blue sky\"]\n---\n\n# Sky\n");
+        Write(fixture, "sky two.md", "---\ntags: [\"blue sky\"]\n---\n\n# Sky two\n");
+        using VaultSession session = OpenScanned(fixture);
+        var announced = new List<A11yEvent>();
+        using ControlledSidebar rig = await ControlledSidebar.StartAsync(session, announced);
+        FilesSidebarViewModel sidebar = rig.Sidebar;
+        sidebar.ActivateTag("two words");
+        await rig.CompleteNextFilterAsync();
+        Assert.Equal("2 results for #two words.", sidebar.Status);
+
+        sidebar.Refresh();
+        sidebar.ClearFilterCommand.Execute(null);
+        Assert.Equal("Filter cleared.", sidebar.Status);
+        sidebar.ActivateTag("blue sky");
+        _ = await rig.NextFilterDelayAsync();
+        await rig.Tree.PublishNext();
+        await rig.CompleteNextFilterAsync();
+
+        Assert.Equal("2 results for #blue sky.", sidebar.Status);
+        AssertSpoke(announced, new A11yEvent.FileListCount(2, "blue sky"),
+            "File list, 2 items. Filtered by tag blue sky.");
+    }
+
+    /// <summary>
+    /// Codex PR 2 round 2, interleaving 2: Clear AFTER a refresh has
+    /// published, while that refresh is still finishing. Nothing is left
+    /// to overwrite the sentence, so nothing is held — a hold here waited
+    /// for the NEXT refresh, which then put "Filter cleared." back over
+    /// its own status. The finishing window is pinned by holding the
+    /// refresh's completion lock across the publication and the clear.
+    /// </summary>
+    [Fact]
+    public async Task AClearAfterThePublicationIsNotRevivedByALaterRefresh()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "tag-clear-late");
+        Write(fixture, "spaced.md", "---\ntags: [\"two words\"]\n---\n\n# Spaced\n");
+        Write(fixture, "spaced note.md", "---\ntags: [\"two words\"]\n---\n\n# Second\n");
+        using VaultSession session = OpenScanned(fixture);
+        using ControlledSidebar rig = await ControlledSidebar.StartAsync(session, []);
+        FilesSidebarViewModel sidebar = rig.Sidebar;
+        sidebar.ActivateTag("two words");
+        await rig.CompleteNextFilterAsync();
+
+        sidebar.Refresh();
+        Action publish = await rig.Tree.Next();
+        object completionGate = typeof(FilesSidebarViewModel)
+            .GetField("_treeRefreshCancellationGate", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(sidebar)!;
+        Monitor.Enter(completionGate);
+        try
+        {
+            publish();
+            sidebar.ClearFilterCommand.Execute(null);
+            Assert.True(sidebar.IsRefreshingTree, "The clear must land while the published refresh is still finishing.");
+            Assert.Equal("Filter cleared.", sidebar.Status);
+        }
+        finally
+        {
+            Monitor.Exit(completionGate);
+        }
+
+        await sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(10));
+        sidebar.Refresh(reportCount: true);
+        await rig.Tree.PublishNext();
+        await sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("2 top-level items.", sidebar.Status);
+    }
+
+    /// <summary>A sidebar whose tree publications and filter runs the fact
+    /// releases one at a time: the tree and filter each post to their own
+    /// <see cref="PublicationContext"/>, the filter's debounce is a delay
+    /// the fact completes, and both workers run inline.</summary>
+    private sealed class ControlledSidebar : IDisposable
+    {
+        private readonly Channel<TaskCompletionSource> _delays = Channel.CreateUnbounded<TaskCompletionSource>();
+
+        private ControlledSidebar(VaultSession session, List<A11yEvent> announced)
+        {
+            Sidebar = new FilesSidebarViewModel(
+                session,
+                announced.Add,
+                filterUiContext: Filter,
+                treeUiContext: Tree,
+                treeWorker: (work, token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    work();
+                    return Task.CompletedTask;
+                },
+                filterWorker: (work, token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    work();
+                    return Task.CompletedTask;
+                },
+                filterDelay: token =>
+                {
+                    var delay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    Assert.True(_delays.Writer.TryWrite(delay));
+                    return delay.Task.WaitAsync(token);
+                });
+        }
+
+        public FilesSidebarViewModel Sidebar { get; }
+        public PublicationContext Tree { get; } = new();
+        public PublicationContext Filter { get; } = new();
+
+        public static async Task<ControlledSidebar> StartAsync(VaultSession session, List<A11yEvent> announced)
+        {
+            var rig = new ControlledSidebar(session, announced);
+            await rig.Tree.PublishNext();
+            await rig.Sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(10));
+            return rig;
+        }
+
+        public Task<TaskCompletionSource> NextFilterDelayAsync() =>
+            _delays.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+
+        /// <summary>Release the next filter run's debounce and publish its
+        /// outcome.</summary>
+        public async Task CompleteNextFilterAsync()
+        {
+            (await NextFilterDelayAsync()).SetResult();
+            await Filter.PublishNext();
+            await Sidebar.FilterCompletion.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+
+        public void Dispose() =>
+            Sidebar.BeginSessionShutdownAndCaptureWork().SessionWork.Wait(TimeSpan.FromSeconds(10));
     }
 
     /// <summary>The last announcement is the typed event carrying the

@@ -84,13 +84,16 @@ public sealed class ReadingTagSearchRerouteTests : IDisposable
 
     /// <summary>
     /// The half SD-4 must NOT disturb: an editor tag still filters the
-    /// sidebar through <c>EditorTagActivated</c> and still speaks the
-    /// W0.5-3 residue string — mac's editor renders tags as unclickable
-    /// plain text, so this Windows-only affordance has no mac twin to
-    /// converge on — and it never touches the search overlay.
+    /// sidebar through <c>EditorTagActivated</c> — mac's editor renders
+    /// tags as unclickable plain text, so this Windows-only affordance has
+    /// no mac twin to converge on — and it never touches the search
+    /// overlay. W7-7 (R-3, codex PR 2 round 2): what it says is the
+    /// filter's one core-rendered result, <c>FileListCount</c>; the
+    /// host-composed "Filtered files by tag …" residue that also spoke was
+    /// a second result line and is gone.
     /// </summary>
     [Fact]
-    public async Task EditorTagActivationStillFiltersTheSidebarAndSpeaksTheResidueString()
+    public async Task EditorTagActivationFiltersTheSidebarAndSpeaksOneCoreResult()
     {
         string root = NewVault("editor-unchanged");
         using VaultLifecycleViewModel lifecycle = NewLifecycle(root);
@@ -111,9 +114,10 @@ public sealed class ReadingTagSearchRerouteTests : IDisposable
         Assert.Equal("#atag", lifecycle.FileSidebar!.FilterText);
         await lifecycle.FileSidebar.FilterCompletion;
         Assert.Contains(lifecycle.FileSidebar.FilterResults, row => row.Path == "note0.md");
-        A11yEvent.HostComposed residue = Assert.Single(
-            AnnouncedSince(announcedBefore).OfType<A11yEvent.HostComposed>());
-        Assert.Equal("Filtered files by tag atag.", residue.Text);
+        A11yEvent spoken = Assert.Single(AnnouncedSince(announcedBefore));
+        Assert.Equal(
+            new A11yEvent.FileListCount((uint)lifecycle.FileSidebar.FilterResults.Count, null),
+            spoken);
         // The reroute is one-directional: the editor path never opens
         // the search overlay.
         Assert.False(lifecycle.Search.IsOpen);

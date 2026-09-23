@@ -88,6 +88,103 @@ public sealed class SidebarTreeKeysTests : IDisposable
     }
 
     /// <summary>
+    /// R-2 (codex PR 2 round 2): a selection-driven open is heard as the
+    /// row's selection, then the Outline panel's once-per-file count of the
+    /// note it now shows (mac's announcedFilePath rule — true whatever has
+    /// focus). Focus stayed on the row, so no tab took it: neither the first
+    /// tab of an empty pane nor an open, inactive tab the selection
+    /// re-activates speaks a tab-focus line.
+    /// </summary>
+    [Fact]
+    public async Task SelectionOpens_SpeakNoTabFocus()
+    {
+        string root = NewVault("select-speech");
+        using VaultLifecycleViewModel lifecycle = NewLifecycle(root);
+        await lifecycle.OpenVaultAsync(root);
+        WorkspaceViewModel workspace = Assert.IsType<WorkspaceViewModel>(lifecycle.Workspace);
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        await SettleSidebarAsync(lifecycle);
+
+        Assert.Null(workspace.ActiveGroup.ActiveTab);
+        int before = Announced().Count;
+        sidebar.SelectedNode = Node(sidebar, "alpha.md");
+        Assert.Equal("alpha.md", workspace.ActiveGroup.ActiveTab?.Path);
+        Assert.Equal(
+            [new A11yEvent.RowSelected("alpha.md"), new A11yEvent.OutlineCount(1)],
+            Announced().Skip(before));
+
+        // beta opens explicitly in a second tab; a folder without a note
+        // moves the selection off alpha and opens nothing.
+        workspace.OpenPath("beta.md", WorkspaceOpenTarget.NewTab);
+        sidebar.SelectedNode = Node(sidebar, "Docs");
+        Assert.Equal("beta.md", workspace.ActiveGroup.ActiveTab?.Path);
+        before = Announced().Count;
+        sidebar.SelectedNode = Node(sidebar, "alpha.md");
+        Assert.Equal("alpha.md", workspace.ActiveGroup.ActiveTab?.Path);
+        Assert.Equal(2, workspace.ActiveGroup.Tabs.Count);
+        Assert.Equal(
+            [new A11yEvent.RowSelected("alpha.md"), new A11yEvent.OutlineCount(1)],
+            Announced().Skip(before));
+    }
+
+    /// <summary>
+    /// R-2 (codex PR 2 round 2): a selection never raises the modal
+    /// dirty-navigation gate. With the current note dirty, an arrow in
+    /// Files shows the destination in another tab of the group — no
+    /// dialog, no editor focus, the edits untouched — and the next arrow
+    /// replaces that clean tab in place. An explicit open still asks.
+    /// </summary>
+    [Fact]
+    public async Task SelectionBesideADirtyNote_OpensAnotherTabWithoutTheGate()
+    {
+        string root = NewVault("select-dirty");
+        var gate = new List<string>();
+        using VaultLifecycleViewModel lifecycle = NewLifecycle(
+            root,
+            confirmDirtyNavigation: (tab, _) =>
+            {
+                gate.Add(tab.Path);
+                return WorkspaceDirtyNavigationDecision.Cancel;
+            });
+        await lifecycle.OpenVaultAsync(root);
+        WorkspaceViewModel workspace = Assert.IsType<WorkspaceViewModel>(lifecycle.Workspace);
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        await SettleSidebarAsync(lifecycle);
+        workspace.OpenPath("alpha.md");
+        WorkspaceTabViewModel dirty = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        const string edited = "# Alpha\n\nEdited, unsaved.\n";
+        dirty.Text = edited;
+        Assert.True(dirty.IsDirty);
+        var focusRequests = new List<string>();
+        workspace.EditorPaneFocusRequested += (_, group) => focusRequests.Add(group.ActiveTab?.Path ?? "<no tab>");
+        int before = Announced().Count;
+
+        sidebar.SelectedNode = Node(sidebar, "beta.md");
+
+        Assert.Empty(gate);
+        Assert.Empty(focusRequests);
+        Assert.Equal("beta.md", workspace.ActiveGroup.ActiveTab?.Path);
+        Assert.Equal(new[] { "alpha.md", "beta.md" }, workspace.ActiveGroup.Tabs.Select(tab => tab.Path));
+        Assert.True(dirty.IsDirty);
+        Assert.Equal(edited, dirty.Text);
+        Assert.Equal(
+            [new A11yEvent.RowSelected("beta.md"), new A11yEvent.OutlineCount(1)],
+            Announced().Skip(before));
+
+        sidebar.SelectedNode = Node(sidebar, "Folder");
+        Assert.Equal(new[] { "alpha.md", "Folder/Folder.md" }, workspace.ActiveGroup.Tabs.Select(tab => tab.Path));
+        Assert.Empty(gate);
+        Assert.Equal(edited, dirty.Text);
+
+        // An explicit open from the dirty note still asks (and Cancel keeps it).
+        workspace.ActiveGroup.ActiveTab = dirty;
+        Assert.True(sidebar.OpenNode(Node(sidebar, "beta.md"), WorkspaceOpenTarget.CurrentTab));
+        Assert.Equal(new[] { "alpha.md" }, gate);
+        Assert.Same(dirty, workspace.ActiveGroup.ActiveTab);
+        Assert.Equal(edited, dirty.Text);
+    }
+
+    /// <summary>
     /// R-2: the explicit opens move focus — Enter's verb on the row the
     /// reader is on (the Open button's command), Ctrl+Enter's new tab, a
     /// folder's note — and a row with nothing to open asks for nothing,
@@ -259,17 +356,51 @@ public sealed class SidebarTreeKeysTests : IDisposable
         Assert.DoesNotContain(host.Requests, request => request.FocusEditor);
     });
 
+    /// <summary>
+    /// R-3 (codex PR 2 round 2): the Tags tree applies a tag when its
+    /// selection CHANGES, so every filter clear releases that selection —
+    /// Clear Sidebar Filter and an emptied field alike — and selecting the
+    /// same tag again applies it again. A one-tag vault has no other row
+    /// to move to first.
+    /// </summary>
+    [Fact]
+    public void TagTree_ReappliesTheSameTagAfterAClear() => RunSta(() =>
+    {
+        string root = NewVault("tag-again");
+        File.WriteAllText(Path.Combine(root, "tagged.md"), "---\ntags: [solo]\n---\n\n# Tagged\n");
+        using var host = new TreeHost(root);
+        host.Initialize();
+        host.Sidebar.ShowTags = true;
+        TreeViewItem row = host.TagRow("solo");
+
+        row.IsSelected = true;
+        Assert.Equal("#solo", host.Sidebar.FilterText);
+
+        host.Sidebar.ClearFilterCommand.Execute(null);
+        Assert.False(host.Sidebar.IsFilterActive);
+        row.IsSelected = true;
+        Assert.Equal("#solo", host.Sidebar.FilterText);
+        Assert.True(host.Sidebar.IsFilterActive);
+
+        host.Sidebar.FilterText = string.Empty;
+        row.IsSelected = true;
+        Assert.Equal("#solo", host.Sidebar.FilterText);
+    });
+
     private static string NavigationHelpText() => Commands.NavigationHelp.FilesTree;
 
     // ---- Helpers --------------------------------------------------------
 
-    private VaultLifecycleViewModel NewLifecycle(string root) =>
+    private VaultLifecycleViewModel NewLifecycle(
+        string root,
+        Func<WorkspaceTabViewModel, WorkspaceItemState, WorkspaceDirtyNavigationDecision>? confirmDirtyNavigation = null) =>
         new(
             pickVault: () => Task.FromResult<string?>(root),
             enqueueUi: action => action(),
             recentVaultsStore: new RecentVaultsStore(
                 Path.Combine(root, "device-state", "recent-vaults.json")),
             announce: Record,
+            confirmDirtyNavigation: confirmDirtyNavigation,
             sessionLoadWorker: work => Task.FromResult(work()));
 
     private void Record(A11yEvent announcement)
@@ -374,6 +505,7 @@ public sealed class SidebarTreeKeysTests : IDisposable
         public ListBox FilterResults { get; private set; } = null!;
         public ListBox DualPane { get; private set; } = null!;
         public TextBox RenameField { get; private set; } = null!;
+        public TreeView TagsTree { get; private set; } = null!;
         public List<(string Path, WorkspaceOpenTarget Target, bool FocusEditor)> Requests { get; } = [];
         public A11yEvent LastAnnouncement => _announced[^1];
 
@@ -409,6 +541,11 @@ public sealed class SidebarTreeKeysTests : IDisposable
             rows.Children.Add(FilterResults);
             var layout = new DockPanel();
             DockPanel.SetDock(RenameField, Dock.Top);
+            TagsTree = Detach<TreeView>(Assert.Single(
+                LogicalDescendants(Shell).OfType<TreeView>(),
+                tree => AutomationProperties.GetAutomationId(tree) == "SidebarTagTree"));
+            DockPanel.SetDock(TagsTree, Dock.Top);
+            layout.Children.Add(TagsTree);
             DockPanel.SetDock(DualPane, Dock.Bottom);
             layout.Children.Add(RenameField);
             layout.Children.Add(DualPane);
@@ -458,6 +595,23 @@ public sealed class SidebarTreeKeysTests : IDisposable
             PumpedDispatcher.Drain();
             Assert.Same(row, Keyboard.FocusedElement);
             return row;
+        }
+
+        /// <summary>The shipped Tags tree's row for <paramref name="full"/>,
+        /// once the tree shows it.</summary>
+        public TreeViewItem TagRow(string full)
+        {
+            TreeViewItem? row = null;
+            Assert.True(PumpedDispatcher.PumpUntil(() =>
+            {
+                TagsTree.UpdateLayout();
+                row = Sidebar.Tags
+                    .Where(tag => tag.Full == full)
+                    .Select(tag => TagsTree.ItemContainerGenerator.ContainerFromItem(tag) as TreeViewItem)
+                    .FirstOrDefault(container => container is not null);
+                return row is not null;
+            }));
+            return row!;
         }
 
         /// <summary>The key's tunnelling route through the real surface:

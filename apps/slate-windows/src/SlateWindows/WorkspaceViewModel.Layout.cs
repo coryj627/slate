@@ -73,7 +73,10 @@ internal sealed partial class WorkspaceViewModel
         }
 
         ActiveGroup = group;
-        if (tab is not null)
+        // W7-7 (R-2, codex PR 2 round 2): a Files selection's activation is
+        // quiet — focus stayed on the row, so no tab took it, and the row's
+        // own selection line is what the reader hears.
+        if (tab is not null && !_selectionOpenInProgress)
         {
             int index = group.Tabs.IndexOf(tab) + 1;
             _announce(new A11yEvent.TabFocused(
@@ -100,7 +103,38 @@ internal sealed partial class WorkspaceViewModel
         }
     }
 
-    private bool TryOpenItem(WorkspaceItemState item, WorkspaceOpenTarget target, bool requestEditorFocus = true)
+    /// <summary>True while a Files selection's open runs (W7-7 R-2): the
+    /// activations it causes post no <c>TabFocused</c>.</summary>
+    private bool _selectionOpenInProgress;
+
+    private bool TryOpenItem(
+        WorkspaceItemState item,
+        WorkspaceOpenTarget target,
+        bool requestEditorFocus = true,
+        bool fromSelection = false)
+    {
+        if (!fromSelection)
+        {
+            return TryOpenItemCore(item, target, requestEditorFocus, fromSelection: false);
+        }
+
+        bool outer = _selectionOpenInProgress;
+        _selectionOpenInProgress = true;
+        try
+        {
+            return TryOpenItemCore(item, target, requestEditorFocus: false, fromSelection: true);
+        }
+        finally
+        {
+            _selectionOpenInProgress = outer;
+        }
+    }
+
+    private bool TryOpenItemCore(
+        WorkspaceItemState item,
+        WorkspaceOpenTarget target,
+        bool requestEditorFocus,
+        bool fromSelection)
     {
         if (item.Kind == WorkspaceItemKind.Graph && TryFocusGlobalGraph())
         {
@@ -147,6 +181,18 @@ internal sealed partial class WorkspaceViewModel
         }
         else if (!ItemsReferToSameTarget(active.Item, item))
         {
+            if (active.IsDirty && fromSelection)
+            {
+                // W7-7 (R-2, codex PR 2 round 2): a Files selection never
+                // raises the modal dirty-navigation gate — an arrow in the
+                // tree must not throw a dialog over it and take focus. The
+                // dirty tab stays exactly as it is (no prompt, no save, no
+                // discard) and the selection shows in another tab of the
+                // group; the next arrow replaces that clean tab in place.
+                AddTab(group, item, activate: true);
+                return true;
+            }
+
             if (active.IsDirty)
             {
                 WorkspaceDirtyNavigationDecision decision = _dirtyNavigationDecision(active, item);

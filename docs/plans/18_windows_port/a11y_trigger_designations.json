@@ -259,7 +259,7 @@
         "status": "recorded"
       },
       "SidebarFilterCleared": {
-        "reason": "W7-7 R-3 (#1250, codex PR 2 round 1): Windows keeps one always-visible sidebar status line, so Clear Sidebar Filter replaces the cleared filter's summary with this sentence and speaks it once. Mac's filter overlay, with its summary, disappears on Escape, which stays silent; no Mac construction site.",
+        "reason": "W7-7 R-3 (#1250, codex PR 2 round 1): Windows keeps one always-visible sidebar status line, so a clear - Clear Sidebar Filter or the field emptied by the user - replaces the cleared filter's summary with this sentence and speaks it once. Mac's filter overlay, with its summary, disappears on Escape, which stays silent; no Mac construction site.",
         "decision": "docs/plans/15_files_sidebar/specs/fl4_spec.md",
         "status": "proposed"
       }
@@ -612,11 +612,6 @@
       },
       "WorkspaceViewModel.cs#WorkspaceTabViewModel.ToggleTask@1": {
         "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
-        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
-        "status": "recorded"
-      },
-      "WorkspaceViewModel.cs#WorkspaceViewModel.ActivateEditorTag@1": {
-        "engine": "Workspace pane/focus/anchor/missing-file availability and editor tag activation",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
