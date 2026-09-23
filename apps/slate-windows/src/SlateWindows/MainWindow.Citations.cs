@@ -299,7 +299,8 @@ public partial class MainWindow
     /// user's keyboard focus was ejected with the old container, so
     /// they would have to Tab back to resume. When the list owned focus
     /// before the publish, put it back on the restored row's container
-    /// (the list itself if the container has not generated yet) —
+    /// (the first row when no selection was restored; the list itself
+    /// only until the container is generated — W7-7 PR 4, #1247) —
     /// guarded so it never steals: a modal surface owns the moment, and
     /// a real focus claim elsewhere (the editor after a save's own
     /// landing) wins; only window-root/null focus is the stranded state
@@ -338,41 +339,14 @@ public partial class MainWindow
                     return;
                 }
 
-                if (PanelCitationsList.SelectedItem is not { } selected)
-                {
-                    _ = PanelCitationsList.Focus();
-                    return;
-                }
-
-                PanelCitationsList.ScrollIntoView(selected);
-                PanelCitationsList.UpdateLayout();
-                if (PanelCitationsList.ItemContainerGenerator.ContainerFromItem(selected)
-                    is ListBoxItem container)
-                {
-                    _ = container.Focus();
-                    return;
-                }
-
-                // The row's container has not generated yet — the
-                // virtualizing panel materializes it on the next layout
-                // pass (measured: at Input priority the generator still
-                // answers null and focus landed on the list itself). Hold
-                // focus on the list so it is never stranded, then seat it
-                // on the row once the container exists; the second step
-                // stands down if focus has moved on meanwhile.
-                _ = PanelCitationsList.Focus();
-                _ = Dispatcher.InvokeAsync(
-                    () =>
-                    {
-                        if (PanelCitationsList.IsKeyboardFocusWithin
-                            && ReferenceEquals(PanelCitationsList.SelectedItem, selected)
-                            && PanelCitationsList.ItemContainerGenerator
-                                .ContainerFromItem(selected) is ListBoxItem late)
-                        {
-                            _ = late.Focus();
-                        }
-                    },
-                    System.Windows.Threading.DispatcherPriority.Background);
+                // The restored row, else the first — never the bare list,
+                // from which Down walked into the menu bar (W7-7 PR 4,
+                // #1247, R-5). The helper carries this restore's two-step:
+                // a row the virtualizing panel has not generated yet
+                // (measured: at Input priority the generator still answers
+                // null) holds focus on the list, so it is never stranded,
+                // and is seated once the container exists.
+                _ = FocusFirstOrSelectedItem(PanelCitationsList);
             },
             System.Windows.Threading.DispatcherPriority.Input);
     }
@@ -651,7 +625,8 @@ public partial class MainWindow
                 {
                     return;
                 }
-                _ = PanelCitationsList.Focus();
+                // A row of the list, never the bare list (R-5, #1247).
+                _ = FocusFirstOrSelectedItem(PanelCitationsList);
             },
             System.Windows.Threading.DispatcherPriority.Input);
     }
