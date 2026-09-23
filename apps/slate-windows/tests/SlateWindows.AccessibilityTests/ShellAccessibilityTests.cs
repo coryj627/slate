@@ -990,27 +990,33 @@ public sealed partial class ShellAccessibilityTests
 
     /// <summary>A .NET type name as <c>ToString()</c> prints one: ROOTED in a
     /// namespace this app's types come from, then dotted or <c>+</c>-nested
-    /// identifiers with an optional generic arity and bracketed element or
-    /// argument types — "SlateWindows.Panels.PropertyRowViewModel",
+    /// identifiers, ANY of them with a generic arity
+    /// ("System.Collections.Generic.Dictionary`2+Enumerator[…]",
+    /// "SlateWindows.Outer`1+Inner`1[…]" — codex PR 3 round 2), ending in a
+    /// type: a PascalCase segment, or one a generic arity or bracketed element
+    /// or argument types follow — "SlateWindows.Panels.PropertyRowViewModel",
     /// "System.String[]" (a markdown table row's). The root is the
     /// discriminator, not the spelling (codex PR 3 round 1): spec §4.2's
     /// <c>^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$</c> matched "note.md", and a
-    /// lexical narrowing (a capitalised last segment) still flagged dotted
-    /// user content — "README.MD", "Part.One", "Smith.Jones" — that a row
-    /// is legitimately named by. The roots are those the shell's sources
-    /// import, plus the conformance host's; the residual is a user name
-    /// that is a root and a dot ("System.md").</summary>
+    /// lexical narrowing (a capitalised last segment) alone still flagged
+    /// dotted user content — "README.MD", "Part.One", "Smith.Jones". The
+    /// PascalCase tail then keeps a root-led file name speakable ("System.md",
+    /// "SlateWindows.note.md" — round 2). The roots are those the shell's
+    /// sources import, plus the conformance host's.</summary>
     private static readonly Regex TypeNamePattern = new(
-        @"^(?:SlateWindows|GridConformanceHost|System|Microsoft|ICSharpCode|uniffi|Svg|SkiaSharp|WpfMath)"
-        + @"(?:[.+][A-Za-z_]\w*)+(?:`\d+)?(?:\[.*\])?$",
+        @"^(?:SlateWindows|GridConformanceHost|System|Microsoft|ICSharpCode|uniffi|Svg|SkiaSharp|WpfMath)(?:`\d+)?"
+        + @"(?:[.+][A-Za-z_]\w*(?:`\d+)?)*"
+        + @"[.+](?:[A-Z]\w*(?:`\d+)?(?:\[.*\])?|[A-Za-z_]\w*(?:`\d+(?:\[.*\])?|\[.*\]))$",
         RegexOptions.CultureInvariant);
 
-    /// <summary>A C# record's synthesized <c>ToString()</c>:
+    /// <summary>A C# record's synthesized <c>ToString()</c>, the WHOLE name:
     /// "RecentVault { Path = …, LastOpenedMs = … }" (spec §4.2), its type
     /// name namespace- or nesting-qualified or not
-    /// ("SlateWindows.Foo.BarRow { Name = value }").</summary>
+    /// ("SlateWindows.Foo.BarRow { Name = value }"), and ending at the
+    /// dump's closing brace — a user's file named "Plan { owner = Alice }.md"
+    /// is no dump (codex PR 3 round 2).</summary>
     private static readonly Regex RecordDumpPattern = new(
-        @"^[\w.+]+ \{ .* = ",
+        @"^[\w.+]+ \{ .* = .* \}$",
         RegexOptions.CultureInvariant);
 
     /// <summary>The census's verdict on one name — a pure function, pinned
