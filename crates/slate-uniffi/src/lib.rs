@@ -5595,7 +5595,9 @@ impl From<core::NestedEmbed> for NestedEmbed {
     }
 }
 
-#[derive(Debug, Clone, uniffi::Enum)]
+// PartialEq/Eq: the reason rides inside `A11yEvent` (W7-7, #1251),
+// which derives both.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum EmbedUnresolvedReason {
     TargetNotFound {
         target: String,
@@ -5640,6 +5642,34 @@ impl From<core::EmbedUnresolvedReason> for EmbedUnresolvedReason {
             core::EmbedUnresolvedReason::ReadError { message } => {
                 EmbedUnresolvedReason::ReadError { message }
             }
+        }
+    }
+}
+
+/// The host hands a resolution's reason BACK to core when it announces
+/// an unavailable embed preview (W7-7, #1251: `A11yEvent::
+/// EmbedPreviewUnavailable`), so core renders the sentence from the
+/// reason rather than wrapping the host's card text.
+impl From<EmbedUnresolvedReason> for core::EmbedUnresolvedReason {
+    fn from(r: EmbedUnresolvedReason) -> Self {
+        match r {
+            EmbedUnresolvedReason::TargetNotFound { target } => Self::TargetNotFound { target },
+            EmbedUnresolvedReason::HeadingNotFound {
+                target_path,
+                heading,
+            } => Self::HeadingNotFound {
+                target_path,
+                heading,
+            },
+            EmbedUnresolvedReason::BlockNotFound {
+                target_path,
+                block_id,
+            } => Self::BlockNotFound {
+                target_path,
+                block_id,
+            },
+            EmbedUnresolvedReason::DepthLimitReached => Self::DepthLimitReached,
+            EmbedUnresolvedReason::ReadError { message } => Self::ReadError { message },
         }
     }
 }
@@ -8396,6 +8426,27 @@ pub enum A11yEvent {
     ShowingNote {
         display_name: String,
     },
+    CitationPopoverShown {
+        speech: String,
+    },
+    EmbedPreviewShown {
+        target: String,
+        title: String,
+    },
+    EmbedPreviewUnavailable {
+        target: String,
+        reason: Option<EmbedUnresolvedReason>,
+    },
+    CitationSummaryShown {
+        citations: u32,
+        sources: u32,
+    },
+    CitationDetailsShown {
+        title: String,
+    },
+    CitationDetailsUnresolved {
+        key: String,
+    },
     TaskToggleUnsaved {
         filename: String,
     },
@@ -8417,6 +8468,9 @@ pub enum A11yEvent {
     NoteSaveBlocked {
         filename: String,
         detail: String,
+    },
+    NoteSaveConflict {
+        filename: String,
     },
     RestoredVersionFrom {
         formatted_date: String,
@@ -10219,6 +10273,17 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::OpenedAtLine { filename, line } => C::OpenedAtLine { filename, line },
             F::OpenedFile { filename } => C::OpenedFile { filename },
             F::ShowingNote { display_name } => C::ShowingNote { display_name },
+            F::CitationPopoverShown { speech } => C::CitationPopoverShown { speech },
+            F::EmbedPreviewShown { target, title } => C::EmbedPreviewShown { target, title },
+            F::EmbedPreviewUnavailable { target, reason } => C::EmbedPreviewUnavailable {
+                target,
+                reason: reason.map(Into::into),
+            },
+            F::CitationSummaryShown { citations, sources } => {
+                C::CitationSummaryShown { citations, sources }
+            }
+            F::CitationDetailsShown { title } => C::CitationDetailsShown { title },
+            F::CitationDetailsUnresolved { key } => C::CitationDetailsUnresolved { key },
             F::TaskToggleUnsaved { filename } => C::TaskToggleUnsaved { filename },
             F::TaskToggleConflict { filename } => C::TaskToggleConflict { filename },
             F::TasksReviewShown { filter_name } => C::TasksReviewShown { filter_name },
@@ -10226,6 +10291,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::NoteSaved { filename } => C::NoteSaved { filename },
             F::SaveConflict { filename } => C::SaveConflict { filename },
             F::NoteSaveBlocked { filename, detail } => C::NoteSaveBlocked { filename, detail },
+            F::NoteSaveConflict { filename } => C::NoteSaveConflict { filename },
             F::RestoredVersionFrom { formatted_date } => C::RestoredVersionFrom { formatted_date },
             F::RestoredFile { filename } => C::RestoredFile { filename },
             F::RestoredFileAs {
