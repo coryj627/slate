@@ -1,0 +1,302 @@
+# W7-7 executable spec — NVDA matrix-pass remediation (#1244–#1257)
+
+Issues: [#1244](https://github.com/coryj627/slate/issues/1244) · [#1245](https://github.com/coryj627/slate/issues/1245) · [#1246](https://github.com/coryj627/slate/issues/1246) · [#1247](https://github.com/coryj627/slate/issues/1247) · [#1248](https://github.com/coryj627/slate/issues/1248) · [#1249](https://github.com/coryj627/slate/issues/1249) · [#1250](https://github.com/coryj627/slate/issues/1250) · [#1251](https://github.com/coryj627/slate/issues/1251) · [#1252](https://github.com/coryj627/slate/issues/1252) · [#1253](https://github.com/coryj627/slate/issues/1253) · [#1254](https://github.com/coryj627/slate/issues/1254) · [#1255](https://github.com/coryj627/slate/issues/1255) · [#1256](https://github.com/coryj627/slate/issues/1256) · [#1257](https://github.com/coryj627/slate/issues/1257). Wave: [W7](w7_spec.md) (the UIA accessibility program), continuing W7-5 (#1239) and W7-6 (#1240). Contracts: [40_nvda_matrix_remediation_contracts.md](../../40_nvda_matrix_remediation_contracts.md) (`R-n`). **Issue = unit of acceptance; PR = unit of review** (the W6 convention); eleven feature PRs plus this docs PR, per owner decision OD-4.
+
+**Origin.** The agent-operated NVDA pass of 2026-09-22 ([record](../reports/nvda_agent_matrix_pass_2026-09-22.md), transcript beside it) ran every NVDA row of the [§W-C matrix](../w_c_matrix.md) at main `039dc40` and filed fourteen findings as issues. This spec turns each issue into work an independent developer can pick up: the verified mechanism, the design, the code sites, the tests that must fail before the fix and pass after it, and the evidence each PR owes. Paths are relative to `apps/slate-windows/src/SlateWindows` unless stated; `tests/` means `apps/slate-windows/tests`; core is `crates/slate-core`.
+
+**Behavioral source (normative, in this order):** the owner decisions in §0 → program decision 6 (announcement text is core-rendered, never `HostComposed`) and contract 38's four-place rule (`a11y.rs` variants/priority/render/corpus rows · `tests/fixtures/a11y/corpus.json` · the `slate-uniffi` mirror · the Swift corpus mirror and `A11yCorpusCensus.cs`) → the shipped contracts these PRs amend (38 D-2/D-10, 39 N-1..N-4, 34 D15/E17/G2D-12, 35 B-9, 30 T4, 28 P7/P10) → the mac construction sites cited per section.
+
+---
+
+## 0. Owner decisions (2026-09-22/23)
+
+- **OD-1 (#1252 scope).** No live watcher in this delivery. Files Sidebar → Refresh runs core's incremental rescan and announces its result; the main window re-activating after being away also rescans, silently unless something changed. A real filesystem watcher in core is filed as a separate issue (§8.7).
+- **OD-2 (#1245 tree keys).** Keyboard selection in the Files tree keeps opening the note (mac parity: `selectedFilePath` drives the editor, `apps/slate-mac/Sources/SlateMac/FileTreeSidebar.swift:5755–5790`) but never moves keyboard focus out of the tree. Enter opens the selected row and moves focus into the note; Ctrl+Enter opens it in a new tab. The batch check box leaves the arrow order; Space on a row toggles it and the state is announced.
+- **OD-3 (#1256 board menu).** The visual board gets the same derived card menu as the outline row and the table row, opened for the seated card by Shift+F10 and the Applications key (contract 34 E17's "renderer card"; G2D-12 is lifted).
+- **OD-4 (delivery shape).** Eleven grouped feature PRs plus this docs PR: #1245+#1250, #1249+#1251 and #1255+#1256 travel together; every other issue is one PR. Each PR closes its issues explicitly.
+- **OD-5 (defaults, amendable at review).** Visual-board Right/Left follow connections (§11.2); the save-conflict sentence reuses mac's wording minus the dialog clause (§7.2); #1257 is a checklist correction plus a composed row hint (§12); the scan-finished copy states both counts (§8.5); #1244 is fixed by raising the notification through `AutomationInteropProvider` from a peer, not by creating windows (§2.3).
+
+## 1. Deliverables, order, collisions
+
+| PR | Issues | Branch | Depends on | Touches |
+|---|---|---|---|---|
+| 0 | docs | `claude/w7-7-nvda-remediation-spec` | — | this spec, contracts 40 |
+| 1 | #1244 | `claude/w7-7-pr1-notifications` | 0 | `AccessibilityNotificationDispatcher.cs`, `AnnouncementSeamCensus`, FlaUI announcements journey |
+| 2 | #1245, #1250 | `claude/w7-7-pr2-sidebar` | 0 | `FilesSidebarViewModel*.cs`, `WorkspaceTemplates.xaml` (tree template), `MainWindow.xaml` (sidebar), `ChordTable.cs`, `chords.json`, `WorkspaceViewModel.cs` (open focus flag) |
+| 3 | #1246 | `claude/w7-7-pr3-names` | 0 | item templates in `MainWindow.xaml` / `WorkspaceTemplates.xaml`, grid `Bind` callers, `GridConformanceHost`, `ShellAccessibilityTests` axe helper |
+| 4 | #1247 | `claude/w7-7-pr4-arrows` | 0 | `MainWindow.xaml` (`MainMenu`), `MainWindow.ShellRegions.cs`, `MainWindow.xaml.cs` (boundary), `MainWindow.Citations.cs`, `MenuBarCensus` |
+| 5 | #1248 | `claude/w7-7-pr5-sheet-fence` | 0 | a new attached behavior, every `IsFocusScope` sheet in `MainWindow.xaml`, a census |
+| 6 | #1249, #1251 | `claude/w7-7-pr6-announcements` | 0 (journey part after 1) | core `a11y.rs` + corpus + mirrors + ledger, `WorkspaceViewModel.cs` (save), `EditorInteractions.cs`, `WorkspaceViewModel.Citations.cs`, `EditorEmbedPreview.cs`, `WorkspaceTemplates.xaml` |
+| 7 | #1252 | `claude/w7-7-pr7-rescan` | 6 merged (core a11y rows) | core session/a11y, `VaultLifecycleViewModel.cs`, `FilesSidebarViewModel*.cs`, `QuickSwitcherViewModel.cs`, `MainWindow.xaml.cs` (Activated) |
+| 8 | #1253 | `claude/w7-7-pr8-reading-focus` | 0 | `MainWindow.xaml.cs` (`FocusEditorPane`), `WorkspaceViewModel.cs` (`ToggleViewMode`), `Reading/ReadingSurface.cs` |
+| 9 | #1254 | `claude/w7-7-pr9-palette` | 0 | `CommandPaletteViewModel.cs`, `MainWindow.Palette.cs`, palette XAML |
+| 10 | #1255, #1256 | `claude/w7-7-pr10-canvas` | 0 | `Canvas/CanvasNavigator.cs`, `Canvas/CanvasSurfaceView.cs`, `Canvas/CanvasOutlineView.cs`, `Canvas/CanvasRendererView.cs`, `Canvas/CanvasContextMenuPlan.cs` |
+| 11 | #1257 | `claude/w7-7-pr11-connections-doc` | 0 | `reports/w6_2_graph_at_checklist.md`, `Graph/ConnectionsPhrase.cs`, `Graph/ConnectionsLeafViewModel.cs` |
+
+**Order.** PR 0 first (the protocol's contracts-before-review rule). Then three waves, each PR on its own worktree branched from the `main` of the moment: wave A = {1, 3, 4, 5}; wave B = {2, 8, 9, 10, 11}; wave C = 6 then 7 (both edit `a11y.rs`, the corpus and the trigger ledger, so they are sequential). PRs 2, 3 and 4 all edit `MainWindow.xaml` in different regions; whichever lands second rebases. PR 6's journey assertion uses PR 1's listener; until PR 1 merges its unit facts stand alone.
+
+**Every PR:** one issue-closing PR; the contracts document gains that PR's round record (§13.4) — each PR appends only inside its own pre-created section; `Closes #n` in the PR body; the record's finding row for the issue gets a "Fixed in #PR" note in the same PR (the record is evidence, cells stay human-owned).
+
+## 2. PR 1 · #1244 — announcements from launch
+
+### 2.1 Goal
+Every typed announcement reaches a listening screen reader from the first frame, including the launch scan lines. No user gesture (a menu, a popup) is required to "unlock" them.
+
+### 2.2 What stands today (verified)
+- The one production raiser (`AccessibilityNotificationDispatcher.cs:17–24`) resolves the `VaultStatus` TextBlock's peer (`MainWindow.xaml:710–714`, constructed at `MainWindow.xaml.cs:32`) and calls `peer.RaiseNotificationEvent(kind, processing, text, activityId)`. `AnnouncementSeamCensus.cs:85–100` pins that exact expression; `AccessibilityNotificationDispatcherTests.cs:64–69` records the four arguments through the internal seam.
+- WPF's `AutomationPeer.RaiseNotificationEvent` (dotnet/wpf, `PresentationCore/System/Windows/Automation/Peers/AutomationPeer.cs`) is gated: `if (EventMap.HasRegisteredEvent(AutomationEvents.Notification)) { … RaiseAutomationEvent(NotificationEvent, provider, new NotificationEventArgs(…)) }`. `EventMap` (`PresentationCore/MS/internal/Automation/EventMap.cs`) is a process-static listener count populated only by `ElementProxy.AdviseEventAdded` (`…/ElementProxy.cs`), i.e. only when UI Automation advises one of this process's providers that a client subscribed.
+- Observed (record F1): after launch NVDA's log shows no `handleNotificationEvent` for any Slate announcement; the first menu popup (a new HwndSource) makes UIA advise the process, the map flips, and every later announcement arrives. Reproduced on every launch of the run.
+- The FlaUI suite has no notification capture (`ShellAccessibilityTests.cs:8261–8264`, `:9130`); its only UIA event subscription is `editor.RegisterAutomationEvent(…, TreeScope.Element, …)` (`:1259–1262`). So CI could not see this. `FlaUI.UIA3` 5.0.0 ships `RegisterNotificationEvent` (IUIAutomation5) and the file already hosts raw COM interop (`:10977–11008`).
+
+### 2.3 Design
+1. **Ungated raise.** The production raise path stops depending on WPF's listener map. It obtains the status TextBlock's provider through the protected-internal `AutomationPeer.ProviderFromPeer(peer)` — callable from any `AutomationPeer` subclass instance — and raises with `AutomationInteropProvider.RaiseAutomationEvent(AutomationElementIdentifiers.NotificationEvent, provider, new NotificationEventArgs(kind, processing, text, activityId))`, which is the same native call WPF makes past its gate (`UiaRaiseNotificationEvent`). Concretely: a `sealed class NotificationProviderPeer : FrameworkElementAutomationPeer` over a private, never-shown `FrameworkElement` exposes `internal IRawElementProviderSimple? ProviderOf(AutomationPeer peer) => ProviderFromPeer(peer)`; the dispatcher keeps resolving the TextBlock's peer exactly as today and passes it to `ProviderOf`. If the provider is null (element not yet connected) the raise is skipped, as WPF does.
+2. **Cheap when nobody listens.** Guard with `AutomationInteropProvider.ClientsAreListening` (true once any UIA client has connected this process); do not use `ListenerExists` for anything but diagnostics.
+3. **Diagnostics.** Under `SLATE_UIA_DIAGNOSTICS=1`, log once per state change `AnnouncementListenerState(clientsListening, notificationListenerExists)` through `HostLog.WriteUiAutomationDiagnostic` (`HostLog.cs:158–182`; add the `HostDiagnosticEvent` member), so a future run can tell "raised into a deaf process" from "not raised".
+4. **Contract 38 D-2** keeps "one production raiser"; the mechanism note is amended (R-1). `AnnouncementSeamCensus` re-pins the new shape: one raiser, same argument tuple, raised through `AutomationInteropProvider.RaiseAutomationEvent` with `AutomationElementIdentifiers.NotificationEvent`, and **no** `RaiseNotificationEvent` call anywhere in authored shell code (Roslyn scan via `CSharpSource`).
+5. **Rejected:** creating a transient popup/HwndSource at startup to provoke the advise (fragile, visible side effects, and it only helps clients already registered); waiting for `ListenerExists` (never flips without a popup).
+
+### 2.4 Tests (twins)
+- `AccessibilityNotificationDispatcherTests`: unchanged seam facts; add `ProductionRaiseSkipsWhenNoClientListens` (a fact over the guard, with `ClientsAreListening` abstracted through an injectable `Func<bool>` on the internal constructor).
+- `AnnouncementSeamCensus`: the re-pinned shape above; mutation-verify by reinstating `peer.RaiseNotificationEvent` (the census fails naming the call).
+- **FlaUI journey `Announcements_ReachADesktopScopedListenerFromLaunch`** (new partial `ShellAccessibilityTests.Announcements.cs`, in the shell gate): create the `UIA3Automation` and register a notification handler on the **desktop root** with `TreeScope.Subtree` **before** launching the app (the shape NVDA has: a client that exists first and never touches the new window before subscribing); launch on the fixture vault; assert the handler received the scan lines (`Scanning vault. N files to index.` and the scan-finished line) and, after `Ctrl+Alt+I`, "Right pane hidden." — all without any menu having been opened. Record every received (displayString, processing, activityId) tuple in the journey's evidence. **Mutation verification is mandatory:** with the gated `RaiseNotificationEvent` reinstated the journey must fail. If it does not (UIA advised the new window for the FlaUI client where it did not for NVDA), the registration must be brought closer to NVDA's: an `IUIAutomation6` event-handler group (`CreateEventHandlerGroup` → `AddNotificationEventHandler` → `AddEventHandlerGroup(root)`) through raw COM in the same file, and the fact re-run until it discriminates. A journey that passes before and after the fix does not ship.
+- Existing journeys keep passing (the raiser's arguments are unchanged).
+
+### 2.5 Evidence and acceptance
+- `w_c_matrix.md`: "Vault scan status" and "Main window and menu bar" automated-evidence cells cite the journey. `reports/w7_2_notification_etiquette_checklist.md`: a "Production agent-operated evidence" line citing the journey (human cells untouched).
+- Contract 38 D-2 amendment in the round record; issue #1244 closed by the PR.
+- Acceptance: journey green on the shell gate; the NVDA transcript re-run on a fresh launch (owner or agent) hears the scan lines with no menu opened.
+
+## 3. PR 2 · #1245 + #1250 — Files sidebar: tree keys and the tag filter
+
+### 3.1 What stands today (verified)
+- `FilesSidebarViewModel.SelectedNode` setter (`FilesSidebarViewModel.cs:555–586`) calls `RequestOpen(value.Path)` (`:581`; folder notes `:575`) → `OpenTargetRequested` (`:1951`) → `VaultLifecycleViewModel.cs:1258` → `WorkspaceViewModel.OpenPath` (`:1985`) → `OpenPathCore` (`:2044`, `requestEditorFocus` defaults true) → `TryOpenItem` (`WorkspaceViewModel.Layout.cs:103`) → `RequestActiveEditorFocus()` (`:126/:136/:200`) → `EditorPaneFocusRequested` (`:828`) → `MainWindow.xaml.cs:460–468` → `FocusEditorPane` → `SlateTextEditor.FocusInputOwner()` (`SlateTextEditor.cs:96`). A no-focus open already exists (`requestEditorFocus: false`, used by `WorkspaceViewModel.Connections.cs:274`) but `OpenPath` does not expose it. `SelectSilently` (`:594`) selects without opening.
+- The tree item template is `WorkspaceTemplates.xaml:23–45`; the batch `CheckBox` (`:31–36`) is focusable by default and sits in the arrow order. The filter results list (`MainWindow.xaml:1044–1063`, `FilterResults_SelectionChanged` `MainWindow.xaml.cs:1269–1276`) and the dual-pane list (`:1065–1076` → `:1278–1285`) reach the same setter.
+- No Enter/double-click open exists on the tree: `Window_PreviewKeyDown` handles only Ctrl+Z/Y, Delete, F2 and Ctrl+1–9 there (`MainWindow.xaml.cs:1023–1075`); `slate.sidebar.open` / `openInNewTab` / `openInSplit` (`Commands/ChordTable.cs:1329, 742–745`) have `"windows": null` in `chords.json` and are reachable only from the Files Sidebar menu, the sidebar buttons and the palette.
+- Tag filter: `ActivateTag` (`:830–836`) sets `FilterText = $"tag:\"{tag}\""`; the editor's Ctrl+Enter tag route is `EditorInteractions.cs:846` → `WorkspaceViewModel.cs:2025–2035` ("Filtered files by tag {tag}.") → `VaultLifecycleViewModel.cs:1280` → `ActivateTag`. Core's grammar (`crates/slate-core/src/sidebar_filter.rs:153–229`) knows `#tag` (nested `#a/b`, tag-or-descendant), `@date`, `has:task`, `ext:`, `path:`; anything else is a name-substring term, so `tag:"x"` matches nothing. `filter_files(query, scope_dir, scope_tag, …)` (`session.rs:5719`) takes a tag scope outside the text; the host passes null for both (`FilesSidebarViewModel.Filter.cs:348–353`). Mac (`AppState.swift:7120–7131`) uses `#tag` for plain tags and the tag scope for tags containing whitespace. The help text is a literal ToolTip at `MainWindow.xaml:878`. `tests/SlateWindows.Tests/ReadingTagSearchRerouteTests.cs:110` asserts the broken `tag:"atag"`.
+
+### 3.2 Design — tree keys (OD-2)
+1. `RequestOpen(path, focusEditor: false)` for every selection-driven open (tree, filter results, dual pane); the request carries the flag through `OpenTargetRequested` → `VaultLifecycleViewModel` → `WorkspaceViewModel.OpenPath(path, requestEditorFocus)`; `TryOpenItem` honours the flag on all three `RequestActiveEditorFocus` sites (verify; wire if not). The selection announcement (`RowSelected`) stays.
+2. New explicit opens on the tree, delivered where the tree has focus (a `PreviewKeyDown` arm beside F2's): **Enter** → `OpenSelected` (moves focus, today's `slate.sidebar.open` verb), **Ctrl+Enter** → `OpenSelectedInNewTab`, **Space** → toggle the focused row's `IsBatchSelected` (no-op on placeholders/group headers; not while an inline rename box has focus). The same Enter/Ctrl+Enter on the filter results and dual-pane lists.
+3. Chord rows (contract 39 N-3): surface-interaction rows `windows.filesTree.openSelected` (Enter), `windows.filesTree.openSelectedInNewTab` (Ctrl+Enter), `windows.filesTree.toggleBatchSelection` (Space) in `ChordTable.cs`, mirrored into `chords.json` by the generator; the tree's `HelpText` is composed from those rows through `NavigationHelp` (N-1; never a literal key name — N-2's audit census runs). `python scripts/generate-parity-matrix.py` must accept the rows (its evidence validation rejects invented ids).
+4. `CheckBox` in the tree template: `Focusable="False"` and `IsTabStop="False"` (pointer still toggles it). The row's `ItemStatus` exposes the batch state ("Checked for batch actions" / empty) for inspection; the existing "N items selected" announcement is the audible feedback.
+5. Focus stays in the tree after a selection-driven open (`FocusedRegion()` still `Files`); the opened note is shown. `FocusEditorPane` is not called for these opens.
+
+### 3.3 Design — tag filter
+1. `ActivateTag(tag)`: no whitespace → `FilterText = "#" + tag`; whitespace → clear the field and set a tag scope (`ScopeTag`, passed as `filter_files`'s `scope_tag`), mirroring mac. The Tags tree overload and the editor's Ctrl+Enter route both flow through it.
+2. Help/tooltip text (`MainWindow.xaml:878` and the field's `HelpText`): "Filter by words, #tag, path:, ext:, has:task, or @date." — accurate to the grammar; core's copy if one exists.
+3. `ReadingTagSearchRerouteTests.cs:110` flips to `#atag`; a new fact covers a whitespace tag → scope.
+
+### 3.4 Tests
+- Unit: `SelectedNode_OpensWithoutRequestingEditorFocus`, `OpenSelected_RequestsEditorFocus`, `Space_TogglesBatchSelectionOnTheFocusedRow` (tree key routing is view code — pin through a WPF-hosted fact or the FlaUI journey below), `ActivateTag_ComposesCoreGrammar` (plain and whitespace), `ChordTableTests` cover the three rows, the N-2 audit census stays green.
+- FlaUI `FilesTree_ArrowsKeepFocusEnterOpens` (extend `FluentShell_…` or add): Down through folder and file rows keeps focus in `FilesTree` while the editor shows the file; Enter moves focus into `MarkdownEditor`; Space on a row checks it and "1 item selected" is heard (via PR 1's listener once merged; until then assert the row's `ItemStatus`). Existing journeys that `Select()` a row and then type into the editor add the Enter press.
+- FlaUI tag route: select "accessibility" in the tag tree → the filter shows `#accessibility` and the results list has one row (fixture `note.md` carries `tags: accessibility`).
+- Mutation: reinstate `tag:"…"` → the unit fact fails; reinstate default focus on selection-driven opens → the journey fails on the focused-element assertion.
+
+### 3.5 Evidence
+Matrix rows "Files tree", "File filter/results", "Tag tree" automated-evidence cells cite the journeys; `w1_shell_at_checklist.md` #3/#4 keep their human cells; `at_navigation_map.md` gains the three tree rows; issues #1245 and #1250 closed.
+
+## 4. PR 3 · #1246 — accessible names for every item
+
+### 4.1 What stands today (verified)
+WPF names an item container with `item.ToString()` when nothing else names it. Sites and the names they need:
+
+| Surface | Site | Name source |
+|---|---|---|
+| Filter results (`SidebarFilterResults`) | `MainWindow.xaml:1044–1063`, no ItemContainerStyle | `FileTreeNodeViewModel.AutomationName` (`FilesSidebarViewModel.cs:113`, already bound by the tree at `MainWindow.xaml:1040`) |
+| Split workspace panes ("Split editor panes") | `WorkspaceTemplates.xaml:708–718`; items `WorkspacePaneNodeViewModel` (`WorkspaceViewModel.cs:1354`) | see §4.2 item 2 |
+| Welcome → Recent vaults | `MainWindow.xaml:769–787`; the inner Button is named (`:774`), the container is the `RecentVault` record (`RecentVaultsStore.cs:11`) | container excluded from the control view (the Button is the stop) |
+| Properties rows | `WorkspaceTemplates.xaml:380–385`; `Panels/PropertyRowViewModel.cs:22`, `AutomationName` at `:121` | bind it |
+| Grids | `Grids/AccessibleDataGrid.cs` `Bind(…, rowAutomationName, …)` (`:468–480`), applied per realized row in `OnLoadingRow` (`:215–224`); only `Graph/GraphTableView.cs:232` passes it | Bases `Bases/BaseSurfaceView.cs:693,749`, `Bases/DashboardSurfaceView.cs:203`; Bibliography `MainWindow.Citations.cs:434,456`; Canvas table `Canvas/CanvasTableView.cs:265` (`CanvasTableRow.SpeakableName`); bulk-rename preview `MainWindow.Properties.cs:285`; `Grids/ReadingTableGrid.cs:71` |
+| Template prompts | `MainWindow.xaml:3803–3817`; TextBox named (`:3813`), container not (`Templates/TemplateFlowViewModel.cs:24`) | container excluded from the control view |
+| Bulk-rename "Old key type" | `MainWindow.xaml:2948–2952`, `DisplayMemberPath="Label"` only; items `Panels/BulkRenameViewModel.cs:25` | `ComboBoxItem` name = `Label` |
+| `GridConformanceHost` fixture rows | `tools/GridConformanceHost` | pass `rowAutomationName` so the fixture models the rule |
+
+The FlaUI axe helper `AssertAxeClean` (`ShellAccessibilityTests.cs:832`) already walks every TreeItem and DataItem in `WaitForRealizedItemBounds` (`:866–900`); journeys already reach the filter results (`:498–518`), properties rows (`:2569`) and the bulk-rename combo (`:2641`). `CanvasDocumentTests.cs:811–823` has a XAML-text check for this bug class.
+
+### 4.2 Design
+1. **Name what is a stop; hide what is layout.** A container the reader lands on (filter result rows, property rows, grid rows, combo items) gets a name derived from the item's existing speakable name. A container that only wraps the real stop (recent-vault entries, template prompt rows, split-pane hosts) is removed from the UIA control view instead of named: a shared `LayoutItemsControl` (or an attached property applied through `ItemContainerStyle`) whose container peer answers `IsControlElementCore => false`, so NVDA speaks neither "list" nor "data item n of m" on a focus change and the inner control is the one stop.
+2. **Split panes**: the host ItemsControl is named "Editor panes" (Group) and its item containers are layout (item 1); the announcer already says "Editor pane 1 of 2, {title}." on pane moves (W7-6), so nothing positional is lost.
+3. **Grids**: every `Bind` call passes `rowAutomationName` (row identity, not the whole audio description): Bases = the row's file name, Bibliography = title (year), Canvas table = `SpeakableName`, preview = the note path, reading table = the first cell's text.
+4. **The census** (new, in the axe helper so every journey runs it): before each axe scan, every element with control type ListItem/DataItem/TreeItem/ComboBox/Custom/Group whose Name matches `^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$` (a dotted type name) or `^\w+ \{ .* = ` (a record dump) fails the journey with the element's path. Mutation: drop one binding → the journey names it.
+
+### 4.3 Tests
+`AccessibleDataGridTests` (`:1011` covers the hook; add one fact per new caller that the row Name is the identity), a XAML census in `tests/SlateWindows.Tests/Censuses` that every `ListBox`/`ItemsControl`/`ComboBox` with an `ItemsSource` binding in authored XAML either names its containers or marks them layout (the `CanvasDocumentTests.cs:811–823` shape, extended), the axe-helper census above, `GridConformanceTests` updated for the fixture names.
+
+### 4.4 Evidence
+Matrix rows Recent vaults, File filter/results, Split workspace, Properties, Bases, Citation surfaces, Canvas table, Templates, Data grids: automated-evidence cells cite the census; issue #1246 closed.
+
+## 5. PR 4 · #1247 — arrows never leave the region
+
+### 5.1 What stands today (verified)
+- `MainMenu` (`MainWindow.xaml:79–85`): `Focusable="False"`, `KeyboardNavigation.TabNavigation="None"`, no `DirectionalNavigation`. `MenuBarCensus.cs:87–93` pins the two attributes. Nothing in the file sets `DirectionalNavigation`; the earlier same-symptom fix bound the empty TabControl's focusability to `HasItems` (`WorkspaceTemplates.xaml:576–585`).
+- Container landings that put focus on a bare container: `TryLand(RightPaneRail)` falls back to `RightPaneLeavesList.Focus()` (`MainWindow.ShellRegions.cs:180–188`); the Ctrl+R boundary (`WorkspaceViewModel.cs:1924–1941` → `VaultLifecycleViewModel.cs:1303–1306` → `MainWindow.xaml.cs:641–685`) ends in `RightPaneLeavesList.Focus()` (`:682`), never the review leaf; `RestoreCitationFocus` and `RestoreFocusTo` fall back to `PanelCitationsList.Focus()` (`MainWindow.Citations.cs:343, 363, 654`); the empty editor landing is `ContentPaneBorder.Focus()` (`:152`); View as List moves no focus (`Bases/BaseSurfaceView.cs:635–641`).
+- From every one of these, Up/Down/Left/Right walked into a top-level `MenuItem` (record F4; fresh-launch repro with no Alt press, transcript `F7 clean repro` 17:57:16).
+
+### 5.2 Design
+1. `MainMenu` gets `KeyboardNavigation.DirectionalNavigation="None"`; `MenuBarCensus` pins it beside the other two (R-4). Alt, Alt+letter and F6 remain the only routes in (W7-5/W7-6).
+2. **No landing on a bare container.** A shared helper `FocusFirstOrSelectedItem(Selector)` (select the current item, else the first, realize its container, focus it; return whether an item took focus) replaces the bare `RightPaneLeavesList.Focus()` / `PanelCitationsList.Focus()` fallbacks; an empty list lands on its empty-state notice when one exists, else the list, and that case is recorded.
+3. **Ctrl+R lands in the review.** The right-pane boundary handler lands on the shown leaf's first focusable stop when the leaf has one (the `RightPaneContent` arm's `VisibleLeafBody()` + `FirstFocusable`), and on the rail's selected item otherwise — so Ctrl+R puts the reader on "All, N tasks" and Down moves to "Due today".
+4. **Radio groups behave like Windows radio groups.** The Tasks Review filter radios and the canvas/graph view switchers get `KeyboardNavigation.DirectionalNavigation="Cycle"` on their panel, and an attached behavior checks the radio that receives keyboard focus from an arrow (Win32 convention; today Right on "Outline" focuses "Table" without checking it — record F47).
+5. Empty editor: `ContentPaneBorder` gets `KeyboardNavigation.DirectionalNavigation="Contained"`, so arrows on the empty stop do nothing (its announcement was just spoken; nothing else is a better destination).
+
+### 5.3 Tests
+- `MenuBarCensus`: the third attribute; a Roslyn/XAML census that every `Selector` focus fallback in `MainWindow*.cs` goes through the helper (structural, singleness asserted).
+- FlaUI `RegionStops_ArrowsStayInRegion`: zero-tab vault → F6 to `ContentPane` → Down → focused element is still `ContentPane` (not a MenuItem); Ctrl+R → focused element is the "All" radio → Down → "Due today" radio is focused **and** checked; Shift+F6 into a Citations list with rows → focused element is a row; F6 to the rail with no selection → focused element is a rail row. Mutation: remove `DirectionalNavigation` → the first assertion fails.
+
+### 5.4 Evidence
+Matrix rows "Main window and menu bar", "Right-pane leaf registry", "Tasks panel + review flow", "Citation surfaces" cite the journey; `w1_shell_at_checklist.md` #8 keeps its human cells; issue #1247 closed.
+
+## 6. PR 5 · #1248 — sheets fence the keyboard
+
+### 6.1 What stands today (verified)
+- `TemplateFlowOverlay` (`MainWindow.xaml:3740–3760`): `FocusManager.IsFocusScope="True"`, `TabNavigation="Cycle"`, `ControlTabNavigation="Cycle"`, `PreviewKeyDown="TemplateFlowOverlay_PreviewKeyDown"` (`MainWindow.Templates.cs:459–504`: Escape and Enter only; Enter from a field runs Next by design, T4/TD-5). The prompts `ItemsControl` and its ScrollViewer are `Focusable="False"` (`:3801–3818`); each prompt TextBox keeps `AcceptsTab=false`.
+- Sixteen overlays in `MainWindow.xaml` carry `FocusManager.IsFocusScope="True"` (lines 2263, 2377, 2662, 2837, 2911, 3032, 3168, 3222, 3276, 3375, 3613, 3751, 3891, 3990, 4028, 4072); none fences Tab — Add property and Bulk rename passed the run only because they were opened from the Properties header, not from the editor.
+- Mechanism (verified in dotnet/wpf and AvalonEdit source): a TextBox binds Tab to `EditingCommands.TabForward`; with `AcceptsTab=false` its CanExecute declines and sets `ContinueRouting`; the unhandled command bubbles to the overlay; because the overlay is a focus scope, `CommandManager` re-targets it at the parent scope's logically focused element — AvalonEdit's `TextArea` — whose `TabForward` binding has no CanExecute and inserts `\t`. Three Tabs = three tab characters in the note behind the sheet, and its tab reads "unsaved changes" (record F5). Shift+Tab (`TabBackward`) takes the same route.
+
+### 6.2 Design
+1. **One fence, every sheet.** An attached behavior `SheetKeyboardFence.IsEnabled="True"` set on every `IsFocusScope` overlay: (a) `PreviewKeyDown` for Tab / Shift+Tab (no other modifiers) performs the traversal itself — `(Keyboard.FocusedElement as UIElement)?.MoveFocus(new TraversalRequest(Next|Previous))` inside the overlay's `Cycle` scope — and marks the event handled; (b) a `CommandManager.PreviewCanExecute` handler on the overlay answers `EditingCommands.TabForward`/`TabBackward` (and `Keyboard.FocusedElement` being inside the overlay) with `CanExecute=false, ContinueRouting=false, Handled=true`, so nothing bubbles to the editor for any other Tab source (a repeat, an IME). No other command is intercepted: Ctrl+chords the sheet does not own still reach their global bindings (contract 28's modal-surface rules stand).
+2. The prompt Tab chain: Topic → Attendees → … → Cancel → Next → (cycle). Enter's step semantics are unchanged (T4).
+3. **Census** `SheetFenceCensus`: every element in authored XAML with `FocusManager.IsFocusScope="True"` also sets the fence; mutation: remove one → the census names it.
+
+### 6.3 Tests
+- WPF-hosted fact `TabInsideASheetNeverReachesTheEditor`: host a window with a `SlateTextEditor` and a fenced overlay holding two TextBoxes; send Tab through `InputManager`/`KeyboardDevice` to the first box; assert focus on the second and the editor's text unchanged; reinstate the unfenced overlay → the fact fails (the editor gains a tab).
+- FlaUI `Templates_PromptTabTraversalStaysInTheSheet` (extend `Templates_PickerPromptsCreateAndCancel_AreClean` `:5575`): open the sheet from a focused editor, press Tab, assert focus on "Attendees", press Shift+Tab, assert "Topic", cancel, assert the note's tab status is still "Saved" and its text unchanged. The same press on Add property and Bulk rename opened from the editor by chord (`Ctrl+Shift+R`).
+
+### 6.4 Evidence
+Matrix "Templates", "Properties header + sheets", "Canvas prompt sheets" automated cells cite the journeys; contract 30 T4 gains the fence note (R-5); issue #1248 closed.
+
+## 7. PR 6 · #1249 + #1251 — what a failed save and a popover say
+
+### 7.1 What stands today (verified)
+- Save: `VaultError::WriteConflict` (`crates/slate-core/src/lib.rs:250–262`) carries three fields; the generated binding composes its message from them (`src/SlateUniffi/generated/slate_uniffi.cs:36976–36982`), and `WorkspaceViewModel.cs:684` posts `NoteSaveBlocked(filename, exception.Message)` (also `:610` for the integrity path; the status line at `:682`). Core renders "Save blocked. Could not save {filename}: {detail}. Your edits remain in the editor." (`a11y.rs:1872–1874`); mac posts `SaveConflict(filename)` → "Save blocked. {filename} was modified externally. Resolve in the dialog." (`a11y.rs:1875–1877`; `AppState.swift:13865–13882`). `RecoveryAnnouncementTests.cs:11–42` pins the prefix, the filename, no "dialog", High — and does not forbid hashes. Contract 38 D-10 says "the detail is the original error".
+- Popovers: `EditorInteractionPopover` (`WorkspaceTemplates.xaml:463–543`, `IsDialog`, Name bound to `PopoverAutomationName` `:469`); `OpenPopover` (`EditorInteractions.cs:3162–3171`) and the host (`EditorInteractionPopoverHost.cs:82–106`) focus Close; no announcement. The name is set at `:1286` (loading), `:1385/:1395` (unavailable/resolved embed), `:1679–1683` (citation), `:2772–2776` (not found); the embed result lands later in `PublishEmbedPreview` (`:1357–1400`). Citation summary (`WorkspaceViewModel.Citations.cs:255–294`; focus `MainWindow.Citations.cs:569–585`; name `MainWindow.xaml:3173` from `Panels/CitationSummaryViewModel.cs:53–59`) and details (`:299–314`; focus `:557–562`; name `:3037`) announce nothing. The pattern that does: `AddPropertySheet = sheet; sheet.SheetShown();` (`WorkspaceViewModel.Properties.cs:131–133`) → `_announce(new A11yEvent.AddPropertySheetShown())` (`Panels/AddPropertyViewModel.cs:57`), core variants at `a11y.rs:841/843`, High at `:1714–1715`, text at `:1961/:1963`, FFI `crates/slate-uniffi/src/lib.rs:8484–8486`, Swift `AddPropertySheet.swift:120`, mirrors `A11yCorpusCensusTests.swift:147` / `A11yCorpusCensus.cs:154`.
+- Embed preview text: `EditorEmbedPreview.cs:124–135` builds `IsReadOnly` TextBoxes without `IsReadOnlyCaretVisible`; WPF's `OnQueryStatusCaretNavigation` disables caret movement exactly then, so Down scrolls the focusable outer ScrollViewer (`WorkspaceTemplates.xaml:494–504`) and NVDA re-reads line 1. The "Preview content" TextBox (`:512–523`) has the same defect. `Reading/ReadingSurface.cs:34–35` is the precedent (`IsReadOnlyCaretVisible = true`).
+
+### 7.2 Design — the conflict sentence (D-10 amendment, R-6)
+1. New core variant `NoteSaveConflict { filename }`, priority High, rendering **"Save blocked. {filename} was modified externally. Your edits remain in the editor."** (mac's sentence minus the dialog clause; OD-5). Corpus row, fixture regeneration, FFI mirror, Swift mirror (mac keeps posting `SaveConflict`; the mirror only knows the variant), Windows census, trigger ledger regenerated (`scripts/a11y_trigger_ledger.py`).
+2. `WorkspaceTabViewModel.Save`: when the failure is `VaultException.WriteConflict` post `NoteSaveConflict(filename)`; every other failure keeps `NoteSaveBlocked(filename, detail)`. The inline `Status` for a conflict uses the same sentence (no `@…Hash` text anywhere on screen either). Save All and save-before-close reach the same arm.
+3. `RecoveryAnnouncementTests`: `ConflictingSaveSpeaksTheConflictSentence` (contains the filename, "modified externally", "remain in the editor"; contains neither "Hash" nor "@" nor a 64-hex run) and the existing preservation facts stay.
+
+### 7.3 Design — popovers and sheets announce their outcome (R-7)
+1. New core variants (High, ImportantMostRecent, like the sheet-shown pair): `CitationPopoverShown { speech }` ("{speech}" — the preview's speech, already "Citation. …"), `EmbedPreviewShown { target, title }` ("Embed preview for {target}. {title}."), `EmbedPreviewUnavailable { target, reason }` ("Embed preview for {target}. {reason}." — the unresolved reason already rendered by `:2770–2778`), `CitationSummaryShown { citations, sources }` ("Citation summary. {citations} citations referencing {sources} unique sources."), `CitationDetailsShown { title }` ("Citation expanded. {title}."). Four places each; the ledger regenerated.
+2. Post points: citation popover at open (content is immediate); embed preview in `PublishEmbedPreview` when the result lands (announcing at open would say "Loading"); "not found"/unavailable in the same publish; summary and details in their open sites (the `SheetShown()` shape). The pane Names stay (`IsDialog`) so a reader who asks "where am I" still gets the outcome.
+3. Mac: no wiring in this PR; the corpus mirrors the variants (census parity) and the divergence is recorded (R-7, AR-2) for the mac owner.
+
+### 7.4 Design — readable preview text
+`EditorEmbedPreview.cs` and the "Preview content" TextBox set `IsReadOnlyCaretVisible = true`; the outer ScrollViewer is not focusable (`Focusable="False"`) so arrows reach the caret; a WPF-hosted fact pins both flags, and the journey reads two lines with Down through `TextPattern` (the caret line changes).
+
+### 7.5 Tests
+Unit: `RecoveryAnnouncementTests` (above); `W2EditorInteractionTests` facts that opening a citation popover posts `CitationPopoverShown`, a resolved embed posts `EmbedPreviewShown` on publish, an unresolved one posts `EmbedPreviewUnavailable`, and the summary/details sheets post on open; `A11yCorpusCensus` and the Rust corpus tripwires (fail until every mirror lists the variants). FlaUI: `CitationSurfaces_GridsSheetsAndChords_AreClean` (`:2717`) asserts the summary announcement through PR 1's listener; the editor journey asserts the embed preview announcement and the two-line read.
+
+### 7.6 Evidence
+Contract 38: D-10 amendment and the new rows in the ledger; matrix "Editor semantic menu and popover", "Citation surfaces" cells; `w2_editor_at_checklist.md` #4 and `w7_2` #9 evidence lines; issues #1249 and #1251 closed. Core change: `cargo fmt --check`, clippy, `cargo test -p slate-core a11y` with `SLATE_REGENERATE_FIXTURES=1` then clean, `generate-bindings.ps1`, the Swift mirror edits (mac lane arbitrates).
+
+## 8. PR 7 · #1252 — files created outside Slate appear (OD-1)
+
+### 8.1 What stands today (verified)
+- `VaultLifecycleViewModel.HandleFileChange` (`:729–797`) handles Created/Renamed/Modified/Deleted — re-seats missing tabs, notifies reading/bases/graph, `QuickSwitcher.ApplyFileChange` (`:785`), sidebar refresh after 150 ms (`:786–795`) — but these events come only from core's `notify_file_change` on Slate's own writes (`session.rs:4253`; trait doc `:705–715`; host comment `:439–441`; bridge `crates/slate-uniffi/src/lib.rs:5240–5255`).
+- Core's `watch` returns `Ok(None)` on every platform (`crates/slate-core/src/vault/fs.rs:973–978`, pinned at `:1859`); `vault/provider.rs:221–224` promises a "refresh-on-foreground" fallback that nothing implements. The host scans once, at open (`VaultLifecycleViewModel.cs:455–472`: `ScanInitialWithProgress`). The only `FileSystemWatcher` is the sync-marker watcher (`SyncMarkerWatcher.cs:14–26`, three directories, non-recursive).
+- Refresh (`FilesSidebarViewModel.cs:428` → `TreeOperations.cs:56`) re-reads the SQLite tree snapshot (`ListDirChildrenPage`, `:888–896`; `session/directory_page.rs:312–328`), sets `Status = "N top-level items."` (`:449–452`, a plain TextBlock, `MainWindow.xaml:1007–1011`) and announces nothing. Quick Open's list is loaded once at open (`:1414–1432`, `ListFiles(OpenableDocuments)`) and changed only by `ApplyFileChange` (`QuickSwitcherViewModel.cs:242–259`); the sidebar filter queries the `files` table.
+- `ScanReport.files_indexed` counts files read and hashed this pass (new or changed); unchanged files are `files_skipped` (`session.rs:667–680`, `:9979`, `:10091`, `:10209`; `files_seen` `:9542`). The host shows and announces `FilesIndexed` (`:467`, `:678–679`; `ScanAnnouncementGate.cs:43–46`; `a11y.rs:1823–1825`), which is why a reopened vault says "0 files indexed".
+
+### 8.2 Design — the rescan
+1. Core: `scan_initial_with_progress` is the walk (`session.rs:2868`). Verify, with a Rust fact, that a second run on an open session (a) indexes a file created since the first run, (b) re-indexes a modified one, (c) removes rows for a deleted one (the reconcile pair under the lock), and (d) reports `files_indexed`/`files_seen`/removed counts; if (c) or the removed count is missing, add them here (the scan is the only reconciliation Windows has under OD-1). Expose the removed count on `ScanReport` if absent.
+2. Host `VaultLifecycleViewModel.RescanAsync(RescanReason reason)`: refuses while a scan, import or trash is in flight or the vault is closing; runs the scan through `_runSessionLoad` with the progress listener (the existing gate `ScanAnnouncementGate` governs progress lines); then in order: `FilesSidebar.Refresh()`, Quick Open list replaced from `LoadSwitcherFiles` (a new `QuickSwitcherViewModel.ReplaceFiles`), the same notifies `HandleIndexPhase(ScanFinished)` sends today (graph, bases, reading), then the announcement (§8.3). Generation-guarded; one rescan at a time (a second request while one runs is coalesced into "run once more after").
+3. **Refresh** (`RefreshCommand`, the "Refresh files" button, the Files Sidebar menu item): `RescanAsync(Explicit)`.
+4. **Foreground**: `MainWindow.Activated` → if the window was deactivated ≥ 2 s ago and the last rescan ended ≥ 5 s ago and no modal surface is open → `RescanAsync(Foreground)`. `Deactivated` records the time. No rescan on the first activation (the open scan just ran).
+
+### 8.3 Design — what it says (R-8)
+1. New core variant `VaultRescanFinished { reason, indexed, removed }` (Medium): "Files refreshed. {indexed} new or changed, {removed} removed." / "Files refreshed. No changes." An explicit Refresh always announces; a foreground rescan announces only when `indexed + removed > 0`.
+2. **Scan-finished copy** (OD-5): `VaultScanFinished` gains `files_seen`: "Scan complete. {seen} files, {indexed} new or changed." (both hosts; the corpus rows, the Swift mirror and mac's post site update; `ScanAnnouncementGate.Finished` passes both counts). The status-bar text becomes "Scan finished: {seen} files, {indexed} new or changed."
+3. Four places for both variants; ledger regenerated; contract 38 D-3 amended.
+
+### 8.4 Tests
+Rust: the rescan facts of §8.2 item 1. Windows unit: `RefreshRunsARescanAndAnnounces`, `ForegroundRescanIsThrottledAndSilentWhenNothingChanged`, `RescanReplacesTheQuickOpenList`, `ARescanDuringAnImportIsRefused`, the D-3 render facts. FlaUI `ExternalFiles_AppearAfterRefresh`: launch, create `late.md` beside the fixture, invoke Files Sidebar → Refresh, assert the tree lists `late.md`, Quick Open finds it, and (through PR 1's listener) "Files refreshed. 1 new or changed, 0 removed." was heard; then delete it, Refresh, assert it is gone and the announcement counts the removal. Mutation: skip the Quick Open replacement → the journey fails on the Quick Open assertion.
+
+### 8.5 Evidence and follow-up
+Matrix "Vault scan status", "Files tree", "Quick Open" cells; `w1_shell_at_checklist.md` #2 and `w7_2` #4 evidence lines; contract 38 D-3 amendment; issue #1252 closed. **Follow-up issue to file from PR 7:** "core: real vault watcher (notify) with the refresh-on-foreground fallback as the baseline" — accepted risk AR-3 until then.
+
+## 9. PR 8 · #1253 — reading view is the editor stop
+
+### 9.1 What stands today (verified)
+`ToggleViewMode` (`WorkspaceViewModel.cs:224–254`, wired at `SlateCommandRegistrar.cs:448` / `:1712–1714`) moves no focus; `ReadingSurface.IsVisibleChanged` focuses itself only when `_lastMerged` is non-null (`Reading/ReadingSurface.cs:199–205`) and otherwise `ClaimsFocusAfterApply` decides after content arrives (`:426–440`). `FocusEditorPane` (`MainWindow.xaml.cs:1679–1742`) has canvas and graph arms but no reading arm: it focuses the `SlateTextEditor` only when visible (`:1710–1715`); a reading tab's editor is collapsed (`WorkspaceTemplates.xaml:389–436` swap by visibility), so it falls to `TabItem.Focus()` (`:1725–1730`). `TryLand(Editor)` (`MainWindow.ShellRegions.cs:133–145`) then reads `FocusedRegion()` = TabBar, treats it as a refusal, and the ring skips the editor. Quick Open commit (`:624–629`) and the palette's close fallback (`MainWindow.Palette.cs:403–405`) reach the same function.
+
+### 9.2 Design
+1. **Reading arm.** In `FocusEditorPane`, before the text-editor arm: if the active tab is in reading mode (the tab's view-mode property) find the visible `ReadingSurface` whose `DataContext` is the tab and focus it (`Focus()`, caret at `ContentStart` if nothing is seated); return when it took focus. The classifier already reports anything under `ContentPaneBorder` that is not a tab item as `Editor`.
+2. **The toggle requests focus.** `ToggleViewMode` ends with `RequestActiveEditorFocus()` in both directions; `ReadingSurface`'s own two focus claims stay for the asynchronous first content (no double landing: `ClaimsFocusAfterApply` already refuses when focus is within).
+3. Quick Open / Outgoing links / palette close inherit the arm.
+
+### 9.3 Tests
+WPF-hosted fact for the arm (a window with a reading-mode tab: `FocusEditorPane` lands on the surface). FlaUI `ReadingView_IsTheEditorStop`: open a note, Ctrl+Shift+E → focused AutomationId `ReadingSurface`; F6 from Files → `ReadingSurface`; Shift+F6 from the rail → `ReadingSurface`; Quick Open into the reading tab → `ReadingSurface`; Ctrl+Shift+E back → `MarkdownEditor`. Mutation: remove the arm → the first assertion fails.
+
+### 9.4 Evidence
+Matrix "Reading view (W3-1)" cell; `w3_content_at_checklist.md` #1 evidence line; contract 39 (the F6 ring table's editor row) amended (R-9); issue #1253 closed.
+
+## 10. PR 9 · #1254 — the palette answers at typing speed
+
+### 10.1 What stands today (verified)
+- By decision the palette recomputes synchronously on the UI thread per keystroke (`CommandPaletteViewModel.cs:166–179`): `Query` → `Recompute` (`:269–288`, `:708–769`) sends the open-time snapshot through FFI `PaletteSections` (`crates/slate-uniffi/src/lib.rs:8076`; `palette.rs:237`), calls `DisabledReason` → `CanExecute` per row (`:735`; `PaletteCommandSource.cs:64`; `SlateCommandRegistrar.cs:299–323`), then the view builds a fresh `CollectionViewSource` and swaps `ItemsSource` (`MainWindow.Palette.cs:206–213`, `RefreshPaletteGrouping`) with `ScrollIntoView` (`:236`); the ListBox is grouped without `IsVirtualizingWhenGrouping` (`MainWindow.xaml:2699–2742`, templates `:2755–2777`), so every row and segment template is rebuilt. Which step costs ~2.5 s at the first keystroke is not yet measured.
+- The stale "Selected: New Canvas": `RefreshPaletteGrouping` swaps `ItemsSource` outside the `_syncingPaletteSelection` guard (the guard wraps only `SyncPaletteSelectionToList`, `:220–242`); the ListBox is not `IsSynchronizedWithCurrentItem="False"`; a bound CollectionView selects its first row on swap → `SelectionChanged` → `Select(row)` (`:245–255`; VM `:503`) → `PaletteCommandSelected` for a row the user never chose; the count then queues behind it (contract 28 P10 / 38 D-1). Both are unpinned: `CommandPaletteTests` cover the view model only (`:720, :741, :779, :806, :835`).
+
+### 10.2 Design
+1. **Profile first (Phase 1 of the debugging protocol).** A `Stopwatch` diagnostic under `SLATE_UIA_DIAGNOSTICS=1` logs the FFI, the per-row disabled-reason pass, and the view rebuild for the first three keystrokes on the demo vault; the PR description records the numbers before and after.
+2. **Stale selection.** The `ItemsSource` swap runs inside the `_syncingPaletteSelection` guard; the ListBox sets `IsSynchronizedWithCurrentItem="False"`; the view-model's `SetSelection` remains the only announcer. A WPF-hosted fact pins one `PaletteCommandSelected` per query change at most, none when the selected id survives (P7).
+3. **Cost.** In the order the profile justifies: (a) grouped virtualization (`VirtualizingPanel.IsVirtualizingWhenGrouping="True"`, `ScrollUnit="Pixel"`) so only visible rows template; (b) reuse the `CollectionViewSource` and refresh in place instead of rebuilding; (c) compute disabled reasons once per recompute into a dictionary keyed by id (the resolver is still asked again at invoke, P8); (d) warm the FFI/JIT path at open by running the empty-query `Recompute` before the overlay shows (it already runs; confirm). Contract 28's synchronous-by-decision rule stands: no async pipeline.
+4. Target: first-keystroke render ≤ 150 ms and steady-state ≤ 50 ms on the dev box for the 200-command demo palette, recorded in the PR; a ratio fact guards regressions.
+
+### 10.3 Tests
+`CommandPaletteTests` gain `RecomputeScalesLinearlyInRowCount` (2 000 vs 4 000 synthetic commands: ≤ 2.5× — a ratio, not an absolute budget) and the view-hosted selection fact; the existing count-window facts stay. FlaUI `Palette_TypingAnnouncesOnlyTheFinalCountAndSelection` (through PR 1's listener): type "split" fast, assert exactly one `PaletteFilterCount` for "split" and no `PaletteCommandSelected` naming a row other than the final selection.
+
+### 10.4 Evidence
+Matrix "Command palette (W5-1)" cell; `w5_commands_at_checklist.md` #1/#6 and `w7_2` #5 evidence lines; contract 28 round record (R-10); issue #1254 closed.
+
+## 11. PR 10 · #1255 + #1256 — the canvas board
+
+### 11.1 What stands today (verified)
+- The seat is `Selection.Selected` (`Canvas/CanvasSelection.cs:30–34`). The chords (`Canvas/CanvasNavigator.cs:183–186`) route Down/Up to `ArrowMove` (`:1603–1627`), which announces End/Start of canvas whenever `CanMoveWithinProjection` is false — and `Canvas/CanvasSurfaceView.cs:403–411` hard-codes `Visual => false`, so on the board every press is a boundary while the seat never moves. `NextCard`/`PreviousCard` → `SelectAdjacent` (`:1079–1127`, the reading-order move with the real boundary rule) are never reached from the arrows. Right/Left → `ArrowFollow` (`:1659–1668`) acts only on the outline; on the board the key is unconsumed and the renderer has no key handler, so nothing is said. Contract 34 D15 (`34_canvas_contracts.md:6645–6653`): the visual projection owns Down and Up as reading-order moves; Right/Left "stay the OUTLINE's". `ShowSurface` (`Canvas/CanvasDocumentViewModel.cs:676–685`) keeps the seat; a peer Invoke moves it (`Canvas/CanvasRendererView.cs:585–597`; `CanvasRendererPeers.cs:188, 197`).
+- Context menus: the outline assigns `item.ContextMenu` inside `ContextMenuOpening` (`Canvas/CanvasOutlineView.cs:354–358, 1032–1047`); WPF chooses the menu that exists when the request arrives, so the first request on a fresh row opens the ancestor `TabControl.ContextMenu` (`WorkspaceTemplates.xaml:590–599`) — the documented "too late" trap (`Graph/ConnectionsLeafView.cs:330–336`, `Grids/AccessibleDataGrid.cs:1307–1313`). The grid's rule (`:1289–1327`: one persistent menu from construction, mutated per request, keyboard requests carry cursor −1/−1 and target the current row) and the diagram's (`Graph/GraphDiagramView.cs:1364–1400`: keyboard request → the selection) are the templates. The renderer has no menu (`Canvas/CanvasContextMenuPlan.cs:43–50`; G2D-12).
+
+### 11.2 Design
+1. **Board arrows (D15 honoured).** `ArrowMove` on the Visual projection performs `SelectAdjacent(forward ? 1 : −1)` (the announced door: `MoveTo` → `CanvasMovedTo`, boundary → End/Start of canvas, empty → the existing sentences) and consumes the key; the outline/table paths are unchanged. `CanMoveWithinProjection` stops being consulted for Visual. **Right/Left on the board follow connections (OD-5):** `ArrowFollow` accepts the Visual projection, so the delivered chords match the chord table's canvas-scope `followConnectionForward/Back` rows (contract 39 N-3); D15's "the OUTLINE's" clause is amended (R-11). After a follow, the renderer pans to contain the seat (`SelectAnnounced`'s pan).
+2. **Outline rows (assignment order).** Each realized `TreeViewItem` gets a persistent `ContextMenu` at container preparation (an `ItemContainerStyle` setter or `PrepareContainerForItemOverride`); `OnRowContextMenuOpening` mutates it from `BuildContextMenu(rowModel)` (the grid's mutate-never-replace rule) and marks the request handled when the row has no menu. Keyboard requests (cursor −1/−1) target the focused row; pointer requests the hit row.
+3. **Board menu (OD-3).** The renderer gets a persistent `ContextMenu` and an opening handler: a keyboard request targets the seated card, a pointer request the hit card, none over empty space; the rows come from the same plan (`CanvasContextSurface.Renderer` joins Outline and Grid; G2D-12 lifted, E17's "renderer card" delivered). The derived-consumer census (`TheOutlineMenuEqualsThePlan`'s shape) covers the renderer.
+4. Escape ladder, marks, modes: unchanged.
+
+### 11.3 Tests
+`CanvasNavigatorTests`: Visual Down/Up move the seat through `FilteredOutline` order and announce `CanvasMovedTo`; End/Start at the boundaries; Right follows a connection on the board; a filtered-out seat behaves as on the outline (m5 parity). `CanvasContextMenuTests`: the renderer's rows equal the plan; a keyboard request on the outline with a fresh row opens the row's menu (WPF-hosted, the `ConnectionsLeafViewTests.cs:610–648` shape). FlaUI: extend `CanvasSurfaces_VisualBoardPeersAndZoom_AreClean` (`:8440`): switch to Visual, press Down/Up/Right and assert the selected peer changes; `Canvas_ContextMenus_OpenTheCardMenuByKeyboard`: Shift+F10 on a fresh outline row and the Applications key on the board both open a menu whose items include "Toggle Mark" and "Delete" and exclude "Duplicate Tab". Mutation: reinstate `Visual => false` routing → the navigator facts fail; reinstate the opening-time assignment → the journey opens the tab menu.
+
+### 11.4 Evidence
+Matrix "Canvas navigator, filter and Where-am-I", "Canvas visual", "Canvas context menus and row actions" cells; `w6_1_canvas_at_checklist.md` #4 and `w5_commands_at_checklist.md` #9 evidence lines (the checklist's item 4 cites a journey that never pressed a board arrow — corrected to the extended one); contracts 34 D15/G2D-12 amendments (R-11, R-12); issues #1255 and #1256 closed.
+
+## 12. PR 11 · #1257 — the Connections leaf says what Enter does
+
+### 12.1 What stands today (verified)
+Enter, double-click and Invoke call `model.Activate(row, newTab: Ctrl)` (`Graph/ConnectionsLeafView.cs:832–836, 869–875, 773`) → Open / Open in New Tab / Create note (`Graph/ConnectionsLeafViewModel.cs:1100–1113`); only the `ShowConnections` action re-roots (`:1088–1091` → `WorkspaceViewModel.Connections.cs:222–277`). "Opens the note." is `Graph/ConnectionsPhrase.cs:49` through `RowHint` (`:1036–1044`). `slate.graph.connectionsBack` is Connections-scoped (`Commands/ChordTable.cs:992–994`), delivered by the leaf's `OnPreviewKeyDown` (`:946–965`), and no-ops unless the leaf is pinned with a non-empty back stack (`:289–294`); an Open never pushes the stack (`:533–551`). The spec and contracts pin exactly this: `w6_2_graph_spec.md:192, :198` ("row ACTIVATION opens the note and does not re-root, only the Show connections action re-roots") and contract 35 B-9 ("Return still opens the note"); mac opens on activation too. Only `reports/w6_2_graph_at_checklist.md:18` says "Enter on a child row (re-root)". The Graph tab was replaced because `OpenConnectionsRowFromSurface` (`:434–444`) opens `CurrentTab` in the active group (`WorkspaceViewModel.Layout.cs:117–201`), which is the same rule mac applies (`openFile(path, target: .currentTab)`).
+
+### 12.2 Design
+1. **Checklist correction** (row 2 "How" and "Observable outcome"): Enter opens the note (Ctrl+Enter in a new tab); re-root through the row's Show connections action (Applications key / Shift+F10, or the palette row `slate.graph.showConnections`); Back = Ctrl+[ from inside the leaf; the Graph tab is replaced when the leaf opens into it, as on mac.
+2. **The row hint says both.** `RowHint` composes "Opens the note. {Ctrl+Enter spoken} opens it in a new tab." from a chord row (`windows.connections.openInNewTab`, added to `ChordTable` if absent) through `NavigationHelp` — never a literal key name (N-2). Ghost rows keep their hint.
+3. No behaviour change to activation; issue #1257 is closed by the correction with the spec citations.
+
+### 12.3 Tests and evidence
+`ConnectionsLeafTests` hint fact updated; `ChordSpeechAuditCensus` green; `WcMatrixEvidenceCensus` green over the edited checklist row; matrix "Graph connections leaf" cell unchanged (Finding → the record's row gains the "corrected checklist" note).
+
+## 13. Process (every PR)
+
+### 13.1 Worktree and build
+`git worktree add <path> -b <branch> origin/main`; copy `src/SlateUniffi/generated/` (`slate_uniffi.cs` + `slate_uniffi.dll`) from a built sibling unless the PR changes core, in which case `apps/slate-windows/generate-bindings.ps1` (shared `CARGO_TARGET_DIR` keeps it to minutes). `dotnet build apps/slate-windows/SlateWindows.slnx -c Release` warning-free for the app project (#1238).
+
+### 13.2 Test-first, then gates
+Red → green → refactor per fact (the `superpowers:test-driven-development` discipline); each new fact is mutation-verified (reinstate the bug, watch it fail, record the run in the PR). Gates before every push: unit suite (`tests/SlateWindows.Tests`; known local-only failures: the three `W1AnchoredVaultStoreTests` reparse-point facts, `CanvasDocumentTests.AnInVaultSymlinkPointingOutsideTheVaultIsRefused`, `MediaSeventyDirectoriesDeepStillOpens`, and a clipboard-flaky `ReadingViewTests` fact), the touched FlaUI journeys locally (interactive desktop, no screen reader running), `dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include <every edited .cs>` after every edit batch (the CRLF gate), `python scripts/generate-parity-matrix.py` when chords change, and for core PRs `cargo fmt --check`, `cargo clippy -p slate-core -p slate-uniffi -- -D warnings`, `cargo test -p slate-core`, fixtures regenerated then re-run clean, `scripts/a11y_trigger_ledger.py`.
+
+### 13.3 Pre-review self-QA
+For every mechanism the PR invents: the fact that attacks it, its complexity, and proof it fails with the fix reverted; no comment or compiled-out assertion stands in for a fix; ratio assertions over absolute budgets.
+
+### 13.4 Review and merge loop
+1. Push the branch; run the codex adversarial review (`codex-companion.mjs adversarial-review --wait --base origin/main --scope branch --model gpt-5.6-sol`, effort `xhigh` via `~/.codex/config.toml`, restored to `low` after) with an invariant-targeted prompt citing the PR's `R-n` contracts, the accepted-risk register inline, "ENUMERATE EXHAUSTIVELY IN THIS ONE PASS", the severity bar (a blocker is reachable without 3+ independent coincidences) and "Ignore the local working tree; untracked ns-action.ts is unrelated". Fix, re-push, re-run until `approve` (or a round with no critical/high/in-scope-medium); stop rule 4/5 → design pass before more code. Each round is appended to this PR's section of contracts 40.
+2. Open the PR (`Closes #n`; the checks list; the mutation runs). Bind it; read CI through the app's PR status; a red lane is read for its failures, not its name.
+3. Poll Codoki every 90 s for inline and top-level comments; address each with a fix or a sourced refutation in the thread; re-run `@codoki` after fixes.
+4. Merge (squash) when all lanes are green and Codoki reads safe to merge; then rebase the remaining branches.
+
+## 14. Non-goals
+No live filesystem watcher (OD-1; follow-up issue). No mac behaviour changes beyond the corpus mirrors and the recorded divergences. No change to Ctrl+Alt+Arrow semantics. No new editor navigation chords. Braille, IME, Voice Access, switch hardware, text scaling, contrast and Reduce Motion rows stay the human residual (W8-6).
