@@ -77,6 +77,7 @@ pub(crate) mod oplog_events;
 pub mod palette;
 pub mod properties_db;
 pub mod reading;
+pub mod scan_delta;
 pub mod search_db;
 pub mod session;
 pub mod sidebar_filter;
@@ -95,6 +96,10 @@ pub mod trash_confirmation;
 pub mod vault;
 mod vault_config;
 
+pub use scan_delta::{
+    MAX_SCAN_DELTA_PAGE_LIMIT, ScanDeltaApplied, ScanDeltaEntry, ScanDeltaKind, ScanDeltaLedger,
+    ScanDeltaOutcome, ScanDeltaPage, ScanDeltaPending,
+};
 pub use search_db::{
     QueryHit, QueryResultSet, SNIPPET_HIT_END, SNIPPET_HIT_START, SearchScope, full_text_search,
 };
