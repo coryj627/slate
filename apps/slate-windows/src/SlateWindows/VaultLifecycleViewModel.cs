@@ -1253,9 +1253,11 @@ internal sealed class VaultLifecycleViewModel
 
     private void FileSidebar_OpenTargetRequested(
         object? sender,
-        (string Path, WorkspaceOpenTarget Target) request)
+        (string Path, WorkspaceOpenTarget Target, bool FocusEditor) request)
     {
-        Workspace?.OpenPath(request.Path, request.Target);
+        // W7-7 (R-2): the sidebar's focus flag rides to the open — a
+        // selection-driven open shows the note and leaves focus on the row.
+        Workspace?.OpenPath(request.Path, request.Target, request.FocusEditor);
     }
 
     private void Workspace_FileOpened(object? sender, string path)

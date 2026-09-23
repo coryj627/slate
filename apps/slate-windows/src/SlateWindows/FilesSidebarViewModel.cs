@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Collections.ObjectModel;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Windows.Threading;
 using System.Windows.Input;
@@ -171,10 +172,17 @@ internal sealed class FileTreeNodeViewModel : BindableBase
         {
             if (IsBatchSelectable && SetField(ref _isBatchSelected, value))
             {
+                OnPropertyChanged(nameof(BatchItemStatus));
                 _owner?.BatchCheckChanged(this);
             }
         }
     }
+
+    /// <summary>W7-7 (R-2, OD-2): the row's UIA ItemStatus. The batch
+    /// check box left the arrow order (Space on the row toggles it), so
+    /// the row the reader is on reports the state itself; the "N items
+    /// selected" announcement stays the audible feedback.</summary>
+    public string BatchItemStatus => _isBatchSelected ? "Checked for batch actions" : string.Empty;
 
     /// <summary>Whether this folder's children are COMPLETELY loaded
     /// real rows — the signal the batch-check reconciliation uses to
@@ -215,9 +223,16 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     /// <summary>Publication-time batch-check rebind (codex round 4):
     /// no per-node announcement — the owner recomputes the count once
     /// after the whole rebind.</summary>
-    internal bool MarkBatchSelectedSilently() =>
-        IsBatchSelectable
-        && SetField(ref _isBatchSelected, true, nameof(IsBatchSelected));
+    internal bool MarkBatchSelectedSilently()
+    {
+        if (!IsBatchSelectable || !SetField(ref _isBatchSelected, true, nameof(IsBatchSelected)))
+        {
+            return false;
+        }
+
+        OnPropertyChanged(nameof(BatchItemStatus));
+        return true;
+    }
 
     internal bool PrepareChildLoad()
     {
@@ -499,7 +514,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         Refresh(reportCount: true);
     }
 
-    public event EventHandler<(string Path, WorkspaceOpenTarget Target)>? OpenTargetRequested;
+    /// <summary>An open for the workspace. W7-7 (R-2): <c>FocusEditor</c>
+    /// is false for a selection-driven open — tree arrows, a filter
+    /// result, a dual-pane row — which shows the note while keyboard focus
+    /// stays on the row; every explicit open (Enter, Ctrl+Enter, the Open
+    /// buttons and palette rows, shortcuts, history, creates) moves focus
+    /// into the note.</summary>
+    public event EventHandler<(string Path, WorkspaceOpenTarget Target, bool FocusEditor)>? OpenTargetRequested;
 
     public ObservableCollection<FileTreeNodeViewModel> DualPaneFiles { get; } = [];
     public ObservableCollection<SidebarTagViewModel> Tags { get; } = [];
@@ -568,19 +589,24 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             }
 
             MutationName = value.Name;
+            // W7-7 (R-2, OD-2): selection keeps opening the note (mac
+            // parity: selectedFilePath drives the editor) but never takes
+            // focus off the row — every arrow onto a file used to land the
+            // reader in the editor. Enter and Ctrl+Enter (OpenNode) are the
+            // opens that move focus.
             if (value.IsDirectory)
             {
                 _announce(new A11yEvent.TreeFolderSelected(value.DisplayName));
                 LoadDualPane(value.Path);
                 if (value.HasFolderNote)
                 {
-                    RequestOpen(FolderNotePath(value));
+                    RequestOpen(FolderNotePath(value), focusEditor: false);
                 }
             }
             else
             {
                 _announce(new A11yEvent.RowSelected(value.DisplayName));
-                RequestOpen(value.Path);
+                RequestOpen(value.Path, focusEditor: false);
             }
 
             RaiseCommandStates();
@@ -819,6 +845,22 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         _announce(BatchSelectionCount == 0
             ? new A11yEvent.NoItemsSelected()
             : new A11yEvent.ItemsSelected((uint)BatchSelectionCount));
+    }
+
+    /// <summary>W7-7 (R-2, OD-2): Space on a tree row toggles its batch
+    /// check box, which left the arrow order. The check's own path
+    /// announces the count ("1 item selected"). A placeholder or a group
+    /// header has no box and answers false, so the key falls
+    /// through.</summary>
+    internal bool ToggleBatchSelection(FileTreeNodeViewModel node)
+    {
+        if (!node.IsBatchSelectable)
+        {
+            return false;
+        }
+
+        node.IsBatchSelected = !node.IsBatchSelected;
+        return true;
     }
 
     public void ActivateTag(SidebarTagViewModel? tag)
@@ -1706,20 +1748,31 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         RaiseCommandStates();
     }
 
-    private bool CanOpenSelected() => SelectedNode is
+    private bool CanOpenSelected() => CanOpen(SelectedNode);
+
+    private static bool CanOpen([NotNullWhen(true)] FileTreeNodeViewModel? node) => node is
     {
         IsPlaceholder: false,
         IsGroupHeader: false,
-    } node && (!node.IsDirectory || node.HasFolderNote);
+    } && (!node.IsDirectory || node.HasFolderNote);
 
-    private void OpenSelected(WorkspaceOpenTarget target)
+    private void OpenSelected(WorkspaceOpenTarget target) => _ = OpenNode(SelectedNode, target);
+
+    /// <summary>W7-7 (R-2): the explicit open of one row — Enter and
+    /// Ctrl+Enter on the row the reader is on, and every Open button and
+    /// palette row through <see cref="OpenSelected"/>. It moves focus into
+    /// the note, the step a selection-driven open withholds. False when
+    /// the row has nothing to open (a placeholder, a group header, a
+    /// folder without a note), so its key falls through.</summary>
+    internal bool OpenNode(FileTreeNodeViewModel? node, WorkspaceOpenTarget target)
     {
-        if (!CanOpenSelected() || SelectedNode is not FileTreeNodeViewModel node)
+        if (!CanOpen(node))
         {
-            return;
+            return false;
         }
 
         RequestOpen(node.IsDirectory ? FolderNotePath(node) : node.Path, target, trackHistory: true);
+        return true;
     }
 
     private StructuralBatchItem[] SelectedBatchItems() => [.. _batchChecked
@@ -1928,15 +1981,16 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }) + bookkeepingWarning;
     }
 
-    private void RequestOpen(string path)
+    private void RequestOpen(string path, bool focusEditor = true)
     {
-        RequestOpen(path, WorkspaceOpenTarget.CurrentTab, trackHistory: true);
+        RequestOpen(path, WorkspaceOpenTarget.CurrentTab, trackHistory: true, focusEditor);
     }
 
     private void RequestOpen(
         string path,
         WorkspaceOpenTarget target,
-        bool trackHistory)
+        bool trackHistory,
+        bool focusEditor = true)
     {
         _recents.Remove(path);
         _recents.Insert(0, path);
@@ -1961,7 +2015,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             _historyIndex = _history.Count - 1;
         }
 
-        OpenTargetRequested?.Invoke(this, (path, target));
+        OpenTargetRequested?.Invoke(this, (path, target, focusEditor));
         RaiseCommandStates();
     }
 

@@ -1017,17 +1017,23 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <Grid Grid.Row="0">
+                                    <!-- W7-7 (R-2, OD-2): arrows only show a note; the rows'
+                                         own handler delivers Enter / Ctrl+Enter (open, focus
+                                         moves) and Space (batch check), and the HelpText is
+                                         composed from those chord rows (contract 39 N-1). -->
                                     <TreeView x:Name="FilesTree"
                                               ItemsSource="{Binding RootNodes}"
                                               ItemTemplate="{StaticResource FileTreeNodeTemplate}"
                                               TextSearch.TextPath="DisplayName"
                                               SelectedItemChanged="FilesTree_SelectedItemChanged"
+                                              PreviewKeyDown="FilesRows_PreviewKeyDown"
                                               Visibility="{Binding IsFilterActive, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
                                               ScrollViewer.CanContentScroll="True"
                                               VirtualizingStackPanel.IsVirtualizing="True"
                                               VirtualizingStackPanel.VirtualizationMode="Recycling"
                                               AutomationProperties.AutomationId="FilesTree"
-                                              AutomationProperties.Name="Files">
+                                              AutomationProperties.Name="Files"
+                                              AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.FilesTree}">
                                         <TreeView.ItemContainerStyle>
                                             <Style TargetType="TreeViewItem">
                                                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
@@ -1038,12 +1044,15 @@
                                                      next arrow key jumped to the tree top. -->
                                                 <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
                                                 <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                                <!-- W7-7 (R-2): the batch state, on the row the reader is on. -->
+                                                <Setter Property="AutomationProperties.ItemStatus" Value="{Binding BatchItemStatus}" />
                                             </Style>
                                         </TreeView.ItemContainerStyle>
                                     </TreeView>
                                     <ListBox x:Name="FilterResultsList"
                                              ItemsSource="{Binding FilterResults}"
                                              SelectionChanged="FilterResults_SelectionChanged"
+                                             PreviewKeyDown="FilesRows_PreviewKeyDown"
                                              Visibility="{Binding IsFilterActive, Converter={StaticResource BooleanToVisibilityConverter}}"
                                              ScrollViewer.CanContentScroll="True"
                                              VirtualizingStackPanel.IsVirtualizing="True"
@@ -1067,6 +1076,7 @@
                                          Margin="0,6,0,0"
                                          ItemsSource="{Binding DualPaneFiles}"
                                          SelectionChanged="DualPaneFiles_SelectionChanged"
+                                         PreviewKeyDown="FilesRows_PreviewKeyDown"
                                          DisplayMemberPath="DisplayName"
                                          Visibility="{Binding IsDualPaneEnabled, Converter={StaticResource BooleanToVisibilityConverter}}"
                                          ScrollViewer.CanContentScroll="True"

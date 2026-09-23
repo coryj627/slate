@@ -28,9 +28,14 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
+            <!-- W7-7 (R-2, OD-2): out of the arrow order — Space on the row
+                 toggles it and the row's ItemStatus reports it; a pointer
+                 click still checks it. -->
             <CheckBox Grid.Column="0"
                       Margin="0,0,6,0"
                       VerticalAlignment="Center"
+                      Focusable="False"
+                      IsTabStop="False"
                       IsChecked="{Binding IsBatchSelected}"
                       Visibility="{Binding IsBatchSelectable, Converter={StaticResource BooleanToVisibilityConverter}}"
                       AutomationProperties.Name="{Binding AutomationName, StringFormat=Select {0} for batch actions}" />
