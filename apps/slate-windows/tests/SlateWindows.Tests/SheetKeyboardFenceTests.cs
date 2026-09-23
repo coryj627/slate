@@ -84,22 +84,44 @@ public sealed class SheetKeyboardFenceTests
         harness.Press(Key.Tab, ModifierKeys.Shift);
         Assert.Same(harness.Topic, Keyboard.FocusedElement);
         Assert.Equal("Indented first line\nSecond line\n", harness.Editor.Text);
+
+        // The IME route arrives too, so the IME fact is not vacuous.
+        harness.ResetNote();
+        harness.FocusTopicAfterTheEditor();
+        harness.Press(Key.Tab, imeProcessed: true);
+        Assert.Equal(Note.Insert(1, "\t"), harness.Editor.Text);
     });
 
     /// <summary>
-    /// The command half of the fence: while the keyboard is in the
-    /// sheet, neither Tab command is answered, and executing one — the
-    /// one path that never asks CanExecute first — changes nothing
-    /// behind the sheet.
+    /// The CanExecute hook: while the keyboard is in the sheet, neither
+    /// Tab command is answered for a field inside it — where the sheet's
+    /// focus scope would otherwise hand the query to the editor, which
+    /// answers yes. The editor asked directly still answers: the fence is
+    /// the sheet's, not the editor's.
     /// </summary>
     [Fact]
-    public void TheTabCommandsNeverLeaveAFencedSheet() => RunSta(() =>
+    public void NeitherTabCommandIsAnsweredInsideAFencedSheet() => RunSta(() =>
     {
         using var harness = new Harness(fenced: true);
         harness.FocusTopicAfterTheEditor();
 
         Assert.False(EditingCommands.TabForward.CanExecute(null, harness.Topic));
         Assert.False(EditingCommands.TabBackward.CanExecute(null, harness.Topic));
+        Assert.True(EditingCommands.TabForward.CanExecute(null, harness.Editor.TextArea));
+        Assert.Equal(Note, harness.Editor.Text);
+    });
+
+    /// <summary>
+    /// The Executed hook. A direct Execute never asks CanExecute —
+    /// RoutedCommand.ExecuteImpl raises PreviewExecuted and Executed and
+    /// nothing else — so the CanExecute hook cannot stop one; without the
+    /// Executed hook the sheet's focus scope hands it to the editor.
+    /// </summary>
+    [Fact]
+    public void ExecutingEitherTabCommandInsideAFencedSheetLeavesTheEditorAlone() => RunSta(() =>
+    {
+        using var harness = new Harness(fenced: true);
+        harness.FocusTopicAfterTheEditor();
 
         // One at a time: a leaked TabForward indents the caret line and a
         // leaked TabBackward unindents it again, so checking only after
@@ -107,6 +129,25 @@ public sealed class SheetKeyboardFenceTests
         EditingCommands.TabForward.Execute(null, harness.Topic);
         Assert.Equal(Note, harness.Editor.Text);
         EditingCommands.TabBackward.Execute(null, harness.Topic);
+        Assert.Equal(Note, harness.Editor.Text);
+        Assert.Same(harness.Topic, Keyboard.FocusedElement);
+    });
+
+    /// <summary>
+    /// A Tab the key hook never sees: an IME-processed key reports
+    /// <c>Key.ImeProcessed</c>, but its gesture still matches TabForward
+    /// through the real key, so it reaches the command layer — where the
+    /// two command hooks stop it (either one alone suffices; each is
+    /// pinned by its own fact above).
+    /// </summary>
+    [Fact]
+    public void AnImeProcessedTabStopsAtTheCommandLayer() => RunSta(() =>
+    {
+        using var harness = new Harness(fenced: true);
+        harness.FocusTopicAfterTheEditor();
+
+        harness.Press(Key.Tab, imeProcessed: true);
+
         Assert.Equal(Note, harness.Editor.Text);
         Assert.Same(harness.Topic, Keyboard.FocusedElement);
     });
@@ -286,17 +327,32 @@ public sealed class SheetKeyboardFenceTests
         }
 
         /// <summary>One key press through the input system, delivered to
-        /// the keyboard focus the way a physical press is.</summary>
-        public void Press(Key key, ModifierKeys modifiers = ModifierKeys.None) =>
-            WithModifiers(modifiers, () => InputManager.Current.ProcessInput(
-                new KeyEventArgs(
+        /// the keyboard focus the way a physical press is. An IME-processed
+        /// press is marked the way the keyboard device marks one —
+        /// <c>Key</c> reads <c>ImeProcessed</c>, the real key is kept — and
+        /// the device carries the mark onto the KeyDown it promotes.</summary>
+        public void Press(Key key, ModifierKeys modifiers = ModifierKeys.None, bool imeProcessed = false) =>
+            WithModifiers(modifiers, () =>
+            {
+                var press = new KeyEventArgs(
                     Keyboard.PrimaryDevice,
                     PresentationSource.FromVisual(_window)!,
                     Environment.TickCount,
                     key)
                 {
                     RoutedEvent = Keyboard.PreviewKeyDownEvent,
-                }));
+                };
+                if (imeProcessed)
+                {
+                    (typeof(KeyEventArgs).GetMethod("MarkImeProcessed", BindingFlags.NonPublic | BindingFlags.Instance)
+                        ?? throw new InvalidOperationException("KeyEventArgs.MarkImeProcessed is gone; the IME fact needs another way in"))
+                        .Invoke(press, null);
+                    Assert.Equal(Key.ImeProcessed, press.Key);
+                    Assert.Equal(key, press.ImeProcessedKey);
+                }
+
+                InputManager.Current.ProcessInput(press);
+            });
 
         public void Dispose() => _window.Close();
     }
