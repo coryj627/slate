@@ -270,10 +270,12 @@ existing NoteSaved path. Core owns the failure sentence; the detail is the
 original error, with no Mac overwrite/reload-dialog instruction.
 Amended by W7-7 (#1249, 2026-09-23): a write conflict instead posts High
 NoteSaveConflict(filename), mac's conflict sentence without its dialog
-clause, and the inline status shows that same rendering, while every other
-failure's detail is the error's own text (`VaultErrorText`, the twin of
-mac's `humanReadableVaultError`), never the binding's field-labelled
-message, a content hash or a modification time.
+clause. Every other core save failure's detail is core's rendering of the
+error (`vault_error_detail`, exported through the binding: the words of
+mac's `humanReadableVaultError`, with Io and Db passing their own text
+through), never host copy, the binding's field-labelled message, a content
+hash or a modification time. In both cases the inline status shows the
+rendered announcement.
 
 **D-11 — Reopen describes the actual file outcome.** Keep the Windows tab and
 its recovery UI. For file-backed tabs, use core's existing CanonicalPath
