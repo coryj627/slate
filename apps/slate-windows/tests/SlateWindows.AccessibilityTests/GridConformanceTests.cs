@@ -71,6 +71,13 @@ public sealed class GridConformanceTests
                     "column + row header items did not materialize. grid holds: " + kinds);
             }
 
+            // W7-7 PR 3 (#1246, R-4): the fixture models the rule every
+            // consuming surface follows — a row is named by its identity,
+            // never by the FixtureRow record's dump.
+            Assert.Contains(
+                grid.FindAllDescendants(cf => cf.ByControlType(ControlType.DataItem)),
+                row => row.Name == "Note 00000");
+
             // Cell labels carry the "Header: value" contract.
             var firstCell = grid.Patterns.Grid.Pattern.GetItem(0, 0);
             Assert.Equal("Name: Note 00000", firstCell.Name);
@@ -249,6 +256,14 @@ public sealed class GridConformanceTests
                             .StartsWith("Name: Note", StringComparison.Ordinal)),
                     TimeSpan.FromSeconds(10)),
                 "the realized row never produced its cells");
+            // …and a realized row answers with its identity (R-4, #1246).
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (lastRealized!.Properties.Name.ValueOrDefault ?? "")
+                        .StartsWith("Note ", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                "the realized row is not named by its identity: "
+                    + $"'{lastRealized!.Properties.Name.ValueOrDefault}'");
 
             EnsureForeground(window);
             FocusCell(grid.Patterns.Grid.Pattern.GetItem(0, 0));
@@ -312,6 +327,13 @@ public sealed class GridConformanceTests
                 $"first cell not focused; focus is on "
                     + $"'{automation.FocusedElement()?.Name ?? "<none>"}'; host log: "
                     + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
+            // W7-7 PR 3 (#1246, R-4): the focused cell's row is named by its
+            // first cell; unnamed, a markdown row read "System.String[]".
+            // Read through focus, not window enumeration (see above).
+            Assert.Equal(
+                "alpha",
+                automation.TreeWalkerFactory.GetControlViewWalker()
+                    .GetParent(automation.FocusedElement())?.Name);
 
             Keyboard.Type(VirtualKeyShort.ESCAPE);
             Assert.True(
