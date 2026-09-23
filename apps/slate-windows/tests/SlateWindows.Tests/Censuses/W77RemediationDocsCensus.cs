@@ -202,8 +202,10 @@ public sealed partial class W77RemediationDocsCensus
         File.ReadAllText(Path.Combine(SourceText.RepoRoot(), "docs", "plans", relative));
 
     // The canonical definition: bold from column zero, an em dash, the
-    // owner in parentheses, and the closing bold on the same line.
-    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n]*?\(PR (\d+)[,;)][^\n]*?\*\*", RegexOptions.Multiline)]
+    // owner in parentheses, and the closing bold on the same line with no
+    // other asterisk before it — an interior bold span cannot pose as the
+    // closing delimiter (codex round 6).
+    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*]*?\(PR (\d+)[,;)][^\n*]*?\*\*", RegexOptions.Multiline)]
     private static partial Regex ContractHeading();
 
     // Anything that starts a line like a contract definition, however it
