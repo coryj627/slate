@@ -766,9 +766,13 @@
                             AutomationProperties.HelpText="Choose a folder to open as a Slate vault." />
                     <StackPanel Visibility="{Binding HasRecentVaults, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <TextBlock Margin="0,32,0,8" FontSize="18" FontWeight="SemiBold" Text="Recent Vaults" AutomationProperties.HeadingLevel="Level2" />
-                        <ItemsControl ItemsSource="{Binding RecentVaults}"
-                                      AutomationProperties.Name="Recent vaults">
-                            <ItemsControl.ItemTemplate>
+                        <!-- W7-7 PR 3 (#1246, R-4): the Button is the stop; its
+                             container is layout. As a plain ItemsControl each
+                             container was a DataItem named by the RecentVault
+                             record's ToString(), and NVDA read the dump. -->
+                        <local:LayoutItemsControl ItemsSource="{Binding RecentVaults}"
+                                                  AutomationProperties.Name="Recent vaults">
+                            <local:LayoutItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Button Margin="0,2"
                                             AutomationProperties.Name="{Binding DisplayName}"
@@ -783,8 +787,8 @@
                                         </StackPanel>
                                     </Button>
                                 </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                            </local:LayoutItemsControl.ItemTemplate>
+                        </local:LayoutItemsControl>
                     </StackPanel>
                 </StackPanel>
             </local:AutomationLandmarkGrid>
@@ -882,6 +886,13 @@
                                               SelectedItem="{Binding SortMode}"
                                               AutomationProperties.AutomationId="SidebarSortOrder"
                                               AutomationProperties.Name="File sort order">
+                                        <!-- R-4 (#1246): the item is the enum, so an
+                                             unnamed ComboBoxItem read "NameAscending". -->
+                                        <ComboBox.ItemContainerStyle>
+                                            <Style TargetType="ComboBoxItem">
+                                                <Setter Property="AutomationProperties.Name" Value="{Binding Converter={StaticResource SidebarSortModeLabelConverter}}" />
+                                            </Style>
+                                        </ComboBox.ItemContainerStyle>
                                         <ComboBox.ItemTemplate>
                                             <DataTemplate>
                                                 <TextBlock Text="{Binding Converter={StaticResource SidebarSortModeLabelConverter}}" />
@@ -997,7 +1008,15 @@
                                                  SelectedItem="{Binding SelectedShortcut}"
                                                  DisplayMemberPath="DisplayName"
                                                  AutomationProperties.AutomationId="SidebarShortcuts"
-                                                 AutomationProperties.Name="File shortcuts" />
+                                                 AutomationProperties.Name="File shortcuts">
+                                            <!-- R-4 (#1246): DisplayMemberPath templates the
+                                                 text only; the container read the record dump. -->
+                                            <ListBox.ItemContainerStyle>
+                                                <Style TargetType="ListBoxItem">
+                                                    <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                                </Style>
+                                            </ListBox.ItemContainerStyle>
+                                        </ListBox>
                                         <Button Margin="0,4,0,0"
                                                 HorizontalAlignment="Left"
                                                 Content="Remove shortcut"
@@ -1050,6 +1069,15 @@
                                              VirtualizingStackPanel.VirtualizationMode="Recycling"
                                              AutomationProperties.AutomationId="SidebarFilterResults"
                                              AutomationProperties.Name="Filtered files">
+                                        <!-- W7-7 PR 3 (#1246, R-4): the row name the Files
+                                             tree already speaks. Unnamed, NVDA read
+                                             "SlateWindows.FileTreeNodeViewModel, not selected,
+                                             1 of 2". -->
+                                        <ListBox.ItemContainerStyle>
+                                            <Style TargetType="ListBoxItem">
+                                                <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                            </Style>
+                                        </ListBox.ItemContainerStyle>
                                         <ListBox.ItemTemplate>
                                             <DataTemplate>
                                                 <StackPanel>
@@ -1073,7 +1101,14 @@
                                          VirtualizingStackPanel.IsVirtualizing="True"
                                          VirtualizingStackPanel.VirtualizationMode="Recycling"
                                          AutomationProperties.AutomationId="SidebarDualPane"
-                                         AutomationProperties.Name="Files in selected folder" />
+                                         AutomationProperties.Name="Files in selected folder">
+                                    <!-- R-4 (#1246): as the filter results above. -->
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                </ListBox>
                             </Grid>
                         </DockPanel>
                     </local:AutomationLandmarkBorder>
@@ -1370,10 +1405,13 @@
                                            Text="{Binding Panels.EmbedsEmptyMessage}" />
                                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto"
                                               HorizontalScrollBarVisibility="Disabled">
-                                    <ItemsControl ItemsSource="{Binding Panels.Embeds}"
-                                                  AutomationProperties.AutomationId="PanelEmbedsList"
-                                                  AutomationProperties.Name="Embeds">
-                                        <ItemsControl.ItemTemplate>
+                                    <!-- R-4 (#1246): the embed card is the named stop;
+                                         its container is layout, not an
+                                         "SlateWindows.Panels.EmbedRowViewModel" item. -->
+                                    <local:LayoutItemsControl ItemsSource="{Binding Panels.Embeds}"
+                                                              AutomationProperties.AutomationId="PanelEmbedsList"
+                                                              AutomationProperties.Name="Embeds">
+                                        <local:LayoutItemsControl.ItemTemplate>
                                             <DataTemplate>
                                                 <StackPanel Margin="0,4">
                                                     <!-- G24: the core preview budgets bound the panel's
@@ -1390,8 +1428,8 @@
                                                     </DataTrigger>
                                                 </DataTemplate.Triggers>
                                             </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
+                                        </local:LayoutItemsControl.ItemTemplate>
+                                    </local:LayoutItemsControl>
                                 </ScrollViewer>
                             </DockPanel>
                             <!-- W4-3 (#735): the note-scoped Tasks leaf — the mac
@@ -1756,11 +1794,13 @@
                                            Text="{x:Static panels:CitationPhrase.UnresolvedEmpty}"
                                            TextWrapping="Wrap"
                                            Visibility="{Binding Bibliography.ShowUnresolvedEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                                <!-- Notices verbatim, per segment (contract 5). -->
-                                <ItemsControl DockPanel.Dock="Bottom"
-                                              Focusable="False"
-                                              ItemsSource="{Binding Bibliography.LoadNotices}"
-                                              AutomationProperties.AutomationId="BibliographyNotices">
+                                <!-- Notices verbatim, per segment (contract 5). Each
+                                     notice's focusable text is the stop, so its
+                                     container is layout (R-4, #1246). -->
+                                <local:LayoutItemsControl DockPanel.Dock="Bottom"
+                                                          Focusable="False"
+                                                          ItemsSource="{Binding Bibliography.LoadNotices}"
+                                                          AutomationProperties.AutomationId="BibliographyNotices">
                                     <!-- With no notices this renders at
                                          zero size but stays on-screen in
                                          the UIA tree, which axe flags as
@@ -1768,7 +1808,7 @@
                                          empty notice region should leave
                                          the tree, as the inactive leaf
                                          bodies above do. -->
-                                    <ItemsControl.Style>
+                                    <local:LayoutItemsControl.Style>
                                         <Style TargetType="ItemsControl">
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Bibliography.LoadNotices.Count}" Value="0">
@@ -1776,16 +1816,16 @@
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
-                                    </ItemsControl.Style>
-                                    <ItemsControl.ItemTemplate>
+                                    </local:LayoutItemsControl.Style>
+                                    <local:LayoutItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <TextBlock Style="{StaticResource PanelEmptyMessage}"
                                                        Focusable="True"
                                                        Text="{Binding}"
                                                        TextWrapping="Wrap" />
                                         </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                    </local:LayoutItemsControl.ItemTemplate>
+                                </local:LayoutItemsControl>
                                 <!-- Both grids share the fill cell; exactly
                                      one is visible, so the other leaves the
                                      UIA tree entirely rather than sitting
@@ -1854,6 +1894,13 @@
                                                  MouseDoubleClick="QueriesSavedList_DoubleClick"
                                                  AutomationProperties.AutomationId="QueriesSavedList"
                                                  AutomationProperties.Name="Saved queries">
+                                            <!-- R-4 (#1246): DisplayMemberPath templates the text only;
+                                                 the container read the saved query record dump. -->
+                                            <ListBox.ItemContainerStyle>
+                                                <Style TargetType="ListBoxItem">
+                                                    <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
+                                                </Style>
+                                            </ListBox.ItemContainerStyle>
                                             <ListBox.Style>
                                                 <Style TargetType="ListBox">
                                                     <Style.Triggers>
@@ -1916,6 +1963,13 @@
                                                  MouseDoubleClick="QueriesBaseFilesList_DoubleClick"
                                                  AutomationProperties.AutomationId="QueriesBaseFilesList"
                                                  AutomationProperties.Name="Base files">
+                                            <!-- R-4 (#1246): DisplayMemberPath templates the text only;
+                                                 the container read the base file record dump. -->
+                                            <ListBox.ItemContainerStyle>
+                                                <Style TargetType="ListBoxItem">
+                                                    <Setter Property="AutomationProperties.Name" Value="{Binding Path}" />
+                                                </Style>
+                                            </ListBox.ItemContainerStyle>
                                             <ListBox.Style>
                                                 <Style TargetType="ListBox">
                                                     <Style.Triggers>
@@ -1961,6 +2015,13 @@
                                                  MouseDoubleClick="QueriesDashboardsList_DoubleClick"
                                                  AutomationProperties.AutomationId="QueriesDashboardsList"
                                                  AutomationProperties.Name="Dashboards">
+                                            <!-- R-4 (#1246): DisplayMemberPath templates the text only;
+                                                 the container read the dashboard record dump. -->
+                                            <ListBox.ItemContainerStyle>
+                                                <Style TargetType="ListBoxItem">
+                                                    <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
+                                                </Style>
+                                            </ListBox.ItemContainerStyle>
                                             <ListBox.Style>
                                                 <Style TargetType="ListBox">
                                                     <Style.Triggers>
@@ -2567,9 +2628,11 @@
                             <ScrollViewer Focusable="False" Grid.Row="1"
                                           Margin="0,4,0,0"
                                           VerticalScrollBarVisibility="Auto">
-                                <ItemsControl ItemsSource="{Binding Recents}"
-                                              AutomationProperties.Name="Recent searches">
-                                    <ItemsControl.ItemTemplate>
+                                <!-- R-4 (#1246): each Button is the stop; its container
+                                     is layout. -->
+                                <local:LayoutItemsControl ItemsSource="{Binding Recents}"
+                                                          AutomationProperties.Name="Recent searches">
+                                    <local:LayoutItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <Button Margin="4,1"
                                                     Padding="8,4"
@@ -2581,8 +2644,8 @@
                                                     AutomationProperties.Name="{Binding StringFormat='Recent search: {0}'}"
                                                     AutomationProperties.HelpText="Runs this search again." />
                                         </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                    </local:LayoutItemsControl.ItemTemplate>
+                                </local:LayoutItemsControl>
                             </ScrollViewer>
                         </Grid>
                         <!-- Visible "Searching…", spoken "Searching." —
@@ -2774,14 +2837,19 @@
                                              back to the whole label, so a hint-only
                                              match renders as one unbolded segment
                                              rather than bold-everything. -->
-                                        <ItemsControl ItemsSource="{Binding LabelSegments}"
-                                                      Focusable="False">
-                                            <ItemsControl.ItemsPanel>
+                                        <!-- Presentation only (R-4, #1246): the row's
+                                             composed name carries the label, and a plain
+                                             ItemsControl put a list of
+                                             "CommandPaletteLabelSegment { … }" items inside
+                                             every row — the W5-2 search-row class. -->
+                                        <local:AutomationPresentationItemsControl ItemsSource="{Binding LabelSegments}"
+                                                                                  Focusable="False">
+                                            <local:AutomationPresentationItemsControl.ItemsPanel>
                                                 <ItemsPanelTemplate>
                                                     <StackPanel Orientation="Horizontal" />
                                                 </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                            <ItemsControl.ItemTemplate>
+                                            </local:AutomationPresentationItemsControl.ItemsPanel>
+                                            <local:AutomationPresentationItemsControl.ItemTemplate>
                                                 <DataTemplate>
                                                     <local:AutomationPresentationTextBlock Text="{Binding Text}">
                                                         <local:AutomationPresentationTextBlock.Style>
@@ -2795,8 +2863,8 @@
                                                         </local:AutomationPresentationTextBlock.Style>
                                                     </local:AutomationPresentationTextBlock>
                                                 </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
+                                            </local:AutomationPresentationItemsControl.ItemTemplate>
+                                        </local:AutomationPresentationItemsControl>
                                         <local:AutomationPresentationTextBlock
                                                 Text="{Binding DisabledReason}"
                                                 Visibility="{Binding IsUnavailable, Converter={StaticResource BooleanToVisibilityConverter}}"
@@ -2882,7 +2950,14 @@
                     <ComboBox ItemsSource="{x:Static panels:AddPropertyViewModel.Kinds}"
                               SelectedItem="{Binding Kind}"
                               AutomationProperties.AutomationId="AddPropertyType"
-                              AutomationProperties.Name="Property type" />
+                              AutomationProperties.Name="Property type">
+                        <!-- R-4 (#1246): every item host names its containers. -->
+                        <ComboBox.ItemContainerStyle>
+                            <Style TargetType="ComboBoxItem">
+                                <Setter Property="AutomationProperties.Name" Value="{Binding}" />
+                            </Style>
+                        </ComboBox.ItemContainerStyle>
+                    </ComboBox>
                     <!-- Round 3: shape-derived kinds need a shape-valid
                          seed — core classifies stored values by shape,
                          so the chosen type must survive the re-read. -->
@@ -2973,7 +3048,17 @@
                                       SelectedItem="{Binding OldKeyType}"
                                       DisplayMemberPath="Label"
                                       AutomationProperties.AutomationId="BulkRenameOldKeyType"
-                                      AutomationProperties.Name="Old key type" />
+                                      AutomationProperties.Name="Old key type">
+                                <!-- W7-7 PR 3 (#1246, R-4): NVDA reads a combo's value
+                                     from its selected item's name, which was the record
+                                     dump "KeyTypeChoice { Label = Any key type, Kind = }";
+                                     DisplayMemberPath templates the text only. -->
+                                <ComboBox.ItemContainerStyle>
+                                    <Style TargetType="ComboBoxItem">
+                                        <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
+                                    </Style>
+                                </ComboBox.ItemContainerStyle>
+                            </ComboBox>
                         </StackPanel>
                         <StackPanel Grid.Column="2">
                             <local:AutomationPresentationTextBlock Margin="0,0,0,2" Text="New property key" />
@@ -3328,7 +3413,14 @@
                                   ItemsSource="{Binding DataContext.Workspace.SavedQueries, RelativeSource={RelativeSource AncestorType=Window}}"
                                   DisplayMemberPath="Name"
                                   AutomationProperties.AutomationId="DashboardEditorQueryPicker"
-                                  AutomationProperties.Name="Saved query to add" />
+                                  AutomationProperties.Name="Saved query to add">
+                            <!-- R-4 (#1246): as the saved-queries list. -->
+                            <ComboBox.ItemContainerStyle>
+                                <Style TargetType="ComboBoxItem">
+                                    <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
+                                </Style>
+                            </ComboBox.ItemContainerStyle>
+                        </ComboBox>
                         <Button Content="Add section"
                                 Margin="8,0,0,0"
                                 AutomationProperties.AutomationId="DashboardEditorAddSection"
@@ -3349,6 +3441,12 @@
                              HorizontalContentAlignment="Stretch"
                              AutomationProperties.AutomationId="DashboardEditorSections"
                              AutomationProperties.Name="Dashboard sections">
+                        <!-- R-4 (#1246): a section row is named by its query. -->
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="AutomationProperties.Name" Value="{Binding SavedQueryName}" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <DockPanel Margin="0,2">
@@ -3481,9 +3579,20 @@
                                         AutomationProperties.AutomationId="BuilderAddGroup"
                                         Click="BuilderAddGroup_Click" />
                             </StackPanel>
+                            <!-- R-4 (#1246): condition and member rows are named
+                                 containers; unnamed, each read its view model's
+                                 type name. -->
                             <ItemsControl Focusable="False" ItemsSource="{Binding ConditionRows}"
                                           Margin="0,6,0,0"
                                           AutomationProperties.AutomationId="BuilderConditions">
+                                <!-- A row is named by its label: each groups a
+                                     label, a Remove button, the expression and its
+                                     members, whose names repeat from row to row. -->
+                                <ItemsControl.ItemContainerStyle>
+                                    <Style TargetType="ContentPresenter">
+                                        <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
+                                    </Style>
+                                </ItemsControl.ItemContainerStyle>
                                 <ItemsControl.Style>
                                     <!-- Empty collections collapse: a zero-size
                                          list is an axe BoundingRectangle
@@ -3537,6 +3646,11 @@
                                                 </TextBlock.Style>
                                             </TextBlock>
                                             <ItemsControl Focusable="False" ItemsSource="{Binding GroupMembers}" Margin="24,0,0,0">
+                                                <ItemsControl.ItemContainerStyle>
+                                                    <Style TargetType="ContentPresenter">
+                                                        <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
+                                                    </Style>
+                                                </ItemsControl.ItemContainerStyle>
                                                 <ItemsControl.Style>
                                                     <Style TargetType="ItemsControl">
                                                         <Style.Triggers>
@@ -3828,13 +3942,16 @@
                              W4-5 class), and the red team caught the
                              ScrollViewer as the same class one level up,
                              where axe's Pane rules cannot see it. The prompt
-                             TextBoxes are the tab stops; these are layout. -->
+                             TextBoxes are the tab stops; these are layout.
+                             W7-7 PR 3 (#1246, R-4): so are the item containers,
+                             which NVDA read as "SlateWindows.Templates.
+                             TemplatePromptFieldViewModel, data item". -->
                         <ScrollViewer VerticalScrollBarVisibility="Auto"
                                       Focusable="False">
-                            <ItemsControl x:Name="TemplateFlowPromptsList"
-                                          Focusable="False"
-                                          ItemsSource="{Binding PromptFields}">
-                                <ItemsControl.ItemTemplate>
+                            <local:LayoutItemsControl x:Name="TemplateFlowPromptsList"
+                                                      Focusable="False"
+                                                      ItemsSource="{Binding PromptFields}">
+                                <local:LayoutItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <StackPanel Margin="0,0,0,10">
                                             <local:AutomationPresentationTextBlock Margin="0,0,0,2"
@@ -3844,8 +3961,8 @@
                                                      AutomationProperties.Name="{Binding Label}" />
                                         </StackPanel>
                                     </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                                </local:LayoutItemsControl.ItemTemplate>
+                            </local:LayoutItemsControl>
                         </ScrollViewer>
                     </DockPanel>
                     <DockPanel Visibility="{Binding IsNameStep, Converter={StaticResource BooleanToVisibilityConverter}}">

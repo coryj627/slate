@@ -168,11 +168,12 @@
             <!-- Unnamed on purpose: it is non-focusable structure and
                  the type-cued row name contains "list", which trips
                  axe's NameExcludesControlType on a List control. The
-                 per-item editors carry the full labels. -->
-            <ItemsControl ItemsSource="{Binding Items}"
-                          Focusable="False"
-                          IsTabStop="False">
-                <ItemsControl.ItemTemplate>
+                 per-item editors carry the full labels, so the item
+                 containers are layout too (R-4, #1246). -->
+            <local:LayoutItemsControl ItemsSource="{Binding Items}"
+                                      Focusable="False"
+                                      IsTabStop="False">
+                <local:LayoutItemsControl.ItemTemplate>
                     <DataTemplate DataType="{x:Type panels:PropertyListItemViewModel}">
                         <StackPanel Margin="0,2" Orientation="Horizontal">
                             <!-- Enter commits the ROW (contract 2 —
@@ -194,8 +195,8 @@
                                     AutomationProperties.Name="{Binding RemoveLabel}" />
                         </StackPanel>
                     </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+                </local:LayoutItemsControl.ItemTemplate>
+            </local:LayoutItemsControl>
             <Button Margin="0,4,0,0"
                     Padding="8,2"
                     HorizontalAlignment="Left"
@@ -382,7 +383,17 @@
                                       Focusable="False"
                                       IsTabStop="False"
                                       AutomationProperties.AutomationId="PropertiesRows"
-                                      AutomationProperties.Name="{Binding Properties.HeaderGroupName}" />
+                                      AutomationProperties.Name="{Binding Properties.HeaderGroupName}">
+                            <!-- W7-7 PR 3 (#1246, R-4): a row is named by its
+                                 editor's label; unnamed, NVDA read
+                                 "SlateWindows.Panels.PropertyRowViewModel, data
+                                 item, 1 of 7". -->
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                    <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
+                        </ItemsControl>
                     </ScrollViewer>
                 </StackPanel>
             </Expander>
