@@ -47,10 +47,11 @@ namespace SlateWindows;
 /// (<see cref="TextBoxBase"/>, <see cref="PasswordBox"/>) turn Tab into a
 /// command, so they are the only stops where (b) removes WPF's traversal
 /// and (a) must supply it. Every other stop keeps WPF's own Tab handling,
-/// which cannot leak. Taking Tab from those too broke the bulk-rename
-/// preview grid: <c>DataGrid.OnTabKeyDown</c> moves the cell selection
-/// with focus, and a preempted Tab left the selection on the first cell
-/// while focus walked on (measured, 2026-09-22).
+/// which cannot leak. Taking Tab from those too would break the
+/// bulk-rename preview grid: <c>DataGrid.OnTabKeyDown</c> moves the cell
+/// selection with focus, and in an <c>AccessibleDataGrid</c> a preempted
+/// Tab left the selection on the first cell while focus walked on
+/// (measured 2026-09-22; <c>AGridInASheetKeepsItsOwnTabTraversal</c>).
 /// </para>
 /// <para>
 /// <b>Nothing else is intercepted.</b> The sheet's own editing chords reach
