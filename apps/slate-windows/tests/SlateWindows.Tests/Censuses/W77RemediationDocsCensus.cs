@@ -116,6 +116,47 @@ public sealed partial class W77RemediationDocsCensus
             issues.OrderBy(pair => pair.Key).Select(pair => $"R-{pair.Key}→#{string.Join(", #", pair.Value)}"));
     }
 
+    /// <summary>
+    /// The issues a PR's spec heading (`## n. PR m · #a + #b — …`) and its
+    /// review-record heading (`### PR m — #a + #b …`) display are exactly
+    /// the union of the issues its contracts close (codex round 19), so a
+    /// heading cannot drift from the ownership the census fixes.
+    /// </summary>
+    [Fact]
+    public void EveryPrHeadingNamesItsContractsIssues()
+    {
+        var expected = ExpectedOwners
+            .GroupBy(pair => pair.Value)
+            .ToDictionary(
+                group => group.Key,
+                group => group.SelectMany(pair => ExpectedIssues[pair.Key]).Distinct().Order().ToArray());
+
+        var specHeadings = SectionHeading().Matches(ReadPlan(SpecDoc))
+            .Where(m => m.Groups[1].Success)
+            .ToDictionary(m => int.Parse(m.Groups[1].Value), m => IssueTokens(m.Value));
+        var recordHeadings = ReviewRecordHeading().Matches(ReadPlan(ContractsDoc))
+            .ToDictionary(m => int.Parse(m.Groups[1].Value), m => IssueTokens(m.Value));
+
+        var drifted = new List<string>();
+        foreach ((int pr, int[] issues) in expected.OrderBy(pair => pair.Key))
+        {
+            if (!specHeadings.TryGetValue(pr, out int[]? specIssues) || !specIssues.SequenceEqual(issues))
+            {
+                drifted.Add($"spec heading for PR {pr} shows #{string.Join(", #", specIssues ?? [])}, expected #{string.Join(", #", issues)}");
+            }
+
+            if (!recordHeadings.TryGetValue(pr, out int[]? recordIssues) || !recordIssues.SequenceEqual(issues))
+            {
+                drifted.Add($"record heading for PR {pr} shows #{string.Join(", #", recordIssues ?? [])}, expected #{string.Join(", #", issues)}");
+            }
+        }
+
+        Assert.True(drifted.Count == 0, "PR headings whose issues drift from their contracts: " + string.Join("; ", drifted));
+    }
+
+    private static int[] IssueTokens(string headingLine) =>
+        IssueToken().Matches(headingLine).Select(m => int.Parse(m.Groups[1].Value)).Distinct().Order().ToArray();
+
     [Fact]
     public void TheSpecHasOneSectionPerFeaturePrAndTheRecordOneSectionPerPr()
     {
@@ -251,7 +292,10 @@ public sealed partial class W77RemediationDocsCensus
     // closing `.**`: a full stop then the bold delimiter, followed by
     // whitespace, with no other asterisk before it, so an interior bold
     // span cannot pose as the closing delimiter (codex rounds 6 and 7).
-    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*]*?\(PR (\d+), (#\d+(?:, #\d+)*)[^)\n*]*\)[^\n*]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
+    // The owner clause's suffix (after the issue list) may not carry an
+    // issue token, so an extra `#issue` cannot hide behind the canonical
+    // list (codex round 19).
+    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*]*?\(PR (\d+), (#\d+(?:, #\d+)*)[^)\n*#]*\)[^\n*]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
     private static partial Regex ContractHeading();
 
     // Anything that starts a line like a contract definition, however it
@@ -274,8 +318,11 @@ public sealed partial class W77RemediationDocsCensus
     [GeneratedRegex(@"(?<![A-Za-z0-9_])R-(\d+)(?![A-Za-z0-9_])")]
     private static partial Regex ContractCitation();
 
-    [GeneratedRegex(@"^### PR (\d+) — ", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^### PR (\d+) — [^\n]*", RegexOptions.Multiline)]
     private static partial Regex ReviewRecordHeading();
+
+    [GeneratedRegex(@"#(\d+)")]
+    private static partial Regex IssueToken();
 
     // Anything that starts a heading like a review record, however it is
     // indented, spaced or punctuated after the PR number.
