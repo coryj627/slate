@@ -8435,7 +8435,7 @@ pub enum A11yEvent {
     },
     EmbedPreviewUnavailable {
         target: String,
-        reason: Option<EmbedUnresolvedReason>,
+        reason: EmbedUnresolvedReason,
     },
     CitationSummaryShown {
         citations: u32,
@@ -10277,7 +10277,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::EmbedPreviewShown { target, title } => C::EmbedPreviewShown { target, title },
             F::EmbedPreviewUnavailable { target, reason } => C::EmbedPreviewUnavailable {
                 target,
-                reason: reason.map(Into::into),
+                reason: reason.into(),
             },
             F::CitationSummaryShown { citations, sources } => {
                 C::CitationSummaryShown { citations, sources }
@@ -10565,6 +10565,57 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
 pub struct RenderedAnnouncement {
     pub text: String,
     pub priority: A11yPriority,
+}
+
+/// Core's detail for an error a host caught (W7-7, #1249): the text a
+/// host speaks or shows for it, rendered by `slate_core::a11y::
+/// vault_error_detail` — never the binding's own message, which is a
+/// field dump ("@message=…"; a write conflict's is two content hashes and
+/// a modification time). `Io` and `Db` were flattened at the boundary to
+/// the inner error's text, which is that detail verbatim.
+#[uniffi::export]
+pub fn vault_error_detail(error: VaultError) -> String {
+    use core::VaultError as C;
+    let error = match error {
+        VaultError::Io { message } | VaultError::Db { message } => return message,
+        VaultError::InvalidPath { path, reason } => C::InvalidPath { path, reason },
+        VaultError::Trash { message } => C::Trash { message },
+        VaultError::Cancelled => C::Cancelled,
+        VaultError::InvalidUtf8 { path } => C::InvalidUtf8 { path },
+        VaultError::FileTooLarge { path, size } => C::FileTooLarge { path, size },
+        VaultError::InvalidQuery { message } => C::InvalidQuery { message },
+        VaultError::Unsupported { feature } => C::Unsupported { feature },
+        VaultError::InvalidArgument { message } => C::InvalidArgument { message },
+        VaultError::TrashConfirmationChanged { message } => C::TrashConfirmationChanged { message },
+        VaultError::StructuralMutationIncomplete { path, message } => {
+            C::StructuralMutationIncomplete { path, message }
+        }
+        VaultError::DestinationExists { path } => C::DestinationExists { path },
+        VaultError::WriteConflict {
+            current_content_hash,
+            expected_content_hash,
+            current_mtime_ms,
+        } => C::WriteConflict {
+            current_content_hash,
+            expected_content_hash,
+            current_mtime_ms,
+        },
+        VaultError::SavedButUnindexed {
+            new_content_hash,
+            detail,
+        } => C::SavedButUnindexed {
+            new_content_hash,
+            detail,
+        },
+        VaultError::HistoryUnavailable { path, reason } => C::HistoryUnavailable { path, reason },
+        VaultError::MalformedFrontmatter { path, reason } => {
+            C::MalformedFrontmatter { path, reason }
+        }
+        VaultError::BibSourceUnreadable { path, reason } => C::BibSourceUnreadable { path, reason },
+        VaultError::CslStyleUnreadable { path, reason } => C::CslStyleUnreadable { path, reason },
+        VaultError::PrefsUnreadable { path, reason } => C::PrefsUnreadable { path, reason },
+    };
+    core::a11y::vault_error_detail(&error)
 }
 
 /// Render an accessibility event to its canonical spoken form
@@ -13069,6 +13120,108 @@ mod tests {
         assert_eq!(properties[2].key, "tags");
         assert_eq!(properties[2].kind, "tag_list");
         assert_eq!(properties[2].value_json, "[\"one\",\"two\"]");
+    }
+
+    /// W7-7 (#1249): the error detail a host gets through the FFI is the
+    /// detail core renders for the same error, variant by variant — the
+    /// boundary's flattening and `vault_error_detail`'s re-mapping lose
+    /// nothing and mis-route nothing. A mapping that swapped two arms, or
+    /// passed a structured variant's field dump through, fails here.
+    #[test]
+    fn vault_error_detail_crosses_the_ffi_as_core_renders_it() {
+        fn witnesses() -> Vec<core::VaultError> {
+            type C = core::VaultError;
+            vec![
+                C::Io(std::io::Error::other("Access is denied. (os error 5)")),
+                C::Db(core::db::DbError::UnsupportedVersion {
+                    db_version: 9,
+                    runner_max: 8,
+                }),
+                C::InvalidPath {
+                    path: "../out.md".into(),
+                    reason: "escapes the vault".into(),
+                },
+                C::Trash {
+                    message: "refused".into(),
+                },
+                C::Cancelled,
+                C::InvalidUtf8 {
+                    path: "notes.md".into(),
+                },
+                C::FileTooLarge {
+                    path: "notes.md".into(),
+                    size: 7,
+                },
+                C::InvalidQuery {
+                    message: "bad query".into(),
+                },
+                C::Unsupported {
+                    feature: "Tag scope".into(),
+                },
+                C::InvalidArgument {
+                    message: "out of range".into(),
+                },
+                C::TrashConfirmationChanged {
+                    message: "changed".into(),
+                },
+                C::StructuralMutationIncomplete {
+                    path: "a.md".into(),
+                    message: "incomplete".into(),
+                },
+                C::DestinationExists {
+                    path: "notes.md".into(),
+                },
+                C::WriteConflict {
+                    current_content_hash: "a".repeat(64),
+                    expected_content_hash: "b".repeat(64),
+                    current_mtime_ms: 1_790_116_253_121,
+                },
+                C::SavedButUnindexed {
+                    new_content_hash: "c".repeat(64),
+                    detail: "locked.".into(),
+                },
+                C::HistoryUnavailable {
+                    path: "notes.md".into(),
+                    reason: "mismatch".into(),
+                },
+                C::MalformedFrontmatter {
+                    path: "notes.md".into(),
+                    reason: "bad yaml".into(),
+                },
+                C::BibSourceUnreadable {
+                    path: "library.bib".into(),
+                    reason: "missing".into(),
+                },
+                C::CslStyleUnreadable {
+                    path: "ieee.csl".into(),
+                    reason: "not xml".into(),
+                },
+                C::PrefsUnreadable {
+                    path: "prefs.json".into(),
+                    reason: "not json".into(),
+                },
+            ]
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for (crossed, direct) in witnesses().into_iter().zip(witnesses()) {
+            let variant: String = format!("{direct:?}")
+                .chars()
+                .take_while(char::is_ascii_alphanumeric)
+                .collect();
+            let expected = core::a11y::vault_error_detail(&direct);
+            assert_eq!(
+                vault_error_detail(VaultError::from(crossed)),
+                expected,
+                "{variant}"
+            );
+            assert!(!expected.contains('@'), "{variant}: {expected}");
+            seen.insert(variant);
+        }
+        assert_eq!(
+            seen.len(),
+            20,
+            "one witness per VaultError variant: {seen:?}"
+        );
     }
 
     /// The mac corpus mirror must stay in lockstep with `corpus()`.
