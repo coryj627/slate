@@ -28,6 +28,21 @@ internal sealed record RecentVault(
             displayName,
             (now ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds());
     }
+
+    /// <summary>
+    /// The welcome screen's name for this vault's button (W7-7 PR 3,
+    /// #1246, R-4). The button is the one stop in its row — the row's
+    /// container is layout — so the name must tell it apart from its
+    /// siblings: the display name, and the path too when another recent
+    /// vault shares the display name in any case (speech does not hear
+    /// case). Two "Notes" folders that read alike are axe's
+    /// SiblingUniqueAndFocusable error.
+    /// </summary>
+    public static string SpokenName(RecentVault vault, IEnumerable<RecentVault> all) =>
+        all.Count(other => string.Equals(
+            other.DisplayName, vault.DisplayName, StringComparison.CurrentCultureIgnoreCase)) > 1
+            ? $"{vault.DisplayName}, {vault.Path}"
+            : vault.DisplayName;
 }
 
 /// <summary>

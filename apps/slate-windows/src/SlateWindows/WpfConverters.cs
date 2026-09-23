@@ -53,6 +53,23 @@ internal sealed class IsNotNullConverter : IValueConverter
         Binding.DoNothing;
 }
 
+/// <summary>A recent vault's button name, <see cref="RecentVault.SpokenName"/>,
+/// bound as (entry, the whole list, its count) so each add while the
+/// list is rebuilt re-evaluates every button.</summary>
+internal sealed class RecentVaultNameConverter : IMultiValueConverter
+{
+    public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture) =>
+        values switch
+        {
+            [RecentVault vault, IEnumerable<RecentVault> all, ..] => RecentVault.SpokenName(vault, all),
+            [RecentVault vault, ..] => vault.DisplayName,
+            _ => string.Empty,
+        };
+
+    public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 internal sealed class SidebarSortModeLabelConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>

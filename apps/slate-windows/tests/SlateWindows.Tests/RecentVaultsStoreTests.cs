@@ -134,6 +134,26 @@ public sealed class RecentVaultsStoreTests : IDisposable
         Assert.Equal("x", entry.DisplayName);
     }
 
+    /// <summary>W7-7 PR 3 (#1246, R-4): a recent vault's button is the one
+    /// stop in its row, so its name must tell it apart from its siblings.
+    /// The display name alone, unless another recent vault shares it (in
+    /// any case, as speech would) — then the path too. Two "Notes" folders
+    /// that read alike are what axe's SiblingUniqueAndFocusable failed on
+    /// the welcome scan once the containers stopped separating them.</summary>
+    [Fact]
+    public void ASharedDisplayNameIsSpokenWithItsPath()
+    {
+        var alpha = new RecentVault(@"C:\Vaults\Alpha", "Alpha", 1);
+        var notes = new RecentVault(@"C:\Work\Notes", "Notes", 2);
+        var otherNotes = new RecentVault(@"D:\Home\notes", "notes", 3);
+        RecentVault[] all = [alpha, notes, otherNotes];
+
+        Assert.Equal("Alpha", RecentVault.SpokenName(alpha, all));
+        Assert.Equal(@"Notes, C:\Work\Notes", RecentVault.SpokenName(notes, all));
+        Assert.Equal(@"notes, D:\Home\notes", RecentVault.SpokenName(otherNotes, all));
+        Assert.Equal("Notes", RecentVault.SpokenName(notes, [alpha, notes]));
+    }
+
     private string StorePath => Path.Combine(_directory, "recent-vaults.json");
     private RecentVaultsStore CreateStore() => new(StorePath);
 }
