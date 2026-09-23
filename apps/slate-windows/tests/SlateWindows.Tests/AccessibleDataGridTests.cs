@@ -1110,34 +1110,74 @@ public sealed class AccessibleDataGridTests
     // WPF's ToString() fallback is what a missing name would show (the
     // record: "SlateWindows.Bases.BaseGridRowViewModel, data item").
 
-    /// <summary>A delegate that answers blank never lets WPF name the
-    /// row — the peer would read the item's ToString() — so the row's
-    /// 1-based position stands in.</summary>
+    /// <summary>R-4 (amended after codex PR 0 round 5): a row is never
+    /// left unnamed. A delegate that answers blank would let WPF read the
+    /// item's ToString() (a blank Name is no Name), so the first non-empty
+    /// cell stands in, else "Row {n}" — n the row's place in the rows the
+    /// caller bound, which a sort does not move (the view position does).</summary>
     [Fact]
-    public void ABlankRowNameFallsBackToThePositionNotTheItem() => RunSta(() =>
+    public void ABlankRowNameFallsBackToTheFirstNonEmptyCellThenAStableOrdinal() => RunSta(() =>
     {
+        object[] rows =
+        [
+            new Person("Charlie", "Ops"),
+            new Person(string.Empty, "Dev"),
+            new Person(string.Empty, " "),
+            new Person("Bora", "Docs"),
+        ];
         var grid = new AccessibleDataGrid { Announce = _ => { } };
         grid.Bind(
-            Columns(), People, "3 rows.", "People",
-            rowAutomationName: row => ((Person)row).Name == "Alice" ? " " : ((Person)row).Name);
+            Columns(), rows, "4 rows.", "People",
+            rowAutomationName: row => ((Person)row).Name == "Charlie" ? "Charlie" : " ");
+        var window = new System.Windows.Window
+        {
+            Content = grid,
+            Width = 640,
+            Height = 480,
+            ShowInTaskbar = false,
+            WindowStyle = System.Windows.WindowStyle.None,
+        };
+        window.Show();
+        try
+        {
+            window.UpdateLayout();
+            Assert.Equal(
+                ["Charlie", "Dev", "Row 3", "Bora"],
+                GridRowNames.Read(grid).Select(row => row.Name));
 
-        Assert.Equal(
-            ["Charlie", "Row 2", "Bora"],
-            GridRowNames.Realized(grid).Select(row => row.Name));
+            // Ascending by Name puts the two blank names first: the blank
+            // row now SITS second, and is still the third row it was bound as.
+            Assert.NotNull(grid.ApplySort(0, ascending: true));
+            window.UpdateLayout();
+            Assert.Equal(
+                ["Dev", "Row 3", "Bora", "Charlie"],
+                GridRowNames.Read(grid).Select(row => row.Name));
+        }
+        finally
+        {
+            window.Close();
+        }
     });
 
-    /// <summary>The reading table names a row by its first cell, the row
-    /// header's text; a blank first cell reads its position. Unnamed, a
-    /// row of cells read "System.String[]".</summary>
+    /// <summary>The reading table names a row by its first non-empty
+    /// cell — the first cell is the row header, but a markdown row may
+    /// leave it blank, run short, or hold nothing at all, and
+    /// <c>CellText</c> reads those as "" by design; a row with no text
+    /// reads its ordinal. Unnamed, a row of cells read "System.String[]".</summary>
     [Fact]
-    public void ReadingTableRowsAreNamedByTheirFirstCell() => RunSta(() =>
+    public void ReadingTableRowsAreNamedByTheirFirstNonEmptyCell() => RunSta(() =>
     {
         AccessibleDataGrid grid = Assert.IsType<AccessibleDataGrid>(Reading.ReadingTableGrid.Build(
-            "| Name | Status |\n| --- | --- |\n| alpha | Open |\n|  | Done |\n"));
+            "| Name | Status |\n"
+            + "| --- | --- |\n"
+            + "| alpha | Open |\n"
+            + "|  | Done |\n"
+            + "| gamma |\n"
+            + "|  |  |\n"));
 
-        Assert.Equal(
-            ["alpha", "Row 2"],
-            GridRowNames.Realized(grid).Select(row => row.Name));
+        List<(object Item, string Name)> rows = GridRowNames.Realized(grid);
+        Assert.Equal(["alpha", "Done", "gamma", "Row 4"], rows.Select(row => row.Name));
+        Assert.All(rows, row => Assert.False(string.IsNullOrWhiteSpace(row.Name)));
     });
 
     /// <summary>A bibliography entry row is its entry: "Title (year)",
@@ -1382,18 +1422,27 @@ internal static class GridRowNames
         try
         {
             window.UpdateLayout();
-            var peer = (System.Windows.Automation.Peers.DataGridAutomationPeer)
-                System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(grid.Grid);
-            List<(object Item, string Name)> rows = peer.GetChildren()
-                .OfType<System.Windows.Automation.Peers.DataGridItemAutomationPeer>()
-                .Select(row => (row.Item, row.GetName()))
-                .ToList();
-            Assert.NotEmpty(rows);
-            return rows;
+            return Read(grid);
         }
         finally
         {
             window.Close();
         }
+    }
+
+    /// <summary>The realized rows of a grid already shown, in view order.</summary>
+    internal static List<(object Item, string Name)> Read(AccessibleDataGrid grid)
+    {
+        var peer = (System.Windows.Automation.Peers.DataGridAutomationPeer)
+            System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(grid.Grid);
+        // The peer caches its children; a re-populated grid (a sort) must
+        // be read in its new order, not the cached one.
+        peer.ResetChildrenCache();
+        List<(object Item, string Name)> rows = peer.GetChildren()
+            .OfType<System.Windows.Automation.Peers.DataGridItemAutomationPeer>()
+            .Select(row => (row.Item, row.GetName()))
+            .ToList();
+        Assert.NotEmpty(rows);
+        return rows;
     }
 }
