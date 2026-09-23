@@ -278,6 +278,34 @@ public sealed class AccessibilityNotificationDispatcherTests
         Assert.Empty(launch.Logged);
     }
 
+    /// <summary>OD-7, codex round 1: a screen reader started shortly AFTER
+    /// Slate still hears the launch lines. Posted while no client listens at
+    /// all, they are queued — not raised, not discarded — and when a client,
+    /// the advise and a connected provider arrive, exactly those tuples drain
+    /// once, in order.</summary>
+    [Fact]
+    public void LinesPostedBeforeAnyClientListensAreQueuedForAReaderStartedLater()
+    {
+        var launch = new LaunchHarness { Listening = false };
+        launch.Post("Vault opened.", "Scanning vault. 2 files to index.");
+        launch.Dispatcher.Post(new RenderedAnnouncement("Could not open vault.", A11yPriority.High));
+        launch.Tick!();
+        Assert.Empty(launch.Raised);
+
+        launch.Listening = true;
+        launch.Advised = true;
+        launch.Tick!();
+        Assert.Equal(
+            [
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Vault opened.", "slate-accessibility-announcement"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.All, "Scanning vault. 2 files to index.", "slate-accessibility-announcement"),
+                new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, "Could not open vault.", "slate-accessibility-announcement"),
+            ],
+            launch.Raised);
+        Assert.Null(launch.Tick);
+        Assert.Equal(1, launch.PollsStarted);
+    }
+
     /// <summary>OD-7: the phase ends only when all three are there — a
     /// listening client, the advise and a connected status provider. Any one
     /// missing keeps the lines queued; the post that completes the three
