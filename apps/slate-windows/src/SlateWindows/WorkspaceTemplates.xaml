@@ -710,17 +710,23 @@
             <ContentControl Focusable="False" Content="{Binding Group}"
                             ContentTemplate="{StaticResource WorkspaceGroupTemplate}"
                             Visibility="{Binding IsGroup, Converter={StaticResource BooleanToVisibilityConverter}}" />
-            <ItemsControl ItemsSource="{Binding Children}"
-                          ItemTemplate="{StaticResource WorkspaceNodeChildTemplate}"
-                          AlternationCount="2147483647"
-                          Visibility="{Binding IsSplit, Converter={StaticResource BooleanToVisibilityConverter}}"
-                          AutomationProperties.Name="Split editor panes">
-                <ItemsControl.ItemsPanel>
+            <!-- W7-7 PR 3 (#1246, R-4): one "Editor panes" group whose
+                 containers are layout. A plain ItemsControl named each pane
+                 container by its view model's type, and NVDA spoke
+                 "SlateWindows.WorkspacePaneNodeViewModel, data item, 1 of 2"
+                 on every pane move; the announcer's "Editor pane 1 of 2,
+                 {title}." (W7-6) carries the position instead. -->
+            <local:LayoutItemsControl ItemsSource="{Binding Children}"
+                                      ItemTemplate="{StaticResource WorkspaceNodeChildTemplate}"
+                                      AlternationCount="2147483647"
+                                      Visibility="{Binding IsSplit, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                      AutomationProperties.Name="Editor panes">
+                <local:LayoutItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
                         <local:WeightedSplitPanel Orientation="{Binding DataContext.Axis, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource AxisToOrientationConverter}}" />
                     </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-            </ItemsControl>
+                </local:LayoutItemsControl.ItemsPanel>
+            </local:LayoutItemsControl>
         </Grid>
     </DataTemplate>
 </ResourceDictionary>
