@@ -302,6 +302,7 @@ public sealed class W2EditorInteractionTests
     [InlineData("thrown-vault-db")]
     [InlineData("thrown-vault-structured")]
     [InlineData("thrown-other")]
+    [InlineData("thrown-empty-message")]
     public void AnUnresolvedEmbedIsWordedByCoreOnEverySurface(string outcome) =>
         RunOnSta(() =>
         {
@@ -356,6 +357,15 @@ public sealed class W2EditorInteractionTests
                         new EmbedUnresolvedReason.ReadError("The resolver was torn down."),
                         new InvalidOperationException("The resolver was torn down."),
                         "Embed preview for target. Could not read embed: The resolver was torn down."),
+                    // An exception with an empty message: the event carries
+                    // what the error said (nothing), and core's sentence
+                    // stands alone, never "Could not read embed:.".
+                    "thrown-empty-message" => (
+                        "![[target]]",
+                        "target",
+                        new EmbedUnresolvedReason.ReadError(string.Empty),
+                        new InvalidOperationException(string.Empty),
+                        "Embed preview for target. Could not read embed."),
                     _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, null),
                 };
             using InteractionFixture fixture = InteractionFixture.Create($"# Source\n\n{row.Embed}\n");

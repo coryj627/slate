@@ -117,6 +117,50 @@ public sealed class RecoveryAnnouncementTests
         AssertNoDiagnostics(tab.Status);
     }
 
+    /// <summary>R-7 at the save boundary's other catch (contract 38 D-10):
+    /// an editor that yields no verified snapshot — here its text keeps
+    /// changing while it is being verified, so the snapshot fails closed —
+    /// posts ONE NoteSaveBlocked whose detail is core's integrity sentence,
+    /// and the status is that same rendering: never a host-worded status
+    /// beside a different spoken line, and never the exception's
+    /// text.</summary>
+    [Theory]
+    [InlineData("save")]
+    [InlineData("save-all")]
+    [InlineData("close")]
+    public void AnEditorIntegrityFailureShowsTheSentenceItSpeaks(string action)
+    {
+        using var host = new Host();
+        WorkspaceTabViewModel tab = host.OpenNote();
+        tab.Text += "\nUnsaved local edit.";
+        string disk = File.ReadAllText(host.NotePath);
+        AvalonDocumentBufferSession session =
+            Assert.IsType<AvalonDocumentBufferSession>(tab.EditorSession);
+        int moves = 0;
+        session.BeforeSaveSnapshotAcquired = active =>
+        {
+            moves++;
+            active.Document.Insert(active.Document.TextLength, " ");
+        };
+        host.Announced.Clear();
+
+        Act(host, tab, action);
+
+        Assert.True(moves > 1, "the snapshot was never retried, so the integrity catch never ran");
+        var blocked = Assert.IsType<A11yEvent.NoteSaveBlocked>(Assert.Single(host.Announced));
+        Assert.Equal("note0.md", blocked.Filename);
+        Assert.Equal(SlateUniffiMethods.EditorIntegrityDetail(), blocked.Detail);
+        string spoken = SlateUniffiMethods.A11yRender(blocked).Text;
+        Assert.Equal(
+            "Save blocked. Could not save note0.md: The editor's text failed its integrity check. "
+                + "Your edits remain in the editor.",
+            spoken);
+        Assert.Equal(spoken, tab.Status);
+        Assert.True(tab.IsDirty);
+        Assert.Equal(disk, File.ReadAllText(host.NotePath));
+        AssertNoDiagnostics(tab.Status);
+    }
+
     private static void Act(Host host, WorkspaceTabViewModel tab, string action)
     {
         switch (action)
