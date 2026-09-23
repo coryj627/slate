@@ -18,6 +18,7 @@ internal enum HostDiagnosticEvent
 {
     ActivationDeliveryFailed,
     AnnouncementListenerState,
+    AnnouncementSource,
     CanvasModeDepartureFailed,
     CanvasModeTeardownFailed,
     ClipboardCopyFailed,
