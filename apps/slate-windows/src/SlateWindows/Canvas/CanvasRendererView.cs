@@ -667,6 +667,14 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// the document no longer knows — is answered HERE with no menu, so
     /// the request never climbs to the tab's.
     /// </para>
+    /// <para>
+    /// A pointer request SEATS the hit card, silently, before its menu
+    /// opens — contract 34 G2-12's rule for every context consumer (a row
+    /// is seated silently before its verb), so the card the menu acts on
+    /// and the selected card are one card while the menu is up, as the
+    /// outline and the grid consumers keep them. A keyboard request needs
+    /// no seat: it opens on the seat already.
+    /// </para>
     /// </remarks>
     private void OnMenuOpening(object sender, System.Windows.Controls.ContextMenuEventArgs e)
     {
@@ -675,6 +683,11 @@ internal sealed class CanvasRendererView : FrameworkElement
             || !RebuildMenu(nodeId))
         {
             e.Handled = true;
+            return;
+        }
+        if (pointerRequest)
+        {
+            _model?.SeatSelectionSilently(nodeId);
         }
     }
 
@@ -692,12 +705,12 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// know.
     /// </summary>
     /// <remarks>
-    /// The dispatch seats the card silently before its verb (TG-0), so a
-    /// pointer request's HIT card is the card acted on, not the seat — and
-    /// a keyboard request's is the seat, so a menu action changes that card
-    /// and no other (R-12). Open runs the document's one activation seam,
-    /// the table's route: a group has nothing to expand on the board, so
-    /// its Open does nothing there, as on the table.
+    /// The card is the seat by the time a row runs — a keyboard request
+    /// opened on it, a pointer request seated it (G2-12) — and the dispatch
+    /// seats it silently again before its verb (TG-0), so a menu action
+    /// changes that card and no other (R-12). Open runs the document's one
+    /// activation seam, the table's route: a group has nothing to expand
+    /// on the board, so its Open does nothing there, as on the table.
     /// </remarks>
     internal bool RebuildMenu(string nodeId)
     {

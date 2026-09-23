@@ -485,11 +485,12 @@ public sealed class CanvasContextMenuTests
     /// R-12 (#1256), OD-3's pointer arm through WPF's OWN right-click
     /// route: the popup service raises the menu request on the board with
     /// the cursor over card B's rendered bounds, the board's handler
-    /// refills its menu for the HIT card, WPF opens it, and its Toggle Mark
-    /// changes card B alone — the SEATED card A untouched, and the seat
-    /// still on A while the menu is up (a right-click selects nothing).
-    /// The two cards take different rows (A sits in a group, B does not),
-    /// so the opened menu's rows name the card it was built for.
+    /// refills its menu for the HIT card and SEATS it — silently, contract
+    /// 34 G2-12's rule for every context consumer, so the card the menu
+    /// acts on is the selected card — WPF opens it, and its Toggle Mark
+    /// changes card B alone, the previously seated card A untouched. The
+    /// two cards take different rows (A sits in a group, B does not), so
+    /// the opened menu's rows name the card it was built for.
     /// </summary>
     /// <remarks>
     /// Driven through <c>PopupControlService.RaiseContextMenuOpeningEvent</c>
@@ -513,6 +514,8 @@ public sealed class CanvasContextMenuTests
         Point overB = ViewCentre(board, "loose");
         Assert.True(board.HitTest(overB) == "loose", "premise: card B's centre does not hit card B.");
         ContextMenu? persistent = board.ContextMenu;
+        document.AnnouncerForTests.FlushForTests();
+        vault.Announced.Clear();
 
         Assert.True(RightClick(board, overB), "the right-click on card B was answered by nothing.");
         Assert.False(tabMenu.IsOpen, "a right-click on card B opened the ANCESTOR's menu (F13's class).");
@@ -523,7 +526,16 @@ public sealed class CanvasContextMenuTests
                 CanvasContextSurface.Renderer,
                 new CanvasContextTarget.Node(hit.NodeId, hit.Kind, hit.GroupPath.Length > 0)),
             Headers(persistent!));
-        Assert.Equal("question", document.Selection.Selected);
+        Assert.True(
+            document.Selection.Selected == "loose",
+            $"the right-click did not seat card B: the seat is \"{document.Selection.Selected}\", so the "
+            + "menu's card and the selected card are two cards (G2-12: a consumer seats its row "
+            + "silently before the verb).");
+        document.AnnouncerForTests.FlushForTests();
+        Assert.True(
+            vault.Announced.Count == 0,
+            "the right-click's seat spoke: [" + string.Join(" | ", vault.Announced) + "] — G2-12's seat "
+            + "is silent; the menu is what the reader hears.");
 
         Choose(persistent!, CanvasPhrase.ToggleMarkRowAction);
         Assert.True(
@@ -531,7 +543,7 @@ public sealed class CanvasContextMenuTests
             "Toggle Mark from the right-clicked card's menu did not mark the card under the pointer.");
         Assert.False(
             document.Selection.IsMarked("question"),
-            "Toggle Mark from a right-click on card B marked the SEATED card A.");
+            "Toggle Mark from a right-click on card B marked the previously seated card A.");
         Assert.Single(document.Selection.Marked);
     });
 
@@ -780,6 +792,10 @@ public sealed class CanvasContextMenuTests
         private readonly VaultSession _session;
         private readonly List<CanvasDocumentViewModel> _opened = [];
 
+        /// <summary>Every rendered line the opened documents' funnels
+        /// posted, in order.</summary>
+        internal List<string> Announced { get; } = [];
+
         internal BoardVault()
         {
             _fixture = FixtureVault.Create(1, "canvas-context-menu");
@@ -794,7 +810,7 @@ public sealed class CanvasContextMenuTests
             var document = new CanvasDocumentViewModel(
                 _session,
                 "board.canvas",
-                new CanvasAnnouncer(_ => { }, TimeSpan.FromMinutes(1)),
+                new CanvasAnnouncer(line => Announced.Add(line.Text), TimeSpan.FromMinutes(1)),
                 synchronousForTests: true,
                 verbosity: () => CanvasVerbosity.Standard);
             document.Load();
