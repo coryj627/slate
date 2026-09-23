@@ -1067,11 +1067,15 @@ public sealed class AccessibleDataGridTests
         });
     }
 
-    /// <summary>Codex PR 3 round 2: a teardown takes the rows' names with
-    /// the rows. A bind of no rows swapped the naming delegate out BEFORE
-    /// the rows unloaded, so OnUnloadingRow — which clears only what a bound
-    /// delegate set — left every realized row its name and status, and a
-    /// peer a client still held read the torn-down row.</summary>
+    /// <summary>Codex PR 3 round 2 and the spec review (round 21): a
+    /// teardown takes the rows' names with the rows. A bind of no rows
+    /// swapped the naming delegate out BEFORE the rows unloaded, so
+    /// OnUnloadingRow — which clears only what a bound delegate set — left
+    /// every realized row its name and status (measured: "Charlie", "Alice",
+    /// "Bora" after the teardown), and a peer a client still held read the
+    /// torn-down row. The ordering is what this proves; a call-site census
+    /// cannot: each row's own peer, retained across Clear(), reads its row
+    /// before and never after.</summary>
     [Fact]
     public void ATeardownLeavesNoRealizedRowItsName() => RunSta(() =>
     {
@@ -1084,7 +1088,13 @@ public sealed class AccessibleDataGridTests
         {
             DataGridRow[] realized = [.. People.Select(person =>
                 Assert.IsType<DataGridRow>(grid.Grid.ItemContainerGenerator.ContainerFromItem(person)))];
-            Assert.All(realized, row => Assert.NotEqual(string.Empty, AutomationProperties.GetName(row)));
+            string[] before = [.. realized.Select(AutomationProperties.GetName)];
+            Assert.Equal(["Charlie", "Alice", "Bora"], before);
+            System.Windows.Automation.Peers.AutomationPeer[] retained =
+            [
+                .. realized.Select(System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement),
+            ];
+            Assert.Equal(before, retained.Select(peer => peer.GetName()));
 
             grid.Clear();
             grid.UpdateLayout();
@@ -1094,7 +1104,31 @@ public sealed class AccessibleDataGridTests
                 Assert.Equal(string.Empty, AutomationProperties.GetName(row));
                 Assert.Equal(string.Empty, AutomationProperties.GetItemStatus(row));
             });
+            for (int index = 0; index < retained.Length; index++)
+            {
+                Assert.NotEqual(before[index], retained[index].GetName());
+                Assert.Equal(string.Empty, retained[index].GetItemStatus());
+            }
         });
+    });
+
+    /// <summary>The spec review (round 21): uniqueness is checked AFTER the
+    /// suffixes too. Rows 1 and 3 share "note.md" and would read "note.md,
+    /// row 1" and "note.md, row 3" — but row 2's own first cell already reads
+    /// "note.md, row 1", so the pair that collides falls back to its
+    /// ordinals.</summary>
+    [Fact]
+    public void ASuffixThatMeetsANaturalNameFallsBackToTheOrdinal() => RunSta(() =>
+    {
+        AccessibleDataGrid grid = Assert.IsType<AccessibleDataGrid>(Reading.ReadingTableGrid.Build(
+            "| Name | Status |\n"
+            + "| --- | --- |\n"
+            + "| note.md | a |\n"
+            + "| note.md, row 1 | b |\n"
+            + "| note.md | c |\n"));
+        GridRowNames.Hosted(grid, () => Assert.Equal(
+            ["Row 1", "Row 2", "note.md, row 3"],
+            GridRowNames.Read(grid).Select(row => row.Name)));
     });
 
     /// <summary>W6-2 PR A (contract A-9): the modified activation seam.

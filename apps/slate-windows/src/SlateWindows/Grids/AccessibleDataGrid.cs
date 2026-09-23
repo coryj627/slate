@@ -251,9 +251,11 @@ internal sealed class AccessibleDataGrid : UserControl
     /// two entries with one title and year, two table rows with one first
     /// cell — so a name more than one row carries (ignoring case, as speech
     /// does) is suffixed with that ordinal in the fallback's shape: "note.md,
-    /// row 3". The ordinal survives a sort (which re-populates the grid and
-    /// moves the view position), re-realization (the map outlives the
-    /// containers) and a re-bind (recomputed from the rows passed).
+    /// row 3" — and the names are checked again AFTER the suffixes, so a
+    /// suffixed name that meets a natural one sends both to "Row {n}". The
+    /// ordinal survives a sort (which re-populates the grid and moves the
+    /// view position), re-realization (the map outlives the containers) and
+    /// a re-bind (recomputed from the rows passed).
     /// </summary>
     private Dictionary<object, string> NameRows(IReadOnlyList<object> rows)
     {
@@ -276,6 +278,22 @@ internal sealed class AccessibleDataGrid : UserControl
                     System.Globalization.CultureInfo.InvariantCulture,
                     $"{name}, row {_boundOrdinals[row] + 1}")
                 : name;
+        }
+        // The spec review (round 21): a suffix can meet a natural name (a row
+        // whose own identity reads "note.md, row 3"). Every member of a group
+        // that still collides falls back to its ordinal, "Row {n}" — unique
+        // among ordinals — until no two rows share a name.
+        while (names
+            .GroupBy(pair => pair.Value, StringComparer.CurrentCultureIgnoreCase)
+            .Where(group => group.Skip(1).Any())
+            .SelectMany(group => group)
+            .ToList() is { Count: > 0 } colliding)
+        {
+            foreach ((object row, _) in colliding)
+            {
+                names[row] = string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture, $"Row {_boundOrdinals[row] + 1}");
+            }
         }
         return names;
     }

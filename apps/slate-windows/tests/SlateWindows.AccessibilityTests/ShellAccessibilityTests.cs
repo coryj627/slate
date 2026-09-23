@@ -1014,10 +1014,12 @@ public sealed partial class ShellAccessibilityTests
     /// name namespace- or nesting-qualified or not
     /// ("SlateWindows.Foo.BarRow { Name = value }"), and ending at the
     /// dump's closing brace — a user's file named "Plan { owner = Alice }.md"
-    /// is no dump (codex PR 3 round 2).</summary>
+    /// is no dump (codex PR 3 round 2) — across lines too: a rendering that
+    /// breaks its members over lines is still a dump (the spec review,
+    /// round 21).</summary>
     private static readonly Regex RecordDumpPattern = new(
-        @"^[\w.+]+ \{ .* = .* \}$",
-        RegexOptions.CultureInvariant);
+        @"^[\w.+]+\s\{\s.*\s=\s.*\s\}$",
+        RegexOptions.CultureInvariant | RegexOptions.Singleline);
 
     /// <summary>The census's verdict on one name — a pure function, pinned
     /// both ways by <see cref="ItemNameCensusTests"/>.</summary>
