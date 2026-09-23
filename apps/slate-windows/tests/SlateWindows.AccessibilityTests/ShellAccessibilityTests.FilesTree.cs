@@ -4,6 +4,7 @@
 using System.Diagnostics;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
+using FlaUI.Core.Input;
 using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
 
@@ -79,10 +80,10 @@ public sealed partial class ShellAccessibilityTests
             WaitForTreeItemStartingWith(tree, automation, "alpha.md").Focus();
             _ = WaitForEditor(window, automation, "alpha.md editor", TimeSpan.FromSeconds(10));
             AssertFocusStaysOnRow(automation, tree, "alpha.md", "Selecting alpha.md moved focus off the Files tree.");
-            PressKey(VirtualKeyShort.DOWN);
+            PressDownArrow();
             AssertFocusStaysOnRow(automation, tree, "Folder", "Down did not move to the Folder row.");
             _ = WaitForEditor(window, automation, "alpha.md editor", TimeSpan.FromSeconds(10));
-            PressKey(VirtualKeyShort.DOWN);
+            PressDownArrow();
             AutomationElement noteEditor = WaitForEditor(window, automation, "note.md editor", TimeSpan.FromSeconds(10));
             AssertFocusStaysOnRow(automation, tree, "note.md", "Down onto note.md moved focus off the Files tree.");
             Assert.Equal(1, TabCount(window, automation));
@@ -177,6 +178,15 @@ public sealed partial class ShellAccessibilityTests
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
     }
+
+    /// <summary>The Down arrow as the keyboard's own arrow key: scan code
+    /// 0x50 with the extended flag. A virtual-key press goes out without
+    /// that flag, which Windows and a running screen reader read as
+    /// numpad 2 — NVDA consumes it as a review-cursor gesture before the
+    /// app sees it (its log records <c>kb(laptop):numpad2</c>), so the
+    /// journey would drive a key no user presses on the arrow
+    /// cluster.</summary>
+    private static void PressDownArrow() => Keyboard.TypeScanCode(0x50, true);
 
     /// <summary>R-2's observable: focus is on the row named
     /// <paramref name="prefix"/> inside <paramref name="container"/>, and
