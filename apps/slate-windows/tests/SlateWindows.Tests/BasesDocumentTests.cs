@@ -421,6 +421,63 @@ public sealed class BaseSurfaceViewTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>W7-7 PR 4 (#1247, R-5; codex round 1): Escape from the
+    /// quick filter returns the keys to a ROW of a list-mode base — past the
+    /// group heading, a disabled separator — never the bare list, from
+    /// which an arrow walked into the menu bar. Synchronous here, so the
+    /// re-query lands before the landing and nothing after it can re-seat
+    /// the keys: this is the Escape's own landing.</summary>
+    [Fact]
+    public void EscapeFromTheQuickFilterLandsOnAListRow() => RunSta(() =>
+    {
+        var document = new SlateWindows.Bases.BaseDocumentViewModel(
+            _session, "Notes.base", _ => { }, synchronousForTests: true);
+        document.Load();
+        document.SelectView(1);
+        var surface = new SlateWindows.Bases.BaseSurfaceView { Model = document };
+        var window = new System.Windows.Window
+        {
+            Content = surface,
+            Width = 600,
+            Height = 400,
+            ShowInTaskbar = false,
+            WindowStyle = System.Windows.WindowStyle.None,
+            ShowActivated = false,
+        };
+        window.Show();
+        window.UpdateLayout();
+        try
+        {
+            System.Windows.Controls.TextBox filter = surface.QuickFilterForTests;
+            Assert.True(filter.Focus());
+            filter.Text = "1";
+            var escape = new System.Windows.Input.KeyEventArgs(
+                System.Windows.Input.Keyboard.PrimaryDevice,
+                System.Windows.PresentationSource.FromVisual(filter)!,
+                0,
+                System.Windows.Input.Key.Escape)
+            {
+                RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent,
+            };
+            filter.RaiseEvent(escape);
+
+            Assert.True(escape.Handled, "Escape with text in the filter was not the filter's");
+            Assert.Equal(string.Empty, filter.Text);
+            var row = Assert.IsType<System.Windows.Controls.ListBoxItem>(
+                System.Windows.Input.Keyboard.FocusedElement);
+            Assert.Same(
+                surface.ListForTests,
+                System.Windows.Controls.ItemsControl.ItemsControlFromItemContainer(row));
+            Assert.False(
+                Assert.IsAssignableFrom<SlateWindows.Bases.BaseListItemViewModel>(row.DataContext).IsHeader);
+        }
+        finally
+        {
+            window.Close();
+            document.Shutdown();
+        }
+    });
+
     private static void RunSta(Action body)
     {
         Exception? failure = null;

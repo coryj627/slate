@@ -111,7 +111,7 @@ public partial class MainWindow : IShellRegionHost
                 // R-5 (#1247): the filter's results land on a result row,
                 // or on the list itself when it is empty (AR-6).
                 _ = FilterResultsList.IsVisible
-                    ? FocusFirstOrSelectedItem(FilterResultsList)
+                    ? SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList)
                         || FilterResultsList.IsKeyboardFocusWithin
                         || FilesTree.Focus()
                     : FilesTree.Focus();
@@ -184,7 +184,7 @@ public partial class MainWindow : IShellRegionHost
                 // R-5 (#1247): the shown leaf's row (the first row if the
                 // rail names none), never the bare list, from which Down
                 // walked into the menu bar.
-                _ = FocusFirstOrSelectedItem(RightPaneLeavesList);
+                _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
                 break;
             case ShellRegionKind.StatusBar:
                 ShellStatusBar.Focus();
@@ -239,13 +239,14 @@ public partial class MainWindow : IShellRegionHost
         return null;
     }
 
-    /// <summary>W7-7 PR 4 (#1247, R-5): where the right-pane boundary puts
-    /// the keys — Ctrl+R's review, Show History, Ctrl+Alt+Right at the
-    /// window's edge — when the shown leaf has no landing of its own: the
-    /// leaf's first stop, the same landing as the ring's right-pane content
-    /// stop, so Ctrl+R puts the reader on the review's "All, N tasks"
-    /// filter; the rail's selected row when the leaf has no stop. It was
-    /// the bare rail, from which Down walked into the menu bar.</summary>
+    /// <summary>W7-7 PR 4 (#1247, R-5): where a leaf REVEAL puts the keys —
+    /// Ctrl+R's review, Show History — when the shown leaf has no landing
+    /// of its own: the leaf's first stop, the same landing as the ring's
+    /// right-pane content stop, so Ctrl+R puts the reader on the review's
+    /// "All, N tasks" filter; the rail's selected row when the leaf has no
+    /// stop. It was the bare rail, from which Down walked into the menu
+    /// bar. Ctrl+Alt+Right's edge is not a reveal and keeps the rail
+    /// (<see cref="WorkspaceFocusBoundary.RightPaneEdge"/>).</summary>
     private void LandInRightPane()
     {
         if (VisibleLeafBody() is { } body && FirstFocusable(body) is { } stop)
@@ -254,7 +255,7 @@ public partial class MainWindow : IShellRegionHost
         }
         else
         {
-            _ = FocusFirstOrSelectedItem(RightPaneLeavesList);
+            _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
         }
     }
 
@@ -262,95 +263,13 @@ public partial class MainWindow : IShellRegionHost
     /// the Citations leaf's is — and a list's landing is its row.</summary>
     private static void LandOnStop(UIElement stop)
     {
-        if (IsListLanding(stop))
+        if (SelectorFocus.IsListLanding(stop))
         {
-            _ = FocusFirstOrSelectedItem((Selector)stop);
+            _ = SelectorFocus.FocusFirstOrSelectedItem((Selector)stop);
             return;
         }
 
         _ = stop.Focus();
-    }
-
-    /// <summary>Whether focusing <paramref name="element"/> itself would
-    /// land on a bare list. A combo box is its own stop — its items live in
-    /// its drop-down — and a grid's stop is a cell, which the grid seats
-    /// (AccessibleDataGrid), not a row container.</summary>
-    internal static bool IsListLanding(UIElement element) =>
-        element is Selector and not ComboBox and not DataGrid;
-
-    /// <summary>
-    /// W7-7 PR 4 (#1247, contract R-5): a list's landing is an ITEM — the
-    /// selected one, else the first — never the bare container.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// A bare list has no row for an arrow to move from, so the arrow goes
-    /// to WPF's directional navigation, which searches the whole window:
-    /// Ctrl+R's "Right pane panels" and Shift+F6's Citations list both
-    /// handed Down to a top-level menu (NVDA pass F4). Every list landing
-    /// in the window goes through here (<c>SelectorLandingCensus</c>).
-    /// </para>
-    /// <para>
-    /// The selection is read, never written: selecting would switch the
-    /// rail's shown leaf or open a filter result. A row that takes focus
-    /// unselected is the state a Win32 list shows before its first arrow;
-    /// an arrow or Space selects from there.
-    /// </para>
-    /// <para>
-    /// A list with no items takes focus itself (AR-6): there is no row to
-    /// land on, and the list is still the stop. A combo box or a grid is
-    /// not a list landing (<see cref="IsListLanding"/>) and is never
-    /// passed.
-    /// </para>
-    /// <para>
-    /// A row whose container has not been generated yet — a virtualizing
-    /// panel after a republish; measured on the Citations list (#1098),
-    /// whose generator still answered null at Input priority — holds focus
-    /// on the list, so it is never stranded, and seats it on the row once
-    /// the container exists. That second step stands down unless focus is
-    /// still exactly on the list.
-    /// </para>
-    /// </remarks>
-    /// <returns>Whether a row took focus now.</returns>
-    internal static bool FocusFirstOrSelectedItem(Selector selector)
-    {
-        if (!selector.HasItems)
-        {
-            _ = selector.Focus();
-            return false;
-        }
-
-        if (FocusLandingItem(selector))
-        {
-            return true;
-        }
-
-        _ = selector.Focus();
-        _ = selector.Dispatcher.InvokeAsync(
-            () =>
-            {
-                if (selector.IsKeyboardFocused && selector.HasItems)
-                {
-                    _ = FocusLandingItem(selector);
-                }
-            },
-            System.Windows.Threading.DispatcherPriority.Background);
-        return false;
-    }
-
-    private static bool FocusLandingItem(Selector selector)
-    {
-        object item = selector.SelectedItem is { } selected && selector.Items.Contains(selected)
-            ? selected
-            : selector.Items[0];
-        if (selector.ItemContainerGenerator.ContainerFromItem(item) is not UIElement)
-        {
-            (selector as ListBox)?.ScrollIntoView(item);
-            selector.UpdateLayout();
-        }
-
-        return selector.ItemContainerGenerator.ContainerFromItem(item) is UIElement container
-            && container.Focus();
     }
 
     private static bool IsWithin(DependencyObject element, DependencyObject scope)

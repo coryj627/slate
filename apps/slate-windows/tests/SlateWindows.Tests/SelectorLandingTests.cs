@@ -9,11 +9,12 @@ namespace SlateWindows.Tests;
 
 /// <summary>
 /// W7-7 PR 4 (#1247, contract R-5): a list's landing is a ROW —
-/// <see cref="MainWindow.FocusFirstOrSelectedItem"/> puts the keys on the
-/// selected row, else the first, and never on the bare container, from
-/// which an arrow walked into the menu bar (NVDA pass F4). Hosted lists,
-/// real keyboard focus; SelectorLandingCensus holds every landing in the
-/// window to this helper.
+/// <see cref="SelectorFocus.FocusFirstOrSelectedItem"/> puts the keys on the
+/// selected row, else the first that takes the keys, and never on the bare
+/// container, from which an arrow walked into the menu bar (NVDA pass F4);
+/// an empty list lands on its showing notice. Hosted lists, real keyboard
+/// focus; SelectorLandingCensus holds every landing in the shell to this
+/// helper.
 /// </summary>
 public sealed class SelectorLandingTests
 {
@@ -24,7 +25,7 @@ public sealed class SelectorLandingTests
         using HostedWindow host = Host(list);
         Assert.True(host.Elsewhere.Focus());
 
-        Assert.True(MainWindow.FocusFirstOrSelectedItem(list));
+        Assert.True(SelectorFocus.FocusFirstOrSelectedItem(list));
 
         Assert.Same(list.ItemContainerGenerator.ContainerFromIndex(1), Keyboard.FocusedElement);
         Assert.Equal(1, list.SelectedIndex);
@@ -40,23 +41,75 @@ public sealed class SelectorLandingTests
         using HostedWindow host = Host(list);
         Assert.True(host.Elsewhere.Focus());
 
-        Assert.True(MainWindow.FocusFirstOrSelectedItem(list));
+        Assert.True(SelectorFocus.FocusFirstOrSelectedItem(list));
 
         Assert.Same(list.ItemContainerGenerator.ContainerFromIndex(0), Keyboard.FocusedElement);
         Assert.Equal(-1, list.SelectedIndex);
     });
 
-    /// <summary>AR-6: with no row to land on, the list is still the stop.</summary>
+    /// <summary>Spec §5.2.2: an EMPTY list's stop is its notice when one
+    /// is showing — the first of the named notices that is visible and takes
+    /// the keys, a collapsed one passed over.</summary>
     [Fact]
-    public void AnEmptyListTakesTheKeysItself() => RunSta(() =>
+    public void AnEmptyListLandsOnItsShowingNotice() => RunSta(() =>
     {
         var list = new ListBox { ItemsSource = Array.Empty<string>() };
-        using HostedWindow host = Host(list);
+        var hidden = new TextBlock { Text = "Select a file.", Focusable = true, Visibility = Visibility.Collapsed };
+        var notice = new TextBlock { Text = "This note has no citations.", Focusable = true };
+        using HostedWindow host = Host(list, hidden, notice);
         Assert.True(host.Elsewhere.Focus());
 
-        Assert.False(MainWindow.FocusFirstOrSelectedItem(list));
+        Assert.False(SelectorFocus.FocusFirstOrSelectedItem(list, hidden, notice));
 
+        Assert.Same(notice, Keyboard.FocusedElement);
+    });
+
+    /// <summary>AR-6: with no row to land on and no notice showing, the
+    /// list is still the stop.</summary>
+    [Fact]
+    public void AnEmptyListWithNoNoticeShowingTakesTheKeysItself() => RunSta(() =>
+    {
+        var list = new ListBox { ItemsSource = Array.Empty<string>() };
+        var hidden = new TextBlock { Text = "This note has no citations.", Focusable = true, Visibility = Visibility.Collapsed };
+        using HostedWindow host = Host(list, hidden);
+        Assert.True(host.Elsewhere.Focus());
+
+        Assert.False(SelectorFocus.FocusFirstOrSelectedItem(list, hidden));
         Assert.Same(list, Keyboard.FocusedElement);
+
+        Assert.True(host.Elsewhere.Focus());
+        Assert.False(SelectorFocus.FocusFirstOrSelectedItem(list));
+        Assert.Same(list, Keyboard.FocusedElement);
+    });
+
+    /// <summary>A notice speaks for an EMPTY list only: with rows, the row
+    /// is the stop even while a notice shows.</summary>
+    [Fact]
+    public void AListWithRowsLandsOnARowWhateverItsNoticeShows() => RunSta(() =>
+    {
+        var list = new ListBox { ItemsSource = Items(2) };
+        var notice = new TextBlock { Text = "Loading.", Focusable = true };
+        using HostedWindow host = Host(list, notice);
+        Assert.True(host.Elsewhere.Focus());
+
+        Assert.True(SelectorFocus.FocusFirstOrSelectedItem(list, notice));
+
+        Assert.Same(list.ItemContainerGenerator.ContainerFromIndex(0), Keyboard.FocusedElement);
+    });
+
+    /// <summary>A row that cannot take the keys — a Bases list's group
+    /// heading is a disabled separator — is passed over for the next.</summary>
+    [Fact]
+    public void WithNoSelectionADisabledHeadingIsPassedOver() => RunSta(() =>
+    {
+        var list = new ListBox { ItemsSource = Items(3) };
+        using HostedWindow host = Host(list);
+        ((ListBoxItem)list.ItemContainerGenerator.ContainerFromIndex(0)).IsEnabled = false;
+        Assert.True(host.Elsewhere.Focus());
+
+        Assert.True(SelectorFocus.FocusFirstOrSelectedItem(list));
+
+        Assert.Same(list.ItemContainerGenerator.ContainerFromIndex(1), Keyboard.FocusedElement);
     });
 
     [Fact]
@@ -66,7 +119,7 @@ public sealed class SelectorLandingTests
         using HostedWindow host = Host(tabs);
         Assert.True(host.Elsewhere.Focus());
 
-        Assert.True(MainWindow.FocusFirstOrSelectedItem(tabs));
+        Assert.True(SelectorFocus.FocusFirstOrSelectedItem(tabs));
 
         Assert.IsType<TabItem>(Keyboard.FocusedElement);
         Assert.Same(tabs.ItemContainerGenerator.ContainerFromIndex(1), Keyboard.FocusedElement);
@@ -78,13 +131,13 @@ public sealed class SelectorLandingTests
     [Fact]
     public void OnlyListsAndTabControlsAreLandedOnARow() => RunSta(() =>
     {
-        Assert.True(MainWindow.IsListLanding(new ListBox()));
-        Assert.True(MainWindow.IsListLanding(new ListView()));
-        Assert.True(MainWindow.IsListLanding(new TabControl()));
-        Assert.False(MainWindow.IsListLanding(new ComboBox()));
-        Assert.False(MainWindow.IsListLanding(new DataGrid()));
-        Assert.False(MainWindow.IsListLanding(new TreeView()));
-        Assert.False(MainWindow.IsListLanding(new Button()));
+        Assert.True(SelectorFocus.IsListLanding(new ListBox()));
+        Assert.True(SelectorFocus.IsListLanding(new ListView()));
+        Assert.True(SelectorFocus.IsListLanding(new TabControl()));
+        Assert.False(SelectorFocus.IsListLanding(new ComboBox()));
+        Assert.False(SelectorFocus.IsListLanding(new DataGrid()));
+        Assert.False(SelectorFocus.IsListLanding(new TreeView()));
+        Assert.False(SelectorFocus.IsListLanding(new Button()));
     });
 
     /// <summary>A row far down a virtualizing list, just republished: its
@@ -101,7 +154,7 @@ public sealed class SelectorLandingTests
         list.ItemsSource = Items(500);
         list.SelectedIndex = 400;
 
-        Assert.False(MainWindow.FocusFirstOrSelectedItem(list));
+        Assert.False(SelectorFocus.FocusFirstOrSelectedItem(list));
         Assert.Same(list, Keyboard.FocusedElement);
 
         Assert.True(
@@ -121,7 +174,7 @@ public sealed class SelectorLandingTests
         list.ItemsSource = Items(500);
         list.SelectedIndex = 400;
 
-        Assert.False(MainWindow.FocusFirstOrSelectedItem(list));
+        Assert.False(SelectorFocus.FocusFirstOrSelectedItem(list));
         Assert.True(host.Elsewhere.Focus());
 
         Assert.True(PumpedDispatcher.PumpUntil(() => list.ItemContainerGenerator.ContainerFromIndex(400) is not null));
@@ -141,11 +194,15 @@ public sealed class SelectorLandingTests
         return list;
     }
 
-    private static HostedWindow Host(Control landing)
+    private static HostedWindow Host(Control landing, params UIElement[] siblings)
     {
         var elsewhere = new Button { Content = "Elsewhere" };
         var content = new StackPanel();
         content.Children.Add(elsewhere);
+        foreach (UIElement sibling in siblings)
+        {
+            content.Children.Add(sibling);
+        }
         content.Children.Add(landing);
         var window = new Window
         {

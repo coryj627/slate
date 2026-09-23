@@ -239,7 +239,7 @@ public partial class MainWindow
 
                 // The selected row, never the bare list (R-5, #1247): a
                 // row not generated yet is seated once it exists.
-                _ = FocusFirstOrSelectedItem(TemplatePickerList);
+                _ = SelectorFocus.FocusFirstOrSelectedItem(TemplatePickerList);
                 return;
             case TemplatePickerState.Empty:
                 _ = TemplatePickerTryAgainButton.Focus();

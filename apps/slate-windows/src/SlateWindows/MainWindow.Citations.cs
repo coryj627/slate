@@ -290,8 +290,19 @@ public partial class MainWindow
             _selectedCitationKey = row.Reference.Citations.FirstOrDefault()?.Key;
         }
 
-        _citationsListOwnedFocusBeforePublish = PanelCitationsList.IsKeyboardFocusWithin;
+        _citationsListOwnedFocusBeforePublish = PanelCitationsList.IsKeyboardFocusWithin
+            || CitationNoticeHasTheKeys();
     }
+
+    /// <summary>The leaf's empty-state notices, in their visual order: an
+    /// EMPTY list's stop is the one showing (W7-7 PR 4, #1247; spec
+    /// §5.2.2). A publish that fills the list collapses the notice under
+    /// the keys, so the notices are sampled with the list (#1098).</summary>
+    private UIElement[] CitationNotices =>
+        [PanelCitationsNoFile, PanelCitationsEmpty, PanelCitationsError];
+
+    private bool CitationNoticeHasTheKeys() =>
+        CitationNotices.Any(notice => notice.IsKeyboardFocused);
 
     /// <summary>
     /// The focus half of the republish restore (#1098): the selection
@@ -334,7 +345,8 @@ public partial class MainWindow
 
                 if (Keyboard.FocusedElement is DependencyObject focused
                     && !ReferenceEquals(focused, this)
-                    && !PanelCitationsList.IsKeyboardFocusWithin)
+                    && !PanelCitationsList.IsKeyboardFocusWithin
+                    && !CitationNoticeHasTheKeys())
                 {
                     return;
                 }
@@ -345,8 +357,9 @@ public partial class MainWindow
                 // a row the virtualizing panel has not generated yet
                 // (measured: at Input priority the generator still answers
                 // null) holds focus on the list, so it is never stranded,
-                // and is seated once the container exists.
-                _ = FocusFirstOrSelectedItem(PanelCitationsList);
+                // and is seated once the container exists. An emptied list
+                // lands on its notice.
+                _ = SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList, CitationNotices);
             },
             System.Windows.Threading.DispatcherPriority.Input);
     }
@@ -625,8 +638,9 @@ public partial class MainWindow
                 {
                     return;
                 }
-                // A row of the list, never the bare list (R-5, #1247).
-                _ = FocusFirstOrSelectedItem(PanelCitationsList);
+                // A row of the list, never the bare list — or its notice
+                // when it is empty (R-5, #1247).
+                _ = SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList, CitationNotices);
             },
             System.Windows.Threading.DispatcherPriority.Input);
     }

@@ -20,8 +20,9 @@ public sealed partial class ShellAccessibilityTests
     /// lands on the review's filter, not the bare rail, and Down there
     /// checks the next filter the way a Windows radio group does; Shift+F6
     /// into a Citations list with rows lands on a row; F6 to a rail that has
-    /// lost its selection lands on a row; and the right-pane boundary into
-    /// a leaf with no stop lands on the rail's row.</summary>
+    /// lost its selection lands on a row; Ctrl+Alt+Right at the edge keeps
+    /// the rail's row though the leaf has stops; and an empty Citations
+    /// list's stop is its notice.</summary>
     [Fact]
     public void RegionStops_ArrowsStayInRegion()
     {
@@ -160,18 +161,102 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.F6);
             AssertFocusedListItem(automation, rail, "Citations", "F6 to a rail with no selection did not land on the shown leaf's row.");
 
-            // 5. The right-pane boundary into a leaf with no stop of its own
-            //    (Math shows the docked placeholder) lands on the rail's
-            //    selected row. It was the bare rail.
-            SelectRailLeaf(window, automation, "Math");
+            // 5. Ctrl+Alt+Right at the editor's edge keeps its landing, the
+            //    rail (W7-6 §6) — on the shown leaf's row, never the bare
+            //    rail — even with a leaf that has stops of its own: a leaf
+            //    REVEAL (Ctrl+R) goes into the leaf, a direction does not.
+            SelectRailLeaf(window, automation, "Tasks Review");
+            _ = WaitForElement(window, "PanelReviewFilterAll", TimeSpan.FromSeconds(10));
             AutomationElement editor = WaitForEditor(window, automation, "cited.md editor", TimeSpan.FromSeconds(10));
             ReassertForegroundForAChord(window);
             editor.Focus();
             AssertEventuallyFocused(editor, "The cited.md editor did not take focus.");
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.RIGHT);
-            AssertFocusedListItem(automation, rail, "Math", "Ctrl+Alt+Right into a leaf without a stop did not land on the rail's row.");
+            AssertFocusedListItem(automation, rail, "Tasks Review", "Ctrl+Alt+Right at the edge did not land on the rail's row.");
+
+            // 6. An EMPTY Citations list's stop is its notice (spec §5.2.2):
+            //    Shift+F6 into the leaf of a note with no citations lands on
+            //    "This note has no citations.", which reads the reason; the
+            //    bare empty list said only "Citations, list".
+            AutomationElement tasksNote = WaitForTreeItemStartingWith(tree, automation, "tasks.md");
+            tasksNote.Patterns.SelectionItem.Pattern.Select();
+            _ = WaitForEditor(window, automation, "tasks.md editor", TimeSpan.FromSeconds(10));
+            SelectRailLeaf(window, automation, "Citations");
+            AutomationElement empty = WaitForElement(window, "PanelCitationsEmpty", TimeSpan.FromSeconds(15));
+            Assert.Equal("This note has no citations.", empty.Properties.Name.ValueOrDefault);
+            ReassertForegroundForAChord(window);
+            statusBar.Focus();
+            AssertEventuallyFocused(statusBar, "The status bar did not take focus.");
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
+            AssertFocusedListItem(automation, rail, "Citations", "Shift+F6 from the status bar did not land on the rail's row.");
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
+            AssertEventuallyFocused(empty, "Shift+F6 into an empty Citations leaf did not land on its notice.");
 
             AssertAxeClean(process, "region-stops");
+        }
+        finally
+        {
+            try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>R-5 in a view (codex round 1 on W7-7 PR 4): Escape from a
+    /// list-mode base's quick filter clears it and returns the keys to the
+    /// content — a ROW of the list, never the bare list, from which an
+    /// arrow walked into the menu bar.</summary>
+    [Fact]
+    public void RegionStops_BasesListEscapeLandsOnARow()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "slate-region-bases-" + Guid.NewGuid().ToString("N"));
+        string vault = Path.Combine(root, "Vault");
+        string logs = Path.Combine(root, "logs");
+        Directory.CreateDirectory(vault);
+        File.WriteAllText(Path.Combine(vault, "alpha.md"), "---\nstatus: todo\n---\n\n# Alpha\n\nBody.\n");
+        File.WriteAllText(Path.Combine(vault, "beta.md"), "---\nstatus: done\n---\n\n# Beta\n\nBody.\n");
+        // A LIST view: the base opens in the list renderer.
+        File.WriteAllText(
+            Path.Combine(vault, "Listed.base"),
+            "filters: 'file.ext == \"md\"'\n"
+                + "views:\n"
+                + "  - type: list\n"
+                + "    name: Main\n"
+                + "    order:\n"
+                + "      - file.name\n"
+                + "      - note.status\n");
+
+        Process? process = null;
+        try
+        {
+            process = StartRegionStopsApp(vault, logs, "region-bases");
+            if (!HasInteractiveDesktop(process, "region-bases")) { return; }
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
+            WaitForTreeItemStartingWith(tree, automation, "Listed").Patterns.SelectionItem.Pattern.Select();
+            AutomationElement list = WaitForElement(window, "BaseTabList", TimeSpan.FromSeconds(15));
+            Assert.True(
+                SpinWait.SpinUntil(() => ListItemNames(automation, list).Length >= 2, TimeSpan.FromSeconds(15)),
+                "the list-mode base never showed its two rows");
+
+            // The field is always in the header (Ctrl+F is the GRID's chord;
+            // a list reader Tabs to it or uses Base > Quick Filter).
+            AutomationElement quickFilter = WaitForElement(window, "BaseQuickFilter", TimeSpan.FromSeconds(10));
+            ReassertForegroundForAChord(window);
+            quickFilter.Focus();
+            AssertEventuallyFocused(quickFilter, "The quick filter did not take focus.");
+            Keyboard.Type("alpha");
+            AutomationElement countReadout = WaitForElement(window, "BaseCountReadout", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(() => countReadout.Name.Contains("1 of", StringComparison.Ordinal), TimeSpan.FromSeconds(10)),
+                $"the filtered count never arrived; readout: {countReadout.Name}");
+
+            PressKey(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(() => !countReadout.Name.Contains("1 of", StringComparison.Ordinal), TimeSpan.FromSeconds(10)),
+                "Escape did not clear the quick filter");
+            AssertFocusedListItem(automation, list, null, "Escape from the quick filter did not land on a row of the list.");
         }
         finally
         {

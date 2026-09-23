@@ -23,10 +23,24 @@ internal enum WorkspaceOpenTarget
     SplitDown,
 }
 
+/// <summary>Where a request puts the keys at the workspace's edge.</summary>
 internal enum WorkspaceFocusBoundary
 {
+    /// <summary>Ctrl+Alt+Left at the window's edge: the Files tree.</summary>
     Files,
+
+    /// <summary>A command that shows a right-pane leaf and moves to it
+    /// (Ctrl+R's review, Show History, the Connections and inspector
+    /// routes): the keys go INTO the shown leaf — its own landing, else its
+    /// first stop (W7-7 PR 4, #1247, R-5).</summary>
     RightPane,
+
+    /// <summary>Ctrl+Alt+Right at the window's edge: arrival at the right
+    /// pane by direction. Its stop is the rail's row unless the shown leaf
+    /// owns a landing (the Connections anchor, the inspector's first stop)
+    /// — Ctrl+Alt+Arrow's semantics are not a leaf reveal's (W7-6 §6,
+    /// W7-7 §14).</summary>
+    RightPaneEdge,
 }
 
 internal enum WorkspaceDirtyNavigationDecision

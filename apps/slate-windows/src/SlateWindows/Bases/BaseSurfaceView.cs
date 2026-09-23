@@ -468,7 +468,9 @@ internal sealed class BaseSurfaceView : UserControl
         }
         else if (_list.Visibility == Visibility.Visible)
         {
-            _ = _list.Focus();
+            // A row, never the bare list, from which an arrow walked
+            // into the menu bar (W7-7 PR 4, #1247, R-5).
+            _ = SelectorFocus.FocusFirstOrSelectedItem(_list);
         }
     }
 
@@ -959,6 +961,16 @@ internal sealed class BaseSurfaceView : UserControl
         AutomationProperties.SetName(_list, result.AudioSummary);
         _list.ItemContainerStyle ??= BuildListItemStyle();
         ReconcileListSelection(items);
+        // A republish replaces every row container, and WPF hands the keys
+        // of a removed row to the bare list — measured: Escape from the
+        // quick filter landed on its row, and the re-query that followed
+        // left the reader on "2 notes, list", from which an arrow walked
+        // into the menu bar. The row, never the bare list (W7-7 PR 4,
+        // #1247, R-5; codex round 1).
+        if (_list.IsKeyboardFocused)
+        {
+            _ = SelectorFocus.FocusFirstOrSelectedItem(_list);
+        }
     }
 
     /// <summary>C9 selection preservation by IDENTITY (FilePath,
