@@ -20,15 +20,16 @@ public sealed partial class ShellAccessibilityTests
 
     /// <summary>W7-7 PR 2 (#1245 R-2, OD-2; #1250 R-3), spec §3.4, with
     /// real keys: Down through a folder row and two file rows keeps focus
-    /// on each row while the editor shows the file; Space toggles the
-    /// focused row's batch check box (the row's ItemStatus reports it,
-    /// focus stays); Enter moves focus into the note; Enter and
-    /// Ctrl+Enter open from the filter results, the tree and the dual
-    /// pane, Ctrl+Enter in a new tab; and the Tags tree filters by core's
-    /// grammar — <c>#accessibility</c> in the field, one result — and a
-    /// whitespace tag by the out-of-band scope, whose summary is shown.
-    /// The vault is this journey's own, so its extra notes touch no
-    /// shared fixture.</summary>
+    /// on each row while the editor shows the file in the one transient
+    /// tab; Space toggles the focused row's batch check box (the row's
+    /// ItemStatus reports it, focus stays); Ctrl+Enter gives the note its
+    /// own tab, so the next arrow shows its note in a new transient tab;
+    /// Enter moves focus into the note; Enter and Ctrl+Enter open from the
+    /// filter results, the tree and the dual pane; the Tags tree filters
+    /// by core's grammar — <c>#accessibility</c> in the field, one result —
+    /// and a whitespace tag by the out-of-band scope, whose summary is
+    /// shown; and Escape in the filter field clears it. The vault is this
+    /// journey's own, so its extra notes touch no shared fixture.</summary>
     [Fact]
     public void FilesTree_ArrowsKeepFocusEnterOpens()
     {
@@ -98,14 +99,30 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.SPACE);
             AssertBatchChecked(automation, noteRow, false);
 
+            // Ctrl+Enter gives the note shown in the transient tab a tab of
+            // its own (focus moves into it); back on the row, the next arrow
+            // shows its note in a NEW transient tab: one tab more (codex PR 2
+            // round 4 — the arrow used to hand Ctrl+Enter a tab it only
+            // re-focused).
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ENTER);
+            AssertEventuallyFocused(noteEditor, "Ctrl+Enter on the note.md row did not move focus into the note.");
+            Assert.Equal(1, TabCount(window, automation));
+            noteRow.Focus();
+            AssertFocusStaysOnRow(automation, tree, "note.md", "The note.md row did not take focus back.");
+            PressDownArrow();
+            AutomationElement zetaEditor = WaitForEditor(window, automation, "zeta.md editor", TimeSpan.FromSeconds(10));
+            AssertFocusStaysOnRow(automation, tree, "zeta.md", "Down onto zeta.md moved focus off the Files tree.");
+            AssertTabCount(window, automation, 2, "The arrow after Ctrl+Enter did not keep note.md in its own tab.");
+
             // Enter is the explicit open: focus moves into the note.
             PressKey(VirtualKeyShort.ENTER);
-            AssertEventuallyFocused(noteEditor, "Enter on the note.md row did not move focus into the note.");
+            AssertEventuallyFocused(zetaEditor, "Enter on the zeta.md row did not move focus into the note.");
             Assert.Equal("MarkdownEditor", automation.FocusedElement()?.Properties.AutomationId.ValueOrDefault);
-            Assert.Equal(1, TabCount(window, automation));
+            Assert.Equal(2, TabCount(window, automation));
 
-            // The filter results: Enter replaces the current tab's note
-            // and moves focus; Ctrl+Enter opens a new tab.
+            // The filter results: Enter opens the result in the current tab
+            // (the transient zeta tab, kept from now on) and moves focus;
+            // Ctrl+Enter opens a new tab.
             // The results list exists in the UIA tree only while a
             // filter is active, so it is found after each activation.
             AutomationElement field = WaitForElement(window, "SidebarFilter", TimeSpan.FromSeconds(10));
@@ -115,28 +132,28 @@ public sealed partial class ShellAccessibilityTests
             AssertEventuallyFocused(
                 WaitForEditor(window, automation, "alpha.md editor", TimeSpan.FromSeconds(10)),
                 "Enter on a filter result did not move focus into its note.");
-            Assert.Equal(1, TabCount(window, automation));
+            Assert.Equal(2, TabCount(window, automation));
             field.Patterns.Value.Pattern.SetValue("zeta");
             FocusOnlyListRow(automation, FilterResults(window), "zeta.md", "The zeta filter result did not take focus.");
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ENTER);
             AssertEventuallyFocused(
                 WaitForEditor(window, automation, "zeta.md editor", TimeSpan.FromSeconds(10)),
                 "Ctrl+Enter on a filter result did not move focus into its note.");
-            AssertTabCount(window, automation, 2, "Ctrl+Enter on a filter result did not open a new tab.");
+            AssertTabCount(window, automation, 3, "Ctrl+Enter on a filter result did not open a new tab.");
 
-            // The tree again: its selected row (note.md, which no tab
-            // holds any more) takes focus without an open, and Ctrl+Enter
-            // opens it in a new tab.
+            // The tree again: its selected row (zeta.md, whose note now has
+            // a tab of its own) takes focus without an open, and Ctrl+Enter
+            // moves focus into that tab rather than duplicating it.
             field.Patterns.Value.Pattern.SetValue(string.Empty);
-            AutomationElement selectedRow = WaitForTreeItemStartingWith(tree, automation, "note.md");
+            AutomationElement selectedRow = WaitForTreeItemStartingWith(tree, automation, "zeta.md");
             selectedRow.Focus();
-            AssertFocusStaysOnRow(automation, tree, "note.md", "The selected note.md row did not take focus.");
-            AssertTabCount(window, automation, 2, "Focusing the selected row opened something.");
+            AssertFocusStaysOnRow(automation, tree, "zeta.md", "The selected zeta.md row did not take focus.");
+            AssertTabCount(window, automation, 3, "Focusing the selected row opened something.");
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ENTER);
             AssertEventuallyFocused(
-                WaitForEditor(window, automation, "note.md editor", TimeSpan.FromSeconds(10)),
+                WaitForEditor(window, automation, "zeta.md editor", TimeSpan.FromSeconds(10)),
                 "Ctrl+Enter on a Files tree row did not move focus into its note.");
-            AssertTabCount(window, automation, 3, "Ctrl+Enter on a Files tree row did not open a new tab.");
+            AssertTabCount(window, automation, 3, "Ctrl+Enter on a row whose note has its own tab opened another.");
 
             // The dual pane, showing the selected folder's files:
             // Ctrl+Enter opens child.md in a new tab; Enter on the same row
@@ -171,6 +188,22 @@ public sealed partial class ShellAccessibilityTests
             AssertFieldValue(field, string.Empty);
             AssertListRowCount(automation, FilterResults(window), 1, "The whitespace tag's scope did not filter to its one note.");
             _ = WaitForNamedElement(window, automation, "1 result for #two words.", TimeSpan.FromSeconds(10));
+
+            // R-3 (codex PR 2 round 4): Escape in the filter field clears
+            // the invisible scope — the results give way to the tree, the
+            // status says so, and the Clear filter button has nothing left
+            // to clear.
+            AutomationElement clear = WaitForElement(window, "SidebarFilterClear", TimeSpan.FromSeconds(10));
+            Assert.True(clear.IsEnabled, "The Clear filter button was disabled while the tag scope filtered.");
+            field.Focus();
+            AssertEventuallyFocused(field, "The filter field did not take focus.");
+            PressKey(VirtualKeyShort.ESCAPE);
+            _ = WaitForNamedElement(window, automation, "Filter cleared.", TimeSpan.FromSeconds(10));
+            AssertFieldValue(field, string.Empty);
+            Assert.True(
+                SpinWait.SpinUntil(() => !clear.IsEnabled, TimeSpan.FromSeconds(10)),
+                "The Clear filter button stayed enabled after Escape cleared the filter.");
+            _ = WaitForTreeItemStartingWith(tree, automation, "alpha.md");
         }
         finally
         {

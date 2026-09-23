@@ -870,12 +870,31 @@
                                             AutomationProperties.HelpText="Reads .slate/sidebar.json again after you repair it."
                                             Command="{Binding RetrySettingsCommand}" />
                                 </StackPanel>
-                                <TextBox x:Name="SidebarFilterTextBox"
-                                         AutomationProperties.AutomationId="SidebarFilter"
-                                         AutomationProperties.Name="Filter files"
-                                         Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
-                                         Padding="6,4"
-                                         ToolTip="Filter by words, #tag, path:, ext:, has:task, or @date." />
+                                <!-- W7-7 (R-3): the filter field and its Clear button (enabled while
+                                     a filter or tag scope is active — a whitespace tag's scope never
+                                     shows in the field); Escape in the field runs the same command. -->
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="SidebarFilterTextBox"
+                                             Grid.Column="0"
+                                             AutomationProperties.AutomationId="SidebarFilter"
+                                             AutomationProperties.Name="Filter files"
+                                             AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.SidebarFilter}"
+                                             Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
+                                             PreviewKeyDown="SidebarFilterTextBox_PreviewKeyDown"
+                                             Padding="6,4"
+                                             ToolTip="Filter by words, #tag, path:, ext:, has:task, or @date." />
+                                    <Button Grid.Column="1"
+                                            Margin="4,0,0,0"
+                                            Padding="6,2"
+                                            Content="Clear"
+                                            AutomationProperties.AutomationId="SidebarFilterClear"
+                                            AutomationProperties.Name="Clear filter"
+                                            Command="{Binding ClearFilterCommand}" />
+                                </Grid>
                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,6">
                                     <ComboBox Width="145"
                                               ItemsSource="{Binding SortModes}"

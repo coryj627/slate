@@ -115,14 +115,14 @@ internal sealed partial class WorkspaceViewModel
     {
         if (!fromSelection)
         {
-            return TryOpenItemCore(item, target, requestEditorFocus, fromSelection: false);
+            return TryOpenItemCore(item, target, requestEditorFocus);
         }
 
         bool outer = _selectionOpenInProgress;
         _selectionOpenInProgress = true;
         try
         {
-            return TryOpenItemCore(item, target, requestEditorFocus: false, fromSelection: true);
+            return ShowSelectionInTransientTab(item);
         }
         finally
         {
@@ -130,11 +130,48 @@ internal sealed partial class WorkspaceViewModel
         }
     }
 
+    /// <summary>W7-7 (R-2, codex PR 2 round 4): a Files selection shows its
+    /// note in the group's ONE transient tab — VS Code's preview tab. A note
+    /// already open in the group is simply activated. Otherwise the clean
+    /// transient tab takes the note in place; a dirty one is never
+    /// replaced — it stops being transient and a new transient tab takes
+    /// the note; with none, a transient tab is created. No other tab is
+    /// ever replaced by a selection, so an explicitly opened tab survives
+    /// arrowing, and no tab is ever duplicated. Focus stays on the row and
+    /// the modal dirty-navigation gate never rises.</summary>
+    private bool ShowSelectionInTransientTab(WorkspaceItemState item)
+    {
+        WorkspaceGroupViewModel group = ActiveGroup;
+        WorkspaceTabViewModel? open = group.Tabs.FirstOrDefault(
+            tab => ItemsReferToSameTarget(tab.Item, item));
+        if (open is not null)
+        {
+            group.ActiveTab = open;
+            return true;
+        }
+
+        WorkspaceTabViewModel? transient = group.Tabs.FirstOrDefault(tab => tab.IsTransient);
+        if (transient is { IsDirty: false })
+        {
+            ReplaceTabItem(transient, item);
+            group.ActiveTab = transient;
+            RaiseCommandStates();
+            return true;
+        }
+
+        if (transient is not null)
+        {
+            transient.IsTransient = false;
+        }
+
+        AddTab(group, item, activate: true).IsTransient = true;
+        return true;
+    }
+
     private bool TryOpenItemCore(
         WorkspaceItemState item,
         WorkspaceOpenTarget target,
-        bool requestEditorFocus,
-        bool fromSelection)
+        bool requestEditorFocus)
     {
         if (item.Kind == WorkspaceItemKind.Graph && TryFocusGlobalGraph())
         {
@@ -154,6 +191,16 @@ internal sealed partial class WorkspaceViewModel
                 tab => ItemsReferToSameTarget(tab.Item, item));
             if (existing is not null)
             {
+                if (target == WorkspaceOpenTarget.NewTab)
+                {
+                    // W7-7 (R-2, codex PR 2 round 4): "open in a new tab" gives
+                    // the note a tab of its own that later selections never
+                    // replace — the transient tab showing it is kept as that
+                    // tab, not duplicated (two editors on one document would
+                    // collide with the save and conflict model).
+                    existing.IsTransient = false;
+                }
+
                 ActiveGroup.ActiveTab = existing;
                 if (requestEditorFocus)
                 {
@@ -181,18 +228,6 @@ internal sealed partial class WorkspaceViewModel
         }
         else if (!ItemsReferToSameTarget(active.Item, item))
         {
-            if (active.IsDirty && fromSelection)
-            {
-                // W7-7 (R-2, codex PR 2 round 2): a Files selection never
-                // raises the modal dirty-navigation gate — an arrow in the
-                // tree must not throw a dialog over it and take focus. The
-                // dirty tab stays exactly as it is (no prompt, no save, no
-                // discard) and the selection shows in another tab of the
-                // group; the next arrow replaces that clean tab in place.
-                AddTab(group, item, activate: true);
-                return true;
-            }
-
             if (active.IsDirty)
             {
                 WorkspaceDirtyNavigationDecision decision = _dirtyNavigationDecision(active, item);
@@ -216,24 +251,10 @@ internal sealed partial class WorkspaceViewModel
                 }
             }
 
-            WorkspaceTabViewModel? peer = FindSamePathTab(item, excluding: active);
-            active.ReplaceItem(item);
-            // The replace arm is a tab MUTATION site, not a construction
-            // site — it needs the same attach funnel as AddTab/restore/
-            // duplicate or a .base opened into the current tab ships a
-            // dead pane (red team round 1 blocker). Attach before the
-            // release sweep so a shared document is never shut down
-            // between the two steps.
-            AttachTabDocumentsIfNeeded(active);
-            ReleaseUnreferencedBaseDocuments();
-            ReleaseUnreferencedDashboards();
-            ReleaseUnreferencedCanvasDocuments();
-            ReleaseGraphDocumentIfUnreferenced();
-            if (peer is not null)
-            {
-                active.MirrorDocumentStateFrom(peer);
-            }
-
+            ReplaceTabItem(active, item);
+            // An explicit open into the current tab makes it the note's own
+            // tab: a transient tab it lands in is kept from here (W7-7 R-2).
+            active.IsTransient = false;
             ActiveGroup.ActiveTab = active;
             RaiseCommandStates();
         }
@@ -246,6 +267,28 @@ internal sealed partial class WorkspaceViewModel
             RequestActiveEditorFocus();
         }
         return true;
+    }
+
+    /// <summary>Put <paramref name="item"/> into <paramref name="tab"/> in
+    /// place — the current tab's explicit replace and the transient tab's
+    /// selection share it. The replace is a tab MUTATION site, not a
+    /// construction site — it needs the same attach funnel as
+    /// AddTab/restore/duplicate or a .base opened into the tab ships a dead
+    /// pane (red team round 1 blocker). Attach before the release sweep so
+    /// a shared document is never shut down between the two steps.</summary>
+    private void ReplaceTabItem(WorkspaceTabViewModel tab, WorkspaceItemState item)
+    {
+        WorkspaceTabViewModel? peer = FindSamePathTab(item, excluding: tab);
+        tab.ReplaceItem(item);
+        AttachTabDocumentsIfNeeded(tab);
+        ReleaseUnreferencedBaseDocuments();
+        ReleaseUnreferencedDashboards();
+        ReleaseUnreferencedCanvasDocuments();
+        ReleaseGraphDocumentIfUnreferenced();
+        if (peer is not null)
+        {
+            tab.MirrorDocumentStateFrom(peer);
+        }
     }
 
     private bool TryFocusGlobalGraph()

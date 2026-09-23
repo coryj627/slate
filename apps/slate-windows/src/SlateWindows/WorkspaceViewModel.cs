@@ -384,11 +384,30 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             if (SetField(ref _isDirty, value))
             {
                 OnPropertyChanged(nameof(DirtyMarker));
+                if (value)
+                {
+                    // An edited note is kept: the transient tab stops being
+                    // one the moment it is edited, saved later or not.
+                    IsTransient = false;
+                }
             }
         }
     }
 
     public string DirtyMarker => IsDirty ? " •" : string.Empty;
+
+    /// <summary>W7-7 (R-2, codex PR 2 round 4): the group's transient tab —
+    /// VS Code's preview tab — which a Files selection shows its note in and
+    /// the next selection replaces while it stays clean. Editing the note, an
+    /// explicit open into the tab, or "open in a new tab" keeps it (the flag
+    /// clears); a restored tab is never transient.</summary>
+    public bool IsTransient
+    {
+        get => _isTransient;
+        internal set => SetField(ref _isTransient, value);
+    }
+
+    private bool _isTransient;
 
     public bool IsMissingFromDisk
     {

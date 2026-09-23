@@ -40,6 +40,12 @@ internal static class NavigationHelp
         + $"{Spoken("windows.filesTree.openSelectedInNewTab")} opens it in a new tab. "
         + $"{Spoken("windows.filesTree.toggleBatchSelection")} checks or unchecks it for batch actions.";
 
+    /// <summary>W7-7 (R-3): the Files filter field's grammar and its
+    /// clear routes, the key spoken from its own row.</summary>
+    public static string SidebarFilter =>
+        "Filter by words, #tag, path:, ext:, has:task, or @date. "
+        + $"{Spoken("windows.sidebarFilter.clear")} or the Clear filter button clears the filter.";
+
     internal static string Spoken(string id) => ChordTable.WindowsSpokenFor(id)
         ?? throw new InvalidOperationException($"Navigation help requires a chord-table row with a Windows chord: '{id}'.");
 }

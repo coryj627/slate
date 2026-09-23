@@ -758,6 +758,7 @@ public sealed class ChordTableTests
             [ChordScope.Connections] = ConnectionsChords(),
             [ChordScope.Graph] = GraphChords(),
             [ChordScope.FilesTree] = FilesTreeChords(),
+            [ChordScope.SidebarFilter] = KeyRouteChords("SidebarFilterTextBox_PreviewKeyDown"),
         };
 
     /// <summary>W7-7 (R-2): the Files rows' own key route,
@@ -765,10 +766,15 @@ public sealed class ChordTableTests
     /// naming one key and its EXACT modifier state — compared both ways
     /// against the table's FilesTree rows, so a gesture handled with no
     /// row, or a row nothing delivers, fails here.</summary>
-    private static HashSet<string> FilesTreeChords()
+    private static HashSet<string> FilesTreeChords() => KeyRouteChords("FilesRows_PreviewKeyDown");
+
+    /// <summary>A MainWindow key route of flat if-arms, each naming one key
+    /// and its EXACT modifier state through a <c>modifiers</c> local — the
+    /// Files rows' route and the Files filter field's (W7-7 R-3).</summary>
+    private static HashSet<string> KeyRouteChords(string method)
     {
         MethodDeclarationSyntax route =
-            CSharpSource.Load("MainWindow.xaml.cs").Method("FilesRows_PreviewKeyDown");
+            CSharpSource.Load("MainWindow.xaml.cs").Method(method);
         AssertLocalMeans(route, "modifiers", "Keyboard.Modifiers");
         var chords = new HashSet<string>(System.StringComparer.Ordinal);
         foreach (IfStatementSyntax arm in route.DescendantNodes().OfType<IfStatementSyntax>())
@@ -784,7 +790,7 @@ public sealed class ChordTableTests
                 CSharpSource.Normalize(arm.Condition), @"modifiers==ModifierKeys\.(\w+)");
             Assert.True(
                 exact.Success,
-                $"Files row arm `{arm.Condition}` names no exact modifier state; the "
+                $"{method} arm `{arm.Condition}` names no exact modifier state; the "
                 + "scrape reads `modifiers == ModifierKeys.X` and would misattribute it.");
             chords.Add(Canonical(
                 exact.Groups[1].Value == "None" ? null : exact.Groups[1].Value, keys[0]));
@@ -820,6 +826,22 @@ public sealed class ChordTableTests
             Assert.Null(row.MacChord);
             Assert.False(string.IsNullOrWhiteSpace(row.Reason));
         }
+    }
+
+    /// <summary>W7-7 (R-3, codex PR 2 round 4): Escape in the Files filter
+    /// field is a surface row in its own scope — the scoped scrape pins its
+    /// delivery both ways — unregistered, claiming no mac chord, and naming
+    /// the registered command it runs.</summary>
+    [Fact]
+    public void SidebarFilterClearIsASurfaceRowInItsOwnScope()
+    {
+        ChordTableEntry row = Assert.Single(ChordTable.Entries, entry => entry.Scope == ChordScope.SidebarFilter);
+        Assert.Equal("windows.sidebarFilter.clear", row.Id);
+        Assert.Equal("Escape", row.WindowsChord);
+        Assert.False(row.IsCommandId);
+        Assert.False(row.IsRegistered);
+        Assert.Null(row.MacChord);
+        Assert.Contains(ChordTable.Ids.SidebarClearFilter, row.Reason, System.StringComparison.Ordinal);
     }
 
     /// <summary>W6-2 PR C (C-11): the graph navigator's map, scraped from

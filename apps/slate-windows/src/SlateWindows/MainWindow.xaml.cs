@@ -1323,6 +1323,24 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>W7-7 (R-3, codex PR 2 round 4): Escape in the Files filter
+    /// field is a user clear — the Clear filter button's and the palette's
+    /// Clear Sidebar Filter — while a filter or tag scope is active; with
+    /// nothing filtering the key is left unhandled for the window's own
+    /// Escape. The <c>windows.sidebarFilter.clear</c> chord row
+    /// (<c>ChordScope.SidebarFilter</c>); the field's HelpText speaks it
+    /// (contract 39 N-1).</summary>
+    private void SidebarFilterTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (e.Key == Key.Escape && modifiers == ModifierKeys.None
+            && _viewModel.FileSidebar is FilesSidebarViewModel { IsFilterActive: true } sidebar)
+        {
+            sidebar.ClearFilterCommand.Execute(null);
+            e.Handled = true;
+        }
+    }
+
     private void Tags_SelectedItemChanged(
         object sender,
         RoutedPropertyChangedEventArgs<object> e)

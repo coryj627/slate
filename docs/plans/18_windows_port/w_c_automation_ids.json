@@ -1841,6 +1841,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "SidebarFilterClear",
+    "Surface": "File filter/results"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "SidebarFilterResults",
     "Surface": "File filter/results"
   },

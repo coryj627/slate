@@ -185,6 +185,130 @@ public sealed class SidebarTreeKeysTests : IDisposable
     }
 
     /// <summary>
+    /// R-2 transient tab (codex PR 2 round 4), the whole sequence: arrow onto
+    /// A, Ctrl+Enter, back to Files, arrow onto B. Ctrl+Enter gives A a tab
+    /// of its own — the transient tab that showed it, kept — so B lands in a
+    /// new transient tab: A intact and permanent, the tab count one higher.
+    /// </summary>
+    [Fact]
+    public async Task ArrowCtrlEnterArrow_KeepsTheNoteInItsOwnTab()
+    {
+        (VaultLifecycleViewModel lifecycle, WorkspaceViewModel workspace, FilesSidebarViewModel sidebar) =
+            await OpenAsync("transient-ctrl-enter");
+        using VaultLifecycleViewModel owned = lifecycle;
+
+        sidebar.SelectedNode = Node(sidebar, "alpha.md");
+        WorkspaceTabViewModel alpha = Assert.Single(workspace.ActiveGroup.Tabs);
+        Assert.True(alpha.IsTransient);
+        int before = workspace.ActiveGroup.Tabs.Count;
+
+        Assert.True(sidebar.OpenNode(Node(sidebar, "alpha.md"), WorkspaceOpenTarget.NewTab));
+        Assert.Same(alpha, Assert.Single(workspace.ActiveGroup.Tabs));
+
+        sidebar.SelectedNode = Node(sidebar, "beta.md");
+
+        Assert.Equal(before + 1, workspace.ActiveGroup.Tabs.Count);
+        Assert.Equal(new[] { "alpha.md", "beta.md" }, workspace.ActiveGroup.Tabs.Select(tab => tab.Path));
+        Assert.Same(alpha, workspace.ActiveGroup.Tabs[0]);
+        Assert.Equal("alpha.md", alpha.Path);
+        Assert.False(alpha.IsTransient);
+        Assert.True(workspace.ActiveGroup.Tabs[1].IsTransient);
+        Assert.Equal("beta.md", workspace.ActiveGroup.ActiveTab?.Path);
+    }
+
+    /// <summary>
+    /// R-2 transient tab: arrow onto A, Enter (focus into the note — the tab
+    /// stays transient), back to Files, arrow onto B. A was transient and
+    /// clean, so B takes its tab in place: one tab, showing B.
+    /// </summary>
+    [Fact]
+    public async Task ArrowEnterArrow_ReplacesTheCleanTransientTab()
+    {
+        (VaultLifecycleViewModel lifecycle, WorkspaceViewModel workspace, FilesSidebarViewModel sidebar) =
+            await OpenAsync("transient-enter");
+        using VaultLifecycleViewModel owned = lifecycle;
+        var focusRequests = new List<string>();
+        workspace.EditorPaneFocusRequested += (_, group) => focusRequests.Add(group.ActiveTab?.Path ?? "<no tab>");
+
+        sidebar.SelectedNode = Node(sidebar, "alpha.md");
+        WorkspaceTabViewModel transient = Assert.Single(workspace.ActiveGroup.Tabs);
+        Assert.True(sidebar.OpenNode(Node(sidebar, "alpha.md"), WorkspaceOpenTarget.CurrentTab));
+        Assert.Equal(new[] { "alpha.md" }, focusRequests);
+        Assert.True(transient.IsTransient);
+
+        sidebar.SelectedNode = Node(sidebar, "beta.md");
+
+        Assert.Same(transient, Assert.Single(workspace.ActiveGroup.Tabs));
+        Assert.Equal("beta.md", transient.Path);
+        Assert.True(transient.IsTransient);
+    }
+
+    /// <summary>
+    /// R-2 transient tab: arrow onto A, type in A, back to Files, arrow onto
+    /// B. An edited note is never replaced: A keeps its tab and its edits,
+    /// no longer transient, and B shows in a new transient tab.
+    /// </summary>
+    [Fact]
+    public async Task ArrowEditArrow_KeepsTheEditedNote()
+    {
+        (VaultLifecycleViewModel lifecycle, WorkspaceViewModel workspace, FilesSidebarViewModel sidebar) =
+            await OpenAsync("transient-edit");
+        using VaultLifecycleViewModel owned = lifecycle;
+
+        sidebar.SelectedNode = Node(sidebar, "alpha.md");
+        WorkspaceTabViewModel alpha = Assert.Single(workspace.ActiveGroup.Tabs);
+        const string edited = "# Alpha\n\nTyped into the transient tab.\n";
+        alpha.Text = edited;
+        Assert.True(alpha.IsDirty);
+
+        sidebar.SelectedNode = Node(sidebar, "beta.md");
+
+        Assert.Equal(new[] { "alpha.md", "beta.md" }, workspace.ActiveGroup.Tabs.Select(tab => tab.Path));
+        Assert.Same(alpha, workspace.ActiveGroup.Tabs[0]);
+        Assert.True(alpha.IsDirty);
+        Assert.Equal(edited, alpha.Text);
+        Assert.False(alpha.IsTransient);
+        Assert.True(workspace.ActiveGroup.Tabs[1].IsTransient);
+    }
+
+    /// <summary>
+    /// R-2 transient tab: a tab opened explicitly survives arrowing — the
+    /// selection shows its notes beside it, in the transient tab, and the
+    /// next arrow replaces only that.
+    /// </summary>
+    [Fact]
+    public async Task AnExplicitlyOpenedTabSurvivesArrowing()
+    {
+        (VaultLifecycleViewModel lifecycle, WorkspaceViewModel workspace, FilesSidebarViewModel sidebar) =
+            await OpenAsync("transient-explicit");
+        using VaultLifecycleViewModel owned = lifecycle;
+        workspace.OpenPath("Docs/readme.md");
+        WorkspaceTabViewModel explicitTab = Assert.Single(workspace.ActiveGroup.Tabs);
+        Assert.False(explicitTab.IsTransient);
+        Assert.False(explicitTab.IsDirty);
+
+        sidebar.SelectedNode = Node(sidebar, "alpha.md");
+        Assert.Equal(new[] { "Docs/readme.md", "alpha.md" }, workspace.ActiveGroup.Tabs.Select(tab => tab.Path));
+        Assert.True(workspace.ActiveGroup.Tabs[1].IsTransient);
+
+        sidebar.SelectedNode = Node(sidebar, "beta.md");
+        Assert.Equal(new[] { "Docs/readme.md", "beta.md" }, workspace.ActiveGroup.Tabs.Select(tab => tab.Path));
+        Assert.Same(explicitTab, workspace.ActiveGroup.Tabs[0]);
+    }
+
+    private async Task<(VaultLifecycleViewModel Lifecycle, WorkspaceViewModel Workspace, FilesSidebarViewModel Sidebar)>
+        OpenAsync(string label)
+    {
+        string root = NewVault(label);
+        VaultLifecycleViewModel lifecycle = NewLifecycle(root);
+        await lifecycle.OpenVaultAsync(root);
+        await SettleSidebarAsync(lifecycle);
+        return (lifecycle,
+            Assert.IsType<WorkspaceViewModel>(lifecycle.Workspace),
+            Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar));
+    }
+
+    /// <summary>
     /// R-2: the explicit opens move focus — Enter's verb on the row the
     /// reader is on (the Open button's command), Ctrl+Enter's new tab, a
     /// folder's note — and a row with nothing to open asks for nothing,
@@ -428,6 +552,89 @@ public sealed class SidebarTreeKeysTests : IDisposable
         Assert.Equal("#solo", host.Sidebar.FilterText);
     });
 
+    /// <summary>
+    /// R-3 (codex PR 2 round 4): Escape in the focused filter field and the
+    /// Clear filter button — invoked the way UI Automation does — are the
+    /// promised clear routes. With a whitespace tag's scope active (the
+    /// field empty, the scope otherwise invisible) and with a typed filter
+    /// alike: the scope and text go, the results go, the status line says
+    /// "Filter cleared." and exactly that is spoken, once.
+    /// </summary>
+    [Fact]
+    public void EscapeAndTheClearButton_ClearAnActiveFilter() => RunSta(() =>
+    {
+        string root = NewVault("clear-routes");
+        File.WriteAllText(Path.Combine(root, "spaced.md"), "---\ntags: [\"two words\"]\n---\n\n# Spaced\n");
+        using var host = new TreeHost(root);
+        host.Initialize();
+        var routes = new (string Name, Action<TreeHost> Clear)[]
+        {
+            ("Escape", h =>
+            {
+                Assert.True(h.FilterField.Focus());
+                Assert.True(h.Press(h.FilterField, Key.Escape), "Escape in the filter field went unhandled.");
+            }),
+            ("the Clear filter button", h =>
+            {
+                Assert.True(h.ClearButton.IsEnabled);
+                var invoke = (System.Windows.Automation.Provider.IInvokeProvider)
+                    new System.Windows.Automation.Peers.ButtonAutomationPeer(h.ClearButton)
+                        .GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke);
+                invoke.Invoke();
+                PumpedDispatcher.Drain();
+            }),
+        };
+
+        foreach ((string name, Action<TreeHost> clear) in routes)
+        {
+            foreach (Action<FilesSidebarViewModel> activate in new Action<FilesSidebarViewModel>[]
+            {
+                sidebar => sidebar.ActivateTag("two words"),
+                sidebar => sidebar.FilterText = "alpha",
+            })
+            {
+                activate(host.Sidebar);
+                PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
+                Assert.True(host.Sidebar.IsFilterActive);
+                Assert.NotEmpty(host.Sidebar.FilterResults);
+                int before = host.AnnouncementCount;
+
+                clear(host);
+                PumpedDispatcher.PumpUntilDrained(host.Sidebar.FilterCompletion);
+
+                Assert.False(host.Sidebar.IsFilterActive, $"{name} left the filter active.");
+                Assert.Null(host.Sidebar.ScopeTag);
+                Assert.Equal(string.Empty, host.Sidebar.FilterText);
+                Assert.Empty(host.Sidebar.FilterResults);
+                Assert.Equal("Filter cleared.", host.Sidebar.Status);
+                A11yEvent spoken = Assert.Single(host.Announcements.Skip(before));
+                Assert.IsType<A11yEvent.SidebarFilterCleared>(spoken);
+                Assert.False(host.ClearButton.IsEnabled);
+            }
+        }
+    });
+
+    /// <summary>
+    /// R-3 (codex PR 2 round 4): with nothing filtering there is nothing to
+    /// clear — the Clear filter button is disabled, Escape in the field is
+    /// left unhandled for the window's own Escape, and nothing is said.
+    /// </summary>
+    [Fact]
+    public void EscapeAndTheClearButton_LeaveAnInactiveFilterAlone() => RunSta(() =>
+    {
+        using var host = new TreeHost(NewVault("clear-inactive"));
+        host.Initialize();
+        Assert.False(host.Sidebar.IsFilterActive);
+        int before = host.AnnouncementCount;
+
+        Assert.False(host.ClearButton.IsEnabled);
+        Assert.True(host.FilterField.Focus());
+        Assert.False(host.Press(host.FilterField, Key.Escape));
+
+        Assert.Equal(before, host.AnnouncementCount);
+        Assert.Equal(string.Empty, host.Sidebar.FilterText);
+    });
+
     private static string NavigationHelpText() => Commands.NavigationHelp.FilesTree;
 
     // ---- Helpers --------------------------------------------------------
@@ -547,6 +754,9 @@ public sealed class SidebarTreeKeysTests : IDisposable
         public ListBox DualPane { get; private set; } = null!;
         public TextBox RenameField { get; private set; } = null!;
         public TreeView TagsTree { get; private set; } = null!;
+        public TextBox FilterField { get; private set; } = null!;
+        public Button ClearButton { get; private set; } = null!;
+        public List<A11yEvent> Announcements => _announced;
         public List<(string Path, WorkspaceOpenTarget Target, bool FocusEditor)> Requests { get; } = [];
         public A11yEvent LastAnnouncement => _announced[^1];
         public int AnnouncementCount => _announced.Count;
@@ -591,6 +801,14 @@ public sealed class SidebarTreeKeysTests : IDisposable
                 tree => AutomationProperties.GetAutomationId(tree) == "SidebarTagTree"));
             DockPanel.SetDock(TagsTree, Dock.Top);
             layout.Children.Add(TagsTree);
+            FilterField = Detach<TextBox>(Assert.IsType<TextBox>(Shell.FindName("SidebarFilterTextBox")));
+            ClearButton = Detach<Button>(Assert.Single(
+                LogicalDescendants(Shell).OfType<Button>(),
+                button => AutomationProperties.GetAutomationId(button) == "SidebarFilterClear"));
+            DockPanel.SetDock(FilterField, Dock.Top);
+            DockPanel.SetDock(ClearButton, Dock.Top);
+            layout.Children.Add(FilterField);
+            layout.Children.Add(ClearButton);
             DockPanel.SetDock(DualPane, Dock.Bottom);
             layout.Children.Add(RenameField);
             layout.Children.Add(DualPane);

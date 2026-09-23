@@ -455,8 +455,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         RefreshCommand = new RelayCommand(_ => Refresh(reportCount: true), _ => true);
         RetrySettingsCommand = new RelayCommand(_ => RetrySettings(), _ => _settingsNotice is not null);
         // W7-7 (R-3): Clear covers the tag scope too — text and scope in
-        // one change (a whitespace-only field stays clearable as before).
-        ClearFilterCommand = new RelayCommand(_ => ClearFilter(), _ => IsFilterActive || FilterText.Length > 0);
+        // one change — and is available exactly while a filter or tag scope
+        // is active: the Clear filter button's enabled state and Escape's
+        // route both read it (codex PR 2 round 4).
+        ClearFilterCommand = new RelayCommand(_ => ClearFilter(), _ => IsFilterActive);
         ToggleTagsCommand = new RelayCommand(_ => ShowTags = !ShowTags, _ => true);
         ToggleDualPaneCommand = new RelayCommand(_ => IsDualPaneEnabled = !IsDualPaneEnabled, _ => true);
         AddTagCommand = new RelayCommand(_ => EditTag(add: true), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0 && TagInput.Length > 0);
