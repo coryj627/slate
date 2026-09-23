@@ -16,11 +16,16 @@
 // Codex round 2: a duplicate definition is as ambiguous as a shifted one,
 // so the parse rejects duplicates instead of letting the later one win.
 // Codex round 3: the contracts document is mutable, so it cannot be the
-// only oracle — a coordinated owner-and-citation swap across both
-// documents would pass a census that merely compares them to each other.
-// The R → PR map is therefore fixed HERE, and every heading-shaped line
-// must match the strict parse so a look-alike definition (a different
-// dash, a missing owner) cannot vanish from the count.
+// only oracle — the R → PR map is fixed HERE, and every heading-shaped
+// line must match the strict parse so a look-alike definition cannot
+// vanish from the count. Codex round 5: the look-alike detectors are
+// CommonMark-tolerant (up to three leading spaces, any run of spaces
+// after the marker), the strict contract form requires its closing bold
+// on the same line, and a citation needs a boundary on BOTH sides so
+// `R-10x` and `_R-10` are neither citations nor near-misses. Fenced-code
+// headings and negated prose are not distinguished (AR-11): neither
+// document carries either, and a fenced heading would still have to
+// match the strict form to count.
 
 using System.Text.RegularExpressions;
 
@@ -88,7 +93,7 @@ public sealed partial class W77RemediationDocsCensus
         int strictContracts = ContractHeading().Matches(contracts).Count;
         Assert.True(
             looseContracts == strictContracts,
-            $"{looseContracts - strictContracts} contract-shaped line(s) in {ContractsDoc} do not parse as `**R-n — … (PR m, …)**`.");
+            $"{looseContracts - strictContracts} contract-shaped line(s) in {ContractsDoc} do not parse as `**R-n — … (PR m, …) …**`.");
 
         int looseRecords = LooseReviewRecordHeading().Matches(contracts).Count;
         int strictRecords = ReviewRecordHeading().Matches(contracts).Count;
@@ -145,7 +150,7 @@ public sealed partial class W77RemediationDocsCensus
         Assert.True(shifted.Count == 0, "Shifted or undefined contract citations: " + string.Join("; ", shifted));
     }
 
-    /// <summary>Contract number → owning PR, from the `**R-n — … (PR m, …)**` lines; a second definition of the same `R-n` fails the parse.</summary>
+    /// <summary>Contract number → owning PR, from the `**R-n — … (PR m, …) …**` lines; a second definition of the same `R-n` fails the parse.</summary>
     private static Dictionary<int, int> ContractOwners()
     {
         string contracts = ReadPlan(ContractsDoc);
@@ -163,9 +168,9 @@ public sealed partial class W77RemediationDocsCensus
 
     /// <summary>
     /// PR number → the set of `R-n` the spec's section for that PR cites;
-    /// a second section for the same PR fails the parse. The lookbehind
-    /// keeps `AR-n` (accepted risks) and `TR-n` (contract 30's template
-    /// rules) out of the count.
+    /// a second section for the same PR fails the parse. The two-sided
+    /// boundary keeps `AR-n` (accepted risks), `TR-n` (contract 30's
+    /// template rules) and malformed tokens out of the count.
     /// </summary>
     private static Dictionary<int, HashSet<int>> SpecSections()
     {
@@ -196,32 +201,35 @@ public sealed partial class W77RemediationDocsCensus
     private static string ReadPlan(string relative) =>
         File.ReadAllText(Path.Combine(SourceText.RepoRoot(), "docs", "plans", relative));
 
-    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n]*?\(PR (\d+)[,;)]", RegexOptions.Multiline)]
+    // The canonical definition: bold from column zero, an em dash, the
+    // owner in parentheses, and the closing bold on the same line.
+    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n]*?\(PR (\d+)[,;)][^\n]*?\*\*", RegexOptions.Multiline)]
     private static partial Regex ContractHeading();
 
     // Anything that starts a line like a contract definition, however it
-    // is punctuated: the strict parse must account for every one of them.
-    [GeneratedRegex(@"^\*\*R-\d+\b", RegexOptions.Multiline)]
+    // is indented or punctuated: the strict parse must account for every
+    // one of them.
+    [GeneratedRegex(@"^[ \t]{0,3}\*\*[ \t]*R-\d+", RegexOptions.Multiline)]
     private static partial Regex LooseContractHeading();
 
-    // Every level-two heading terminates the previous section; only the
-    // `## n. PR m · …` shape carries a PR number.
+    // Every canonical level-two heading terminates the previous section;
+    // only the `## n. PR m · …` shape carries a PR number.
     [GeneratedRegex(@"^## (?:\d+\. PR (\d+) · )?[^\n]*", RegexOptions.Multiline)]
     private static partial Regex SectionHeading();
 
     // Anything that starts a heading like a PR section, however it is
-    // punctuated after the PR number.
-    [GeneratedRegex(@"^## \d+\. PR \d+\b", RegexOptions.Multiline)]
+    // indented, spaced or punctuated after the PR number.
+    [GeneratedRegex(@"^[ \t]{0,3}##[ \t]+\d+\.[ \t]+PR[ \t]+\d+\b", RegexOptions.Multiline)]
     private static partial Regex LoosePrSectionHeading();
 
-    [GeneratedRegex(@"(?<![A-Za-z])R-(\d+)")]
+    [GeneratedRegex(@"(?<![A-Za-z0-9_])R-(\d+)(?![A-Za-z0-9_])")]
     private static partial Regex ContractCitation();
 
     [GeneratedRegex(@"^### PR (\d+) — ", RegexOptions.Multiline)]
     private static partial Regex ReviewRecordHeading();
 
     // Anything that starts a heading like a review record, however it is
-    // punctuated after the PR number.
-    [GeneratedRegex(@"^### PR \d+\b", RegexOptions.Multiline)]
+    // indented, spaced or punctuated after the PR number.
+    [GeneratedRegex(@"^[ \t]{0,3}###[ \t]+PR[ \t]+\d+\b", RegexOptions.Multiline)]
     private static partial Regex LooseReviewRecordHeading();
 }
