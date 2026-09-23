@@ -170,6 +170,71 @@ internal sealed class AutomationPresentationItemsControlPeer : FrameworkElementA
     protected override bool IsContentElementCore() => false;
 }
 
+/// <summary>
+/// An items host whose item containers only WRAP the real stop — a
+/// recent-vault Button, a template prompt TextBox, a split pane's editor
+/// (W7-7 PR 3, #1246, contract R-4). WPF gives each item of a plain
+/// <see cref="ItemsControl"/> a DataItem peer named by the item's
+/// <c>ToString()</c>, so NVDA spoke "RecentVault { Path = …, LastOpenedMs = … },
+/// data item" and "SlateWindows.WorkspacePaneNodeViewModel, data item, 1 of 2"
+/// on the way to the control the reader actually landed on (record F3).
+/// Here the host is one named Group, each container peer answers
+/// <c>IsControlElementCore =&gt; false</c> (NVDA treats such an element as
+/// layout), and the wrapped control is the one stop. A layout host is
+/// never a stop itself: <see cref="Control"/> makes every ItemsControl
+/// focusable by default (the #1120 class), so this one opts out.
+/// </summary>
+internal sealed class LayoutItemsControl : ItemsControl
+{
+    static LayoutItemsControl() =>
+        FocusableProperty.OverrideMetadata(
+            typeof(LayoutItemsControl), new FrameworkPropertyMetadata(false));
+
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new LayoutItemsControlAutomationPeer(this);
+}
+
+internal sealed class LayoutItemsControlAutomationPeer : ItemsControlAutomationPeer
+{
+    internal LayoutItemsControlAutomationPeer(LayoutItemsControl owner)
+        : base(owner)
+    {
+    }
+
+    protected override AutomationControlType GetAutomationControlTypeCore() =>
+        AutomationControlType.Group;
+
+    protected override string GetClassNameCore() => "SlateGroup";
+
+    protected override ItemAutomationPeer CreateItemAutomationPeer(object item) =>
+        new LayoutItemAutomationPeer(item, this);
+}
+
+/// <summary>
+/// A <see cref="LayoutItemsControl"/> container: out of the control and
+/// content views, and nameless, so not even a raw-view client reads the
+/// item's <c>ToString()</c>. Its children — the wrapped stop — surface
+/// directly under the host in the control view.
+/// </summary>
+internal sealed class LayoutItemAutomationPeer : ItemAutomationPeer
+{
+    internal LayoutItemAutomationPeer(object item, LayoutItemsControlAutomationPeer host)
+        : base(item, host)
+    {
+    }
+
+    protected override AutomationControlType GetAutomationControlTypeCore() =>
+        AutomationControlType.DataItem;
+
+    protected override string GetClassNameCore() => "SlateLayoutItem";
+
+    protected override string GetNameCore() => string.Empty;
+
+    protected override bool IsControlElementCore() => false;
+
+    protected override bool IsContentElementCore() => false;
+}
+
 internal sealed class AutomationLandmarkPeer : FrameworkElementAutomationPeer
 {
     internal AutomationLandmarkPeer(FrameworkElement owner)
