@@ -24,3 +24,5 @@ settings; Narrator is W8-6 smoke scope. Automated twins do not prove speech.
 | 9 | W4-1 §8.7 large-fixture acceptance | Ten-thousand-row virtualization | Launch `GridConformanceHost.exe 10000` (the fixture used by VirtualizationTrapProbeSurvivesTenThousandRows); navigate to initially unrealized rows near the middle and end, then return to the first row; repeat independently with NVDA and JAWS. | Row identity and headers remain correct after realization; focus and selection survive scrolling, and no UIA traversal crash or silent dead end occurs. | `VirtualizationTrapProbeSurvivesTenThousandRows` | Pending | Pending | Pending |
 
 Residual: every unexecuted row remains Pending. Record findings and the fix commit on retest; never replace a human pass with the automated twin.
+
+Agent-operated NVDA evidence for every row here (not a human cell; no cell above changed): [2026-09-22 matrix pass](nvda_agent_matrix_pass_2026-09-22.md), with per-row results, findings F1–F14 and the rows it could not execute.

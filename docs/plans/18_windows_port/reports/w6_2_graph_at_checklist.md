@@ -30,3 +30,5 @@ Residual: items 1–11 require human judgment with real AT; CI cannot
 substitute. File findings as `audit`-labelled issues per repo
 convention, credited to the tester. The `w_c_matrix.md` graph rows
 stay Pending until this record carries a named run.
+
+Agent-operated NVDA evidence for every row here (not a human cell; no cell above changed): [2026-09-22 matrix pass](nvda_agent_matrix_pass_2026-09-22.md), with per-row results, findings F1–F14 and the rows it could not execute.
