@@ -481,6 +481,131 @@ public sealed class CanvasContextMenuTests
         Assert.Null(board.MenuTargetFor(pointerRequest: true, empty.X, empty.Y));
     });
 
+    /// <summary>
+    /// R-12 (#1256), OD-3's pointer arm through WPF's OWN right-click
+    /// route: the popup service raises the menu request on the board with
+    /// the cursor over card B's rendered bounds, the board's handler
+    /// refills its menu for the HIT card, WPF opens it, and its Toggle Mark
+    /// changes card B alone — the SEATED card A untouched, and the seat
+    /// still on A while the menu is up (a right-click selects nothing).
+    /// The two cards take different rows (A sits in a group, B does not),
+    /// so the opened menu's rows name the card it was built for.
+    /// </summary>
+    /// <remarks>
+    /// Driven through <c>PopupControlService.RaiseContextMenuOpeningEvent</c>
+    /// with the position a right-button release over B reports — the call
+    /// the service's own mouse-up handler makes — because a hosted fact
+    /// cannot move the shared desktop's real cursor, which is what the
+    /// service reads the element and position from. Everything after that
+    /// read is production: the request's routing, the handler's coordinate
+    /// targeting, the menu WPF chooses to open, and the dispatch.
+    /// </remarks>
+    [Fact]
+    public void ARightClickOnAnUnseatedCardOpensItsMenuAndActsOnItAlone() => RunSta(() =>
+    {
+        using var vault = new BoardVault();
+        CanvasDocumentViewModel document = vault.Open();
+        var surface = new CanvasSurfaceView { Model = document };
+        ContextMenu tabMenu = TabMenuStandIn();
+        using HostedWindow host = Host(new Border { ContextMenu = tabMenu, Child = surface });
+        CanvasRendererView board = ShowBoard(document, surface, host);
+        document.SeatSelectionSilently("question");
+        Point overB = ViewCentre(board, "loose");
+        Assert.True(board.HitTest(overB) == "loose", "premise: card B's centre does not hit card B.");
+        ContextMenu? persistent = board.ContextMenu;
+
+        Assert.True(RightClick(board, overB), "the right-click on card B was answered by nothing.");
+        Assert.False(tabMenu.IsOpen, "a right-click on card B opened the ANCESTOR's menu (F13's class).");
+        Assert.True(persistent is { IsOpen: true }, "a right-click on card B opened no card menu.");
+        CanvasOutlineRow hit = document.RowFor("loose")!;
+        Assert.Equal(
+            PlanNames(
+                CanvasContextSurface.Renderer,
+                new CanvasContextTarget.Node(hit.NodeId, hit.Kind, hit.GroupPath.Length > 0)),
+            Headers(persistent!));
+        Assert.Equal("question", document.Selection.Selected);
+
+        Choose(persistent!, CanvasPhrase.ToggleMarkRowAction);
+        Assert.True(
+            document.Selection.IsMarked("loose"),
+            "Toggle Mark from the right-clicked card's menu did not mark the card under the pointer.");
+        Assert.False(
+            document.Selection.IsMarked("question"),
+            "Toggle Mark from a right-click on card B marked the SEATED card A.");
+        Assert.Single(document.Selection.Marked);
+    });
+
+    /// <summary>
+    /// R-12 (#1256): a right-click on EMPTY board space opens no menu —
+    /// neither the board's card menu (which still holds the previous card's
+    /// rows, and would act on that card) nor the ancestor's (the workspace
+    /// tab's, F13's class). The request is answered on the board with
+    /// nothing, never handed up and never served stale.
+    /// </summary>
+    [Fact]
+    public void ARightClickOnEmptyBoardOpensNoMenu() => RunSta(() =>
+    {
+        using var vault = new BoardVault();
+        CanvasDocumentViewModel document = vault.Open();
+        var surface = new CanvasSurfaceView { Model = document };
+        ContextMenu tabMenu = TabMenuStandIn();
+        using HostedWindow host = Host(new Border { ContextMenu = tabMenu, Child = surface });
+        CanvasRendererView board = ShowBoard(document, surface, host);
+        document.SeatSelectionSilently("question");
+        ContextMenu persistent = board.ContextMenu!;
+
+        // A card's menu first, so the persistent menu holds rows a
+        // fall-through would serve.
+        Assert.True(RightClick(board, ViewCentre(board, "loose")));
+        Assert.True(persistent.IsOpen, "premise: the card's menu never opened, so its rows are not held.");
+        persistent.IsOpen = false;
+        Pump();
+        Assert.NotEmpty(persistent.Items);
+
+        Point[] corners =
+        [
+            new(1, 1),
+            new(board.ActualWidth - 2, 1),
+            new(1, board.ActualHeight - 2),
+            new(board.ActualWidth - 2, board.ActualHeight - 2),
+        ];
+        Point empty = corners.First(point => board.HitTest(point) is null);
+        _ = RightClick(board, empty);
+        Assert.False(
+            persistent.IsOpen,
+            "a right-click on empty board opened the card menu — the previous card's rows, "
+            + "which would act on that card.");
+        Assert.False(tabMenu.IsOpen, "a right-click on empty board climbed to the ANCESTOR's menu.");
+        Assert.Empty(document.Selection.Marked);
+    });
+
+    /// <summary>
+    /// WPF's own right-click menu request: the popup service's mouse-up
+    /// handler reads the element under the cursor and the cursor's position
+    /// relative to it, then makes exactly this call — raise the request
+    /// there, and open the menu its route found unless something handled
+    /// it. The board hosts no child elements, so the element is the board
+    /// and the position is in its view space. Answers what the service
+    /// does: whether a menu opened or the request was handled.
+    /// </summary>
+    private static bool RightClick(CanvasRendererView board, Point at)
+    {
+        System.Reflection.PropertyInfo service = typeof(FrameworkElement).GetProperty(
+            "PopupControlService",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("WPF's popup service is not where this fact reaches for it.");
+        object popups = service.GetValue(null)
+            ?? throw new InvalidOperationException("WPF's popup service is not running.");
+        System.Reflection.MethodInfo raise = popups.GetType().GetMethod(
+            "RaiseContextMenuOpeningEvent",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance,
+            [typeof(IInputElement), typeof(double), typeof(double), typeof(bool)])
+            ?? throw new InvalidOperationException("WPF's popup service has no pointer request door to drive.");
+        bool answered = (bool)raise.Invoke(popups, [board, at.X, at.Y, true])!;
+        Pump();
+        return answered;
+    }
+
     private static void AssertTheMenuIsThePlan(
         CanvasContextSurface surface, CanvasContextTarget target, string name, ContextMenu menu)
     {

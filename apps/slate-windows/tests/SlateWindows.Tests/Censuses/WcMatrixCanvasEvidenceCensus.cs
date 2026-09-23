@@ -121,7 +121,8 @@ public sealed class WcMatrixCanvasEvidenceCensus
             // W7-7 R-12 (#1256, OD-3): the board's card menu and the keyboard
             // request that opens a fresh row's or the seated card's menu.
             ["TheOutlineMenuEqualsThePlan", "TheRowMenuEqualsThePlansGridProjectionAndToggleMarkIsLive", "AConnectionRowsVerbsActOnTheCapturedEdgeFromItsSeatedSource", "CanvasSurfaces_TableGridSortSelectionAndActivation_AreClean",
-                "TheBoardMenuEqualsThePlan", "TheBoardsCardMenuIsTheApplicableVerbInventoryPerKind", "AKeyboardRequestOnAFreshRowOpensThatRowsMenu", "AKeyboardRequestOnTheBoardOpensTheSeatedCardsMenu", "Canvas_ContextMenus_OpenTheCardMenuByKeyboard"],
+                "TheBoardMenuEqualsThePlan", "TheBoardsCardMenuIsTheApplicableVerbInventoryPerKind", "AKeyboardRequestOnAFreshRowOpensThatRowsMenu", "AKeyboardRequestOnTheBoardOpensTheSeatedCardsMenu", "ARightClickOnAnUnseatedCardOpensItsMenuAndActsOnItAlone",
+                "ARightClickOnEmptyBoardOpensNoMenu", "Canvas_ContextMenus_OpenTheCardMenuByKeyboard"],
             []),
     ];
 
