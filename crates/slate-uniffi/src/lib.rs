@@ -10618,6 +10618,15 @@ pub fn vault_error_detail(error: VaultError) -> String {
     core::a11y::vault_error_detail(&error)
 }
 
+/// Core's detail for a save the host refused because its editor produced
+/// no verified snapshot of the text (W7-7, #1249), rendered by
+/// `slate_core::a11y::editor_integrity_detail` so the host words none of
+/// it: it passes this to `NoteSaveBlocked` instead of an exception's text.
+#[uniffi::export]
+pub fn editor_integrity_detail() -> String {
+    core::a11y::editor_integrity_detail()
+}
+
 /// Render an accessibility event to its canonical spoken form
 /// (`slate_core::a11y` owns every template and priority — hosts post
 /// the result verbatim and never compose announcement copy).
@@ -13222,6 +13231,17 @@ mod tests {
             20,
             "one witness per VaultError variant: {seen:?}"
         );
+    }
+
+    /// W7-7 (#1249): the integrity detail a host gets through the FFI is
+    /// core's sentence, byte for byte.
+    #[test]
+    fn editor_integrity_detail_crosses_the_ffi_as_core_renders_it() {
+        assert_eq!(
+            editor_integrity_detail(),
+            core::a11y::editor_integrity_detail()
+        );
+        assert!(!editor_integrity_detail().trim().is_empty());
     }
 
     /// The mac corpus mirror must stay in lockstep with `corpus()`.
