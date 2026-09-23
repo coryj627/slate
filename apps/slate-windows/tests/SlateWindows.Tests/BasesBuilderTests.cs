@@ -128,6 +128,41 @@ public sealed class BasesBuilderTests : IDisposable
         builder.Shutdown();
     }
 
+    /// <summary>W7-7 PR 3 (#1246, R-4's one-stop rule): a row's container
+    /// is layout, so its controls carry its position — the mac
+    /// BaseQueryBuilderRow.accessibilityLabel prefixes, a group's members
+    /// under their group — and follow it through every change to the rows
+    /// (WrappedStopTests hosts the names on the controls).</summary>
+    [Fact]
+    public void RowControlsCarryTheRowsPositionThroughEveryChange()
+    {
+        using WorkspaceViewModel workspace = new(
+            _session, _fixture.Root, () => [], _announced.Add,
+            startInteractionBackgroundWork: false);
+        BaseDocumentViewModel document = workspace.BaseDocumentFor("Filtered.base");
+        BaseQueryBuilderViewModel builder = ForViewBuilder(document);
+        BuilderConditionRow preserved = Assert.Single(builder.ConditionRows);
+        BuilderConditionRow condition = builder.AddCondition();
+        BuilderConditionRow group = builder.AddGroup();
+        BuilderConditionRow member = Assert.Single(group.GroupMembers!);
+
+        Assert.Equal("Remove Existing filters (preserved)", preserved.RemoveName);
+        Assert.Equal("Existing filters (preserved) expression", preserved.ExpressionName);
+        Assert.Equal("Remove Condition 2", condition.RemoveName);
+        Assert.Equal("Condition 2 expression", condition.ExpressionName);
+        Assert.Equal("Remove Group 3", group.RemoveName);
+        Assert.Equal("Group 3 condition 1 expression", member.ExpressionName);
+
+        var changed = new List<string?>();
+        member.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+        builder.RemoveCondition(preserved);
+        Assert.Equal("Condition 1 expression", condition.ExpressionName);
+        Assert.Equal("Remove Group 2", group.RemoveName);
+        Assert.Equal("Group 2 condition 1 expression", member.ExpressionName);
+        Assert.Contains(nameof(BuilderConditionRow.ExpressionName), changed);
+        builder.Shutdown();
+    }
+
     [Fact]
     public void SaveToViewWritesTheFiltersYamlAndReExecutes()
     {

@@ -19,11 +19,15 @@
 // unrelated binding fails — codex PR 3 round 1), or a layout host
 // (LayoutItemsControl: containers out of the control view, the wrapped
 // control is the stop; AutomationPresentationItemsControl: no container
-// peers at all). A host missing from the table fails, and so does a table
-// entry the scan no longer finds. The runtime twins are the name census
-// inside the FlaUI axe helper and ItemContainerNameBindingTests, which
-// host each pinned style and read the container's name as it follows the
-// item.
+// peers at all). Only a container that is itself a stop — a selector's or
+// a tree's item — may be named: a plain ItemsControl's container WRAPS the
+// item's own controls, and named it is a second stop beside them (R-4's
+// one-stop rule), so such a host must be layout with its controls named.
+// A host missing from the table fails, and so does a table entry the scan
+// no longer finds. The runtime twins are the name census inside the FlaUI
+// axe helper, ItemContainerNameBindingTests, which host each pinned style
+// and read the container's name as it follows the item, and
+// WrappedStopTests, which count the stops a wrapped item exposes.
 //
 // The grid substrate names its rows only when the host passes
 // rowAutomationName (Grids/AccessibleDataGrid.cs OnLoadingRow): the grid
@@ -122,8 +126,8 @@ public sealed class ItemContainerNameCensus
             ["FilesCitingList"] = Self(typeof(string)),
             ["DashboardEditorQueryPicker"] = Named(typeof(SavedQuerySummary), nameof(SavedQuerySummary.Name)),
             ["DashboardEditorSections"] = Named(typeof(DashboardEditorSection), nameof(DashboardEditorSection.SavedQueryName)),
-            ["BuilderConditions"] = Named(typeof(BuilderConditionRow), nameof(BuilderConditionRow.Label)),
-            ["MainWindow.xaml#{Binding GroupMembers}"] = Named(typeof(BuilderConditionRow), nameof(BuilderConditionRow.Label)),
+            ["BuilderConditions"] = new ContainerNaming.Layout(),
+            ["MainWindow.xaml#{Binding GroupMembers}"] = new ContainerNaming.Layout(),
             ["TemplatePickerList"] = Named(typeof(TemplatePickerRowViewModel), nameof(TemplatePickerRowViewModel.AccessibleName)),
             ["TemplateFlowPromptsList"] = new ContainerNaming.Layout(),
             ["MoveToList"] = Named(typeof(MoveToRowViewModel), nameof(MoveToRowViewModel.AccessibleName)),
@@ -132,7 +136,7 @@ public sealed class ItemContainerNameCensus
 
             // --- authored XAML: WorkspaceTemplates.xaml ---
             ["WorkspaceTemplates.xaml#{Binding Items}"] = new ContainerNaming.Layout(),
-            ["PropertiesRows"] = Named(typeof(PropertyRowViewModel), nameof(PropertyRowViewModel.AutomationName)),
+            ["PropertiesRows"] = new ContainerNaming.Layout(),
             ["WorkspaceTabs"] = Named(typeof(WorkspaceTabViewModel), nameof(WorkspaceTabViewModel.Title)),
             ["Editor panes"] = new ContainerNaming.Layout(),
 
@@ -342,6 +346,7 @@ public sealed class ItemContainerNameCensus
                 ? null : "must be a LayoutItemsControl",
             ContainerNaming.Presentation => typeof(AutomationPresentationItemsControl).IsAssignableFrom(type)
                 ? null : "must be an AutomationPresentationItemsControl",
+            ContainerNaming.Bound when !ContainersAreStops(type) => WrapperIsASecondStop,
             ContainerNaming.Bound bound => BoundProblem(ContainerStyle(host, keyedStyles), bound, keyedStyles),
             _ => $"pinned as {expected}, which a XAML host cannot be",
         };
@@ -350,6 +355,18 @@ public sealed class ItemContainerNameCensus
             offenders.Add($"{site}: {problem}");
         }
     }
+
+    private const string WrapperIsASecondStop =
+        "names its containers, but they only wrap the item's own controls: a named wrapper is a second "
+        + "stop beside them (R-4's one-stop rule) — make it a LayoutItemsControl and name the controls";
+
+    /// <summary>Whether a host's containers are stops themselves — a
+    /// selector's items (ListBoxItem, ComboBoxItem, TabItem) or a tree's —
+    /// and so may carry the item's name. A plain ItemsControl's container
+    /// only wraps the item's content.</summary>
+    internal static bool ContainersAreStops(Type hostType) =>
+        typeof(System.Windows.Controls.Primitives.Selector).IsAssignableFrom(hostType)
+        || typeof(TreeView).IsAssignableFrom(hostType);
 
     /// <summary>The host's item container style: inline, or a keyed
     /// resource declared exactly once (an ambiguous key names nothing the
@@ -641,6 +658,8 @@ public sealed class ItemContainerNameCensus
                         ? null : $"is a {type?.Name ?? "(unknown)"}, but must be an AutomationPresentationItemsControl",
                     ContainerNaming.Grid => InheritsFrom(type, "System.Windows.Controls.DataGrid")
                         ? null : $"is a {type?.Name ?? "(unknown)"}, but is pinned as the grid substrate's DataGrid",
+                    ContainerNaming.Bound when !InheritsFrom(type, "System.Windows.Controls.Primitives.Selector")
+                        && !InheritsFrom(type, "System.Windows.Controls.TreeView") => WrapperIsASecondStop,
                     ContainerNaming.Bound bound => CodeBoundProblem(host, creation, source.Root, model, bound),
                     _ => $"pinned as {expected}",
                 };
