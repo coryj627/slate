@@ -75,6 +75,32 @@ public sealed class AnnouncementSeamCensus
                 && listening.ContainingType.ToDisplayString() == "System.Windows.Automation.Provider.AutomationInteropProvider",
             $"the production guard must be AutomationInteropProvider.ClientsAreListening; it is `{probe.ExpressionBody}`.");
 
+        // OD-7: the launch phase ends on production's own inputs — WPF's
+        // listener map for the notification event (bound: the map only an
+        // advise fills) and the status element's connected provider, the one
+        // the raise uses — so the drain waits on both.
+        RecordDeclarationSyntax seams = Assert.Single(
+            notification.Source.Root.DescendantNodes().OfType<RecordDeclarationSyntax>(),
+            type => type.Identifier.ValueText == "LaunchSeams");
+        MethodDeclarationSyntax forProduction = Assert.Single(
+            seams.Members.OfType<MethodDeclarationSyntax>(), member => member.Identifier.ValueText == "ForProduction");
+        var production = Assert.Single(forProduction.DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>(),
+            creation => model.GetSymbolInfo(creation).Symbol is IMethodSymbol { ContainingType.Name: "LaunchSeams" });
+        var advised = Assert.IsType<ParenthesizedLambdaExpressionSyntax>(production.ArgumentList!.Arguments[0].Expression);
+        Assert.True(
+            advised.ExpressionBody is InvocationExpressionSyntax exists
+                && model.GetSymbolInfo(exists).Symbol is IMethodSymbol { Name: "ListenerExists" } map
+                && map.ContainingType.ToDisplayString() == "System.Windows.Automation.Peers.AutomationPeer"
+                && model.GetSymbolInfo(Assert.Single(exists.ArgumentList.Arguments).Expression).Symbol
+                    is IFieldSymbol { Name: "Notification" } notificationEvent
+                && notificationEvent.ContainingType.ToDisplayString() == "System.Windows.Automation.Peers.AutomationEvents",
+            $"the launch phase's advise probe must be AutomationPeer.ListenerExists(AutomationEvents.Notification); it is `{advised.ExpressionBody}`.");
+        // Token text (CSharpSource.Normalize): NormalizeWhitespace prints
+        // an `is not` pattern without its space.
+        Assert.Equal("()=>NotificationSource.Of(source)isnotnull",
+            CSharpSource.Normalize(production.ArgumentList.Arguments[1].Expression));
+        Assert.Equal("source", Assert.Single(forProduction.ParameterList.Parameters).Identifier.ValueText);
+
         // The source (R-1): the element's own provider, through its peer
         // resolved exactly as the dispatcher always has, and nothing else —
         // the window's HWND host provider was measured and delivered nothing
@@ -112,22 +138,38 @@ public sealed class AnnouncementSeamCensus
                 && passed.Identifier.ValueText == Assert.Single(providerOf.ParameterList.Parameters).Identifier.ValueText,
             $"ProviderOf must return ProviderFromPeer(peer) for the peer it is handed; it is `{providerOf.ExpressionBody}`.");
 
+        // OD-7: ONE production dispatcher per window, so one launch phase,
+        // one queue and one provider — MainWindow's, over the status element.
+        // Any other construction in shell code (the grid's old lazy one, a
+        // surface's own) is an independent state machine and fails here.
         var constructors = ShellCompilation.Sources.SelectMany(entry => entry.Source.Root
             .DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>()
             .Where(creation => UiaModel(entry.Source).GetSymbolInfo(creation).Symbol is IMethodSymbol method
                 && method.ContainingType.ToDisplayString() == "SlateWindows.AccessibilityNotificationDispatcher")
-            .Select(creation => (entry.Relative, Creation: creation))).ToArray();
-        Assert.Equal(["Grids/AccessibleDataGrid.cs", "MainWindow.xaml.cs"], constructors.Select(c => c.Relative).Order());
-        var construction = Assert.Single(constructors, c => c.Relative == "MainWindow.xaml.cs");
+            .Select(creation => (entry.Relative, entry.Source, Creation: creation))).ToArray();
+        var construction = Assert.Single(constructors);
+        Assert.Equal("MainWindow.xaml.cs", construction.Relative);
         Assert.Equal("StatusTextBlock", Assert.Single(construction.Creation.ArgumentList!.Arguments).Expression.ToString());
         Assert.Equal("_announcer", construction.Creation.Ancestors().OfType<AssignmentExpressionSyntax>().Single().Left.ToString());
-        foreach (var site in constructors)
-        {
-            var symbol = (IMethodSymbol)UiaModel(
-                ShellCompilation.Sources.Single(s => s.Relative == site.Relative).Source)
-                .GetSymbolInfo(site.Creation).Symbol!;
-            Assert.Equal("System.Windows.FrameworkElement", Assert.Single(symbol.Parameters).Type.ToDisplayString());
-        }
+        Assert.Equal(
+            "System.Windows.FrameworkElement",
+            Assert.Single(((IMethodSymbol)UiaModel(construction.Source).GetSymbolInfo(construction.Creation).Symbol!).Parameters)
+                .Type.ToDisplayString());
+
+        // ...and that one is the window's, inherited by every surface in it:
+        // MainWindow's constructor sets it on itself, and the grid's default
+        // seam posts through the one it finds, never one of its own.
+        ConstructorDeclarationSyntax window = construction.Creation.Ancestors().OfType<ConstructorDeclarationSyntax>().Single();
+        Assert.Contains(window.DescendantNodes().OfType<InvocationExpressionSyntax>(), call =>
+            UiaModel(construction.Source).GetSymbolInfo(call).Symbol is IMethodSymbol { Name: "SetAnnouncer" } set
+            && set.ContainingType.ToDisplayString() == "SlateWindows.AccessibilityNotificationDispatcher"
+            && CSharpSource.Normalize(call.ArgumentList) == "(this,_announcer)");
+        CSharpSource grid = CSharpSource.Load("Grids", "AccessibleDataGrid.cs");
+        AssignmentExpressionSyntax seam = Assert.Single(
+            grid.Root.DescendantNodes().OfType<AssignmentExpressionSyntax>(),
+            assignment => assignment.Left is IdentifierNameSyntax { Identifier.ValueText: "Announce" }
+                && assignment.Ancestors().OfType<ConstructorDeclarationSyntax>().Any());
+        Assert.Equal("@event=>AccessibilityNotificationDispatcher.For(this)?.Post(@event)", CSharpSource.Normalize(seam.Right));
     }
 
     /// <summary>
@@ -200,6 +242,8 @@ public sealed class AnnouncementSeamCensus
             Mutate(original, "NotificationSource.Of(source)", "AutomationInteropProvider.HostProviderFromHandle(System.IntPtr.Zero)"),
             Mutate(original, "provider is not null", "provider is null"),
             Mutate(original, "() => AutomationInteropProvider.ClientsAreListening", "() => true"),
+            // OD-7: the launch seams swapped for ones that never see an advise.
+            Mutate(original, "LaunchSeams.ForProduction(source)", "new LaunchSeams(() => false, () => false, _ => null!, () => TimeSpan.Zero, _ => { })"),
         })
         {
             Assert.NotEqual(original, mutation);
@@ -215,15 +259,16 @@ public sealed class AnnouncementSeamCensus
         return original.Replace(from, to, StringComparison.Ordinal);
     }
 
-    /// <summary>The production constructor's shape (R-1): the provider from
-    /// the element through <c>NotificationSource</c>, the raise only when
-    /// there is one, and UIA's own listener probe as the guard.</summary>
+    /// <summary>The production constructor's shape (R-1, OD-7): the provider
+    /// from the element through <c>NotificationSource</c>, the raise only when
+    /// there is one, UIA's own listener probe as the guard, and production's
+    /// launch seams for the replay on advise.</summary>
     private static void AssertNativeConstructor(ConstructorDeclarationSyntax constructor)
     {
         Assert.Equal("FrameworkElement", Assert.Single(constructor.ParameterList.Parameters).Type!.ToString());
         Assert.Equal(SyntaxKind.ThisConstructorInitializer, constructor.Initializer!.Kind());
         SeparatedSyntaxList<ArgumentSyntax> arguments = constructor.Initializer.ArgumentList.Arguments;
-        Assert.Equal(2, arguments.Count);
+        Assert.Equal(3, arguments.Count);
         var lambda = Assert.IsType<ParenthesizedLambdaExpressionSyntax>(arguments[0].Expression);
         Assert.Equal(["kind", "processing", "text", "activityId"], lambda.ParameterList.Parameters.Select(p => p.Identifier.ValueText));
         var body = Assert.IsType<BlockSyntax>(lambda.Body);
@@ -244,6 +289,7 @@ public sealed class AnnouncementSeamCensus
         var probe = Assert.IsType<ParenthesizedLambdaExpressionSyntax>(arguments[1].Expression);
         Assert.Empty(probe.ParameterList.Parameters);
         Assert.Equal("AutomationInteropProvider.ClientsAreListening", probe.ExpressionBody?.ToString());
+        Assert.Equal("LaunchSeams.ForProduction(source)", arguments[2].Expression.NormalizeWhitespace().ToFullString());
     }
 
     /// <summary>A model over the shell compilation that is sure to see the

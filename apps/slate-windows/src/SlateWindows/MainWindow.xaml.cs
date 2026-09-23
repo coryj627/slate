@@ -30,6 +30,10 @@ public partial class MainWindow : Window
         InitializeComponent();
         _windowPlacement = new WindowPlacementManager(this);
         _announcer = new AccessibilityNotificationDispatcher(StatusTextBlock);
+        // OD-7: the window's one dispatcher, inherited by every surface in
+        // it (and found by the windows it owns), so the launch phase, its
+        // queue and its provider exist once per window.
+        AccessibilityNotificationDispatcher.SetAnnouncer(this, _announcer);
         CommandBindings.Add(new CommandBinding(ApplicationCommands.Close, (_, _) => Close()));
         _viewModel = new VaultLifecycleViewModel(
             PickVaultAsync,
