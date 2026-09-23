@@ -2643,7 +2643,7 @@
                  twice before, in W4-5 and W4-6. And the results list gets
                  its ItemsSource from code-behind, not from a binding,
                  because the rows are grouped by the section core PLACED
-                 them in; see RefreshPaletteGrouping.
+                 them in; see CommandPaletteResultsPresenter.
                  ========================================================== -->
             <Border Background="Transparent"
                     Visibility="{Binding Palette.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
@@ -2700,7 +2700,6 @@
                              Grid.Row="1"
                              Margin="0,8"
                              Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
-                             SelectionChanged="CommandPaletteResults_SelectionChanged"
                              MouseDoubleClick="CommandPaletteResults_MouseDoubleClick"
                              AutomationProperties.AutomationId="CommandPaletteResults"
                              AutomationProperties.Name="Command results">

@@ -4,7 +4,6 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -12,14 +11,20 @@ using System.Windows.Threading;
 namespace SlateWindows;
 
 /// <summary>
-/// W5-1 (#741) command-palette shell wiring: grouping, focus, and the
-/// keyboard route. The view model owns navigation and gating; this part
-/// owns only what needs a live visual tree.
+/// W5-1 (#741) command-palette shell wiring: focus and the keyboard
+/// route, with the results list delegated to
+/// <see cref="CommandPaletteResultsPresenter"/>. The view model owns
+/// navigation and gating; this part owns only what needs a live visual
+/// tree.
 /// </summary>
 public partial class MainWindow
 {
     private IInputElement? _focusBeforePalette;
-    private bool _syncingPaletteSelection;
+    private CommandPaletteResultsPresenter? _paletteResults;
+
+    /// <summary>The results list's presenter — the R-11 facts detach it to
+    /// host the shipped list against a fake command source.</summary>
+    internal CommandPaletteResultsPresenter? PaletteResults => _paletteResults;
 
     /// <summary>
     /// Subscribes to the palette. Touching <c>Palette</c> constructs it,
@@ -32,7 +37,7 @@ public partial class MainWindow
         CommandPaletteViewModel palette = _viewModel.Palette;
         palette.PropertyChanged += Palette_PropertyChanged;
         palette.SearchFocusRequested += Palette_SearchFocusRequested;
-        RefreshPaletteGrouping();
+        _paletteResults = new CommandPaletteResultsPresenter(CommandPaletteResultsList, palette);
     }
 
     private void Palette_PropertyChanged(object? sender, PropertyChangedEventArgs eventArgs)
@@ -60,14 +65,6 @@ public partial class MainWindow
                     RestoreFocusAfterPalette();
                 }
 
-                break;
-
-            case nameof(CommandPaletteViewModel.Rows):
-                RefreshPaletteGrouping();
-                break;
-
-            case nameof(CommandPaletteViewModel.SelectedRow):
-                SyncPaletteSelectionToList();
                 break;
         }
     }
@@ -189,71 +186,6 @@ public partial class MainWindow
     /// </remarks>
     private void Palette_SearchFocusRequested(object? sender, EventArgs e) =>
         CommandPaletteSearchTextBox.Focus();
-
-    /// <summary>
-    /// Rebuilds the grouped view over the current rows.
-    /// </summary>
-    /// <remarks>
-    /// Grouping is applied here rather than through a XAML
-    /// <c>CollectionViewSource</c> because it keys on
-    /// <c>SectionTitle</c> — the section core actually PLACED the row in.
-    /// Grouping on the <c>CommandSection</c> enum would file a Recent row
-    /// under the very section core excluded it from. A fresh view per
-    /// publish also matches the view model's replace-wholesale rows, and
-    /// the groups keep core's order because a view with no sort
-    /// description creates groups in encounter order (contract P1).
-    /// </remarks>
-    private void RefreshPaletteGrouping()
-    {
-        var grouped = new CollectionViewSource { Source = _viewModel.Palette.Rows };
-        grouped.GroupDescriptions.Add(
-            new PropertyGroupDescription(nameof(CommandPaletteRowViewModel.SectionTitle)));
-        CommandPaletteResultsList.ItemsSource = grouped.View;
-        SyncPaletteSelectionToList();
-    }
-
-    /// <summary>
-    /// Pushes the view model's selection into the list and scrolls it into
-    /// view. The view model is the authority: a two-way
-    /// <c>SelectedItem</c> binding would push null on every ItemsSource
-    /// replacement and destroy the selection the view model just
-    /// preserved across a query change (contract P7).
-    /// </summary>
-    private void SyncPaletteSelectionToList()
-    {
-        CommandPaletteRowViewModel? selected = _viewModel.Palette.SelectedRow;
-        if (ReferenceEquals(CommandPaletteResultsList.SelectedItem, selected))
-        {
-            return;
-        }
-
-        _syncingPaletteSelection = true;
-        try
-        {
-            CommandPaletteResultsList.SelectedItem = selected;
-            if (selected is not null)
-            {
-                CommandPaletteResultsList.ScrollIntoView(selected);
-            }
-        }
-        finally
-        {
-            _syncingPaletteSelection = false;
-        }
-    }
-
-    private void CommandPaletteResults_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_syncingPaletteSelection)
-        {
-            return;
-        }
-
-        if (CommandPaletteResultsList.SelectedItem is CommandPaletteRowViewModel row)
-        {
-            _viewModel.Palette.Select(row);
-        }
-    }
 
     private void CommandPaletteResults_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {

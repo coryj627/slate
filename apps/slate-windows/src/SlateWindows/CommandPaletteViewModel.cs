@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Diagnostics;
 using System.Text;
 using SlateWindows.Commands;
 using uniffi.slate_uniffi;
@@ -128,6 +129,21 @@ internal sealed class CommandPaletteRowViewModel
 }
 
 /// <summary>
+/// What one query change cost, split by step — the #1254 profile
+/// (SLATE_UIA_DIAGNOSTICS=1 only). <see cref="QueryChange"/> is 0 for the
+/// open's own recompute and counts keystrokes after it; the three spans
+/// are <see cref="System.Diagnostics.Stopwatch"/> ticks, and
+/// <see cref="StartTimestamp"/> anchors the view's end-to-end reading.
+/// </summary>
+internal sealed record CommandPaletteRecomputeTiming(
+    int QueryChange,
+    int Rows,
+    long StartTimestamp,
+    long RankTicks,
+    long AvailabilityTicks,
+    long RowBuildTicks);
+
+/// <summary>
 /// One rendered palette section, in the order core returned it.
 /// </summary>
 internal sealed class CommandPaletteSectionViewModel
@@ -200,6 +216,10 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// overlay's 150 ms, so a typed query speaks once for its latest state.</summary>
     internal const int FilterCountWindowMilliseconds = 150;
 
+    /// <summary>The #1254 profile times the open and this many keystrokes
+    /// after it — the first keystroke is the one the NVDA pass heard stall.</summary>
+    internal const int TimedKeystrokes = 3;
+
     private readonly IPaletteCommandSource _source;
     private readonly Action<A11yEvent> _announce;
     private readonly Func<CancellationToken, Task> _filterCountWindow;
@@ -217,6 +237,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
     private bool _isOpen;
     private bool _suppressSelectionAnnouncement;
     private int _pageSize = 10;
+    private int _queryChangesSinceOpen;
 
     public CommandPaletteViewModel(IPaletteCommandSource source, Action<A11yEvent> announce,
         Func<CancellationToken, Task>? filterCountWindow = null)
@@ -255,6 +276,14 @@ internal sealed class CommandPaletteViewModel : BindableBase
     public int MatchCount => _rows.Length;
 
     public bool HasResults => _rows.Length > 0;
+
+    /// <summary>
+    /// The latest query change's step costs, for the view to finish the
+    /// reading with its own rebuild (#1254). Non-null only for the open and
+    /// the first <see cref="TimedKeystrokes"/> keystrokes while
+    /// SLATE_UIA_DIAGNOSTICS=1; otherwise no clock is read at all.
+    /// </summary>
+    internal CommandPaletteRecomputeTiming? LastRecomputeTiming { get; private set; }
 
     /// <summary>
     /// Rows moved by one Page Up / Page Down. Windows-only navigation
@@ -399,6 +428,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _query = string.Empty;
         _selectedId = null;
         _selectedRow = null;
+        _queryChangesSinceOpen = 0;
         // Contract P10: the first selection change after open is
         // silent — the initial row is not announced before any user
         // action.
@@ -427,6 +457,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _rows = [];
         _selectedId = null;
         _selectedRow = null;
+        LastRecomputeTiming = null;
         // A count still in its window has nothing to say once the palette closes.
         CancelFilterCountWindow();
         _isOpen = false;
@@ -709,11 +740,19 @@ internal sealed class CommandPaletteViewModel : BindableBase
     {
         string? previousId = _selectedId;
 
+        // The #1254 profile: read the clock only while diagnostics are on,
+        // and only for the open and the first keystrokes after it.
+        bool timed = _queryChangesSinceOpen <= TimedKeystrokes
+            && HostLog.UiAutomationDiagnosticsEnabled;
+        long started = timed ? Stopwatch.GetTimestamp() : 0;
+        long availabilityTicks = 0;
+
         PaletteSection[] computed = SlateUniffiMethods.PaletteSections(
             _snapshot,
             Query,
             _recents,
             _source.SidebarPinnedOrder);
+        long ranked = timed ? Stopwatch.GetTimestamp() : 0;
 
         var sections = new List<CommandPaletteSectionViewModel>(computed.Length);
         var rows = new List<CommandPaletteRowViewModel>();
@@ -726,13 +765,20 @@ internal sealed class CommandPaletteViewModel : BindableBase
             {
                 IReadOnlyList<CommandPaletteMatchRun> matchRuns =
                     ToMatchRuns(row.Command.Label, row.LabelMatchSpans);
+                long asked = timed ? Stopwatch.GetTimestamp() : 0;
+                string? disabledReason = _source.DisabledReason(row.Command.Id);
+                if (timed)
+                {
+                    availabilityTicks += Stopwatch.GetTimestamp() - asked;
+                }
+
                 var built = new CommandPaletteRowViewModel(
                     row.Command,
                     section.Title,
                     matchRuns,
                     ToLabelSegments(row.Command.Label, matchRuns),
                     row.Score,
-                    _source.DisabledReason(row.Command.Id));
+                    disabledReason);
                 sectionRows.Add(built);
                 rows.Add(built);
             }
@@ -745,6 +791,20 @@ internal sealed class CommandPaletteViewModel : BindableBase
 
         _sections = sections;
         _rows = [.. rows];
+        LastRecomputeTiming = timed
+            ? new CommandPaletteRecomputeTiming(
+                _queryChangesSinceOpen,
+                _rows.Length,
+                started,
+                ranked - started,
+                availabilityTicks,
+                Stopwatch.GetTimestamp() - ranked - availabilityTicks)
+            : null;
+        if (_queryChangesSinceOpen <= TimedKeystrokes)
+        {
+            _queryChangesSinceOpen++;
+        }
+
         RaiseDerivedState();
 
         // Contract P7: preserve the selection when its id survived,
