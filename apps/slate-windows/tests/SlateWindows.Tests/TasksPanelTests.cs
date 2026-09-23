@@ -1180,7 +1180,11 @@ public sealed class TasksPanelTests : IDisposable
         try
         {
             Assert.False(tab.Save());
-            Assert.StartsWith("Save blocked: ", tab.Status);
+            // W7-7 R-7: the status is the sentence that is spoken.
+            Assert.Equal(
+                SlateUniffiMethods.A11yRender(
+                    Assert.Single(announced.OfType<A11yEvent.NoteSaveBlocked>())).Text,
+                tab.Status);
             // The write landed; the index rolled back.
             Assert.Contains(
                 "- [x] done manually",
