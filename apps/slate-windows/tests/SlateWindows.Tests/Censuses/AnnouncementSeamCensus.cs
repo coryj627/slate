@@ -35,8 +35,8 @@ public sealed class AnnouncementSeamCensus
     /// dispatcher's element constructor, and it raises through UI Automation
     /// itself — <c>AutomationInteropProvider.RaiseAutomationEvent</c> with
     /// <c>AutomationElementIdentifiers.NotificationEvent</c> and the same
-    /// four-argument tuple — on the provider of the peer it always resolved,
-    /// guarded by UIA's <c>ClientsAreListening</c>.
+    /// four-argument tuple — on the provider <c>NotificationSource</c> takes
+    /// from the element's peer, guarded by UIA's <c>ClientsAreListening</c>.
     /// </summary>
     /// <remarks>
     /// BOUND over every authored shell source. A notification can only be
@@ -75,8 +75,27 @@ public sealed class AnnouncementSeamCensus
                 && listening.ContainingType.ToDisplayString() == "System.Windows.Automation.Provider.AutomationInteropProvider",
             $"the production guard must be AutomationInteropProvider.ClientsAreListening; it is `{probe.ExpressionBody}`.");
 
-        // The one door to the provider: a peer, handing the peer it was given
-        // to AutomationPeer.ProviderFromPeer and nothing else.
+        // The source (R-1): the element's own provider, through its peer
+        // resolved exactly as the dispatcher always has, and nothing else —
+        // the window's HWND host provider was measured and delivered nothing
+        // to a desktop-scoped client (codex round 5).
+        ClassDeclarationSyntax sources = Assert.Single(
+            notification.Source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>(),
+            type => type.Identifier.ValueText == "NotificationSource");
+        MethodDeclarationSyntax of = Assert.Single(
+            sources.Members.OfType<MethodDeclarationSyntax>(), member => member.Identifier.ValueText == "Of");
+        Assert.Equal(
+            "UIElementAutomationPeer.FromElement(source) ?? UIElementAutomationPeer.CreatePeerForElement(source) ?? new FrameworkElementAutomationPeer(source)",
+            Assert.Single(of.DescendantNodes().OfType<VariableDeclaratorSyntax>(), local => local.Identifier.ValueText == "peer")
+                .Initializer!.Value.NormalizeWhitespace().ToFullString());
+        Assert.Equal("NotificationProviderPeer.Current.ProviderOf(peer)",
+            Assert.Single(of.DescendantNodes().OfType<VariableDeclaratorSyntax>(), local => local.Identifier.ValueText == "provider")
+                .Initializer!.Value.NormalizeWhitespace().ToFullString());
+        Assert.Equal("provider",
+            Assert.IsType<ReturnStatementSyntax>(of.Body!.Statements.Last()).Expression!.NormalizeWhitespace().ToFullString());
+
+        // The one door to a peer's provider: a peer, handing the peer it was
+        // given to AutomationPeer.ProviderFromPeer and nothing else.
         ClassDeclarationSyntax door = Assert.Single(
             notification.Source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>(),
             type => type.Identifier.ValueText == "NotificationProviderPeer");
@@ -177,8 +196,8 @@ public sealed class AnnouncementSeamCensus
             Mutate(original, "NotificationEventArgs(kind, processing, text, activityId)", "NotificationEventArgs(kind, processing, text, \"wrong\")"),
             Mutate(original, "NotificationEventArgs(kind, processing, text, activityId)", "NotificationEventArgs(kind, processing, activityId, text)"),
             Mutate(original, "AutomationElementIdentifiers.NotificationEvent", "AutomationElementIdentifiers.AsyncContentLoadedEvent"),
-            Mutate(original, "FromElement(source)", "FromElement(new System.Windows.Controls.TextBlock())"),
-            Mutate(original, "NotificationProviderPeer.Current.ProviderOf(peer)", "AutomationInteropProvider.HostProviderFromHandle(System.IntPtr.Zero)"),
+            Mutate(original, "NotificationSource.Of(source)", "NotificationSource.Of(new System.Windows.Controls.TextBlock())"),
+            Mutate(original, "NotificationSource.Of(source)", "AutomationInteropProvider.HostProviderFromHandle(System.IntPtr.Zero)"),
             Mutate(original, "provider is not null", "provider is null"),
             Mutate(original, "() => AutomationInteropProvider.ClientsAreListening", "() => true"),
         })
@@ -196,10 +215,9 @@ public sealed class AnnouncementSeamCensus
         return original.Replace(from, to, StringComparison.Ordinal);
     }
 
-    /// <summary>The production constructor's shape (R-1): the peer resolved
-    /// from the element exactly as before, its provider through the one
-    /// door, the raise only when UIA knows that provider, and UIA's own
-    /// listener probe as the guard.</summary>
+    /// <summary>The production constructor's shape (R-1): the provider from
+    /// the element through <c>NotificationSource</c>, the raise only when
+    /// there is one, and UIA's own listener probe as the guard.</summary>
     private static void AssertNativeConstructor(ConstructorDeclarationSyntax constructor)
     {
         Assert.Equal("FrameworkElement", Assert.Single(constructor.ParameterList.Parameters).Type!.ToString());
@@ -209,17 +227,12 @@ public sealed class AnnouncementSeamCensus
         var lambda = Assert.IsType<ParenthesizedLambdaExpressionSyntax>(arguments[0].Expression);
         Assert.Equal(["kind", "processing", "text", "activityId"], lambda.ParameterList.Parameters.Select(p => p.Identifier.ValueText));
         var body = Assert.IsType<BlockSyntax>(lambda.Body);
-        Assert.Equal(3, body.Statements.Count);
-        var declaration = Assert.IsType<LocalDeclarationStatementSyntax>(body.Statements[0]);
-        VariableDeclaratorSyntax peer = Assert.Single(declaration.Declaration.Variables);
-        Assert.Equal("peer", peer.Identifier.ValueText);
-        Assert.Equal("UIElementAutomationPeer.FromElement(source) ?? UIElementAutomationPeer.CreatePeerForElement(source) ?? new FrameworkElementAutomationPeer(source)",
-            peer.Initializer!.Value.NormalizeWhitespace().ToFullString());
-        var providerDeclaration = Assert.IsType<LocalDeclarationStatementSyntax>(body.Statements[1]);
+        Assert.Equal(2, body.Statements.Count);
+        var providerDeclaration = Assert.IsType<LocalDeclarationStatementSyntax>(body.Statements[0]);
         VariableDeclaratorSyntax provider = Assert.Single(providerDeclaration.Declaration.Variables);
         Assert.Equal("provider", provider.Identifier.ValueText);
-        Assert.Equal("NotificationProviderPeer.Current.ProviderOf(peer)", provider.Initializer!.Value.NormalizeWhitespace().ToFullString());
-        var connected = Assert.IsType<IfStatementSyntax>(body.Statements[2]);
+        Assert.Equal("NotificationSource.Of(source)", provider.Initializer!.Value.NormalizeWhitespace().ToFullString());
+        var connected = Assert.IsType<IfStatementSyntax>(body.Statements[1]);
         Assert.Equal("provider is not null", connected.Condition.NormalizeWhitespace().ToFullString());
         Assert.Null(connected.Else);
         var raise = Assert.IsType<InvocationExpressionSyntax>(Assert.IsType<ExpressionStatementSyntax>(
