@@ -109,15 +109,20 @@ public sealed class AccessibilityNotificationDispatcherTests
     }
 
     /// <summary>
-    /// R-1, codex round 5, recorded rather than assumed: at the first frame —
-    /// the window shown, no UIA client yet to ask it for anything — the status
-    /// element's peer has NO provider (ProviderFromPeer answers null: the peer
-    /// is unconnected, the helper peer has no window, and the dispatcher has
-    /// no automation root), so a line posted then is not raised, exactly as
-    /// WPF's gated call would not raise it. The provider appears the moment
-    /// something asks the window for its UIA root (WM_GETOBJECT, which is how
-    /// every client connects), and not before.
+    /// R-1, codex round 5, recorded rather than assumed: the status element's
+    /// peer has a UIA provider exactly when something has asked its window
+    /// for one (WM_GETOBJECT, which is how every client connects). At the
+    /// first frame of a launch nothing has, so ProviderFromPeer answers null
+    /// (the peer is unconnected, the helper peer has no window, and the
+    /// dispatcher has no automation root) and a line posted then is not
+    /// raised, exactly as WPF's gated call would not raise it.
     /// </summary>
+    /// <remarks>
+    /// Another UIA client on the desktop may ask a new window at once (one
+    /// did during a full-suite run here), so the first-frame check follows
+    /// the window's own record of whether it was asked; the explicit ask
+    /// after it holds on every desktop.
+    /// </remarks>
     [Fact]
     public void AtTheFirstFrameTheStatusPeerHasNoProviderUntilTheWindowIsAsked() => RunSta(() =>
     {
@@ -131,13 +136,30 @@ public sealed class AccessibilityNotificationDispatcherTests
             WindowStyle = WindowStyle.None,
             ShowActivated = false,
         };
+        int asked = 0;
         try
         {
-            window.Show();
-            Assert.Null(AccessibilityNotificationDispatcher.NotificationSource.Of(status));
+            IntPtr handle = new WindowInteropHelper(window).EnsureHandle();
+            HwndSource.FromHwnd(handle).AddHook(
+                (IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled) =>
+                {
+                    if (message == NativeWindow.WmGetObject)
+                    {
+                        asked++;
+                    }
 
-            _ = NativeWindow.SendMessage(
-                new WindowInteropHelper(window).Handle, NativeWindow.WmGetObject, IntPtr.Zero, NativeWindow.UiaRootObjectId);
+                    return IntPtr.Zero;
+                });
+            window.Show();
+
+            bool connected = AccessibilityNotificationDispatcher.NotificationSource.Of(status) is not null;
+            Assert.True(
+                connected == asked > 0,
+                $"first frame: {asked} WM_GETOBJECT seen, status peer provider {(connected ? "present" : "null")}");
+
+            int before = asked;
+            _ = NativeWindow.SendMessage(handle, NativeWindow.WmGetObject, IntPtr.Zero, NativeWindow.UiaRootObjectId);
+            Assert.True(asked > before, "the window's hook never saw the WM_GETOBJECT this fact sent, so it cannot tell asked from unasked.");
             Assert.NotNull(AccessibilityNotificationDispatcher.NotificationSource.Of(status));
         }
         finally
