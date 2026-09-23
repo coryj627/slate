@@ -139,6 +139,12 @@ a double-click on Next lands where Create appears — a TD-5 mechanics
 consequence mac's sequential sheets cannot have). Structurally
 pinned; the input state is view-layer and not headless-synthesizable.
 
+**Tab stays in the sheet** (W7-7 #1248, contract 40 R-6): the flow
+sheet carries `SheetKeyboardFence`, so Tab and Shift+Tab cycle through
+the prompt fields and the footer buttons inside the sheet, and the
+`TabForward`/`TabBackward` they raise never reach the note behind it.
+Enter's step semantics above are unchanged.
+
 **T5 — Metadata/render coherence.** Metadata is extracted from a
 host-read snapshot of the source; the render re-reads by path at create
 time. A template edited in the gap can therefore carry prompts the user
