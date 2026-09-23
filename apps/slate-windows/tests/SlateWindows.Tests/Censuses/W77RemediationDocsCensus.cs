@@ -212,7 +212,7 @@ public sealed partial class W77RemediationDocsCensus
     // Anything that starts a line like a contract definition, however it
     // is indented or punctuated: the strict parse must account for every
     // one of them.
-    [GeneratedRegex(@"^[ \t]{0,3}\*\*[ \t]*R[-–—]\d+", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^[ \t]{0,3}\*\*[ \t]*R\p{Pd}\d+", RegexOptions.Multiline)]
     private static partial Regex LooseContractHeading();
 
     // Every canonical level-two heading terminates the previous section;
