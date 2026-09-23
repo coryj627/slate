@@ -797,3 +797,5 @@ protect. Round 3 found three of its six findings inside round 2's fixes;
 round 4 found four inside round 3's. The gates are materially stronger
 than they were, and their remaining limit is now written down and owned
 rather than assumed away.
+
+**W7-7 PR 9 — #1254, contract 40 R-11 (2026-09-23).** The NVDA pass's stale "Selected: New Canvas" (F11) came from the view, not the view model: a list synchronized with its current item selected the fresh grouped view's FIRST row on every `ItemsSource` swap, and the pointer route handed that row to the view model as the user's choice. The swap now runs inside the selection-sync guard, the list sets `IsSynchronizedWithCurrentItem="False"` and its grouped rows virtualize; P7, P10 and the synchronous-by-decision rule stand unchanged (`TheShippedListAnnouncesOnlyTheViewModelsSelection`, `TheItemsSourceSwapRunsInsideTheSelectionSyncGuard`, `GroupedRowsVirtualize`, `RecomputeScalesLinearlyInRowCount`, `Palette_TypingAnnouncesOnlyTheFinalCountAndSelection`).
