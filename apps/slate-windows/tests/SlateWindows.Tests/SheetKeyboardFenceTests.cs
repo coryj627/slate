@@ -5,14 +5,15 @@
 // Tab in the template prompt sheet typed tab characters into the note
 // behind it (record F5): the prompt TextBox declines TabForward, and the
 // overlay — a focus scope — hands the unanswered command to the parent
-// scope's focused element, the editor's TextArea. The first five facts
-// drive REAL keystrokes through the input system (InputManager, so the
-// PreviewKeyDown → KeyDown → command → KeyboardNavigation pipeline runs as
-// it does for a key press) into a window that reproduces that shape: a
-// SlateTextEditor that last held focus, and a focus-scope sheet over it.
-// The last runs the shipped MainWindow, to show the fence and the modal
-// routing that owns shell chords under a sheet (contract 30 TR-7) leave
-// each other alone.
+// scope's focused element, the editor's TextArea. The harness reproduces
+// that shape — a SlateTextEditor that last held focus, and a focus-scope
+// sheet over it — and drives it three ways: REAL keystrokes through the
+// input system (InputManager, so the PreviewKeyDown → KeyDown → command
+// → KeyboardNavigation pipeline runs as it does for a key press), the two
+// Tab commands as a command source drives them (ask, then execute on
+// yes), and the two commands executed directly. The last fact runs the
+// shipped MainWindow, to show the fence and the modal routing that owns
+// shell chords under a sheet (contract 30 TR-7) leave each other alone.
 
 using System.Reflection;
 using System.Runtime.ExceptionServices;
@@ -90,25 +91,50 @@ public sealed class SheetKeyboardFenceTests
         harness.FocusTopicAfterTheEditor();
         harness.Press(Key.Tab, imeProcessed: true);
         Assert.Equal(Note.Insert(1, "\t"), harness.Editor.Text);
+
+        // So does a command source, for both commands: the sheet's focus
+        // scope hands the query to the editor, which answers yes, and the
+        // execution follows it there.
+        harness.ResetNote();
+        harness.FocusTopicAfterTheEditor();
+        Assert.True(harness.RunAsACommandSource(EditingCommands.TabForward));
+        Assert.Equal(Note.Insert(1, "\t"), harness.Editor.Text);
+        harness.ResetNote();
+        harness.FocusTopicAfterTheEditor();
+        Assert.True(harness.RunAsACommandSource(EditingCommands.TabBackward));
+        Assert.Equal("Indented first line\nSecond line\n", harness.Editor.Text);
     });
 
     /// <summary>
-    /// The CanExecute hook: while the keyboard is in the sheet, neither
-    /// Tab command is answered for a field inside it — where the sheet's
-    /// focus scope would otherwise hand the query to the editor, which
-    /// answers yes. The editor asked directly still answers: the fence is
-    /// the sheet's, not the editor's.
+    /// The CanExecute hook, driven the way a command source drives a
+    /// command — ask, and execute only on yes. While the keyboard is in
+    /// the sheet neither Tab command is answered for a field inside it:
+    /// unfenced, the sheet's focus scope hands the query to the editor,
+    /// which answers yes, and the execution that follows reaches it (the
+    /// control fact below). The editor asked directly still answers: the
+    /// fence is the sheet's, not the editor's.
     /// </summary>
+    /// <remarks>
+    /// With only this hook removed the answer is yes but the note is
+    /// untouched: the Executed hook stops the execution the answer let
+    /// through. Either command hook alone stops a command source; the
+    /// note changes only with both removed.
+    /// </remarks>
     [Fact]
-    public void NeitherTabCommandIsAnsweredInsideAFencedSheet() => RunSta(() =>
+    public void ACommandSourceInsideAFencedSheetGetsNoAnswerForEitherTabCommand() => RunSta(() =>
     {
         using var harness = new Harness(fenced: true);
         harness.FocusTopicAfterTheEditor();
 
-        Assert.False(EditingCommands.TabForward.CanExecute(null, harness.Topic));
-        Assert.False(EditingCommands.TabBackward.CanExecute(null, harness.Topic));
-        Assert.True(EditingCommands.TabForward.CanExecute(null, harness.Editor.TextArea));
+        // The note first, after each command: what reaches the editor is
+        // the defect; the answer is how the hook is seen doing its part.
+        bool forward = harness.RunAsACommandSource(EditingCommands.TabForward);
         Assert.Equal(Note, harness.Editor.Text);
+        bool backward = harness.RunAsACommandSource(EditingCommands.TabBackward);
+        Assert.Equal(Note, harness.Editor.Text);
+        Assert.False(forward, "TabForward was answered inside the sheet");
+        Assert.False(backward, "TabBackward was answered inside the sheet");
+        Assert.True(EditingCommands.TabForward.CanExecute(null, harness.Editor.TextArea));
     });
 
     /// <summary>
@@ -354,6 +380,21 @@ public sealed class SheetKeyboardFenceTests
                 InputManager.Current.ProcessInput(press);
             });
 
+        /// <summary>What a command source does with <paramref name="command"/>
+        /// targeted at the sheet's focused field (CommandHelpers'
+        /// shape): ask, and execute only on yes. Returns the answer.</summary>
+        public bool RunAsACommandSource(RoutedCommand command)
+        {
+            Assert.Same(Topic, Keyboard.FocusedElement);
+            bool answered = command.CanExecute(null, Topic);
+            if (answered)
+            {
+                command.Execute(null, Topic);
+            }
+
+            return answered;
+        }
+
         public void Dispose() => _window.Close();
     }
 
@@ -465,11 +506,14 @@ public sealed class SheetKeyboardFenceTests
     };
 
     /// <summary>Holds exactly <paramref name="modifiers"/> down in the
-    /// thread's key state — what <c>Keyboard.Modifiers</c> reads — for
-    /// the length of <paramref name="press"/>, then restores it. Every
-    /// modifier is cleared first: a thread's key state can start with a
-    /// modifier another process was holding when it was created, and on a
-    /// shared desktop something usually is.</summary>
+    /// thread's key state — <c>GetKeyState</c>, what <c>Keyboard.Modifiers</c>
+    /// reads — for the length of <paramref name="press"/>, then restores
+    /// it. Every modifier is cleared first, and the state is re-applied
+    /// until it reads back exactly: on a shared desktop the thread's key
+    /// state can be resynchronized from input another process is
+    /// injecting (measured: a cleared Shift read back down, a set Shift
+    /// read back up), and a press made under the wrong modifiers would
+    /// fail for a reason that is not the fence's.</summary>
     private static void WithModifiers(ModifierKeys modifiers, Action press)
     {
         byte[] saved = new byte[256];
@@ -490,10 +534,23 @@ public sealed class SheetKeyboardFenceTests
             pressed[VkControl] = pressed[VkLeftControl] = KeyDown;
         }
 
-        Assert.True(SetKeyboardState(pressed));
         try
         {
-            Assert.Equal(modifiers, Keyboard.Modifiers);
+            for (int attempt = 0; ; attempt++)
+            {
+                Assert.True(SetKeyboardState(pressed));
+                if (Keyboard.Modifiers == modifiers)
+                {
+                    break;
+                }
+
+                Assert.True(
+                    attempt < 40,
+                    $"environmental: the thread's key state would not hold {modifiers} "
+                    + $"(read back {Keyboard.Modifiers}) — another process is holding modifiers");
+                Thread.Sleep(25);
+            }
+
             press();
         }
         finally
