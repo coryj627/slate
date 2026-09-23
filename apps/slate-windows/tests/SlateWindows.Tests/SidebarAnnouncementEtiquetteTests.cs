@@ -72,4 +72,75 @@ public sealed class SidebarAnnouncementEtiquetteTests
         await CompleteNext();
         Assert.Equal(3, announcements.OfType<A11yEvent.FileListCount>().Count());
     }
+
+    /// <summary>W7-7 (R-3, codex round 4): a tag scope's count is
+    /// de-duplicated on (query, scope, total), like a typed query's. The
+    /// same scope refreshed with the same total stays quiet; another scope
+    /// with an equal total speaks, naming its tag; and the same scope
+    /// speaks again when a rescan changes its total.</summary>
+    [Fact]
+    public async Task ScopedPublicationDedupsQueryScopeAndTotalAcrossRefreshes()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "sidebar-scope-etiquette");
+        WriteTagged(fixture, "a.md", "two words");
+        WriteTagged(fixture, "b.md", "two words");
+        WriteTagged(fixture, "c.md", "blue sky");
+        WriteTagged(fixture, "d.md", "blue sky");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken()) { session.ScanInitial(cancel); }
+        var delays = Channel.CreateUnbounded<TaskCompletionSource>();
+        var context = new PublicationContext();
+        var announcements = new List<A11yEvent>();
+        Task Delay(CancellationToken token)
+        {
+            var delay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Assert.True(delays.Writer.TryWrite(delay));
+            return delay.Task.WaitAsync(token);
+        }
+        var sidebar = new FilesSidebarViewModel(session, announcements.Add,
+            filterUiContext: context, filterDelay: Delay,
+            filterWorker: (work, token) => { token.ThrowIfCancellationRequested(); work(); return Task.CompletedTask; });
+        announcements.Clear();
+
+        async Task CompleteNext()
+        {
+            TaskCompletionSource delay = await delays.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            delay.SetResult();
+            await context.PublishNext();
+            await sidebar.FilterCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        A11yEvent.FileListCount[] Counts() => [.. announcements.OfType<A11yEvent.FileListCount>()];
+
+        sidebar.ActivateTag("two words");
+        await CompleteNext();
+        Assert.Equal([new A11yEvent.FileListCount(2, "two words")], Counts());
+
+        // The same (query, scope, total) after a refresh is not news.
+        sidebar.Refresh();
+        await CompleteNext();
+        Assert.Single(Counts());
+
+        // An equal total under another scope is a distinct state.
+        sidebar.ActivateTag("blue sky");
+        await CompleteNext();
+        Assert.Equal(
+            [new A11yEvent.FileListCount(2, "two words"), new A11yEvent.FileListCount(2, "blue sky")],
+            Counts());
+
+        // The same scope speaks again when a rescan changes its total.
+        WriteTagged(fixture, "e.md", "blue sky");
+        using (var cancel = new CancelToken()) { session.ScanInitial(cancel); }
+        sidebar.Refresh();
+        await CompleteNext();
+        Assert.Equal(
+            [
+                new A11yEvent.FileListCount(2, "two words"),
+                new A11yEvent.FileListCount(2, "blue sky"),
+                new A11yEvent.FileListCount(3, "blue sky"),
+            ],
+            Counts());
+    }
+
+    private static void WriteTagged(FixtureVault fixture, string name, string tag) =>
+        File.WriteAllText(Path.Combine(fixture.Root, name), $"---\ntags: [\"{tag}\"]\n---\n\n# {name}\n");
 }
