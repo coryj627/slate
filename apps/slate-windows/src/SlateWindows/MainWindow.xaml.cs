@@ -436,10 +436,12 @@ public partial class MainWindow : Window
             }
             return;
         }
-        if (CanvasPromptChoicesList.IsVisible && CanvasPromptChoicesList.Focusable)
+        // R-5 (#1247): the selected choice's row, never the bare list; a
+        // row that cannot be landed yet leaves the keys to the sheet's
+        // other stop.
+        if (CanvasPromptChoicesList.IsVisible && CanvasPromptChoicesList.Focusable
+            && SelectorFocus.FocusFirstOrSelectedItem(CanvasPromptChoicesList))
         {
-            // R-5 (#1247): the selected choice's row, never the bare list.
-            _ = SelectorFocus.FocusFirstOrSelectedItem(CanvasPromptChoicesList);
             return;
         }
         _ = TryFocus(CanvasPromptClearMarksButton);
@@ -1740,7 +1742,7 @@ public partial class MainWindow : Window
         // the bare TabControl gave NVDA "Workspace tabs tab control" and
         // let Down arrow wander into the menu bar — so a tab control that
         // HAS tabs lands on one (W7-7 PR 4, #1247, R-5).
-        if (!SelectorFocus.FocusFirstOrSelectedItem(tabs) && !tabs.IsKeyboardFocusWithin)
+        if (!SelectorFocus.FocusFirstOrSelectedItem(tabs))
         {
             FilesTree.Focus();
         }

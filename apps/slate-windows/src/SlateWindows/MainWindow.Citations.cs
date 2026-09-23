@@ -353,13 +353,15 @@ public partial class MainWindow
 
                 // The restored row, else the first — never the bare list,
                 // from which Down walked into the menu bar (W7-7 PR 4,
-                // #1247, R-5). The helper carries this restore's two-step:
-                // a row the virtualizing panel has not generated yet
-                // (measured: at Input priority the generator still answers
-                // null) holds focus on the list, so it is never stranded,
-                // and is seated once the container exists. An emptied list
-                // lands on its notice.
-                _ = SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList, CitationNotices);
+                // #1247, R-5). The helper realizes a row the virtualizing
+                // panel has not generated yet (measured: at Input priority
+                // the generator still answered null); an emptied list lands
+                // on its notice; a row that still cannot be landed leaves
+                // the keys to the pane's stable stop, the rail's row.
+                if (!SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList, CitationNotices))
+                {
+                    _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+                }
             },
             System.Windows.Threading.DispatcherPriority.Input);
     }
@@ -639,8 +641,12 @@ public partial class MainWindow
                     return;
                 }
                 // A row of the list, never the bare list — or its notice
-                // when it is empty (R-5, #1247).
-                _ = SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList, CitationNotices);
+                // when it is empty — else the pane's stable stop, the rail's
+                // row (R-5, #1247).
+                if (!SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList, CitationNotices))
+                {
+                    _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+                }
             },
             System.Windows.Threading.DispatcherPriority.Input);
     }
