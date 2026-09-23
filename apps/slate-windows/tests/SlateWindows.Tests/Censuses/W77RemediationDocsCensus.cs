@@ -206,7 +206,7 @@ public sealed partial class W77RemediationDocsCensus
     // then the bold delimiter, followed by whitespace — with no other
     // asterisk before it, so an interior bold span cannot pose as the
     // closing delimiter (codex rounds 6 and 7).
-    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*]*?\(PR (\d+)[^)\n*]*\)[^\n*]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*]*?\(PR (\d+), #\d+[^)\n*]*\)[^\n*]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
     private static partial Regex ContractHeading();
 
     // Anything that starts a line like a contract definition, however it
