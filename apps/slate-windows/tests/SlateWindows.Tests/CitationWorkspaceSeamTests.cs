@@ -200,12 +200,73 @@ public sealed class CitationWorkspaceSeamTests : IDisposable
         CitationSummaryViewModel summary = workspace.CitationSummary!;
         Assert.Equal(2, summary.Total);
         Assert.Equal(2, summary.Unique);
-        // Opening the sheet announces nothing (§2.6).
+        // Opening the sheet announces its counts (W7-7 R-8), never the
+        // walk-through, which is the walk action's own event.
         Assert.Empty(announced.OfType<A11yEvent.CitationWalkThrough>());
 
         summary.WalkThrough();
         Assert.Null(workspace.CitationSummary);
         Assert.Single(announced.OfType<A11yEvent.CitationWalkThrough>());
+    }
+
+    /// <summary>W7-7 (#1251, R-8): the summary sheet opens with focus on
+    /// its first button, where the sheet's name is not read, so it
+    /// announces its counts on open — once, in core's sentence.</summary>
+    [Fact]
+    public void OpeningTheSummaryAnnouncesItsCounts()
+    {
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeWorkspace(session, announced);
+        workspace.OpenPath("cited.md");
+        announced.Clear();
+
+        workspace.OpenCitationSummary();
+
+        var shown = Assert.IsType<A11yEvent.CitationSummaryShown>(Assert.Single(announced));
+        Assert.Equal(2u, shown.Citations);
+        Assert.Equal(2u, shown.Sources);
+        Assert.Equal(
+            "Citation summary. 2 citations referencing 2 unique sources.",
+            SlateUniffiMethods.A11yRender(shown).Text);
+    }
+
+    /// <summary>R-8: the details sheet announces its outcome when it opens,
+    /// on both branches. A resolved citation or a bibliography entry says
+    /// what was expanded; a key no bibliography holds expanded nothing, so
+    /// it says the key is unresolved — core's sentence, which is also the
+    /// sheet's name, never the key dressed up as an expansion.</summary>
+    [Fact]
+    public void OpeningCitationDetailsAnnouncesTheExpandedCitation()
+    {
+        var announced = new List<A11yEvent>();
+        using VaultSession session = OpenScanned();
+        using var workspace = MakeWorkspace(session, announced);
+        workspace.OpenPath("cited.md");
+        workspace.Bibliography.EnsureLoaded();
+        announced.Clear();
+
+        workspace.OpenCitationDetails(workspace.Citations.Rows.First(row => !row.IsUnresolved));
+        var resolved = Assert.IsType<A11yEvent.CitationDetailsShown>(Assert.Single(announced));
+        Assert.Equal("Literate Programming", resolved.Title);
+        Assert.Equal(
+            "Citation expanded. Literate Programming.",
+            SlateUniffiMethods.A11yRender(resolved).Text);
+
+        announced.Clear();
+        workspace.OpenCitationDetails(workspace.Citations.Rows.First(row => row.IsUnresolved));
+        var unresolved = Assert.IsType<A11yEvent.CitationDetailsUnresolved>(Assert.Single(announced));
+        Assert.Equal("ghostkey", unresolved.Key);
+        string spoken = SlateUniffiMethods.A11yRender(unresolved).Text;
+        Assert.Equal(
+            "Unresolved citation: ghostkey. This key isn't in any bibliography source.",
+            spoken);
+        Assert.Equal(spoken, workspace.CitationDetails!.AutomationName);
+
+        announced.Clear();
+        workspace.OpenEntryDetails(workspace.Bibliography.Entries[0].Entry);
+        var entry = Assert.IsType<A11yEvent.CitationDetailsShown>(Assert.Single(announced));
+        Assert.Equal("Literate Programming", entry.Title);
     }
 
     [Fact]
@@ -461,6 +522,8 @@ public sealed class CitationWorkspaceSeamTests : IDisposable
 
         workspace.OpenCitationDetails(row);
         Assert.Null(workspace.CitationDetails);
+        // Nothing opened, so nothing is announced as expanded (R-8).
+        Assert.Empty(announced.OfType<A11yEvent.CitationDetailsShown>());
         // …and with nothing expanded, Jump is unavailable.
         Assert.False(workspace.JumpToBibliographyCommand.CanExecute(null));
     }

@@ -41,6 +41,93 @@ public sealed class RecoveryAnnouncementTests
         Assert.Equal(A11yPriority.High, failure.Priority);
     }
 
+    /// <summary>W7-7 (#1249, R-7; contract 38 D-10 as amended): a write
+    /// conflict speaks core's conflict sentence (mac's wording without the
+    /// dialog clause, OD-5) and the inline status shows that same sentence.
+    /// The binding's message for a conflict is two content hashes and a
+    /// modification time; none of it may be spoken or shown.</summary>
+    [Theory]
+    [InlineData("save")]
+    [InlineData("save-all")]
+    [InlineData("close")]
+    public void ConflictingSaveSpeaksTheConflictSentence(string action)
+    {
+        using var host = new Host();
+        WorkspaceTabViewModel tab = host.OpenNote();
+        tab.Text += "\nUnsaved local edit.";
+        File.WriteAllText(host.NotePath, "# Externally changed\n");
+        host.Announced.Clear();
+
+        Act(host, tab, action);
+
+        var conflict = Assert.IsType<A11yEvent.NoteSaveConflict>(Assert.Single(host.Announced));
+        Assert.Equal("note0.md", conflict.Filename);
+        RenderedAnnouncement spoken = SlateUniffiMethods.A11yRender(conflict);
+        Assert.Equal(A11yPriority.High, spoken.Priority);
+        Assert.Contains("note0.md", spoken.Text);
+        Assert.Contains("modified externally", spoken.Text);
+        Assert.Contains("remain in the editor", spoken.Text);
+        Assert.Equal(spoken.Text, tab.Status);
+        AssertNoDiagnostics(spoken.Text);
+        AssertNoDiagnostics(tab.Status);
+    }
+
+    /// <summary>R-7's other half: every other save failure keeps
+    /// NoteSaveBlocked and its detail, and the detail is the error's own
+    /// text rather than the binding's field-labelled message
+    /// ("@message=…"). A read-only note refuses the atomic replace.</summary>
+    [Theory]
+    [InlineData("save")]
+    [InlineData("save-all")]
+    [InlineData("close")]
+    public void AFailedSaveSpeaksItsReasonWithoutBindingFieldLabels(string action)
+    {
+        using var host = new Host();
+        WorkspaceTabViewModel tab = host.OpenNote();
+        tab.Text += "\nUnsaved local edit.";
+        string local = tab.Text;
+        File.SetAttributes(host.NotePath, FileAttributes.ReadOnly);
+        host.Announced.Clear();
+        try
+        {
+            Act(host, tab, action);
+        }
+        finally
+        {
+            File.SetAttributes(host.NotePath, FileAttributes.Normal);
+        }
+
+        var blocked = Assert.IsType<A11yEvent.NoteSaveBlocked>(Assert.Single(host.Announced));
+        Assert.Equal("note0.md", blocked.Filename);
+        Assert.False(string.IsNullOrWhiteSpace(blocked.Detail));
+        Assert.Equal(local, tab.Text);
+        Assert.True(tab.IsDirty);
+        AssertNoDiagnostics(SlateUniffiMethods.A11yRender(blocked).Text);
+        AssertNoDiagnostics(tab.Status);
+    }
+
+    private static void Act(Host host, WorkspaceTabViewModel tab, string action)
+    {
+        switch (action)
+        {
+            case "save": host.Workspace.SaveActiveCommand.Execute(null); break;
+            case "save-all": Assert.False(host.Workspace.SaveAll()); break;
+            case "close": host.Workspace.CloseTabCommand.Execute(tab); break;
+            default: throw new ArgumentOutOfRangeException(nameof(action), action, null);
+        }
+    }
+
+    /// <summary>No binding field label, content hash or modification time
+    /// (R-7): the shapes of uniffi's error message.</summary>
+    private static void AssertNoDiagnostics(string text)
+    {
+        Assert.DoesNotContain("@", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Hash", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Mtime", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotMatch("[0-9a-fA-F]{64}", text);
+        Assert.DoesNotMatch(@"\d{10,}", text);
+    }
+
     [Fact]
     public void SuccessfulSaveKeepsItsExistingAnnouncement()
     {

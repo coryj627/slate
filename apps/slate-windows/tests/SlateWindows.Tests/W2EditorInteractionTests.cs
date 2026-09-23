@@ -197,6 +197,333 @@ public sealed class W2EditorInteractionTests
         interactions.ClearCitationHover();
         WaitForUi(() => !interactions.IsPopoverOpen);
     }
+
+    /// <summary>W7-7 (#1251, R-8): activating a citation announces it in
+    /// core's sentence, built from the preview's speech exactly as it
+    /// arrived, and the popover's UIA name is that same rendering. Two
+    /// shapes: the unstyled placeholder, which already names itself, and a
+    /// styled unresolved key's speech, which does not. A host that
+    /// prefixes fails the second (its speech is no longer raw); a core
+    /// that omits the prefix fails its name, and one that always prefixes
+    /// fails the first ("Citation. Citation: doe").</summary>
+    [Theory]
+    [InlineData(false, "Citation: doe", "Citation: doe")]
+    [InlineData(true, "Unresolved citation: doe", "Citation. Unresolved citation: doe")]
+    public void ActivatingACitationAnnouncesCoresSentenceAndNamesThePopoverWithIt(
+        bool styled, string rawSpeech, string spoken)
+    {
+        using InteractionFixture fixture = InteractionFixture.Create();
+        if (styled)
+        {
+            fixture.ConfigureCitationStyle();
+        }
+        using VaultSession session = ScannedSession(fixture);
+        var announcements = new List<A11yEvent>();
+        using WorkspaceTabViewModel tab = OpenSourceTab(session, announcements);
+        EditorInteractionCoordinator interactions = tab.EditorInteractions!;
+
+        Assert.True(interactions.ActivateAt(Inside(tab.Text, "[@doe]")));
+
+        Assert.True(interactions.IsPopoverOpen);
+        var shown = Assert.IsType<A11yEvent.CitationPopoverShown>(Assert.Single(announcements));
+        Assert.Equal(rawSpeech, shown.Speech);
+        Assert.Equal(spoken, SlateUniffiMethods.A11yRender(shown).Text);
+        Assert.Equal(spoken, interactions.PopoverAutomationName);
+    }
+
+    /// <summary>R-8 answers an activation. A pointer hover shows the same
+    /// popover, named the same way, without an assertive announcement on
+    /// every rest of the mouse — hover already keeps its unavailable
+    /// states silent.</summary>
+    [Fact]
+    public void HoveringACitationShowsThePopoverWithoutAnnouncing()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create();
+        using VaultSession session = ScannedSession(fixture);
+        var announcements = new List<A11yEvent>();
+        using WorkspaceTabViewModel tab = OpenSourceTab(session, announcements);
+        EditorInteractionCoordinator interactions = tab.EditorInteractions!;
+
+        interactions.HoverAt(Inside(tab.Text, "[@doe]"));
+
+        Assert.True(interactions.IsPopoverOpen);
+        Assert.Equal("Citation: doe", interactions.PopoverAutomationName);
+        Assert.Empty(announcements);
+    }
+
+    /// <summary>R-8: an embed preview announces its outcome when the
+    /// result lands, not at open, where the only outcome is
+    /// "Loading".</summary>
+    [Fact]
+    public void AResolvedEmbedAnnouncesItsPreviewWhenTheResultLands()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create();
+        using VaultSession session = ScannedSession(fixture);
+        var announcements = new List<A11yEvent>();
+        using WorkspaceTabViewModel tab = OpenSourceTab(session, announcements);
+        EditorInteractionCoordinator interactions = tab.EditorInteractions!;
+
+        Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, "![[target#Destination]]")));
+        Assert.True(interactions.IsPopoverOpen);
+        Assert.StartsWith("Loading", interactions.PopoverTitle, StringComparison.Ordinal);
+        Assert.Empty(announcements);
+
+        WaitForUi(() => !interactions.PopoverTitle.StartsWith("Loading", StringComparison.Ordinal));
+
+        // The target as authored (the anchor lives in the card title), the
+        // same pair the popover's name carries.
+        var shown = Assert.IsType<A11yEvent.EmbedPreviewShown>(Assert.Single(announcements));
+        Assert.Equal("target", shown.Target);
+        Assert.Equal("Embedded section: Destination from target.md", shown.Title);
+        Assert.Equal(
+            "Embed preview for target. Embedded section: Destination from target.md.",
+            SlateUniffiMethods.A11yRender(shown).Text);
+        Assert.StartsWith("Embed preview for target, source line", interactions.PopoverAutomationName, StringComparison.Ordinal);
+        Assert.EndsWith(shown.Title, interactions.PopoverAutomationName, StringComparison.Ordinal);
+    }
+
+    /// <summary>R-8: an embed that resolves to nothing says why, in the
+    /// same publish, for every reason the resolver gives a top-level
+    /// preview. The event carries the SEMANTIC reason and core words it;
+    /// the popover's body and name are that same rendering, so the host's
+    /// card wording (Describe) reaches none of them: rewording it leaves
+    /// this fact green, and pointing a surface back at it turns it red.</summary>
+    [Theory]
+    [InlineData("![[missing]]", "TargetNotFound", "Embed preview for missing. Target not found: missing.")]
+    [InlineData("![[target#Nope]]", "HeadingNotFound", "Embed preview for target. Heading not found: Nope in target.md.")]
+    [InlineData("![[target#^nope]]", "BlockNotFound", "Embed preview for target. Block not found: nope in target.md.")]
+    [InlineData("![[unreadable]]", "ReadError", null)]
+    public void AnUnresolvedEmbedIsWordedByCoreOnEverySurface(
+        string embed,
+        string reasonKind,
+        string? expected)
+    {
+        using InteractionFixture fixture = InteractionFixture.Create($"# Source\n\n{embed}\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "unreadable.md"), "# Readable at scan time\n");
+        using VaultSession session = ScannedSession(fixture);
+        // Unreadable only AFTER the scan indexed it, so the link resolves
+        // and the read fails (invalid UTF-8).
+        File.WriteAllBytes(Path.Combine(fixture.Root, "unreadable.md"), [0xff, 0xfe, 0xff]);
+        var announcements = new List<A11yEvent>();
+        using WorkspaceTabViewModel tab = OpenSourceTab(session, announcements);
+        EditorInteractionCoordinator interactions = tab.EditorInteractions!;
+
+        Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, embed)));
+        Assert.Empty(announcements);
+        WaitForUi(() => !interactions.PopoverTitle.StartsWith("Loading", StringComparison.Ordinal));
+
+        var unavailable = Assert.IsType<A11yEvent.EmbedPreviewUnavailable>(Assert.Single(announcements));
+        Assert.Equal(reasonKind, unavailable.Reason?.GetType().Name);
+        string sentence = SlateUniffiMethods.A11yRender(unavailable).Text;
+        if (expected is not null)
+        {
+            Assert.Equal(expected, sentence);
+        }
+        else
+        {
+            Assert.StartsWith("Embed preview for unreadable. Could not read embed: ", sentence, StringComparison.Ordinal);
+        }
+        Assert.Equal(sentence, interactions.PopoverBody);
+        Assert.Equal(sentence, interactions.PopoverAutomationName);
+        Assert.Null(interactions.PopoverEmbedRoot);
+    }
+
+    /// <summary>R-8, every case the presenter can be handed — including the
+    /// two a top-level preview cannot reach through the resolver (the depth
+    /// limit, and a resolve that failed outright): announcement, body and
+    /// name are one core rendering.</summary>
+    [Fact]
+    public void EveryUnavailableReasonIsOneCoreRenderingOnEverySurface()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create();
+        using VaultSession session = ScannedSession(fixture);
+        var announcements = new List<A11yEvent>();
+        using WorkspaceTabViewModel tab = OpenSourceTab(session, announcements);
+        EditorInteractionCoordinator interactions = tab.EditorInteractions!;
+
+        foreach ((EmbedUnresolvedReason? reason, string expected) in new (EmbedUnresolvedReason?, string)[]
+        {
+            (new EmbedUnresolvedReason.TargetNotFound("X"), "Embed preview for X. Target not found: X."),
+            (new EmbedUnresolvedReason.HeadingNotFound("x.md", "H"), "Embed preview for X. Heading not found: H in x.md."),
+            (new EmbedUnresolvedReason.BlockNotFound("x.md", "b1"), "Embed preview for X. Block not found: b1 in x.md."),
+            (new EmbedUnresolvedReason.DepthLimitReached(), "Embed preview for X. Nested embed depth limit reached."),
+            (new EmbedUnresolvedReason.ReadError("disk on fire"), "Embed preview for X. Could not read embed: disk on fire."),
+            (null, "Embed preview for X. The embedded content could not be resolved."),
+        })
+        {
+            announcements.Clear();
+            interactions.PresentUnavailableEmbedForTests("X", 3, reason);
+
+            var unavailable = Assert.IsType<A11yEvent.EmbedPreviewUnavailable>(Assert.Single(announcements));
+            Assert.Equal(reason, unavailable.Reason);
+            Assert.Equal(expected, SlateUniffiMethods.A11yRender(unavailable).Text);
+            Assert.Equal(expected, interactions.PopoverBody);
+            Assert.Equal(expected, interactions.PopoverAutomationName);
+            Assert.Null(interactions.PopoverEmbedRoot);
+        }
+    }
+
+    /// <summary>R-8 in the live tree: the shipped popover template, bound to
+    /// a tab whose preview resolved to nothing, exposes core's sentence as
+    /// the popover's UIA name and as the text of its body.</summary>
+    [Fact]
+    public void AnUnavailablePreviewExposesCoresSentenceInTheLiveTree() =>
+        RunOnSta(() =>
+        {
+            using InteractionFixture fixture = InteractionFixture.Create("# Source\n\n![[missing]]\n");
+            using VaultSession session = ScannedSession(fixture);
+            var announcements = new List<A11yEvent>();
+            using WorkspaceTabViewModel tab = OpenSourceTab(session, announcements);
+            EditorInteractionCoordinator interactions = tab.EditorInteractions!;
+            Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, "![[missing]]")));
+            WaitForUi(() => !interactions.PopoverTitle.StartsWith("Loading", StringComparison.Ordinal));
+            string sentence = SlateUniffiMethods.A11yRender(
+                Assert.IsType<A11yEvent.EmbedPreviewUnavailable>(Assert.Single(announcements))).Text;
+            Assert.Equal("Embed preview for missing. Target not found: missing.", sentence);
+
+            var resources = (System.Windows.ResourceDictionary)System.Windows.Application.LoadComponent(
+                new Uri("/SlateWindows;component/WorkspaceTemplates.xaml", UriKind.Relative));
+            var template = (System.Windows.DataTemplate)resources["WorkspaceTabContentTemplate"];
+            var root = (System.Windows.FrameworkElement)template.LoadContent();
+            root.DataContext = tab;
+            var window = new System.Windows.Window { Content = root };
+            try
+            {
+                window.Show();
+                root.UpdateLayout();
+                root.Dispatcher.Invoke(DispatcherPriority.DataBind, new Action(() => { }));
+                root.UpdateLayout();
+
+                var popover = (System.Windows.UIElement)Assert.Single(
+                    LogicalDescendants(root),
+                    element => System.Windows.Automation.AutomationProperties.GetAutomationId(element)
+                        == "EditorInteractionPopover");
+                System.Windows.Automation.Peers.AutomationPeer peer =
+                    System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(popover);
+                Assert.Equal(sentence, peer.GetName());
+                System.Windows.Controls.TextBox body = Assert.Single(
+                    LogicalDescendants(popover).OfType<System.Windows.Controls.TextBox>(),
+                    box => System.Windows.Automation.AutomationProperties.GetName(box) == "Preview content");
+                Assert.Equal(sentence, body.Text);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    /// <summary>W7-7 (#1251, R-8): WPF disables caret navigation in a
+    /// read-only TextBox that hides its caret, so Down scrolled the
+    /// focusable host instead and the reader heard line 1 again. Both
+    /// preview bodies keep a caret, and the popover's scroll host is not a
+    /// focus stop of its own that would take the arrows.</summary>
+    [Fact]
+    public void PreviewTextKeepsACaretAndTheScrollHostIsNotAFocusStop() =>
+        RunOnSta(() =>
+        {
+            // The card renderer the popover and the embeds leaf share.
+            var view = new EditorEmbedPreviewView
+            {
+                Root = new EditorEmbedPreviewNode(
+                    "Embedded note: a.md",
+                    [new EditorEmbedPreviewPart("# A\nSecond line\n", null)],
+                    null,
+                    "a.md",
+                    IsDisclosure: true,
+                    InitiallyExpanded: true,
+                    IsWarning: false),
+            };
+            System.Windows.Controls.TextBox embedded = Assert.Single(
+                LogicalDescendants(view).OfType<System.Windows.Controls.TextBox>());
+            Assert.True(embedded.IsReadOnly);
+            Assert.True(embedded.IsReadOnlyCaretVisible);
+
+            // The popover itself, from the shipped template.
+            var resources = (System.Windows.ResourceDictionary)System.Windows.Application.LoadComponent(
+                new Uri("/SlateWindows;component/WorkspaceTemplates.xaml", UriKind.Relative));
+            var template = (System.Windows.DataTemplate)resources["WorkspaceTabContentTemplate"];
+            var root = (System.Windows.DependencyObject)template.LoadContent();
+            System.Windows.DependencyObject popover = Assert.Single(
+                LogicalDescendants(root),
+                element => System.Windows.Automation.AutomationProperties.GetAutomationId(element)
+                    == "EditorInteractionPopover");
+            System.Windows.Controls.ScrollViewer host = Assert.Single(
+                LogicalDescendants(popover).OfType<System.Windows.Controls.ScrollViewer>(),
+                scroller => System.Windows.Automation.AutomationProperties.GetName(scroller)
+                    == "Scrollable embed preview");
+            Assert.False(host.Focusable);
+            System.Windows.Controls.TextBox body = Assert.Single(
+                LogicalDescendants(popover).OfType<System.Windows.Controls.TextBox>(),
+                box => System.Windows.Automation.AutomationProperties.GetName(box) == "Preview content");
+            Assert.True(body.IsReadOnly);
+            Assert.True(body.IsReadOnlyCaretVisible);
+        });
+
+    private static IEnumerable<System.Windows.DependencyObject> LogicalDescendants(
+        System.Windows.DependencyObject root)
+    {
+        foreach (object child in System.Windows.LogicalTreeHelper.GetChildren(root))
+        {
+            if (child is System.Windows.DependencyObject element)
+            {
+                yield return element;
+                foreach (System.Windows.DependencyObject nested in LogicalDescendants(element))
+                {
+                    yield return nested;
+                }
+            }
+        }
+    }
+
+    private static void RunOnSta(Action action)
+    {
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception exception)
+            {
+                failure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception);
+            }
+        })
+        {
+            IsBackground = true,
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "STA preview test timed out.");
+        failure?.Throw();
+    }
+
+    private static VaultSession ScannedSession(InteractionFixture fixture)
+    {
+        VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        return session;
+    }
+
+    private static WorkspaceTabViewModel OpenSourceTab(
+        VaultSession session,
+        List<A11yEvent> announcements)
+    {
+        var tab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            announce: announcements.Add,
+            startInteractionBackgroundWork: false);
+        EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(
+            tab.EditorInteractions);
+        interactions.RefreshMathRangesForTests();
+        interactions.RefreshArtifactCacheForTests();
+        return tab;
+    }
+
     [Fact]
     public void DirtyTaskAndSavedRecordActions_FailClosedWithoutLosingEditorText()
     {
@@ -939,6 +1266,20 @@ public sealed class W2EditorInteractionTests
                 Path.Combine(root, "unrelated.md"),
                 "- [ ] unrelated task\n");
             return new InteractionFixture(root);
+        }
+
+        /// <summary>W7-7: a configured citation style, so core renders the
+        /// citation speech instead of the host's unstyled placeholder — and
+        /// an unresolved key's rendered speech does not name itself a
+        /// citation. Must run before the session opens.</summary>
+        public void ConfigureCitationStyle()
+        {
+            File.Copy(
+                RepoFile("demo-vault", "csl", "ieee.csl"),
+                Path.Combine(Root, "ieee.csl"));
+            File.WriteAllText(
+                Path.Combine(Root, "slate.json"),
+                "{\"citations\":{\"cite_style\":\"ieee\"}}");
         }
 
         public void Dispose()

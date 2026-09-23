@@ -256,13 +256,15 @@ public class CitationPhraseTests
             CitationPhrase.DetailsSummary("Literate Programming"));
 
         Assert.Equal("Citation key not found", CitationPhrase.DetailsUnresolvedHeading);
-        // Visible and spoken forms differ deliberately (mac parity).
+        // Visible and spoken forms differ deliberately (mac parity). The
+        // spoken form is core's since W7-7 R-8: it is both the sheet's name
+        // and its opening announcement, so it is rendered, not spelled here.
         Assert.Equal(
             "'nosuchkey' isn't in any bibliography source.",
             CitationPhrase.DetailsUnresolvedBody("nosuchkey"));
         Assert.Equal(
             "Unresolved citation: nosuchkey. This key isn't in any bibliography source.",
-            CitationPhrase.DetailsUnresolvedSpoken("nosuchkey"));
+            SlateUniffiMethods.A11yRender(new A11yEvent.CitationDetailsUnresolved("nosuchkey")).Text);
 
         Assert.Equal("Close", CitationPhrase.DetailsClose);
         Assert.Equal("Close the expanded citation.", CitationPhrase.DetailsCloseHelp);
