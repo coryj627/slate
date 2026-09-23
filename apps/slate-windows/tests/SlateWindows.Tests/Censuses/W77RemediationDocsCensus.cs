@@ -307,7 +307,9 @@ public sealed partial class W77RemediationDocsCensus
     // No `#issue` token anywhere outside the owner clause's canonical list
     // — not in its suffix, not in the title, not after the clause — so an
     // extra issue cannot hide anywhere in the heading (codex rounds 19–20).
-    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*#]*?\(PR (\d+), (#\d+(?:, #\d+)*)[^)\n*#]*\)[^\n*#]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
+    // Every issue token ends at an identifier boundary, so `#1244x` is a
+    // malformed heading rather than issue 1244 (codex round 21).
+    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*#]*?\(PR (\d+), (#\d+(?:, #\d+)*)(?![A-Za-z0-9_])[^)\n*#]*\)[^\n*#]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
     private static partial Regex ContractHeading();
 
     // Anything that starts a line like a contract definition, however it
@@ -333,7 +335,9 @@ public sealed partial class W77RemediationDocsCensus
     [GeneratedRegex(@"^### PR (\d+) — [^\n]*", RegexOptions.Multiline)]
     private static partial Regex ReviewRecordHeading();
 
-    [GeneratedRegex(@"#(\d+)")]
+    // A token is `#` plus digits up to an identifier boundary: `#1244x`
+    // yields no token, so a heading carrying it drifts (codex round 21).
+    [GeneratedRegex(@"#(\d+)(?![A-Za-z0-9_])")]
     private static partial Regex IssueToken();
 
     // Anything that starts a heading like a review record, however it is
