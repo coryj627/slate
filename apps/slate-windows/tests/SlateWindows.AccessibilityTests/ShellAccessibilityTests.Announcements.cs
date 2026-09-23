@@ -170,8 +170,10 @@ public sealed partial class ShellAccessibilityTests
     /// <summary>How many times the journey relaunches Slate for a launch whose
     /// first line lands before UIA's advise. Measured, the share of launches
     /// already advised at their first line ran from one in three (2026-09-22)
-    /// to five in six (2026-09-23), so thirty keeps a run that never finds an
-    /// unadvised launch well under one in a hundred; each costs about a second.</summary>
+    /// to five in six (2026-09-23), and on a busy desktop one run found all
+    /// thirty advised (2026-09-23): the harness flakiness AR-1 names, which
+    /// decides whether this journey sits in the shell gate. Each launch costs
+    /// about a second.</summary>
     private const int MaxAnnouncementLaunches = 30;
 
     /// <summary>Waits until the listener has heard exactly <paramref
