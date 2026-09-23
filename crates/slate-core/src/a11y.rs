@@ -949,8 +949,12 @@ pub enum A11yEvent {
     OutlineCount {
         count: u32,
     },
+    /// The Files filter's result count. W7-7 (#1250): a tag scope never
+    /// shows in the filter field, so it rides along and the count names
+    /// the tag that is filtering.
     FileListCount {
         count: u32,
+        scope_tag: Option<String>,
     },
     ItemsSelected {
         count: u32,
@@ -2118,8 +2122,12 @@ impl A11yEvent {
                     plural(*count, "heading", "headings")
                 )
             }
-            FileListCount { count } => {
-                format!("File list, {count} {}", plural(*count, "item", "items"))
+            FileListCount { count, scope_tag } => {
+                let listed = format!("File list, {count} {}", plural(*count, "item", "items"));
+                match scope_tag {
+                    Some(tag) => format!("{listed}. Filtered by tag {tag}."),
+                    None => listed,
+                }
             }
             ItemsSelected { count } => {
                 format!("{count} {} selected", plural(*count, "item", "items"))
@@ -4069,8 +4077,22 @@ pub fn corpus() -> Vec<A11yEvent> {
         CitationsCount { count: 3 },
         OutlineCount { count: 1 },
         OutlineCount { count: 5 },
-        FileListCount { count: 1 },
-        FileListCount { count: 12 },
+        FileListCount {
+            count: 1,
+            scope_tag: None,
+        },
+        FileListCount {
+            count: 12,
+            scope_tag: None,
+        },
+        FileListCount {
+            count: 1,
+            scope_tag: Some("two words".into()),
+        },
+        FileListCount {
+            count: 0,
+            scope_tag: Some("project alpha".into()),
+        },
         ItemsSelected { count: 4 },
         ItemsSelected { count: 1 },
         NoItemsSelected,
@@ -6345,6 +6367,8 @@ mod tests {
             (Medium, "Outline, 5 headings."),
             (Medium, "File list, 1 item"),
             (Medium, "File list, 12 items"),
+            (Medium, "File list, 1 item. Filtered by tag two words."),
+            (Medium, "File list, 0 items. Filtered by tag project alpha."),
             (Medium, "4 items selected"),
             (Medium, "1 item selected"),
             (Medium, "No items selected"),

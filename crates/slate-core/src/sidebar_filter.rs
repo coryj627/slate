@@ -439,16 +439,59 @@ pub(crate) fn plan(
     Ok(plan)
 }
 
-/// Normative summary strings (spec rule 6). Grouped decimals.
+/// What a tag activation (a tag row, a tag shortcut, an editor tag)
+/// writes into the sidebar filter (W7-7 #1250, contract R-3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarTagFilterActivation {
+    /// The field's text: the query `#tag`, or empty for a scope.
+    pub filter_text: String,
+    /// The out-of-band tag scope, [`plan`]'s `scope_tag`.
+    pub scope_tag: Option<String>,
+}
+
+/// The pure form of mac's `activateSidebarTagScope`
+/// (`AppState.swift`), so no host re-implements the split. A tag the
+/// whitespace-tokenized grammar can express becomes the query `#tag`
+/// — shown in the field, editable, teaching the grammar. One containing
+/// whitespace would re-tokenize into the wrong terms (`#two words` is
+/// the tag `two` AND the name word `words`), so it rides out of band as
+/// the scope and the field empties. "Whitespace" is the tokenizer's own
+/// rule ([`parse_sidebar_filter`]'s `split_whitespace`). A blank tag
+/// activates nothing.
+pub fn sidebar_tag_filter_activation(tag: &str) -> SidebarTagFilterActivation {
+    if tag.trim().is_empty() {
+        return SidebarTagFilterActivation {
+            filter_text: String::new(),
+            scope_tag: None,
+        };
+    }
+    if tag.chars().any(char::is_whitespace) {
+        SidebarTagFilterActivation {
+            filter_text: String::new(),
+            scope_tag: Some(tag.to_string()),
+        }
+    } else {
+        SidebarTagFilterActivation {
+            filter_text: format!("#{tag}"),
+            scope_tag: None,
+        }
+    }
+}
+
+/// Normative summary strings (spec rule 6). Grouped decimals. A scoped
+/// summary names its scope even when nothing matches (W7-7 #1250): a tag
+/// scope never shows in the filter field, so this sentence is where the
+/// reader learns which tag is filtering.
 pub fn sidebar_filter_audio_summary(
     total: u64,
     scope_dir: Option<&str>,
     scope_tag: Option<&str>,
 ) -> String {
-    if total == 0 {
-        return "No results.".to_string();
-    }
-    let counted = count_noun(total, "result", "results");
+    let counted = if total == 0 {
+        "No results".to_string()
+    } else {
+        count_noun(total, "result", "results")
+    };
     if let Some(scope) = scope_dir {
         let folder = scope
             .trim_end_matches('/')
@@ -506,6 +549,58 @@ mod tests {
 
     fn term(query: &str) -> SidebarFilterTerm {
         parse_sidebar_filter(query).unwrap().remove(0).term
+    }
+
+    fn activation(filter_text: &str, scope_tag: Option<&str>) -> SidebarTagFilterActivation {
+        SidebarTagFilterActivation {
+            filter_text: filter_text.to_string(),
+            scope_tag: scope_tag.map(str::to_string),
+        }
+    }
+
+    // W7-7 (#1250, R-3): a tag the grammar can express is the query
+    // `#tag`, which parses back to exactly that one tag term.
+    #[test]
+    fn tag_activation_writes_the_grammar_for_an_expressible_tag() {
+        for tag in ["project", "Project", "a/b", "café", "-draft", "x:y"] {
+            let written = sidebar_tag_filter_activation(tag);
+            assert_eq!(written, activation(&format!("#{tag}"), None), "{tag}");
+            let terms = parse_sidebar_filter(&written.filter_text).unwrap();
+            assert_eq!(terms.len(), 1, "{tag}");
+            assert!(!terms[0].negated, "{tag}");
+            assert_eq!(
+                terms[0].term,
+                SidebarFilterTerm::Tag(crate::tags_db::normalize_tag(tag).unwrap()),
+                "{tag}"
+            );
+        }
+    }
+
+    // A tag with whitespace (frontmatter allows it) would re-tokenize —
+    // `#two words` is the tag `two` AND the name word `words` — so it
+    // rides out of band as the scope, with the field empty. The split is
+    // the tokenizer's own whitespace rule, Unicode included.
+    #[test]
+    fn tag_activation_scopes_a_tag_the_grammar_would_retokenize() {
+        for tag in ["two words", "tab\there", "no\u{a0}break", " padded"] {
+            assert_eq!(
+                sidebar_tag_filter_activation(tag),
+                activation("", Some(tag)),
+                "{tag:?}"
+            );
+            assert!(
+                parse_sidebar_filter(&format!("#{tag}"))
+                    .map(|terms| terms.len() != 1)
+                    .unwrap_or(true),
+                "{tag:?} must be a tag the typed grammar cannot express"
+            );
+        }
+    }
+
+    #[test]
+    fn tag_activation_of_nothing_activates_nothing() {
+        assert_eq!(sidebar_tag_filter_activation(""), activation("", None));
+        assert_eq!(sidebar_tag_filter_activation("   "), activation("", None));
     }
 
     #[test]
@@ -619,6 +714,17 @@ mod tests {
         assert_eq!(
             sidebar_filter_audio_summary(2, None, Some("project alpha")),
             "2 results for #project alpha."
+        );
+        // W7-7 (#1250, R-3): an empty scoped result still names its
+        // scope — a tag scope never shows in the field, so the summary is
+        // where the reader learns which tag is filtering.
+        assert_eq!(
+            sidebar_filter_audio_summary(0, None, Some("project alpha")),
+            "No results for #project alpha."
+        );
+        assert_eq!(
+            sidebar_filter_audio_summary(0, Some("research/papers"), None),
+            "No results in papers."
         );
     }
 

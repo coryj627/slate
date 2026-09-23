@@ -665,14 +665,24 @@
     "text": "Outline, 5 headings."
   },
   {
-    "event": "FileListCount { count: 1 }",
+    "event": "FileListCount { count: 1, scope_tag: None }",
     "priority": "medium",
     "text": "File list, 1 item"
   },
   {
-    "event": "FileListCount { count: 12 }",
+    "event": "FileListCount { count: 12, scope_tag: None }",
     "priority": "medium",
     "text": "File list, 12 items"
+  },
+  {
+    "event": "FileListCount { count: 1, scope_tag: Some(\"two words\") }",
+    "priority": "medium",
+    "text": "File list, 1 item. Filtered by tag two words."
+  },
+  {
+    "event": "FileListCount { count: 0, scope_tag: Some(\"project alpha\") }",
+    "priority": "medium",
+    "text": "File list, 0 items. Filtered by tag project alpha."
   },
   {
     "event": "ItemsSelected { count: 4 }",

@@ -8578,8 +8578,10 @@ pub enum A11yEvent {
     OutlineCount {
         count: u32,
     },
+    /// W7-7 (#1250): the tag scope rides along so the count names it.
     FileListCount {
         count: u32,
+        scope_tag: Option<String>,
     },
     ItemsSelected {
         count: u32,
@@ -10364,7 +10366,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::CitationStyleChanged { title } => C::CitationStyleChanged { title },
             F::CitationsCount { count } => C::CitationsCount { count },
             F::OutlineCount { count } => C::OutlineCount { count },
-            F::FileListCount { count } => C::FileListCount { count },
+            F::FileListCount { count, scope_tag } => C::FileListCount { count, scope_tag },
             F::ItemsSelected { count } => C::ItemsSelected { count },
             F::NoItemsSelected => C::NoItemsSelected,
             F::TreeFolderSelected { name } => C::TreeFolderSelected { name },
@@ -10672,6 +10674,28 @@ pub fn canvas_color_name(color: CanvasColor) -> String {
 #[uniffi::export]
 pub fn count_noun(count: u64, singular: String, plural: String) -> String {
     core::sidebar_filter::count_noun(count, &singular, &plural)
+}
+
+/// W7-7 (#1250, contract R-3): what a tag activation writes into the
+/// sidebar filter — the query `#tag`, or an empty field and the
+/// out-of-band `scope_tag` for a tag containing whitespace.
+#[derive(uniffi::Record)]
+pub struct SidebarTagFilterActivation {
+    pub filter_text: String,
+    pub scope_tag: Option<String>,
+}
+
+/// Core's `sidebar_tag_filter_activation` (`sidebar_filter.rs`): the
+/// split between the typed grammar and the out-of-band scope is core's
+/// tokenizer rule, so a host applies this answer and never decides the
+/// split itself (§W-G).
+#[uniffi::export]
+pub fn sidebar_tag_filter_activation(tag: String) -> SidebarTagFilterActivation {
+    let written = core::sidebar_tag_filter_activation(&tag);
+    SidebarTagFilterActivation {
+        filter_text: written.filter_text,
+        scope_tag: written.scope_tag,
+    }
 }
 
 /// Core Debug identity of the event — the exact string the corpus artifact
