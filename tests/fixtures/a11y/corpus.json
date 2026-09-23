@@ -685,6 +685,11 @@
     "text": "File list, 0 items. Filtered by tag project alpha."
   },
   {
+    "event": "SidebarFilterCleared",
+    "priority": "medium",
+    "text": "Filter cleared."
+  },
+  {
     "event": "ItemsSelected { count: 4 }",
     "priority": "medium",
     "text": "4 items selected"

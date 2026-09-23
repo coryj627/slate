@@ -956,6 +956,10 @@ pub enum A11yEvent {
         count: u32,
         scope_tag: Option<String>,
     },
+    /// Clear Sidebar Filter emptied the Files filter's text and tag scope
+    /// (W7-7 #1250). Windows shows it in the sidebar status line, which
+    /// otherwise kept the cleared filter's summary, and speaks it once.
+    SidebarFilterCleared,
     ItemsSelected {
         count: u32,
     },
@@ -2129,6 +2133,7 @@ impl A11yEvent {
                     None => listed,
                 }
             }
+            SidebarFilterCleared => "Filter cleared.".to_owned(),
             ItemsSelected { count } => {
                 format!("{count} {} selected", plural(*count, "item", "items"))
             }
@@ -4093,6 +4098,7 @@ pub fn corpus() -> Vec<A11yEvent> {
             count: 0,
             scope_tag: Some("project alpha".into()),
         },
+        SidebarFilterCleared,
         ItemsSelected { count: 4 },
         ItemsSelected { count: 1 },
         NoItemsSelected,
@@ -6369,6 +6375,7 @@ mod tests {
             (Medium, "File list, 12 items"),
             (Medium, "File list, 1 item. Filtered by tag two words."),
             (Medium, "File list, 0 items. Filtered by tag project alpha."),
+            (Medium, "Filter cleared."),
             (Medium, "4 items selected"),
             (Medium, "1 item selected"),
             (Medium, "No items selected"),
@@ -7617,8 +7624,9 @@ mod tests {
         assert_eq!(
             declared_variants("A11yEvent").len(),
             // W7-7 (#1249, #1251): NoteSaveConflict and the six
-            // popover/sheet outcome events, 206 → 213.
-            213,
+            // popover/sheet outcome events, 206 → 213; W7-7 #1250
+            // added SidebarFilterCleared, 214.
+            214,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

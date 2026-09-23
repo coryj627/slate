@@ -186,6 +186,7 @@ final class A11yCorpusCensusTests: XCTestCase {
             .fileListCount(count: 12, scopeTag: nil),
             .fileListCount(count: 1, scopeTag: "two words"),
             .fileListCount(count: 0, scopeTag: "project alpha"),
+            .sidebarFilterCleared,
             .itemsSelected(count: 4),
             .itemsSelected(count: 1),
             .noItemsSelected,

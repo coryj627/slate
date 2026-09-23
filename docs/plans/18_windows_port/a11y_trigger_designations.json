@@ -257,6 +257,11 @@
         "reason": "W7-7 (#1251): the Windows citation details sheet opens on Close, where its name is not read, so a key no bibliography holds announces as unresolved, in mac CitationPopover's own label sentence moved into core. Mac carries that sentence as the popover's accessibility label and moves VoiceOver focus to the unresolved notice on appear; Mac constructs no such event in this wave and its owner decides. Current Windows evidence is hosted (`OpeningCitationDetailsAnnouncesTheExpandedCitation`); no journey opens an unresolved key's details, and none observes its delivery until PR 1's desktop listener (#1244).",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
+      },
+      "SidebarFilterCleared": {
+        "reason": "W7-7 R-3 (#1250, codex PR 2 round 1): Windows keeps one always-visible sidebar status line, so Clear Sidebar Filter replaces the cleared filter's summary with this sentence and speaks it once. Mac's filter overlay, with its summary, disappears on Escape, which stays silent; no Mac construction site.",
+        "decision": "docs/plans/15_files_sidebar/specs/fl4_spec.md",
+        "status": "proposed"
       }
     }
   },

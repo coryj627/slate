@@ -55,8 +55,11 @@ internal sealed partial class FilesSidebarViewModel
             {
                 // W7-7 (R-3): typing narrows WITHIN a tag scope (core ANDs
                 // the query with scope_tag); emptying the field is the
-                // user's clear, and the scope goes with the text.
-                if (string.IsNullOrWhiteSpace(value) && _scopeTag is not null)
+                // user's clear, and the scope goes with the text. Only an
+                // EMPTY field clears: a whitespace-only edit (a leading
+                // space before the words) keeps the scope, and core runs
+                // the trimmed query inside it (codex PR 2 round 1).
+                if (string.IsNullOrEmpty(value) && _scopeTag is not null)
                 {
                     _scopeTag = null;
                     OnPropertyChanged(nameof(ScopeTag));
@@ -110,7 +113,34 @@ internal sealed partial class FilesSidebarViewModel
         RaiseCommandStates();
     }
 
-    private void ClearFilter() => ApplyTagActivation(string.Empty, scopeTag: null);
+    /// <summary>Clear Sidebar Filter: the text and the scope in one change.
+    /// No filter run follows an empty, unscoped field, so the clear speaks
+    /// for itself (W7-7 R-3, codex PR 2 round 1): the status line — which
+    /// still carried the cleared filter's summary — shows core's
+    /// SidebarFilterCleared sentence, and that event is announced once.
+    /// The listener heard the filter end, so the next filter, even the
+    /// same one again, is news: the count de-duplication starts
+    /// over.</summary>
+    private void ClearFilter()
+    {
+        if (!IsFilterActive && FilterText.Length == 0)
+        {
+            return;
+        }
+
+        ApplyTagActivation(string.Empty, scopeTag: null);
+        var cleared = new A11yEvent.SidebarFilterCleared();
+        Status = SlateUniffiMethods.A11yRender(cleared).Text;
+        if (IsRefreshingTree)
+        {
+            // A tree republication in flight would otherwise restore the
+            // status it captured — the one this replaces.
+            _statusToReassert = Status;
+        }
+
+        _lastFilterAnnouncement = null;
+        _announce(cleared);
+    }
 
     private void ScheduleFilter(bool automatic = false)
     {
