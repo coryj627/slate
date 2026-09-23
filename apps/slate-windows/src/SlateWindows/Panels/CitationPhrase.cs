@@ -227,14 +227,13 @@ internal static class CitationPhrase
 
     public const string DetailsUnresolvedHeading = "Citation key not found";
 
+    /// <summary>The visible body. Its SPOKEN form differs deliberately (mac
+    /// parity: it names the state first and says "This key" where the
+    /// visible text quotes it) and is core's since W7-7 R-8
+    /// (<c>A11yEvent.CitationDetailsUnresolved</c>), because it is both the
+    /// sheet's name and its opening announcement.</summary>
     public static string DetailsUnresolvedBody(string key) =>
         $"'{key}' isn't in any bibliography source.";
-
-    /// <summary>Visible body and spoken body differ deliberately (mac
-    /// parity): the spoken form names the state first and uses "This
-    /// key" where the visible text quotes it.</summary>
-    public static string DetailsUnresolvedSpoken(string key) =>
-        $"Unresolved citation: {key}. This key isn't in any bibliography source.";
 
     /// <summary>
     /// Windows ADDITION (D-14): the container label for the details

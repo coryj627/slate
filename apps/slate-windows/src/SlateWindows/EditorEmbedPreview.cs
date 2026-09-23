@@ -125,6 +125,11 @@ internal sealed class EditorEmbedPreviewView : ContentControl
                 {
                     Text = part.Text,
                     IsReadOnly = true,
+                    // W7-7 (#1251, R-8): WPF disables caret navigation in a
+                    // read-only TextBox whose caret is hidden, so Down fell
+                    // through to the scroll host and a reader heard line 1
+                    // again. Reading/ReadingSurface is the precedent.
+                    IsReadOnlyCaretVisible = true,
                     AcceptsReturn = true,
                     TextWrapping = TextWrapping.Wrap,
                     BorderThickness = new Thickness(0),

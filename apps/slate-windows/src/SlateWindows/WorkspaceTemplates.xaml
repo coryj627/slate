@@ -491,11 +491,15 @@
                                    FontWeight="SemiBold"
                                    AutomationProperties.HeadingLevel="Level2" />
                         <StackPanel Grid.Row="1" Margin="0,10,0,10">
+                            <!-- W7-7 (#1251, R-8): not a focus stop of its own. Its
+                                 read-only text keeps a caret, and a focusable host
+                                 took the arrows for scrolling, so a reader heard
+                                 line 1 again; the caret now scrolls it. -->
                             <ScrollViewer MaxWidth="560"
                                           MaxHeight="300"
                                           VerticalScrollBarVisibility="Auto"
                                           HorizontalScrollBarVisibility="Disabled"
-                                          Focusable="True"
+                                          Focusable="False"
                                           KeyboardNavigation.TabIndex="2"
                                           AutomationProperties.Name="Scrollable embed preview"
                                           Visibility="{Binding EditorInteractions.HasPopoverEmbed, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -519,6 +523,7 @@
                                          TextWrapping="Wrap"
                                          AcceptsReturn="True"
                                          IsReadOnly="True"
+                                         IsReadOnlyCaretVisible="True"
                                          VerticalScrollBarVisibility="Auto"
                                          AutomationProperties.Name="Preview content" />
                             </StackPanel>

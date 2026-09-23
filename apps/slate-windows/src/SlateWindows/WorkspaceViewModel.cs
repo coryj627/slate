@@ -679,9 +679,25 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                     is VaultException.WriteConflict
                     or VaultException.DestinationExists);
             leaseSettled = true;
-            Status = $"Save blocked: {exception.Message}";
+            String filename = System.IO.Path.GetFileName(Path);
+            if (exception is VaultException.WriteConflict)
+            {
+                // W7-7 R-7 (#1249; contract 38 D-10 as amended, OD-5): a
+                // conflict speaks core's sentence and shows the same one.
+                // The binding's message for it is two content hashes and a
+                // modification time, which nobody should hear or read.
+                var conflict = new A11yEvent.NoteSaveConflict(filename);
+                Status = SlateUniffiMethods.A11yRender(conflict).Text;
+                _documentChanged?.Invoke(this, null);
+                _announce(conflict);
+                return false;
+            }
+            // R-7: any other failure keeps its detail, as text rather than
+            // the binding's field-labelled message ("@message=…").
+            string detail = VaultErrorText.HumanReadable(exception);
+            Status = $"Save blocked: {detail}";
             _documentChanged?.Invoke(this, null);
-            _announce(new A11yEvent.NoteSaveBlocked(System.IO.Path.GetFileName(Path), exception.Message));
+            _announce(new A11yEvent.NoteSaveBlocked(filename, detail));
             return false;
         }
         finally

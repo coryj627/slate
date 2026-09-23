@@ -39,6 +39,11 @@ internal sealed class CitationDetailsViewModel : BindableBase
 {
     private bool _abstractExpanded;
 
+    /// <summary>The opening announcement (W7-7 R-8): the expanded entry's
+    /// title, or — for a key no bibliography holds — core's unresolved
+    /// outcome, which is also this sheet's name.</summary>
+    private readonly A11yEvent _shown;
+
     private CitationDetailsViewModel(
         IReadOnlyList<CitationField> fields,
         string? abstractText,
@@ -46,6 +51,7 @@ internal sealed class CitationDetailsViewModel : BindableBase
         string unresolvedKey,
         string entryKey,
         string automationName,
+        A11yEvent shown,
         object? returnFocusToken)
     {
         Fields = fields;
@@ -54,6 +60,7 @@ internal sealed class CitationDetailsViewModel : BindableBase
         UnresolvedKey = unresolvedKey;
         EntryKey = entryKey;
         AutomationName = automationName;
+        _shown = shown;
         ReturnFocusToken = returnFocusToken;
     }
 
@@ -78,10 +85,17 @@ internal sealed class CitationDetailsViewModel : BindableBase
 
     public string UnresolvedKey { get; }
 
-    /// <summary>The overlay's container name — the speech surface.
-    /// Opening the overlay announces NOTHING; this label is what AT
-    /// reads on focus (§2.6).</summary>
+    /// <summary>The overlay's container name, for a reader that asks where
+    /// it is. The overlay opens on Close, and a screen reader does not read
+    /// a pane's name when focus lands inside it, so
+    /// <see cref="SheetShown"/> announces the outcome instead (W7-7 R-8,
+    /// reversing §2.6's silent open).</summary>
     public string AutomationName { get; }
+
+    /// <summary>W7-7 R-8 (#1251): called by the workspace once the
+    /// overlay is shown, the AddPropertySheet shape. Construction stays
+    /// silent: an overlay that is never shown says nothing.</summary>
+    internal void SheetShown(Action<A11yEvent> announce) => announce(_shown);
 
     /// <summary>Identity of the row that opened this overlay, so
     /// Escape can return focus exactly there (contract 11).</summary>
@@ -143,18 +157,24 @@ internal sealed class CitationDetailsViewModel : BindableBase
                 unresolvedKey: "",
                 entryKey: entry.Key,
                 automationName: CitationPhrase.DetailsSummary(entry.Title),
+                shown: new A11yEvent.CitationDetailsShown(entry.Title),
                 returnFocusToken);
         }
         string key = reference.Citations.Length > 0
             ? reference.Citations[0].Key
             : reference.Raw;
+        // Nothing was expanded, so the sheet says the key is unresolved —
+        // core's sentence, which is also the sheet's name (W7-7 R-8), so
+        // the name and the announcement are one rendering.
+        var unresolved = new A11yEvent.CitationDetailsUnresolved(key);
         return new CitationDetailsViewModel(
             [],
             abstractText: null,
             isUnresolved: true,
             unresolvedKey: key,
             entryKey: key,
-            automationName: CitationPhrase.DetailsUnresolvedSpoken(key),
+            automationName: SlateUniffiMethods.A11yRender(unresolved).Text,
+            shown: unresolved,
             returnFocusToken);
     }
 
@@ -170,6 +190,7 @@ internal sealed class CitationDetailsViewModel : BindableBase
             unresolvedKey: "",
             entryKey: entry.Key,
             automationName: CitationPhrase.DetailsSummary(entry.Title),
+            shown: new A11yEvent.CitationDetailsShown(entry.Title),
             returnFocusToken);
 
     /// <summary>Mac's field order, with every optional row omitted

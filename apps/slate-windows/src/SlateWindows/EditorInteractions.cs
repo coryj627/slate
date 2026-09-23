@@ -1302,12 +1302,19 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             link));
         return true;
     }
+    /// <summary><paramref name="Resolved"/> is false when the embed resolved
+    /// to nothing (W7-7 R-8). The preview then announces as unavailable
+    /// from <paramref name="UnresolvedReason"/>, the resolver's own reason
+    /// (null for a shape this host does not render): core words it, and the
+    /// card's text never reaches speech.</summary>
     private sealed record EmbedPreviewContent(
         string Title,
         string Body,
         string? SourcePath,
         ImageSource? Image,
-        EditorEmbedPreviewNode Root);
+        EditorEmbedPreviewNode Root,
+        bool Resolved,
+        EmbedUnresolvedReason? UnresolvedReason);
 
     private void ResolveEmbedPreview(
         int generation,
@@ -1378,15 +1385,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
         _embedRequestKey = null;
         _activeEmbedRequestKey = requestKey;
-        if (content is null)
+        // W7-7 R-8 (#1251): the outcome is announced here, when the result
+        // lands — focus has sat on Close since the open, where the pane's
+        // name is not read, and announcing at open would have said
+        // "Loading". A superseded result returned above, unspoken.
+        if (content is null || !content.Resolved)
         {
-            PopoverTitle = $"Embed preview unavailable — source line {sourceLine}";
-            PopoverBody = "The embedded content could not be resolved.";
-            PopoverAutomationName =
-                $"Embed preview for {targetRaw}, source line {sourceLine}, unavailable.";
-            PopoverImage = null;
-            PopoverEmbedRoot = null;
-            PopoverSourcePath = null;
+            // A null content is a resolve that failed outright: there is
+            // no reason to hand core.
+            PresentUnavailableEmbed(targetRaw, sourceLine, content?.UnresolvedReason);
             return;
         }
 
@@ -1397,6 +1404,43 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         PopoverImage = content.Image;
         PopoverEmbedRoot = content.Root;
         PopoverSourcePath = content.SourcePath;
+        _announce(new A11yEvent.EmbedPreviewShown(targetRaw, content.Title));
+    }
+
+    /// <summary>The whole unavailable outcome (W7-7 R-8): core words it
+    /// from the resolver's semantic reason, and the popover's body and
+    /// name ARE that rendering. The text a reader lands on, the name a
+    /// reader asks for and the announcement cannot drift apart, and none
+    /// of them is host copy — the card's Describe wording stays on the
+    /// embeds leaf and nested cards, off this surface.</summary>
+    private void PresentUnavailableEmbed(
+        string targetRaw,
+        int sourceLine,
+        EmbedUnresolvedReason? reason)
+    {
+        var unavailable = new A11yEvent.EmbedPreviewUnavailable(targetRaw, reason);
+        string sentence = SlateUniffiMethods.A11yRender(unavailable).Text;
+        PopoverTitle = $"Embed preview unavailable — source line {sourceLine}";
+        PopoverBody = sentence;
+        PopoverAutomationName = sentence;
+        PopoverImage = null;
+        PopoverEmbedRoot = null;
+        PopoverSourcePath = null;
+        _announce(unavailable);
+    }
+
+    /// <summary>W7-7 R-8 test seam: the unavailable surface through the
+    /// same presenter the publish uses, for the reasons a top-level
+    /// preview cannot produce through the resolver (the depth limit, and a
+    /// resolve that fails outright).</summary>
+    internal void PresentUnavailableEmbedForTests(
+        string targetRaw,
+        int sourceLine,
+        EmbedUnresolvedReason? reason)
+    {
+        ThrowIfDisposed();
+        OpenPopover(requestFocus: false);
+        PresentUnavailableEmbed(targetRaw, sourceLine, reason);
     }
 
     private static EmbedPreviewContent BuildEmbedPreview(
@@ -1431,7 +1475,12 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             body,
             root.SourcePath,
             root.Image,
-            root);
+            root,
+            Resolved: resolution is EmbedResolution.FullNote
+                or EmbedResolution.Section
+                or EmbedResolution.Block
+                or EmbedResolution.Image,
+            UnresolvedReason: (resolution as EmbedResolution.Unresolved)?.Reason);
     }
 
     /// <summary>The decoded-pixel bound for one built card (W4-2
@@ -1674,17 +1723,25 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         _hoveredCitationByteOffset = requestPopoverFocus
             ? null
             : checked((int)byteOffset);
+        // W7-7 R-8 (#1251): core renders the whole sentence from the
+        // preview's speech exactly as it arrived, prefix rule included, and
+        // the popover's name IS that rendering — the host neither composes
+        // nor doubles "Citation. ", and name and announcement cannot drift.
+        var shown = new A11yEvent.CitationPopoverShown(preview.Speech);
         PopoverTitle = "Citation";
         PopoverBody = preview.Body;
-        PopoverAutomationName = preview.Speech.StartsWith(
-            "Citation",
-            StringComparison.OrdinalIgnoreCase)
-                ? preview.Speech
-                : $"Citation. {preview.Speech}";
+        PopoverAutomationName = SlateUniffiMethods.A11yRender(shown).Text;
         PopoverImage = null;
         PopoverEmbedRoot = null;
         PopoverSourcePath = null;
         OpenPopover(requestPopoverFocus);
+        if (requestPopoverFocus)
+        {
+            // An activation lands focus on Close, where the popover's name
+            // is not read, so the outcome is announced. A pointer hover is
+            // not spoken over: hover keeps its unavailable states silent too.
+            _announce(shown);
+        }
     }
 
     private bool TryToggleTaskAt(int utf16Offset, EditorInteractionOrigin origin)
