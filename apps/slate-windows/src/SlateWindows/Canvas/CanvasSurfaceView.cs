@@ -138,6 +138,11 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // untrue sentence the Tab claim was.
         KeyboardNavigation.SetDirectionalNavigation(
             _switcher, KeyboardNavigationMode.Cycle);
+        // …and an arrow CHOOSES (W7-7 PR 4, #1247, R-5): WPF's radios
+        // moved focus alone, so Right on Outline landed on Table while
+        // the outline stayed on screen and checked — a screen reader
+        // announced a projection the canvas had not switched to.
+        RadioGroupArrows.SetIsEnabled(_switcher, true);
 
         // The filter field (t0 §3: the filter's state is READABLE — the
         // field's value plus a result summary element — never
