@@ -285,7 +285,13 @@ internal sealed class ConnectionsLeafView : UserControl
         _summary = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
         AutomationProperties.SetAutomationId(_summary, "ConnectionsSummary");
 
-        _depth = new ComboBox { Margin = new Thickness(0, 8, 0, 8), ItemsSource = ConnectionsPhrase.DepthTags };
+        _depth = new ComboBox
+        {
+            Margin = new Thickness(0, 8, 0, 8),
+            ItemsSource = ConnectionsPhrase.DepthTags,
+            // R-4 (#1246): every items host names its containers.
+            ItemContainerStyle = ItemContainerNames.BySelf(typeof(ComboBoxItem)),
+        };
         AutomationProperties.SetAutomationId(_depth, "ConnectionsDepth");
         AutomationProperties.SetName(_depth, ConnectionsPhrase.DepthName);
         AutomationProperties.SetHelpText(_depth, ConnectionsPhrase.DepthHint);
