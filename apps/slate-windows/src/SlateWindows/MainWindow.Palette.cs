@@ -36,6 +36,7 @@ public partial class MainWindow
     {
         CommandPaletteViewModel palette = _viewModel.Palette;
         palette.PropertyChanged += Palette_PropertyChanged;
+        palette.PropertyChanged += ModalSource_PropertyChanged;
         palette.SearchFocusRequested += Palette_SearchFocusRequested;
         _paletteResults = new CommandPaletteResultsPresenter(CommandPaletteResultsList, palette);
     }

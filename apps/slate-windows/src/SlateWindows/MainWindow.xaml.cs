@@ -276,6 +276,7 @@ public partial class MainWindow : Window
             _observedFileSidebar.TreeSelectionRestored -=
                 FileSidebar_TreeSelectionRestored;
             _observedFileSidebar.PropertyChanged -= FileSidebar_MoveToSheetChanged;
+            _observedFileSidebar.PropertyChanged -= ModalSource_PropertyChanged;
             _observedFileSidebar.MoveToOpenAdmission = null;
             _observedFileSidebar.MoveToOwnsModal = null;
         }
@@ -296,6 +297,7 @@ public partial class MainWindow : Window
             sidebar.MoveToOwnsModal = () => ReferenceEquals(_observedFileSidebar, sidebar)
                 && OpenModalSurface == ModalSurface.MoveTo;
             sidebar.PropertyChanged += FileSidebar_MoveToSheetChanged;
+            sidebar.PropertyChanged += ModalSource_PropertyChanged;
         }
 
         // A vault transition mid-pick never runs the restore (the sheet
@@ -376,6 +378,7 @@ public partial class MainWindow : Window
         {
             _observedWorkspace.EditorPaneFocusRequested -= Workspace_EditorPaneFocusRequested;
             _observedWorkspace.PropertyChanged -= Workspace_CanvasSheetChanged;
+            _observedWorkspace.PropertyChanged -= ModalSource_PropertyChanged;
             UnwireWorkspaceProperties(_observedWorkspace);
             UnwireWorkspaceCitations(_observedWorkspace);
             UnwireWorkspaceBases(_observedWorkspace);
@@ -388,6 +391,7 @@ public partial class MainWindow : Window
         {
             workspace.EditorPaneFocusRequested += Workspace_EditorPaneFocusRequested;
             workspace.PropertyChanged += Workspace_CanvasSheetChanged;
+            workspace.PropertyChanged += ModalSource_PropertyChanged;
             WireWorkspaceProperties(workspace);
             WireWorkspaceCitations(workspace);
             WireWorkspaceBases(workspace);
@@ -477,6 +481,7 @@ public partial class MainWindow : Window
         if (_observedQuickSwitcher is not null)
         {
             _observedQuickSwitcher.PropertyChanged -= QuickSwitcher_PropertyChanged;
+            _observedQuickSwitcher.PropertyChanged -= ModalSource_PropertyChanged;
             _observedQuickSwitcher.OpenRequested -= QuickSwitcher_OpenRequested;
         }
 
@@ -484,6 +489,7 @@ public partial class MainWindow : Window
         if (switcher is not null)
         {
             switcher.PropertyChanged += QuickSwitcher_PropertyChanged;
+            switcher.PropertyChanged += ModalSource_PropertyChanged;
             switcher.OpenRequested += QuickSwitcher_OpenRequested;
         }
     }

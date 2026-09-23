@@ -610,17 +610,18 @@ internal sealed partial class WorkspaceViewModel
         // A newer press CANCELS a held one (R-10): withdrawn — no line, no
         // fall-through, and the host lets go of it — so a late completion can
         // never finish a second traversal. The ring stands on the held region:
-        // while its landing is still held and focus is where the held press
-        // left it, the new press goes on from THAT ring position in its own
-        // direction (F6 → the region after the editor, Shift+F6 → the tab
-        // bar) and never asks it again. A landing the region already let go
-        // of (it completed, the view changed), or one the reader walked away
-        // from, holds no position: the press starts from where focus is.
+        // while the host still held its landing, with the reader exactly
+        // where the held press left them, the new press goes on from THAT
+        // ring position in its own direction (F6 → the region after the
+        // editor, Shift+F6 → the tab bar) and never asks it again. A landing
+        // the host already let go of — it completed, the view changed, the
+        // reader moved, even within one region — holds no position: the
+        // press starts from where focus is.
         ShellRegionKind? from = host.FocusedRegion();
         if (_heldShellRegionPress is { } held)
         {
             _heldShellRegionPress = null;
-            if (host.WithdrawHeldLanding() && from == held.Origin)
+            if (host.WithdrawHeldLanding())
             {
                 from = held.Region;
             }
@@ -633,13 +634,29 @@ internal sealed partial class WorkspaceViewModel
     /// holding. Its completions act only while it is still this.</summary>
     private HeldShellRegionPress? _heldShellRegionPress;
 
-    /// <summary>A press's landing attempt: the region it asked, and — once
-    /// that region answered Pending — where focus stood while it held.</summary>
+    /// <summary>A press's landing attempt: the region it asked.</summary>
     private sealed class HeldShellRegionPress(ShellRegionKind region)
     {
         public ShellRegionKind Region { get; } = region;
+    }
 
-        public ShellRegionKind? Origin { get; set; }
+    /// <summary>W7-7 PR 8 (R-10): the F6 ring holds a landing.</summary>
+    internal bool HoldsShellRegionLanding => _heldShellRegionPress is not null;
+
+    /// <summary>W7-7 PR 8 (R-10): let go of the landing the F6 ring holds —
+    /// silently, and synchronously, before anything else moves: another
+    /// route is putting the reader somewhere (the editor-focus funnel behind
+    /// every open, tab switch and pane move; a modal surface opening), so the
+    /// ring's late completion must neither seat focus nor speak.</summary>
+    internal void WithdrawHeldShellRegionLanding()
+    {
+        if (_heldShellRegionPress is null)
+        {
+            return;
+        }
+
+        _heldShellRegionPress = null;
+        _ = ShellRegionHost?.WithdrawHeldLanding();
     }
 
     /// <summary>The press's traversal from <paramref name="current"/>, at most
@@ -670,9 +687,16 @@ internal sealed partial class WorkspaceViewModel
                 target,
                 () =>
                 {
-                    if (ReferenceEquals(_heldShellRegionPress, press))
+                    if (!ReferenceEquals(_heldShellRegionPress, press))
                     {
-                        _heldShellRegionPress = null;
+                        return;
+                    }
+
+                    _heldShellRegionPress = null;
+                    // W7-6 §4's modal rule: a modal surface owns the keys, so
+                    // a success arriving under one is not spoken.
+                    if (!host.ModalSurfaceOpen)
+                    {
                         AnnounceShellRegion(target, host);
                     }
                 },
@@ -691,7 +715,6 @@ internal sealed partial class WorkspaceViewModel
                 // resumes here if the landing is refused, and a withdrawn
                 // landing does neither; moving on now would land a second
                 // region under the held one.
-                press.Origin = host.FocusedRegion();
                 return;
             }
 
@@ -909,6 +932,11 @@ internal sealed partial class WorkspaceViewModel
     /// </summary>
     internal void RequestActiveEditorFocus()
     {
+        // W7-7 PR 8 (R-10): this request supersedes a landing the F6 ring
+        // holds — in this pane or in the one it leaves — so that landing is
+        // withdrawn NOW, before its content can arrive ahead of this request's
+        // own (queued) landing and seat focus there.
+        WithdrawHeldShellRegionLanding();
         // Addressed to the tab that asked: one document serves every
         // pane on the path, and an unaddressed request lands focus in
         // all of them.

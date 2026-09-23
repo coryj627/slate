@@ -329,6 +329,12 @@ internal sealed class ReadingSurface : RichTextBox
         {
             ApplyModel();
         }
+        else if (e.PropertyName is nameof(ReadingContentViewModel.RefreshInFlight)
+            && _focusLandingPending
+            && _model is { RefreshInFlight: false })
+        {
+            ScheduleSettledLanding();
+        }
     }
 
     /// <summary>
@@ -352,10 +358,10 @@ internal sealed class ReadingSurface : RichTextBox
     private FlowDocument? _lastMerged;
     private IReadOnlyList<ReadingLandmark> _landmarks = Array.Empty<ReadingLandmark>();
     private bool _focusLandingPending;
-    private IInputElement? _focusLandingOrigin;
+    private object? _focusLandingToken;
     private Action? _focusLandingAnnouncement;
     private Action? _focusLandingRefusal;
-    private int _focusLandingRequest;
+    private FocusDepartureWatch? _focusLandingDeparture;
 
     internal IReadOnlyList<ReadingLandmark> LandmarksForTests => _landmarks;
 
@@ -369,10 +375,9 @@ internal sealed class ReadingSurface : RichTextBox
         {
             ApplyBuiltDocument(built);
             _lastMerged = built;
-            // After the merge: the landing asked for while the placeholder
-            // showed arrives with the content, and only if one is held — the
-            // apply path never claims focus on its own.
-            DeliverFocusLanding();
+            // No landing here: the apply path never claims focus. A landing
+            // held for this projection is delivered by the settle of the
+            // refresh that published it (ScheduleSettledLanding).
         }
     }
 
@@ -451,12 +456,15 @@ internal sealed class ReadingSurface : RichTextBox
     /// W7-7 PR 8 (#1253, contract R-10): the shell's editor landing for a
     /// reading-mode tab — <c>MainWindow.FocusEditorPane</c>'s reading arm,
     /// behind Ctrl+Shift+E, F6/Shift+F6, tab cycling, Quick Open and the
-    /// dismissal fallbacks. A surface showing its model's applied projection —
-    /// an empty note's included — takes focus NOW and keeps the caret where
-    /// the rebind restore or the merge seated it. A surface still showing the loading placeholder HOLDS the
-    /// landing for the merge that brings the content: focused early, NVDA
-    /// reads the placeholder (or "blank") and never re-reads what replaces
-    /// it. A held landing calls <paramref name="announceWhenHeldLandingArrives"/>
+    /// dismissal fallbacks. A surface showing its model's CURRENT projection —
+    /// applied, with no refresh of it in flight; an empty note's included —
+    /// takes focus NOW and keeps the caret where the rebind restore or the
+    /// merge seated it. A surface still showing the loading placeholder, or a
+    /// projection a refresh in flight is about to replace (the reader left
+    /// reading mode, edited the note, and came back), HOLDS the landing until
+    /// that refresh settles: focused early, NVDA reads the placeholder (or
+    /// "blank", or the obsolete text) and never re-reads what replaces it. A
+    /// held landing calls <paramref name="announceWhenHeldLandingArrives"/>
     /// once focus is really here (the F6 ring's deferred line), or
     /// <paramref name="fallThroughWhenHeldLandingRefused"/> when the content
     /// arrives and focus cannot be taken (the F6 ring moves on); a withdrawn
@@ -479,7 +487,7 @@ internal sealed class ReadingSurface : RichTextBox
             // the reader's place outranks a re-seat.
             return true;
         }
-        if (!ShowsAppliedProjection)
+        if (!ShowsAppliedProjection || _model is { RefreshInFlight: true })
         {
             HoldFocusLanding(announceWhenHeldLandingArrives, fallThroughWhenHeldLandingRefused);
             return true;
@@ -498,33 +506,54 @@ internal sealed class ReadingSurface : RichTextBox
     /// <summary>The merged document is the model's terminal-failure notice.</summary>
     private bool ShowsFailureNotice => _model is { PublishedFailureNotice: true };
 
+    /// <summary>Hold the landing. The reader's leaving is latched from the
+    /// element this request found them on (<see cref="FocusDepartureWatch"/>):
+    /// a move they — or another route — make withdraws the landing at once,
+    /// and coming back does not revive it.</summary>
     private void HoldFocusLanding(Action? announceWhenLanded, Action? fallThroughWhenRefused)
     {
         _focusLandingPending = true;
-        _focusLandingOrigin = System.Windows.Input.Keyboard.FocusedElement;
+        _focusLandingToken = new object();
         _focusLandingAnnouncement = announceWhenLanded;
         _focusLandingRefusal = fallThroughWhenRefused;
-        int request = ++_focusLandingRequest;
-        // Re-read where the reader is once the moves already queued behind
-        // this request have run — WPF's recovery off a view the toggle just
-        // collapsed, a closing overlay's restore — so a later departure is
-        // judged from there, not from an element that was on its way out.
+        _focusLandingDeparture = new FocusDepartureWatch(this, WithdrawFocusLanding);
+    }
+
+    /// <summary>R-10: the refresh the landing waits on settled — the ONE
+    /// delivery path. Posted behind the publish that settled it, so whatever
+    /// that publish merged (a new projection, the failure notice) is on
+    /// screen first; a publish that found the note drifted and refreshed
+    /// again leaves a refresh in flight, and the landing keeps waiting for
+    /// that one. A refresh that failed refuses the landing; any other lands
+    /// it — on the merged projection, or on the unchanged one (a memo hit
+    /// merges nothing), the caret wherever the merge left it.</summary>
+    private void ScheduleSettledLanding() =>
         _ = Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Background,
             () =>
             {
-                if (_focusLandingPending && request == _focusLandingRequest)
+                if (!_focusLandingPending || _model is not { RefreshInFlight: false } model)
                 {
-                    _focusLandingOrigin = System.Windows.Input.Keyboard.FocusedElement;
+                    return;
                 }
+
+                if (model.LastRefreshFailed)
+                {
+                    Action? refuse = _focusLandingRefusal;
+                    WithdrawFocusLanding();
+                    refuse?.Invoke();
+                    return;
+                }
+
+                DeliverFocusLanding();
             });
-    }
 
     /// <summary>Let go of the held landing that <paramref name="owner"/>
     /// (its announcement) was requested with — a newer F6 press cancels it —
     /// and of nothing a later request holds. Answers whether it was still
-    /// wanted: held for that owner, and focus still where the request found
-    /// it.</summary>
+    /// held: the reader's leaving withdraws it at once, so a landing still
+    /// held for that owner has the reader exactly where its request found
+    /// them.</summary>
     internal bool CancelFocusLanding(Action owner)
     {
         if (!_focusLandingPending || !ReferenceEquals(_focusLandingAnnouncement, owner))
@@ -532,22 +561,19 @@ internal sealed class ReadingSurface : RichTextBox
             return false;
         }
 
-        bool wanted = !FocusLeft(_focusLandingOrigin);
         WithdrawFocusLanding();
-        return wanted;
+        return true;
     }
 
-    /// <summary>Focus has left where a held landing's request found it, for
-    /// somewhere still shown — the reader's move. A move off an origin that
-    /// is no longer shown was WPF's recovery, not the reader's.</summary>
-    private static bool FocusLeft(IInputElement? origin) =>
-        !ReferenceEquals(System.Windows.Input.Keyboard.FocusedElement, origin)
-        && origin is not UIElement { IsVisible: false };
-
-    /// <summary>R-10: the bound model was torn down (its tab navigated in
-    /// place or closed) before its projection applied. No apply is coming,
-    /// so a held landing is REFUSED — the F6 ring resumes past the editor —
-    /// rather than stranded.</summary>
+    /// <summary>R-10: the bound model was torn down before its projection
+    /// applied, so no apply is coming. A teardown almost always travels with
+    /// a move that ends the landing itself — the tab navigated in place (a
+    /// rebind) or closed (a rebind or an unload), and those CANCEL it — so
+    /// the outcome is decided once that move has run: if THIS landing is
+    /// still the one held (nothing cancelled or replaced it; the surface is
+    /// still bound to the torn-down model), it is REFUSED and the F6 ring
+    /// resumes past the editor; otherwise the callback is stale and does
+    /// nothing. One terminal transition per landing, in either order.</summary>
     private void Model_TornDown()
     {
         if (!_focusLandingPending)
@@ -555,36 +581,48 @@ internal sealed class ReadingSurface : RichTextBox
             return;
         }
 
+        object? token = _focusLandingToken;
         Action? refuse = _focusLandingRefusal;
-        WithdrawFocusLanding();
-        refuse?.Invoke();
+        _ = Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Background,
+            () =>
+            {
+                if (!ReferenceEquals(_focusLandingToken, token))
+                {
+                    return;
+                }
+
+                WithdrawFocusLanding();
+                refuse?.Invoke();
+            });
     }
 
     private void WithdrawFocusLanding()
     {
         _focusLandingPending = false;
-        _focusLandingOrigin = null;
+        _focusLandingToken = null;
         _focusLandingAnnouncement = null;
         _focusLandingRefusal = null;
+        _focusLandingDeparture?.Dispose();
+        _focusLandingDeparture = null;
     }
 
     /// <summary>
-    /// A held landing lands with the model's first applied projection, the
-    /// caret at the start (the placeholder's park is no reader's place), and
+    /// A held landing lands with the projection it waited for — the first
+    /// applied one (the placeholder's caret park maps to its start), or the
+    /// one the refresh in flight settled on (the reader's place kept) — and
     /// only then speaks its announcement. An empty note's merge delivers too:
     /// the empty document is the note, like the ring's empty editor pane.
-    /// When the landing cannot be taken — the load failed and only its notice
-    /// arrived, or focus is refused (or, before any apply, the model was torn
-    /// down: <see cref="Model_TornDown"/>) — it is REFUSED: the caller falls through
-    /// (the F6 ring moves on from the editor's position) and nothing is
-    /// spoken. It is WITHDRAWN, with neither, when focus left where the
-    /// request found it — the reader took another region, tab or window
-    /// while the content was arriving, and a request is not a claim. A move
-    /// off an origin that is no longer shown was WPF's recovery, not the
-    /// reader's, and the landing stands. (Hidden, which includes unloaded,
-    /// and rebinding withdraw it outright: the view left under a move the
-    /// reader or the shell made, and falling through over it would pull focus
-    /// away from where that move put it.)
+    /// When the landing cannot be taken — the refresh failed (<see
+    /// cref="ScheduleSettledLanding"/>), focus is refused, or before any apply
+    /// the model was torn down (<see cref="Model_TornDown"/>) — it is REFUSED:
+    /// the caller falls through (the F6 ring moves on from the editor's
+    /// position) and nothing is spoken. It is WITHDRAWN, with neither, the
+    /// moment the reader leaves where its request found them (<see
+    /// cref="FocusDepartureWatch"/>), and when the surface is hidden (unloaded
+    /// included) or rebinds: the view left under a move the reader or the
+    /// shell made, and falling through over it would pull focus away from
+    /// where that move put it.
     /// </summary>
     private void DeliverFocusLanding()
     {
@@ -592,7 +630,6 @@ internal sealed class ReadingSurface : RichTextBox
         {
             return;
         }
-        IInputElement? origin = _focusLandingOrigin;
         Action? announce = _focusLandingAnnouncement;
         Action? refuse = _focusLandingRefusal;
         WithdrawFocusLanding();
@@ -600,16 +637,6 @@ internal sealed class ReadingSurface : RichTextBox
         {
             return;
         }
-        if (FocusLeft(origin))
-        {
-            return;
-        }
-        if (ShowsFailureNotice)
-        {
-            refuse?.Invoke();
-            return;
-        }
-        CaretPosition = Document.ContentStart;
         if (Focus() && IsKeyboardFocusWithin)
         {
             announce?.Invoke();

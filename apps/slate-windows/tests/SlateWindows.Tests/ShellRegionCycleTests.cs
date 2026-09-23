@@ -435,16 +435,17 @@ public sealed class ShellRegionCycleTests
         }
     }
 
-    /// <summary>R-10: the held region is the ring's position only while its
-    /// landing is still held and focus is where the held press left it. A
-    /// landing the region already let go of, or one the reader walked away
-    /// from, holds no position: the next press starts from where focus is —
+    /// <summary>R-10: the held region is the ring's position only while the
+    /// host still held its landing with the reader exactly where the held
+    /// press left them — the host answers. A landing the host already let go
+    /// of (it completed, the view changed, the reader moved — even within one
+    /// region) holds no position: the next press starts from where focus is —
     /// from the tab bar the editor, asked again; from the Files tree the tab
     /// bar.</summary>
     [Theory]
-    [InlineData("the region let go")]
-    [InlineData("the reader moved")]
-    public void APressAfterTheHeldLandingWasLetGoStartsFromFocus(string why)
+    [InlineData("the tab bar")]
+    [InlineData("the Files tree")]
+    public void APressAfterTheHostLetGoOfTheHeldLandingStartsFromFocus(string from)
     {
         (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
         using (fixture)
@@ -457,11 +458,8 @@ public sealed class ShellRegionCycleTests
             host.Holds.Add(ShellRegionKind.Editor);
             workspace.FocusNextPaneCommand.Execute(null);
             Assert.Single(host.Held);
-            if (why == "the region let go")
-            {
-                host.StillHeld = false;
-            }
-            else
+            host.StillHeld = false;
+            if (from == "the Files tree")
             {
                 host.Focused = ShellRegionKind.Files;
             }
@@ -469,7 +467,7 @@ public sealed class ShellRegionCycleTests
             workspace.FocusNextPaneCommand.Execute(null);
 
             Assert.Equal(1, host.Withdrawals);
-            if (why == "the region let go")
+            if (from == "the tab bar")
             {
                 Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.Editor], host.Landed);
                 Assert.Equal(2, host.Held.Count);
@@ -480,6 +478,71 @@ public sealed class ShellRegionCycleTests
             Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.TabBar], host.Landed);
             Assert.Equal(ShellRegionKind.TabBar, host.Focused);
             Assert.Equal([new A11yEvent.TabFocused("Tab bar. ", "note0", 1, 1)], announced);
+        }
+    }
+
+    /// <summary>R-10 (W7-6 §4's modal rule): a held landing whose success
+    /// arrives while a modal surface is open is not spoken — the modal owns
+    /// the keys — and the press is over: the next press has nothing to
+    /// withdraw.</summary>
+    [Fact]
+    public void AHeldLandingCompletingUnderAModalIsNotSpoken()
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            announced.Clear();
+            host.Focused = ShellRegionKind.TabBar;
+            host.Holds.Add(ShellRegionKind.Editor);
+            workspace.FocusNextPaneCommand.Execute(null);
+            (Action announce, _) = Assert.Single(host.Held);
+            host.ModalSurfaceOpen = true;
+
+            announce();
+
+            Assert.Empty(announced);
+            Assert.False(workspace.HoldsShellRegionLanding);
+            host.ModalSurfaceOpen = false;
+            host.Holds.Clear();
+            workspace.FocusNextPaneCommand.Execute(null);
+            Assert.Equal(0, host.Withdrawals);
+        }
+    }
+
+    /// <summary>R-10: another route asking for the editor — the funnel behind
+    /// every open, tab switch and pane move — withdraws the landing the ring
+    /// holds, synchronously and once; its late completions then do nothing,
+    /// and the next press starts from where focus is.</summary>
+    [Fact]
+    public void AnotherRouteRequestingTheEditorWithdrawsTheHeldLanding()
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            announced.Clear();
+            host.Focused = ShellRegionKind.TabBar;
+            host.Holds.Add(ShellRegionKind.Editor);
+            workspace.FocusNextPaneCommand.Execute(null);
+            (Action announce, Action fallThrough) = Assert.Single(host.Held);
+
+            workspace.RequestActiveEditorFocus();
+
+            Assert.Equal(1, host.Withdrawals);
+            Assert.False(workspace.HoldsShellRegionLanding);
+            announce();
+            fallThrough();
+            Assert.Empty(announced);
+            Assert.Equal([ShellRegionKind.Editor], host.Landed);
+
+            workspace.FocusNextPaneCommand.Execute(null);
+            Assert.Equal(1, host.Withdrawals);
+            Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.Editor], host.Landed);
         }
     }
 

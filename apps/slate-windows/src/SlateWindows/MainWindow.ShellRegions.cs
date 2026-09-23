@@ -241,6 +241,20 @@ public partial class MainWindow : IShellRegionHost
             : ShellRegionLanding.Refused;
     }
 
+    /// <summary>W7-7 PR 8 (R-10; W7-6 §4's modal rule): a modal surface
+    /// opening withdraws the landing the F6 ring holds, synchronously — the
+    /// modal owns the keys, so the ring's late completion must neither seat
+    /// focus beneath it nor speak through it. Every view model whose flag
+    /// feeds <see cref="OpenModalSurface"/> reports its changes here.</summary>
+    private void ModalSource_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs eventArgs)
+    {
+        if (_viewModel.Workspace is { HoldsShellRegionLanding: true } workspace
+            && OpenModalSurface is not null)
+        {
+            workspace.WithdrawHeldShellRegionLanding();
+        }
+    }
+
     bool IShellRegionHost.WithdrawHeldLanding()
     {
         Func<bool>? withdraw = _withdrawHeldLanding;
@@ -311,8 +325,9 @@ public partial class MainWindow : IShellRegionHost
     /// document torn down — a pane closed under it drops the tab's request
     /// with the tab). It is withdrawn instead, releasing the request so the
     /// document seats nobody later, by a newer press, by a newer request in
-    /// its place, or by the surface leaving the tab (the shared cell rebinds
-    /// on a tab switch).</summary>
+    /// its place, by the surface leaving the tab (the shared cell rebinds on
+    /// a tab switch), and the moment the reader leaves the element the press
+    /// found them on (<see cref="FocusDepartureWatch"/>).</summary>
     private sealed class HeldDocumentLanding
     {
         private readonly FrameworkElement _surface;
@@ -323,6 +338,7 @@ public partial class MainWindow : IShellRegionHost
         private readonly Action _release;
         private readonly Action _announce;
         private readonly Action _fallThrough;
+        private readonly FocusDepartureWatch _departure;
         private bool _done;
 
         public HeldDocumentLanding(
@@ -345,9 +361,13 @@ public partial class MainWindow : IShellRegionHost
             _fallThrough = fallThrough;
             _surface.DataContextChanged += SurfaceRebound;
             _document.PropertyChanged += RequestChanged;
+            _departure = new FocusDepartureWatch(surface, () => _ = Withdraw());
         }
 
-        /// <summary>Withdraw the landing; answers whether it was still held.</summary>
+        /// <summary>Withdraw the landing; answers whether it was still held.
+        /// (One its document let go of still counts until the refusal is
+        /// decided: a press that cancels it goes on past the editor, where
+        /// the refusal would have resumed.)</summary>
         public bool Withdraw()
         {
             if (!Stop())
@@ -369,6 +389,7 @@ public partial class MainWindow : IShellRegionHost
             _done = true;
             _surface.DataContextChanged -= SurfaceRebound;
             _document.PropertyChanged -= RequestChanged;
+            _departure.Dispose();
             return true;
         }
 
@@ -381,31 +402,39 @@ public partial class MainWindow : IShellRegionHost
                 return;
             }
 
-            if (!Stop())
-            {
-                return;
-            }
-
             // Replaced by a newer request — another route asked — it is a
             // withdrawal, silent, wherever focus is: the ring's line belongs
-            // to its own landing. Completed, it is the landing when the
-            // completion finds focus in the surface (the document completes
-            // only after the seat), and the refusal when it does not — let
-            // go of unseated, a failure or the document torn down: the press
-            // resumes past the editor.
+            // to its own landing.
             if (_currentRequest() is not null)
             {
+                _ = Stop();
                 return;
             }
 
+            // Completed seated — focus is in the surface, and the document
+            // completes only after the seat — it is the landing: the line.
             if (_surface.IsKeyboardFocusWithin)
             {
+                _ = Stop();
                 _announce();
+                return;
             }
-            else
-            {
-                _fallThrough();
-            }
+
+            // Let go of unseated — a failure, or the document torn down. A
+            // teardown travels with its tab's close or rebind, which CANCELS
+            // the landing, so the refusal is decided once that move has run:
+            // it stands (the press resumes past the editor) only if nothing
+            // ended the landing first; otherwise it is stale. One terminal
+            // transition per landing, in either order.
+            _ = _surface.Dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Background,
+                () =>
+                {
+                    if (Stop())
+                    {
+                        _fallThrough();
+                    }
+                });
         }
     }
 

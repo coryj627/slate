@@ -31,6 +31,7 @@ public partial class MainWindow
     {
         SearchOverlayViewModel search = _viewModel.Search;
         search.PropertyChanged += Search_PropertyChanged;
+        search.PropertyChanged += ModalSource_PropertyChanged;
         search.Dismissed += Search_Dismissed;
         // W5-2 SD-4: reading-view tag activation opens the overlay from
         // the view-model side, and must respect the same modal decision
