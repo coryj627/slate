@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Diagnostics;
 using System.Reflection;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using SlateWindows.Commands;
@@ -105,6 +106,76 @@ public sealed partial class CommandPaletteTests
 
         harness.Palette.Query = "save";
         Assert.NotSame(first, harness.Palette.Sections);
+    }
+
+    // --- R-11: a query change costs what its rows cost ----------------------
+
+    /// <summary>
+    /// Doubling the commands at most doubles-and-a-bit a query change
+    /// (R-11; AR-4 tolerates 2.5×): a ratio over interleaved medians, never
+    /// an absolute budget, which no two machines would agree on.
+    /// </summary>
+    /// <remarks>
+    /// The whole synchronous query change the palette runs per keystroke —
+    /// contract 28's synchronous-by-decision rule stands, so this is the
+    /// cost a user's typing waits on: core's ranking through the binding,
+    /// the availability pass, the row build, the selection and the count.
+    /// The two sizes alternate round by round so a burst of load elsewhere
+    /// on the machine lands on both, and the warm-up rounds carry the
+    /// binding and the JIT past their first calls.
+    /// </remarks>
+    [Fact]
+    public void RecomputeScalesLinearlyInRowCount()
+    {
+        var small = new PaletteHarness(SyntheticCommands(2_000));
+        var large = new PaletteHarness(SyntheticCommands(4_000));
+        small.Palette.Open();
+        large.Palette.Open();
+
+        // Both queries keep every row, and alternating them makes every
+        // assignment a real query change: an unchanged query recomputes
+        // nothing.
+        string[] queries = ["synthetic", "synthetic command"];
+        const int WarmUpRounds = 5;
+        const int MeasuredRounds = 21;
+        var smallMilliseconds = new List<double>(MeasuredRounds);
+        var largeMilliseconds = new List<double>(MeasuredRounds);
+        for (int round = 0; round < WarmUpRounds + MeasuredRounds; round++)
+        {
+            double smallCost = QueryChangeMilliseconds(small, queries[round % 2]);
+            double largeCost = QueryChangeMilliseconds(large, queries[round % 2]);
+            if (round >= WarmUpRounds)
+            {
+                smallMilliseconds.Add(smallCost);
+                largeMilliseconds.Add(largeCost);
+            }
+        }
+
+        Assert.Equal(2_000, small.Palette.MatchCount);
+        Assert.Equal(4_000, large.Palette.MatchCount);
+        double smallMedian = Median(smallMilliseconds);
+        double largeMedian = Median(largeMilliseconds);
+        double ratio = largeMedian / smallMedian;
+        Assert.True(
+            ratio <= 2.5,
+            $"Doubling the commands multiplied a query change by {ratio:F2} "
+            + $"({smallMedian:F1} ms for 2 000, {largeMedian:F1} ms for 4 000): "
+            + "something in the per-keystroke path is no longer linear in the rows.");
+
+        static double QueryChangeMilliseconds(PaletteHarness harness, string query)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            long started = Stopwatch.GetTimestamp();
+            harness.Palette.Query = query;
+            return Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        }
+
+        static double Median(List<double> samples)
+        {
+            double[] ordered = [.. samples.Order()];
+            return ordered[ordered.Length / 2];
+        }
     }
 
     // --- P4: the snapshot rule -------------------------------------------
