@@ -379,22 +379,19 @@
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   Visibility="{Binding Properties.HasRows, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <ItemsControl ItemsSource="{Binding Properties.Rows}"
+                        <!-- W7-7 PR 3 (#1246, R-4's one-stop rule): a row's
+                             container is layout. As a plain ItemsControl
+                             container NVDA read "SlateWindows.Panels.
+                             PropertyRowViewModel, data item, 1 of 7", and
+                             named by the editor's label it was a second stop
+                             reading the editor's own name; the editor and its
+                             buttons already carry the key. -->
+                        <local:LayoutItemsControl ItemsSource="{Binding Properties.Rows}"
                                       ItemTemplate="{StaticResource PropertyRowTemplate}"
                                       Focusable="False"
                                       IsTabStop="False"
                                       AutomationProperties.AutomationId="PropertiesRows"
-                                      AutomationProperties.Name="{Binding Properties.HeaderGroupName}">
-                            <!-- W7-7 PR 3 (#1246, R-4): a row is named by its
-                                 editor's label; unnamed, NVDA read
-                                 "SlateWindows.Panels.PropertyRowViewModel, data
-                                 item, 1 of 7". -->
-                            <ItemsControl.ItemContainerStyle>
-                                <Style TargetType="ContentPresenter">
-                                    <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
-                                </Style>
-                            </ItemsControl.ItemContainerStyle>
-                        </ItemsControl>
+                                      AutomationProperties.Name="{Binding Properties.HeaderGroupName}" />
                     </ScrollViewer>
                 </StackPanel>
             </Expander>

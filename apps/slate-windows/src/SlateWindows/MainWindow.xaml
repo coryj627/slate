@@ -3587,21 +3587,17 @@
                                         AutomationProperties.AutomationId="BuilderAddGroup"
                                         Click="BuilderAddGroup_Click" />
                             </StackPanel>
-                            <!-- R-4 (#1246): condition and member rows are named
-                                 containers; unnamed, each read its view model's
-                                 type name. -->
-                            <ItemsControl Focusable="False" ItemsSource="{Binding ConditionRows}"
+                            <!-- R-4 (#1246), the one-stop rule: a row's container
+                                 wraps its own controls, so it is layout. As a
+                                 plain ItemsControl container it read its view
+                                 model's type name, and named it was a second
+                                 stop beside those controls; the controls carry
+                                 the row's position instead ("Condition 2
+                                 expression", "Remove Condition 2"). -->
+                            <local:LayoutItemsControl Focusable="False" ItemsSource="{Binding ConditionRows}"
                                           Margin="0,6,0,0"
                                           AutomationProperties.AutomationId="BuilderConditions">
-                                <!-- A row is named by its label: each groups a
-                                     label, a Remove button, the expression and its
-                                     members, whose names repeat from row to row. -->
-                                <ItemsControl.ItemContainerStyle>
-                                    <Style TargetType="ContentPresenter">
-                                        <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
-                                    </Style>
-                                </ItemsControl.ItemContainerStyle>
-                                <ItemsControl.Style>
+                                <local:LayoutItemsControl.Style>
                                     <!-- Empty collections collapse: a zero-size
                                          list is an axe BoundingRectangle
                                          violation (the queries-leaf rule). -->
@@ -3612,8 +3608,8 @@
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
-                                </ItemsControl.Style>
-                                <ItemsControl.ItemTemplate>
+                                </local:LayoutItemsControl.Style>
+                                <local:LayoutItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <StackPanel Margin="0,2">
                                             <DockPanel>
@@ -3621,11 +3617,11 @@
                                                 <Button DockPanel.Dock="Right"
                                                         Content="Remove"
                                                         Click="BuilderRemoveCondition_Click"
-                                                        AutomationProperties.Name="{Binding Label, StringFormat=Remove {0}}" />
+                                                        AutomationProperties.Name="{Binding RemoveName}" />
                                                 <TextBox Margin="6,0,6,0"
                                                          Text="{Binding Expression, UpdateSourceTrigger=PropertyChanged}"
                                                          TextChanged="BuilderExpression_TextChanged"
-                                                         AutomationProperties.Name="Raw filter expression">
+                                                         AutomationProperties.Name="{Binding ExpressionName}">
                                                     <TextBox.Style>
                                                         <Style TargetType="TextBox">
                                                             <Style.Triggers>
@@ -3653,13 +3649,8 @@
                                                     </Style>
                                                 </TextBlock.Style>
                                             </TextBlock>
-                                            <ItemsControl Focusable="False" ItemsSource="{Binding GroupMembers}" Margin="24,0,0,0">
-                                                <ItemsControl.ItemContainerStyle>
-                                                    <Style TargetType="ContentPresenter">
-                                                        <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
-                                                    </Style>
-                                                </ItemsControl.ItemContainerStyle>
-                                                <ItemsControl.Style>
+                                            <local:LayoutItemsControl Focusable="False" ItemsSource="{Binding GroupMembers}" Margin="24,0,0,0">
+                                                <local:LayoutItemsControl.Style>
                                                     <Style TargetType="ItemsControl">
                                                         <Style.Triggers>
                                                             <DataTrigger Binding="{Binding GroupMembers}" Value="{x:Null}">
@@ -3667,13 +3658,13 @@
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
-                                                </ItemsControl.Style>
-                                                <ItemsControl.ItemTemplate>
+                                                </local:LayoutItemsControl.Style>
+                                                <local:LayoutItemsControl.ItemTemplate>
                                                     <DataTemplate>
                                                         <StackPanel Margin="0,2">
                                                             <TextBox Text="{Binding Expression, UpdateSourceTrigger=PropertyChanged}"
                                                                      TextChanged="BuilderExpression_TextChanged"
-                                                                     AutomationProperties.Name="Group member expression" />
+                                                                     AutomationProperties.Name="{Binding ExpressionName}" />
                                                             <!-- A group member's refusal renders like a
                                                                  top-level row's (red team round 1: it was
                                                                  invisible). -->
@@ -3695,12 +3686,12 @@
                                                             </TextBlock>
                                                         </StackPanel>
                                                     </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
+                                                </local:LayoutItemsControl.ItemTemplate>
+                                            </local:LayoutItemsControl>
                                         </StackPanel>
                                     </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                                </local:LayoutItemsControl.ItemTemplate>
+                            </local:LayoutItemsControl>
                             <TextBlock Text="{Binding SaveError}"
                                        Foreground="{DynamicResource Slate.WarningBrush}"
                                        TextWrapping="Wrap"
