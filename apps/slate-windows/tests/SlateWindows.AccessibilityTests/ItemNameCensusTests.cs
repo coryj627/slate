@@ -31,6 +31,10 @@ public sealed class ItemNameCensusTests
     [InlineData("ICSharpCode.AvalonEdit.Document.TextDocument")]
     [InlineData("Microsoft.Win32.OpenFileDialog")]
     [InlineData("GridConformanceHost.Program+FixtureRow")]
+    // Generic arity on any segment of a nested type (codex PR 3 round 2).
+    [InlineData("System.Collections.Generic.Dictionary`2+Enumerator[System.String,System.Int32]")]
+    [InlineData("SlateWindows.Outer`1+Inner`1[System.String]")]
+    [InlineData("SlateWindows.Outer`1+Inner")]
     // Record dumps, as a C# record's synthesized ToString() prints them —
     // the type name qualified or not (codex PR 3 round 1).
     [InlineData(@"RecentVault { Path = C:\Vaults\at-vault, DisplayName = at-vault, LastOpenedMs = 1790112463550 }")]
@@ -53,6 +57,13 @@ public sealed class ItemNameCensusTests
     [InlineData("Part.One")]
     [InlineData("Smith.Jones")]
     [InlineData("Systems.Thinking")]
+    // A root and a dot is a file name when the tail is not a type, and a
+    // record-like name that does not END at the dump's brace is no dump
+    // (codex PR 3 round 2).
+    [InlineData("System.md")]
+    [InlineData("System.String.md")]
+    [InlineData("SlateWindows.note.md")]
+    [InlineData("Plan { owner = Alice }.md")]
     [InlineData("child.md")]
     [InlineData("Folder/child.md")]
     [InlineData("child.md, file")]
