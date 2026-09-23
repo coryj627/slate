@@ -89,6 +89,11 @@ internal enum ChordScope
     /// (<c>MainWindow.FilesRows_PreviewKeyDown</c>) while one of their rows
     /// has focus.</summary>
     FilesTree,
+
+    /// <summary>The Files filter field (W7-7, R-3): Escape clears an active
+    /// filter or tag scope, delivered by the field's own tunnelling handler
+    /// (<c>MainWindow.SidebarFilterTextBox_PreviewKeyDown</c>).</summary>
+    SidebarFilter,
 }
 
 /// <summary>
@@ -1655,6 +1660,18 @@ internal static class ChordTable
                 + "is announced and the row's ItemStatus reports the state. No mac "
                 + "twin: mac's tree multi-selects, and Space there is folder "
                 + "disclosure."),
+
+            // W7-7 (R-3, codex PR 2 round 4): Escape in the Files filter
+            // field is one of the promised clear routes (with the Clear
+            // filter button and an emptied field).
+            Chord("windows.sidebarFilter.clear", "Sidebar filter: clear the filter",
+                "Escape", ChordScope.SidebarFilter,
+                "W7-7 (R-3): Escape in the Files filter field runs Clear Sidebar Filter "
+                + "(slate.sidebar.clearFilter) while a filter or tag scope is active, "
+                + "delivered by MainWindow.SidebarFilterTextBox_PreviewKeyDown; with "
+                + "nothing filtering the key is left to the window. A KeyBinding would "
+                + "not do: WPF marks a matched plain-ICommand binding handled even when "
+                + "it cannot execute."),
 
             // §E TE-11 (E19/ED-1, D-6 adopted): the canvas history
             // domain. Chord-only rows like the structural pair below: mac

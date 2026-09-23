@@ -1106,7 +1106,7 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>
     /// ONE attach funnel for every site that gives a tab its item.
     /// The FIVE call sites, by their enclosing methods:
-    /// <c>TryOpenItemCore</c> (the in-place replace arm on the active tab),
+    /// <c>ReplaceTabItem</c> (the in-place replace of the current or transient tab),
     /// <c>AddTab</c>, <c>DuplicateActiveTab</c>, <c>RestoreNode</c>,
     /// <c>ReloadOpenTabFromDisk</c> (the history retarget).
     /// </summary>

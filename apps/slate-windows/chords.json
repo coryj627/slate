@@ -3877,6 +3877,19 @@
       "reason": "W7-7 (R-2, OD-2): tree rows only (the result lists carry no check box), delivered by MainWindow.FilesRows_PreviewKeyDown; the count is announced and the row's ItemStatus reports the state. No mac twin: mac's tree multi-selects, and Space there is folder disclosure."
     },
     {
+      "id": "windows.sidebarFilter.clear",
+      "label": "Sidebar filter: clear the filter",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Escape",
+      "windowsSpoken": "Escape",
+      "scope": "SidebarFilter",
+      "registered": false,
+      "reason": "W7-7 (R-3): Escape in the Files filter field runs Clear Sidebar Filter (slate.sidebar.clearFilter) while a filter or tag scope is active, delivered by MainWindow.SidebarFilterTextBox_PreviewKeyDown; with nothing filtering the key is left to the window. A KeyBinding would not do: WPF marks a matched plain-ICommand binding handled even when it cannot execute."
+    },
+    {
       "id": "windows.canvas.undoHistory",
       "label": "Canvas: undo the last canvas action",
       "section": "View",

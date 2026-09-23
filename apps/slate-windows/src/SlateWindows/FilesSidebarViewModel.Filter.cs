@@ -127,7 +127,7 @@ internal sealed partial class FilesSidebarViewModel
     /// then the clear's own voice.</summary>
     private void ClearFilter()
     {
-        if (!IsFilterActive && FilterText.Length == 0)
+        if (!IsFilterActive)
         {
             return;
         }
