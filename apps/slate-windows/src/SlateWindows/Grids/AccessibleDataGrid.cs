@@ -57,6 +57,9 @@ internal sealed class AccessibleDataGrid : UserControl
     // W6-2 PR A (contracts A-6, A-9; AD-2): the row-name, item-status and
     // modified-activation seams — generic, the graph their first user.
     private Func<object, string?>? _rowAutomationName;
+    // W7-7 PR 3 (R-4): each bound row's place in the rows the surface
+    // passed, by reference — the stable ordinal a nameless row falls back to.
+    private Dictionary<object, int> _boundOrdinals = new(ReferenceEqualityComparer.Instance);
     private Func<object, string?>? _rowItemStatus;
     private Action<object>? _rowActivatedModified;
     private string _typeAheadBuffer = string.Empty;
@@ -216,9 +219,9 @@ internal sealed class AccessibleDataGrid : UserControl
         // the consuming surface's delegates, applied per REALIZED row —
         // Standard virtualization creates and discards containers, never
         // reuses them, so every container carries its own row's values.
-        if (_rowAutomationName is { } name)
+        if (_rowAutomationName is not null)
         {
-            AutomationProperties.SetName(e.Row, RowName(name(e.Row.Item), e.Row.GetIndex()));
+            AutomationProperties.SetName(e.Row, RowName(e.Row.Item));
         }
         if (_rowItemStatus is { } status)
         {
@@ -226,16 +229,37 @@ internal sealed class AccessibleDataGrid : UserControl
         }
     }
 
-    /// <summary>W7-7 PR 3 (#1246, contract R-4): a surface that names its
-    /// rows never lets WPF name one. An EMPTY name is no name —
-    /// DataGridItemAutomationPeer then falls back to the item's
-    /// <c>ToString()</c>, so a reading-table row whose first cell is blank
-    /// would read "System.String[]" — and the row's 1-based position
-    /// stands in.</summary>
-    internal static string RowName(string? name, int index) =>
-        string.IsNullOrWhiteSpace(name)
-            ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"Row {index + 1}")
-            : name;
+    /// <summary>
+    /// W7-7 PR 3 (#1246, contract R-4 as amended after codex PR 0 round 5):
+    /// the name a realized row carries is never empty. A blank name is no
+    /// name — DataGridItemAutomationPeer then falls back to the item's
+    /// <c>ToString()</c>, and a reading-table row whose first cell is blank
+    /// read "System.String[]" — so when the surface's identity is blank the
+    /// first non-empty cell stands in, else "Row {n}", n the row's place in
+    /// the rows the surface bound. That ordinal is stable: a sort
+    /// re-populates the grid, so the view position is not.
+    /// </summary>
+    private string RowName(object item)
+    {
+        if (_rowAutomationName?.Invoke(item) is { } identity
+            && !string.IsNullOrWhiteSpace(identity))
+        {
+            return identity;
+        }
+        foreach (AccessibleGridColumn column in _columns)
+        {
+            string text = column.Cell(item);
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                return text;
+            }
+        }
+        int ordinal = _boundOrdinals.TryGetValue(item, out int index)
+            ? index
+            : _items.IndexOf(item);
+        return string.Create(
+            System.Globalization.CultureInfo.InvariantCulture, $"Row {ordinal + 1}");
+    }
 
     /// <summary>The unloading half of the row seams: a container that
     /// leaves the viewport drops the name and status it carried, so a
@@ -476,7 +500,8 @@ internal sealed class AccessibleDataGrid : UserControl
     /// name, a title, a first cell — not the whole description): every
     /// row-bearing caller passes it (W7-7 PR 3, #1246, R-4; pinned by
     /// ItemContainerNameCensus), because an unnamed DataGridRow reads its
-    /// item's <c>ToString()</c>.
+    /// item's <c>ToString()</c>. Where an identity comes back blank the
+    /// row takes its first non-empty cell, else its bound ordinal.
     /// </summary>
     public void Bind(
         IReadOnlyList<AccessibleGridColumn> columns,
@@ -572,6 +597,14 @@ internal sealed class AccessibleDataGrid : UserControl
             ? DataGridHeadersVisibility.Column
             : DataGridHeadersVisibility.All;
 
+        // The ordinals first: clearing and adding realizes rows, and each
+        // realized row may need its ordinal for a name.
+        var boundOrdinals = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
+        for (int index = 0; index < rows.Count; index++)
+        {
+            _ = boundOrdinals.TryAdd(rows[index], index);
+        }
+        _boundOrdinals = boundOrdinals;
         _items.Clear();
         foreach (object row in rows)
         {
