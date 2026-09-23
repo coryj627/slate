@@ -644,6 +644,95 @@ public sealed class ConnectionsLeafCensus
         Assert.Contains("ConnectionsLeafSurface.FocusAnchor()", window, StringComparison.Ordinal);
     }
 
+    /// <summary>W7-7 R-13 (#1257), contract 39 N-2: a note row's hint names
+    /// its new-tab chord from the row that DELIVERS it and from nowhere else.
+    /// The phrase inventory and the leaf's document together make one
+    /// <c>NavigationHelp</c> reference — <c>RowHint</c>'s <c>Spoken</c> of the
+    /// constant <c>windows.connections.openInNewTab</c>, the Connections
+    /// scope's Ctrl+Enter row, handed straight to
+    /// <c>ConnectionsPhrase.NoteHintWithNewTab</c> — and reach a key name no
+    /// other way: no chord-table row or hotkey producer, no key, modifier or
+    /// gesture type, no text spelling a display chord. The hint fact compares
+    /// strings, and another Ctrl+Enter row (the editor's
+    /// <c>slate.editor.activateAtCaret</c>) speaks the same words.</summary>
+    [Fact]
+    public void TheRowHintNamesItsNewTabChordFromItsOwnRowThroughNavigationHelpAlone()
+    {
+        const string NewTabRow = "windows.connections.openInNewTab";
+        const string Help = "SlateWindows.Commands.NavigationHelp";
+        string[] files = ["Graph/ConnectionsPhrase.cs", "Graph/ConnectionsLeafViewModel.cs"];
+        var forbidden = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "ChordTable", "ChordTableEntry", "WindowsHotkeySpoken", "MacHotkeySpoken", "MacToWindowsChordRule",
+            "Key", "ModifierKeys", "Keyboard", "KeyBinding", "KeyGesture", "KeyGestureConverter", "KeyConverter",
+            "ModifierKeysConverter",
+        };
+        var displayChord = new System.Text.RegularExpressions.Regex(
+            @"\bCtrl\b|\b(?:Control|Alt|Shift|Win|Windows)\s*\+|\+\s*(?:Enter|Return)\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        var failures = new List<string>();
+        var helpReferences = new List<(string Where, SimpleNameSyntax Name, ISymbol Symbol, SemanticModel Model)>();
+        foreach (string file in files)
+        {
+            CSharpSource source = Assert.Single(ShellCompilation.Sources, entry => entry.Relative == file).Source;
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            string Where(SyntaxNode node) => $"{file}:{node.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
+            foreach (SyntaxNode node in source.Root.DescendantNodes())
+            {
+                if (node is SimpleNameSyntax name)
+                {
+                    ISymbol? symbol = model.GetSymbolInfo(name).Symbol;
+                    var types = new List<string>();
+                    for (INamedTypeSymbol? type = symbol as INamedTypeSymbol ?? symbol?.ContainingType; type is not null; type = type.ContainingType)
+                    {
+                        types.Add(type.Name);
+                    }
+                    // `pair.Key` is a member NAME, not the key type: only a
+                    // name outside the member position is read by spelling.
+                    bool member = name.Parent is MemberAccessExpressionSyntax access && access.Name == name;
+                    if ((!member && forbidden.Contains(name.Identifier.ValueText)) || types.Any(forbidden.Contains))
+                    {
+                        failures.Add($"{Where(name)}: reaches `{name}` — a key name comes only through NavigationHelp");
+                    }
+                    if (symbol is not null and not INamedTypeSymbol && symbol.ContainingType?.ToDisplayString() == Help)
+                    {
+                        helpReferences.Add((Where(name), name, symbol, model));
+                    }
+                }
+                if (node is LiteralExpressionSyntax or InterpolatedStringExpressionSyntax or InvocationExpressionSyntax
+                    || node.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddExpression))
+                {
+                    string? text = ChordSpeechAuditCensus.TextOf((ExpressionSyntax)node, model);
+                    if (text is not null && displayChord.IsMatch(text))
+                    {
+                        failures.Add($"{Where(node)}: spells a chord — {text}");
+                    }
+                }
+            }
+        }
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
+
+        (string where, SimpleNameSyntax spoken, ISymbol method, SemanticModel spokenModel) = Assert.Single(helpReferences);
+        Assert.Equal("Spoken", method.Name);
+        InvocationExpressionSyntax call = spoken.Ancestors().OfType<InvocationExpressionSyntax>().First();
+        Assert.Equal("RowHint", OwnerOf(call));
+        ExpressionSyntax argument = Assert.Single(call.ArgumentList.Arguments).Expression;
+        Optional<object?> id = spokenModel.GetConstantValue(argument);
+        Assert.True(
+            id.HasValue && Equals(id.Value, NewTabRow),
+            $"{where}: RowHint speaks {(id.HasValue ? id.Value : argument.ToString())}, not the delivering row {NewTabRow}");
+        Assert.True(
+            call.Parent is ArgumentSyntax { Parent.Parent: InvocationExpressionSyntax phrase }
+                && spokenModel.GetSymbolInfo(phrase).Symbol is IMethodSymbol composed
+                && composed.Name == "NoteHintWithNewTab"
+                && composed.ContainingType.ToDisplayString() == "SlateWindows.Graph.ConnectionsPhrase",
+            $"{where}: the spoken chord is not handed straight to ConnectionsPhrase.NoteHintWithNewTab");
+        SlateWindows.Commands.ChordTableEntry row = Assert.IsType<SlateWindows.Commands.ChordTableEntry>(
+            SlateWindows.Commands.ChordTable.Find(NewTabRow));
+        Assert.Equal(SlateWindows.Commands.ChordScope.Connections, row.Scope);
+        Assert.Equal("Ctrl+Enter", row.WindowsChord);
+    }
+
     /// <summary>B-20: the parity matrix carries the three command rows at
     /// the W6-2 status the generator names, and the W-C matrix carries the
     /// leaf's row (its cells the evidence census's).</summary>
