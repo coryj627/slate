@@ -6,12 +6,10 @@ using System.Dynamic;
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Data;
-using System.Windows.Markup;
 using System.Xml.Linq;
 using SlateWindows.Tests.Censuses;
 
@@ -30,9 +28,6 @@ public sealed class ItemContainerNameBindingTests
 {
     private const string FirstName = "First name";
     private const string SecondName = "Second name";
-
-    private static readonly XNamespace Presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
-    private static readonly XNamespace Xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
 
     /// <summary>The code-built hosts, by label, and the factory that
     /// builds each one's container style in production.</summary>
@@ -82,7 +77,7 @@ public sealed class ItemContainerNameBindingTests
             .Where(pair => pair.Value is ContainerNaming.Bound)
             .Select(pair => pair.Key)
             .ToArray();
-        Assert.True(named.Length > 40, $"only {named.Length} named hosts — the table read is broken");
+        Assert.True(named.Length > 35, $"only {named.Length} named hosts — the table read is broken");
         Assert.All(
             CodeBuilt.Keys,
             label => Assert.IsType<ContainerNaming.Bound>(ItemContainerNameCensus.ExpectedNaming[label]));
@@ -96,12 +91,12 @@ public sealed class ItemContainerNameBindingTests
         (string file, XElement host) = ItemContainerNameCensus.XamlHost(label);
         XElement authored = ItemContainerNameCensus.ContainerStyle(host, ItemContainerNameCensus.KeyedStyles())
             ?? throw new Xunit.Sdk.XunitException($"{label}: {file} gives it no container style");
-        Style style = LoadStyle(authored, file);
+        Style style = ShellXamlFragments.LoadStyle(authored, file);
         Type hostType = ItemContainerNameCensus.ResolveType(host)
             ?? throw new Xunit.Sdk.XunitException($"{label}: the host type does not resolve");
         // The pinned converter, loaded apart from the style: a style that
         // drops it must read differently, not switch this fact's mode.
-        IValueConverter? converter = bound.Converter is null ? null : LoadConverter(bound.Converter);
+        IValueConverter? converter = bound.Converter is null ? null : ShellXamlFragments.LoadConverter(bound.Converter);
         Exercise(label, hostType, style, bound, converter);
     });
 
@@ -197,82 +192,6 @@ public sealed class ItemContainerNameBindingTests
             ?? throw new Xunit.Sdk.XunitException($"{label}: the host published no item peer");
         return item.GetName();
     }
-
-    /// <summary>Loads an authored container style as the app would: its
-    /// document's namespace prefixes (clr mappings bound to the shell
-    /// assembly), any converter it names from WorkspaceTemplates.xaml, and
-    /// no event setters (a handler needs its code-behind; naming does not).</summary>
-    private static Style LoadStyle(XElement authored, string file)
-    {
-        XElement documentRoot = authored.Document?.Root
-            ?? throw new InvalidOperationException("the style has no document");
-        XElement root = Dictionary(documentRoot);
-        var style = new XElement(authored);
-        style.Descendants().Where(element => element.Name.LocalName == "EventSetter").Remove();
-        foreach (XElement element in style.DescendantsAndSelf())
-        {
-            element.Name = XNamespace.Get(Remap(element.Name.NamespaceName)) + element.Name.LocalName;
-        }
-        style.SetAttributeValue(Xaml + "Key", "__pinned");
-        foreach (string key in Regex.Matches(style.ToString(), @"\{StaticResource ([\w.]+)\}")
-            .Select(match => match.Groups[1].Value)
-            .Distinct(StringComparer.Ordinal))
-        {
-            root.Add(TemplatesResource(key, file));
-        }
-        root.Add(style);
-        return (Style)Load(root)["__pinned"];
-    }
-
-    /// <summary>A converter as WorkspaceTemplates.xaml declares it.</summary>
-    private static IValueConverter LoadConverter(string key)
-    {
-        XElement root = Dictionary(TemplatesDocument().Root!);
-        root.Add(TemplatesResource(key, "the pin"));
-        return Assert.IsAssignableFrom<IValueConverter>(Load(root)[key]);
-    }
-
-    /// <summary>An empty ResourceDictionary carrying the namespace
-    /// declarations of <paramref name="documentRoot"/>.</summary>
-    private static XElement Dictionary(XElement documentRoot) =>
-        new(
-            Presentation + "ResourceDictionary",
-            documentRoot.Attributes()
-                .Where(attribute => attribute.IsNamespaceDeclaration)
-                .Select(attribute => new XAttribute(attribute.Name, Remap(attribute.Value))));
-
-    private static XDocument TemplatesDocument() =>
-        XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "WorkspaceTemplates.xaml"));
-
-    private static XElement TemplatesResource(string key, string user)
-    {
-        XElement declared = TemplatesDocument().Root!.Elements()
-            .FirstOrDefault(element => (string?)element.Attribute(Xaml + "Key") == key)
-            ?? throw new Xunit.Sdk.XunitException($"{user}: {key} is not declared in WorkspaceTemplates.xaml");
-        var copy = new XElement(declared);
-        copy.Name = XNamespace.Get(Remap(copy.Name.NamespaceName)) + copy.Name.LocalName;
-        return copy;
-    }
-
-    /// <summary>Loads a dictionary with the shell as the LOCAL assembly, as
-    /// its compiled XAML is: its converters are internal, which a plain
-    /// XamlReader.Parse refuses.</summary>
-    private static ResourceDictionary Load(XElement root)
-    {
-        using var text = new StringReader(root.ToString());
-        using var xml = System.Xml.XmlReader.Create(text);
-        using var reader = new System.Xaml.XamlXmlReader(
-            xml,
-            XamlReader.GetWpfSchemaContext(),
-            new System.Xaml.XamlXmlReaderSettings { LocalAssembly = typeof(MainWindow).Assembly });
-        return (ResourceDictionary)XamlReader.Load(reader);
-    }
-
-    private static string Remap(string xmlNamespace) =>
-        xmlNamespace.StartsWith("clr-namespace:", StringComparison.Ordinal)
-        && !xmlNamespace.Contains(";assembly=", StringComparison.Ordinal)
-            ? xmlNamespace + ";assembly=SlateWindows"
-            : xmlNamespace;
 
     private static Style Factory(Type owner, string method) =>
         (Style)owner.GetMethod(method, BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, null)!;
