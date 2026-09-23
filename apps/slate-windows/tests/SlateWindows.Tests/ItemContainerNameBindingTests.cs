@@ -109,6 +109,119 @@ public sealed class ItemContainerNameBindingTests
         Exercise(label, host, style(), bound, converter: null);
     });
 
+    public static TheoryData<string> TriggeredHosts()
+    {
+        var data = new TheoryData<string>();
+        foreach ((string label, ContainerNaming naming) in ItemContainerNameCensus.ExpectedNaming)
+        {
+            if (naming is ContainerNaming.Bound { Triggers.Count: > 0 })
+            {
+                data.Add(label);
+            }
+        }
+        return data;
+    }
+
+    /// <summary>Codex PR 3 round 2: every pinned trigger state, hosted. Two
+    /// items walk from rest through each pinned state (the workspace tab's
+    /// dirty, missing and both) and back, and in each the container reads
+    /// the state's format over the item's OWN name — so a format that drops
+    /// the name (every dirty tab called "duplicate") fails here as well as
+    /// in the census.</summary>
+    [Theory]
+    [MemberData(nameof(TriggeredHosts))]
+    public void EveryPinnedTriggerStateReadsItsOwnName(string label) => RunSta(() =>
+    {
+        var bound = (ContainerNaming.Bound)ItemContainerNameCensus.ExpectedNaming[label];
+        (string file, XElement element) = ItemContainerNameCensus.XamlHost(label);
+        XElement authored = ItemContainerNameCensus.ContainerStyle(element, ItemContainerNameCensus.KeyedStyles())
+            ?? throw new Xunit.Sdk.XunitException($"{label}: {file} gives it no container style");
+        Type hostType = ItemContainerNameCensus.ResolveType(element)
+            ?? throw new Xunit.Sdk.XunitException($"{label}: the host type does not resolve");
+        var host = (ItemsControl)Activator.CreateInstance(hostType, nonPublic: true)!;
+        host.ItemContainerStyle = ShellXamlFragments.LoadStyle(authored, file);
+
+        // Every property a pinned state names, and the value that sets it.
+        (string Property, object? On, object? Off)[] conditions =
+        [
+            .. bound.Triggers
+                .SelectMany(state => state.When.Split(" & "))
+                .Select(condition => condition.Split('='))
+                .DistinctBy(pair => pair[0])
+                .Select(pair => bool.TryParse(pair[1], out bool on)
+                    ? (pair[0], (object?)on, (object?)!on)
+                    : (pair[0], (object?)pair[1], (object?)null)),
+        ];
+        string[] titles = ["Alpha", "Beta"];
+        var items = new ObservableCollection<object>();
+        foreach (string title in titles)
+        {
+            var fields = (IDictionary<string, object?>)new ExpandoObject();
+            fields[bound.Path] = title;
+            foreach ((string property, _, object? off) in conditions)
+            {
+                fields[property] = off;
+            }
+            items.Add(fields);
+        }
+        host.ItemsSource = items;
+        var window = new Window
+        {
+            Content = host,
+            Width = 480,
+            Height = 360,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+        };
+        window.Show();
+        try
+        {
+            void Enter(string? when)
+            {
+                HashSet<string> on = when is null ? [] : [.. when.Split(" & ").Select(condition => condition.Split('=')[0])];
+                foreach (IDictionary<string, object?> fields in items.Cast<IDictionary<string, object?>>())
+                {
+                    foreach ((string property, object? onValue, object? off) in conditions)
+                    {
+                        fields[property] = on.Contains(property) ? onValue : off;
+                    }
+                }
+            }
+            void Expect(string state, Func<string, string> name) => Assert.True(
+                titles.Select(name).SequenceEqual(ItemNames(host)),
+                $"{label} {state}: expected [{string.Join(" | ", titles.Select(name))}], "
+                + $"read [{string.Join(" | ", ItemNames(host))}]");
+
+            Expect("at rest", title => title);
+            foreach (TriggerNaming state in bound.Triggers)
+            {
+                Assert.Null(state.Converter);
+                Enter(state.When);
+                string format = state.Format is { } authoredFormat
+                    ? (authoredFormat.StartsWith("{}", StringComparison.Ordinal) ? authoredFormat[2..] : authoredFormat)
+                    : "{0}";
+                Expect($"when {state.When}", title => string.Format(CultureInfo.InvariantCulture, format, title));
+            }
+            Enter(null);
+            Expect("back at rest", title => title);
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
+    /// <summary>Every item peer's Name, in order.</summary>
+    private static string[] ItemNames(ItemsControl host)
+    {
+        host.UpdateLayout();
+        PumpedDispatcher.Drain();
+        host.UpdateLayout();
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(host);
+        peer.ResetChildrenCache();
+        return [.. (peer.GetChildren() ?? []).OfType<ItemAutomationPeer>().Select(item => item.GetName())];
+    }
+
     /// <summary>Host <paramref name="style"/> on a <paramref name="hostType"/>
     /// over one item carrying the pinned property, and read the item peer's
     /// Name; then change the item's name and read it again.</summary>
