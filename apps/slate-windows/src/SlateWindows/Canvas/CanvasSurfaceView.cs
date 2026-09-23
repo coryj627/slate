@@ -403,9 +403,13 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     public bool CanMoveWithinProjection(bool forward) => Projection switch
     {
         CanvasSurfaceKind.Table => _table.CanMoveRow(forward),
-        // The visual has no intrinsic row control: every arrow is the
-        // navigator's answer (D15), so the projection itself never
-        // moves the reader.
+        // The visual has no intrinsic row control, so the projection
+        // itself never moves the reader — and the navigator no longer
+        // asks it (R-12, #1255): on the board Down/Up ARE the
+        // reading-order move and Right/Left follow connections
+        // (contract 34 D15, its outline clause amended by OD-5). Asking
+        // here turned every press into "End of canvas." with the seat
+        // never moving.
         CanvasSurfaceKind.Visual => false,
         _ => _outline.CanMoveFocus(forward),
     };
@@ -420,10 +424,26 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         CanvasSurfaceKind.Table => _table.DeliverFocus(nodeId),
         // The visual's cards are peers, not focusable controls: a
         // focus request has nowhere to land, and answering false lets
-        // the caller fall back honestly (m6's rule).
+        // the caller fall back honestly (m6's rule). The board shows
+        // the seat through `RevealSeat`'s pan instead (R-12).
         CanvasSurfaceKind.Visual => false,
         _ => _outline.DeliverFocus(nodeId) is not null,
     };
+
+    /// <summary>
+    /// R-12 (#1255): the seat in view after a navigator move. The board
+    /// pans to contain the card — its cards take no focus, so this is the
+    /// board's whole answer (D4: a selection made on this surface always
+    /// scrolls into view); the outline and the table focused the row,
+    /// which already scrolled it into view.
+    /// </summary>
+    public void RevealSeat(string nodeId)
+    {
+        if (Projection == CanvasSurfaceKind.Visual)
+        {
+            _visual.RevealNode(nodeId);
+        }
+    }
 
     /// <summary>§D D7: this pane's visual surface answers a viewport
     /// verb through ITS renderer's engine — structural addressing, no

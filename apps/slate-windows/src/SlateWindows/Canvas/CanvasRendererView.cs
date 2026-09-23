@@ -589,6 +589,18 @@ internal sealed class CanvasRendererView : FrameworkElement
             return;
         }
         model.SelectNode(nodeId);
+        RevealNode(nodeId);
+    }
+
+    /// <summary>The pan that brings a card into the window (D4 — a
+    /// selection made ON this surface always scrolls into view): the
+    /// peer door's above, and since R-12 (#1255) the navigator's — the
+    /// board's arrows and follow chords move the seat through the
+    /// navigator, which has already announced the move and asks the
+    /// presenter only to reveal it. A card the installed population does
+    /// not know has nothing to pan to.</summary>
+    internal void RevealNode(string nodeId)
+    {
         if (_engine.Current?.Source.Loaded?.Population is { } population
             && population.SceneByNode.TryGetValue(nodeId, out CanvasSceneNode? node))
         {

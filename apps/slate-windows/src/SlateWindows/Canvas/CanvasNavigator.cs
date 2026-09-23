@@ -76,6 +76,23 @@ internal interface ICanvasSurfacePresenter
     bool FocusRow(string nodeId);
 
     /// <summary>
+    /// Bring the SEAT into view on the showing projection, after a move
+    /// the navigator made (R-12, contract 34 D4).
+    /// </summary>
+    /// <remarks>
+    /// The visual board has no row to focus — its cards are peers, and
+    /// <see cref="FocusRow"/> answers false there (m6) — so a move made
+    /// on it left the new seat wherever the viewport happened to be,
+    /// off-screen included: the ring drawn outside the window and the
+    /// card's peer unmaterialized, while every sentence said the move
+    /// had happened. The board pans to contain the card, the pan a
+    /// peer's Invoke already makes (D4: a selection made on this surface
+    /// always scrolls into view). The outline and the table have nothing
+    /// further to do, because focusing the row scrolled it into view.
+    /// </remarks>
+    void RevealSeat(string nodeId);
+
+    /// <summary>
     /// Put keyboard focus back where this state can hold it, reporting
     /// whether anything took it (contract C6).
     /// </summary>
@@ -327,8 +344,10 @@ internal sealed class CanvasNavigator
                 // §F TF-9 (IF-29): the restoration addresses the
                 // OWNING presenter and returns reader FOCUS, not just
                 // selection — the silent seat is the fallback when the
-                // row cannot take it.
+                // row cannot take it. R-12: and the origin back in
+                // view, which on the board is the whole of the return.
                 _ = presenter.FocusRow(originId);
+                presenter.RevealSeat(originId);
                 return new CanvasModeRestoration.BackAt(originTitle);
             },
             Token: token);
@@ -1251,7 +1270,7 @@ internal sealed class CanvasNavigator
         Announce(new CanvasA11yEvent.CanvasConnectionTraversed(
             target.Direction, otherKind, target.OtherTitle, target.Label));
         _document.SelectNode(target.OtherNode, announce: false);
-        _presenter?.FocusRow(target.OtherNode);
+        ReaderFollows(target.OtherNode);
     }
 
     /// <summary>
@@ -1286,7 +1305,7 @@ internal sealed class CanvasNavigator
             return;
         }
         _document.SelectNode(hops[^1].NodeId, announce: false);
-        _presenter?.FocusRow(hops[^1].NodeId);
+        ReaderFollows(hops[^1].NodeId);
         string[] titles = startTitle is null
             ? hops.Select(hop => hop.Title).ToArray()
             : [startTitle, .. hops.Select(hop => hop.Title)];
@@ -1595,16 +1614,37 @@ internal sealed class CanvasNavigator
     // --- Chord arms ------------------------------------------------------
 
     /// <summary>
-    /// Down/Up. Rule R2 gates it on the projection owning focus; the
-    /// projection then MOVES the reader itself and the movement narrates
-    /// through the document's one selection mutation, so the navigator's
-    /// job here is the boundary the projection cannot speak to.
+    /// Down/Up. Rule R2 gates it on the projection owning focus. On the
+    /// outline and the table the projection then MOVES the reader itself
+    /// and the movement narrates through the document's one selection
+    /// mutation, so the navigator's job there is the boundary the
+    /// projection cannot speak to.
     /// </summary>
+    /// <remarks>
+    /// The VISUAL board has no row control to move anyone, so there the
+    /// arrow IS the navigator's reading-order move (R-12, #1255; contract
+    /// 34 D15 honoured): <see cref="SelectAdjacent"/> — the announced
+    /// door, End/Start of canvas at the real bounds, and the empty and
+    /// filtered sentences — which is mac's board verbatim
+    /// (<c>CanvasRendererView.swift</c>'s ↓/↑ call
+    /// <c>canvasSelectAdjacent</c>). It used to ask the board
+    /// <see cref="ICanvasSurfacePresenter.CanMoveWithinProjection"/>, whose
+    /// answer there is always no, and speak that no as the boundary: the
+    /// NVDA pass heard "End of canvas." for Down and "Start of canvas." for
+    /// Up from one position while the seat never moved (F12). The key is
+    /// consumed on every arm, because on the board nothing else would
+    /// answer it.
+    /// </remarks>
     private bool ArrowMove(bool forward)
     {
         if (_presenter is not { ProjectionHasFocus: true } presenter)
         {
             return false;
+        }
+        if (presenter.Projection == CanvasSurfaceKind.Visual)
+        {
+            SelectAdjacent(forward ? 1 : -1);
+            return true;
         }
         if (!_document.AdmitStructuralRead())
         {
@@ -1628,9 +1668,19 @@ internal sealed class CanvasNavigator
 
     /// <summary>
     /// Right/Left FOLLOW, unconditionally, on the outline (contract C3,
-    /// CD-48).
+    /// CD-48) and on the visual board (R-12, owner decision OD-5).
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// The board is the second arm since R-12 (#1255): contract 34 D15
+    /// kept Right/Left "the OUTLINE's" and the board left the key
+    /// unconsumed, so on it the Follow Connection rows the chord table
+    /// scopes to the canvas (contract 39 N-3) said nothing at all (the
+    /// NVDA pass's F12). OD-5 amends D15's clause: the board follows,
+    /// as mac's board does (<c>CanvasRendererView.swift</c>'s ←/→ call
+    /// <c>canvasFollowConnection</c>), and the reveal after the follow
+    /// brings the destination into view.
+    /// </para>
     /// <para>
     /// The spec asked for "connection-follow when the selected card has
     /// connections, else tree semantics, as mac does". Mac does not do
@@ -1659,7 +1709,10 @@ internal sealed class CanvasNavigator
     private bool ArrowFollow(bool forward)
     {
         if (_presenter is not
-            { ProjectionHasFocus: true, Projection: CanvasSurfaceKind.Outline })
+            {
+                ProjectionHasFocus: true,
+                Projection: CanvasSurfaceKind.Outline or CanvasSurfaceKind.Visual,
+            })
         {
             return false;
         }
@@ -1810,13 +1863,31 @@ internal sealed class CanvasNavigator
 
     /// <summary>
     /// The one movement every verb ends in: the document's narrating
-    /// selection mutation, then the reader's focus follows it on whatever
-    /// projection is showing.
+    /// selection mutation, then the reader follows it on whatever
+    /// projection is showing — focus on the row, and the seat in view
+    /// (R-12: on the board, where no row takes focus, the reveal is the
+    /// whole of it).
     /// </summary>
     private void MoveTo(string nodeId)
     {
         _document.SelectNode(nodeId);
+        ReaderFollows(nodeId);
+    }
+
+    /// <summary>
+    /// Put the reader where a move left the selection, silently: the row
+    /// takes focus where the projection has rows, and the seat is brought
+    /// into view — which on the visual board, whose cards take no focus
+    /// (<see cref="ICanvasSurfacePresenter.FocusRow"/> answers false
+    /// there, m6), is the only way the reader sees where they went (R-12,
+    /// #1255; D4: a selection made on this surface always scrolls into
+    /// view). Every navigator move ends here, so none of them can move the
+    /// seat off-screen and leave it there.
+    /// </summary>
+    private void ReaderFollows(string nodeId)
+    {
         _presenter?.FocusRow(nodeId);
+        _presenter?.RevealSeat(nodeId);
     }
 
     /// <summary>There is nowhere to move: either the filter matched

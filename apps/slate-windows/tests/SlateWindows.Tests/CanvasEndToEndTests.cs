@@ -293,6 +293,10 @@ public sealed class CanvasEndToEndTests : IDisposable
 
         public bool FocusRow(string nodeId) => false;
 
+        public void RevealSeat(string nodeId)
+        {
+        }
+
         public bool FocusProjection() => false;
     }
 
