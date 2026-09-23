@@ -61,9 +61,52 @@ public sealed class AccessibilityNotificationDispatcherTests
             "Unknown priority.", "slate-accessibility-announcement"), Assert.Single(raised));
     }
 
+    /// <summary>R-1 (#1244): the production raise is guarded by UIA's own
+    /// "is any client listening", injected here, and asked at EVERY post —
+    /// a screen reader started after Slate hears the next line, which a
+    /// probe read once at construction would never let it.</summary>
+    [Fact]
+    public void ProductionRaiseSkipsWhenNoClientListens()
+    {
+        bool listening = false;
+        var raised = new List<Notification>();
+        var dispatcher = new AccessibilityNotificationDispatcher(
+            (kind, processing, text, activityId) => raised.Add(new Notification(kind, processing, text, activityId)),
+            () => listening);
+
+        dispatcher.Post(new RenderedAnnouncement("Nobody listens.", A11yPriority.High));
+        dispatcher.Post(new A11yEvent.HostComposed("Nobody listens.", A11yPriority.Medium));
+        Assert.Empty(raised);
+
+        listening = true;
+        dispatcher.Post(new RenderedAnnouncement("A client listens.", A11yPriority.High));
+        Assert.Equal(new Notification(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent,
+            "A client listens.", "slate-accessibility-announcement"), Assert.Single(raised));
+    }
+
+    /// <summary>R-1's SLATE_UIA_DIAGNOSTICS line is written once per CHANGE
+    /// of the listener state — the two facts a run needs to tell "raised into
+    /// a deaf process" from "not raised" — never once per announcement.</summary>
+    [Fact]
+    public void TheListenerStateIsReportedOncePerChange()
+    {
+        int last = -1;
+        Assert.Equal("clientsListening=True, notificationListenerExists=False",
+            AccessibilityNotificationDispatcher.ListenerStateChange(ref last, true, false));
+        Assert.Null(AccessibilityNotificationDispatcher.ListenerStateChange(ref last, true, false));
+        Assert.Equal("clientsListening=True, notificationListenerExists=True",
+            AccessibilityNotificationDispatcher.ListenerStateChange(ref last, true, true));
+        Assert.Equal("clientsListening=False, notificationListenerExists=True",
+            AccessibilityNotificationDispatcher.ListenerStateChange(ref last, false, true));
+        Assert.Equal("clientsListening=False, notificationListenerExists=False",
+            AccessibilityNotificationDispatcher.ListenerStateChange(ref last, false, false));
+        Assert.Null(AccessibilityNotificationDispatcher.ListenerStateChange(ref last, false, false));
+    }
+
     private static AccessibilityNotificationDispatcher Recording(List<Notification> raised) =>
         new((kind, processing, text, activityId) =>
-            raised.Add(new Notification(kind, processing, text, activityId)));
+            raised.Add(new Notification(kind, processing, text, activityId)),
+            () => true);
 
     private sealed record Notification(AutomationNotificationKind Kind,
         AutomationNotificationProcessing Processing, string Text, string ActivityId);
