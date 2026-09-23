@@ -62,7 +62,9 @@
 //! persisted table would have to be shared through the cache database
 //! with every other session on the same vault (the CLI opens its own),
 //! where one process's initial-open discard would silently drop another
-//! live process's unreconciled tail.
+//! live process's unreconciled tail. The tables are created by the first
+//! rescan, never at open: a session that never rescans never touches the
+//! temp store, and opening a vault never depends on it.
 
 use std::collections::HashMap;
 
@@ -183,8 +185,21 @@ fn invalid(message: &str) -> VaultError {
     }
 }
 
+/// Whether this connection has created the ledger yet. The TEMP tables are
+/// created lazily by the first rescan ([`ensure_tables`]), so opening a
+/// session never depends on the temp store, and a session that never
+/// rescans (the mac host and the CLI today) never touches it.
+fn tables_exist(conn: &Connection) -> Result<bool, VaultError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM temp.sqlite_master
+                       WHERE type = 'table' AND name = 'scan_delta_generation')",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
 /// Create the ledger's TEMP tables on the session connection. Idempotent;
-/// called once when the session opens.
+/// the rescan calls it before its scan transaction opens.
 pub(crate) fn ensure_tables(conn: &Connection) -> Result<(), VaultError> {
     conn.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS scan_delta_generation (
@@ -212,6 +227,9 @@ pub(crate) fn ensure_tables(conn: &Connection) -> Result<(), VaultError> {
 /// workspace state survives an open to reconcile, so nothing retained
 /// may be applied or spoken against the rebuilt index.
 pub(crate) fn discard_all(conn: &Connection) -> Result<(), VaultError> {
+    if !tables_exist(conn)? {
+        return Ok(());
+    }
     conn.execute_batch(
         "DELETE FROM temp.scan_delta_row;
          DELETE FROM temp.scan_delta_generation;",
@@ -367,7 +385,7 @@ fn row_count(conn: &Connection, generation: u64) -> Result<u64, VaultError> {
 
 /// True when a Pending generation exists — a new scan must not start.
 pub(crate) fn has_pending(conn: &Connection) -> Result<bool, VaultError> {
-    Ok(pending_row(conn)?.is_some())
+    Ok(tables_exist(conn)? && pending_row(conn)?.is_some())
 }
 
 /// The Pending generation and the cursor its effects have reached.
@@ -375,6 +393,9 @@ pub(crate) fn pending(
     conn: &Connection,
     session_nonce: u64,
 ) -> Result<Option<ScanDeltaPending>, VaultError> {
+    if !tables_exist(conn)? {
+        return Ok(None);
+    }
     let Some((generation, cursor)) = pending_row(conn)? else {
         return Ok(None);
     };
@@ -386,7 +407,27 @@ pub(crate) fn pending(
 }
 
 /// Both halves of the ledger, for diagnostics and the invariant facts.
+/// Fails closed if the ledger ever holds more than one generation in one
+/// state — the bound every write preserves — so a violation is reported,
+/// never hidden behind whichever generation a query happened to return.
 pub(crate) fn ledger(conn: &Connection, session_nonce: u64) -> Result<ScanDeltaLedger, VaultError> {
+    if !tables_exist(conn)? {
+        return Ok(ScanDeltaLedger::default());
+    }
+    let crowded: Option<i64> = conn
+        .query_row(
+            "SELECT COUNT(*) FROM temp.scan_delta_generation
+             GROUP BY state HAVING COUNT(*) > 1 LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(count) = crowded {
+        return Err(invalid(&format!(
+            "the scan delta ledger holds {count} generations in one state; \
+             at most one Pending and one Applied may exist"
+        )));
+    }
     let applied = match applied_generation(conn)? {
         Some(generation) => Some(ScanDeltaApplied {
             generation,
@@ -412,6 +453,11 @@ pub(crate) fn page(
     if paging.limit == 0 || paging.limit > MAX_SCAN_DELTA_PAGE_LIMIT {
         return Err(invalid(&format!(
             "scan delta page limit must be between 1 and {MAX_SCAN_DELTA_PAGE_LIMIT}"
+        )));
+    }
+    if !tables_exist(conn)? {
+        return Err(invalid(&format!(
+            "scan delta generation {generation} is not pending"
         )));
     }
     match pending_row(conn)? {
@@ -476,6 +522,11 @@ pub(crate) fn page_applied(
     generation: u64,
     next_cursor: Option<&str>,
 ) -> Result<(), VaultError> {
+    if !tables_exist(conn)? {
+        return Err(invalid(&format!(
+            "scan delta generation {generation} is not pending"
+        )));
+    }
     let tx = db::begin_fenced(conn)?;
     let current = match pending_row(&tx)? {
         Some((pending, cursor)) if pending == generation => cursor,
@@ -621,6 +672,9 @@ fn coalesce_into_applied(conn: &Connection, generation: u64) -> Result<(), Vault
 /// it, in one transaction. Refused while a Pending generation exists:
 /// releasing then would split a retry's outcome across two sentences.
 pub(crate) fn release(conn: &Connection) -> Result<ScanDeltaOutcome, VaultError> {
+    if !tables_exist(conn)? {
+        return Ok(ScanDeltaOutcome::default());
+    }
     let tx = db::begin_fenced(conn)?;
     if pending_row(&tx)?.is_some() {
         return Err(invalid(

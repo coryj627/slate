@@ -912,6 +912,59 @@ fn the_ledger_never_holds_more_than_one_pending_and_one_applied_generation() {
     assert!(raw_generations_by_state(&session).is_empty());
 }
 
+/// The ledger read is the hosts' view of the bound, so it fails closed on
+/// a violation instead of answering with whichever generation a query
+/// happened to return — the host twin of the bound fact
+/// (`TheLedgerNeverHoldsMoreThanOnePendingAndOneAppliedGeneration`)
+/// observes the invariant through it.
+#[test]
+fn a_ledger_read_refuses_a_second_generation_in_one_state() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"a\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    std::fs::write(tmp.path().join("b.md"), b"b\n").unwrap();
+    rescan(&session);
+    apply_pending(&session, 10);
+    let applied = session.scan_delta_ledger().unwrap().applied.unwrap();
+
+    let forge = |generation: u64, state: i64| {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO temp.scan_delta_generation (generation, state) VALUES (?1, ?2)",
+            rusqlite::params![generation as i64, state],
+        )
+        .unwrap();
+    };
+    forge(applied.generation + 100, 1);
+    assert!(
+        matches!(
+            session.scan_delta_ledger(),
+            Err(VaultError::InvalidArgument { .. })
+        ),
+        "two Applied generations read as a bounded ledger"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM temp.scan_delta_generation WHERE generation != ?1",
+            rusqlite::params![applied.generation as i64],
+        )
+        .unwrap();
+    }
+    assert!(session.scan_delta_ledger().is_ok());
+
+    forge(applied.generation + 101, 0);
+    forge(applied.generation + 102, 0);
+    assert!(
+        matches!(
+            session.scan_delta_ledger(),
+            Err(VaultError::InvalidArgument { .. })
+        ),
+        "two Pending generations read as a bounded ledger"
+    );
+}
+
 fn raw_rows_of(
     session: &VaultSession,
     generation: u64,
@@ -1154,6 +1207,52 @@ fn coalescing_composes_each_path_against_the_last_release() {
         removed,
         "modify -> remove"
     );
+}
+
+fn temp_ledger_exists(session: &VaultSession) -> bool {
+    let conn = session.conn.lock().unwrap();
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM temp.sqlite_master WHERE name = 'scan_delta_generation')",
+        [],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+/// The ledger's TEMP tables are created by the first rescan, never at open:
+/// opening a vault never depends on the temp store, and a session that
+/// never rescans (the mac host, the CLI) never touches it. Every read of
+/// an absent ledger answers "nothing retained" without creating it.
+#[test]
+fn the_ledger_is_created_by_the_first_rescan_not_at_open() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"a\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(!temp_ledger_exists(&session), "the open created the ledger");
+
+    assert_eq!(
+        session.scan_delta_ledger().unwrap(),
+        ScanDeltaLedger::default()
+    );
+    assert_eq!(session.scan_delta_pending().unwrap(), None);
+    assert_eq!(
+        session.scan_delta_release().unwrap(),
+        ScanDeltaOutcome::default()
+    );
+    assert!(matches!(
+        session.scan_delta_page(1, Paging::first(1)),
+        Err(VaultError::InvalidArgument { .. })
+    ));
+    assert!(matches!(
+        session.scan_delta_page_applied(1, None),
+        Err(VaultError::InvalidArgument { .. })
+    ));
+    assert!(!temp_ledger_exists(&session), "a read created the ledger");
+
+    std::fs::write(tmp.path().join("b.md"), b"b\n").unwrap();
+    assert_eq!(rescan(&session).files_changed, 1);
+    assert!(temp_ledger_exists(&session), "the first rescan creates it");
 }
 
 // --- restart protocol --------------------------------------------------------------
