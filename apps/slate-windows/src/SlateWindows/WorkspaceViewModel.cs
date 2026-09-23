@@ -605,9 +605,19 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            Status = $"Save blocked by editor integrity check: {exception.Message}";
+            // W7-7 R-7 (#1249; contract 38 D-10): the editor produced no
+            // verified snapshot. ONE NoteSaveBlocked carries core's
+            // integrity sentence, and the status shows the sentence that is
+            // spoken. The exception's own text is host copy (or a runtime
+            // message) and reaches neither; its type goes to the durable
+            // log for diagnosis.
+            HostLog.Write(HostDiagnosticEvent.EditorSaveIntegrityBlocked, exception);
+            var blocked = new A11yEvent.NoteSaveBlocked(
+                System.IO.Path.GetFileName(Path),
+                SlateUniffiMethods.EditorIntegrityDetail());
+            Status = SlateUniffiMethods.A11yRender(blocked).Text;
             _documentChanged?.Invoke(this, null);
-            _announce(new A11yEvent.NoteSaveBlocked(System.IO.Path.GetFileName(Path), exception.Message));
+            _announce(blocked);
             return false;
         }
 

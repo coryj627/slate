@@ -40,6 +40,7 @@ internal enum HostDiagnosticEvent
     EditorEmbedPreviewRejectedUnavailable,
     EditorEmbedPreviewRequested,
     EditorMathRefreshFailed,
+    EditorSaveIntegrityBlocked,
     FileRecentsPersistFailed,
     GraphConfigDecodeFailed,
     GraphConfigPersistFailed,
