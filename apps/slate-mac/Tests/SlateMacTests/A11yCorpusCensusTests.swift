@@ -115,7 +115,7 @@ final class A11yCorpusCensusTests: XCTestCase {
             .embedPreviewUnavailable(target: "recipes^step-3", reason: .blockNotFound(targetPath: "recipes.md", blockId: "step-3")),
             .embedPreviewUnavailable(target: "Deep", reason: .depthLimitReached),
             .embedPreviewUnavailable(target: "Locked", reason: .readError(message: "Access is denied. (os error 5)")),
-            .embedPreviewUnavailable(target: "Target", reason: nil),
+            .embedPreviewUnavailable(target: "Target", reason: .readError(message: "sqlite error: database disk image is malformed")),
             .citationSummaryShown(citations: 0, sources: 0),
             .citationSummaryShown(citations: 1, sources: 2),
             .citationSummaryShown(citations: 2, sources: 1),
