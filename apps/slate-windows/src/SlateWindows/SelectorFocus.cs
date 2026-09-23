@@ -4,13 +4,15 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Threading;
 
 namespace SlateWindows;
 
 /// <summary>
 /// W7-7 PR 4 (#1247, contract R-5): a list's landing is an ITEM — the
-/// selected one, else the first that can take the keys — never the bare
-/// container.
+/// selected one, else the first that can take the keys — and a list that
+/// has items never takes the keys itself.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -28,19 +30,26 @@ namespace SlateWindows;
 /// group heading is a disabled separator — is passed over for the next.
 /// </para>
 /// <para>
-/// An EMPTY list's stop is its notice when one is showing (spec §5.2.2): the
-/// caller names the notices, and the first visible one that takes the keys
-/// is the landing. With none, the list itself takes focus (AR-6): there is
-/// no row to land on, and the list is still the stop. A combo box or a grid
-/// is not a list landing (<see cref="IsListLanding"/>) and is never passed.
+/// A row whose container does not exist is realized NOW: a generator that
+/// has not produced containers yet makes <c>ScrollIntoView</c> defer to
+/// Loaded priority, so the list is laid out first — which generates the
+/// viewport's containers — and the item is then brought in, which a
+/// virtualizing panel realizes. Only a row that still has no container
+/// (the list is not laid out at all) is left to a deferred seat, and the
+/// call answers false so the caller lands on its own stable stop. The
+/// seat is for the NEWEST request only — any later landing, the caller's
+/// fallback among them, supersedes it — and runs only while the keys are
+/// still exactly where the caller left them. Codex round 3: the list
+/// itself used to hold the keys meanwhile, and NVDA announced the bare
+/// list before the row.
 /// </para>
 /// <para>
-/// A row whose container has not been generated yet — a virtualizing panel
-/// after a republish; measured on the Citations list (#1098), whose
-/// generator still answered null at Input priority — holds focus on the
-/// list, so it is never stranded, and seats it on the row once the
-/// container exists. That second step stands down unless focus is still
-/// exactly on the list.
+/// An EMPTY list's stop is its notice when one is showing (spec §5.2.2):
+/// the caller names the notices, and the first visible one that takes the
+/// keys is the landing. With none, the empty list itself takes focus
+/// (AR-6): there is no row to land on, and the list is still the stop. A
+/// combo box or a grid is not a list landing (<see cref="IsListLanding"/>)
+/// and is never passed.
 /// </para>
 /// </remarks>
 internal static class SelectorFocus
@@ -50,38 +59,56 @@ internal static class SelectorFocus
     /// a real list's first row sits right after its first heading.</summary>
     private const int FirstRowSearchLimit = 64;
 
-    /// <returns>Whether a row took focus now.</returns>
+    /// <summary>The newest landing request on this UI thread; a deferred
+    /// seat runs only for it.</summary>
+    [ThreadStatic]
+    private static int _newestRequest;
+
+    private enum Landing
+    {
+        Landed,
+        Unrealized,
+        Refused,
+    }
+
+    /// <returns>Whether the keys landed now: on a row, or — for an EMPTY
+    /// list — on its showing notice or on the list itself (AR-6). False
+    /// means nothing took them, and the caller lands on its stable
+    /// stop.</returns>
     internal static bool FocusFirstOrSelectedItem(Selector selector, params UIElement?[] emptyNotices)
     {
+        int request = ++_newestRequest;
         if (!selector.HasItems)
         {
             foreach (UIElement? notice in emptyNotices)
             {
                 if (notice is { IsVisible: true } && notice.Focus())
                 {
-                    return false;
+                    return true;
                 }
             }
 
-            _ = selector.Focus();
-            return false;
+            return selector.Focus();
         }
 
-        if (FocusLandingItem(selector))
+        Landing landing = FocusLandingItem(selector);
+        if (landing != Landing.Unrealized)
         {
-            return true;
+            return landing == Landing.Landed;
         }
 
-        _ = selector.Focus();
+        IInputElement? leftAt = Keyboard.FocusedElement;
         _ = selector.Dispatcher.InvokeAsync(
             () =>
             {
-                if (selector.IsKeyboardFocused && selector.HasItems)
+                if (request == _newestRequest
+                    && ReferenceEquals(Keyboard.FocusedElement, leftAt)
+                    && selector.HasItems)
                 {
                     _ = FocusLandingItem(selector);
                 }
             },
-            System.Windows.Threading.DispatcherPriority.Background);
+            DispatcherPriority.Background);
         return false;
     }
 
@@ -92,40 +119,74 @@ internal static class SelectorFocus
     internal static bool IsListLanding(UIElement element) =>
         element is Selector and not ComboBox and not DataGrid;
 
-    private static bool FocusLandingItem(Selector selector)
+    /// <summary>A leaf's first stop — the region ring's right-pane content
+    /// landing and a leaf reveal's. A list lands on its row. Any other stop
+    /// is judged by where the keys END UP (W7-6 #1240): a stop that hands
+    /// them on to an item or a cell of its own answers false from its own
+    /// <c>Focus()</c> though the keys are inside it, and a caller that
+    /// falls back on false would take them away again.</summary>
+    /// <returns>Whether the keys landed on the stop or inside it.</returns>
+    internal static bool LandOnStop(UIElement stop) =>
+        IsListLanding(stop)
+            ? FocusFirstOrSelectedItem((Selector)stop)
+            : stop.Focus() || stop.IsKeyboardFocusWithin;
+
+    private static Landing FocusLandingItem(Selector selector)
     {
         if (selector.SelectedItem is { } selected && selector.Items.Contains(selected))
         {
-            return RealizedContainer(selector, selected) is { } container && container.Focus();
+            return RealizedContainer(selector, selected) is not { } container
+                ? Landing.Unrealized
+                : container.Focus() ? Landing.Landed : Landing.Refused;
         }
 
         int searched = 0;
         foreach (object item in selector.Items)
         {
-            if (++searched > FirstRowSearchLimit
-                || RealizedContainer(selector, item) is not { } container)
+            if (++searched > FirstRowSearchLimit)
             {
-                return false;
+                return Landing.Refused;
+            }
+
+            if (RealizedContainer(selector, item) is not { } container)
+            {
+                return Landing.Unrealized;
             }
 
             if (container.Focus())
             {
-                return true;
+                return Landing.Landed;
             }
         }
 
-        return false;
+        return Landing.Refused;
     }
 
     private static UIElement? RealizedContainer(Selector selector, object item)
     {
-        if (selector.ItemContainerGenerator.ContainerFromItem(item) is UIElement realized)
+        if (Container(selector, item) is { } realized)
         {
             return realized;
         }
 
-        (selector as ListBox)?.ScrollIntoView(item);
-        selector.UpdateLayout();
-        return selector.ItemContainerGenerator.ContainerFromItem(item) as UIElement;
+        if (selector.ItemContainerGenerator.Status != GeneratorStatus.ContainersGenerated)
+        {
+            selector.UpdateLayout();
+            if (Container(selector, item) is { } generated)
+            {
+                return generated;
+            }
+        }
+
+        if (selector.ItemContainerGenerator.Status == GeneratorStatus.ContainersGenerated)
+        {
+            (selector as ListBox)?.ScrollIntoView(item);
+            selector.UpdateLayout();
+        }
+
+        return Container(selector, item);
     }
+
+    private static UIElement? Container(Selector selector, object item) =>
+        selector.ItemContainerGenerator.ContainerFromItem(item) as UIElement;
 }
