@@ -23,7 +23,14 @@ internal sealed partial class FilesSidebarViewModel
     private int _filterGeneration;
     private string _filterText = string.Empty;
     private string? _scopeTag;
-    private (string Query, ulong Total)? _lastFilterAnnouncement;
+
+    /// <summary>The last spoken count, de-duplicated on (query, scope,
+    /// total) — mac's (key, total) with its <c>tagScopeAnnounceKey</c>: the
+    /// same request published again with the same total (a refresh) is not
+    /// news; a changed total (a rescan), or an equal total for another
+    /// query or tag scope, is (W7-7 R-3, codex round 4). A request's
+    /// staleness is (query, scope) alone — the total is its answer.</summary>
+    private (string Query, string? ScopeTag, ulong Total)? _lastFilterAnnouncement;
 
     public ObservableCollection<FileTreeNodeViewModel> FilterResults { get; } = [];
     internal Task FilterCompletion
@@ -458,12 +465,9 @@ internal sealed partial class FilesSidebarViewModel
             // reassert — the user asked for the summary.
             _statusToReassert = null;
             Status = outcome.AudioSummary;
-            // A scope's dedup key cannot collide with a typed query: NUL
-            // never reaches the field (mac's tagScopeAnnounceKey).
-            string announcementKey = scopeTag is null ? query : $"\0tag:{scopeTag}\0{query}";
-            if (_lastFilterAnnouncement != (announcementKey, outcome.Total))
+            if (_lastFilterAnnouncement != (query, scopeTag, outcome.Total))
             {
-                _lastFilterAnnouncement = (announcementKey, outcome.Total);
+                _lastFilterAnnouncement = (query, scopeTag, outcome.Total);
                 // W7-7 (R-3): the field never shows a tag scope, so the
                 // count carries it and core renders the tag into the
                 // sentence ("File list, 1 item. Filtered by tag two words.").
