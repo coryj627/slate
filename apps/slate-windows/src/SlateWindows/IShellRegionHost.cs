@@ -37,8 +37,9 @@ internal interface IShellRegionHost
     /// <summary>Let go of the landing the last <see
     /// cref="ShellRegionLanding.Pending"/> answer is holding (W7-7 PR 8, R-10:
     /// a newer press cancels it): no line, no fall-through, and focus is not
-    /// moved for it. Answers whether it was still held — false when the
-    /// region already let go of it (it completed, the reader moved on, the
-    /// view changed).</summary>
+    /// moved for it. Answers whether it was still held with the reader
+    /// exactly where the held press left them — false when the region already
+    /// let go of it (it completed, the view changed) or the reader moved,
+    /// even between two stops of one region.</summary>
     bool WithdrawHeldLanding();
 }

@@ -125,14 +125,18 @@ public sealed class ReadingFocusTests
     /// neither speaks nor resumes the ring: withdrawn when the reader moves
     /// focus elsewhere before the content applies — including after a
     /// request made while focus sat on an element already on its way out (a
-    /// palette-invoked toggle's collapsed search box), judged from where
-    /// focus settled — and when the view it waits on is hidden, unloaded or
-    /// rebound to another projection. Focus that WPF's recovery moved (its
-    /// origin stopped being shown) is not the reader's choice, so that
-    /// landing still lands, and speaks.</summary>
+    /// palette-invoked toggle's collapsed search box), and a move already
+    /// queued at Input behind the request — and when the view it waits on is
+    /// hidden, unloaded or rebound to another projection. Leaving is latched
+    /// from the request's own element: coming back does not revive the
+    /// landing. Focus that WPF's recovery moved (its origin stopped being
+    /// shown) is not the reader's choice, so that landing still lands, and
+    /// speaks.</summary>
     [Theory]
     [InlineData("reader moved on", false)]
     [InlineData("reader moved on after a hidden origin", false)]
+    [InlineData("an input move queued behind the request", false)]
+    [InlineData("left and came back", false)]
     [InlineData("view hidden", false)]
     [InlineData("surface unloaded", false)]
     [InlineData("surface rebound", false)]
@@ -156,6 +160,11 @@ public sealed class ReadingFocusTests
             ShellRegionLanding.Pending,
             ((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.Editor, () => spoken++, () => fellThrough++));
         Assert.True(surface.IsFocusLandingPending);
+        if (change == "an input move queued behind the request")
+        {
+            _ = Dispatcher.CurrentDispatcher.BeginInvoke(
+                DispatcherPriority.Input, () => host.Elsewhere.Focus());
+        }
         // The work already queued behind the request runs before the reader
         // can act.
         PumpedDispatcher.Drain();
@@ -163,6 +172,15 @@ public sealed class ReadingFocusTests
         IInputElement? expected = host.Sentinel;
         switch (change)
         {
+            case "an input move queued behind the request":
+                Assert.False(surface.IsFocusLandingPending);
+                expected = host.Elsewhere;
+                break;
+            case "left and came back":
+                Assert.True(host.Elsewhere.Focus());
+                Assert.False(surface.IsFocusLandingPending);
+                Assert.True(host.Sentinel.Focus());
+                break;
             case "reader moved on":
             case "reader moved on after a hidden origin":
                 Assert.True(host.Elsewhere.Focus());
@@ -582,11 +600,12 @@ public sealed class ReadingFocusTests
         Assert.Equal([host.RightPaneLine()], host.Announced);
     });
 
-    /// <summary>R-10: a newer request replacing the ring's held canvas landing
-    /// withdraws it silently even when the reader has already put focus in
-    /// the surface themselves (its filter field, while the canvas is still
-    /// loading): the ring's line belongs to its own landing, never to another
-    /// route's.</summary>
+    /// <summary>R-10: a newer request the document raises in place of the
+    /// ring's held canvas landing withdraws it silently, even when the reader
+    /// has already put focus in the surface themselves (its filter field,
+    /// while the canvas is still loading — a move into the landing's own
+    /// target, which is no departure): the ring's line belongs to its own
+    /// landing, never to another's.</summary>
     [Fact]
     public void AReplacedDocumentLandingIsSilentEvenWithFocusInTheSurface() => RunSta(() =>
     {
@@ -604,7 +623,8 @@ public sealed class ReadingFocusTests
         object? held = host.EditorLandingRequest();
         Assert.NotNull(held);
 
-        host.Workspace.RequestActiveEditorFocus();
+        // The document raises a landing of its own in the ring's place.
+        host.Tab.Canvas!.RequestFocusLanding(host.Tab);
         PumpedDispatcher.Drain();
 
         Assert.NotSame(held, host.EditorLandingRequest());
@@ -657,6 +677,316 @@ public sealed class ReadingFocusTests
         Assert.Equal(ShellRegionLanding.Landed, ring.Attempts[1].Outcome);
         Assert.True(host.EditorStop().IsKeyboardFocusWithin);
         Assert.Equal([host.TabLine(other), host.TabLine(host.Tab), host.EditorLine()], host.Announced);
+    });
+
+    /// <summary>R-10: readiness is the CURRENT projection, never any earlier
+    /// merge. A reader who left reading mode, edited the note elsewhere and
+    /// came back finds the surface still showing the old projection while the
+    /// refresh their return started is in flight (production scheduling: the
+    /// fetch runs on the pool): the landing holds for that refresh — never
+    /// seated on text it is about to replace — and settles with it: on the
+    /// edited note, the line spoken over the new text (through a retry, when
+    /// the note changed again under the fetch); on the unchanged note, the
+    /// reader's caret kept; and a refresh that fails is a refusal.</summary>
+    [Theory]
+    [InlineData("edited")]
+    [InlineData("edited while it fetched")]
+    [InlineData("unchanged")]
+    [InlineData("failed")]
+    public void AHeldLandingWaitsForTheRefreshInFlight(string refresh) => RunSta(() =>
+    {
+        const string Edited = "An edited paragraph the reader has not heard yet.";
+        using var host = new Host();
+        host.Initialize(readingMode: true);
+        ReadingSurface surface = host.ShownSurface();
+        ReadingContentViewModel model = host.BindProjectionInFlight(surface);
+        host.ReleaseProjection();
+        Assert.Contains(NoteText, UiaDocumentText(surface));
+        surface.CaretPosition = surface.Document.ContentEnd;
+        int seated = surface.Document.ContentStart.GetOffsetToPosition(surface.CaretPosition);
+        Assert.True(seated > 2, "the fixture's seat must not be the document start");
+
+        // Out of reading mode (the model stops observing the buffer), an
+        // edit, and back: the return refreshes, and the fetch is held.
+        model.Deactivate();
+        if (refresh == "edited")
+        {
+            host.Tab.Text = "# Reading focus\n\n" + Edited + "\n";
+        }
+        host.HoldNextFetch(failsTerminally: refresh == "failed");
+        model.Activate();
+        Assert.True(model.RefreshInFlight);
+        Assert.True(host.Sentinel.Focus());
+        int spoken = 0;
+        int fellThrough = 0;
+        string? readWhenSpoken = null;
+
+        ShellRegionLanding landing = ((IShellRegionHost)host.Shell).TryLand(
+            ShellRegionKind.Editor,
+            () =>
+            {
+                spoken++;
+                readWhenSpoken = UiaDocumentText(surface);
+            },
+            () => fellThrough++);
+        PumpedDispatcher.Drain();
+
+        Assert.Equal(ShellRegionLanding.Pending, landing);
+        Assert.Same(host.Sentinel, Keyboard.FocusedElement);
+        Assert.True(surface.IsFocusLandingPending);
+        Assert.Equal(0, spoken);
+        if (refresh == "edited while it fetched")
+        {
+            // The note changes under the fetch: its publish finds the tuple
+            // drifted and refreshes again, and the landing waits through that
+            // retry instead of landing on the projection the edit obsoleted.
+            model.Deactivate();
+            host.Tab.Text = "# Reading focus\n\n" + Edited + "\n";
+            host.HoldNextFetch();
+            host.ReleaseProjection();
+            Assert.True(model.RefreshInFlight);
+            Assert.True(surface.IsFocusLandingPending);
+            Assert.Same(host.Sentinel, Keyboard.FocusedElement);
+            Assert.Equal(0, spoken);
+        }
+
+        host.ReleaseProjection();
+
+        Assert.False(surface.IsFocusLandingPending);
+        if (refresh == "failed")
+        {
+            Assert.Equal(1, fellThrough);
+            Assert.Equal(0, spoken);
+            Assert.Same(host.Sentinel, Keyboard.FocusedElement);
+            return;
+        }
+
+        AssertFocused(surface, $"the landing held for the refresh ({refresh})");
+        Assert.Equal(1, spoken);
+        Assert.Equal(0, fellThrough);
+        if (refresh.StartsWith("edited", StringComparison.Ordinal))
+        {
+            Assert.Contains(Edited, readWhenSpoken);
+            Assert.DoesNotContain(NoteText, readWhenSpoken);
+        }
+        else
+        {
+            Assert.Contains(NoteText, readWhenSpoken);
+            Assert.Equal(seated, surface.Document.ContentStart.GetOffsetToPosition(surface.CaretPosition));
+        }
+    });
+
+    /// <summary>R-10: a route that activates another pane — here a
+    /// directional pane move, through the one editor-focus funnel every open,
+    /// tab switch and pane move takes — withdraws the landing the F6 ring
+    /// holds in the pane it leaves, synchronously: even when that pane's
+    /// content arrives AHEAD of the new pane's queued landing, nothing seats
+    /// in the old pane, the new pane stays active and takes the keys, and the
+    /// ring never speaks. (A graph pane needs no witness: an inactive group's
+    /// graph never takes the keys, Term F2.)</summary>
+    [Theory]
+    [InlineData("reading")]
+    [InlineData("canvas")]
+    public void APaneMoveWithdrawsTheHeldLandingInThePaneItLeaves(string kind) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(kind);
+        host.Workspace.OpenPath("other.md", WorkspaceOpenTarget.SplitRight);
+        host.Settle();
+        WorkspaceGroupViewModel paneB = host.Workspace.ActiveGroup;
+        WorkspaceTabViewModel otherTab = paneB.ActiveTab!;
+        Assert.True(host.Workspace.FocusDirectionalPane("horizontal", -1));
+        host.Settle();
+        Assert.NotSame(paneB, host.Workspace.ActiveGroup);
+        RingHost ring = host.UseRing();
+        host.HoldEditorLanding();
+        host.FocusTabBar();
+        host.Workspace.FocusNextPaneCommand.Execute(null);
+        PumpedDispatcher.Drain();
+        Assert.Equal(ShellRegionLanding.Pending, Assert.Single(ring.Attempts).Outcome);
+
+        Assert.True(host.Workspace.FocusDirectionalPane("horizontal", +1));
+        host.LetEditorLandingArriveAhead();
+        PumpedDispatcher.Drain();
+
+        Assert.Same(paneB, host.Workspace.ActiveGroup);
+        Assert.False(host.EditorStop().IsKeyboardFocusWithin);
+        AssertFocused(host.ShownEditor(otherTab).TextArea, "the pane move");
+        // The pane move's own line, once; nothing from the ring. (The move
+        // also re-derives the right pane's leaves, which speak for
+        // themselves.)
+        Assert.Equal(
+            [new A11yEvent.EditorPaneFocused(2, 2, otherTab.Title, string.Empty)],
+            host.Announced.OfType<A11yEvent.EditorPaneFocused>());
+        Assert.Single(ring.Attempts);
+        Assert.Null(host.EditorLandingRequest());
+    });
+
+    /// <summary>R-10 (W7-6 §4's modal rule): a modal surface opening — the
+    /// command palette, or a sheet — withdraws the landing the F6 ring holds,
+    /// synchronously, for every asynchronous editor arm: its content arriving
+    /// under the modal seats nothing beneath it and speaks nothing through
+    /// it.</summary>
+    [Theory]
+    [InlineData("reading", "palette")]
+    [InlineData("reading", "sheet")]
+    [InlineData("canvas", "palette")]
+    [InlineData("canvas", "sheet")]
+    [InlineData("graph", "palette")]
+    [InlineData("graph", "sheet")]
+    public void AModalSurfaceOpeningWithdrawsTheHeldLanding(string kind, string modal) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(kind);
+        RingHost ring = host.UseRing();
+        host.HoldEditorLanding();
+        TabItem tabItem = host.FocusTabBar();
+        host.Workspace.FocusNextPaneCommand.Execute(null);
+        PumpedDispatcher.Drain();
+        Assert.Equal(ShellRegionLanding.Pending, Assert.Single(ring.Attempts).Outcome);
+
+        host.OpenModal(modal);
+
+        Assert.False(host.Workspace.HoldsShellRegionLanding);
+        Assert.Null(host.EditorLandingRequest());
+        if (kind == "reading")
+        {
+            Assert.False(host.ShownSurface().IsFocusLandingPending);
+        }
+
+        host.LetEditorLandingArrive();
+
+        Assert.False(host.EditorStop().IsKeyboardFocusWithin);
+        Assert.DoesNotContain(host.Announced, line => line is A11yEvent.EditorPaneFocused);
+        Assert.Single(ring.Attempts);
+        AssertFocused(tabItem, $"the late completion under the {modal}");
+    });
+
+    /// <summary>R-10: the held region is the ring's position only while the
+    /// reader is exactly where the held press left them. Held from the right
+    /// pane's content stop, then moved to its OTHER stop — one region, two
+    /// focusable controls — the landing is withdrawn with that move, and the
+    /// next press starts from the live position: F6 goes on past the right
+    /// pane (to the Files tree, the ring's next stop that can take focus
+    /// here), Shift+F6 goes back to the editor and asks it again — never the
+    /// right pane or the tab bar a restart from the held editor would reach.</summary>
+    [Theory]
+    [InlineData("reading", false)]
+    [InlineData("reading", true)]
+    [InlineData("canvas", false)]
+    [InlineData("canvas", true)]
+    public void ARepeatedPressAfterAMoveWithinTheRegionStartsFromFocus(string kind, bool backward) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(kind);
+        RingHost ring = host.UseRing();
+        host.HoldEditorLanding();
+        Assert.True(host.Elsewhere.Focus());
+        host.Workspace.FocusPreviousPaneCommand.Execute(null);
+        PumpedDispatcher.Drain();
+        Assert.Equal(ShellRegionLanding.Pending, Assert.Single(ring.Attempts).Outcome);
+
+        Assert.True(host.ElsewhereToo.Focus());
+        Assert.Equal(ShellRegionKind.RightPaneContent, ring.FocusedRegion());
+        Assert.Null(host.EditorLandingRequest());
+        if (kind == "reading")
+        {
+            Assert.False(host.ShownSurface().IsFocusLandingPending);
+        }
+
+        (backward ? host.Workspace.FocusPreviousPaneCommand : host.Workspace.FocusNextPaneCommand).Execute(null);
+        PumpedDispatcher.Drain();
+
+        if (backward)
+        {
+            Assert.Equal([ShellRegionKind.Editor, ShellRegionKind.Editor], ring.Tried);
+            Assert.Equal(ShellRegionLanding.Pending, ring.Attempts[1].Outcome);
+            Assert.Empty(host.Announced);
+            AssertFocused(host.ElsewhereToo, "Shift+F6 from the moved position");
+            return;
+        }
+
+        Assert.Equal(
+            [ShellRegionKind.Editor, ShellRegionKind.RightPaneRail, ShellRegionKind.StatusBar,
+                ShellRegionKind.MenuBar, ShellRegionKind.Files],
+            ring.Tried);
+        Assert.Equal([new A11yEvent.FilesRegionFocused()], host.Announced);
+        AssertFocused(host.Sentinel, "F6 from the moved position");
+    });
+
+    /// <summary>R-10: ONE terminal transition per held landing. A teardown
+    /// travels with a rebind — a tab navigated in place or closed — and in
+    /// EITHER order the rebind cancels the landing: the teardown's refusal is
+    /// decided once the move has run, finds its landing already ended, and is
+    /// ignored. Exactly one outcome, withdrawn and silent: no traversal
+    /// resumed after the reader was moved, no second completion.</summary>
+    [Theory]
+    [InlineData("reading", true)]
+    [InlineData("reading", false)]
+    [InlineData("canvas", true)]
+    [InlineData("canvas", false)]
+    public void ATeardownAndARebindEndTheHeldLandingOnce(string kind, bool tornDownFirst) => RunSta(() =>
+    {
+        using var host = new Host();
+        if (kind == "reading")
+        {
+            host.Initialize(readingMode: true);
+        }
+        else
+        {
+            host.Initialize(readingMode: false, besideTextTab: true, documentKind: kind);
+            host.Activate(host.Tab);
+        }
+        RingHost ring = host.UseRing();
+        host.HoldEditorLanding();
+        host.FocusTabBar();
+        host.Workspace.FocusNextPaneCommand.Execute(null);
+        PumpedDispatcher.Drain();
+        Assert.Equal(ShellRegionLanding.Pending, Assert.Single(ring.Attempts).Outcome);
+        ReadingSurface? surface = kind == "reading" ? host.ShownSurface() : null;
+
+        void TearDown()
+        {
+            if (surface is not null)
+            {
+                host.TearDownProjectionNow();
+            }
+            else
+            {
+                host.Tab.Canvas!.Shutdown();
+            }
+        }
+
+        void Rebind()
+        {
+            if (surface is not null)
+            {
+                surface.Model = host.Tab.Reading;
+            }
+            else
+            {
+                host.Workspace.ActiveGroup.ActiveTab = host.Other;
+            }
+        }
+
+        if (tornDownFirst)
+        {
+            TearDown();
+            Rebind();
+        }
+        else
+        {
+            Rebind();
+            TearDown();
+        }
+        PumpedDispatcher.Drain();
+
+        Assert.Single(ring.Attempts);
+        Assert.DoesNotContain(
+            host.Announced, line => line is A11yEvent.EditorPaneFocused or A11yEvent.LeafPanelShown);
+        Assert.Null(host.EditorLandingRequest());
+        Assert.False(surface?.IsFocusLandingPending ?? false);
+        Assert.False(host.EditorStopOrNull()?.IsKeyboardFocusWithin ?? false);
     });
 
     /// <summary>R-10's one owner: the surface takes focus only through a
@@ -836,8 +1166,10 @@ public sealed class ReadingFocusTests
     /// tab bar lands the pane's real active tab item; the two regions the
     /// rehosted pane does not carry stand in as the fixture's text boxes — the
     /// Files tree as <see cref="Host.Sentinel"/>, the right pane's content as
-    /// <see cref="Host.Elsewhere"/> — so every landing moves real keyboard
-    /// focus, and where the ring stands is read from it. Every attempt is
+    /// <see cref="Host.Elsewhere"/> (its first stop) and <see
+    /// cref="Host.ElsewhereToo"/> (another) — so every landing moves real
+    /// keyboard focus, and where the ring stands is read from it. The modal
+    /// state is the shipped shell's. Every attempt is
     /// recorded with its answer and the token the ring handed it (its two
     /// completions), so a fact can complete a stale one.</summary>
     private sealed class RingHost(Host host) : IShellRegionHost
@@ -850,7 +1182,7 @@ public sealed class ReadingFocusTests
         /// <summary>The regions the ring tried, in order.</summary>
         public ShellRegionKind[] Tried => [.. Attempts.Select(attempt => attempt.Region)];
 
-        public bool ModalSurfaceOpen => false;
+        public bool ModalSurfaceOpen => ((IShellRegionHost)host.Shell).ModalSurfaceOpen;
 
         public bool RightPaneHasContentStop => true;
 
@@ -864,7 +1196,7 @@ public sealed class ReadingFocusTests
                 return ShellRegionKind.Files;
             }
 
-            if (ReferenceEquals(focused, host.Elsewhere))
+            if (ReferenceEquals(focused, host.Elsewhere) || ReferenceEquals(focused, host.ElsewhereToo))
             {
                 return ShellRegionKind.RightPaneContent;
             }
@@ -910,7 +1242,9 @@ public sealed class ReadingFocusTests
     {
         private readonly FixtureVault _fixture = FixtureVault.Create(0, "reading-focus");
         private readonly Func<bool> _priorOverlayProbe = CanvasSurfaceView.ShellOverlayIsOpen;
-        private readonly ManualResetEventSlim _gate = new(false);
+        private readonly List<ManualResetEventSlim> _fetchGates = [new(false)];
+        private readonly HashSet<ManualResetEventSlim> _awaitedFetchGates = [];
+        private bool _fetchFails;
         private ReadingContentViewModel? _inFlight;
         private readonly TaskCompletionSource _canvasLoadGate =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -925,6 +1259,7 @@ public sealed class ReadingFocusTests
         public WorkspaceTabViewModel? Other { get; private set; }
         public TextBox Sentinel { get; private set; } = null!;
         public TextBox Elsewhere { get; private set; } = null!;
+        public TextBox ElsewhereToo { get; private set; } = null!;
         public List<A11yEvent> Announced { get; } = [];
         private FrameworkElement? _heldSurface;
 
@@ -996,11 +1331,14 @@ public sealed class ReadingFocusTests
             Assert.IsAssignableFrom<Panel>(pane.Parent).Children.Remove(pane);
             Sentinel = new TextBox { Text = "Focus starts outside the editor pane" };
             Elsewhere = new TextBox { Text = "Somewhere else the reader can go" };
+            ElsewhereToo = new TextBox { Text = "And another stop beside it" };
             var content = new DockPanel();
             DockPanel.SetDock(Sentinel, Dock.Top);
             DockPanel.SetDock(Elsewhere, Dock.Top);
+            DockPanel.SetDock(ElsewhereToo, Dock.Top);
             content.Children.Add(Sentinel);
             content.Children.Add(Elsewhere);
+            content.Children.Add(ElsewhereToo);
             content.Children.Add(pane);
             _window = new Window
             {
@@ -1029,6 +1367,10 @@ public sealed class ReadingFocusTests
                     "pack://application:,,,/SlateWindows;component/Themes/Slate.Light.xaml",
                     UriKind.Absolute),
             });
+            // The shell's own resources too: a split builds its panes from
+            // templates the pane looks up dynamically, which it found in the
+            // shell before the rehost.
+            _window.Resources.MergedDictionaries.Add(Shell.Resources);
             _window.Show();
             _window.Activate();
             _window.UpdateLayout();
@@ -1087,6 +1429,16 @@ public sealed class ReadingFocusTests
             return item;
         }
 
+        /// <summary>Lay the pane out and let queued work settle (a split
+        /// builds the new pane's views).</summary>
+        public void Settle()
+        {
+            _window!.UpdateLayout();
+            PumpedDispatcher.Drain();
+            _window.UpdateLayout();
+            PumpedDispatcher.Drain();
+        }
+
         /// <summary>Make <paramref name="tab"/> the active tab, as the tab
         /// strip does, and let its work settle.</summary>
         public void Activate(WorkspaceTabViewModel tab)
@@ -1127,10 +1479,14 @@ public sealed class ReadingFocusTests
         /// publishes nothing.</summary>
         public void TearDownProjection()
         {
-            _inFlight!.Dispose();
+            TearDownProjectionNow();
             PumpedDispatcher.Drain();
             ReleaseProjection();
         }
+
+        /// <summary>Only the teardown, with nothing pumped after it (the
+        /// fixture's cleanup lets the held fetch run out).</summary>
+        public void TearDownProjectionNow() => _inFlight!.Dispose();
 
         /// <summary>Put the editor stop where it will seat focus only LATER,
         /// in the state each arm really waits in: a reading projection still
@@ -1295,14 +1651,15 @@ public sealed class ReadingFocusTests
         /// is a production (asynchronous) model for the same tab, bound
         /// locally, with its fetch held at the test seam until
         /// <see cref="ReleaseProjection"/>.</summary>
-        public void BindProjectionInFlight(ReadingSurface surface, bool failsTerminally = false)
+        public ReadingContentViewModel BindProjectionInFlight(ReadingSurface surface, bool failsTerminally = false)
         {
+            Volatile.Write(ref _fetchFails, failsTerminally);
             _inFlight = new ReadingContentViewModel(Session, Tab, _ => { })
             {
                 FetchFaultForTests = () =>
                 {
-                    _ = _gate.Wait(TimeSpan.FromSeconds(30));
-                    return failsTerminally
+                    _ = GateForTheFetch().Wait(TimeSpan.FromSeconds(30));
+                    return Volatile.Read(ref _fetchFails)
                         ? new InvalidOperationException("The fixture's projection fails.")
                         : null;
                 },
@@ -1310,12 +1667,103 @@ public sealed class ReadingFocusTests
             surface.Model = _inFlight;
             PumpedDispatcher.Drain();
             Assert.True(ShowsLoadingNotice(surface));
+            return _inFlight;
         }
 
-        /// <summary>Open the gate and pump until the projection's publish,
-        /// posted from the pool, has run on this dispatcher.</summary>
+        /// <summary>Hold the in-flight model's NEXT fetch at a gate of its own,
+        /// failing it terminally when asked.</summary>
+        public void HoldNextFetch(bool failsTerminally = false)
+        {
+            Volatile.Write(ref _fetchFails, failsTerminally);
+            lock (_fetchGates)
+            {
+                _fetchGates.Add(new ManualResetEventSlim(false));
+            }
+        }
+
+        /// <summary>A fetch starting now waits at the newest gate.</summary>
+        private ManualResetEventSlim GateForTheFetch()
+        {
+            lock (_fetchGates)
+            {
+                ManualResetEventSlim gate = _fetchGates[^1];
+                _ = _awaitedFetchGates.Add(gate);
+                return gate;
+            }
+        }
+
+        /// <summary>The oldest gate still held: the one the pending fetch
+        /// waits at.</summary>
+        private ManualResetEventSlim? FirstHeldFetchGate()
+        {
+            lock (_fetchGates)
+            {
+                return _fetchGates.FirstOrDefault(gate => !gate.IsSet);
+            }
+        }
+
+        /// <summary>Let the held content arrive AHEAD of work already queued
+        /// at a lower priority (a funnel landing waits at Input): the reading
+        /// fetch and the canvas body run on the pool while this thread waits
+        /// unpumped, so their apply is queued first, and the caller's drain
+        /// runs it first.</summary>
+        public void LetEditorLandingArriveAhead()
+        {
+            if (Tab.IsReadingMode)
+            {
+                Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+                DispatcherOperation? posted = null;
+                void Posted(object? sender, DispatcherHookEventArgs args)
+                {
+                    if (!dispatcher.CheckAccess())
+                    {
+                        Volatile.Write(ref posted, args.Operation);
+                    }
+                }
+                dispatcher.Hooks.OperationPosted += Posted;
+                try
+                {
+                    (FirstHeldFetchGate() ?? throw new InvalidOperationException("No fetch is held.")).Set();
+                    Assert.True(
+                        SpinWait.SpinUntil(() => Volatile.Read(ref posted) is not null, TimeSpan.FromSeconds(30)),
+                        "the reading fetch never posted its publish");
+                }
+                finally
+                {
+                    dispatcher.Hooks.OperationPosted -= Posted;
+                }
+                return;
+            }
+
+            CanvasDocumentViewModel canvas = _loadingCanvas
+                ?? throw new InvalidOperationException("No canvas load is held.");
+            _canvasLoadGate.SetResult();
+            Assert.True(canvas.WhenAllWorkDrained().Wait(TimeSpan.FromSeconds(30)), "the canvas load never ran");
+        }
+
+        /// <summary>Open a modal surface as the shell's routes do: the command
+        /// palette (a lifecycle surface), or the template picker (a workspace
+        /// sheet).</summary>
+        public void OpenModal(string modal)
+        {
+            if (modal == "palette")
+            {
+                SetProperty(Lifecycle, nameof(VaultLifecycleViewModel.IsVaultOpen), true);
+                Lifecycle.Palette.Open();
+            }
+            else
+            {
+                Workspace.OpenTemplatePicker();
+            }
+            Assert.NotNull(Shell.OpenModalSurface);
+        }
+
+        /// <summary>Open the oldest held gate and pump until the projection's
+        /// publish, posted from the pool, has run on this dispatcher.</summary>
         public void ReleaseProjection()
         {
+            ManualResetEventSlim gate = FirstHeldFetchGate()
+                ?? throw new InvalidOperationException("No fetch is held.");
             Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
             DispatcherOperation? published = null;
             void Posted(object? sender, DispatcherHookEventArgs args)
@@ -1328,7 +1776,7 @@ public sealed class ReadingFocusTests
             dispatcher.Hooks.OperationPosted += Posted;
             try
             {
-                _gate.Set();
+                gate.Set();
                 Assert.True(
                     PumpedDispatcher.PumpUntil(() => Volatile.Read(ref published)
                         is { Status: DispatcherOperationStatus.Completed or DispatcherOperationStatus.Aborted }),
@@ -1352,11 +1800,23 @@ public sealed class ReadingFocusTests
             try
             {
                 // A fact that failed before releasing its projection must not
-                // leave the pool blocked on the gate, or fetching after the
+                // leave the pool blocked on a gate, or fetching after the
                 // session below is gone.
-                if (_inFlight is not null && !_gate.IsSet)
+                while (_inFlight is not null && FirstHeldFetchGate() is { } held)
                 {
-                    CleanUp(ReleaseProjection);
+                    bool awaited;
+                    lock (_fetchGates)
+                    {
+                        awaited = _awaitedFetchGates.Contains(held);
+                    }
+                    if (awaited)
+                    {
+                        CleanUp(ReleaseProjection);
+                    }
+                    else
+                    {
+                        held.Set();
+                    }
                 }
                 CleanUp(() => _inFlight?.Dispose());
                 if (_loadingCanvas is { } canvas)
@@ -1377,7 +1837,10 @@ public sealed class ReadingFocusTests
                 CleanUp(() => Shell?.Close());
                 CleanUp(() => Session?.Dispose());
                 CleanUp(_fixture.Dispose);
-                CleanUp(_gate.Dispose);
+                foreach (ManualResetEventSlim gate in _fetchGates)
+                {
+                    CleanUp(gate.Dispose);
+                }
             }
             finally { CanvasSurfaceView.ShellOverlayIsOpen = _priorOverlayProbe; }
             if (failures.Count > 0) { throw new AggregateException("Reading focus fixture cleanup failed.", failures); }
