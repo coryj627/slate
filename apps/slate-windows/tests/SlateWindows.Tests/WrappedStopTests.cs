@@ -187,7 +187,7 @@ public sealed class WrappedStopTests
     /// the control view, then each visible control inside — a control is
     /// one stop with its own content (a button's text), and a nested plain
     /// items host contributes its items' stops.</summary>
-    private static List<AutomationPeer> Stops(AutomationPeer container)
+    internal static List<AutomationPeer> Stops(AutomationPeer container)
     {
         var stops = new List<AutomationPeer>();
         if (container.IsControlElement())
