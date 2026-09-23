@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Globalization;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
+using FlaUI.Core.Input;
 using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
 
@@ -62,6 +63,7 @@ public sealed partial class ShellAccessibilityTests
             // 1. Zero tabs: the empty editor stop. Every arrow walked into a
             //    top-level menu (Down/Up Canvas, Left Graph, Right File).
             AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
+            ReassertForegroundForAChord(window);
             tree.Focus();
             AssertEventuallyFocused(tree, "The Files tree did not take focus.");
             PressKey(VirtualKeyShort.F6);
@@ -76,6 +78,7 @@ public sealed partial class ShellAccessibilityTests
             //    The bar closed to arrows still wraps its OWN: Left on File
             //    reaches the last menu, Right there comes back to File.
             AutomationElement statusBar = WaitForElement(window, "StatusBar", TimeSpan.FromSeconds(10));
+            ReassertForegroundForAChord(window);
             statusBar.Focus();
             AssertEventuallyFocused(statusBar, "The status bar did not take focus.");
             PressKey(VirtualKeyShort.F6);
@@ -124,6 +127,7 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 SpinWait.SpinUntil(() => ListItemNames(automation, citations).Length >= 2, TimeSpan.FromSeconds(20)),
                 "the citations leaf never rendered its two rows");
+            ReassertForegroundForAChord(window);
             statusBar.Focus();
             AssertEventuallyFocused(statusBar, "The status bar did not take focus.");
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
@@ -147,6 +151,7 @@ public sealed partial class ShellAccessibilityTests
                     () => rail.Patterns.Selection.Pattern.Selection.ValueOrDefault is { Length: 0 },
                     TimeSpan.FromSeconds(10)),
                 "the rail kept a selection");
+            ReassertForegroundForAChord(window);
             citationRow.Focus();
             AssertFocusedListItem(automation, citations, null, "The Citations row did not take focus back.");
             Assert.True(
@@ -210,6 +215,7 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement outline = WaitForElement(window, "CanvasShowOutline", TimeSpan.FromSeconds(10));
             AutomationElement table = WaitForElement(window, "CanvasShowTable", TimeSpan.FromSeconds(10));
             Assert.True(IsChosen(outline), "the Outline projection must start checked");
+            ReassertForegroundForAChord(window);
             outline.Focus();
             AssertEventuallyFocused(outline, "The Outline choice did not take focus.");
 
@@ -271,6 +277,7 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement tableChoice = WaitForElement(window, "GraphMode.table", TimeSpan.FromSeconds(10));
             AutomationElement diagramChoice = WaitForElement(window, "GraphMode.diagram", TimeSpan.FromSeconds(10));
             Assert.True(IsChosen(tableChoice), "the Table view must start checked");
+            ReassertForegroundForAChord(window);
             tableChoice.Focus();
             AssertEventuallyFocused(tableChoice, "The Table choice did not take focus.");
 
@@ -298,8 +305,25 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
+    /// <summary>Launches the app for a region-stops journey. These journeys
+    /// are bare keystrokes on a desktop other runs share, so any modifier a
+    /// killed run left held is released first, before the app exists — a
+    /// held Alt or Shift turns each arrow into a chord the radio groups
+    /// rightly ignore — and each keyboard step re-asserts the foreground
+    /// (<see cref="ReassertForegroundForAChord"/>), the suite's rule before
+    /// a chord.</summary>
     private static Process StartRegionStopsApp(string vault, string logs, string instance)
     {
+        foreach (VirtualKeyShort modifier in new[]
+                 {
+                     VirtualKeyShort.SHIFT,
+                     VirtualKeyShort.CONTROL,
+                     VirtualKeyShort.ALT,
+                 })
+        {
+            Keyboard.Release(modifier);
+        }
+
         var start = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
         start.ArgumentList.Add(vault);
         start.Environment["SLATE_CENSUS_INSTANCE_ID"] = instance + "-" + Guid.NewGuid().ToString("N");
