@@ -32,6 +32,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::VaultError;
 use crate::db;
+use crate::scan_delta::{ScanDeltaLedger, ScanDeltaOutcome, ScanDeltaPage, ScanDeltaPending};
 use crate::vault::{EntryKind, FsVaultProvider, VaultProvider, content_hash};
 
 mod trash_cancellation;
@@ -677,6 +678,23 @@ pub struct ScanReport {
     /// going on individual-file failures so one unreadable file does not
     /// blank the index.
     pub errors: Vec<String>,
+    /// W7-7 PR 7 (R-9): files whose committed content hash is new or
+    /// differs from the one the index held before this scan — the "new
+    /// or changed" count both hosts speak. Hash-authoritative: a
+    /// slow-path re-read of unchanged bytes counts in `files_indexed`
+    /// and never here, so a touched-but-unchanged vault reports 0.
+    pub files_changed: u64,
+    /// Index rows this scan removed because their files left the disk.
+    pub files_removed: u64,
+    /// False whenever the walk was partial OR any error was recorded in
+    /// `errors` (a per-file stat, read or index failure included) — never
+    /// the walk flag alone. A partial scan must never be spoken as
+    /// "No changes".
+    pub complete: bool,
+    /// The retained delta generation a rescan leaves for the host
+    /// (`crate::scan_delta`); `None` for the initial-open scan, which
+    /// has no open workspace to reconcile.
+    pub delta_generation: Option<u64>,
 }
 
 // --- Scan progress events ---
@@ -1035,8 +1053,13 @@ impl DiagramCompletedCache {
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
-    /// Ephemeral process/session binding for opaque directory cursors.
+    /// Ephemeral process/session binding for opaque directory cursors —
+    /// and, since W7-7 PR 7, for scan-delta cursors too.
     directory_cursor_nonce: u64,
+    /// W7-7 PR 7: the next rescan delta generation id. Monotonic and
+    /// never reused within the session, so a stale generation id fails
+    /// closed instead of addressing a newer generation.
+    next_scan_delta_generation: AtomicU64,
     config: SessionConfig,
     /// Per-file op-log append state (#378). See [`OplogAppendState`].
     /// `Arc` so the compaction worker can mark futility (O-2).
@@ -2249,6 +2272,10 @@ impl VaultSession {
         // to prevent. Only a rebuild legitimately orphans bindings.
         let cache_created_this_open = db::current_version(&conn)? == 0;
         db::migrate(&mut conn)?;
+        // W7-7 PR 7: the rescan delta ledger lives in TEMP tables on this
+        // connection — session-side, transactional with the index, and gone
+        // with the connection, so no other session ever sees an orphan.
+        crate::scan_delta::ensure_tables(&conn)?;
 
         let math_prefs = Mutex::new(config.math_prefs);
         let diagram_cache = Mutex::new(DiagramCompletedCache::default());
@@ -2318,6 +2345,7 @@ impl VaultSession {
             provider,
             conn: Mutex::new(conn),
             directory_cursor_nonce: next_directory_cursor_nonce(),
+            next_scan_delta_generation: AtomicU64::new(1),
             config,
             oplog_state,
             next_oplog_stem_salt: AtomicU64::new(0),
@@ -2870,6 +2898,87 @@ impl VaultSession {
         cancel: &CancelToken,
         listener: Option<Arc<dyn ScanProgressListener>>,
     ) -> Result<ScanReport, VaultError> {
+        self.scan_session(cancel, listener, ScanMode::InitialOpen)
+    }
+
+    /// W7-7 PR 7 (#1252, R-9): rescan the OPEN session — the same walk
+    /// as [`Self::scan_initial_with_progress`] — and retain its delta as
+    /// a Pending generation for the host to reconcile page by page
+    /// (`crate::scan_delta`; the id travels as
+    /// [`ScanReport::delta_generation`]). The index mutations and the
+    /// generation commit in one transaction.
+    ///
+    /// Refused with `InvalidArgument` while a Pending generation exists:
+    /// the host resumes it first, so a later scan can never overwrite an
+    /// unreconciled tail. No file-change event is emitted (locked
+    /// decision 05: external edits surface at a scan, never as events).
+    pub fn rescan_with_progress(
+        &self,
+        cancel: &CancelToken,
+        listener: Option<Arc<dyn ScanProgressListener>>,
+    ) -> Result<ScanReport, VaultError> {
+        self.scan_session(cancel, listener, ScanMode::Rescan)
+    }
+
+    /// The Pending delta generation and the cursor its effects have
+    /// reached (`None` when nothing is pending).
+    pub fn scan_delta_pending(&self) -> Result<Option<ScanDeltaPending>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::scan_delta::pending(&conn, self.directory_cursor_nonce)
+    }
+
+    /// Both halves of the retained ledger — at most one Pending and one
+    /// Applied generation.
+    pub fn scan_delta_ledger(&self) -> Result<ScanDeltaLedger, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::scan_delta::ledger(&conn, self.directory_cursor_nonce)
+    }
+
+    /// One bounded, removal-first page of the Pending generation. Reading
+    /// never moves the generation's stored cursor.
+    pub fn scan_delta_page(
+        &self,
+        generation: u64,
+        paging: Paging,
+    ) -> Result<ScanDeltaPage, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::scan_delta::page(&conn, self.directory_cursor_nonce, generation, &paging)
+    }
+
+    /// The host applied the effects of every entry before `next_cursor`
+    /// — `None` after the LAST page, which makes the generation Applied
+    /// and coalesces it into the retained Applied generation.
+    pub fn scan_delta_page_applied(
+        &self,
+        generation: u64,
+        next_cursor: Option<&str>,
+    ) -> Result<(), VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::scan_delta::page_applied(&conn, self.directory_cursor_nonce, generation, next_cursor)
+    }
+
+    /// Reduce the Applied generation into the spoken counts and release
+    /// it, atomically. Refused while a generation is Pending.
+    pub fn scan_delta_release(&self) -> Result<ScanDeltaOutcome, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        crate::scan_delta::release(&conn)
+    }
+
+    fn scan_session(
+        &self,
+        cancel: &CancelToken,
+        listener: Option<Arc<dyn ScanProgressListener>>,
+        mode: ScanMode,
+    ) -> Result<ScanReport, VaultError> {
+        // W7-7 PR 7: a rescan never starts over a Pending generation —
+        // checked before the lifecycle bracket opens, and again under the
+        // scan's lock below.
+        if mode == ScanMode::Rescan {
+            let conn = self.conn.lock().expect("session connection mutex");
+            if crate::scan_delta::has_pending(&conn)? {
+                return Err(pending_generation_refusal());
+            }
+        }
         // #802: coarse lifecycle events bracket the scan. Started
         // fires before the session lock is taken; Finished after it
         // drops; the reconcile pair fires under the lock (the
@@ -2877,6 +2986,31 @@ impl VaultSession {
         // reenter synchronously).
         self.notify_index_phase(IndexPhase::ScanStarted, 0);
         let mut conn = self.conn.lock().expect("session connection mutex");
+        let capture = match mode {
+            // The restart protocol: a generation retained by this session
+            // (a TEMP table, so nothing from any other session) is
+            // discarded before the open scan rebuilds the index.
+            ScanMode::InitialOpen => {
+                if let Err(e) = crate::scan_delta::discard_all(&conn) {
+                    drop(conn);
+                    self.notify_index_phase(IndexPhase::ScanFinished, 0);
+                    return Err(e);
+                }
+                None
+            }
+            ScanMode::Rescan => {
+                let pending = crate::scan_delta::has_pending(&conn);
+                if !matches!(pending, Ok(false)) {
+                    drop(conn);
+                    self.notify_index_phase(IndexPhase::ScanFinished, 0);
+                    return Err(pending.err().unwrap_or_else(pending_generation_refusal));
+                }
+                Some(
+                    self.next_scan_delta_generation
+                        .fetch_add(1, Ordering::SeqCst),
+                )
+            }
+        };
         // O-6 (#544): observe a parser bump BEFORE the scan runs — the
         // scan stamps every row with the new version, erasing the
         // evidence — and convert it straight into the DURABLE
@@ -2911,6 +3045,7 @@ impl VaultSession {
             cancel,
             listener.as_deref(),
             &mut graph_sink,
+            capture,
         )?;
         self.graph_apply(graph_sink);
         self.bump_bases_generation();
@@ -9407,6 +9542,23 @@ fn snapshot_summary_counts(
 
 // --- Internal: scan ---
 
+/// Which scan the shared walk is running (W7-7 PR 7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScanMode {
+    /// The open scan: discards this session's retained delta generations
+    /// first and retains none of its own.
+    InitialOpen,
+    /// A rescan of the open session: retains its delta as a Pending
+    /// generation for the host to reconcile.
+    Rescan,
+}
+
+fn pending_generation_refusal() -> VaultError {
+    VaultError::InvalidArgument {
+        message: "a pending scan delta generation must be applied before a new scan".to_string(),
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // shared scanner state; bundling adds friction
 fn scan_vault(
     provider: &dyn VaultProvider,
@@ -9416,6 +9568,7 @@ fn scan_vault(
     cancel: &CancelToken,
     listener: Option<&dyn ScanProgressListener>,
     graph_sink: &mut crate::graph::GraphOpSink,
+    delta_generation: Option<u64>,
 ) -> Result<ScanReport, VaultError> {
     /// Fires `Cancelled` to the listener and returns Err. Only
     /// valid AFTER `Started` has been emitted — see the contract on
@@ -9461,11 +9614,27 @@ fn scan_vault(
     // out Unresolved and get fixed up by the post-scan re-resolve
     // pass below. That trade-off keeps per-file work O(scanner) not
     // O(scanner * vault).
-    let vault_index = crate::InMemoryVaultIndex::new(
-        tx.prepare("SELECT path FROM files")?
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?,
-    );
+    //
+    // The same read is the scan's BEFORE picture (W7-7 PR 7, R-9): each
+    // path's committed content hash, which the post-walk diff compares
+    // against to count what is new, changed or removed — hash-
+    // authoritative, never the read count. One query, so the index keeps
+    // its row order.
+    let mut prior_hashes: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let vault_index = {
+        let mut paths = Vec::new();
+        let mut stmt = tx.prepare("SELECT path, content_hash FROM files")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (path, hash) = row?;
+            prior_hashes.insert(path.clone(), hash);
+            paths.push(path);
+        }
+        crate::InMemoryVaultIndex::new(paths)
+    };
     if let Some(l) = listener {
         l.on_progress(ScanProgress::Started { total_files });
     }
@@ -9609,7 +9778,11 @@ fn scan_vault(
     // in the table that we didn't see this pass was deleted (or renamed
     // away) since the last scan, so drop it. Runs inside the same
     // transaction so it commits atomically with the upserts above.
-    if let Err(e) = prune_unseen_dirs(&tx, &seen_dirs) {
+    // Skipped on an incomplete walk, exactly like the file prune below
+    // (W7-7 PR 7, R-9): an unlistable directory hides its subtree, and
+    // pruning on that partial view made live nested folders vanish from
+    // the refreshed tree.
+    if walk_complete && let Err(e) = prune_unseen_dirs(&tx, &seen_dirs) {
         report.errors.push(format!("prune stale dirs: {e}"));
     }
 
@@ -9676,6 +9849,43 @@ fn scan_vault(
     if let Err(e) = reindex_all_canvases(&tx, provider, large_file_refuse_bytes) {
         report.errors.push(format!("canvas index: {e}"));
     }
+
+    // W7-7 PR 7 (R-9): what this scan changed, per path, hash-
+    // authoritative, against the BEFORE picture — after every mutation
+    // above and before the commit, so a rescan's retained generation is
+    // written in THIS transaction: the index and the delta the host
+    // reconciles it through commit together or not at all.
+    let delta = match crate::scan_delta::diff_against_index(&tx, prior_hashes).and_then(|delta| {
+        match delta_generation {
+            Some(generation) => {
+                crate::scan_delta::insert_pending(&tx, generation, &delta).map(|()| delta)
+            }
+            None => Ok(delta),
+        }
+    }) {
+        Ok(delta) => delta,
+        Err(e) => {
+            // `Started` was emitted; the stream owes a terminal event.
+            if let Some(l) = listener {
+                l.on_progress(ScanProgress::Failed {
+                    message: e.to_string(),
+                });
+            }
+            return Err(e);
+        }
+    };
+    for row in &delta {
+        match row.kind {
+            crate::scan_delta::ScanDeltaKind::Removed => report.files_removed += 1,
+            crate::scan_delta::ScanDeltaKind::Created
+            | crate::scan_delta::ScanDeltaKind::Modified => report.files_changed += 1,
+        }
+    }
+    // Complete only when the walk saw everything AND nothing failed:
+    // `errors` mixes per-file and systemic failures, and either can hide
+    // a change, so a partial scan can never be spoken as "No changes".
+    report.complete = walk_complete && report.errors.is_empty();
+    report.delta_generation = delta_generation;
 
     // Commit can still fail (disk full, file corruption). If it
     // does, the listener has already seen `Started` and N
@@ -21088,6 +21298,9 @@ mod tests {
 
     #[path = "scan.rs"]
     mod scan;
+
+    #[path = "rescan.rs"]
+    mod rescan;
 
     #[path = "file_meta.rs"]
     mod file_meta;
