@@ -60,6 +60,30 @@ public sealed partial class W77RemediationDocsCensus
             [13] = 11,
         };
 
+    /// <summary>
+    /// The issues each contract closes, fixed with the ownership (codex
+    /// round 18): the owner clause's `#issue` list must match exactly, so
+    /// a wrong or missing secondary issue cannot pass as a well-formed
+    /// heading.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<int, int[]> ExpectedIssues =
+        new Dictionary<int, int[]>
+        {
+            [1] = [1244],
+            [2] = [1245],
+            [3] = [1250],
+            [4] = [1246],
+            [5] = [1247],
+            [6] = [1248],
+            [7] = [1249],
+            [8] = [1251],
+            [9] = [1252],
+            [10] = [1253],
+            [11] = [1254],
+            [12] = [1255, 1256],
+            [13] = [1257],
+        };
+
     private static readonly int[] ExpectedFeaturePrs = Enumerable.Range(1, 11).ToArray();
     private static readonly int[] ExpectedReviewRecords = Enumerable.Range(0, 12).ToArray();
 
@@ -70,6 +94,26 @@ public sealed partial class W77RemediationDocsCensus
         Assert.Equal(
             ExpectedOwners.OrderBy(pair => pair.Key).Select(pair => $"R-{pair.Key}→PR {pair.Value}"),
             owners.OrderBy(pair => pair.Key).Select(pair => $"R-{pair.Key}→PR {pair.Value}"));
+    }
+
+    [Fact]
+    public void EveryContractNamesExactlyItsIssues()
+    {
+        string contracts = ReadPlan(ContractsDoc);
+        var issues = new Dictionary<int, int[]>();
+        foreach (Match m in ContractHeading().Matches(contracts))
+        {
+            int contract = int.Parse(m.Groups[1].Value);
+            int[] named = m.Groups[3].Value
+                .Split(',', StringSplitOptions.TrimEntries)
+                .Select(token => int.Parse(token.TrimStart('#')))
+                .ToArray();
+            Assert.True(issues.TryAdd(contract, named), $"R-{contract} is defined twice in {ContractsDoc}.");
+        }
+
+        Assert.Equal(
+            ExpectedIssues.OrderBy(pair => pair.Key).Select(pair => $"R-{pair.Key}→#{string.Join(", #", pair.Value)}"),
+            issues.OrderBy(pair => pair.Key).Select(pair => $"R-{pair.Key}→#{string.Join(", #", pair.Value)}"));
     }
 
     [Fact]
@@ -202,11 +246,12 @@ public sealed partial class W77RemediationDocsCensus
         File.ReadAllText(Path.Combine(SourceText.RepoRoot(), "docs", "plans", relative));
 
     // The canonical definition: bold from column zero, an em dash, the
-    // owner in parentheses, and the heading's closing `.**` — a full stop
-    // then the bold delimiter, followed by whitespace — with no other
-    // asterisk before it, so an interior bold span cannot pose as the
-    // closing delimiter (codex rounds 6 and 7).
-    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*]*?\(PR (\d+), #\d+[^)\n*]*\)[^\n*]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
+    // owner clause in parentheses — `(PR n, #issue[, #issue]…` with the
+    // issue list captured (codex rounds 17 and 18) — and the heading's
+    // closing `.**`: a full stop then the bold delimiter, followed by
+    // whitespace, with no other asterisk before it, so an interior bold
+    // span cannot pose as the closing delimiter (codex rounds 6 and 7).
+    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*]*?\(PR (\d+), (#\d+(?:, #\d+)*)[^)\n*]*\)[^\n*]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
     private static partial Regex ContractHeading();
 
     // Anything that starts a line like a contract definition, however it
