@@ -13,12 +13,14 @@
 // a PR section cites is owned by that PR in contracts 40, and every
 // contract is cited by its owning section at least once.
 //
-// Codex round 2: a duplicate definition is as ambiguous as a shifted one
-// (two `R-9` lines owned by different PRs, two `## n. PR 7` sections, two
-// `### PR 7` records), so the parse rejects duplicates instead of letting
-// the later one win, and the key sets are asserted exactly — thirteen
-// contracts, eleven feature PRs, twelve review records — rather than
-// floored.
+// Codex round 2: a duplicate definition is as ambiguous as a shifted one,
+// so the parse rejects duplicates instead of letting the later one win.
+// Codex round 3: the contracts document is mutable, so it cannot be the
+// only oracle — a coordinated owner-and-citation swap across both
+// documents would pass a census that merely compares them to each other.
+// The R → PR map is therefore fixed HERE, and every heading-shaped line
+// must match the strict parse so a look-alike definition (a different
+// dash, a missing owner) cannot vanish from the count.
 
 using System.Text.RegularExpressions;
 
@@ -30,14 +32,44 @@ public sealed partial class W77RemediationDocsCensus
     private const string SpecDoc = "18_windows_port/specs/w7_7_nvda_matrix_remediation_spec.md";
     private const string ContractsDoc = "40_nvda_matrix_remediation_contracts.md";
 
-    private static readonly int[] ExpectedContracts = Enumerable.Range(1, 13).ToArray();
+    /// <summary>
+    /// The wave's ownership, fixed at the docs PR: contract → PR. A
+    /// renumbering is a deliberate edit to this table and the two
+    /// documents together, never to the documents alone.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<int, int> ExpectedOwners =
+        new Dictionary<int, int>
+        {
+            [1] = 1,
+            [2] = 2,
+            [3] = 2,
+            [4] = 3,
+            [5] = 4,
+            [6] = 5,
+            [7] = 6,
+            [8] = 6,
+            [9] = 7,
+            [10] = 8,
+            [11] = 9,
+            [12] = 10,
+            [13] = 11,
+        };
+
     private static readonly int[] ExpectedFeaturePrs = Enumerable.Range(1, 11).ToArray();
     private static readonly int[] ExpectedReviewRecords = Enumerable.Range(0, 12).ToArray();
 
     [Fact]
-    public void TheDocumentsDefineExactlyTheWaveOnce()
+    public void TheContractsDocumentDefinesExactlyTheFixedOwnership()
     {
-        Assert.Equal(ExpectedContracts, ContractOwners().Keys.Order().ToArray());
+        var owners = ContractOwners();
+        Assert.Equal(
+            ExpectedOwners.OrderBy(pair => pair.Key).Select(pair => $"R-{pair.Key}→PR {pair.Value}"),
+            owners.OrderBy(pair => pair.Key).Select(pair => $"R-{pair.Key}→PR {pair.Value}"));
+    }
+
+    [Fact]
+    public void TheSpecHasOneSectionPerFeaturePrAndTheRecordOneSectionPerPr()
+    {
         Assert.Equal(ExpectedFeaturePrs, SpecSections().Keys.Order().ToArray());
 
         string contracts = ReadPlan(ContractsDoc);
@@ -49,13 +81,30 @@ public sealed partial class W77RemediationDocsCensus
     }
 
     [Fact]
+    public void EveryHeadingShapedLineMatchesTheStrictParse()
+    {
+        string contracts = ReadPlan(ContractsDoc);
+        int looseContracts = LooseContractHeading().Matches(contracts).Count;
+        int strictContracts = ContractHeading().Matches(contracts).Count;
+        Assert.True(
+            looseContracts == strictContracts,
+            $"{looseContracts - strictContracts} contract-shaped line(s) in {ContractsDoc} do not parse as `**R-n — … (PR m, …)**`.");
+
+        string spec = ReadPlan(SpecDoc);
+        int loosePrSections = LoosePrSectionHeading().Matches(spec).Count;
+        int strictPrSections = SectionHeading().Matches(spec).Count(m => m.Groups[1].Success);
+        Assert.True(
+            loosePrSections == strictPrSections,
+            $"{loosePrSections - strictPrSections} PR-section heading(s) in the spec do not parse as `## n. PR m · …`.");
+    }
+
+    [Fact]
     public void EveryContractIsCitedByItsOwningSpecSection()
     {
-        var owners = ContractOwners();
         var sections = SpecSections();
 
         var missing = new List<string>();
-        foreach ((int contract, int pr) in owners)
+        foreach ((int contract, int pr) in ExpectedOwners)
         {
             if (!sections.TryGetValue(pr, out var cited) || !cited.Contains(contract))
             {
@@ -69,7 +118,6 @@ public sealed partial class W77RemediationDocsCensus
     [Fact]
     public void NoSpecSectionCitesAnotherPrsContract()
     {
-        var owners = ContractOwners();
         var sections = SpecSections();
 
         var shifted = new List<string>();
@@ -77,9 +125,9 @@ public sealed partial class W77RemediationDocsCensus
         {
             foreach (int contract in cited)
             {
-                if (!owners.TryGetValue(contract, out int owner))
+                if (!ExpectedOwners.TryGetValue(contract, out int owner))
                 {
-                    shifted.Add($"PR {pr} cites R-{contract}, which contracts 40 does not define");
+                    shifted.Add($"PR {pr} cites R-{contract}, which the wave does not define");
                 }
                 else if (owner != pr)
                 {
@@ -145,10 +193,20 @@ public sealed partial class W77RemediationDocsCensus
     [GeneratedRegex(@"^\*\*R-(\d+) — [^\n]*?\(PR (\d+)[,;)]", RegexOptions.Multiline)]
     private static partial Regex ContractHeading();
 
+    // Anything that starts a line like a contract definition, however it
+    // is punctuated: the strict parse must account for every one of them.
+    [GeneratedRegex(@"^\*\*R-\d+\b", RegexOptions.Multiline)]
+    private static partial Regex LooseContractHeading();
+
     // Every level-two heading terminates the previous section; only the
     // `## n. PR m · …` shape carries a PR number.
     [GeneratedRegex(@"^## (?:\d+\. PR (\d+) · )?[^\n]*", RegexOptions.Multiline)]
     private static partial Regex SectionHeading();
+
+    // Anything that starts a heading like a PR section, however it is
+    // punctuated after the PR number.
+    [GeneratedRegex(@"^## \d+\. PR \d+\b", RegexOptions.Multiline)]
+    private static partial Regex LoosePrSectionHeading();
 
     [GeneratedRegex(@"(?<![A-Za-z])R-(\d+)")]
     private static partial Regex ContractCitation();
