@@ -2696,10 +2696,18 @@
                          invisible elements from the CONTROL view that hides
                          them, not these bindings. Kept for consistency with
                          Quick Open; they are redundant, not load-bearing. -->
+                    <!-- R-11 (#1254): never synchronized with the view's
+                         current item. Every query change swaps in a fresh
+                         grouped view, and a synchronized list selects that
+                         view's FIRST row on the swap — the stale "Selected:
+                         New Canvas" the NVDA pass heard. The view model's
+                         selection is the only one; the presenter pushes it
+                         in (CommandPaletteResultsPresenter). -->
                     <local:AutomationVisibilityListBox x:Name="CommandPaletteResultsList"
                              Grid.Row="1"
                              Margin="0,8"
                              Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                             IsSynchronizedWithCurrentItem="False"
                              MouseDoubleClick="CommandPaletteResults_MouseDoubleClick"
                              AutomationProperties.AutomationId="CommandPaletteResults"
                              AutomationProperties.Name="Command results">

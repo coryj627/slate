@@ -19,7 +19,8 @@ namespace SlateWindows;
 /// <remarks>
 /// Its own type rather than more of <see cref="MainWindow"/> so that the
 /// list the shell's XAML actually declares can be hosted against a fake
-/// command source.
+/// command source — the R-11 facts run the shipped list, not a copy of its
+/// settings.
 /// </remarks>
 internal sealed class CommandPaletteResultsPresenter : IDisposable
 {
@@ -63,6 +64,7 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
     /// Rebuilds the grouped view over the current rows.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Grouping is applied here rather than through a XAML
     /// <c>CollectionViewSource</c> because it keys on
     /// <c>SectionTitle</c> — the section core actually PLACED the row in.
@@ -71,6 +73,17 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
     /// publish also matches the view model's replace-wholesale rows, and
     /// the groups keep core's order because a view with no sort
     /// description creates groups in encounter order (contract P1).
+    /// </para>
+    /// <para>
+    /// R-11 (#1254): the swap runs inside the selection-sync guard. The
+    /// list drops the old row from its selection as the view changes, and
+    /// a list synchronized with its view's current item would then select
+    /// the new FIRST row — which the pointer route used to hand to the
+    /// view model as a user's choice, so it announced "Selected: {first
+    /// row}" and then its own survivor again (contract 28 P7, P10). The
+    /// XAML also turns the synchronization off; the guard keeps the swap
+    /// silent even if a template or style turns it back on.
+    /// </para>
     /// </remarks>
     private void Refresh()
     {
@@ -79,7 +92,16 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
         var grouped = new CollectionViewSource { Source = _palette.Rows };
         grouped.GroupDescriptions.Add(
             new PropertyGroupDescription(nameof(CommandPaletteRowViewModel.SectionTitle)));
-        _list.ItemsSource = grouped.View;
+        _syncingSelection = true;
+        try
+        {
+            _list.ItemsSource = grouped.View;
+        }
+        finally
+        {
+            _syncingSelection = false;
+        }
+
         SyncSelection();
         if (timing is not null)
         {
@@ -94,10 +116,18 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
     /// replacement and destroy the selection the view model just
     /// preserved across a query change (contract P7).
     /// </summary>
+    /// <remarks>
+    /// A recompute publishes its rows before its selection, so while the
+    /// swap runs the view model's row is still the previous query's object,
+    /// in no row of the new view. The list would refuse it and the scroll
+    /// would find nothing; the <c>SelectedRow</c> change that follows
+    /// carries the row to show, so a stale one is skipped here.
+    /// </remarks>
     private void SyncSelection()
     {
         CommandPaletteRowViewModel? selected = _palette.SelectedRow;
-        if (ReferenceEquals(_list.SelectedItem, selected))
+        if (ReferenceEquals(_list.SelectedItem, selected)
+            || (selected is not null && !_palette.Rows.Contains(selected)))
         {
             return;
         }

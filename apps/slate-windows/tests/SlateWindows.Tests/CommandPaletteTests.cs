@@ -15,7 +15,7 @@ namespace SlateWindows.Tests;
 /// the host's layout drift from core's, which is the exact failure
 /// contract P1 exists to prevent.
 /// </summary>
-public sealed class CommandPaletteTests
+public sealed partial class CommandPaletteTests
 {
     // --- P1: core ranks, the host renders --------------------------------
 

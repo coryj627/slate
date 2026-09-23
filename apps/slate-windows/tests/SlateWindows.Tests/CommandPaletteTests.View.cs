@@ -1,0 +1,370 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using System.Runtime.ExceptionServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using uniffi.slate_uniffi;
+
+namespace SlateWindows.Tests;
+
+/// <summary>
+/// R-11 (#1254): the results list as the shell ships it. The list is
+/// <c>MainWindow.xaml</c>'s own <c>CommandPaletteResultsList</c> — its
+/// container style, templates, grouping, selection and virtualization
+/// settings — driven by the production
+/// <see cref="CommandPaletteResultsPresenter"/> over the fake command
+/// source, so every announcement is countable. The view-model facts above
+/// never render; the stale "Selected: New Canvas" of the NVDA pass lived
+/// entirely in the view.
+/// </summary>
+public sealed partial class CommandPaletteTests
+{
+    // --- R-11 / P7 / P10: the view never selects on the user's behalf ------
+
+    /// <summary>
+    /// At most one <c>PaletteCommandSelected</c> per query change, and none
+    /// when the selected id survives it — with the list showing, and
+    /// scrolled to, exactly the row the view model chose.
+    /// </summary>
+    /// <remarks>
+    /// The discriminating step is the survivor that is NOT the new first
+    /// row. Swapping a grouped view into a list synchronized with its
+    /// current item selects the view's first row; the pointer route handed
+    /// that to the view model, which announced it, and the view model then
+    /// restored its survivor and announced that too — two sentences for a
+    /// change that owes none, the first naming a row the user never chose.
+    /// </remarks>
+    [Fact]
+    public void TheShippedListAnnouncesOnlyTheViewModelsSelection() => RunSta(() =>
+    {
+        using var host = new ShippedResultsList(StandardCommands());
+        CommandPaletteViewModel palette = host.Palette;
+        palette.Open();
+        host.Settle();
+        host.AssertShowsTheViewModelsSelection();
+        Assert.Empty(host.SelectionAnnouncements);
+
+        palette.Select(palette.Rows[3]);
+        host.Settle();
+        Assert.Equal("slate.editor.bold", palette.SelectedId);
+        Assert.Equal(["Toggle Bold"], host.SelectionAnnouncements);
+
+        // Survives, and is the LAST of three rows: nothing to say (P7).
+        host.ChangeQuery("o");
+        Assert.Equal(
+            ["slate.file.newNote", "slate.nav.quickOpen", "slate.editor.bold"],
+            host.Harness.RowIds);
+        Assert.Equal("slate.editor.bold", palette.SelectedId);
+        Assert.Empty(host.SelectionAnnouncements);
+        host.AssertShowsTheViewModelsSelection();
+
+        // Vanishes: the snap to the first row is one sentence, not two.
+        host.ChangeQuery("q");
+        Assert.Equal(["Quick Open"], host.SelectionAnnouncements);
+        host.AssertShowsTheViewModelsSelection();
+
+        // Zero matches: no selection, nothing said.
+        host.ChangeQuery("zzzz");
+        Assert.Null(palette.SelectedRow);
+        Assert.Empty(host.SelectionAnnouncements);
+        host.AssertShowsTheViewModelsSelection();
+
+        // Recovering from none selects, and says so, once.
+        host.ChangeQuery("sav");
+        Assert.Equal(["Save"], host.SelectionAnnouncements);
+        host.AssertShowsTheViewModelsSelection();
+    });
+
+    /// <summary>
+    /// The swap runs inside the selection-sync guard (R-11) — pinned as
+    /// source because it is the second of two locks.
+    /// </summary>
+    /// <remarks>
+    /// With the list unsynchronized (the XAML half, which the fact above
+    /// catches through the list's own selection traffic) a swap only ever
+    /// DESELECTS, so no runtime observation can tell whether the guard is
+    /// still there: moving the swap out of it leaves every hosted fact
+    /// green. The guard is what keeps the swap silent if a style, a
+    /// template or a later control turns synchronization back on.
+    /// </remarks>
+    [Fact]
+    public void TheItemsSourceSwapRunsInsideTheSelectionSyncGuard()
+    {
+        MethodDeclarationSyntax refresh = CSharpSource
+            .Load("CommandPaletteResultsPresenter.cs")
+            .Method("Refresh");
+        AssignmentExpressionSyntax swap = Assert.Single(
+            refresh.DescendantNodes().OfType<AssignmentExpressionSyntax>(),
+            assignment => CSharpSource.Normalize(assignment.Left) == "_list.ItemsSource");
+
+        TryStatementSyntax? guarded = swap.Ancestors()
+            .OfType<TryStatementSyntax>()
+            .FirstOrDefault(statement => statement.Block.Contains(swap));
+        Assert.True(
+            guarded is not null,
+            "Refresh assigns ItemsSource outside any try block, so nothing guards "
+            + "the selection the swap can raise.");
+        BlockSyntax body = Assert.IsType<BlockSyntax>(guarded!.Parent);
+        int at = body.Statements.IndexOf(guarded);
+        Assert.True(at > 0, "Nothing precedes the guarding try block.");
+        Assert.Equal("_syncingSelection=true;", CSharpSource.Normalize(body.Statements[at - 1]));
+        Assert.Contains(
+            "_syncingSelection=false;",
+            (guarded.Finally?.Block.Statements ?? []).Select(CSharpSource.Normalize));
+    }
+
+    /// <summary>
+    /// With the list no longer synchronized to its current item, every
+    /// keyboard move still reaches it: Up, Down, Home and End (PD-1) each
+    /// highlight the view model's row and scroll it into view, each says
+    /// one sentence, and Enter runs the row the list shows.
+    /// </summary>
+    /// <remarks>
+    /// Enough rows that End and the wrap from the top land far outside the
+    /// first page, so the scroll is real work for a virtualized list.
+    /// </remarks>
+    [Fact]
+    public void KeyboardMovesAndEnterStillDriveTheShippedList() => RunSta(() =>
+    {
+        using var host = new ShippedResultsList(SyntheticCommands(400));
+        CommandPaletteViewModel palette = host.Palette;
+        palette.Open();
+        host.Settle();
+        host.AssertShowsTheViewModelsSelection();
+
+        void Move(Action move, int expectedIndex)
+        {
+            host.ClearObservations();
+            move();
+            host.Settle();
+            CommandPaletteRowViewModel expected = palette.Rows[expectedIndex];
+            Assert.Same(expected, palette.SelectedRow);
+            Assert.Equal([expected.Label], host.SelectionAnnouncements);
+            host.AssertShowsTheViewModelsSelection();
+        }
+
+        int last = palette.Rows.Count - 1;
+        Move(palette.SelectLast, last);
+        Move(palette.SelectFirst, 0);
+        Move(() => palette.MoveSelection(1), 1);
+        Move(() => palette.MoveSelection(1), 2);
+        Move(() => palette.MoveSelection(-1), 1);
+        Move(() => palette.MoveSelection(-1), 0);
+        // Up from the first row wraps to the last (contract P7).
+        Move(() => palette.MoveSelection(-1), last);
+
+        // Enter runs the row the list highlights — the view model's.
+        CommandPaletteRowViewModel highlighted =
+            Assert.IsType<CommandPaletteRowViewModel>(host.List.SelectedItem);
+        palette.InvokeSelected();
+        Assert.Equal([SyntheticId(last)], host.Harness.Source.Invoked);
+        Assert.Equal(SyntheticId(last), highlighted.Id);
+    });
+
+    // --- helpers -------------------------------------------------------------
+
+    private static readonly (CommandSection Section, string Title)[] SyntheticSections =
+    [
+        (CommandSection.File, "File"),
+        (CommandSection.Navigation, "Navigation"),
+        (CommandSection.Editor, "Editor"),
+        (CommandSection.Tasks, "Tasks"),
+    ];
+
+    private static string SyntheticId(int index) =>
+        $"slate.synthetic.row{index:D5}";
+
+    /// <summary>Commands spread evenly over four sections, in section order
+    /// so the empty query renders them as listed.</summary>
+    private static Command[] SyntheticCommands(int count)
+    {
+        var commands = new Command[count];
+        for (int index = 0; index < count; index++)
+        {
+            CommandSection section = SyntheticSections[index * SyntheticSections.Length / count].Section;
+            commands[index] = Cmd(SyntheticId(index), $"Synthetic Command {index:D5}", section);
+        }
+
+        return commands;
+    }
+
+    /// <summary>
+    /// The shipped results list, lifted out of a real (never shown)
+    /// <see cref="MainWindow"/> — the Move-To focus fixture's technique —
+    /// and re-hosted off-screen over a palette whose command source is the
+    /// fake. The shell's own presenter lets go first, so the list answers
+    /// one view model.
+    /// </summary>
+    private sealed class ShippedResultsList : IDisposable
+    {
+        private readonly MainWindow _shell;
+        private readonly Window _window;
+        private readonly CommandPaletteResultsPresenter _presenter;
+
+        public ShippedResultsList(Command[] commands)
+        {
+            Harness = new PaletteHarness(commands);
+            _shell = new MainWindow();
+            Assert.IsType<CommandPaletteResultsPresenter>(_shell.PaletteResults).Dispose();
+            List = _shell.CommandPaletteResultsList;
+            Assert.IsAssignableFrom<Panel>(List.Parent).Children.Remove(List);
+            List.SelectionChanged += List_SelectionChanged;
+
+            // The overlay's list row, near enough: 470 high less the search
+            // box, the footer and the padding. Off-screen and never
+            // activated, so a journey running on this desktop keeps the
+            // foreground.
+            _window = new Window
+            {
+                Content = List,
+                DataContext = Harness.Palette,
+                Width = 640,
+                Height = 360,
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                Left = -20_000,
+                Top = -20_000,
+                ShowInTaskbar = false,
+                ShowActivated = false,
+                WindowStyle = WindowStyle.None,
+                ResizeMode = ResizeMode.NoResize,
+            };
+            _window.Show();
+            _presenter = new CommandPaletteResultsPresenter(List, Harness.Palette);
+        }
+
+        public PaletteHarness Harness { get; }
+
+        public CommandPaletteViewModel Palette => Harness.Palette;
+
+        public ListBox List { get; }
+
+        /// <summary>Every row the list added to its OWN selection since the
+        /// last clear — each one a UIA ElementSelected an AT can hear.</summary>
+        public List<object> ListSelections { get; } = [];
+
+        public string[] SelectionAnnouncements =>
+        [
+            .. Harness.Announcements
+                .OfType<A11yEvent.PaletteCommandSelected>()
+                .Select(selected => selected.Label),
+        ];
+
+        public void ClearObservations()
+        {
+            Harness.Announcements.Clear();
+            ListSelections.Clear();
+        }
+
+        /// <summary>One query change, observed from a clean slate.</summary>
+        public void ChangeQuery(string query)
+        {
+            ClearObservations();
+            Palette.Query = query;
+            Settle();
+        }
+
+        /// <summary>Layout, the queued <c>ScrollIntoView</c>, and the layout
+        /// that one causes.</summary>
+        public void Settle()
+        {
+            List.UpdateLayout();
+            PumpedDispatcher.Drain();
+            List.UpdateLayout();
+            PumpedDispatcher.Drain();
+        }
+
+        /// <summary>
+        /// The list highlights the view model's row, never selected
+        /// anything else on the way there, and — when there is a row —
+        /// has it realized and inside the viewport.
+        /// </summary>
+        public void AssertShowsTheViewModelsSelection()
+        {
+            CommandPaletteRowViewModel? selected = Palette.SelectedRow;
+            Assert.Same(selected, List.SelectedItem);
+            Assert.All(ListSelections, added => Assert.Same(selected, added));
+            if (selected is null)
+            {
+                return;
+            }
+
+            ListBoxItem? container = RealizedContainers()
+                .SingleOrDefault(item => ReferenceEquals(item.DataContext, selected));
+            Assert.True(
+                container is not null,
+                $"'{selected.Label}' is selected but its row was never realized — "
+                + "ScrollIntoView did not bring it into the list.");
+            Assert.True(container!.IsSelected, $"'{selected.Label}' is not highlighted.");
+            ScrollContentPresenter viewport = Descendants<ScrollContentPresenter>(List).Single();
+            Rect bounds = container
+                .TransformToAncestor(viewport)
+                .TransformBounds(new Rect(container.RenderSize));
+            Assert.True(
+                bounds.Top >= -0.5 && bounds.Bottom <= viewport.ActualHeight + 0.5,
+                $"'{selected.Label}' is realized at {bounds} but the viewport is "
+                + $"0..{viewport.ActualHeight}: selected off-screen.");
+        }
+
+        public ListBoxItem[] RealizedContainers() => [.. Descendants<ListBoxItem>(List)];
+
+        public void Dispose()
+        {
+            List.SelectionChanged -= List_SelectionChanged;
+            _presenter.Dispose();
+            _window.Close();
+            _shell.Close();
+        }
+
+        private void List_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            foreach (object added in e.AddedItems)
+            {
+                ListSelections.Add(added);
+            }
+        }
+
+        private static IEnumerable<T> Descendants<T>(DependencyObject root)
+            where T : DependencyObject
+        {
+            for (int index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+            {
+                DependencyObject child = VisualTreeHelper.GetChild(root, index);
+                if (child is T match)
+                {
+                    yield return match;
+                }
+
+                foreach (T nested in Descendants<T>(child))
+                {
+                    yield return nested;
+                }
+            }
+        }
+    }
+
+    private static void RunSta(Action body)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                PumpedDispatcher.Run(body);
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(120)), "the hosted palette fact timed out.");
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+}
