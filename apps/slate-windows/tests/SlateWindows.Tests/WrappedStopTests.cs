@@ -163,11 +163,12 @@ public sealed class WrappedStopTests
             Assert.NotEmpty(items);
             for (int index = 0; index < items.Count; index++)
             {
+                ItemStops item = items[index];
                 Assert.False(
-                    items[index].Container.IsControlElement(),
-                    $"{label}: item {index + 1}'s container is a stop beside its own controls "
-                    + $"(named '{items[index].Container.GetName()}')");
-                Assert.NotEmpty(items[index].Stops);
+                    item.Container.IsControlElement(),
+                    $"{label}: item {index + 1} is {item.Stops.Count} stops — its container "
+                    + $"'{item.Container.GetName()}' beside its own controls: {string.Join(" | ", item.Names)}");
+                Assert.NotEmpty(item.Stops);
             }
             string[] names = [.. items.SelectMany(item => item.Names)];
             Assert.All(names, name => Assert.False(string.IsNullOrWhiteSpace(name), $"{label}: an unnamed stop"));
