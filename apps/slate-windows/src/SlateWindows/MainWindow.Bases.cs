@@ -184,8 +184,9 @@ public partial class MainWindow
             QueriesRenameRow.Visibility = Visibility.Collapsed;
             _pendingRenameSavedQueryId = null;
             // Focus returns to the list the rename came from — the
-            // collapsed row must not strand focus (red team round 1).
-            _ = QueriesSavedList.Focus();
+            // collapsed row must not strand focus (red team round 1) — on
+            // the renamed query's row, never the bare list (R-5, #1247).
+            _ = FocusFirstOrSelectedItem(QueriesSavedList);
             e.Handled = true;
             return;
         }
@@ -196,7 +197,7 @@ public partial class MainWindow
         BasesWorkspace?.RenameSavedQuery(id, QueriesRenameBox.Text);
         QueriesRenameRow.Visibility = Visibility.Collapsed;
         _pendingRenameSavedQueryId = null;
-        _ = QueriesSavedList.Focus();
+        _ = FocusFirstOrSelectedItem(QueriesSavedList);
         e.Handled = true;
     }
 

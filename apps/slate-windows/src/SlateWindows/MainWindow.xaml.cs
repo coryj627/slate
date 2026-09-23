@@ -438,15 +438,8 @@ public partial class MainWindow : Window
         }
         if (CanvasPromptChoicesList.IsVisible && CanvasPromptChoicesList.Focusable)
         {
-            object? selected = CanvasPromptChoicesList.SelectedItem;
-            if (selected is not null
-                && CanvasPromptChoicesList.ItemContainerGenerator.ContainerFromItem(selected)
-                    is IInputElement container
-                && TryFocus(container))
-            {
-                return;
-            }
-            _ = TryFocus(CanvasPromptChoicesList);
+            // R-5 (#1247): the selected choice's row, never the bare list.
+            _ = FocusFirstOrSelectedItem(CanvasPromptChoicesList);
             return;
         }
         _ = TryFocus(CanvasPromptClearMarksButton);
@@ -675,11 +668,14 @@ public partial class MainWindow : Window
                     Graph.GraphInspectorView.LandBoundary(
                         _viewModel.Workspace is WorkspaceViewModel current && current.IsGraphInspectorShown,
                         GraphInspectorSurface.FocusFirstStop,
-                        () => _ = RightPaneLeavesList.Focus()));
+                        () => _ = FocusFirstOrSelectedItem(RightPaneLeavesList)));
             }
             else
             {
-                RightPaneLeavesList.Focus();
+                // W7-7 PR 4 (#1247, R-5): IN the leaf — Ctrl+R on the
+                // review's filter — or on the rail's row; never the bare
+                // rail, from which Down walked into the menu bar.
+                LandInRightPane();
             }
         });
     }
@@ -1734,8 +1730,9 @@ public partial class MainWindow : Window
         // the Files tree: the owner's launch landing when nothing is open,
         // and the one region that always has something to say. Landing on
         // the bare TabControl gave NVDA "Workspace tabs tab control" and
-        // let Down arrow wander into the menu bar.
-        if (!tabs.Focus())
+        // let Down arrow wander into the menu bar — so a tab control that
+        // HAS tabs lands on one (W7-7 PR 4, #1247, R-5).
+        if (!FocusFirstOrSelectedItem(tabs) && !tabs.IsKeyboardFocusWithin)
         {
             FilesTree.Focus();
         }
