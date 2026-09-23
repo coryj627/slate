@@ -10885,7 +10885,8 @@ takes the target (IG2-28). The rows, in mac's order
 | Outline | node | Open; Edit Card Text… (text); Convert to Note… (text); Create Connected Card; Duplicate; Rename Group… (group); Locate File… (file, image); Toggle Mark; Connect To…; Set Color… (every kind, groups included); Move into Group…; Remove from Group (in a group); Delete (cards) or Ungroup (group) |
 | Outline | connection | Jump to Card; Edit Connection…; Delete Connection — both on the row's edge directly, no picker |
 | Grid | node | mac's table subset from the SAME plan: Open; Toggle Mark (LIVE — the staged reason retires); Delete or Ungroup |
-| Renderer | — | no context menu (G2D-12): the peers keep Invoke; the palette carries every verb |
+| Renderer | node | the Outline node rows, row for row — W7-7 R-12 (#1256, owner decision OD-3) lifted G2D-12: the seated card by Shift+F10 or the Applications key, the card under the pointer by a right-click |
+| Renderer | connection | no rows — a board request targets a card, never an edge (R-12) |
 
 One static table maps `CanvasContextVerb` arms onto document verbs
 for ALL consumers (seat the row silently, then the verb — TG-0's
