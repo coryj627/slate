@@ -181,9 +181,10 @@ public partial class MainWindow
             _observedBibliography.KeyFocusRequested -= Bibliography_KeyFocusRequested;
             _observedBibliography = null;
             // Drop the closed vault's rows rather than leaving up to
-            // MaxEntryRows of them alive behind the welcome screen.
-            BibliographyEntriesGrid.Bind([], [], summary: "", accessibilityLabel: "");
-            BibliographyUnresolvedGrid.Bind([], [], summary: "", accessibilityLabel: "");
+            // MaxEntryRows of them alive behind the welcome screen — and
+            // their names with them (codex PR 3 round 2).
+            BibliographyEntriesGrid.Clear();
+            BibliographyUnresolvedGrid.Clear();
         }
         if (_observedCitations is not null)
         {

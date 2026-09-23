@@ -339,7 +339,8 @@ internal sealed class GraphTableView : UserControl
     private void ClearBinding()
     {
         _grid.Announce = _ => { };
-        _grid.Bind([], [], summary: string.Empty, accessibilityLabel: GridLabel);
+        // The rows' names go with them (codex PR 3 round 2).
+        _grid.Clear(summary: string.Empty, accessibilityLabel: GridLabel);
         BoundPublication = null;
     }
 

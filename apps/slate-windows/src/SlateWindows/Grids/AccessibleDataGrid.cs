@@ -60,6 +60,9 @@ internal sealed class AccessibleDataGrid : UserControl
     // W7-7 PR 3 (R-4): each bound row's place in the rows the surface
     // passed, by reference — the stable ordinal a nameless row falls back to.
     private Dictionary<object, int> _boundOrdinals = new(ReferenceEqualityComparer.Instance);
+    // …and each bound row's name, fixed at Bind (codex PR 3 round 2), where
+    // a name other rows share is told apart by that ordinal.
+    private Dictionary<object, string> _rowNames = new(ReferenceEqualityComparer.Instance);
     private Func<object, string?>? _rowItemStatus;
     private Action<object>? _rowActivatedModified;
     private string _typeAheadBuffer = string.Empty;
@@ -229,19 +232,55 @@ internal sealed class AccessibleDataGrid : UserControl
         }
     }
 
+    /// <summary>A realized row's name, fixed for it at Bind. Every row the
+    /// grid holds came through Bind — ApplySort only reorders them — so its
+    /// name exists; the view position is never consulted.</summary>
+    private string RowName(object item) =>
+        _rowNames.TryGetValue(item, out string? name) ? name : BaseRowName(item);
+
     /// <summary>
     /// W7-7 PR 3 (#1246, contract R-4 as amended after codex PR 0 rounds 5
-    /// and 6): the name a realized row carries is never empty. A blank name
-    /// is no name — DataGridItemAutomationPeer then falls back to the item's
+    /// and 6, and codex PR 3 round 2): every bound row's name, never empty
+    /// and never another row's. A blank name is no name —
+    /// DataGridItemAutomationPeer then falls back to the item's
     /// <c>ToString()</c>, and a reading-table row whose first cell is blank
-    /// read "System.String[]" — so when the surface's identity is blank the
-    /// first non-empty cell stands in, else "Row {n}", n the row's place in
-    /// the rows the surface bound: its source order (a reading table's
-    /// parsed order). That ordinal survives a sort (which re-populates the
-    /// grid and moves the view position), re-realization (the map outlives
-    /// the containers) and a re-bind (recomputed from the rows passed).
+    /// read "System.String[]" — so a blank identity takes the first
+    /// non-empty cell, else "Row {n}", n the row's place in the rows the
+    /// surface bound: its source order (a reading table's parsed order).
+    /// And two rows may share an identity — one file name in two folders,
+    /// two entries with one title and year, two table rows with one first
+    /// cell — so a name more than one row carries (ignoring case, as speech
+    /// does) is suffixed with that ordinal in the fallback's shape: "note.md,
+    /// row 3". The ordinal survives a sort (which re-populates the grid and
+    /// moves the view position), re-realization (the map outlives the
+    /// containers) and a re-bind (recomputed from the rows passed).
     /// </summary>
-    private string RowName(object item)
+    private Dictionary<object, string> NameRows(IReadOnlyList<object> rows)
+    {
+        var baseNames = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
+        var carriers = new Dictionary<string, int>(StringComparer.CurrentCultureIgnoreCase);
+        foreach (object row in rows)
+        {
+            if (!baseNames.ContainsKey(row))
+            {
+                string name = BaseRowName(row);
+                baseNames[row] = name;
+                carriers[name] = carriers.GetValueOrDefault(name) + 1;
+            }
+        }
+        var names = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
+        foreach ((object row, string name) in baseNames)
+        {
+            names[row] = carriers[name] > 1
+                ? string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"{name}, row {_boundOrdinals[row] + 1}")
+                : name;
+        }
+        return names;
+    }
+
+    private string BaseRowName(object item)
     {
         if (_rowAutomationName?.Invoke(item) is { } identity
             && !string.IsNullOrWhiteSpace(identity))
@@ -256,9 +295,6 @@ internal sealed class AccessibleDataGrid : UserControl
                 return text;
             }
         }
-        // Every row the grid holds came through Bind — ApplySort only
-        // reorders them — so its bound ordinal exists; the view position
-        // is never consulted.
         return string.Create(
             System.Globalization.CultureInfo.InvariantCulture, $"Row {_boundOrdinals[item] + 1}");
     }
@@ -275,6 +311,22 @@ internal sealed class AccessibleDataGrid : UserControl
         if (_rowItemStatus is not null)
         {
             e.Row.ClearValue(AutomationProperties.ItemStatusProperty);
+        }
+    }
+
+    /// <summary>Codex PR 3 round 2: every realized row drops the name and
+    /// status the bound delegates gave it — run while those delegates are
+    /// still bound, before anything replaces them, so no row a client's
+    /// peer still holds keeps a name its grid no longer gives.</summary>
+    private void ClearRealizedRowSeams()
+    {
+        foreach (object item in _items)
+        {
+            if (_grid.ItemContainerGenerator.ContainerFromItem(item) is DataGridRow row)
+            {
+                row.ClearValue(AutomationProperties.NameProperty);
+                row.ClearValue(AutomationProperties.ItemStatusProperty);
+            }
         }
     }
 
@@ -499,27 +551,33 @@ internal sealed class AccessibleDataGrid : UserControl
     /// contract; <paramref name="rowAudioDescription"/> is the core
     /// `audio_description` the row-move announcement consumes.
     /// <paramref name="rowAutomationName"/> is the row's IDENTITY (a file
-    /// name, a title, a first cell — not the whole description): every
-    /// row-bearing caller passes it (W7-7 PR 3, #1246, R-4; pinned by
+    /// name, a title, a first cell — not the whole description), REQUIRED
+    /// (W7-7 PR 3, #1246, R-4; each caller's identity pinned by
     /// ItemContainerNameCensus), because an unnamed DataGridRow reads its
     /// item's <c>ToString()</c>. Where an identity comes back blank the
-    /// row takes its first non-empty cell, else its bound ordinal.
+    /// row takes its first non-empty cell, else its bound ordinal; where
+    /// rows share one, the ordinal tells them apart (<see cref="NameRows"/>).
+    /// A surface's teardown is <see cref="Clear"/>, never a bind of nothing.
     /// </summary>
     public void Bind(
         IReadOnlyList<AccessibleGridColumn> columns,
         IReadOnlyList<object> rows,
         string summary,
         string accessibilityLabel,
+        Func<object, string?> rowAutomationName,
         Func<object, string?>? rowAudioDescription = null,
         IReadOnlyList<AccessibleGridRowAction>? rowActions = null,
         Func<ExportFormat, string>? exportProducer = null,
         Action<object>? rowActivated = null,
-        Func<object, string?>? rowAutomationName = null,
         Func<object, string?>? rowItemStatus = null,
         Action<object>? rowActivatedModified = null)
     {
         ArgumentNullException.ThrowIfNull(columns);
         ArgumentNullException.ThrowIfNull(rows);
+        ArgumentNullException.ThrowIfNull(rowAutomationName);
+        // The outgoing rows drop what the outgoing delegates gave them
+        // before anything replaces those delegates.
+        ClearRealizedRowSeams();
         _rowAutomationName = rowAutomationName;
         _rowItemStatus = rowItemStatus;
         _rowActivatedModified = rowActivatedModified;
@@ -599,14 +657,15 @@ internal sealed class AccessibleDataGrid : UserControl
             ? DataGridHeadersVisibility.Column
             : DataGridHeadersVisibility.All;
 
-        // The ordinals first: clearing and adding realizes rows, and each
-        // realized row may need its ordinal for a name.
+        // The ordinals and names first: clearing and adding realizes rows,
+        // and each realized row takes its name from the map.
         var boundOrdinals = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
         for (int index = 0; index < rows.Count; index++)
         {
             _ = boundOrdinals.TryAdd(rows[index], index);
         }
         _boundOrdinals = boundOrdinals;
+        _rowNames = NameRows(rows);
         _items.Clear();
         foreach (object row in rows)
         {
@@ -638,6 +697,39 @@ internal sealed class AccessibleDataGrid : UserControl
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Codex PR 3 round 2: a surface's teardown — every row, column and
+    /// delegate the grid holds goes, and the summary and grid name become
+    /// <paramref name="summary"/> and <paramref name="accessibilityLabel"/>.
+    /// The realized rows drop the names and statuses the delegates gave
+    /// them FIRST, while those delegates are still bound; a bind of no rows
+    /// swapped the delegates out before its rows unloaded, so each
+    /// torn-down row kept its name for any peer a client still held.
+    /// </summary>
+    public void Clear(string summary = "", string accessibilityLabel = "")
+    {
+        ClearRealizedRowSeams();
+        _items.Clear();
+        _rowAutomationName = null;
+        _rowItemStatus = null;
+        _rowActivatedModified = null;
+        _rowAudioDescription = null;
+        _rowActions = Array.Empty<AccessibleGridRowAction>();
+        _exportProducer = null;
+        _rowActivated = null;
+        _lastAnnouncedRow = null;
+        _activeSort = null;
+        _boundOrdinals = new(ReferenceEqualityComparer.Instance);
+        _rowNames = new(ReferenceEqualityComparer.Instance);
+        _columns = Array.Empty<AccessibleGridColumn>();
+        _grid.Columns.Clear();
+        _rowHeaderColumn = null;
+        _grid.HeadersVisibility = DataGridHeadersVisibility.Column;
+        _summary.Text = summary;
+        AutomationProperties.SetName(_summary, $"Summary: {summary}");
+        AutomationProperties.SetName(_grid, accessibilityLabel);
     }
 
     /// <summary>
