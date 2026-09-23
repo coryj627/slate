@@ -469,8 +469,13 @@ internal sealed class BaseSurfaceView : UserControl
         else if (_list.Visibility == Visibility.Visible)
         {
             // A row, never the bare list, from which an arrow walked
-            // into the menu bar (W7-7 PR 4, #1247, R-5).
-            _ = SelectorFocus.FocusFirstOrSelectedItem(_list);
+            // into the menu bar (W7-7 PR 4, #1247, R-5). A row that cannot
+            // be landed leaves the keys on the surface's stable stop, the
+            // quick filter the Escape came from.
+            if (!SelectorFocus.FocusFirstOrSelectedItem(_list))
+            {
+                _ = _quickFilter.Focus();
+            }
         }
     }
 
@@ -966,10 +971,11 @@ internal sealed class BaseSurfaceView : UserControl
         // quick filter landed on its row, and the re-query that followed
         // left the reader on "2 notes, list", from which an arrow walked
         // into the menu bar. The row, never the bare list (W7-7 PR 4,
-        // #1247, R-5; codex round 1).
-        if (_list.IsKeyboardFocused)
+        // #1247, R-5; codex round 1) — else the surface's stable stop, the
+        // quick filter (codex round 3).
+        if (_list.IsKeyboardFocused && !SelectorFocus.FocusFirstOrSelectedItem(_list))
         {
-            _ = SelectorFocus.FocusFirstOrSelectedItem(_list);
+            _ = _quickFilter.Focus();
         }
     }
 

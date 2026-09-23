@@ -24,8 +24,14 @@
 // is a grid (its stop is a cell, which AccessibleDataGrid seats) — the
 // helper's own IsListLanding rule. A target typed as a base class (a
 // leaf's first stop is a UIElement) is out of a static census's reach;
-// LandOnStop routes those, and the FlaUI journey
+// SelectorFocus.LandOnStop routes those, and the FlaUI journey
 // RegionStops_ArrowsStayInRegion witnesses the Citations case.
+//
+// ANSWERED, not dropped (codex round 3): the helper answers false when
+// nothing took the keys NOW — a row it could not realize yet, or rows
+// that all refuse — and the populated list is never the landing, so the
+// caller must land on its own stable stop. No landing discards the answer,
+// nor the answer of a method that hands it back (LandOnStop).
 
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -124,6 +130,105 @@ public sealed class SelectorLandingCensus
             offenders);
     }
 
+    /// <summary>Every landing uses its answer — falls back to its stable
+    /// stop when nothing took the keys. The exemptions are structural, not
+    /// argued: the rail's row IS the right pane's stable stop, with nothing
+    /// behind it; and the region ring's <c>TryLand</c> judges every landing
+    /// by where the keys end up (W7-6 #1240) — exempt only in a case that
+    /// breaks to TryLand's closing statement, which is checked here to
+    /// return that end-state comparison.</summary>
+    [Fact]
+    public void EveryUnlandedAnswerFallsToAStableStop()
+    {
+        CSharpCompilation compilation = BindingCompilation();
+        SyntaxTree[] sources = ShellSources(compilation).ToArray();
+
+        (string[] discards, int judged) = Discards(compilation, sources);
+
+        Assert.True(judged >= 15, $"only {judged} landings were judged; the census would read too little.");
+        Assert.True(
+            discards.Length == 0,
+            "Landings that discard whether they landed (fall back to the caller's stable stop):\n  "
+            + string.Join("\n  ", discards));
+    }
+
+    /// <summary>The answer census's own witness: each way to drop the answer
+    /// is caught — a discard, a bare call, a wrapper's answer, a void
+    /// lambda, a branch of a discarded conditional, a planted wrapper's
+    /// answer, and a ring case that returns before the end-state judge —
+    /// and the rail's row, a tested answer, a fallback after <c>||</c>, an
+    /// answer a lambda returns, and a ring case that breaks to the judge
+    /// are not.</summary>
+    [Fact]
+    public void ThePlantedDiscardsAreCaught()
+    {
+        const string planted = """
+            namespace SlateWindows;
+
+            public partial class MainWindow
+            {
+                private void PlantedDiscards()
+                {
+                    _ = SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList);
+                    SelectorFocus.FocusFirstOrSelectedItem(QueriesSavedList);
+                    _ = SelectorFocus.LandOnStop(PanelCitationsList);
+                    System.Action seat = () => SelectorFocus.FocusFirstOrSelectedItem(TemplatePickerList);
+                    _ = FilterResultsList.IsVisible ? SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) : FilesTree.Focus();
+                    _ = PlantedAnswer();
+                    _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+                    if (!SelectorFocus.FocusFirstOrSelectedItem(CanvasPromptChoicesList))
+                    {
+                        _ = FilesTree.Focus();
+                    }
+
+                    _ = SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) || FilesTree.Focus();
+                    System.Func<bool> answer = () => SelectorFocus.FocusFirstOrSelectedItem(PanelOutlineList);
+                }
+
+                private bool PlantedAnswer() => SelectorFocus.FocusFirstOrSelectedItem(PanelBacklinksList);
+            }
+
+            internal sealed class PlantedRing : IShellRegionHost
+            {
+                private readonly System.Windows.Controls.ListBox _rows = new();
+
+                bool IShellRegionHost.TryLand(ShellRegionKind region)
+                {
+                    switch (region)
+                    {
+                        case ShellRegionKind.RightPaneContent:
+                            _ = SelectorFocus.FocusFirstOrSelectedItem(_rows);
+                            break;
+                        case ShellRegionKind.Files:
+                            _ = SelectorFocus.FocusFirstOrSelectedItem(_rows);
+                            return true;
+                    }
+
+                    return ((IShellRegionHost)this).FocusedRegion() == region;
+                }
+            }
+            """;
+        CSharpCompilation shell = BindingCompilation();
+        var options = (CSharpParseOptions)ShellSources(shell).First().Options;
+        SyntaxTree tree = CSharpSyntaxTree.ParseText(planted, options, path: "Planted.cs");
+        CSharpCompilation compilation = shell.AddSyntaxTrees(tree);
+
+        (string[] discards, int judged) = Discards(compilation, [tree]);
+
+        Assert.Equal(
+            [
+                "Planted.cs:7: SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList) discards whether it landed",
+                "Planted.cs:8: SelectorFocus.FocusFirstOrSelectedItem(QueriesSavedList) discards whether it landed",
+                "Planted.cs:9: SelectorFocus.LandOnStop(PanelCitationsList) discards whether it landed",
+                "Planted.cs:10: SelectorFocus.FocusFirstOrSelectedItem(TemplatePickerList) discards whether it landed",
+                "Planted.cs:11: SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) discards whether it landed",
+                "Planted.cs:12: PlantedAnswer() discards whether it landed",
+                "Planted.cs:38: SelectorFocus.FocusFirstOrSelectedItem(_rows) discards whether it landed",
+            ],
+            discards);
+        Assert.Equal(13, judged);
+    }
+
     /// <summary>The shared shell compilation, with the editor's assembly
     /// referenced whatever this process has loaded so far: the shared one
     /// references the assemblies loaded when it was first built, so whether
@@ -217,6 +322,173 @@ public sealed class SelectorLandingCensus
             }
         }
     }
+
+    /// <summary>Every call to the helper or to a method that hands back its
+    /// answer, judged: the discards that are not a stable stop
+    /// themselves.</summary>
+    private static (string[] Discards, int Judged) Discards(
+        CSharpCompilation compilation, IReadOnlyCollection<SyntaxTree> scanned)
+    {
+        IMethodSymbol helper = compilation.GetTypeByMetadataName("SlateWindows.SelectorFocus")?
+            .GetMembers(Helper).OfType<IMethodSymbol>().SingleOrDefault()
+            ?? throw new Xunit.Sdk.XunitException($"SelectorFocus.{Helper} did not bind.");
+        HashSet<IMethodSymbol> answering = AnsweringMethods(
+            compilation, ShellSources(compilation).Concat(scanned).Distinct().ToArray(), helper);
+        HashSet<string> names = answering.Select(method => method.Name).ToHashSet(StringComparer.Ordinal);
+
+        var discards = new List<string>();
+        int judged = 0;
+        foreach (SyntaxTree tree in scanned)
+        {
+            SemanticModel model = compilation.GetSemanticModel(tree);
+            foreach (InvocationExpressionSyntax call in tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (!names.Contains(InvokedName(call)))
+                {
+                    continue;
+                }
+
+                string where = $"{Path.GetFileName(tree.FilePath)}:{call.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
+                if (model.GetSymbolInfo(call).Symbol is not IMethodSymbol method)
+                {
+                    discards.Add($"{where}: {CSharpSource.Normalize(call)} did not bind, so its answer cannot be judged");
+                    continue;
+                }
+
+                if (!answering.Contains(method.OriginalDefinition))
+                {
+                    continue;
+                }
+
+                judged++;
+                if (Flow(model, call) == AnswerFlow.Discarded
+                    && !LandsOnTheRail(model, call)
+                    && !JudgedByTheRing(model, call))
+                {
+                    discards.Add($"{where}: {CSharpSource.Normalize(call)} discards whether it landed");
+                }
+            }
+        }
+
+        return (discards.ToArray(), judged);
+    }
+
+    /// <summary>The helper, and every method that returns its answer — or
+    /// the answer of one that does (LandOnStop).</summary>
+    private static HashSet<IMethodSymbol> AnsweringMethods(
+        CSharpCompilation compilation, IReadOnlyCollection<SyntaxTree> trees, IMethodSymbol helper)
+    {
+        var answering = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { helper };
+        bool grew = true;
+        while (grew)
+        {
+            grew = false;
+            HashSet<string> names = answering.Select(method => method.Name).ToHashSet(StringComparer.Ordinal);
+            foreach (SyntaxTree tree in trees)
+            {
+                SemanticModel model = compilation.GetSemanticModel(tree);
+                foreach (InvocationExpressionSyntax call in tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>())
+                {
+                    if (names.Contains(InvokedName(call))
+                        && model.GetSymbolInfo(call).Symbol is IMethodSymbol method
+                        && answering.Contains(method.OriginalDefinition)
+                        && Flow(model, call) == AnswerFlow.Returned
+                        && call.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault() is { } declaration
+                        && model.GetDeclaredSymbol(declaration) is IMethodSymbol wrapper
+                        && answering.Add(wrapper.OriginalDefinition))
+                    {
+                        grew = true;
+                    }
+                }
+            }
+        }
+
+        return answering;
+    }
+
+    private enum AnswerFlow
+    {
+        Discarded,
+        Returned,
+        Used,
+    }
+
+    /// <summary>Where a call's answer goes: through parentheses, a cast, a
+    /// branch of a conditional or the right side of <c>||</c>/<c>&amp;&amp;</c>
+    /// it is still the answer; a statement, a discard or a void lambda
+    /// drops it; a method's return hands it back; anything else — a test,
+    /// the left side of <c>||</c> before a fallback — uses it.</summary>
+    private static AnswerFlow Flow(SemanticModel model, ExpressionSyntax call)
+    {
+        SyntaxNode value = call;
+        while (value.Parent is { } parent)
+        {
+            if (parent is ParenthesizedExpressionSyntax or CastExpressionSyntax
+                || parent.IsKind(SyntaxKind.SuppressNullableWarningExpression)
+                || (parent is ConditionalExpressionSyntax conditional && conditional.Condition != value)
+                || (parent is BinaryExpressionSyntax binary && binary.Right == value
+                    && binary.Kind() is SyntaxKind.LogicalOrExpression or SyntaxKind.LogicalAndExpression))
+            {
+                value = parent;
+                continue;
+            }
+
+            return parent switch
+            {
+                ExpressionStatementSyntax => AnswerFlow.Discarded,
+                AssignmentExpressionSyntax assignment when assignment.Right == value =>
+                    (model.GetSymbolInfo(assignment.Left).Symbol is IDiscardSymbol) ? AnswerFlow.Discarded : AnswerFlow.Used,
+                LambdaExpressionSyntax lambda when lambda.Body == value =>
+                    (model.GetSymbolInfo(lambda).Symbol is IMethodSymbol { ReturnsVoid: true }) ? AnswerFlow.Discarded : AnswerFlow.Used,
+                ArrowExpressionClauseSyntax { Parent: MethodDeclarationSyntax declaration } =>
+                    (model.GetDeclaredSymbol(declaration) is IMethodSymbol { ReturnsVoid: true }) ? AnswerFlow.Discarded : AnswerFlow.Returned,
+                ReturnStatementSyntax statement =>
+                    (statement.Ancestors().FirstOrDefault(node => node is AnonymousFunctionExpressionSyntax
+                        or LocalFunctionStatementSyntax or BaseMethodDeclarationSyntax) is MethodDeclarationSyntax)
+                        ? AnswerFlow.Returned
+                        : AnswerFlow.Used,
+                _ => AnswerFlow.Used,
+            };
+        }
+
+        return AnswerFlow.Used;
+    }
+
+    /// <summary>The rail's row is the right pane's stable stop: a landing
+    /// there has nothing behind it to fall back to.</summary>
+    private static bool LandsOnTheRail(SemanticModel model, InvocationExpressionSyntax call) =>
+        call.ArgumentList.Arguments.FirstOrDefault()?.Expression is { } argument
+        && model.GetSymbolInfo(argument).Symbol is IFieldSymbol { Name: "RightPaneLeavesList", ContainingType.Name: "MainWindow" };
+
+    /// <summary>A discard inside the region ring's <c>TryLand</c>, in a case
+    /// that breaks to its closing statement — checked to return the
+    /// end-state comparison, <c>FocusedRegion() == region</c>, so a landing
+    /// that took nothing reads as the region's refusal and the ring moves
+    /// on.</summary>
+    private static bool JudgedByTheRing(SemanticModel model, InvocationExpressionSyntax call)
+    {
+        if (call.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault() is not { } declaration
+            || model.GetDeclaredSymbol(declaration) is not IMethodSymbol method
+            || !method.ExplicitInterfaceImplementations.Any(
+                implemented => implemented is { Name: "TryLand", ContainingType.Name: "IShellRegionHost" })
+            || call.Ancestors().OfType<SwitchSectionSyntax>().FirstOrDefault() is not { } section
+            || !EndsInBreak(section.Statements.LastOrDefault())
+            || declaration.Body?.Statements.LastOrDefault() is not ReturnStatementSyntax { Expression: { } judge })
+        {
+            return false;
+        }
+
+        return judge.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>().Any(invocation =>
+            model.GetSymbolInfo(invocation).Symbol is IMethodSymbol { Name: "FocusedRegion" } focused
+            && focused.ContainingType.Name == "IShellRegionHost");
+    }
+
+    private static bool EndsInBreak(StatementSyntax? statement) => statement switch
+    {
+        BreakStatementSyntax => true,
+        BlockSyntax block => EndsInBreak(block.Statements.LastOrDefault()),
+        _ => false,
+    };
 
     /// <summary>The window's own methods that focus one of their parameters —
     /// directly, or through a pattern over it (<c>TryFocus</c>'s switch) —

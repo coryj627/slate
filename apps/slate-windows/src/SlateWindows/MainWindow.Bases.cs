@@ -186,7 +186,7 @@ public partial class MainWindow
             // Focus returns to the list the rename came from — the
             // collapsed row must not strand focus (red team round 1) — on
             // the renamed query's row, never the bare list (R-5, #1247).
-            _ = SelectorFocus.FocusFirstOrSelectedItem(QueriesSavedList);
+            LandOnSavedQueries();
             e.Handled = true;
             return;
         }
@@ -197,8 +197,19 @@ public partial class MainWindow
         BasesWorkspace?.RenameSavedQuery(id, QueriesRenameBox.Text);
         QueriesRenameRow.Visibility = Visibility.Collapsed;
         _pendingRenameSavedQueryId = null;
-        _ = SelectorFocus.FocusFirstOrSelectedItem(QueriesSavedList);
+        LandOnSavedQueries();
         e.Handled = true;
+    }
+
+    /// <summary>The saved query's row; a row that cannot be landed yet
+    /// leaves the keys to the pane's stable stop, the rail's row (R-5,
+    /// #1247).</summary>
+    private void LandOnSavedQueries()
+    {
+        if (!SelectorFocus.FocusFirstOrSelectedItem(QueriesSavedList))
+        {
+            _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+        }
     }
 
     private void QueriesExport_Click(object sender, RoutedEventArgs e)

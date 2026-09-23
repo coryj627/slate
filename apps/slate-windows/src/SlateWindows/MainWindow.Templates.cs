@@ -237,9 +237,14 @@ public partial class MainWindow
                     TemplatePickerList.SelectedIndex = 0;
                 }
 
-                // The selected row, never the bare list (R-5, #1247): a
-                // row not generated yet is seated once it exists.
-                _ = SelectorFocus.FocusFirstOrSelectedItem(TemplatePickerList);
+                // The selected row, never the bare list (R-5, #1247); a
+                // row that cannot be landed yet leaves the keys to the
+                // sheet's stable stop, Cancel.
+                if (!SelectorFocus.FocusFirstOrSelectedItem(TemplatePickerList))
+                {
+                    _ = TemplatePickerCancelButton.Focus();
+                }
+
                 return;
             case TemplatePickerState.Empty:
                 _ = TemplatePickerTryAgainButton.Focus();

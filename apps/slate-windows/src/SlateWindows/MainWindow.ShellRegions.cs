@@ -109,11 +109,10 @@ public partial class MainWindow : IShellRegionHost
                 break;
             case ShellRegionKind.Files:
                 // R-5 (#1247): the filter's results land on a result row,
-                // or on the list itself when it is empty (AR-6).
+                // or on the list itself when it is empty (AR-6); a row that
+                // cannot be landed yet leaves the keys to the tree.
                 _ = FilterResultsList.IsVisible
-                    ? SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList)
-                        || FilterResultsList.IsKeyboardFocusWithin
-                        || FilesTree.Focus()
+                    ? SelectorFocus.FocusFirstOrSelectedItem(FilterResultsList) || FilesTree.Focus()
                     : FilesTree.Focus();
                 break;
             case ShellRegionKind.TabBar:
@@ -171,7 +170,9 @@ public partial class MainWindow : IShellRegionHost
                 }
                 else if (VisibleLeafBody() is { } body && FirstFocusable(body) is { } stop)
                 {
-                    LandOnStop(stop);
+                    // A stop that cannot be landed leaves the region
+                    // unfocused, so the ring moves on to the rail.
+                    _ = SelectorFocus.LandOnStop(stop);
                 }
 
                 break;
@@ -249,27 +250,14 @@ public partial class MainWindow : IShellRegionHost
     /// (<see cref="WorkspaceFocusBoundary.RightPaneEdge"/>).</summary>
     private void LandInRightPane()
     {
-        if (VisibleLeafBody() is { } body && FirstFocusable(body) is { } stop)
+        if (VisibleLeafBody() is { } body && FirstFocusable(body) is { } stop && SelectorFocus.LandOnStop(stop))
         {
-            LandOnStop(stop);
-        }
-        else
-        {
-            _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
-        }
-    }
-
-    /// <summary>R-5 (#1247): a leaf's first stop can itself be a list —
-    /// the Citations leaf's is — and a list's landing is its row.</summary>
-    private static void LandOnStop(UIElement stop)
-    {
-        if (SelectorFocus.IsListLanding(stop))
-        {
-            _ = SelectorFocus.FocusFirstOrSelectedItem((Selector)stop);
             return;
         }
 
-        _ = stop.Focus();
+        // The leaf has no stop, or its list's row cannot be landed yet: the
+        // pane's stable stop, the rail's row.
+        _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
     }
 
     private static bool IsWithin(DependencyObject element, DependencyObject scope)
