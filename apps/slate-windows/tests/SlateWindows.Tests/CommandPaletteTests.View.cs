@@ -5,7 +5,6 @@ using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -79,42 +78,98 @@ public sealed partial class CommandPaletteTests
     });
 
     /// <summary>
-    /// The swap runs inside the selection-sync guard (R-11) — pinned as
-    /// source because it is the second of two locks.
+    /// A query that removes the selected id moves the selection to its
+    /// replacement, and the reader hears exactly that: one
+    /// <c>PaletteCommandSelected</c> naming the replacement, then the
+    /// query's count — and a query the selection survives says the count
+    /// alone (contract 28 P7, P10), through the shipped list.
     /// </summary>
     /// <remarks>
-    /// With the list unsynchronized (the XAML half, which the fact above
-    /// catches through the list's own selection traffic) a swap only ever
-    /// DESELECTS, so no runtime observation can tell whether the guard is
-    /// still there: moving the swap out of it leaves every hosted fact
-    /// green. The guard is what keeps the swap silent if a style, a
-    /// template or a later control turns synchronization back on.
+    /// The other R-11 facts forbid a selection the user never made; this
+    /// one forbids the opposite repair — silencing selection announcements
+    /// altogether — which would pass every "none on a survivor" and "never
+    /// the wrong row" assertion while the reader lost the row they are on.
     /// </remarks>
     [Fact]
-    public void TheItemsSourceSwapRunsInsideTheSelectionSyncGuard()
+    public void AQueryThatRemovesTheSelectionAnnouncesItsReplacementThenTheCount() => RunSta(() =>
     {
-        MethodDeclarationSyntax refresh = CSharpSource
-            .Load("CommandPaletteResultsPresenter.cs")
-            .Method("Refresh");
-        AssignmentExpressionSyntax swap = Assert.Single(
-            refresh.DescendantNodes().OfType<AssignmentExpressionSyntax>(),
-            assignment => CSharpSource.Normalize(assignment.Left) == "_list.ItemsSource");
+        using var host = new ShippedResultsList(StandardCommands());
+        CommandPaletteViewModel palette = host.Palette;
+        palette.Open();
+        host.Settle();
+        palette.SelectLast();
+        host.Settle();
+        Assert.Equal("slate.tasks.review", palette.SelectedId);
 
-        TryStatementSyntax? guarded = swap.Ancestors()
-            .OfType<TryStatementSyntax>()
-            .FirstOrDefault(statement => statement.Block.Contains(swap));
-        Assert.True(
-            guarded is not null,
-            "Refresh assigns ItemsSource outside any try block, so nothing guards "
-            + "the selection the swap can raise.");
-        BlockSyntax body = Assert.IsType<BlockSyntax>(guarded!.Parent);
-        int at = body.Statements.IndexOf(guarded);
-        Assert.True(at > 0, "Nothing precedes the guarding try block.");
-        Assert.Equal("_syncingSelection=true;", CSharpSource.Normalize(body.Statements[at - 1]));
+        // "Tasks Review" has no 'o': the selection moves to the first of
+        // the three rows left, and that move is the one thing to say
+        // before the count.
+        host.ChangeQuery("o");
+        Assert.Equal("slate.file.newNote", palette.SelectedId);
+        Assert.Collection(
+            host.Harness.Announcements,
+            announced => Assert.Equal(
+                "New Note",
+                Assert.IsType<A11yEvent.PaletteCommandSelected>(announced).Label),
+            announced => Assert.Equal(
+                (3u, "o"),
+                (Assert.IsType<A11yEvent.PaletteFilterCount>(announced).Count,
+                    ((A11yEvent.PaletteFilterCount)announced).Query)));
+        host.AssertShowsTheViewModelsSelection();
+
+        // "New Note" survives "no": the count, and nothing else.
+        host.ChangeQuery("no");
+        Assert.Equal("slate.file.newNote", palette.SelectedId);
+        A11yEvent.PaletteFilterCount count = Assert.IsType<A11yEvent.PaletteFilterCount>(
+            Assert.Single(host.Harness.Announcements));
+        Assert.Equal("no", count.Query);
+        host.AssertShowsTheViewModelsSelection();
+    });
+
+    /// <summary>
+    /// The selection-sync guard alone keeps the swap silent (R-11). The
+    /// shipped list is switched back to synchronizing its current item — as
+    /// a later style, template or control could — so the swap really does
+    /// select the new view's first row, and nothing may reach the view
+    /// model as a choice the user made.
+    /// </summary>
+    /// <remarks>
+    /// The XAML half hides the guard from every other runtime fact: an
+    /// unsynchronized swap only deselects. With that half turned off here,
+    /// the guard is the only lock left, so this fails when the swap leaves
+    /// the guard and when the pointer route stops honouring it. The first
+    /// assertion after the query change proves the list did select the
+    /// first row; without it this fact could pass on a list that never
+    /// synchronized at all.
+    /// </remarks>
+    [Fact]
+    public void TheGuardAloneKeepsASynchronizedSwapSilent() => RunSta(() =>
+    {
+        using var host = new ShippedResultsList(StandardCommands());
+        host.List.IsSynchronizedWithCurrentItem = true;
+        CommandPaletteViewModel palette = host.Palette;
+        palette.Open();
+        host.Settle();
+        palette.Select(palette.Rows[3]);
+        host.Settle();
+        Assert.Equal("slate.editor.bold", palette.SelectedId);
+        Assert.Equal(["Toggle Bold"], host.SelectionAnnouncements);
+
+        // The survivor is the last of three rows; the synchronized swap
+        // selects the first, and nobody may hear about it (P7).
+        host.ChangeQuery("o");
         Assert.Contains(
-            "_syncingSelection=false;",
-            (guarded.Finally?.Block.Statements ?? []).Select(CSharpSource.Normalize));
-    }
+            host.ListSelections,
+            added => added is CommandPaletteRowViewModel { Id: "slate.file.newNote" });
+        Assert.Empty(host.SelectionAnnouncements);
+        Assert.Equal("slate.editor.bold", palette.SelectedId);
+        Assert.Same(palette.SelectedRow, host.List.SelectedItem);
+
+        // The survivor vanishes: the view model's one snap, and no other.
+        host.ChangeQuery("q");
+        Assert.Equal(["Quick Open"], host.SelectionAnnouncements);
+        Assert.Same(palette.SelectedRow, host.List.SelectedItem);
+    });
 
     /// <summary>
     /// With the list no longer synchronized to its current item, every
