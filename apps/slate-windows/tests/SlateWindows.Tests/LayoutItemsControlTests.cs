@@ -121,6 +121,47 @@ public sealed class LayoutItemsControlTests
         Assert.IsType<TabControl>(pane.Child);
     });
 
+    /// <summary>Codex PR 3 round 1: the Bases warning banners are built in
+    /// C#, and as a plain ItemsControl each warning's focusable text sat
+    /// under a DataItem wrapper. The host is layout now: the generated
+    /// container is out of the control view and the warning text is the
+    /// one stop.</summary>
+    [Fact]
+    public void TheBasesWarningBannersAreALayoutHostOverTheirFocusableText() => RunSta(() =>
+    {
+        var surface = new Bases.BaseSurfaceView();
+        LayoutItemsControl banners = surface.WarningBannersForTests;
+        banners.ItemsSource = new[] { "Unknown property: status" };
+        banners.Visibility = Visibility.Visible;
+        ((FrameworkElement)banners.Parent).Visibility = Visibility.Visible;
+        var window = new Window
+        {
+            Content = surface,
+            Width = 480,
+            Height = 320,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+        };
+        window.Show();
+        try
+        {
+            window.UpdateLayout();
+            AutomationPeer container = Assert.Single(
+                UIElementAutomationPeer.CreatePeerForElement(banners).GetChildren());
+            Assert.IsType<LayoutItemAutomationPeer>(container);
+            Assert.False(container.IsControlElement());
+            Assert.False(container.IsContentElement());
+            AutomationPeer text = Assert.Single(container.GetChildren());
+            Assert.True(text.IsControlElement());
+            Assert.Equal("Unknown property: status", text.GetName());
+            Assert.True(((FrameworkElementAutomationPeer)text).Owner.Focusable);
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
     private static void RunSta(Action body)
     {
         Exception? failure = null;
