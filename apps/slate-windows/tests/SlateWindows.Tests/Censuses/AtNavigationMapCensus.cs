@@ -27,6 +27,8 @@ public sealed class AtNavigationMapCensus
         "Reading headings", "Reading links", "Reading lists", "Reading tables",
         "Reading text, embeds, code, math and diagrams", "Form controls", "Landmarks",
         "Editor text and Outline heading navigation", "Panel lists and links", "Data grids and tables", "Sidebar trees",
+        // W7-7 (R-2, OD-2): the Files region's row gestures.
+        "Files tree explicit open", "Files tree open in a new tab", "Files tree batch selection",
     ];
 
     // The adjustable action is an action too: VoiceOver's increment/decrement
