@@ -805,12 +805,15 @@ public sealed class ChordTableTests
     /// PR B2, B2-4), which its body delivers, read from
     /// <c>IsTheBackChord</c>'s expression — the key as <c>Key.X</c>, the
     /// modifiers as <c>ModifierKeys.Y</c> — and the tree's new-tab
-    /// activation (W7-7 R-13), read from <c>OnTreeKeyDown</c>'s ONE
-    /// <c>Activate</c> call: the key its enclosing arm tests and the
-    /// modifier its <c>newTab:</c> argument tests. A chord added to either
-    /// without a table row, or a row without a delivering site, fails here.
-    /// The bare Enter of the same arm is the row's default action (B-9),
-    /// not a table row.</summary>
+    /// activation (W7-7 R-13), read the same way from
+    /// <c>TryActivationFromKey</c>, once the route that ships is shown to
+    /// run through it: <c>OnTreeKeyDown</c> hands the live
+    /// <c>Keyboard.Modifiers</c> to the tree's key owner, which decides
+    /// through <c>TryActivationFromKey</c> and activates with ITS
+    /// <c>newTab</c>. A chord added to either without a table row, or a row
+    /// without a delivering site, fails here; the decision's behaviour is
+    /// <c>ConnectionsLeafViewTests</c>'. The bare Enter is the row's default
+    /// action (B-9), not a table row.</summary>
     private static HashSet<string> ConnectionsChords()
     {
         CSharpSource view = CSharpSource.Load("Graph", "ConnectionsLeafView.cs");
@@ -825,16 +828,28 @@ public sealed class ChordTableTests
         Assert.Single(keys);
         Assert.NotEmpty(modifiers);
 
-        InvocationExpressionSyntax activation = Assert.Single(
+        InvocationExpressionSyntax toOwner = Assert.Single(
             view.Method("OnTreeKeyDown").DescendantNodes().OfType<InvocationExpressionSyntax>(),
+            call => CSharpSource.Normalize(call.Expression) == "TryHandleTreeKey");
+        Assert.Equal(
+            ["e.Key==Key.System?e.SystemKey:e.Key", "Keyboard.Modifiers"],
+            toOwner.ArgumentList.Arguments.Select(argument => CSharpSource.Normalize(argument.Expression)));
+        MethodDeclarationSyntax treeOwner = view.Method("TryHandleTreeKey");
+        InvocationExpressionSyntax decide = Assert.Single(
+            treeOwner.DescendantNodes().OfType<InvocationExpressionSyntax>(),
+            call => CSharpSource.Normalize(call.Expression) == "TryActivationFromKey");
+        Assert.Equal(
+            ["key", "modifiers", "boolnewTab"],
+            decide.ArgumentList.Arguments.Select(argument => CSharpSource.Normalize(argument.Expression)));
+        InvocationExpressionSyntax activation = Assert.Single(
+            treeOwner.DescendantNodes().OfType<InvocationExpressionSyntax>(),
             call => call.Expression is MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Activate" });
-        ArgumentSyntax newTab = Assert.Single(
-            activation.ArgumentList.Arguments,
-            argument => argument.NameColon?.Name.Identifier.ValueText == "newTab");
-        string newTabModifier = Assert.Single(CSharpSource.MemberAccesses(newTab.Expression, "ModifierKeys"))
-            .Name.Identifier.ValueText;
-        IfStatementSyntax arm = activation.Ancestors().OfType<IfStatementSyntax>().First();
-        string activationKey = Assert.Single(CSharpSource.KeyNames(arm.Condition));
+        Assert.Equal("newTab", CSharpSource.Normalize(activation.ArgumentList.Arguments.Last().Expression));
+
+        MethodDeclarationSyntax decision = view.Method("TryActivationFromKey");
+        string activationKey = Assert.Single(CSharpSource.KeyNames(decision).Distinct());
+        string newTabModifier = Assert.Single(CSharpSource.MemberAccesses(decision, "ModifierKeys")
+            .Select(access => access.Name.Identifier.ValueText).Distinct());
         return [Canonical(string.Join("+", modifiers), keys[0]), Canonical(newTabModifier, activationKey)];
     }
 

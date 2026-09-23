@@ -822,28 +822,8 @@ internal sealed class ConnectionsLeafView : UserControl
 
     private void OnTreeKeyDown(object sender, KeyEventArgs e)
     {
-        if (Model is not { } model)
+        if (TryHandleTreeKey(e.Key == Key.System ? e.SystemKey : e.Key, Keyboard.Modifiers))
         {
-            return;
-        }
-        ConnectionsRowViewModel? current = _tree.SelectedItem as ConnectionsRowViewModel;
-        bool alt = (Keyboard.Modifiers & ModifierKeys.Alt) != 0;
-        Key key = e.Key == Key.System ? e.SystemKey : e.Key;
-        if (key == Key.Return && current is { Row: not null })
-        {
-            model.Activate(current.Row, newTab: (Keyboard.Modifiers & ModifierKeys.Control) != 0);
-            e.Handled = true;
-        }
-        else if (key == Key.Return && current is { IsGroup: true })
-        {
-            current.IsExpanded = !current.IsExpanded;
-            e.Handled = true;
-        }
-        else if (key is Key.Up or Key.Down && alt)
-        {
-            // Alt+Up / Alt+Down: the first row of the previous / next group
-            // (the mac's `jumpSection`, `:296–306`).
-            JumpGroup(key == Key.Down);
             e.Handled = true;
         }
         // The Menu key and Shift+F10 are WPF's: its popup service raises
@@ -852,6 +832,49 @@ internal sealed class ConnectionsLeafView : UserControl
         // a menu of its own here as well and marked the key handled, and the
         // two answers to the one key left NO menu open on the Menu key
         // (W6-2 PR B2's journey, T6).
+    }
+
+    /// <summary>The tree's key owner, for the facts (Back's shape, <see
+    /// cref="TryHandleBackChord"/>): handled iff the key activated the
+    /// selected row, toggled the selected group or jumped between the
+    /// groups. W7-7 R-13: the row's activation is <see
+    /// cref="TryActivationFromKey"/>'s decision.</summary>
+    internal bool TryHandleTreeKey(Key key, ModifierKeys modifiers)
+    {
+        if (Model is not { } model)
+        {
+            return false;
+        }
+        ConnectionsRowViewModel? current = _tree.SelectedItem as ConnectionsRowViewModel;
+        bool alt = (modifiers & ModifierKeys.Alt) != 0;
+        if (current is { Row: not null } && TryActivationFromKey(key, modifiers, out bool newTab))
+        {
+            model.Activate(current.Row, newTab);
+            return true;
+        }
+        if (key == Key.Return && current is { IsGroup: true })
+        {
+            current.IsExpanded = !current.IsExpanded;
+            return true;
+        }
+        if (key is Key.Up or Key.Down && alt)
+        {
+            // Alt+Up / Alt+Down: the first row of the previous / next group
+            // (the mac's `jumpSection`, `:296–306`).
+            JumpGroup(key == Key.Down);
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>W7-7 R-13 (#1257): a row's activation key — Return activates
+    /// it, and Control opens its note in a new tab (the chord table's
+    /// <c>windows.connections.openInNewTab</c>, contract 35 B-9); Shift and
+    /// Alt change nothing. The chord table's scope scrape reads this body.</summary>
+    internal static bool TryActivationFromKey(Key key, ModifierKeys modifiers, out bool newTab)
+    {
+        newTab = key == Key.Return && (modifiers & ModifierKeys.Control) != 0;
+        return key == Key.Return;
     }
 
     private void JumpGroup(bool down)
