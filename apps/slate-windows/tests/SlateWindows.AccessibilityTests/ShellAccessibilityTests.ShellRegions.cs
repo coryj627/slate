@@ -60,9 +60,10 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement note = WaitForTreeItemStartingWith(tree, automation, "alpha.md");
             note.Patterns.SelectionItem.Pattern.Select();
             AutomationElement editor = WaitForEditor(window, automation, "alpha.md editor", TimeSpan.FromSeconds(10));
-            // Opening the note moves focus to the editor, and once a
-            // TreeViewItem is selected, WPF's TreeView automation peer
-            // throws InvalidOperationException from SetFocus() on the
+            // Selecting the row shows the note and leaves focus where it
+            // was (W7-7, R-2); UIA's Select() moves no keyboard focus, and
+            // once a TreeViewItem is selected, WPF's TreeView automation
+            // peer throws InvalidOperationException from SetFocus() on the
             // TreeView container itself (a known WPF/UIA quirk for
             // ItemsControl containers with a live selection) — focus the
             // selected row instead and confirm with a descendant check
