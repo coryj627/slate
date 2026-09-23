@@ -6,8 +6,10 @@
 // element, so a sheet declared as a focus scope without the fence sends
 // Tab from its text fields to whatever held focus before it opened — the
 // note editor, in the NVDA pass (record F5). All sixteen overlays in
-// MainWindow.xaml were focus scopes and none was fenced. The fence moves
-// Tab inside the sheet's own cycle, so a fenced sheet must also cycle.
+// MainWindow.xaml were focus scopes and none was fenced. The fence leaves
+// Tab to WPF's own traversal, which stays inside the sheet only when the
+// sheet cycles — so a fenced sheet must also cycle, whether an element or
+// a style makes it a focus scope.
 
 using System.Xml;
 using System.Xml.Linq;
@@ -22,6 +24,8 @@ public sealed class SheetFenceCensus
     private const string FocusScope = "FocusManager.IsFocusScope";
     private const string Fence = "SheetKeyboardFence.IsEnabled";
     private const string TabNavigation = "KeyboardNavigation.TabNavigation";
+    private const string FenceRequirement = "local:" + Fence + "=\"True\"";
+    private const string CycleRequirement = TabNavigation + "=\"Cycle\"";
 
     /// <summary>The CLR namespace the fence is declared in, as XAML maps
     /// it — whatever prefix a file binds to it.</summary>
@@ -45,40 +49,10 @@ public sealed class SheetFenceCensus
         foreach (string path in ShellXaml())
         {
             files++;
-            string file = Path.GetFileName(path);
-            XDocument document = XDocument.Load(path, LoadOptions.SetLineInfo);
-            foreach (XElement element in document.Descendants())
-            {
-                if (IsTrue(Attribute(element, FocusScope)))
-                {
-                    scopes++;
-                    var missing = new List<string>();
-                    if (!IsTrue(FenceAttribute(element)))
-                    {
-                        missing.Add($"local:{Fence}=\"True\"");
-                    }
-
-                    if (!string.Equals(Attribute(element, TabNavigation), "Cycle", StringComparison.OrdinalIgnoreCase))
-                    {
-                        missing.Add($"{TabNavigation}=\"Cycle\"");
-                    }
-
-                    if (missing.Count > 0)
-                    {
-                        offenders.Add($"{Describe(file, element)} lacks {string.Join(" and ", missing)}");
-                    }
-                }
-                else if (IsFocusScopeSetter(element))
-                {
-                    // A style can make a focus scope too; its fence must
-                    // ride the same style.
-                    scopes++;
-                    if (!element.Parent!.Elements().Any(IsFenceSetter))
-                    {
-                        offenders.Add($"{Describe(file, element)} sets {FocusScope} in a style with no {Fence} setter beside it");
-                    }
-                }
-            }
+            (List<string> found, int declared) = Offenders(
+                XDocument.Load(path, LoadOptions.SetLineInfo), Path.GetFileName(path));
+            offenders.AddRange(found);
+            scopes += declared;
         }
 
         Assert.True(files > 0, "the census found no shell XAML — the discovery is broken");
@@ -87,6 +61,50 @@ public sealed class SheetFenceCensus
             offenders.Count == 0,
             "focus scopes that do not fence Tab (R-6: Tab from a text field in an unfenced "
             + "sheet reaches the element behind it):\n  " + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>The rule over a focus scope a STYLE makes: its setters
+    /// must fence and cycle too, and a missing one is named by file and
+    /// line (the IsFocusScope setter's).</summary>
+    [Theory]
+    [InlineData(true, true, null)]
+    [InlineData(true, false, CycleRequirement)]
+    [InlineData(false, true, FenceRequirement)]
+    public void AStyleThatMakesAFocusScopeMustFenceAndCycleToo(bool fences, bool cycles, string? missing)
+    {
+        string xaml = $"""
+            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                xmlns:local="clr-namespace:SlateWindows">
+              <Style x:Key="Sheet" TargetType="Border" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                <Setter Property="FocusManager.IsFocusScope" Value="True" />
+                {(fences ? "<Setter Property=\"local:SheetKeyboardFence.IsEnabled\" Value=\"True\" />" : "")}
+                {(cycles ? "<Setter Property=\"KeyboardNavigation.TabNavigation\" Value=\"Cycle\" />" : "")}
+              </Style>
+            </ResourceDictionary>
+            """;
+
+        AssertTheRule(xaml, "Synthetic.xaml:4 <Setter>", missing);
+    }
+
+    /// <summary>The same rule over a focus scope an ELEMENT makes.</summary>
+    [Theory]
+    [InlineData(true, true, null)]
+    [InlineData(true, false, CycleRequirement)]
+    [InlineData(false, true, FenceRequirement)]
+    public void AnElementThatIsAFocusScopeMustFenceAndCycleToo(bool fences, bool cycles, string? missing)
+    {
+        string xaml = $"""
+            <Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:local="clr-namespace:SlateWindows">
+              <Border x:Name="SyntheticOverlay"
+                      FocusManager.IsFocusScope="True"
+                      {(fences ? "local:SheetKeyboardFence.IsEnabled=\"True\"" : "")}
+                      {(cycles ? "KeyboardNavigation.TabNavigation=\"Cycle\"" : "")} />
+            </Grid>
+            """;
+
+        AssertTheRule(xaml, "Synthetic.xaml:4 <Border SyntheticOverlay>", missing);
     }
 
     /// <summary>A focus scope made in code escapes the XAML scrape above,
@@ -113,6 +131,73 @@ public sealed class SheetFenceCensus
             + string.Join("\n  ", sites));
     }
 
+    /// <summary>The census's rule over one XAML document: every element
+    /// that is a focus scope, and every style setter that makes one,
+    /// carries the fence and cycles Tab. Returns the offenders — file,
+    /// line, element and what it lacks — and the scopes it examined.</summary>
+    private static (List<string> Offenders, int Scopes) Offenders(XDocument document, string file)
+    {
+        var offenders = new List<string>();
+        int scopes = 0;
+        foreach (XElement element in document.Descendants())
+        {
+            var missing = new List<string>();
+            if (IsTrue(Attribute(element, FocusScope)))
+            {
+                scopes++;
+                if (!IsTrue(FenceAttribute(element)))
+                {
+                    missing.Add(FenceRequirement);
+                }
+
+                if (!IsCycle(Attribute(element, TabNavigation)))
+                {
+                    missing.Add(CycleRequirement);
+                }
+            }
+            else if (IsSetter(element, FocusScope, IsTrue))
+            {
+                // A style makes a focus scope too; its fence and its
+                // cycle must ride the same setters.
+                scopes++;
+                IEnumerable<XElement> siblings = element.Parent!.Elements();
+                if (!siblings.Any(sibling => IsSetter(sibling, Fence, IsTrue)))
+                {
+                    missing.Add(FenceRequirement);
+                }
+
+                if (!siblings.Any(sibling => IsSetter(sibling, TabNavigation, IsCycle)))
+                {
+                    missing.Add(CycleRequirement);
+                }
+            }
+
+            if (missing.Count > 0)
+            {
+                offenders.Add($"{Describe(file, element)} lacks {string.Join(" and ", missing)}");
+            }
+        }
+
+        return (offenders, scopes);
+    }
+
+    private static void AssertTheRule(string xaml, string site, string? missing)
+    {
+        (List<string> offenders, int scopes) = Offenders(
+            XDocument.Parse(xaml, LoadOptions.SetLineInfo), "Synthetic.xaml");
+
+        Assert.Equal(1, scopes);
+        if (missing is null)
+        {
+            Assert.Empty(offenders);
+            return;
+        }
+
+        string offender = Assert.Single(offenders);
+        Assert.StartsWith(site + " lacks ", offender, StringComparison.Ordinal);
+        Assert.EndsWith(missing, offender, StringComparison.Ordinal);
+    }
+
     private static bool BindsElsewhere(SymbolInfo info)
     {
         ISymbol[] symbols = info.Symbol is { } symbol ? [symbol] : [.. info.CandidateSymbols];
@@ -122,6 +207,9 @@ public sealed class SheetFenceCensus
 
     private static bool IsTrue(string? value) =>
         string.Equals(value, "True", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsCycle(string? value) =>
+        string.Equals(value, "Cycle", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Attached properties are plain attributes whose local name
     /// carries the dot (<c>FocusManager.IsFocusScope</c>).</summary>
@@ -135,16 +223,15 @@ public sealed class SheetFenceCensus
     private static string? FenceAttribute(XElement element) =>
         element.Attribute(ShellNamespace + Fence)?.Value;
 
-    private static bool IsFocusScopeSetter(XElement element) =>
+    /// <summary>A <c>Setter</c> for <paramref name="property"/> — written
+    /// bare (<c>FocusManager.IsFocusScope</c>) or behind a namespace prefix
+    /// (<c>local:SheetKeyboardFence.IsEnabled</c>) — whose value passes
+    /// <paramref name="value"/>.</summary>
+    private static bool IsSetter(XElement element, string property, Func<string?, bool> value) =>
         element.Name.LocalName == "Setter"
-        && Attribute(element, "Property") == FocusScope
-        && IsTrue(Attribute(element, "Value"));
-
-    private static bool IsFenceSetter(XElement element) =>
-        element.Name.LocalName == "Setter"
-        && Attribute(element, "Property") is { } property
-        && property.EndsWith(":" + Fence, StringComparison.Ordinal)
-        && IsTrue(Attribute(element, "Value"));
+        && Attribute(element, "Property") is { } written
+        && (written == property || written.EndsWith(":" + property, StringComparison.Ordinal))
+        && value(Attribute(element, "Value"));
 
     private static string Describe(string file, XElement element)
     {
