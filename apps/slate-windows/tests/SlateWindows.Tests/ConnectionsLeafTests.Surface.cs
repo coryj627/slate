@@ -273,6 +273,41 @@ public sealed partial class ConnectionsLeafTests
         });
     }
 
+    /// <summary>W7-7 R-13 (#1257): the gesture the row's hint names — an
+    /// activation with Control opens the note in a NEW tab of the active
+    /// pane (contract 35 B-9's Open in a new tab), leaving the tab that was
+    /// in view where it was; like the plain activation it never re-roots —
+    /// no pin, no Back step (only Show connections re-roots).</summary>
+    [Fact]
+    public void ActivationWithControlOpensTheNoteInANewTabAndNeverReRoots()
+    {
+        using GraphVault vault = GraphVault.Copy("open-row-new-tab");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            ConnectionsLeafViewModel leaf = host.Leaf;
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            GraphConnectionRow note = leaf.Publication.Tree!.Outgoing.First(row => row.Path == Two);
+            WorkspaceTabViewModel inView = host.Workspace.ActiveGroup.ActiveTab!;
+            int tabs = host.Workspace.ActiveGroup.Tabs.Count;
+            host.Clear();
+
+            leaf.Activate(note, newTab: true);
+
+            Assert.Equal(tabs + 1, host.Workspace.ActiveGroup.Tabs.Count);
+            Assert.Equal(Two, host.Workspace.ActiveGroup.ActiveTab!.Path);
+            Assert.Contains(inView, host.Workspace.ActiveGroup.Tabs);
+            Assert.Equal(Hub, inView.Path);
+            Assert.Contains(host.ShellEvents, e => e is A11yEvent.OpenedFile);
+            Assert.Null(leaf.Pin);
+            Assert.Empty(leaf.BackStack);
+            host.Settle();
+            Assert.DoesNotContain(ReRooted(Two), host.RelayLines);
+        });
+    }
+
     // --- The commands (B-14) and the labels (B-16) -------------------------------------
 
     [Fact]
