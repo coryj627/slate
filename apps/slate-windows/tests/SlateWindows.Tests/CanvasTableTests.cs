@@ -920,6 +920,51 @@ public sealed class CanvasTableTests : IDisposable
     });
 
     /// <summary>
+    /// W7-7 PR 4 (#1247, R-5; codex round 1): the switcher's arrows are its
+    /// radio group's even while a Move mode owns every other arrow on the
+    /// surface — the surface's tunnelling navigator steps the moving cards
+    /// on an unmodified arrow, and it ran first. Right on the checked
+    /// Outline choice checks Table and switches the projection; the cards
+    /// stay where they were and the mode stays up. The key travels both
+    /// routed phases with one argument object, as the input manager sends
+    /// it.
+    /// </summary>
+    [Fact]
+    public void TheSwitchersArrowsChooseEvenWhileAModeStepsTheCards() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = NewDocument("table.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using var host = Host(surface);
+        document.SelectNode("beta", announce: false);
+        document.Navigator.AttachPresenter(surface);
+        Assert.True(document.Navigator.EnterMoveMode(), "move mode did not enter");
+        CanvasTransientHolder transient = Assert.IsType<CanvasTransientHolder>(document.Transient);
+        var before = transient.Rects;
+        Assert.True(surface.OutlineChoiceForTests.IsChecked);
+        Assert.True(surface.OutlineChoiceForTests.Focus());
+
+        var args = new KeyEventArgs(
+            Keyboard.PrimaryDevice,
+            PresentationSource.FromVisual(surface.OutlineChoiceForTests)
+                ?? throw new InvalidOperationException("the switcher is not in a window."),
+            0,
+            Key.Right)
+        {
+            RoutedEvent = Keyboard.PreviewKeyDownEvent,
+        };
+        surface.OutlineChoiceForTests.RaiseEvent(args);
+        args.RoutedEvent = Keyboard.KeyDownEvent;
+        surface.OutlineChoiceForTests.RaiseEvent(args);
+
+        Assert.True(surface.TableChoiceForTests.IsChecked, "Right in move mode did not choose Table");
+        Assert.Equal(CanvasSurfaceKind.Table, document.Selection.ActiveSurface);
+        Assert.Same(before, transient.Rects);
+        Assert.True(document.Modes.IsActive, "the choice ended the move mode");
+        document.Shutdown();
+    });
+
+    /// <summary>
     /// Contract A14.3 at the SEAM: asking the substrate to put the
     /// reader on a row answers whether the REALIZED ROW took focus, not
     /// whether the row was in the bound set.

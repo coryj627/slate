@@ -613,6 +613,14 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             e.Handled = true;
             return;
         }
+        // The projection switcher's arrows are its radio group's (W7-7
+        // PR 4, #1247, R-5): in a Move or Resize mode the navigator below
+        // takes every unmodified arrow on the surface, and Right on the
+        // checked choice stepped the moving cards instead of choosing.
+        if (RadioGroupArrows.OwnsKey(e.OriginalSource, key, Keyboard.Modifiers))
+        {
+            return;
+        }
         if (model.Navigator.HandleKey(key, Keyboard.Modifiers, this))
         {
             e.Handled = true;

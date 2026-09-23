@@ -93,6 +93,23 @@ internal static class RadioGroupArrows
         return radios[(index + step + radios.Count) % radios.Count];
     }
 
+    /// <summary>
+    /// Whether this key, from this source, is one a radio group owns — the
+    /// question a surface that tunnels its own chords asks before it takes
+    /// an arrow.
+    /// </summary>
+    /// <remarks>
+    /// A tunnelling handler runs before the group's bubbling one: the
+    /// canvas surface's navigator takes every unmodified arrow while a Move
+    /// or Resize mode is active, so Right on the switcher's checked
+    /// "Outline" stepped the moving cards instead of choosing the Table
+    /// projection (codex round 1 on W7-7 PR 4).
+    /// </remarks>
+    internal static bool OwnsKey(object? source, Key key, ModifierKeys modifiers) =>
+        source is RadioButton { Parent: Panel panel } radio
+        && GetIsEnabled(panel)
+        && Target(panel, radio, key, modifiers) is not null;
+
     private static void OnIsEnabledChanged(DependencyObject element, DependencyPropertyChangedEventArgs change)
     {
         if (element is not Panel panel)
