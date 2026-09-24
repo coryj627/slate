@@ -233,9 +233,11 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             MaxHeight = 96,
             Visibility = Visibility.Collapsed,
             // R-4 (#1246): every items host names its containers.
-            ItemContainerStyle = ItemContainerNames.BySelf(typeof(ListBoxItem)),
+            ItemContainerStyle = SiblingNames.ContainerStyle(typeof(ListBoxItem)),
         };
         AutomationProperties.SetAutomationId(_warningRows, "CanvasWarningRows");
+        SiblingNames.SetNamePath(_warningRows, string.Empty);
+        SiblingNames.SetNoun(_warningRows, "warning");
         AutomationProperties.SetName(_warningRows, CanvasPhrase.WarningsRegionName);
 
         var banners = new StackPanel { Margin = new Thickness(12, 0, 12, 4) };

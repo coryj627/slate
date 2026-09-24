@@ -78,6 +78,10 @@ internal sealed class BaseSurfaceView : UserControl
             ItemContainerStyle = ViewPickerItemStyle(),
         };
         AutomationProperties.SetAutomationId(_viewPicker, "BaseViewPicker");
+        // R-4 (#1246; the spec review, round 21): a base may name two
+        // views alike (core warns DuplicateViewName).
+        SiblingNames.SetNamePath(_viewPicker, nameof(BaseViewSummary.Name));
+        SiblingNames.SetNoun(_viewPicker, "view");
         AutomationProperties.SetName(_viewPicker, "Base view");
         AutomationProperties.SetHelpText(
             _viewPicker, "Switch the active view in this base.");
@@ -151,8 +155,13 @@ internal sealed class BaseSurfaceView : UserControl
         {
             Focusable = false,
             ItemTemplate = WarningTemplate(),
+            ItemContainerStyle = SiblingNames.ContainerStyle(typeof(ContentPresenter)),
         };
         AutomationProperties.SetAutomationId(_warningBanners, "BaseWarningBanners");
+        // Two warnings may read alike: each text takes its container's
+        // composed name (R-4; the spec review, round 21).
+        SiblingNames.SetNamePath(_warningBanners, string.Empty);
+        SiblingNames.SetNoun(_warningBanners, "warning");
         _banners = new StackPanel { Margin = new Thickness(12, 0, 12, 4) };
         _banners.Children.Add(_stateBanner);
         _banners.Children.Add(_warningBanners);
@@ -182,6 +191,8 @@ internal sealed class BaseSurfaceView : UserControl
             SelectionMode = SelectionMode.Single,
         };
         AutomationProperties.SetAutomationId(_list, "BaseTabList");
+        SiblingNames.SetNamePath(_list, nameof(BaseListItemViewModel.AccessibleName));
+        SiblingNames.SetNoun(_list, "row");
         ScrollViewer.SetHorizontalScrollBarVisibility(
             _list, ScrollBarVisibility.Disabled);
         // The list renderer participates in selection and activation
@@ -1076,7 +1087,7 @@ internal sealed class BaseSurfaceView : UserControl
         var style = new Style(typeof(ComboBoxItem));
         style.Setters.Add(new Setter(
             AutomationProperties.NameProperty,
-            new System.Windows.Data.Binding(nameof(BaseViewSummary.Name))));
+            SiblingNames.ContainerNameBinding()));
         return style;
     }
 
@@ -1088,7 +1099,7 @@ internal sealed class BaseSurfaceView : UserControl
         var style = new Style(typeof(ListBoxItem));
         style.Setters.Add(new Setter(
             AutomationProperties.NameProperty,
-            new System.Windows.Data.Binding(nameof(BaseListItemViewModel.AccessibleName))));
+            SiblingNames.ContainerNameBinding()));
         var headerTrigger = new DataTrigger
         {
             Binding = new System.Windows.Data.Binding(nameof(BaseListItemViewModel.IsHeader)),
@@ -1118,6 +1129,7 @@ internal sealed class BaseSurfaceView : UserControl
         text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding());
         text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
         text.SetValue(FocusableProperty, true);
+        text.SetBinding(AutomationProperties.NameProperty, SiblingNames.FromContainer());
         text.SetResourceReference(
             TextBlock.ForegroundProperty, "Slate.WarningBrush");
         return new DataTemplate { VisualTree = text };

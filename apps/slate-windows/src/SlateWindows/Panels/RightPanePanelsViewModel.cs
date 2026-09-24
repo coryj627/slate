@@ -1244,6 +1244,11 @@ internal sealed class EmbedRowViewModel
         Node = node;
     }
 
+    /// <summary>The embed's source as the card tree titles it: the name
+    /// its group takes among its siblings (R-4; the spec review, round
+    /// 21 — one note embedded twice reads apart).</summary>
+    public string Title => Node.Title;
+
     public static EmbedRowViewModel FromShared(
         OutgoingLink link, Shared shared) => new(
         link, shared.Resolution, shared.Truncated, shared.Node);
