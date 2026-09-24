@@ -48,6 +48,14 @@ internal sealed partial class WorkspaceViewModel
     /// its stale baseline, marked externally stale exactly as the funnel's
     /// Modified arm marks it.
     /// </summary>
+    /// <remarks>
+    /// Round 24: NO tab on the path reloads while a Slate-owned save to it
+    /// is in flight — a property write (the note-scoped lease) or a task
+    /// toggle on any same-path tab. That save's own completion
+    /// re-baselines the tab; a reload in between would move the revision
+    /// a toggle's splice verifies and discard the undo history. The
+    /// staleness the funnel's Modified arm derives is still derived.
+    /// </remarks>
     public void ReloadCleanTab(string path)
     {
         string modified = NormalizeWorkspacePath(path);
@@ -56,14 +64,16 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
 
-        bool reloaded = false;
-        foreach (WorkspaceTabViewModel tab in Groups
+        List<WorkspaceTabViewModel> tabs = [.. Groups
             .SelectMany(group => group.Tabs)
             .Where(candidate => candidate.IsMarkdown
-                && string.Equals(candidate.Path, modified, StringComparison.Ordinal))
-            .ToList())
+                && string.Equals(candidate.Path, modified, StringComparison.Ordinal))];
+        bool saveInFlight = PropertyWriteInFlightFor(modified)
+            || tabs.Any(tab => tab.IsTaskToggleInFlight);
+        bool reloaded = false;
+        foreach (WorkspaceTabViewModel tab in tabs)
         {
-            if (tab.IsDirty)
+            if (tab.IsDirty || saveInFlight)
             {
                 tab.InvalidateExternalState();
                 tab.RefreshExternalStaleness();
@@ -110,37 +120,12 @@ internal sealed partial class WorkspaceViewModel
             string invalidated = NormalizeWorkspacePath(path);
             if (invalidated.Length > 0)
             {
-                _ = InvalidatePathWithoutPersisting(invalidated);
+                InvalidatePath(invalidated, persist: false);
             }
         }
 
         RaiseCommandStates();
         Persist();
-    }
-
-    /// <summary>The per-path half <see cref="InvalidatePath(string)"/> and
-    /// <see cref="InvalidatePaths"/> share. Returns how many open tabs the
-    /// path invalidated.</summary>
-    private int InvalidatePathWithoutPersisting(string invalidated)
-    {
-        int affected = 0;
-        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
-        {
-            if (IsPathBacked(tab.Item) && IsSameOrDescendantPath(tab.Path, invalidated))
-            {
-                tab.InvalidatePath();
-                affected++;
-            }
-        }
-
-        _closedTabs.RemoveAll(entry =>
-            IsPathBacked(entry.Item) && IsSameOrDescendantPath(entry.Item.Path, invalidated));
-        // W6-2 PR B2 (rule D, the delete hook; B2D-9): the leaf's stack
-        // entries under the deleted path are pruned, so Back never opens a
-        // note that is gone; the pin and the note in view are kept (the
-        // Error presentation, B1's delete route).
-        Connections.Prune(invalidated);
-        return affected;
     }
 
     private sealed class SilentReconciliationScope(WorkspaceViewModel owner) : IDisposable

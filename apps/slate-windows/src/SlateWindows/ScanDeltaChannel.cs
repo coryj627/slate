@@ -26,8 +26,17 @@ internal interface IScanDeltaChannel
     ScanDeltaPending? Pending();
 
     /// <summary>One bounded page of the Pending generation from
-    /// <paramref name="cursor"/> (null = the first row).</summary>
-    ScanDeltaPage ReadPage(ulong generation, string? cursor, uint limit);
+    /// <paramref name="cursor"/> (null = the first row). A cancelled
+    /// <paramref name="cancel"/> fails the read closed
+    /// (<c>VaultException.Cancelled</c>) before it reads.</summary>
+    ScanDeltaPage ReadPage(ulong generation, string? cursor, uint limit, CancelToken cancel);
+
+    /// <summary>The same page re-read synchronously in the UI turn that
+    /// applies it (round 24): its rows' <c>Superseded</c> flags as they
+    /// stand NOW, so a Slate-owned write whose event the host handled after
+    /// the page was fetched is never undone by the page's cached
+    /// effect.</summary>
+    ScanDeltaPage RecheckPage(ulong generation, string? cursor, uint limit, CancelToken cancel);
 
     /// <summary>Every entry before <paramref name="nextCursor"/> has had its
     /// effects applied; null after the LAST page marks the generation
@@ -45,8 +54,11 @@ internal sealed class SessionScanDeltaChannel(VaultSession session) : IScanDelta
 {
     public ScanDeltaPending? Pending() => session.ScanDeltaPending();
 
-    public ScanDeltaPage ReadPage(ulong generation, string? cursor, uint limit) =>
-        session.ScanDeltaPage(generation, new Paging(cursor, limit));
+    public ScanDeltaPage ReadPage(ulong generation, string? cursor, uint limit, CancelToken cancel) =>
+        session.ScanDeltaPage(generation, new Paging(cursor, limit), cancel);
+
+    public ScanDeltaPage RecheckPage(ulong generation, string? cursor, uint limit, CancelToken cancel) =>
+        session.ScanDeltaPage(generation, new Paging(cursor, limit), cancel);
 
     public void PageApplied(ulong generation, string? nextCursor) =>
         session.ScanDeltaPageApplied(generation, nextCursor);
