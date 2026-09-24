@@ -124,30 +124,77 @@ public sealed partial class W77RemediationDocsCensus
     }
 
     /// <summary>
-    /// A contract's body shares its heading's line, so the heading cannot be
-    /// anchored to the line's end; the whole line is policed instead (codex
-    /// round 23): it names exactly one `PR n` — its owner — and no issue
+    /// A contract's body shares its heading's line and may be reflowed onto
+    /// the lines after it, so the heading cannot be anchored to the line's
+    /// end; the whole contract paragraph is policed instead (codex rounds 23
+    /// and 25): it names exactly one `PR n` — its owner — and no issue
     /// outside its owner clause except the fixed cross-reference allow-list.
     /// </summary>
     [Fact]
-    public void EveryContractLineNamesOnlyItsOwnPrAndIssues()
+    public void EveryContractParagraphNamesOnlyItsOwnPrAndIssues()
     {
         var defects = new List<string>();
-        foreach (string line in ReadPlan(ContractsDoc).Split('\n'))
+        foreach ((Match heading, string paragraph) in ContractParagraphs(ReadPlan(ContractsDoc)))
         {
-            Match heading = ContractHeading().Match(line);
-            if (!heading.Success)
-            {
-                continue;
-            }
-
-            if (ContractLineDefect(line, heading) is { } defect)
+            if (ContractParagraphDefect(paragraph, heading) is { } defect)
             {
                 defects.Add($"R-{heading.Groups[1].Value} {defect}");
             }
         }
 
-        Assert.True(defects.Count == 0, "Contract lines naming more than their owner: " + string.Join("; ", defects));
+        Assert.True(defects.Count == 0, "Contract paragraphs naming more than their owner: " + string.Join("; ", defects));
+    }
+
+    [Theory]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR 9, #9999.")]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nAlso #1244.")]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nnaming #9999.")]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\n#9999 is named too.")]
+    [InlineData("**R-6 — Title (PR 5, #1248).** Body.\nciting #1118x.")]
+    public void AReflowedBodyIsCheckedAsAWhole(string document)
+    {
+        var (heading, paragraph) = Assert.Single(ContractParagraphs(document));
+        Assert.NotNull(ContractParagraphDefect(paragraph, heading));
+    }
+
+    [Fact]
+    public void AContractParagraphEndsAtABlankLineOrAHeading()
+    {
+        var paragraphs = ContractParagraphs(
+            "**R-1 — Title (PR 1, #1244).** Body.\n\nUnrelated PR 9, #9999.\n**R-6 — Title (PR 5, #1248).** Body.\n## Next PR 9, #9999")
+            .ToList();
+        Assert.Equal(2, paragraphs.Count);
+        Assert.All(paragraphs, p => Assert.Null(ContractParagraphDefect(p.Paragraph, p.Heading)));
+    }
+
+    /// <summary>Each strict contract heading with its complete paragraph: the
+    /// heading's line and every following line up to a blank line, the next
+    /// heading-shaped line or a Markdown heading (codex round 25: a reflowed
+    /// body keeps its later lines under the check).</summary>
+    private static IEnumerable<(Match Heading, string Paragraph)> ContractParagraphs(string document)
+    {
+        string[] lines = document.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            Match heading = ContractHeading().Match(lines[i]);
+            if (!heading.Success)
+            {
+                continue;
+            }
+
+            var paragraph = new List<string> { lines[i] };
+            for (int j = i + 1;
+                j < lines.Length
+                    && !string.IsNullOrWhiteSpace(lines[j])
+                    && !LooseContractHeading().IsMatch(lines[j])
+                    && !MarkdownHeading().IsMatch(lines[j]);
+                j++)
+            {
+                paragraph.Add(lines[j]);
+            }
+
+            yield return (heading, string.Join('\n', paragraph));
+        }
     }
 
     [Theory]
@@ -162,7 +209,7 @@ public sealed partial class W77RemediationDocsCensus
     {
         Match heading = ContractHeading().Match(line);
         Assert.True(heading.Success);
-        Assert.NotNull(ContractLineDefect(line, heading));
+        Assert.NotNull(ContractParagraphDefect(line, heading));
     }
 
     /// <summary>The allow-list is what a body MAY cite (codex round 24): a
@@ -174,7 +221,7 @@ public sealed partial class W77RemediationDocsCensus
     {
         Match heading = ContractHeading().Match(line);
         Assert.True(heading.Success);
-        Assert.Null(ContractLineDefect(line, heading));
+        Assert.Null(ContractParagraphDefect(line, heading));
     }
 
     /// <summary>The malformed-heading mutations, kept as parser tests (codex
@@ -239,22 +286,24 @@ public sealed partial class W77RemediationDocsCensus
         Assert.Equal(new[] { 1245, 1250 }, IssueTokens("## 3. PR 2 · #1245 + #1250 — Files sidebar"));
 
     /// <summary>
-    /// What a contract line names beyond its owner: a count of `PR n` tokens
-    /// other than one, a malformed issue token anywhere outside the owner
-    /// clause, or a well-formed one the allow-list does not name. Only the
-    /// owner clause's own span is exempt — the same issue repeated in the
-    /// body is outside it (codex round 24). Null when the line is clean.
+    /// What a contract paragraph names beyond its owner: a count of `PR n`
+    /// tokens other than one, a malformed issue token anywhere outside the
+    /// owner clause, or a well-formed one the allow-list does not name. Only
+    /// the owner clause's own span is exempt — the same issue repeated in the
+    /// body is outside it (codex round 24). The paragraph starts with the
+    /// heading's line, so the heading's spans index it directly. Null when
+    /// the paragraph is clean.
     /// </summary>
-    private static string? ContractLineDefect(string line, Match heading)
+    private static string? ContractParagraphDefect(string paragraph, Match heading)
     {
-        int prTokens = PrToken().Matches(line).Count;
+        int prTokens = PrToken().Matches(paragraph).Count;
         if (prTokens != 1)
         {
             return $"names {prTokens} PRs";
         }
 
         Group owner = heading.Groups[3];
-        string outside = string.Concat(line.AsSpan(0, owner.Index), line.AsSpan(owner.Index + owner.Length));
+        string outside = string.Concat(paragraph.AsSpan(0, owner.Index), paragraph.AsSpan(owner.Index + owner.Length));
         if (MalformedIssueToken().Match(outside) is { Success: true } malformed)
         {
             return $"carries the malformed issue token `{malformed.Value}`";
@@ -528,6 +577,12 @@ public sealed partial class W77RemediationDocsCensus
     // A PR reference: `PR` then a number, not inside a longer word.
     [GeneratedRegex(@"(?<![A-Za-z0-9_])PR \d+")]
     private static partial Regex PrToken();
+
+    // A Markdown ATX heading line, which ends a contract paragraph. `#` must
+    // be followed by a space or the line end, so a continuation line that
+    // starts with `#1244` stays inside the paragraph.
+    [GeneratedRegex(@"^[ \t]{0,3}#{1,6}(?:[ \t]|$)")]
+    private static partial Regex MarkdownHeading();
 
     // Anything that starts a heading like a review record, however it is
     // indented, spaced or punctuated after the PR number.
