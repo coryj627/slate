@@ -131,9 +131,9 @@ public sealed class ShellContainerLandingTests
                 Height = 400,
                 ShowInTaskbar = false,
                 WindowStyle = WindowStyle.None,
+                ShowActivated = false,
             };
             _window.Show();
-            _window.Activate();
             _window.UpdateLayout();
         }
 

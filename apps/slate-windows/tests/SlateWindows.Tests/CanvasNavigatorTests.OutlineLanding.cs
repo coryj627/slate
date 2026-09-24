@@ -136,9 +136,9 @@ public sealed partial class CanvasNavigatorTests
             Height = 700,
             ShowInTaskbar = false,
             WindowStyle = WindowStyle.None,
+            ShowActivated = false,
         };
         window.Show();
-        window.Activate();
         window.UpdateLayout();
         Assert.Equal(CanvasSurfaceKind.Outline, document.Selection.ActiveSurface);
         return new OutlineHost(window, surface, above);

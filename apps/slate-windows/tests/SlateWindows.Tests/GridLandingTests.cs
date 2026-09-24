@@ -163,9 +163,9 @@ public sealed class GridLandingTests
             Height = 500,
             ShowInTaskbar = false,
             WindowStyle = WindowStyle.None,
+            ShowActivated = false,
         };
         window.Show();
-        window.Activate();
         window.UpdateLayout();
         return new Hosted(window, above, left);
     }

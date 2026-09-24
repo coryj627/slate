@@ -176,9 +176,9 @@ public sealed class FilesRegionLandingTests
                 Height = 600,
                 ShowInTaskbar = false,
                 WindowStyle = WindowStyle.None,
+                ShowActivated = false,
             };
             _window.Show();
-            _window.Activate();
             _window.UpdateLayout();
             PumpedDispatcher.Drain();
             Assert.True(Tree.IsVisible, "premise: the lifted pane shows its tree.");
