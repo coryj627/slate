@@ -13,7 +13,9 @@ namespace SlateWindows;
 /// after the last page — releases the ledger into the spoken counts.
 /// </summary>
 /// <remarks>
-/// Production binds this to the session one to one
+/// Every call is a synchronous core call the host makes OFF the dispatcher
+/// (locked decision 05 §4.1). Production binds this to the session one to
+/// one
 /// (<see cref="SessionScanDeltaChannel"/>). It is a seam only so the
 /// reconciliation facts can wrap that SAME binding to fail a page or
 /// record when each call arrives relative to the host's effects; the
@@ -31,12 +33,6 @@ internal interface IScanDeltaChannel
     /// (<c>VaultException.Cancelled</c>) before it reads.</summary>
     ScanDeltaPage ReadPage(ulong generation, string? cursor, uint limit, CancelToken cancel);
 
-    /// <summary>The same page re-read synchronously in the UI turn that
-    /// applies it (round 24): its rows' <c>Superseded</c> flags as they
-    /// stand NOW, so a Slate-owned write whose event the host handled after
-    /// the page was fetched is never undone by the page's cached
-    /// effect.</summary>
-    ScanDeltaPage RecheckPage(ulong generation, string? cursor, uint limit, CancelToken cancel);
 
     /// <summary>Every entry before <paramref name="nextCursor"/> has had its
     /// effects applied; null after the LAST page marks the generation
@@ -57,8 +53,6 @@ internal sealed class SessionScanDeltaChannel(VaultSession session) : IScanDelta
     public ScanDeltaPage ReadPage(ulong generation, string? cursor, uint limit, CancelToken cancel) =>
         session.ScanDeltaPage(generation, new Paging(cursor, limit), cancel);
 
-    public ScanDeltaPage RecheckPage(ulong generation, string? cursor, uint limit, CancelToken cancel) =>
-        session.ScanDeltaPage(generation, new Paging(cursor, limit), cancel);
 
     public void PageApplied(ulong generation, string? nextCursor) =>
         session.ScanDeltaPageApplied(generation, nextCursor);

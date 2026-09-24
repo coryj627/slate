@@ -140,7 +140,7 @@ public sealed class RescanTests
         h.ParkAfterCall = scans + 1;
 
         Task run = h.Lifecycle.RescanAsync(RescanReason.Foreground);
-        Assert.True(h.Parked.Wait(TimeSpan.FromSeconds(10)), "the foreground scan never parked");
+        h.Context.RunUntil(() => h.Parked.IsSet, "the foreground scan parking");
         Assert.Same(run, h.Lifecycle.RescanAsync(RescanReason.Explicit));
         h.Release.Set();
         h.Context.Await(run);
@@ -165,7 +165,7 @@ public sealed class RescanTests
             int scans = h.ScanCalls;
             h.ParkAfterCall = scans + 1;
             Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
-            Assert.True(h.Parked.Wait(TimeSpan.FromSeconds(10)), "the explicit scan never parked");
+            h.Context.RunUntil(() => h.Parked.IsSet, "the explicit scan parking");
             _ = h.Lifecycle.RescanAsync(RescanReason.Foreground);
             h.Release.Set();
             h.Context.Await(run);
@@ -183,7 +183,7 @@ public sealed class RescanTests
             int scans = h.ScanCalls;
             h.ParkAfterCall = scans + 1;
             Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
-            Assert.True(h.Parked.Wait(TimeSpan.FromSeconds(10)), "the explicit scan never parked");
+            h.Context.RunUntil(() => h.Parked.IsSet, "the explicit scan parking");
             _ = h.Lifecycle.RescanAsync(RescanReason.Explicit);
             _ = h.Lifecycle.RescanAsync(RescanReason.Foreground);
             h.Release.Set();
@@ -208,7 +208,7 @@ public sealed class RescanTests
         h.ParkAfterCall = scans + 1;
 
         Task run = h.Lifecycle.RescanAsync(RescanReason.Foreground);
-        Assert.True(h.Parked.Wait(TimeSpan.FromSeconds(10)), "the foreground scan never parked");
+        h.Context.RunUntil(() => h.Parked.IsSet, "the foreground scan parking");
         _ = h.Lifecycle.RescanAsync(RescanReason.Foreground);
         _ = h.Lifecycle.RescanAsync(RescanReason.Foreground);
         h.Release.Set();
@@ -365,20 +365,71 @@ public sealed class RescanTests
         Assert.Equal(["Files refreshed. 1 new or changed, 1 removed."], h.Spoken);
     });
 
-    /// <summary>The Quick Open list is replaced from the index — a created
-    /// file is found and a deleted one gone after one Refresh — even when a
-    /// page failure stopped the per-entry updates part way.</summary>
+    /// <summary>Round 25: the delta is Quick Open's ONLY rescan path. A
+    /// multi-page reconciliation (one row a page) during which Slate writes
+    /// create a path behind the cursor (<c>a-early.md</c>) and delete another
+    /// (<c>keep.md</c>) ends with Quick Open listing exactly the files on disk:
+    /// the Slate events reached it through the funnel, the delta's rows
+    /// through the pages, and nothing reloads a list read before either. An
+    /// open switcher ranks the new file. A page failure leaves Quick Open
+    /// with only the applied pages' rows, and the retry completes it.</summary>
     [Fact]
-    public void RescanReplacesTheQuickOpenList() => RunSta(() =>
+    public void RescanUpdatesQuickOpenThroughTheDelta() => RunSta(() =>
     {
-        using (var h = new Harness("quick-open", ("alpha.md", "# Alpha\n"), ("doomed.md", "# Doomed\n")))
+        using (var h = new Harness(
+            "quick-open-delta",
+            pageLimit: 1,
+            files: [("alpha.md", "# Alpha\n"), ("doomed.md", "# Doomed\n"), ("keep.md", "# Keep\n")]))
         {
             h.Write("late.md", "# Late\n");
+            h.Write("n2.md", "# Two\n");
             h.Delete("doomed.md");
+            bool wrote = false;
+            Exception? writeFailure = null;
+            h.AfterRead(page =>
+            {
+                if (!wrote)
+                {
+                    wrote = true;
+                    try
+                    {
+                        // On the read's pool thread: the create commits
+                        // before the page's continuation is queued. The
+                        // delete goes through the OS trash, whose COM
+                        // apartment wants the UI (STA) thread — the thread
+                        // the host's own delete runs on — so it is queued
+                        // there, ahead of the page's effects.
+                        h.CreateInCore("a-early.md", "# Early\n");
+                        h.Context.Post(
+                            _ =>
+                            {
+                                try
+                                {
+                                    h.DeleteInCore("keep.md");
+                                }
+                                catch (Exception exception)
+                                {
+                                    writeFailure = exception;
+                                }
+                            },
+                            null);
+                    }
+                    catch (Exception exception)
+                    {
+                        writeFailure = exception;
+                    }
+                }
+            });
 
             h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
 
-            Assert.Contains("late.md", h.QuickOpen.FilePathsForTests);
+            Assert.True(wrote);
+            Assert.Null(writeFailure);
+            Assert.Equal(
+                h.OpenableFilesOnDisk(),
+                h.QuickOpen.FilePathsForTests.Order(StringComparer.Ordinal).ToArray());
+            Assert.Contains("a-early.md", h.QuickOpen.FilePathsForTests);
+            Assert.DoesNotContain("keep.md", h.QuickOpen.FilePathsForTests);
             Assert.DoesNotContain("doomed.md", h.QuickOpen.FilePathsForTests);
             h.QuickOpen.Open();
             h.QuickOpen.Query = "late";
@@ -387,8 +438,8 @@ public sealed class RescanTests
             h.QuickOpen.Dismiss();
         }
 
-        // Three creations a page at a time; page 2 fails. The replacement
-        // still carries all three — the per-entry updates stopped at one.
+        // Three creations a page at a time; page 2 fails: Quick Open holds
+        // page 1's row only, and the retry brings it to the disk's list.
         using var paged = new Harness("quick-open-paged", pageLimit: 1, files: [("alpha.md", "# Alpha\n")]);
         paged.Write("n1.md", "1\n");
         paged.Write("n2.md", "2\n");
@@ -398,8 +449,14 @@ public sealed class RescanTests
 
         Assert.Equal([OneError], paged.Spoken);
         Assert.Contains("n1.md", paged.QuickOpen.FilePathsForTests);
-        Assert.Contains("n2.md", paged.QuickOpen.FilePathsForTests);
-        Assert.Contains("n3.md", paged.QuickOpen.FilePathsForTests);
+        Assert.DoesNotContain("n2.md", paged.QuickOpen.FilePathsForTests);
+
+        paged.FailReads(_ => false);
+        paged.Now += TimeSpan.FromMinutes(1);
+        paged.Context.Await(paged.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.Equal(
+            paged.OpenableFilesOnDisk(),
+            paged.QuickOpen.FilePathsForTests.Order(StringComparer.Ordinal).ToArray());
     });
 
     /// <summary>An import in flight refuses a rescan of either reason: no scan
@@ -435,7 +492,7 @@ public sealed class RescanTests
         int scans = h.ScanCalls;
         h.ParkAfterCall = scans + 1;
         Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
-        Assert.True(h.Parked.Wait(TimeSpan.FromSeconds(10)), "the explicit scan never parked");
+        h.Context.RunUntil(() => h.Parked.IsSet, "the explicit scan parking");
         h.Write("late.md", "# Late\n");
         _ = h.Lifecycle.RescanAsync(RescanReason.Foreground);
         h.Sidebar.ImportCommand.Execute(null);
@@ -504,8 +561,10 @@ public sealed class RescanTests
         using var h = new Harness("ack-order", pageLimit: 1, files: [("a.md", "a old\n"), ("b.md", "b old\n")]);
         WorkspaceTabViewModel a = h.Open("a.md");
         WorkspaceTabViewModel b = h.Open("b.md");
-        var acknowledged = new List<(string? NextCursor, string A, string B)>();
-        h.OnApplied((_, next) => acknowledged.Add((next, a.Text, b.Text)));
+        // The hook runs on the ledger call's pool thread: it records the
+        // tabs' saved hashes (plain fields), never their editor documents.
+        var acknowledged = new List<(string? NextCursor, string? A, string? B)>();
+        h.OnApplied((_, next) => acknowledged.Add((next, a.SavedContentHash, b.SavedContentHash)));
         h.Write("a.md", "a new text\n");
         h.Write("b.md", "b new text\n");
 
@@ -516,12 +575,12 @@ public sealed class RescanTests
             first =>
             {
                 Assert.NotNull(first.NextCursor);
-                Assert.Equal("a new text\n", first.A);
+                Assert.Equal(SlateUniffiMethods.EditorTextContentHash("a new text\n"), first.A);
             },
             last =>
             {
                 Assert.Null(last.NextCursor);
-                Assert.Equal("b new text\n", last.B);
+                Assert.Equal(SlateUniffiMethods.EditorTextContentHash("b new text\n"), last.B);
             });
         Assert.Equal(["Files refreshed. 2 new or changed, 0 removed."], h.Spoken);
     });
@@ -696,6 +755,35 @@ public sealed class RescanTests
         Assert.Empty(refusals);
         Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
         Assert.Equal([OneError, OneError, "Files refreshed. 3 new or changed, 1 removed."], h.Spoken);
+    });
+
+    /// <summary>Round 25 (locked decision 05 §4.1): no ledger call runs on the
+    /// UI thread. Across a page failure and its retry — the resume, a new
+    /// generation, every page read, every applied mark and the release —
+    /// every call the lifecycle makes into core's ledger lands on a pool
+    /// thread, never the fact's STA (dispatcher) thread.</summary>
+    [Fact]
+    public void TheLedgerIsNeverCalledOnTheUiThread() => RunSta(() =>
+    {
+        using var h = new Harness(
+            "ledger-threads", pageLimit: 1, files: [("a.md", "a0\n"), ("b.md", "b0\n")]);
+        h.Write("a.md", "a1 text\n");
+        h.Write("b.md", "b1 text\n");
+        h.FailReads(read => read == 2);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        h.FailReads(_ => false);
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        (string Call, int Thread, bool Pool)[] calls = [.. h.LedgerCalls];
+        Assert.Equal(
+            ["PageApplied", "Pending", "ReadPage", "Release"],
+            calls.Select(call => call.Call).Distinct().Order(StringComparer.Ordinal).ToArray());
+        Assert.All(calls, call =>
+        {
+            Assert.NotEqual(h.UiThread, call.Thread);
+            Assert.True(call.Pool, $"{call.Call} ran on a non-pool thread");
+        });
     });
 
     /// <summary>The conflicting pairs, each through the real page-failure →
@@ -927,9 +1015,11 @@ public sealed class RescanTests
         {
             if (!recreated && page.Entries.Any(entry => entry.Path == "x.md" && !entry.Superseded))
             {
+                // After the fetch, on the read's thread: the Created event is
+                // posted ahead of the page's continuation, so the host
+                // handles it before it applies the cached page.
                 recreated = true;
-                h.CreateThroughSlate("x.md", "x back\n");
-                Assert.False(x.IsMissingFromDisk);
+                h.CreateInCore("x.md", "x back\n");
             }
         });
 
@@ -956,19 +1046,24 @@ public sealed class RescanTests
         h.Delete("x.md");
         h.Write("z.md", "zed\n");
         bool recreated = false;
+        bool missingBeforeTheRecreate = false;
         h.OnApplied((_, next) =>
         {
             if (!recreated && next is not null)
             {
+                // Page 1's effects are applied; its mark is being reported
+                // off the UI thread. The recreate commits now and its event
+                // is handled AFTER the page's effects.
                 recreated = true;
-                Assert.True(x.IsMissingFromDisk, "page 1's removal was not applied first");
-                h.CreateThroughSlate("x.md", "x back\n");
+                missingBeforeTheRecreate = x.IsMissingFromDisk;
+                h.CreateInCore("x.md", "x back\n");
             }
         });
 
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
 
         Assert.True(recreated);
+        Assert.True(missingBeforeTheRecreate, "page 1's removal was not applied first");
         Assert.False(x.IsMissingFromDisk);
         Assert.Equal("x back\n", x.Text);
         Assert.Equal([Explicit1], h.Spoken);
@@ -1122,7 +1217,7 @@ public sealed class RescanTests
         h.ParkAfterCall = scans + 1;
 
         Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
-        Assert.True(h.Parked.Wait(TimeSpan.FromSeconds(10)), "the explicit scan never parked");
+        h.Context.RunUntil(() => h.Parked.IsSet, "the explicit scan parking");
         h.Write("late.md", "# Late\n");
         Assert.NotNull(route.OnActivated());
         h.Release.Set();
@@ -1152,7 +1247,7 @@ public sealed class RescanTests
         int scans = h.ScanCalls;
         h.ParkAfterCall = scans + 1;
         Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
-        Assert.True(h.Parked.Wait(TimeSpan.FromSeconds(10)), "the explicit scan never parked");
+        h.Context.RunUntil(() => h.Parked.IsSet, "the explicit scan parking");
         h.Write("late.md", "# Late\n");
         h.Now += TimeSpan.FromSeconds(1);
         Assert.NotNull(route.OnActivated());
@@ -1294,10 +1389,14 @@ public sealed class RescanTests
         /// read: a close or vault switch arriving between pages.</summary>
         public Func<int, bool> CancelAtRead { get; set; } = _ => false;
 
-        /// <summary>Runs after a page read returns and before the host
-        /// re-checks and applies it — work the UI thread did between the
-        /// fetch and the effects (round 24).</summary>
+        /// <summary>Runs on the ledger call's own (pool) thread after a page
+        /// read returns and before the host applies it: a Slate-owned write
+        /// made here posts its event AHEAD of the page's continuation, so
+        /// the host handles it between the fetch and the effects.</summary>
         public Action<ScanDeltaPage>? AfterRead { get; set; }
+
+        /// <summary>Runs at the start of every call, on its thread.</summary>
+        public Action<string>? OnCall { get; set; }
 
         public bool FailAppliedMark { get; set; }
 
@@ -1308,6 +1407,7 @@ public sealed class RescanTests
 
         public ScanDeltaPending? Pending()
         {
+            OnCall?.Invoke(nameof(Pending));
             ScanDeltaPending? pending = inner.Pending();
             AfterCall?.Invoke();
             return pending;
@@ -1315,6 +1415,7 @@ public sealed class RescanTests
 
         public ScanDeltaPage ReadPage(ulong generation, string? cursor, uint limit, CancelToken cancel)
         {
+            OnCall?.Invoke(nameof(ReadPage));
             int read = nextRead();
             if (CancelAtRead(read))
             {
@@ -1332,13 +1433,9 @@ public sealed class RescanTests
             return page;
         }
 
-        /// <summary>The re-check is the production binding's, never
-        /// scripted: it is what the facts observe.</summary>
-        public ScanDeltaPage RecheckPage(ulong generation, string? cursor, uint limit, CancelToken cancel) =>
-            inner.RecheckPage(generation, cursor, limit, cancel);
-
         public void PageApplied(ulong generation, string? nextCursor)
         {
+            OnCall?.Invoke(nameof(PageApplied));
             OnApplied?.Invoke(generation, nextCursor);
             if (FailAppliedMark && nextCursor is null)
             {
@@ -1351,6 +1448,7 @@ public sealed class RescanTests
 
         public ScanDeltaOutcome Release()
         {
+            OnCall?.Invoke(nameof(Release));
             ScanDeltaOutcome outcome = inner.Release();
             AfterCall?.Invoke();
             return outcome;
@@ -1402,7 +1500,8 @@ public sealed class RescanTests
                 announce: Events.Add,
                 pickImportSources: pickImportSources,
                 scanClock: () => Now,
-                sessionLoadWorker: RunWorker,
+                sessionLoadWorker: RunOnWorker<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
+                rescanWorker: RunOnWorker<RescanReport>,
                 scanDeltaChannel: session => new ScriptedChannel(
                     new SessionScanDeltaChannel(session),
                     () => Interlocked.Increment(ref _reads))
@@ -1410,6 +1509,8 @@ public sealed class RescanTests
                     FailRead = read => _failRead[0](read),
                     CancelAtRead = read => _cancelRead[0](read),
                     AfterRead = page => _afterRead?.Invoke(page),
+                    OnCall = call => LedgerCalls.Enqueue(
+                        (call, Environment.CurrentManagedThreadId, Thread.CurrentThread.IsThreadPoolThread)),
                     FailAppliedMark = _failAppliedMark,
                     OnApplied = (generation, next) => _onApplied?.Invoke(generation, next),
                     AfterCall = () => _afterLedgerCall?.Invoke(),
@@ -1481,6 +1582,38 @@ public sealed class RescanTests
         /// <summary>Observe every fetched page before the host re-checks and
         /// applies it; null stops observing.</summary>
         public void AfterRead(Action<ScanDeltaPage>? observer) => _afterRead = observer;
+
+        /// <summary>Every ledger call the lifecycle made: its name, thread
+        /// and whether that was a pool thread.</summary>
+        public ConcurrentQueue<(string Call, int Thread, bool Pool)> LedgerCalls { get; } = new();
+
+        /// <summary>The fact's own (STA, UI) thread.</summary>
+        public int UiThread { get; } = Environment.CurrentManagedThreadId;
+
+        /// <summary>A Slate-owned create through the host's session, from
+        /// whatever thread the fact is on; its Created event is POSTED to
+        /// the UI queue by the lifecycle's real listener, not drained.</summary>
+        public void CreateInCore(string path, string text) =>
+            _ = Lifecycle.SessionForTests!.CreateExclusive(path, text);
+
+        /// <summary>A Slate-owned delete through the host's session (to the
+        /// OS trash, whose COM apartment wants the UI thread); its Deleted
+        /// event is posted, not drained.</summary>
+        public void DeleteInCore(string path) => Lifecycle.SessionForTests!.DeleteFile(path);
+
+        /// <summary>The openable files on disk, vault-relative, sorted —
+        /// what Quick Open must list.</summary>
+        public string[] OpenableFilesOnDisk()
+        {
+            string cache = Path.Combine(Root, ".slate") + Path.DirectorySeparatorChar;
+            return
+            [
+                .. Directory.EnumerateFiles(Root, "*.md", SearchOption.AllDirectories)
+                    .Where(file => !file.StartsWith(cache, StringComparison.OrdinalIgnoreCase))
+                    .Select(file => Path.GetRelativePath(Root, file).Replace('\\', '/'))
+                    .Order(StringComparer.Ordinal),
+            ];
+        }
 
         /// <summary>Page reads so far, across every run of this vault.</summary>
         public int Reads => Volatile.Read(ref _reads);
@@ -1586,20 +1719,21 @@ public sealed class RescanTests
             }
         }
 
-        private Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)> RunWorker(
-            Func<(ScanReport Report, SwitcherFile[] SwitcherFiles)> work)
+        /// <summary>The open's session load and every rescan's scan: call
+        /// <see cref="ScanCalls"/> may throw or park after its work.</summary>
+        private Task<T> RunOnWorker<T>(Func<T> work)
         {
             int call = Interlocked.Increment(ref _scanCalls);
             if (ThrowOnCall?.Invoke(call) is Exception fault)
             {
-                return Task.FromException<(ScanReport, SwitcherFile[])>(fault);
+                return Task.FromException<T>(fault);
             }
 
             if (ParkAfterCall == call)
             {
                 return Task.Run(() =>
                 {
-                    (ScanReport, SwitcherFile[]) loaded = work();
+                    T loaded = work();
                     Parked.Set();
                     Release.Wait(TimeSpan.FromSeconds(30));
                     return loaded;
