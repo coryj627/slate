@@ -84,6 +84,17 @@ public sealed partial class W77RemediationDocsCensus
             [13] = [1257],
         };
 
+    /// <summary>
+    /// The issues a contract's body may cite beyond its own owner clause —
+    /// a fixed allow-list, so an ownership statement cannot hide in the body
+    /// that shares the heading's line (codex round 23).
+    /// </summary>
+    private static readonly IReadOnlyDictionary<int, int[]> AllowedCrossReferences =
+        new Dictionary<int, int[]>
+        {
+            [6] = [1118],
+        };
+
     private static readonly int[] ExpectedFeaturePrs = Enumerable.Range(1, 11).ToArray();
     private static readonly int[] ExpectedReviewRecords = Enumerable.Range(0, 12).ToArray();
 
@@ -104,17 +115,123 @@ public sealed partial class W77RemediationDocsCensus
         foreach (Match m in ContractHeading().Matches(contracts))
         {
             int contract = int.Parse(m.Groups[1].Value);
-            int[] named = m.Groups[3].Value
-                .Split(',', StringSplitOptions.TrimEntries)
-                .Select(token => int.Parse(token.TrimStart('#')))
-                .ToArray();
-            Assert.True(issues.TryAdd(contract, named), $"R-{contract} is defined twice in {ContractsDoc}.");
+            Assert.True(issues.TryAdd(contract, IssueList(m.Groups[3].Value)), $"R-{contract} is defined twice in {ContractsDoc}.");
         }
 
         Assert.Equal(
             ExpectedIssues.OrderBy(pair => pair.Key).Select(pair => $"R-{pair.Key}→#{string.Join(", #", pair.Value)}"),
             issues.OrderBy(pair => pair.Key).Select(pair => $"R-{pair.Key}→#{string.Join(", #", pair.Value)}"));
     }
+
+    /// <summary>
+    /// A contract's body shares its heading's line, so the heading cannot be
+    /// anchored to the line's end; the whole line is policed instead (codex
+    /// round 23): it names exactly one `PR n` — its owner — and no issue
+    /// outside its owner clause except the fixed cross-reference allow-list.
+    /// </summary>
+    [Fact]
+    public void EveryContractLineNamesOnlyItsOwnPrAndIssues()
+    {
+        var defects = new List<string>();
+        foreach (string line in ReadPlan(ContractsDoc).Split('\n'))
+        {
+            Match heading = ContractHeading().Match(line);
+            if (!heading.Success)
+            {
+                continue;
+            }
+
+            int contract = int.Parse(heading.Groups[1].Value);
+            if (ContractLineDefect(line, contract, IssueList(heading.Groups[3].Value)) is { } defect)
+            {
+                defects.Add($"R-{contract} {defect}");
+            }
+        }
+
+        Assert.True(defects.Count == 0, "Contract lines naming more than their owner: " + string.Join("; ", defects));
+    }
+
+    [Theory]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body with an extra owner PR 9, #9999.")]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body naming #9999.")]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body naming #9999x.")]
+    public void AnOwnershipStatementAfterTheHeadingIsCaught(string line)
+    {
+        Match heading = ContractHeading().Match(line);
+        Assert.True(heading.Success);
+        Assert.NotNull(ContractLineDefect(line, 1, IssueList(heading.Groups[3].Value)));
+    }
+
+    [Fact]
+    public void AContractLineCitingOnlyItsAllowedCrossReferenceIsClean()
+    {
+        const string line = "**R-6 — Title (PR 5, #1248).** Body citing #1118.";
+        Match heading = ContractHeading().Match(line);
+        Assert.True(heading.Success);
+        Assert.Null(ContractLineDefect(line, 6, IssueList(heading.Groups[3].Value)));
+    }
+
+    /// <summary>The malformed-heading mutations, kept as parser tests (codex
+    /// round 23): the loose detector sees each line and the strict parse
+    /// refuses it, so the document-level loose/strict fact would fail.</summary>
+    [Theory]
+    [InlineData("**R-1 — Title (PR 1, #1244x).** Body.")]
+    [InlineData("**R-1 — Title (PR 1, #1244é).** Body.")]
+    [InlineData("**R-1 — Title (PR 1, #1244²).** Body.")]
+    [InlineData("**R-1 — Title #1299 (PR 1, #1244).** Body.")]
+    [InlineData("**R-1 — Title (PR 1, #1244; see #1299).** Body.")]
+    [InlineData("**R-1 – Title (PR 1, #1244).** Body.")]
+    [InlineData("**R-1 — Title (PR 1).** Body.")]
+    [InlineData("**R-1 — Title (PR 1 nonsense).** Body.")]
+    [InlineData("**R-1 — Title **bold** (PR 1, #1244).** Body.")]
+    public void TheStrictParseRefusesAMalformedContractHeading(string line)
+    {
+        Assert.Single(LooseContractHeading().Matches(line));
+        Assert.Empty(ContractHeading().Matches(line));
+    }
+
+    [Theory]
+    [InlineData("## 2. PR 1 · #1244x #1244 — title", new[] { 1244 })]
+    [InlineData("## 2. PR 1 · #1244é — title", new[] { 1244 })]
+    [InlineData("## 2. PR 1 · #1244² — title", new[] { 1244 })]
+    [InlineData("## 2. PR 1 · #1244 + #1244 — title", new[] { 1244 })]
+    [InlineData("### PR 1 — #1244 #1244x announcements", new[] { 1244 })]
+    [InlineData("### PR 0 — docs #9999 (this document)", new int[0])]
+    public void AHeadingWhoseIssuesDriftIsCaught(string heading, int[] expected) =>
+        Assert.False(IssueTokens(heading).SequenceEqual(expected));
+
+    [Fact]
+    public void ACleanHeadingYieldsExactlyItsIssues() =>
+        Assert.Equal(new[] { 1245, 1250 }, IssueTokens("## 3. PR 2 · #1245 + #1250 — Files sidebar"));
+
+    /// <summary>What a contract line names beyond its owner: a count of
+    /// `PR n` tokens other than one, or an issue outside the owner clause
+    /// that the allow-list does not name. Null when the line is clean.</summary>
+    private static string? ContractLineDefect(string line, int contract, int[] ownerIssues)
+    {
+        int prTokens = PrToken().Matches(line).Count;
+        if (prTokens != 1)
+        {
+            return $"names {prTokens} PRs";
+        }
+
+        int[] extra = AnyIssueToken().Matches(line)
+            .Select(m => int.Parse(m.Groups[1].Value))
+            .Where(issue => !ownerIssues.Contains(issue))
+            .Distinct()
+            .Order()
+            .ToArray();
+        int[] allowed = AllowedCrossReferences.GetValueOrDefault(contract, []);
+        return extra.SequenceEqual(allowed)
+            ? null
+            : $"names #{string.Join(", #", extra)} outside its owner clause";
+    }
+
+    private static int[] IssueList(string ownerList) =>
+        ownerList
+            .Split(',', StringSplitOptions.TrimEntries)
+            .Select(token => int.Parse(token.TrimStart('#')))
+            .ToArray();
 
     /// <summary>
     /// The issues a PR's spec heading (`## n. PR m · #a + #b — …`) and its
@@ -315,7 +432,10 @@ public sealed partial class W77RemediationDocsCensus
     // Every issue token ends at a Unicode identifier boundary, so `#1244x`
     // and `#1244é` are malformed headings rather than issue 1244 (codex
     // rounds 21–22).
-    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*#]*?\(PR (\d+), (#\d+(?:, #\d+)*)(?!\w)[^)\n*#]*\)[^\n*#]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
+    // Round 23: the issue list must be followed by `;` or `)`, so any other
+    // character after the digits — a letter, a superscript, a supplementary
+    // character — refuses the heading.
+    [GeneratedRegex(@"^\*\*R-(\d+) — [^\n*#]*?\(PR (\d+), (#\d+(?:, #\d+)*)(?=[;)])[^)\n*#]*\)[^\n*#]*?\.\*\*(?=\s)", RegexOptions.Multiline)]
     private static partial Regex ContractHeading();
 
     // Anything that starts a line like a contract definition, however it
@@ -341,16 +461,26 @@ public sealed partial class W77RemediationDocsCensus
     [GeneratedRegex(@"^### PR (\d+) — [^\n]*", RegexOptions.Multiline)]
     private static partial Regex ReviewRecordHeading();
 
-    // A token is `#` plus digits up to a Unicode identifier boundary
-    // (codex rounds 21–22: `#1244x` and `#1244é` are both malformed).
-    [GeneratedRegex(@"#(\d+)(?!\w)")]
+    // A token is `#` plus digits ending at whitespace, `,`, `;`, `:`, `.`,
+    // `)` or the end of the line (codex rounds 21–23): an allow-list of
+    // terminators, so `#1244x`, `#1244é`, `#1244²` and a supplementary
+    // character after the digits are all malformed.
+    [GeneratedRegex(@"#(\d+)(?=[\s,;:.)]|$)")]
     private static partial Regex IssueToken();
 
-    // An issue-shaped substring running into an identifier character —
-    // a non-digit word character, so the digits cannot backtrack into it
-    // and turn `#1244` itself into a "malformed" token.
-    [GeneratedRegex(@"#\d+[^\W\d]")]
+    // An issue-shaped substring whose digits are followed by anything but a
+    // digit or an allowed terminator. The digit in the negated class stops
+    // the digits backtracking into a false "malformed" match on `#1244`.
+    [GeneratedRegex(@"#\d+(?![\d\s,;:.)]|$)")]
     private static partial Regex MalformedIssueToken();
+
+    // Any `#digits` on a contract line, well formed or not.
+    [GeneratedRegex(@"#(\d+)")]
+    private static partial Regex AnyIssueToken();
+
+    // A PR reference: `PR` then a number, not inside a longer word.
+    [GeneratedRegex(@"(?<![A-Za-z0-9_])PR \d+")]
+    private static partial Regex PrToken();
 
     // Anything that starts a heading like a review record, however it is
     // indented, spaced or punctuated after the PR number.
