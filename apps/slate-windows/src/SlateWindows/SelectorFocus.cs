@@ -79,7 +79,7 @@ internal static class SelectorFocus
     /// stop.</returns>
     internal static bool FocusFirstOrSelectedItem(Selector selector, params UIElement?[] emptyNotices)
     {
-        int request = ++_newestRequest;
+        ++_newestRequest;
         if (!selector.HasItems)
         {
             foreach (UIElement? notice in emptyNotices)
@@ -99,19 +99,31 @@ internal static class SelectorFocus
             return landing == Landing.Landed;
         }
 
+        SeatLater(selector, () => selector.HasItems && FocusLandingItem(selector) == Landing.Landed);
+        return false;
+    }
+
+    /// <summary>
+    /// Seat a landing that cannot be made now — a row or a cell with no
+    /// container yet — once the dispatcher reaches Background priority:
+    /// for the NEWEST request only, and only while the keys are exactly
+    /// where they were when it was asked for, so any later landing, or a
+    /// caller's fallback that moved them, retires it (codex round 3). It is
+    /// tried once.
+    /// </summary>
+    internal static void SeatLater(DispatcherObject owner, Func<bool> land)
+    {
+        int request = ++_newestRequest;
         IInputElement? leftAt = Keyboard.FocusedElement;
-        _ = selector.Dispatcher.InvokeAsync(
+        _ = owner.Dispatcher.InvokeAsync(
             () =>
             {
-                if (request == _newestRequest
-                    && ReferenceEquals(Keyboard.FocusedElement, leftAt)
-                    && selector.HasItems)
+                if (request == _newestRequest && ReferenceEquals(Keyboard.FocusedElement, leftAt))
                 {
-                    _ = FocusLandingItem(selector);
+                    _ = land();
                 }
             },
             DispatcherPriority.Background);
-        return false;
     }
 
     /// <summary>Whether focusing <paramref name="element"/> itself would

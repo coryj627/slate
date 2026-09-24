@@ -128,6 +128,7 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.Sorting += OnHeaderSorting;
         _grid.PreviewTextInput += OnTypeAhead;
         _grid.PreviewKeyDown += OnActivationKey;
+        _grid.KeyDown += OnBareGridArrow;
         _grid.MouseDoubleClick += OnActivationDoubleClick;
         _grid.ContextMenuOpening += OnContextMenuOpening;
         _grid.LoadingRow += OnLoadingRow;
@@ -395,19 +396,41 @@ internal sealed class AccessibleDataGrid : UserControl
     /// scroll, realize the container synchronously (under a starved
     /// session the deferred generation leaves Focus() on the grid, and
     /// AT announces the grid instead of the cell), set currency, focus
-    /// the realized DataGridCell. Falls back to the grid only when the
-    /// container genuinely cannot exist yet (pre-load).
+    /// the realized DataGridCell. A cell whose container cannot exist yet
+    /// is seated once it does, while the keys have not moved.
     /// </summary>
+    /// <remarks>
+    /// W7-7 PR 4 (#1247, R-5; spec review round 23): the unrealized case
+    /// fell back to focusing the grid itself, and a populated grid is not
+    /// a landing — DataGrid moves between cells only from a cell, so from
+    /// the grid every arrow went to directional navigation and out of the
+    /// region, a current cell or not (GridLandingTests measures it). The
+    /// keys now stay where they were, the caller is told the truth, and
+    /// the seat is the list landing's own: the newest request only, and
+    /// only while the keys are exactly where they were.
+    /// </remarks>
     /// <returns>
-    /// Whether the REALIZED CELL took focus — false for the grid-level
-    /// fallback, which is a different outcome and used to be reported as
-    /// the same one. Currency and selection are set either way, so the
-    /// callers that only want the reader's position keep ignoring this;
-    /// W6-1 PR B's focus delivery reads it, because A14's rule is that
-    /// only a realized row counts as delivered and a fallback that says
-    /// "true" consumes a request nothing ever satisfied.
+    /// Whether the REALIZED CELL took focus now. Currency and selection
+    /// are set either way, so the callers that only want the reader's
+    /// position keep ignoring this; W6-1 PR B's focus delivery reads it,
+    /// because A14's rule is that only a realized row counts as delivered
+    /// and a fallback that says "true" consumes a request nothing ever
+    /// satisfied.
     /// </returns>
     private bool FocusCellElement(object item, DataGridColumn column)
+    {
+        if (TryFocusCell(item, column))
+        {
+            return true;
+        }
+
+        SelectorFocus.SeatLater(
+            _grid,
+            () => _items.Contains(item) && _grid.Columns.Contains(column) && TryFocusCell(item, column));
+        return false;
+    }
+
+    private bool TryFocusCell(object item, DataGridColumn column)
     {
         _grid.ScrollIntoView(item, column);
         if (_grid.IsLoaded)
@@ -417,16 +440,38 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.CurrentCell = new DataGridCellInfo(item, column);
         _grid.SelectedCells.Clear();
         _grid.SelectedCells.Add(_grid.CurrentCell);
-        if (_grid.ItemContainerGenerator.ContainerFromItem(item)
-                is DataGridRow row
-            && column.GetCellContent(row)?.Parent is DataGridCell cell)
+        return _grid.ItemContainerGenerator.ContainerFromItem(item) is DataGridRow row
+            && column.GetCellContent(row)?.Parent is DataGridCell cell
+            && cell.Focus();
+    }
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247, R-5; spec review round 23): an arrow pressed while
+    /// the GRID itself holds the keys — an empty grid's own stop, or a grid
+    /// WPF handed them to when their row went away — lands on a cell, the
+    /// current one else the first, and an empty grid keeps it. DataGrid
+    /// moves between cells only from a cell: from the grid, every arrow
+    /// went to directional navigation and out of the region.
+    /// </summary>
+    private void OnBareGridArrow(object sender, KeyEventArgs e)
+    {
+        if (e.Handled
+            || !ReferenceEquals(e.OriginalSource, _grid)
+            || Keyboard.Modifiers != ModifierKeys.None
+            || e.Key is not (Key.Left or Key.Right or Key.Up or Key.Down))
         {
-            return cell.Focus();
+            return;
         }
-        // The reader is NOT on the row. Focus still goes somewhere
-        // sensible rather than nowhere, but the caller is told the truth.
-        _ = _grid.Focus();
-        return false;
+
+        e.Handled = true;
+        if (_items.Count > 0 && _grid.Columns.Count > 0)
+        {
+            object item = _grid.CurrentCell.Item is { } current && _items.Contains(current) ? current : _items[0];
+            DataGridColumn column = _grid.CurrentCell.Column is { } currentColumn && _grid.Columns.Contains(currentColumn)
+                ? currentColumn
+                : _grid.Columns[0];
+            _ = FocusCellElement(item, column);
+        }
     }
 
     /// <summary>
