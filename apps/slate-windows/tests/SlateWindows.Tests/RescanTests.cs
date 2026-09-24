@@ -823,6 +823,287 @@ public sealed class RescanTests
     });
 
     // ---------------------------------------------------------------------
+    // Slate-owned writes supersede (round 23) and the re-check (round 24)
+    // ---------------------------------------------------------------------
+
+    /// <summary>Round 23 (a): page 1 applied x.md's removal (its tab went
+    /// missing) and page 2 failed; the user recreates x.md through Slate —
+    /// its own Created event re-seats the tab — and the retry recovers page
+    /// 2. The recreate superseded x.md's removal row (still in its page,
+    /// flagged), so the one sentence counts only z.md, and the final state is
+    /// the disk's: x.md's tab live with the recreated text, the tree and
+    /// Quick Open listing it, nothing retained.</summary>
+    [Fact]
+    public void ASlateRecreateAfterAnAppliedRemovalLeavesTheTabLiveAndUnspoken() => RunSta(() =>
+    {
+        using var h = new Harness(
+            "supersede-recreate", pageLimit: 1, files: [("x.md", "x0\n"), ("keep.md", "keep\n")]);
+        WorkspaceTabViewModel x = h.Open("x.md");
+        h.Delete("x.md");
+        h.Write("z.md", "zed\n");
+        h.FailReads(read => read == 2);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.Equal([OneError], h.Spoken);
+        Assert.True(x.IsMissingFromDisk);
+
+        h.CreateThroughSlate("x.md", "x back\n");
+        Assert.False(x.IsMissingFromDisk);
+        Assert.Equal("x back\n", x.Text);
+        ScanDeltaEntry removal = Assert.Single(h.PendingPage(cursor: null, limit: 1).Entries);
+        Assert.Equal(
+            (ScanDeltaKind.Removed, "x.md", true),
+            (removal.Kind, removal.Path, removal.Superseded));
+
+        h.FailReads(_ => false);
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal([OneError, Explicit1], h.Spoken);
+        Assert.False(x.IsMissingFromDisk);
+        Assert.Equal("x back\n", x.Text);
+        Assert.False(x.IsDirty);
+        Assert.Equal("x back\n", File.ReadAllText(Path.Combine(h.Root, "x.md")));
+        Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "x.md");
+        Assert.Contains("x.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("z.md", h.QuickOpen.FilePathsForTests);
+        Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
+    });
+
+    /// <summary>Round 23 (b): y.md's external modification sits on the page
+    /// that failed; the user opens y.md, edits it and saves it through Slate
+    /// before the retry. The save superseded the unapplied row: the retry
+    /// applies nothing for it — no reload, so the user's undo history
+    /// survives — and never speaks it.</summary>
+    [Fact]
+    public void ASlateSaveBeforeTheRetrySupersedesAnUnappliedModification() => RunSta(() =>
+    {
+        using var h = new Harness(
+            "supersede-save", pageLimit: 1, files: [("a.md", "a0\n"), ("y.md", "y0\n")]);
+        h.Write("a.md", "a1 text\n");
+        h.Write("y.md", "y1 external\n");
+        h.FailReads(read => read == 2);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.Equal([OneError], h.Spoken);
+
+        WorkspaceTabViewModel y = h.Open("y.md");
+        Assert.Equal("y1 external\n", y.Text);
+        y.Text = "y1 external\nmy line\n";
+        Assert.True(y.Save());
+        h.Context.Drain();
+        Assert.True(y.EditorDocument!.UndoStack.CanUndo);
+        ScanDeltaEntry modification = Assert.Single(h.PendingPage(h.Ledger.Pending!.Cursor, limit: 1).Entries);
+        Assert.Equal(
+            (ScanDeltaKind.Modified, "y.md", true),
+            (modification.Kind, modification.Path, modification.Superseded));
+
+        h.FailReads(_ => false);
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal([OneError, Explicit1], h.Spoken);
+        Assert.Equal("y1 external\nmy line\n", y.Text);
+        Assert.False(y.IsDirty);
+        Assert.True(y.EditorDocument!.UndoStack.CanUndo, "the retry reloaded the tab Slate had just saved");
+        Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
+    });
+
+    /// <summary>Round 24 (a): the page holding x.md's removal is FETCHED; before
+    /// the host applies it, x.md is recreated through Slate and its Created
+    /// event is handled. The re-check in the applying turn sees the row
+    /// superseded, so the cached removal is never applied: the tab stays
+    /// live (a Created event re-seats only a MISSING tab, so the funnel
+    /// leaves this one's buffer as it was), Quick Open keeps x.md (the
+    /// replacement read before the recreate is re-based on its event), and
+    /// x.md is never spoken.</summary>
+    [Fact]
+    public void APageRecheckedAfterASlateRecreateAppliesNoStaleRemoval() => RunSta(() =>
+    {
+        using var h = new Harness("recheck-recreate", ("x.md", "x0\n"), ("keep.md", "keep\n"));
+        WorkspaceTabViewModel x = h.Open("x.md");
+        h.Delete("x.md");
+        h.Write("z.md", "zed\n");
+        bool recreated = false;
+        h.AfterRead(page =>
+        {
+            if (!recreated && page.Entries.Any(entry => entry.Path == "x.md" && !entry.Superseded))
+            {
+                recreated = true;
+                h.CreateThroughSlate("x.md", "x back\n");
+                Assert.False(x.IsMissingFromDisk);
+            }
+        });
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.True(recreated, "the page never held x.md's removal");
+        Assert.False(x.IsMissingFromDisk, "the cached removal was applied over the handled recreate");
+        Assert.Equal([Explicit1], h.Spoken);
+        Assert.Contains("x.md", h.QuickOpen.FilePathsForTests);
+    });
+
+    /// <summary>Round 24 (b): the page is fetched, re-checked AND applied —
+    /// x.md's tab goes missing — before the recreate commits; the recreate's
+    /// own Created event, handled after the page's effects, re-seats the tab
+    /// over them. The same final state as (a), and x.md is still never
+    /// spoken: the write superseded its applied row before the
+    /// release.</summary>
+    [Fact]
+    public void ASlateRecreateAfterThePageAppliedReconcilesOverIt() => RunSta(() =>
+    {
+        using var h = new Harness(
+            "recreate-after-apply", pageLimit: 1, files: [("x.md", "x0\n"), ("keep.md", "keep\n")]);
+        WorkspaceTabViewModel x = h.Open("x.md");
+        h.Delete("x.md");
+        h.Write("z.md", "zed\n");
+        bool recreated = false;
+        h.OnApplied((_, next) =>
+        {
+            if (!recreated && next is not null)
+            {
+                recreated = true;
+                Assert.True(x.IsMissingFromDisk, "page 1's removal was not applied first");
+                h.CreateThroughSlate("x.md", "x back\n");
+            }
+        });
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.True(recreated);
+        Assert.False(x.IsMissingFromDisk);
+        Assert.Equal("x back\n", x.Text);
+        Assert.Equal([Explicit1], h.Spoken);
+        Assert.Contains("x.md", h.QuickOpen.FilePathsForTests);
+        Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
+    });
+
+    /// <summary>Round 24 (c): a task toggle on y.md is IN FLIGHT — held before
+    /// its core write — when the rescan applies y.md's external modification.
+    /// The clean-tab reload waits for the save: no reload, the undo history
+    /// intact, only the staleness derived; the toggle's own completion then
+    /// reconciles the tab (here a conflict, since y.md changed on disk under
+    /// it).</summary>
+    [Fact]
+    public void ACleanReloadWaitsForAnInFlightSlateSave() => RunSta(() =>
+    {
+        using var h = new Harness("inflight-save", ("y.md", "- [ ] task\n"));
+        WorkspaceTabViewModel y = h.Open("y.md");
+        y.Text = "- [ ] task\nmine\n";
+        Assert.True(y.Save());
+        h.Context.Drain();
+        Assert.True(y.EditorDocument!.UndoStack.CanUndo);
+
+        h.Write("y.md", "- [ ] task\nmine\nexternal\n");
+        using var hold = new ManualResetEventSlim(false);
+        using var holding = new ManualResetEventSlim(false);
+        y.TaskToggleBeforeWriteForTests = () =>
+        {
+            holding.Set();
+            _ = hold.Wait(TimeSpan.FromSeconds(30));
+        };
+        TaskItem task = h.Lifecycle.SessionForTests!.TasksForFile("y.md")[0];
+        var toggleEvents = new List<A11yEvent>();
+        Assert.Equal(TabTaskToggle.Started, y.ToggleTask(task, toggleEvents.Add));
+        Assert.True(holding.Wait(TimeSpan.FromSeconds(10)), "the toggle never reached its write");
+        Assert.True(y.IsTaskToggleInFlight);
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal(["Files refreshed. 1 new or changed, 0 removed."], h.Spoken);
+        Assert.Equal("- [ ] task\nmine\n", y.Text);
+        Assert.True(y.EditorDocument!.UndoStack.CanUndo, "the rescan reloaded a tab whose save was in flight");
+        Assert.True(y.IsExternallyStale);
+
+        hold.Set();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !y.IsTaskToggleInFlight),
+            "the toggle never completed");
+        _ = Assert.Single(toggleEvents.OfType<A11yEvent.TaskToggleConflict>());
+        Assert.True(y.EditorDocument!.UndoStack.CanUndo);
+    });
+
+    // ---------------------------------------------------------------------
+    // Cancellation (round 23)
+    // ---------------------------------------------------------------------
+
+    /// <summary>A close arriving before the FIRST page (the run's token
+    /// cancelled at the first read) stops the reconciliation there: no host
+    /// effect, nothing spoken, the generation Pending at cursor 0.</summary>
+    [Fact]
+    public void ACancelBeforeTheFirstPageAppliesNothingAndSaysNothing() => RunSta(() =>
+    {
+        using var h = new Harness(
+            "cancel-first", pageLimit: 1, files: [("a.md", "a0\n"), ("gone.md", "g\n")]);
+        WorkspaceTabViewModel a = h.Open("a.md");
+        WorkspaceTabViewModel gone = h.Open("gone.md");
+        h.Write("a.md", "a1 text\n");
+        h.Delete("gone.md");
+        h.CancelReads(read => read == 1);
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Empty(h.Events);
+        Assert.Equal("a0\n", a.Text);
+        Assert.False(gone.IsMissingFromDisk);
+        ScanDeltaPending pending = Assert.IsType<ScanDeltaPending>(h.Ledger.Pending);
+        Assert.Null(pending.Cursor);
+        Assert.Equal(2UL, pending.Rows);
+    });
+
+    /// <summary>A close arriving after page 1 keeps page 1's effects, says
+    /// nothing and leaves the generation Pending at page 2; a later rescan
+    /// of the same session resumes exactly there (page 1 is never re-read)
+    /// and speaks the whole outcome once. A vault reopened after a cancelled
+    /// run starts with nothing retained: the closed session's generation died
+    /// with it.</summary>
+    [Fact]
+    public void ACancelAfterPageOneKeepsItsEffectsAndTheNextRescanResumes() => RunSta(() =>
+    {
+        using var h = new Harness(
+            "cancel-second", pageLimit: 1, files: [("a.md", "a0\n"), ("b.md", "b0\n")]);
+        WorkspaceTabViewModel a = h.Open("a.md");
+        WorkspaceTabViewModel b = h.Open("b.md");
+        h.Write("a.md", "a1 text\n");
+        h.Write("b.md", "b1 text\n");
+        h.CancelReads(read => read == 2);
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Empty(h.Events);
+        Assert.Equal("a1 text\n", a.Text);
+        Assert.Equal("b0\n", b.Text);
+        string? atPageTwo = Assert.IsType<ScanDeltaPending>(h.Ledger.Pending).Cursor;
+        Assert.NotNull(atPageTwo);
+
+        var read = new List<string>();
+        h.AfterRead(page => read.AddRange(page.Entries.Select(entry => entry.Path)));
+        h.CancelReads(_ => false);
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal(["b.md"], read);
+        Assert.Equal(["Files refreshed. 2 new or changed, 0 removed."], h.Spoken);
+        Assert.Equal("b1 text\n", b.Text);
+        Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
+
+        // Cancel mid-generation again, then reopen the vault.
+        h.AfterRead(null);
+        h.Write("a.md", "a2 text, longer\n");
+        h.Write("b.md", "b2 text, longer\n");
+        int readsSoFar = h.Reads;
+        h.CancelReads(ordinal => ordinal == readsSoFar + 2);
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.NotNull(h.Ledger.Pending);
+
+        h.Events.Clear();
+        h.Context.Await(h.Lifecycle.OpenVaultAsync(h.Root), "the reopen");
+        Assert.Equal(new ScanDeltaLedger(null, null), h.Ledger);
+        Assert.DoesNotContain(
+            h.Events,
+            e => e is A11yEvent.VaultRescanFinished or A11yEvent.VaultRescanIncomplete);
+    });
+
+    // ---------------------------------------------------------------------
     // The foreground route
     // ---------------------------------------------------------------------
 
@@ -1009,6 +1290,15 @@ public sealed class RescanTests
     {
         public Func<int, bool> FailRead { get; set; } = _ => false;
 
+        /// <summary>Cancel the run's token at this read ordinal, BEFORE the
+        /// read: a close or vault switch arriving between pages.</summary>
+        public Func<int, bool> CancelAtRead { get; set; } = _ => false;
+
+        /// <summary>Runs after a page read returns and before the host
+        /// re-checks and applies it — work the UI thread did between the
+        /// fetch and the effects (round 24).</summary>
+        public Action<ScanDeltaPage>? AfterRead { get; set; }
+
         public bool FailAppliedMark { get; set; }
 
         public Action<ulong, string?>? OnApplied { get; set; }
@@ -1023,18 +1313,29 @@ public sealed class RescanTests
             return pending;
         }
 
-        public ScanDeltaPage ReadPage(ulong generation, string? cursor, uint limit)
+        public ScanDeltaPage ReadPage(ulong generation, string? cursor, uint limit, CancelToken cancel)
         {
             int read = nextRead();
+            if (CancelAtRead(read))
+            {
+                cancel.Cancel();
+            }
+
             if (FailRead(read))
             {
                 throw new IOException($"injected failure of page read {read}");
             }
 
-            ScanDeltaPage page = inner.ReadPage(generation, cursor, limit);
+            ScanDeltaPage page = inner.ReadPage(generation, cursor, limit, cancel);
             AfterCall?.Invoke();
+            AfterRead?.Invoke(page);
             return page;
         }
+
+        /// <summary>The re-check is the production binding's, never
+        /// scripted: it is what the facts observe.</summary>
+        public ScanDeltaPage RecheckPage(ulong generation, string? cursor, uint limit, CancelToken cancel) =>
+            inner.RecheckPage(generation, cursor, limit, cancel);
 
         public void PageApplied(ulong generation, string? nextCursor)
         {
@@ -1062,6 +1363,8 @@ public sealed class RescanTests
     {
         private readonly SynchronizationContext? _previous;
         private readonly Func<int, bool>[] _failRead = [_ => false];
+        private readonly Func<int, bool>[] _cancelRead = [_ => false];
+        private Action<ScanDeltaPage>? _afterRead;
         private int _scanCalls;
         private int _reads;
         private bool _failAppliedMark;
@@ -1105,6 +1408,8 @@ public sealed class RescanTests
                     () => Interlocked.Increment(ref _reads))
                 {
                     FailRead = read => _failRead[0](read),
+                    CancelAtRead = read => _cancelRead[0](read),
+                    AfterRead = page => _afterRead?.Invoke(page),
                     FailAppliedMark = _failAppliedMark,
                     OnApplied = (generation, next) => _onApplied?.Invoke(generation, next),
                     AfterCall = () => _afterLedgerCall?.Invoke(),
@@ -1168,6 +1473,35 @@ public sealed class RescanTests
         /// <summary>Fail page reads by their global ordinal (1-based) across
         /// every run of this vault.</summary>
         public void FailReads(Func<int, bool> predicate) => _failRead[0] = predicate;
+
+        /// <summary>Cancel the run's token at these read ordinals (1-based,
+        /// across every run of this vault), before the read.</summary>
+        public void CancelReads(Func<int, bool> predicate) => _cancelRead[0] = predicate;
+
+        /// <summary>Observe every fetched page before the host re-checks and
+        /// applies it; null stops observing.</summary>
+        public void AfterRead(Action<ScanDeltaPage>? observer) => _afterRead = observer;
+
+        /// <summary>Page reads so far, across every run of this vault.</summary>
+        public int Reads => Volatile.Read(ref _reads);
+
+        /// <summary>A Slate-owned create through the session the host holds
+        /// — the core call the host's create commands make — and its
+        /// Created event handled through the lifecycle's real listener.</summary>
+        public void CreateThroughSlate(string path, string text)
+        {
+            _ = Lifecycle.SessionForTests!.CreateExclusive(path, text);
+            Context.Drain();
+        }
+
+        /// <summary>A page of the Pending generation as core pages it now,
+        /// flags included (reading never moves the cursor).</summary>
+        public ScanDeltaPage PendingPage(string? cursor, uint limit)
+        {
+            using var cancel = new CancelToken();
+            return Lifecycle.SessionForTests!.ScanDeltaPage(
+                Ledger.Pending!.Generation, new Paging(cursor, limit), cancel);
+        }
 
         /// <summary>Fail each generation's Applied mark (the last page's
         /// report) — takes effect from the next run's channel.</summary>

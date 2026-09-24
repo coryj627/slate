@@ -160,28 +160,63 @@ internal sealed partial class VaultLifecycleViewModel
 
     private async Task RunOneRescanAsync(int generation, VaultSession session, RescanReason reason)
     {
-        IScanDeltaChannel channel = _scanDeltaChannel(session);
-
-        // (1) A Pending generation a failed run left: its remaining pages'
-        // effects first, from its stored cursor — core refuses a new scan
-        // over it, so an unreconciled tail is never overwritten.
-        if (!ReconcileScanDelta(generation, channel))
+        // ONE cancel token for the whole run: the resume, the scan and every
+        // page read take it (locked decision 05). A close or a vault switch
+        // cancels it (CloseSession, which then owns and disposes it); a
+        // cancelled run stops silently wherever it is, its generation Pending
+        // at its cursor for a later rescan of the same session (a closed
+        // session's generation dies with its connection).
+        var cancel = new CancelToken();
+        _scanCancel = cancel;
+        // Quick Open's replacement is read on the worker after the scan; the
+        // journal opened here re-bases it on every Slate-owned write whose
+        // event is handled meanwhile (QuickSwitcherViewModel.ReplaceFiles).
+        QuickSwitcherViewModel? quickOpen = QuickSwitcher;
+        quickOpen?.BeginReplacementJournal();
+        try
         {
-            if (generation == _generation)
+            await RunOneRescanAsync(generation, session, reason, _scanDeltaChannel(session), cancel);
+        }
+        finally
+        {
+            quickOpen?.EndReplacementJournal();
+            if (ReferenceEquals(_scanCancel, cancel))
             {
-                PostRescanIncomplete(1);
+                _scanCancel = null;
+                cancel.Dispose();
             }
+        }
+    }
 
-            return;
+    private async Task RunOneRescanAsync(
+        int generation,
+        VaultSession session,
+        RescanReason reason,
+        IScanDeltaChannel channel,
+        CancelToken cancel)
+    {
+        // (1) A Pending generation a failed or cancelled run left: its
+        // remaining pages' effects first, from its stored cursor — core
+        // refuses a new scan over it, so an unreconciled tail is never
+        // overwritten.
+        switch (ReconcileScanDelta(generation, channel, cancel))
+        {
+            case DeltaReconciliation.Cancelled:
+                return;
+            case DeltaReconciliation.Failed:
+                if (generation == _generation)
+                {
+                    PostRescanIncomplete(1);
+                }
+
+                return;
         }
 
         // (2) The scan, on the session-load worker. The listener only moves
         // the progress bar of an explicit refresh; nothing it hears speaks.
-        var cancel = new CancelToken();
         UiProgressListener? progress = reason == RescanReason.Explicit
             ? new UiProgressListener(_enqueueUi, @event => HandleRescanProgress(generation, @event))
             : null;
-        _scanCancel = cancel;
         Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)> scan = _runSessionLoad(() =>
         {
             ScanReport report = progress is null
@@ -194,6 +229,11 @@ internal sealed partial class VaultLifecycleViewModel
         try
         {
             loaded = await scan;
+        }
+        catch (VaultException.Cancelled)
+        {
+            // A close or a vault switch: nothing to say.
+            return;
         }
         catch (Exception exception)
         {
@@ -212,17 +252,11 @@ internal sealed partial class VaultLifecycleViewModel
         {
             if (generation == _generation)
             {
-                if (ReferenceEquals(_scanCancel, cancel))
-                {
-                    _scanCancel = null;
-                }
-
                 if (_sessionLoadCompletion.IsCompleted)
                 {
                     _sessionLoadCompletion = Task.CompletedTask;
                 }
 
-                cancel.Dispose();
                 IsProgressIndeterminate = false;
             }
         }
@@ -236,16 +270,21 @@ internal sealed partial class VaultLifecycleViewModel
         // reduces the retained Applied generation — this run's, coalesced
         // with any recovered one — into the net per-path counts.
         ScanDeltaOutcome? outcome = null;
-        if (ReconcileScanDelta(generation, channel))
+        switch (ReconcileScanDelta(generation, channel, cancel))
         {
-            try
-            {
-                outcome = channel.Release();
-            }
-            catch (Exception exception) when (exception is not OutOfMemoryException)
-            {
-                HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-            }
+            case DeltaReconciliation.Cancelled:
+                return;
+            case DeltaReconciliation.Complete:
+                try
+                {
+                    outcome = channel.Release();
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                    HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+                }
+
+                break;
         }
 
         if (generation != _generation)
@@ -284,6 +323,21 @@ internal sealed partial class VaultLifecycleViewModel
         }
     }
 
+    /// <summary>How a walk of the Pending generation ended.</summary>
+    private enum DeltaReconciliation
+    {
+        /// <summary>Every page applied (or nothing was pending).</summary>
+        Complete,
+
+        /// <summary>A page failed: the generation keeps its cursor and the
+        /// run says "results may be incomplete".</summary>
+        Failed,
+
+        /// <summary>The run's token was cancelled, or the vault closed or
+        /// switched: the generation keeps its cursor, nothing is said.</summary>
+        Cancelled,
+    }
+
     /// <summary>
     /// Walk the Pending delta generation from its stored cursor in page
     /// order — core pages it removal-first, so a case-only rename's removal
@@ -292,10 +346,22 @@ internal sealed partial class VaultLifecycleViewModel
     /// file-change funnel (<see cref="HandleFileChange"/>) applies, silently
     /// (<see cref="WorkspaceViewModel.BeginSilentReconciliation"/>), and
     /// reporting each page applied only AFTER its effects. The last page's
-    /// report marks the generation Applied. False on any failure: the
+    /// report marks the generation Applied. On failure or cancellation the
     /// generation keeps its cursor and the next rescan resumes it.
     /// </summary>
-    private bool ReconcileScanDelta(int generation, IScanDeltaChannel channel)
+    /// <remarks>
+    /// The linearization with Slate-owned writes (round 24): every page is
+    /// RE-CHECKED against core's ledger in the very turn that applies it,
+    /// with no await between the check and the effects. Slate-owned events
+    /// are handled on this thread, so none can be handled in between: a
+    /// write whose event the host already handled has superseded its rows
+    /// by the check (its own transaction flagged them) and they are skipped;
+    /// a write that commits after the check reaches the host after the
+    /// page's effects, and its own event reconciles over them (a Created
+    /// re-seats the tab a stale Deleted marked missing).
+    /// </remarks>
+    private DeltaReconciliation ReconcileScanDelta(
+        int generation, IScanDeltaChannel channel, CancelToken cancel)
     {
         ScanDeltaPending? pending;
         try
@@ -305,47 +371,80 @@ internal sealed partial class VaultLifecycleViewModel
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-            return false;
+            return DeltaReconciliation.Failed;
         }
 
         if (pending is null)
         {
-            return true;
+            return DeltaReconciliation.Complete;
         }
 
         string? cursor = pending.Cursor;
         using IDisposable? silence = Workspace?.BeginSilentReconciliation();
-        while (generation == _generation)
+        while (generation == _generation && !cancel.IsCancelled())
         {
             ScanDeltaPage page;
             try
             {
-                page = channel.ReadPage(pending.Generation, cursor, _scanDeltaPageLimit);
+                ScanDeltaPage fetched = channel.ReadPage(
+                    pending.Generation, cursor, _scanDeltaPageLimit, cancel);
+                page = RecheckScanDeltaPage(channel, pending.Generation, cursor, fetched, cancel);
                 ApplyScanDeltaPage(page);
                 channel.PageApplied(pending.Generation, page.NextCursor);
+            }
+            catch (VaultException.Cancelled)
+            {
+                return DeltaReconciliation.Cancelled;
             }
             catch (Exception exception) when (exception is not OutOfMemoryException)
             {
                 HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-                return false;
+                return DeltaReconciliation.Failed;
             }
 
             if (page.NextCursor is not string next)
             {
-                return true;
+                return DeltaReconciliation.Complete;
             }
 
             cursor = next;
         }
 
-        return false;
+        return DeltaReconciliation.Cancelled;
+    }
+
+    /// <summary>
+    /// The round-24 re-check: the fetched page re-read, synchronously, in
+    /// the turn that applies it — its rows' superseded flags as they stand
+    /// NOW. A generation is immutable but for those flags, so any other
+    /// difference is a broken ledger: the page fails closed.
+    /// </summary>
+    private ScanDeltaPage RecheckScanDeltaPage(
+        IScanDeltaChannel channel,
+        ulong generation,
+        string? cursor,
+        ScanDeltaPage fetched,
+        CancelToken cancel)
+    {
+        ScanDeltaPage rechecked = channel.RecheckPage(generation, cursor, _scanDeltaPageLimit, cancel);
+        bool same = rechecked.Entries.Length == fetched.Entries.Length
+            && string.Equals(rechecked.NextCursor, fetched.NextCursor, StringComparison.Ordinal)
+            && rechecked.Entries.Zip(fetched.Entries).All(pair =>
+                pair.First.Kind == pair.Second.Kind
+                && string.Equals(pair.First.Path, pair.Second.Path, StringComparison.Ordinal));
+        return same
+            ? rechecked
+            : throw new InvalidOperationException(
+                "A scan delta page changed between its read and its re-check.");
     }
 
     /// <summary>
     /// One page's effects: the operations <see cref="HandleFileChange"/>
     /// applies for the matching event kind (an external rename is Deleted +
     /// Created, AR-8), plus the clean-tab reload the funnel's Modified arm
-    /// never had. Idempotent, so a resumed page may be applied twice.
+    /// never had — for every entry no Slate-owned write has superseded (that
+    /// write's own event reconciled the host). Idempotent, so a resumed page
+    /// may be applied twice.
     /// </summary>
     /// <remarks>
     /// Batched per page, in the page's own removal-first order, so the cost
@@ -362,10 +461,11 @@ internal sealed partial class VaultLifecycleViewModel
     private void ApplyScanDeltaPage(ScanDeltaPage page)
     {
         WorkspaceViewModel? workspace = Workspace;
+        ScanDeltaEntry[] live = [.. page.Entries.Where(entry => !entry.Superseded)];
         var removed = new List<string>();
         var modified = new List<string>();
         bool created = false;
-        foreach (ScanDeltaEntry entry in page.Entries)
+        foreach (ScanDeltaEntry entry in live)
         {
             switch (entry.Kind)
             {
@@ -398,7 +498,7 @@ internal sealed partial class VaultLifecycleViewModel
             workspace?.NotifyHistoryOfVaultChange(path);
         }
 
-        foreach (ScanDeltaEntry entry in page.Entries)
+        foreach (ScanDeltaEntry entry in live)
         {
             FileChangeKind kind = entry.Kind switch
             {
@@ -410,7 +510,10 @@ internal sealed partial class VaultLifecycleViewModel
             workspace?.NotifyBasesOfVaultChange(entry.Path);
         }
 
-        workspace?.InvalidateAllInteractionStates();
+        if (live.Length > 0)
+        {
+            workspace?.InvalidateAllInteractionStates();
+        }
     }
 
     /// <summary>The rescan's progress policy: an explicit refresh moves the

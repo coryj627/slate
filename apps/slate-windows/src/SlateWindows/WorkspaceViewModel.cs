@@ -842,6 +842,19 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// written, index commit failed) with an actual landed write.</summary>
     internal Action? TaskToggleFaultForTests { get; set; }
 
+    /// <summary>Test seam (W7-7 PR 7, round 24): runs INSIDE the toggle
+    /// worker BEFORE the core write, so a fact can hold a toggle in flight,
+    /// its write not yet committed, while a rescan applies the note's
+    /// delta.</summary>
+    internal Action? TaskToggleBeforeWriteForTests { get; set; }
+
+    /// <summary>True from a task toggle's start until its dispatcher-side
+    /// publish re-baselines the tab (W7-7 PR 7, round 24): a rescan's
+    /// clean-tab reload waits for it, because a reload in between would
+    /// move the revision the splice verifies and discard the undo
+    /// history.</summary>
+    internal bool IsTaskToggleInFlight => _taskToggleInFlight;
+
     /// <summary>The workspace's shared repair quarantine (adversarial
     /// round 19): set at tab creation so EVERY toggle route through
     /// this tab — panel, review, editor, reading view — leases the
@@ -903,6 +916,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             {
                 try
                 {
+                    TaskToggleBeforeWriteForTests?.Invoke();
                     SaveReport report = _session.ToggleTaskStatus(
                         path,
                         task.Ordinal,
@@ -2263,9 +2277,40 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             return;
         }
 
-        int affected = InvalidatePathWithoutPersisting(invalidated);
-        RaiseCommandStates();
-        Persist();
+        InvalidatePath(invalidated, persist: true);
+    }
+
+    /// <summary>The per-path invalidation <see cref="InvalidatePath(string)"/>
+    /// and a rescan's page batch (<see cref="InvalidatePaths"/>) share: open
+    /// tabs on the path marked missing (their buffers kept), closed-tab
+    /// history and the Connections stack pruned. <paramref name="persist"/>
+    /// false leaves the command-state refresh and the workspace persist to
+    /// the batch, once per page.</summary>
+    private void InvalidatePath(string invalidated, bool persist)
+    {
+        int affected = 0;
+        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+        {
+            if (IsPathBacked(tab.Item) && IsSameOrDescendantPath(tab.Path, invalidated))
+            {
+                tab.InvalidatePath();
+                affected++;
+            }
+        }
+
+        _closedTabs.RemoveAll(entry =>
+            IsPathBacked(entry.Item) && IsSameOrDescendantPath(entry.Item.Path, invalidated));
+        // W6-2 PR B2 (rule D, the delete hook; B2D-9): the leaf's stack
+        // entries under the deleted path are pruned, so Back never opens a
+        // note that is gone; the pin and the note in view are kept (the
+        // Error presentation, B1's delete route).
+        Connections.Prune(invalidated);
+        if (persist)
+        {
+            RaiseCommandStates();
+            Persist();
+        }
+
         // W7-7 PR 7 (R-9): silent under a rescan's reconciliation, which
         // speaks only its one core-rendered completion sentence.
         if (affected > 0 && !IsReconcilingSilently)
