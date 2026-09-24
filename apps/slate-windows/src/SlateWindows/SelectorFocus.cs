@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace SlateWindows;
@@ -127,10 +128,60 @@ internal static class SelectorFocus
     /// <c>Focus()</c> though the keys are inside it, and a caller that
     /// falls back on false would take them away again.</summary>
     /// <returns>Whether the keys landed on the stop or inside it.</returns>
-    internal static bool LandOnStop(UIElement stop) =>
-        IsListLanding(stop)
-            ? FocusFirstOrSelectedItem((Selector)stop)
-            : stop.Focus() || stop.IsKeyboardFocusWithin;
+    internal static bool LandOnStop(UIElement stop) => stop switch
+    {
+        Selector list when IsListLanding(list) => FocusFirstOrSelectedItem(list),
+        TreeView tree => FocusSelectedOrFirstRow(tree),
+        _ => stop.Focus() || stop.IsKeyboardFocusWithin,
+    };
+
+    /// <summary>
+    /// W7-7 PR 4 (#1247, contract R-5; spec review round 23): a TREE's
+    /// landing is a ROW — the selected one, else the first — and never the
+    /// tree itself.
+    /// </summary>
+    /// <remarks>
+    /// WPF hands a focused tree's keys to its selected container only when
+    /// one exists. With no selection the bare tree keeps them: Up and Down
+    /// then reach its first row, but Left and Right go to directional
+    /// navigation and out of the region (<c>TreeLandingTests</c> measures
+    /// both). A selected row the panel has not realized is brought into
+    /// view level by level; one under a collapsed row is hidden, cannot take
+    /// the keys, and is not a landing. The selection is not written here — a
+    /// row selects itself
+    /// when it takes focus, as the first row does — and an empty tree is not
+    /// a landing either: the caller's stable stop is.
+    /// </remarks>
+    /// <param name="selectedPath">The selected row's items, root first, when
+    /// the tree's own selection is not the source of truth (a recycled
+    /// container drops it); null reads the tree's.</param>
+    /// <returns>Whether a row took the keys now. False means none did, and
+    /// the caller lands on its stable stop.</returns>
+    internal static bool FocusSelectedOrFirstRow(TreeView tree, IReadOnlyList<object>? selectedPath = null)
+    {
+        ++_newestRequest;
+        if (!tree.HasItems)
+        {
+            return false;
+        }
+
+        TreeViewItem? row;
+        if (selectedPath is { Count: > 0 })
+        {
+            row = RealizedTreeRow(tree, selectedPath);
+        }
+        else if (tree.SelectedItem is { } selected)
+        {
+            row = SelectedTreeRow(tree)
+                ?? (tree.Items.Contains(selected) ? RealizedTreeRow(tree, [selected]) : null);
+        }
+        else
+        {
+            row = RealizedTreeRow(tree, [tree.Items[0]]);
+        }
+
+        return row is not null && (row.Focus() || row.IsKeyboardFocusWithin);
+    }
 
     private static Landing FocusLandingItem(Selector selector)
     {
@@ -190,4 +241,103 @@ internal static class SelectorFocus
 
     private static UIElement? Container(Selector selector, object item) =>
         selector.ItemContainerGenerator.ContainerFromItem(item) as UIElement;
+
+    /// <summary>The realized selected row at any depth, searching only rows
+    /// that are shown.</summary>
+    private static TreeViewItem? SelectedTreeRow(ItemsControl level)
+    {
+        foreach (object item in level.Items)
+        {
+            if (level.ItemContainerGenerator.ContainerFromItem(item) is not TreeViewItem row)
+            {
+                continue;
+            }
+
+            if (row.IsSelected)
+            {
+                return row;
+            }
+
+            if (row.IsExpanded && SelectedTreeRow(row) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The row at the end of <paramref name="path"/>, realized level
+    /// by level; null when a level will not realize it. A row under a
+    /// collapsed row is not shown, so it cannot take the keys either.</summary>
+    private static TreeViewItem? RealizedTreeRow(TreeView tree, IReadOnlyList<object> path)
+    {
+        ItemsControl level = tree;
+        TreeViewItem? row = null;
+        foreach (object item in path)
+        {
+            row = RealizedTreeRow(level, item);
+            if (row is null)
+            {
+                return null;
+            }
+
+            level = row;
+        }
+
+        return row;
+    }
+
+    private static TreeViewItem? RealizedTreeRow(ItemsControl level, object item)
+    {
+        if (level.ItemContainerGenerator.ContainerFromItem(item) is TreeViewItem realized)
+        {
+            return realized;
+        }
+
+        level.UpdateLayout();
+        if (level.ItemContainerGenerator.ContainerFromItem(item) is TreeViewItem laidOut)
+        {
+            return laidOut;
+        }
+
+        // A virtualizing level realizes an index it is asked to bring into
+        // view; a tree has no ScrollIntoView of its own.
+        int index = level.Items.IndexOf(item);
+        if (index < 0 || ItemsHost(level) is not VirtualizingPanel panel)
+        {
+            return null;
+        }
+
+        panel.BringIndexIntoViewPublic(index);
+        level.UpdateLayout();
+        return level.ItemContainerGenerator.ContainerFromItem(item) as TreeViewItem;
+    }
+
+    /// <summary>The panel that hosts <paramref name="level"/>'s own rows —
+    /// never a nested row's.</summary>
+    private static VirtualizingPanel? ItemsHost(ItemsControl level)
+    {
+        var pending = new Queue<DependencyObject>();
+        pending.Enqueue(level);
+        while (pending.Count > 0)
+        {
+            DependencyObject current = pending.Dequeue();
+            for (int index = 0; index < VisualTreeHelper.GetChildrenCount(current); index++)
+            {
+                DependencyObject child = VisualTreeHelper.GetChild(current, index);
+                if (child is VirtualizingPanel panel && ReferenceEquals(ItemsControl.GetItemsOwner(panel), level))
+                {
+                    return panel;
+                }
+
+                if (child is not TreeViewItem)
+                {
+                    pending.Enqueue(child);
+                }
+            }
+        }
+
+        return null;
+    }
 }
