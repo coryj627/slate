@@ -113,7 +113,7 @@ public partial class MainWindow
 
                 if (focusBefore is null || !TryFocus(focusBefore))
                 {
-                    _ = FilesTree.Focus();
+                    _ = LandOnFilesTree();
                 }
             },
             DispatcherPriority.Input);
