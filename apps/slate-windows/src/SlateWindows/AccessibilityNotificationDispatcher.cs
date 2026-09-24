@@ -452,13 +452,16 @@ internal sealed class AccessibilityNotificationDispatcher
     /// <summary>
     /// R-1: the provider a notification is raised on — the source element's
     /// own, through its peer resolved as the dispatcher always has. It exists
-    /// only once a UIA client has asked the window for its root: at the first
-    /// frame <c>ProviderFromPeer</c> answers null
-    /// (<c>AtTheFirstFrameTheStatusPeerHasNoProviderUntilTheWindowIsAsked</c>
-    /// records it), and the launch phase keeps its lines until it answers
-    /// (OD-7). The window's HWND host provider was measured as the
-    /// alternative and delivered nothing to a desktop-scoped client, advised
-    /// or not, so it is not used.
+    /// only once the window's automation root is connected — by any
+    /// WM_GETOBJECT the window receives, or by WPF itself when its
+    /// process-wide event map already has a listener as the window gets its
+    /// root visual. At a launch's first frame with neither,
+    /// <c>ProviderFromPeer</c> answers null
+    /// (<c>AtTheFirstFrameTheStatusPeerHasNoProviderUntilItsWindowIsConnected</c>
+    /// records it), and the queue keeps its lines until it answers (OD-7).
+    /// The window's HWND host provider was measured as the alternative and
+    /// delivered nothing to a desktop-scoped client, advised or not, so it is
+    /// not used.
     /// </summary>
     internal static class NotificationSource
     {
