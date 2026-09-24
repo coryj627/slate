@@ -2,29 +2,35 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // W7-7 PR 4 (#1247, contract R-5): no focus landing anywhere in the shell
-// puts the keys on a bare list.
+// puts the keys on a bare container.
 //
 // A bare ListBox has no row for an arrow to move from, so the arrow goes
 // to WPF's directional navigation, which searches the whole window: from
 // Ctrl+R's "Right pane panels" and Shift+F6's Citations list, Down reached
-// a top-level menu (NVDA pass F4). SelectorFocus.FocusFirstOrSelectedItem
-// lands on the selected row, else the first; this census holds every other
-// landing in every source file of the shell to it — the window's partials
-// and the views alike (codex round 1: the Bases quick filter's Escape
-// landed on the bare list from BaseSurfaceView, which a window-only scope
-// could not see).
+// a top-level menu (NVDA pass F4). Spec review round 23 widened the rule
+// to every ItemsControl container — a Selector, a TreeView, a DataGrid, a
+// status bar or a menu — in every source file of the shell, the window's
+// partials and the views alike: a tree with no selection keeps the keys
+// itself and its Left and Right leave, and from a grid (or a status bar)
+// every arrow does (measured: TreeLandingTests, GridLandingTests,
+// ShellContainerLandingTests). A row is not a container: a MenuItem or a
+// TreeViewItem is the landing, not the thing landed around.
+//
+// A container landing is a ROW through SelectorFocus — the list's
+// FocusFirstOrSelectedItem, the tree's FocusSelectedOrFirstRow — or it is
+// a PROVEN stop: a stop of its own with no row to land on, named per site
+// below with the hosted fact that shows it keeps all four arrows. A combo
+// box is one by type (it takes every arrow as a move between its choices).
 //
 // BOUND, not read: a landing is a call that binds to a parameterless
-// Focus(), to Keyboard.Focus, or to one of the shell's own focus funnels
-// (a method that focuses its parameter, such as TryFocus), and the target
-// is judged by its bound static type — an x:Name field binds through the
-// XAML-generated partial (ShellCompilation), so `TryFocus(SomeList)` is
-// caught as surely as `SomeList.Focus()`. A combo box is not a list
-// landing (its items live in its drop-down, and the box is the stop), nor
-// is a grid (its stop is a cell, which AccessibleDataGrid seats) — the
-// helper's own IsListLanding rule. A target typed as a base class (a
-// leaf's first stop is a UIElement) is out of a static census's reach;
-// SelectorFocus.LandOnStop routes those, and the FlaUI journey
+// Focus() (on a receiver, or on the object itself), to Keyboard.Focus, or
+// to one of the shell's own focus funnels (a method that focuses its
+// parameter, such as TryFocus), and the target is judged by its bound
+// static type — an x:Name field binds through the XAML-generated partial
+// (ShellCompilation), so `TryFocus(SomeList)` is caught as surely as
+// `SomeList.Focus()`. A target typed as a base class (a leaf's first stop
+// is a UIElement) is out of a static census's reach; SelectorFocus
+// .LandOnStop routes those at run time, and the FlaUI journey
 // RegionStops_ArrowsStayInRegion witnesses the Citations case.
 //
 // ANSWERED, not dropped (codex round 3): the helper answers false when
@@ -43,6 +49,25 @@ namespace SlateWindows.Tests.Censuses;
 public sealed class SelectorLandingCensus
 {
     private const string Helper = "FocusFirstOrSelectedItem";
+
+    /// <summary>The container landings that stay landings, per site
+    /// (<c>Type.Method: the call as written</c>): stops of their own with no
+    /// row to land on, each with the hosted fact that shows it keeps all four
+    /// arrows — spec review round 23's "a hosted arrow assertion for every
+    /// site the census discovers". An entry the shell no longer has fails the
+    /// census: its witness would prove nothing.</summary>
+    private static readonly (string Site, string Witness)[] ProvenStops =
+    [
+        ("AccessibleDataGrid.FocusFirstCell: _grid.Focus()", nameof(GridLandingTests.AnEmptyGridKeepsItsArrows)),
+        ("MainWindow.TryLand: ShellStatusBar.Focus()", nameof(ShellContainerLandingTests.TheStatusBarKeepsItsArrows)),
+    ];
+
+    /// <summary>The containers that are their own stop by type, with the
+    /// hosted fact that shows it.</summary>
+    private static readonly (string Type, string Witness)[] OwnStopTypes =
+    [
+        ("System.Windows.Controls.ComboBox", nameof(ShellContainerLandingTests.TheCombinatorBoxKeepsItsArrows)),
+    ];
 
     [Fact]
     public void TheHelperIsDeclaredOnceAndTakesASelector()
@@ -68,23 +93,30 @@ public sealed class SelectorLandingCensus
     }
 
     [Fact]
-    public void EveryListLandingInTheShellGoesThroughTheHelper()
+    public void EveryContainerLandingInTheShellIsARowOrAProvenStop()
     {
         CSharpCompilation compilation = BindingCompilation();
         SyntaxTree[] sources = ShellSources(compilation).ToArray();
         Assert.True(sources.Length >= 200, $"only {sources.Length} shell sources were found; the census would read too little.");
         Assert.Contains(sources, tree => tree.FilePath.EndsWith("BaseSurfaceView.cs", StringComparison.OrdinalIgnoreCase));
-        string[] offenders = Offenders(compilation, sources).ToArray();
+        var proven = new HashSet<string>(StringComparer.Ordinal);
+
+        string[] offenders = Offenders(compilation, sources, proven).ToArray();
+
         Assert.True(
             offenders.Length == 0,
-            "Focus landings on a bare list (route them through SelectorFocus." + Helper + "):\n  "
+            "Focus landings on a bare container (land on a row through SelectorFocus, or prove the stop keeps its arrows):\n  "
             + string.Join("\n  ", offenders));
+        Assert.Equal(
+            ProvenStops.Select(stop => stop.Site).Order(StringComparer.Ordinal),
+            proven.Order(StringComparer.Ordinal));
     }
 
     /// <summary>The census's own witness: each landing shape it exists to
-    /// catch, planted in a partial of the real window and in a view of its
-    /// own, is caught — and the combo box, the grid and the helper's own
-    /// route are not.</summary>
+    /// catch, planted in a partial of the real window and in views of their
+    /// own, is caught — a list, a grid, a tree, a menu, a status bar landed
+    /// on anywhere but its proven site, and a container focusing itself —
+    /// and the combo box, a row, and the helper's own route are not.</summary>
     [Fact]
     public void ThePlantedBareLandingsAreCaught()
     {
@@ -102,6 +134,10 @@ public sealed class SelectorLandingCensus
                     BuilderCombinatorBox.Focus();
                     new System.Windows.Controls.DataGrid().Focus();
                     _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+                    FilesTree.Focus();
+                    ShellStatusBar.Focus();
+                    new System.Windows.Controls.TreeViewItem().Focus();
+                    MainMenu.Focus();
                 }
             }
 
@@ -111,13 +147,18 @@ public sealed class SelectorLandingCensus
 
                 private void Land() => _list.Focus();
             }
+
+            internal sealed class PlantedTree : System.Windows.Controls.TreeView
+            {
+                private void Land() => Focus();
+            }
             """;
         CSharpCompilation shell = BindingCompilation();
         var options = (CSharpParseOptions)ShellSources(shell).First().Options;
         SyntaxTree tree = CSharpSyntaxTree.ParseText(planted, options, path: "Planted.cs");
         CSharpCompilation compilation = shell.AddSyntaxTrees(tree);
 
-        string[] offenders = Offenders(compilation, [tree]).ToArray();
+        string[] offenders = Offenders(compilation, [tree], proven: null).ToArray();
 
         Assert.Equal(
             [
@@ -125,7 +166,12 @@ public sealed class SelectorLandingCensus
                 "Planted.cs:8: TryFocus(PanelCitationsList) lands on a bare ListBox",
                 "Planted.cs:9: list?.Focus() lands on a bare ListBox",
                 "Planted.cs:10: System.Windows.Input.Keyboard.Focus(QueriesSavedList) lands on a bare ListBox",
-                "Planted.cs:21: _list.Focus() lands on a bare ListBox",
+                "Planted.cs:12: new System.Windows.Controls.DataGrid().Focus() lands on a bare DataGrid",
+                "Planted.cs:14: FilesTree.Focus() lands on a bare TreeView",
+                "Planted.cs:15: ShellStatusBar.Focus() lands on a bare StatusBar",
+                "Planted.cs:17: MainMenu.Focus() lands on a bare Menu",
+                "Planted.cs:25: _list.Focus() lands on a bare ListBox",
+                "Planted.cs:30: Focus() lands on a bare PlantedTree",
             ],
             offenders);
     }
@@ -260,18 +306,23 @@ public sealed class SelectorLandingCensus
                 .Any(segment => segment is "obj" or "bin"));
     }
 
-    private static IEnumerable<string> Offenders(CSharpCompilation compilation, IReadOnlyCollection<SyntaxTree> scanned)
+    private static IEnumerable<string> Offenders(
+        CSharpCompilation compilation, IReadOnlyCollection<SyntaxTree> scanned, ISet<string>? proven)
     {
-        INamedTypeSymbol selector = compilation.GetTypeByMetadataName("System.Windows.Controls.Primitives.Selector")
-            ?? throw new Xunit.Sdk.XunitException("Selector did not bind: the census compilation lacks WPF.");
-        INamedTypeSymbol[] ownStops =
+        INamedTypeSymbol itemsControl = compilation.GetTypeByMetadataName("System.Windows.Controls.ItemsControl")
+            ?? throw new Xunit.Sdk.XunitException("ItemsControl did not bind: the census compilation lacks WPF.");
+        INamedTypeSymbol[] rows =
         [
-            compilation.GetTypeByMetadataName("System.Windows.Controls.ComboBox")!,
-            compilation.GetTypeByMetadataName("System.Windows.Controls.DataGrid")!,
+            compilation.GetTypeByMetadataName("System.Windows.Controls.MenuItem")!,
+            compilation.GetTypeByMetadataName("System.Windows.Controls.TreeViewItem")!,
         ];
+        INamedTypeSymbol[] ownStops = OwnStopTypes
+            .Select(own => compilation.GetTypeByMetadataName(own.Type)
+                ?? throw new Xunit.Sdk.XunitException($"{own.Type} did not bind."))
+            .ToArray();
         INamedTypeSymbol keyboard = compilation.GetTypeByMetadataName("System.Windows.Input.Keyboard")!;
         Dictionary<IMethodSymbol, int> funnels = Funnels(
-            compilation, ShellSources(compilation).Concat(scanned).Distinct().ToArray(), selector);
+            compilation, ShellSources(compilation).Concat(scanned).Distinct().ToArray(), itemsControl);
 
         foreach (SyntaxTree tree in scanned)
         {
@@ -291,9 +342,15 @@ public sealed class SelectorLandingCensus
                 }
 
                 ExpressionSyntax? target = null;
+                ITypeSymbol? implicitThis = null;
                 if (method is { Name: "Focus", Parameters.Length: 0, IsStatic: false })
                 {
                     target = Receiver(call);
+                    if (target is null && call.Expression is IdentifierNameSyntax)
+                    {
+                        // `Focus()` on the object itself: its own type is the target.
+                        implicitThis = model.GetEnclosingSymbol(call.SpanStart)?.ContainingType;
+                    }
                 }
                 else if (method.Name == "Focus" && SymbolEqualityComparer.Default.Equals(method.ContainingType, keyboard))
                 {
@@ -304,19 +361,27 @@ public sealed class SelectorLandingCensus
                     target = call.ArgumentList.Arguments.ElementAtOrDefault(ordinal)?.Expression;
                 }
 
-                if (target is null || call.Ancestors().OfType<MethodDeclarationSyntax>().Any(
+                if ((target is null && implicitThis is null) || call.Ancestors().OfType<MethodDeclarationSyntax>().Any(
                         declaration => declaration.Identifier.ValueText == Helper))
                 {
                     continue;
                 }
 
-                ITypeSymbol? type = model.GetTypeInfo(target).Type;
+                ITypeSymbol? type = target is null ? implicitThis : model.GetTypeInfo(target).Type;
                 if (type is null || type.TypeKind == TypeKind.Error)
                 {
                     yield return $"{where}: the target of {CSharpSource.Normalize(call)} did not bind (is the app built?)";
                 }
-                else if (IsListLanding(type, selector, ownStops))
+                else if (IsContainerLanding(type, itemsControl, [.. rows, .. ownStops]))
                 {
+                    string site = $"{call.Ancestors().OfType<TypeDeclarationSyntax>().First().Identifier.ValueText}."
+                        + $"{call.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault()?.Identifier.ValueText}: {Written(call)}";
+                    if (ProvenStops.Any(stop => stop.Site == site))
+                    {
+                        proven?.Add(site);
+                        continue;
+                    }
+
                     yield return $"{where}: {Written(call)} lands on a bare {type.Name}";
                 }
             }
@@ -329,11 +394,13 @@ public sealed class SelectorLandingCensus
     private static (string[] Discards, int Judged) Discards(
         CSharpCompilation compilation, IReadOnlyCollection<SyntaxTree> scanned)
     {
-        IMethodSymbol helper = compilation.GetTypeByMetadataName("SlateWindows.SelectorFocus")?
-            .GetMembers(Helper).OfType<IMethodSymbol>().SingleOrDefault()
-            ?? throw new Xunit.Sdk.XunitException($"SelectorFocus.{Helper} did not bind.");
+        INamedTypeSymbol focus = compilation.GetTypeByMetadataName("SlateWindows.SelectorFocus")
+            ?? throw new Xunit.Sdk.XunitException("SelectorFocus did not bind.");
+        IMethodSymbol[] landings = [.. new[] { Helper, "FocusSelectedOrFirstRow" }.Select(name =>
+            focus.GetMembers(name).OfType<IMethodSymbol>().SingleOrDefault()
+                ?? throw new Xunit.Sdk.XunitException($"SelectorFocus.{name} did not bind."))];
         HashSet<IMethodSymbol> answering = AnsweringMethods(
-            compilation, ShellSources(compilation).Concat(scanned).Distinct().ToArray(), helper);
+            compilation, ShellSources(compilation).Concat(scanned).Distinct().ToArray(), landings);
         HashSet<string> names = answering.Select(method => method.Name).ToHashSet(StringComparer.Ordinal);
 
         var discards = new List<string>();
@@ -373,12 +440,12 @@ public sealed class SelectorLandingCensus
         return (discards.ToArray(), judged);
     }
 
-    /// <summary>The helper, and every method that returns its answer — or
-    /// the answer of one that does (LandOnStop).</summary>
+    /// <summary>The landings, and every method that returns one's answer —
+    /// or the answer of one that does (LandOnStop).</summary>
     private static HashSet<IMethodSymbol> AnsweringMethods(
-        CSharpCompilation compilation, IReadOnlyCollection<SyntaxTree> trees, IMethodSymbol helper)
+        CSharpCompilation compilation, IReadOnlyCollection<SyntaxTree> trees, IEnumerable<IMethodSymbol> landings)
     {
-        var answering = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { helper };
+        var answering = new HashSet<IMethodSymbol>(landings, SymbolEqualityComparer.Default);
         bool grew = true;
         while (grew)
         {
@@ -430,6 +497,13 @@ public sealed class SelectorLandingCensus
                     && binary.Kind() is SyntaxKind.LogicalOrExpression or SyntaxKind.LogicalAndExpression))
             {
                 value = parent;
+                continue;
+            }
+
+            // A switch expression's arm hands its value to the switch.
+            if (parent is SwitchExpressionArmSyntax arm && arm.Expression == value && arm.Parent is { } switchExpression)
+            {
+                value = switchExpression;
                 continue;
             }
 
@@ -495,7 +569,7 @@ public sealed class SelectorLandingCensus
     /// where that parameter could hold a list. The helper is the one
     /// sanctioned funnel and is not listed.</summary>
     private static Dictionary<IMethodSymbol, int> Funnels(
-        CSharpCompilation compilation, IReadOnlyCollection<SyntaxTree> trees, INamedTypeSymbol selector)
+        CSharpCompilation compilation, IReadOnlyCollection<SyntaxTree> trees, INamedTypeSymbol itemsControl)
     {
         var funnels = new Dictionary<IMethodSymbol, int>(SymbolEqualityComparer.Default);
         foreach (SyntaxTree tree in trees)
@@ -511,7 +585,7 @@ public sealed class SelectorLandingCensus
 
                 foreach (IParameterSymbol parameter in method.Parameters)
                 {
-                    if (!compilation.ClassifyConversion(selector, parameter.Type).IsImplicit)
+                    if (!compilation.ClassifyConversion(itemsControl, parameter.Type).IsImplicit)
                     {
                         continue;
                     }
@@ -587,19 +661,21 @@ public sealed class SelectorLandingCensus
         _ => string.Empty,
     };
 
-    private static bool IsListLanding(ITypeSymbol type, INamedTypeSymbol selector, INamedTypeSymbol[] ownStops)
+    /// <summary>Whether <paramref name="type"/> is an ItemsControl container
+    /// — not a row, and not a container that is its own stop.</summary>
+    private static bool IsContainerLanding(ITypeSymbol type, INamedTypeSymbol itemsControl, INamedTypeSymbol[] exempt)
     {
-        bool isSelector = false;
+        bool isContainer = false;
         for (ITypeSymbol? current = type; current is not null; current = current.BaseType)
         {
-            if (ownStops.Any(own => SymbolEqualityComparer.Default.Equals(current, own)))
+            if (exempt.Any(row => SymbolEqualityComparer.Default.Equals(current, row)))
             {
                 return false;
             }
 
-            isSelector |= SymbolEqualityComparer.Default.Equals(current, selector);
+            isContainer |= SymbolEqualityComparer.Default.Equals(current, itemsControl);
         }
 
-        return isSelector;
+        return isContainer;
     }
 }
