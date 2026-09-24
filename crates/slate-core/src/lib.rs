@@ -178,7 +178,9 @@ pub use session::{
     SessionConfig, TaskIndexRepairOutcome, VaultEventListener, VaultRootIdentity, VaultSession,
     VersionSummary,
 };
-pub use session::{SkippedFile, TagCount, TagEditReport};
+pub use session::{
+    OPENABLE_DOCUMENT_EXTENSIONS, SkippedFile, TagCount, TagEditReport, is_openable_document,
+};
 pub use sidebar_filter::{
     FilterParseError, SidebarFilterDateWindow, SidebarFilterNamedWindow, SidebarFilterQueryTerm,
     SidebarFilterTerm, SidebarTagFilterActivation, parse_sidebar_filter,

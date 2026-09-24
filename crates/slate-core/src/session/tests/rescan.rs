@@ -1654,3 +1654,52 @@ fn a_cancelled_page_read_fails_closed_and_moves_nothing() {
         ]
     );
 }
+
+// --- openability is core's (round 26) --------------------------------------------------
+
+/// The path classifier every delta row carries (`openable`) is the
+/// `OpenableDocuments` filter itself: over indexed rows of every openable
+/// extension (any case) and a few that are not, the paths the filter lists
+/// are exactly the paths `is_openable_document` accepts.
+#[test]
+fn the_openable_classifier_is_the_openable_documents_filter() {
+    let (_tmp, session) = make_vault(|p| {
+        for name in [
+            "a.md",
+            "b.markdown",
+            "c.mdown",
+            "d.mkd",
+            "e.canvas",
+            "f.base",
+            "G.MD",
+            "H.Mdown",
+            "i.txt",
+            "j.png",
+            "k.pdf",
+            "l.md.bak",
+        ] {
+            p.write_file(name, b"x\n").unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let listed: std::collections::BTreeSet<String> = session
+        .list_files(FileFilter::OpenableDocuments, Paging::first(100))
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|summary| summary.path)
+        .collect();
+    let all: Vec<String> = session
+        .list_files(FileFilter::All, Paging::first(100))
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|summary| summary.path)
+        .collect();
+    let classified: std::collections::BTreeSet<String> = all
+        .into_iter()
+        .filter(|path| crate::is_openable_document(path))
+        .collect();
+    assert_eq!(listed, classified);
+    assert!(listed.contains("c.mdown") && listed.contains("d.mkd") && listed.contains("H.Mdown"));
+}

@@ -153,6 +153,10 @@ pub struct ScanDeltaEntry {
     pub kind: ScanDeltaKind,
     pub path: String,
     pub superseded: bool,
+    /// Core's document classification (round 26): an openable document
+    /// ([`crate::is_openable_document`]) — what Quick Open lists — so no
+    /// host keeps its own extension list for the delta.
+    pub openable: bool,
 }
 
 /// A bounded page of the Pending generation (the `ListDirChildrenPage`
@@ -591,6 +595,7 @@ pub(crate) fn page(
         .map(|(_, kind, path, superseded)| {
             Ok(ScanDeltaEntry {
                 kind: ScanDeltaKind::from_code(kind)?,
+                openable: crate::is_openable_document(&path),
                 path,
                 superseded,
             })
