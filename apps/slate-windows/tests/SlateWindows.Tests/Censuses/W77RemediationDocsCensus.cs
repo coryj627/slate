@@ -147,6 +147,7 @@ public sealed partial class W77RemediationDocsCensus
 
     [Theory]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR 9, #9999.")]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nContinued ownership: PR\n9.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nAlso #1244.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\nnaming #9999.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body.\n#9999 is named too.")]
@@ -574,8 +575,11 @@ public sealed partial class W77RemediationDocsCensus
     [GeneratedRegex(@"#\d+(?![\d\s,;:.)]|$)")]
     private static partial Regex MalformedIssueToken();
 
-    // A PR reference: `PR` then a number, not inside a longer word.
-    [GeneratedRegex(@"(?<![A-Za-z0-9_])PR \d+")]
+    // A PR reference: `PR` then a number, not inside a longer word. Any run
+    // of whitespace may separate them, a Markdown soft wrap included, since
+    // `PR` at a line's end and `9` on the next line still render as `PR 9`
+    // (codex round 26).
+    [GeneratedRegex(@"(?<![A-Za-z0-9_])PR\s+\d+")]
     private static partial Regex PrToken();
 
     // A Markdown ATX heading line, which ends a contract paragraph. `#` must
