@@ -926,18 +926,24 @@ public sealed class ReadingFocusTests
         AssertFocused(host.Sentinel, "F6 from the moved position");
     });
 
-    /// <summary>R-10: ONE terminal transition per held landing. A teardown
-    /// travels with a rebind — a tab navigated in place or closed — and in
-    /// EITHER order the rebind cancels the landing: the teardown's refusal is
-    /// decided once the move has run, finds its landing already ended, and is
-    /// ignored. Exactly one outcome, withdrawn and silent: no traversal
-    /// resumed after the reader was moved, no second completion.</summary>
+    /// <summary>R-10: ONE terminal transition per held landing, and
+    /// Cancelled and Refused are exclusive. A teardown travels with a move
+    /// that cancels the landing — a rebind (a tab navigated in place, or a
+    /// tab switch or close) or an unload (a closed pane) — and in EITHER
+    /// callback order the landing is Cancelled: the teardown's refusal is
+    /// decided once the move has run, finds the landing already ended, and is
+    /// ignored. So: the ring never resumes, nothing is spoken, and no stale
+    /// callback moves focus — into the editor, or onward to the next region.</summary>
     [Theory]
-    [InlineData("reading", true)]
-    [InlineData("reading", false)]
-    [InlineData("canvas", true)]
-    [InlineData("canvas", false)]
-    public void ATeardownAndARebindEndTheHeldLandingOnce(string kind, bool tornDownFirst) => RunSta(() =>
+    [InlineData("reading", "rebind", true)]
+    [InlineData("reading", "rebind", false)]
+    [InlineData("reading", "unload", true)]
+    [InlineData("reading", "unload", false)]
+    [InlineData("canvas", "rebind", true)]
+    [InlineData("canvas", "rebind", false)]
+    [InlineData("canvas", "unload", true)]
+    [InlineData("canvas", "unload", false)]
+    public void ATeardownAndAMoveCancelTheHeldLandingOnce(string kind, string move, bool tornDownFirst) => RunSta(() =>
     {
         using var host = new Host();
         if (kind == "reading")
@@ -956,6 +962,7 @@ public sealed class ReadingFocusTests
         PumpedDispatcher.Drain();
         Assert.Equal(ShellRegionLanding.Pending, Assert.Single(ring.Attempts).Outcome);
         ReadingSurface? surface = kind == "reading" ? host.ShownSurface() : null;
+        FrameworkElement stop = host.EditorStop();
 
         void TearDown()
         {
@@ -969,9 +976,13 @@ public sealed class ReadingFocusTests
             }
         }
 
-        void Rebind()
+        void Move()
         {
-            if (surface is not null)
+            if (move == "unload")
+            {
+                host.DetachPaneNow();
+            }
+            else if (surface is not null)
             {
                 surface.Model = host.Tab.Reading;
             }
@@ -984,13 +995,15 @@ public sealed class ReadingFocusTests
         if (tornDownFirst)
         {
             TearDown();
-            Rebind();
+            Move();
         }
         else
         {
-            Rebind();
+            Move();
             TearDown();
         }
+        IInputElement? settled = Keyboard.FocusedElement;
+        PumpedDispatcher.Drain();
         PumpedDispatcher.Drain();
 
         Assert.Single(ring.Attempts);
@@ -998,7 +1011,13 @@ public sealed class ReadingFocusTests
             host.Announced, line => line is A11yEvent.EditorPaneFocused or A11yEvent.LeafPanelShown);
         Assert.Null(host.EditorLandingRequest());
         Assert.False(surface?.IsFocusLandingPending ?? false);
-        Assert.False(host.EditorStopOrNull()?.IsKeyboardFocusWithin ?? false);
+        Assert.False(stop.IsKeyboardFocusWithin);
+        Assert.NotSame(host.Elsewhere, Keyboard.FocusedElement);
+        if (move == "rebind")
+        {
+            // Nothing moved focus after the two callbacks ran.
+            Assert.Same(settled, Keyboard.FocusedElement);
+        }
     });
 
     /// <summary>R-10: a reader who moves INTO the held reading surface while
@@ -1751,9 +1770,16 @@ public sealed class ReadingFocusTests
         /// unload.</summary>
         public void DetachPane()
         {
+            DetachPaneNow();
+            PumpedDispatcher.Drain();
+        }
+
+        /// <summary>Only the removal, with nothing pumped after it (the
+        /// surfaces' Unloaded follows on the dispatcher).</summary>
+        public void DetachPaneNow()
+        {
             var content = (DockPanel)_window!.Content;
             content.Children.Remove(Shell.ContentPaneBorder);
-            PumpedDispatcher.Drain();
         }
 
         /// <summary>Show another element in the window, above the pane.</summary>

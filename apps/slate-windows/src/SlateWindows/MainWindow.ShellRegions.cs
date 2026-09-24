@@ -322,12 +322,15 @@ public partial class MainWindow : IShellRegionHost
     /// focus-within edge included, so focus arriving is never seen first: the
     /// line when the completion finds focus in the surface, the fall-through
     /// when the document let go of the request unseated (a failure, or the
-    /// document torn down — a pane closed under it drops the tab's request
-    /// with the tab). It is withdrawn instead, releasing the request so the
-    /// document seats nobody later, by a newer press, by a newer request in
-    /// its place, by the surface leaving the tab (the shared cell rebinds on
-    /// a tab switch), and the moment the reader leaves the element the press
-    /// found them on (<see cref="FocusDepartureWatch"/>).</summary>
+    /// document torn down while its surface still shows the tab). It is
+    /// CANCELLED instead — silently, the request released so the document
+    /// seats nobody later — by a newer press, by a newer request in its
+    /// place, by the surface leaving the tab (the shared cell rebinds on a
+    /// tab switch or close) or the tree (an unload: a closed pane), and the
+    /// moment the reader leaves the element the press found them on (<see
+    /// cref="FocusDepartureWatch"/>). Cancelled and Refused are exclusive: a
+    /// refusal is decided after the move it may travel with, and stands only
+    /// if nothing cancelled the landing first.</summary>
     private sealed class HeldDocumentLanding
     {
         private readonly FrameworkElement _surface;
@@ -360,6 +363,7 @@ public partial class MainWindow : IShellRegionHost
             _announce = announce;
             _fallThrough = fallThrough;
             _surface.DataContextChanged += SurfaceRebound;
+            _surface.Unloaded += SurfaceUnloaded;
             _document.PropertyChanged += RequestChanged;
             _departure = new FocusDepartureWatch(surface, () => _ = Withdraw());
         }
@@ -388,12 +392,15 @@ public partial class MainWindow : IShellRegionHost
 
             _done = true;
             _surface.DataContextChanged -= SurfaceRebound;
+            _surface.Unloaded -= SurfaceUnloaded;
             _document.PropertyChanged -= RequestChanged;
             _departure.Dispose();
             return true;
         }
 
         private void SurfaceRebound(object sender, DependencyPropertyChangedEventArgs e) => _ = Withdraw();
+
+        private void SurfaceUnloaded(object sender, RoutedEventArgs e) => _ = Withdraw();
 
         private void RequestChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
         {
