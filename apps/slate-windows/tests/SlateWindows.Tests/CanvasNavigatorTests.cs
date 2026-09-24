@@ -23,7 +23,7 @@ namespace SlateWindows.Tests;
 ///
 /// Contracts C1–C8 and C10–C14.
 /// </summary>
-public sealed class CanvasNavigatorTests : IDisposable
+public sealed partial class CanvasNavigatorTests : IDisposable
 {
     private readonly FixtureVault _fixture;
     private readonly VaultSession _session;
