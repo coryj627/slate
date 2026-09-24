@@ -2913,7 +2913,16 @@ impl VaultSession {
         cancel: &CancelToken,
         listener: Option<Arc<dyn ScanProgressListener>>,
     ) -> Result<ScanReport, VaultError> {
-        self.scan_session(cancel, listener, ScanMode::Rescan)
+        let report = self.scan_session(cancel, listener, ScanMode::Rescan)?;
+        // Round 25: hosts receive a count and a few samples; the whole
+        // list stays here.
+        if !report.errors.is_empty() {
+            log::warn!("rescan recorded {} errors", report.errors.len());
+            for error in &report.errors {
+                log::debug!("rescan error: {error}");
+            }
+        }
+        Ok(report)
     }
 
     /// The Pending delta generation and the cursor its effects have

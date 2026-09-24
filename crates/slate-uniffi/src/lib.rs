@@ -1307,9 +1307,9 @@ impl VaultSession {
         &self,
         cancel: Arc<CancelToken>,
         listener: Arc<dyn ScanProgressListener>,
-    ) -> Result<ScanReport, VaultError> {
+    ) -> Result<RescanReport, VaultError> {
         let adapter: Arc<dyn core::ScanProgressListener> =
-            Arc::new(ScanProgressListenerAdapter { foreign: listener });
+            Arc::new(RescanProgressListenerAdapter { foreign: listener });
         let report = self
             .inner
             .rescan_with_progress(&cancel.inner, Some(adapter))?;
@@ -1317,7 +1317,7 @@ impl VaultSession {
     }
 
     /// The listener-less rescan (a foreground rescan shows no progress).
-    pub fn rescan(&self, cancel: Arc<CancelToken>) -> Result<ScanReport, VaultError> {
+    pub fn rescan(&self, cancel: Arc<CancelToken>) -> Result<RescanReport, VaultError> {
         Ok(self.inner.rescan_with_progress(&cancel.inner, None)?.into())
     }
 
@@ -3636,6 +3636,27 @@ struct ScanProgressListenerAdapter {
 
 impl core::ScanProgressListener for ScanProgressListenerAdapter {
     fn on_progress(&self, event: core::ScanProgress) {
+        self.foreign.on_progress(event.into());
+    }
+}
+
+/// A RESCAN's progress bridge (W7-7 PR 7, round 25): the stream the open
+/// scan uses, except that its `Finished` report carries at most
+/// [`RESCAN_ERROR_SAMPLES`] error messages — a rescan's error list never
+/// crosses the FFI unbounded, on either of its two paths out.
+struct RescanProgressListenerAdapter {
+    foreign: Arc<dyn ScanProgressListener>,
+}
+
+impl core::ScanProgressListener for RescanProgressListenerAdapter {
+    fn on_progress(&self, event: core::ScanProgress) {
+        let event = match event {
+            core::ScanProgress::Finished { mut report } => {
+                report.errors.truncate(RESCAN_ERROR_SAMPLES);
+                core::ScanProgress::Finished { report }
+            }
+            other => other,
+        };
         self.foreign.on_progress(event.into());
     }
 }
@@ -6311,6 +6332,55 @@ impl From<core::ScanReport> for ScanReport {
             files_removed: r.files_removed,
             complete: r.complete,
             delta_generation: r.delta_generation,
+        }
+    }
+}
+
+/// The most error messages a rescan carries across the FFI (W7-7 PR 7,
+/// round 25; locked decision 05's memory-bounded rule). A degraded provider
+/// can fail every file of the vault on every rescan; the count and
+/// completeness cross in full, the messages only as samples, and core's
+/// log keeps the whole list.
+pub const RESCAN_ERROR_SAMPLES: usize = 5;
+
+/// A rescan's result across the FFI (W7-7 PR 7, R-9, round 25): the
+/// counts and completeness of [`ScanReport`] with the errors bounded —
+/// their exact count (what `VaultRescanIncomplete` speaks) and at most
+/// [`RESCAN_ERROR_SAMPLES`] sample messages.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct RescanReport {
+    pub files_seen: u64,
+    /// Files read and hashed this pass — a READ count, never copy.
+    pub files_indexed: u64,
+    pub files_skipped: u64,
+    pub bytes_processed: u64,
+    /// New rows plus rows whose committed content hash differs.
+    pub files_changed: u64,
+    /// Rows removed because their files left the disk.
+    pub files_removed: u64,
+    /// False when the walk was partial or any error was recorded.
+    pub complete: bool,
+    /// The retained delta generation the host reconciles.
+    pub delta_generation: Option<u64>,
+    /// Every error the rescan recorded, counted.
+    pub error_count: u64,
+    /// The first of them, never more than [`RESCAN_ERROR_SAMPLES`].
+    pub error_samples: Vec<String>,
+}
+
+impl From<core::ScanReport> for RescanReport {
+    fn from(r: core::ScanReport) -> Self {
+        Self {
+            files_seen: r.files_seen,
+            files_indexed: r.files_indexed,
+            files_skipped: r.files_skipped,
+            bytes_processed: r.bytes_processed,
+            files_changed: r.files_changed,
+            files_removed: r.files_removed,
+            complete: r.complete,
+            delta_generation: r.delta_generation,
+            error_count: u64::try_from(r.errors.len()).unwrap_or(u64::MAX),
+            error_samples: r.errors.into_iter().take(RESCAN_ERROR_SAMPLES).collect(),
         }
     }
 }
@@ -13172,6 +13242,95 @@ impl VaultSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W7-7 PR 7 (round 25; locked decision 05's memory-bounded rule): a
+    /// rescan over thousands of failing files crosses the FFI with the
+    /// EXACT error count and at most five sample messages, on both of its
+    /// paths out: the returned report and its progress stream's Finished
+    /// report.
+    #[test]
+    fn a_rescan_carries_an_exact_error_count_and_at_most_five_samples_across_the_ffi() {
+        struct Recorder(std::sync::Mutex<Vec<ScanProgress>>);
+        impl ScanProgressListener for Recorder {
+            fn on_progress(&self, event: ScanProgress) {
+                self.0.lock().unwrap().push(event);
+            }
+        }
+        fn settle(session: &VaultSession) {
+            let pending = session.scan_delta_pending().unwrap().expect("pending");
+            let mut cursor = pending.cursor;
+            loop {
+                let page = session
+                    .scan_delta_page(
+                        pending.generation,
+                        Paging {
+                            cursor,
+                            limit: 1000,
+                        },
+                        CancelToken::new(),
+                    )
+                    .unwrap();
+                session
+                    .scan_delta_page_applied(pending.generation, page.next_cursor.clone())
+                    .unwrap();
+                match page.next_cursor {
+                    Some(next) => cursor = Some(next),
+                    None => break,
+                }
+            }
+            session.scan_delta_release().unwrap();
+        }
+
+        const FAILING: usize = 3000;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("ok.md"), "ok\n").unwrap();
+        // Every file past the refuse threshold is recorded as an error.
+        let mut config = core::SessionConfig::new(tmp.path().join(".slate"));
+        config.large_file_refuse_bytes = 32;
+        let session = VaultSession {
+            inner: core::VaultSession::open(
+                Arc::new(core::FsVaultProvider::new(tmp.path().to_path_buf())),
+                config,
+            )
+            .expect("open vault"),
+            _census: census_live::Marker::count(&census_live::SESSIONS),
+        };
+        session.scan_initial(CancelToken::new()).unwrap();
+        for n in 0..FAILING {
+            std::fs::write(tmp.path().join(format!("big-{n:04}.md")), [b'x'; 64]).unwrap();
+        }
+
+        let report = session.rescan(CancelToken::new()).unwrap();
+        assert_eq!(report.error_count, FAILING as u64);
+        assert!(!report.complete);
+        assert_eq!(report.error_samples.len(), RESCAN_ERROR_SAMPLES);
+        settle(&session);
+        // A refused file keeps its (mtime, size) row, so the next scan
+        // re-reads it only once it changes.
+        for n in 0..FAILING {
+            std::fs::write(tmp.path().join(format!("big-{n:04}.md")), [b'y'; 65]).unwrap();
+        }
+
+        let recorder = Arc::new(Recorder(std::sync::Mutex::new(Vec::new())));
+        let report = session
+            .rescan_with_progress(CancelToken::new(), recorder.clone())
+            .unwrap();
+        assert_eq!(report.error_count, FAILING as u64);
+        assert_eq!(report.error_samples.len(), RESCAN_ERROR_SAMPLES);
+        let events = recorder.0.lock().unwrap();
+        let finished = events
+            .iter()
+            .find_map(|event| match event {
+                ScanProgress::Finished { report } => Some(report),
+                _ => None,
+            })
+            .expect("a Finished event");
+        assert!(
+            finished.errors.len() <= RESCAN_ERROR_SAMPLES,
+            "the progress stream carried {} error messages",
+            finished.errors.len()
+        );
+    }
 
     #[test]
     fn bounded_directory_page_crosses_ffi_with_cursor_and_cancellation() {
