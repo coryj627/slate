@@ -191,6 +191,103 @@ public sealed class ItemContainerNameBindingTests
         });
     });
 
+    public static TheoryData<string> AuthoredLayoutRuleHosts()
+    {
+        var codeBuilt = new HashSet<string>(
+            ItemContainerNameCensus.CodeItemsHosts.Values.OfType<CodeItemsHost.Pinned>().Select(pinned => pinned.Label),
+            StringComparer.Ordinal);
+        var data = new TheoryData<string>();
+        foreach ((string label, ContainerNaming naming) in ItemContainerNameCensus.ExpectedNaming)
+        {
+            if (naming is ContainerNaming.Layout { Rule: not null } && !codeBuilt.Contains(label))
+            {
+                data.Add(label);
+            }
+        }
+        return data;
+    }
+
+    /// <summary>The spec review, round 21: a LAYOUT host on the sibling rule
+    /// carries each item's name on its structural container, and the one
+    /// stop its template holds reads it from there — so the stops of two
+    /// namesakes read apart by place, and a loner's stop reads its own name
+    /// bare. Hosted from the authored XAML, template and all; a stop that
+    /// binds its item directly reads two namesakes alike and fails.</summary>
+    [Theory]
+    [MemberData(nameof(AuthoredLayoutRuleHosts))]
+    public void AnAuthoredLayoutHostsStopsReadTheirItemsApart(string label) => RunSta(() =>
+    {
+        SiblingRule rule = ((ContainerNaming.Layout)ItemContainerNameCensus.ExpectedNaming[label]).Rule!;
+        (string file, XElement element) = ItemContainerNameCensus.XamlHost(label);
+        (Grid root, ItemsControl host) = ShellXamlFragments.LoadHost(element, file);
+        object Item(string name)
+        {
+            if (rule.Wrapped)
+            {
+                return new SiblingText(name);
+            }
+            var fields = (IDictionary<string, object?>)new ExpandoObject();
+            fields[rule.NamePath] = name;
+            return fields;
+        }
+        // Namesakes by the rule's reading; a rule over bare strings has no
+        // two EQUAL items (its NoEqualItems reason), so its namesakes differ
+        // in case only, as speech ignores it.
+        host.ItemsSource = rule.NamePath.Length == 0
+            ? new object[] { "Namesake", "NAMESAKE", "Loner" }
+            : new[] { Item("Namesake"), Item("Namesake"), Item("Loner") };
+        Hosted(root, () =>
+        {
+            string[] stops = LayoutStops(host);
+            string read = string.Join(" | ", stops);
+            Assert.True(stops.Length == 3, $"{label}: {stops.Length} stops: {read}");
+            Assert.True(
+                stops.Distinct(StringComparer.CurrentCultureIgnoreCase).Count() == 3,
+                $"{label}: stops read alike: {read}");
+            Assert.True(
+                stops[0].Contains($", {rule.Noun} 1", StringComparison.Ordinal)
+                && stops[1].Contains($", {rule.Noun} 2", StringComparison.Ordinal),
+                $"{label}: the namesakes do not read their places: {read}");
+            Assert.True(
+                stops[2].Contains("Loner", StringComparison.Ordinal)
+                && !stops[2].Contains($", {rule.Noun} ", StringComparison.Ordinal),
+                $"{label}: the loner does not read its own name bare: {read}");
+        });
+    });
+
+    /// <summary>Each layout container's stop — the first control-view
+    /// element it holds — by name, in order.</summary>
+    private static string[] LayoutStops(ItemsControl host)
+    {
+        host.UpdateLayout();
+        PumpedDispatcher.Drain();
+        host.UpdateLayout();
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(host);
+        peer.ResetChildrenCache();
+        return
+        [
+            .. (peer.GetChildren() ?? [])
+                .OfType<ItemAutomationPeer>()
+                .Select(container => FirstStop(container)?.GetName() ?? "(no stop)"),
+        ];
+    }
+
+    private static AutomationPeer? FirstStop(AutomationPeer peer)
+    {
+        foreach (AutomationPeer child in peer.GetChildren() ?? [])
+        {
+            if (child.IsControlElement())
+            {
+                return child;
+            }
+            if (FirstStop(child) is { } nested)
+            {
+                return nested;
+            }
+        }
+        return null;
+    }
+
     /// <summary>The properties the pinned states name, each with the value
     /// that enters it and the one that leaves it.</summary>
     internal static (string Property, object? On, object? Off)[] Conditions(IReadOnlyList<TriggerNaming> triggers) =>
