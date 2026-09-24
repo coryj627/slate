@@ -33,7 +33,15 @@
 // item's own controls, and named it is a second stop beside them (R-4's
 // one-stop rule), so such a host must be layout with its controls named.
 // A host missing from the table fails, and so does a table entry the scan
-// no longer finds. The runtime twins are the name census inside the FlaUI
+// no longer finds. The C# the shell authors is inventoried as well as its
+// XAML (the spec review, round 23): every object creation of an
+// ItemsControl derivative and every host it fills in code (ItemsSource,
+// Items.Add) is listed in CodeItemsHosts — pinned in the table, a tree's
+// own container, or a menu with the reason its headers cannot collide —
+// and a XAML host's INLINE items (a menu, a combo's fixed choices) are read
+// and proved distinct. WPF gives two EQUAL items one automation peer, so a
+// rule never reads a bare string that can repeat: such strings are
+// wrapped (SiblingText), or the pin says why no two are equal. The runtime twins are the name census inside the FlaUI
 // axe helper, ItemContainerNameBindingTests, which host each pinned style
 // and read the container's name as it follows the item, and
 // WrappedStopTests, which count the stops a wrapped item exposes.
@@ -63,8 +71,17 @@ namespace SlateWindows.Tests.Censuses;
 
 /// <summary>The sibling rule a host declares (<see cref="SiblingNames"/>):
 /// the property each item is read by ("" = the item itself), the one that
-/// tells namesakes apart, and an ordinal's noun.</summary>
-internal sealed record SiblingRule(string NamePath, string? DistinguisherPath, string Noun);
+/// tells namesakes apart, and an ordinal's noun. WPF gives two EQUAL items
+/// ONE automation peer, so a rule over the item itself says why no two
+/// items are equal (<see cref="NoEqualItems"/>); a rule over
+/// <see cref="SiblingText"/> rows (<see cref="Wrapped"/>) is given wrapped
+/// strings wherever its host's ItemsSource is set.</summary>
+internal sealed record SiblingRule(string NamePath, string? DistinguisherPath, string Noun)
+{
+    public string NoEqualItems { get; init; } = string.Empty;
+
+    public bool Wrapped { get; init; }
+}
 
 /// <summary>How an items host names its containers — the R-4 pin.</summary>
 internal abstract record ContainerNaming
@@ -114,6 +131,27 @@ internal abstract record ContainerNaming
 /// (the XAML <c>{}</c> escape included).</summary>
 internal sealed record TriggerNaming(string When, string Path, string? Converter, string? Format);
 
+/// <summary>How an items host the shell builds or fills in C# is accounted
+/// for (the spec review, round 23).</summary>
+internal abstract record CodeItemsHost
+{
+    /// <summary>An ItemsSource host pinned in the census table as
+    /// <paramref name="Label"/>, whose container naming is checked
+    /// there.</summary>
+    internal sealed record Pinned(string Label) : CodeItemsHost;
+
+    /// <summary>A tree's own item container, made for the tree pinned as
+    /// <paramref name="Label"/>: it takes the tree's sibling rule and names
+    /// its own children under it.</summary>
+    internal sealed record Container(string Label) : CodeItemsHost;
+
+    /// <summary>A menu the shell fills with MenuItems it builds: each is its
+    /// own container, named by its Header, never an item's ToString; and
+    /// <paramref name="Distinct"/> says why one menu's headers cannot
+    /// collide.</summary>
+    internal sealed record Menu(string Distinct) : CodeItemsHost;
+}
+
 [Trait("census", "item-container-names")]
 public sealed class ItemContainerNameCensus
 {
@@ -125,12 +163,29 @@ public sealed class ItemContainerNameCensus
     /// rule through, as authored.</summary>
     internal const string SiblingConverter = "{x:Static local:SiblingNames.Converter}";
 
+    /// <summary>The converter that wraps an authored ItemsSource's strings
+    /// into SiblingText rows.</summary>
+    private const string SiblingTextRows = "{x:Static local:SiblingText.Rows}";
+
     private static ContainerNaming.Bound Distinct(Type itemType, string path, string reason) =>
         new(itemType, path) { Distinct = reason };
 
     private static ContainerNaming.Sibling Sibling(
         Type itemType, string namePath, string? distinguisherPath, string noun) =>
         new(itemType, new SiblingRule(namePath, distinguisherPath, noun));
+
+    /// <summary>A rule over <see cref="SiblingText"/> rows: strings that may
+    /// repeat, each wrapped into its own item.</summary>
+    private static SiblingRule Wrapped(string noun) =>
+        new(nameof(SiblingText.Text), null, noun) { Wrapped = true };
+
+    /// <summary>The sibling rule a pin declares, if any.</summary>
+    internal static SiblingRule? RuleOf(ContainerNaming? naming) => naming switch
+    {
+        ContainerNaming.Sibling sibling => sibling.Rule,
+        ContainerNaming.Layout layout => layout.Rule,
+        _ => null,
+    };
 
     /// <summary>
     /// Every items host, by label — its AutomationId, else x:Name, else its
@@ -186,8 +241,7 @@ public sealed class ItemContainerNameCensus
             ["PanelCitationsList"] = Sibling(
                 typeof(CitationRowViewModel), nameof(CitationRowViewModel.AutomationName), null, "citation"),
             ["BibliographyNotices"] = new ContainerNaming.Layout(
-                "each notice's focusable text is named among its siblings",
-                new SiblingRule(string.Empty, null, "notice")),
+                "each notice's focusable text is named among its siblings", Wrapped("notice")),
             ["QueriesSavedList"] = Sibling(typeof(SavedQuerySummary), nameof(SavedQuerySummary.Name), null, "query"),
             ["QueriesBaseFilesList"] = Distinct(
                 typeof(BaseFileSummary), nameof(BaseFileSummary.Path), "a vault path names one file"),
@@ -203,8 +257,11 @@ public sealed class ItemContainerNameCensus
                 nameof(SearchResultRowViewModel.Path), "result"),
             ["MainWindow.xaml#{Binding SnippetSegments}"] = new ContainerNaming.Presentation(),
             ["Recent searches"] = new ContainerNaming.Layout(
-                "each button is named among its siblings (recents are kept once each, but only ordinally)",
-                new SiblingRule(string.Empty, null, "search")),
+                "each button is named among its siblings",
+                new SiblingRule(string.Empty, null, "search")
+                {
+                    NoEqualItems = "the recents store keeps each query once (SearchRecentsStore: an ordinal de-duplication on add and on load)",
+                }),
             ["CommandPaletteResults"] = Distinct(
                 typeof(CommandPaletteRowViewModel), nameof(CommandPaletteRowViewModel.AccessibleName),
                 "every command has its own label (chords.json)"),
@@ -262,16 +319,18 @@ public sealed class ItemContainerNameCensus
             // --- built in code (codex PR 3 round 1) ---
             ["BaseViewPicker"] = Sibling(typeof(BaseViewSummary), nameof(BaseViewSummary.Name), null, "view"),
             ["BaseWarningBanners"] = new ContainerNaming.Layout(
-                "each warning's focusable text is named among its siblings",
-                new SiblingRule(string.Empty, null, "warning")),
+                "each warning's focusable text is named among its siblings", Wrapped("warning")),
             ["BaseTabList"] = Sibling(
-                typeof(BaseListItemViewModel), nameof(BaseListItemViewModel.AccessibleName), null, "row"),
-            ["CanvasWarningRows"] = Sibling(typeof(string), string.Empty, null, "warning"),
+                typeof(BaseListItemViewModel), nameof(BaseListItemViewModel.AccessibleName),
+                nameof(BaseListItemViewModel.FilePath), "row"),
+            ["CanvasWarningRows"] = new ContainerNaming.Sibling(typeof(SiblingText), Wrapped("warning")),
             ["ConnectionsDepth"] = Distinct(typeof(string), string.Empty, "the three depth tags are fixed and distinct"),
-            ["GraphInspectorGroupRing:"] = Distinct(
-                typeof(GraphRingStyleSpec), nameof(GraphRingStyleSpec.Title), "the ring styles are fixed and titled apart"),
-            ["GraphInspectorGroupColour:"] = Distinct(
-                typeof(GraphColorTokenSpec), nameof(GraphColorTokenSpec.Title), "the colour tokens are fixed and titled apart"),
+            ["GraphInspectorGroupRing:"] = Sibling(
+                typeof(GraphRingStyleSpec), nameof(GraphRingStyleSpec.Title), null, "style"),
+            ["GraphInspectorGroupColour:"] = Sibling(
+                typeof(GraphColorTokenSpec), nameof(GraphColorTokenSpec.Title), null, "colour"),
+            ["{idRoot}Section{index}List"] = Sibling(
+                typeof(BasesRow), nameof(BasesRow.AudioDescription), nameof(BasesRow.FilePath), "row"),
             ["CanvasOutlineTree"] = Sibling(
                 typeof(CanvasOutlineRowViewModel), nameof(CanvasOutlineRowViewModel.Name), null, "item"),
             ["ConnectionsTree"] = Sibling(
@@ -330,6 +389,25 @@ public sealed class ItemContainerNameCensus
                         offenders.Add($"{label}: {sibling.ItemType.Name} has no property {path}");
                     }
                 }
+                if (sibling.ItemType == typeof(SiblingText) && !sibling.Rule.Wrapped)
+                {
+                    offenders.Add($"{label}: reads SiblingText rows under a rule not marked Wrapped");
+                }
+            }
+            // Two EQUAL items are one peer (WPF keys item peers by item):
+            // a rule over the item itself says why none are equal.
+            if (RuleOf(naming) is { } rule)
+            {
+                if (rule.NamePath.Length == 0 && rule.NoEqualItems.Length == 0)
+                {
+                    offenders.Add(
+                        $"{label}: a sibling rule over the item itself with no reason two items cannot be equal — WPF "
+                        + "gives equal items ONE peer, so the second of two reads as nothing: wrap them (SiblingText)");
+                }
+                if (rule.Wrapped && rule.NamePath != nameof(SiblingText.Text))
+                {
+                    offenders.Add($"{label}: a Wrapped rule must read {nameof(SiblingText)}.{nameof(SiblingText.Text)}");
+                }
             }
         }
 
@@ -338,6 +416,309 @@ public sealed class ItemContainerNameCensus
             offenders.Count == 0,
             "items hosts whose containers would not read their pinned name:\n  "
             + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>
+    /// Every items host the shell builds or fills in C# (the spec review,
+    /// round 23), by "{Type}.{field}" or "{Type}.{member}.{local}" — an
+    /// object creation of any ItemsControl derivative (ListBox, ComboBox,
+    /// TreeView, DataGrid, ItemsControl, a menu, the shell's own
+    /// subclasses), and every host given items in code (ItemsSource, or
+    /// Items.Add) — and how its item names are accounted for. A MenuItem
+    /// handed to a menu's Items.Add and never filled itself is that menu's
+    /// item, not a host.
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<string, CodeItemsHost> CodeItemsHosts =
+        new Dictionary<string, CodeItemsHost>(StringComparer.Ordinal)
+        {
+            ["BaseSurfaceView._viewPicker"] = new CodeItemsHost.Pinned("BaseViewPicker"),
+            ["BaseSurfaceView._list"] = new CodeItemsHost.Pinned("BaseTabList"),
+            ["BaseSurfaceView._warningBanners"] = new CodeItemsHost.Pinned("BaseWarningBanners"),
+            ["DashboardSurfaceView.BuildSectionList.list"] = new CodeItemsHost.Pinned("{idRoot}Section{index}List"),
+            ["CanvasSurfaceView._warningRows"] = new CodeItemsHost.Pinned("CanvasWarningRows"),
+            ["CanvasOutlineView._tree"] = new CodeItemsHost.Pinned("CanvasOutlineTree"),
+            ["ConnectionsLeafView._tree"] = new CodeItemsHost.Pinned("ConnectionsTree"),
+            ["ConnectionsLeafView._depth"] = new CodeItemsHost.Pinned("ConnectionsDepth"),
+            ["GraphInspectorView.BuildRow.ring"] = new CodeItemsHost.Pinned("GraphInspectorGroupRing:"),
+            ["GraphInspectorView.BuildRow.colour"] = new CodeItemsHost.Pinned("GraphInspectorGroupColour:"),
+            ["AccessibleDataGrid._grid"] = new CodeItemsHost.Pinned("AccessibleDataGrid"),
+            ["CanvasOutlineTree.GetContainerForItemOverride"] = new CodeItemsHost.Container("CanvasOutlineTree"),
+            ["CanvasOutlineItem.GetContainerForItemOverride"] = new CodeItemsHost.Container("CanvasOutlineTree"),
+            ["ConnectionsTree.GetContainerForItemOverride"] = new CodeItemsHost.Container("ConnectionsTree"),
+            ["ConnectionsTreeItem.GetContainerForItemOverride"] = new CodeItemsHost.Container("ConnectionsTree"),
+            ["CanvasContextMenuBuilder.Build.menu"] = new CodeItemsHost.Menu(
+                "one row per verb CanvasContextMenuPlan.RowsFor plans, and the plan names each verb once"),
+            ["CanvasContextMenuBuilder.Refill.persistent"] = new CodeItemsHost.Menu(
+                "Build's rows, moved across as they are"),
+            ["CanvasRendererView._menu"] = new CodeItemsHost.Menu(
+                "refilled from CanvasContextMenuBuilder: one row per planned verb"),
+            ["CanvasOutlineItem.ContextMenu"] = new CodeItemsHost.Menu(
+                "refilled from CanvasContextMenuBuilder: one row per planned verb"),
+            ["ConnectionsLeafView._rowMenu"] = new CodeItemsHost.Menu(
+                "BuildRowMenu's rows, moved across: one per action core lists for the row's kind"),
+            ["ConnectionsLeafView.BuildRowMenu.menu"] = new CodeItemsHost.Menu(
+                "one row per action core lists for the row's kind (GraphRowActionSpec), each titled once"),
+            ["GraphDiagramView._menu"] = new CodeItemsHost.Menu(
+                "one row per action core lists for the node's kind, each titled once, then the pin toggle"),
+            ["AccessibleDataGrid._persistentMenu"] = new CodeItemsHost.Menu(
+                "BuildRowActionsMenu's rows, moved across: one per row action its host declares"),
+            ["AccessibleDataGrid.BuildRowActionsMenu.menu"] = new CodeItemsHost.Menu(
+                "one row per row action its host declares (AccessibleGridRowAction), each named once"),
+            ["GraphVerbosityMenu.Populate.submenu"] = new CodeItemsHost.Menu(
+                "one check item per verbosity choice in core's vector, each titled once"),
+        };
+
+    /// <summary>The spec review, round 23: the inventory covers the C# the
+    /// shell authors as well as its XAML. Every object creation of an
+    /// ItemsControl derivative and every host filled in code — bound, never
+    /// matched by spelling — is in <see cref="CodeItemsHosts"/>: pinned in
+    /// the table (and the very host the ItemsSource scan labels so), a
+    /// pinned tree's own container, or a menu with the reason its headers
+    /// cannot collide. An unlisted host fails, and so does a stale
+    /// entry.</summary>
+    [Fact]
+    public void EveryItemsHostTheShellBuildsInCodeIsInventoried()
+    {
+        var labels = new Dictionary<ISymbol, string>(SymbolEqualityComparer.Default);
+        foreach (string _ in CheckCodeBuiltHosts(KeyedStyles(), new HashSet<string>(StringComparer.Ordinal), labels))
+        {
+        }
+        var offenders = new List<string>();
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        foreach ((string file, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            var hosts = new List<(string Key, ISymbol? Symbol, ITypeSymbol? Type, string Site)>();
+            var addedLocals = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            var addedCreations = new HashSet<SyntaxNode>();
+            foreach (InvocationExpressionSyntax add in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (ItemsAddReceiver(add, model) is not { } receiver)
+                {
+                    continue;
+                }
+                ExpressionSyntax item = add.ArgumentList.Arguments[^1].Expression;
+                if (item is BaseObjectCreationExpressionSyntax created)
+                {
+                    _ = addedCreations.Add(created);
+                }
+                else if (model.GetSymbolInfo(item).Symbol is ILocalSymbol local)
+                {
+                    _ = addedLocals.Add(local);
+                }
+                ISymbol? symbol = model.GetSymbolInfo(receiver).Symbol;
+                hosts.Add((HostKey(symbol, add), symbol, model.GetTypeInfo(receiver).Type, Site(file, add)));
+            }
+            foreach (BaseObjectCreationExpressionSyntax creation in source.Root
+                .DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>())
+            {
+                ITypeSymbol? type = model.GetTypeInfo(creation).Type;
+                if (!InheritsFrom(type, "System.Windows.Controls.ItemsControl"))
+                {
+                    continue;
+                }
+                ISymbol? slot = SlotOf(creation, model);
+                bool anItem = addedCreations.Contains(creation) || (slot is not null && addedLocals.Contains(slot));
+                bool filled = slot is not null
+                    && (labels.ContainsKey(slot) || hosts.Any(host => SymbolEqualityComparer.Default.Equals(host.Symbol, slot)));
+                if (anItem && !filled)
+                {
+                    continue;
+                }
+                hosts.Add((HostKey(slot, creation), slot, type, Site(file, creation)));
+            }
+            foreach ((string key, ISymbol? symbol, ITypeSymbol? type, string site) in hosts)
+            {
+                if (!found.Add(key))
+                {
+                    continue;
+                }
+                if (!CodeItemsHosts.TryGetValue(key, out CodeItemsHost? disposition))
+                {
+                    offenders.Add(
+                        $"{site}: `{key}` ({type?.Name ?? "unknown"}) is not inventoried — pin it in ExpectedNaming and "
+                        + "list it in CodeItemsHosts, or say there why its item names cannot collide");
+                    continue;
+                }
+                string? problem = disposition switch
+                {
+                    CodeItemsHost.Pinned pinned when !ExpectedNaming.ContainsKey(pinned.Label) =>
+                        $"points at `{pinned.Label}`, which ExpectedNaming does not pin",
+                    CodeItemsHost.Pinned pinned when symbol is null
+                        || !labels.TryGetValue(symbol, out string? scanned)
+                        || scanned != pinned.Label =>
+                        $"is not the host the ItemsSource scan labels `{pinned.Label}`",
+                    CodeItemsHost.Container container
+                        when ExpectedNaming.GetValueOrDefault(container.Label) is not ContainerNaming.Sibling =>
+                        $"is a container of `{container.Label}`, which is not a tree on the sibling rule",
+                    CodeItemsHost.Container when !InheritsFrom(type, "System.Windows.Controls.TreeViewItem") =>
+                        $"is a {type?.Name ?? "(unknown)"}, not a tree's item container",
+                    CodeItemsHost.Menu { Distinct.Length: 0 } =>
+                        "a menu with no reason its headers cannot collide",
+                    CodeItemsHost.Menu when !InheritsFrom(type, "System.Windows.Controls.Primitives.MenuBase")
+                        && !InheritsFrom(type, "System.Windows.Controls.MenuItem") =>
+                        $"is a {type?.Name ?? "(unknown)"}, not a menu",
+                    CodeItemsHost.Menu when symbol is not null && labels.ContainsKey(symbol) =>
+                        "a menu given an ItemsSource: its containers would be named by ToString — pin it instead",
+                    _ => null,
+                };
+                if (problem is not null)
+                {
+                    offenders.Add($"{site} `{key}`: {problem}");
+                }
+            }
+        }
+        foreach (string key in CodeItemsHosts.Keys.Where(key => !found.Contains(key)))
+        {
+            offenders.Add($"{key}: inventoried, but the shell no longer builds or fills it — a stale entry");
+        }
+        Assert.True(found.Count > 20, $"the inventory found only {found.Count} code-built hosts — the scan is broken");
+        Assert.True(
+            offenders.Count == 0,
+            "items hosts built in code that the census does not account for:\n  " + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>The host an <c>X.Items.Add(item)</c> or
+    /// <c>X.Items.Insert(index, item)</c> fills — an ItemsControl's own
+    /// Items, bound — or null for any other call.</summary>
+    private static ExpressionSyntax? ItemsAddReceiver(InvocationExpressionSyntax invocation, SemanticModel model) =>
+        invocation.Expression is MemberAccessExpressionSyntax
+        {
+            Name.Identifier.ValueText: "Add" or "Insert",
+            Expression: MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Items" } items,
+        }
+        && invocation.ArgumentList.Arguments.Count > 0
+        && model.GetSymbolInfo(items).Symbol is IPropertySymbol property
+        && InheritsFrom(property.ContainingType, "System.Windows.Controls.ItemsControl")
+            ? items.Expression
+            : null;
+
+    /// <summary>The field, property or local a creation is stored in.</summary>
+    private static ISymbol? SlotOf(BaseObjectCreationExpressionSyntax creation, SemanticModel model) =>
+        creation.Parent switch
+        {
+            EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator } => model.GetDeclaredSymbol(declarator),
+            AssignmentExpressionSyntax assignment when assignment.Right == creation =>
+                model.GetSymbolInfo(assignment.Left).Symbol,
+            _ => null,
+        };
+
+    /// <summary>"{Type}.{field}" for a field or property; "{Type}.{member}.{name}"
+    /// for a local or parameter; "{Type}.{member}" for a host held by
+    /// neither.</summary>
+    private static string HostKey(ISymbol? symbol, SyntaxNode site)
+    {
+        string owner = site.Ancestors().OfType<BaseTypeDeclarationSyntax>().FirstOrDefault()?.Identifier.ValueText ?? "(file)";
+        string member = site.Ancestors().Select(ancestor => ancestor switch
+        {
+            MethodDeclarationSyntax method => method.Identifier.ValueText,
+            LocalFunctionStatementSyntax local => local.Identifier.ValueText,
+            ConstructorDeclarationSyntax => "ctor",
+            PropertyDeclarationSyntax property => property.Identifier.ValueText,
+            _ => null,
+        }).FirstOrDefault(name => name is not null) ?? "(member)";
+        return symbol switch
+        {
+            IFieldSymbol or IPropertySymbol => $"{owner}.{symbol.Name}",
+            ILocalSymbol or IParameterSymbol => $"{owner}.{member}.{symbol.Name}",
+            _ => $"{owner}.{member}",
+        };
+    }
+
+    private static string Site(string file, SyntaxNode node) =>
+        $"{file}:{node.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
+
+    /// <summary>XAML hosts whose inline items do not all carry a literal
+    /// name, and why those items cannot read alike.</summary>
+    internal static readonly IReadOnlyDictionary<string, string> InlineItemsHosts =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["StatusBar"] =
+                "three fixed regions of different kinds — the vault state, the status message and the progress bar",
+        };
+
+    /// <summary>The spec review, rounds 21-23: a XAML items host with INLINE
+    /// items — a menu, a combo's fixed choices, the status bar; every
+    /// ItemsControl derivative the shell fills without an ItemsSource —
+    /// names each item as authored, so the census reads those names and
+    /// proves no two siblings alike (access keys dropped, case ignored as
+    /// speech ignores it). A host whose items carry no literal name says in
+    /// <see cref="InlineItemsHosts"/> why they cannot read alike.</summary>
+    [Fact]
+    public void EveryAuthoredInlineItemsHostNamesItsItemsApart()
+    {
+        var offenders = new List<string>();
+        var listed = new HashSet<string>(StringComparer.Ordinal);
+        int hosts = 0;
+        foreach (string path in ShellViewXaml())
+        {
+            string file = Path.GetFileName(path);
+            foreach (XElement element in XDocument.Load(path, LoadOptions.SetLineInfo).Descendants())
+            {
+                if (element.Name.LocalName.Contains('.', StringComparison.Ordinal)
+                    || HasItemsSource(element)
+                    || ResolveType(element) is not { } type
+                    || !typeof(ItemsControl).IsAssignableFrom(type))
+                {
+                    continue;
+                }
+                XElement[] items =
+                [
+                    .. element.Elements().Where(child =>
+                        !child.Name.LocalName.Contains('.', StringComparison.Ordinal)
+                        && child.Name.LocalName != "Separator"),
+                ];
+                if (items.Length == 0)
+                {
+                    continue;
+                }
+                hosts++;
+                string label = Label(element, file);
+                string site = $"{file}:{((IXmlLineInfo)element).LineNumber} <{element.Name.LocalName}> {label}";
+                string?[] names = [.. items.Select(AuthoredItemName)];
+                if (names.Any(name => name is null))
+                {
+                    if (InlineItemsHosts.TryGetValue(label, out string? reason) && reason.Length > 0)
+                    {
+                        _ = listed.Add(label);
+                    }
+                    else
+                    {
+                        offenders.Add($"{site}: an inline item with no literal name — name it, or say in InlineItemsHosts why its items cannot read alike");
+                    }
+                    continue;
+                }
+                foreach (IGrouping<string, string?> clash in names
+                    .GroupBy(name => name!, StringComparer.CurrentCultureIgnoreCase)
+                    .Where(group => group.Skip(1).Any()))
+                {
+                    offenders.Add($"{site}: {clash.Count()} items read \"{clash.Key}\"");
+                }
+            }
+        }
+        foreach (string label in InlineItemsHosts.Keys.Where(label => !listed.Contains(label)))
+        {
+            offenders.Add($"{label}: listed as a host of unnamed inline items, but no such host exists — a stale entry");
+        }
+        Assert.True(hosts > 10, $"the census found only {hosts} inline items hosts — the scan is broken");
+        Assert.True(
+            offenders.Count == 0,
+            "inline items that could read alike:\n  " + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>An inline item's authored name — AutomationProperties.Name,
+    /// else its Header, else its Content — when that is literal text, its
+    /// access-key markers dropped; null otherwise.</summary>
+    internal static string? AuthoredItemName(XElement item)
+    {
+        foreach (string attribute in new[] { "AutomationProperties.Name", "Header", "Content" })
+        {
+            if ((string?)item.Attribute(attribute) is { } value)
+            {
+                return value.StartsWith('{') ? null : value.Replace("_", string.Empty, StringComparison.Ordinal);
+            }
+        }
+        return null;
     }
 
     /// <summary>R-4: every <c>AccessibleDataGrid.Bind</c> call passes
@@ -525,6 +906,12 @@ public sealed class ItemContainerNameCensus
                 return $"declares {property}={(declared is null ? "(none)" : $"\"{declared}\"")} but R-4 pins "
                     + (expected is null ? "none" : $"\"{expected}\"");
             }
+        }
+        if (rule.Wrapped
+            && ParseBindingMarkup((string?)host.Attribute("ItemsSource") ?? string.Empty)?.Converter != SiblingTextRows)
+        {
+            return $"reads SiblingText rows, but its ItemsSource does not wrap them (Converter={SiblingTextRows}): "
+                + "two equal strings would be one peer";
         }
         if (style is null)
         {
@@ -843,9 +1230,12 @@ public sealed class ItemContainerNameCensus
     /// type, and its container style's Name setter is read from the method
     /// that builds it.</summary>
     private static IEnumerable<string> CheckCodeBuiltHosts(
-        Dictionary<string, List<XElement>> keyedStyles, HashSet<string> seen)
+        Dictionary<string, List<XElement>> keyedStyles,
+        HashSet<string> seen,
+        Dictionary<ISymbol, string>? labels = null)
     {
         var checkedHosts = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        var hostLabels = new Dictionary<ISymbol, string>(SymbolEqualityComparer.Default);
         foreach ((string file, CSharpSource source) in ShellCompilation.Sources)
         {
             SemanticModel model = ShellCompilation.ModelFor(source);
@@ -883,6 +1273,10 @@ public sealed class ItemContainerNameCensus
                 }
                 if (!checkedHosts.Add(host))
                 {
+                    if (hostLabels.TryGetValue(host, out string? known) && WrapProblem(known, assignment, model) is { } again)
+                    {
+                        yield return $"{site} `{known}`: {again}";
+                    }
                     continue;
                 }
                 if (host.DeclaringSyntaxReferences.All(reference => IsGenerated(reference.SyntaxTree.FilePath)))
@@ -908,10 +1302,19 @@ public sealed class ItemContainerNameCensus
                     continue;
                 }
                 _ = seen.Add(label);
+                hostLabels[host] = label;
+                if (labels is not null)
+                {
+                    labels[host] = label;
+                }
                 if (!ExpectedNaming.TryGetValue(label, out ContainerNaming? expected))
                 {
                     yield return $"{site}: `{label}` is not pinned — add it to ExpectedNaming";
                     continue;
+                }
+                if (WrapProblem(label, assignment, model) is { } wrap)
+                {
+                    yield return $"{site} `{label}`: {wrap}";
                 }
                 ITypeSymbol? type = creation is not null
                     ? model.GetTypeInfo(creation).Type
@@ -940,6 +1343,20 @@ public sealed class ItemContainerNameCensus
             }
         }
     }
+
+    /// <summary>Why an ItemsSource assignment to a host that reads
+    /// SiblingText rows does not wrap its strings, or null.</summary>
+    private static string? WrapProblem(string label, AssignmentExpressionSyntax assignment, SemanticModel model) =>
+        RuleOf(ExpectedNaming.GetValueOrDefault(label)) is { Wrapped: true }
+        && !(assignment.Right is InvocationExpressionSyntax call
+            && model.GetSymbolInfo(call).Symbol is IMethodSymbol
+            {
+                Name: nameof(SiblingText.Wrap),
+                ContainingType.Name: nameof(SiblingText),
+            })
+            ? $"reads SiblingText rows, but this ItemsSource (`{assignment.Right}`) is not SiblingText.Wrap(…): "
+                + "two equal strings would be one peer"
+            : null;
 
     private static string? CodeBoundProblem(
         ISymbol host,
@@ -1224,6 +1641,17 @@ public sealed class ItemContainerNameCensus
                 continue;
             }
             ExpressionSyntax id = invocation.ArgumentList.Arguments[1].Expression;
+            // An id composed per section ($"{idRoot}Section{index}List") is
+            // labelled by its template, holes and all.
+            if (id is InterpolatedStringExpressionSyntax interpolated)
+            {
+                return string.Concat(interpolated.Contents.Select(content => content switch
+                {
+                    InterpolatedStringTextSyntax text => text.TextToken.ValueText,
+                    InterpolationSyntax hole => $"{{{hole.Expression}}}",
+                    _ => string.Empty,
+                }));
+            }
             while (id is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression } sum)
             {
                 id = sum.Left;

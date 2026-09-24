@@ -160,7 +160,7 @@ internal sealed class BaseSurfaceView : UserControl
         AutomationProperties.SetAutomationId(_warningBanners, "BaseWarningBanners");
         // Two warnings may read alike: each text takes its container's
         // composed name (R-4; the spec review, round 21).
-        SiblingNames.SetNamePath(_warningBanners, string.Empty);
+        SiblingNames.SetNamePath(_warningBanners, nameof(SiblingText.Text));
         SiblingNames.SetNoun(_warningBanners, "warning");
         _banners = new StackPanel { Margin = new Thickness(12, 0, 12, 4) };
         _banners.Children.Add(_stateBanner);
@@ -192,6 +192,7 @@ internal sealed class BaseSurfaceView : UserControl
         };
         AutomationProperties.SetAutomationId(_list, "BaseTabList");
         SiblingNames.SetNamePath(_list, nameof(BaseListItemViewModel.AccessibleName));
+        SiblingNames.SetDistinguisherPath(_list, nameof(BaseListItemViewModel.FilePath));
         SiblingNames.SetNoun(_list, "row");
         ScrollViewer.SetHorizontalScrollBarVisibility(
             _list, ScrollBarVisibility.Disabled);
@@ -279,6 +280,10 @@ internal sealed class BaseSurfaceView : UserControl
     internal AccessibleDataGrid GridForTests => _grid;
 
     internal ListBox ListForTests => _list;
+
+    internal ComboBox ViewPickerForTests => _viewPicker;
+
+    internal void RenderListForTests(BasesResultSet result) => RenderList(result);
 
     internal LayoutItemsControl WarningBannersForTests => _warningBanners;
 
@@ -591,7 +596,7 @@ internal sealed class BaseSurfaceView : UserControl
             ? Visibility.Visible
             : Visibility.Collapsed;
         string[] warnings = model.Result?.Warnings ?? [];
-        _warningBanners.ItemsSource = warnings;
+        _warningBanners.ItemsSource = SiblingText.Wrap(warnings);
         _warningBanners.Visibility =
             warnings.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         _banners.Visibility =
@@ -1126,7 +1131,7 @@ internal sealed class BaseSurfaceView : UserControl
     private static DataTemplate WarningTemplate()
     {
         var text = new FrameworkElementFactory(typeof(TextBlock));
-        text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding());
+        text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(SiblingText.Text)));
         text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
         text.SetValue(FocusableProperty, true);
         text.SetBinding(AutomationProperties.NameProperty, SiblingNames.FromContainer());
@@ -1155,6 +1160,11 @@ internal class BaseListItemViewModel
     public BasesRow? Row { get; }
 
     public string AccessibleName { get; }
+
+    /// <summary>W7-7 PR 3 (#1246, R-4): what tells two rows that read
+    /// alike apart — their files (SiblingNames' distinguisher); a group
+    /// header has none.</summary>
+    public string? FilePath => Row?.FilePath;
 
     public bool IsHeader => Row is null;
 

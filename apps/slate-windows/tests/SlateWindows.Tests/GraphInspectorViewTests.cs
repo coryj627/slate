@@ -389,6 +389,51 @@ public sealed class GraphInspectorViewTests
 
     // --- Rule Y: the rows, the pickers, the keys -----------------------------------------------------------
 
+    /// <summary>W7-7 PR 3 (#1246, R-4; the spec review, round 23): a group
+    /// row's pickers, as the inspector builds them, given two entries core
+    /// titled alike — each reads apart by its place, the rest bare.</summary>
+    [Fact]
+    public void AGroupRowsPickersTellEntriesTitledAlikeApart()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(2, "inspector-view-namesakes");
+            host.Open();
+            (GraphInspectorView view, HostedWindow window) = Shown(host);
+            using (window)
+            {
+                Invoke(view.AddGroupForTests);
+                Panel row = Assert.IsAssignableFrom<Panel>(Assert.Single(view.RowsForTests.Children));
+                ComboBox[] combos = [.. row.Children.OfType<ComboBox>()];
+                ComboBox ring = combos.Single(c => Id(c) == "GraphInspectorGroupRing:1");
+                ComboBox colour = combos.Single(c => Id(c) == "GraphInspectorGroupColour:1");
+                // As core gives them, each title reads bare.
+                Assert.Equal(
+                    host.Inspector.RingStyles.Select(spec => spec.Title),
+                    ItemContainerNameBindingTests.ItemNames(ring));
+                ring.IsDropDownOpen = false;
+                GraphRingStyleSpec[] styles = [.. host.Inspector.RingStyles];
+                ring.ItemsSource = new[]
+                {
+                    styles[0] with { Title = "Shared" },
+                    styles[1] with { Title = "Shared" },
+                    styles[^1] with { Title = "Own" },
+                };
+                Assert.Equal(["Shared, style 1", "Shared, style 2", "Own"], ItemContainerNameBindingTests.ItemNames(ring));
+                ring.IsDropDownOpen = false;
+                GraphColorTokenSpec[] tokens = [.. host.Inspector.ColorTokens];
+                colour.ItemsSource = new[]
+                {
+                    tokens[0] with { Title = "Shared" },
+                    tokens[1] with { Title = "Own" },
+                    tokens[2] with { Title = "Shared" },
+                };
+                Assert.Equal(["Shared, colour 1", "Own", "Shared, colour 3"], ItemContainerNameBindingTests.ItemNames(colour));
+                colour.IsDropDownOpen = false;
+            }
+        });
+    }
+
     [Fact]
     public void TheGroupRowsComposeTheirNamesListCoresVectorsAndMoveTheKeys()
     {
@@ -418,11 +463,14 @@ public sealed class GraphInspectorViewTests
                 // The pickers list core's vectors, the titles core's (Term Y4).
                 Assert.Same(host.Inspector.ColorTokens, colour.ItemsSource);
                 Assert.Same(host.Inspector.RingStyles, ring.ItemsSource);
-                // A picker item's accessible name is core's Title, not the record's ToString.
+                // A picker item's accessible name is core's Title, not the
+                // record's ToString — read under the sibling rule the picker
+                // declares (W7-7 PR 3, R-4): every title as core gives it.
                 foreach (ComboBox picker in new[] { colour, ring })
                 {
                     Setter name = picker.ItemContainerStyle.Setters.OfType<Setter>().Single(setter => setter.Property == AutomationProperties.NameProperty);
-                    Assert.Equal("Title", ((System.Windows.Data.Binding)name.Value).Path.Path);
+                    Assert.Same(SiblingNames.Converter, ((System.Windows.Data.Binding)name.Value).Converter);
+                    Assert.Equal("Title", SiblingNames.GetNamePath(picker));
                 }
                 GraphGroupStyle style = SlateUniffiMethods.GraphConfigNextGroupStyle(0);
                 Assert.Equal(style.ColorToken, ((GraphColorTokenSpec)colour.SelectedItem!).Token);

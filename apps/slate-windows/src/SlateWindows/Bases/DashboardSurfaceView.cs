@@ -214,27 +214,28 @@ internal sealed class DashboardSurfaceView : UserControl
 
     /// <summary>The "list" view override: core's row readbacks in a
     /// keyboard-navigable read-only list (the thin twin of the Base
-    /// tab's list renderer — no actions, no activation).</summary>
-    private static UIElement BuildSectionList(
+    /// tab's list renderer — no actions, no activation). W7-7 PR 3 (#1246,
+    /// R-4): each row is named by its readback under the sibling rule —
+    /// two rows that read alike add their file, and two of one file (its
+    /// tasks) their place.</summary>
+    internal static ListBox BuildSectionList(
         string idRoot, int index, BasesResultSet result)
     {
+        var text = new FrameworkElementFactory(typeof(TextBlock));
+        text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(BasesRow.AudioDescription)));
+        text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
         var list = new ListBox
         {
             MaxHeight = 320,
+            ItemTemplate = new DataTemplate { VisualTree = text },
+            ItemContainerStyle = SiblingNames.ContainerStyle(typeof(ListBoxItem)),
+            ItemsSource = result.Rows,
         };
         AutomationProperties.SetAutomationId(list, $"{idRoot}Section{index}List");
         AutomationProperties.SetName(list, result.AudioSummary);
-        foreach (BasesRow row in result.Rows)
-        {
-            list.Items.Add(new ListBoxItem
-            {
-                Content = new TextBlock
-                {
-                    Text = row.AudioDescription,
-                    TextWrapping = TextWrapping.Wrap,
-                },
-            });
-        }
+        SiblingNames.SetNamePath(list, nameof(BasesRow.AudioDescription));
+        SiblingNames.SetDistinguisherPath(list, nameof(BasesRow.FilePath));
+        SiblingNames.SetNoun(list, "row");
         return list;
     }
 }

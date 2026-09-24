@@ -304,3 +304,37 @@ internal static class SiblingNames
             throw new NotSupportedException();
     }
 }
+
+/// <summary>
+/// W7-7 PR 3 (#1246, R-4): one string of a list whose strings may repeat —
+/// a warning, a notice. WPF keys an items host's automation peers by item,
+/// so two EQUAL strings get one peer between them: the list reads as one
+/// row short and the second is unreachable, whatever its container is
+/// named. Wrapped, each string is its own item, and its host names it by
+/// <see cref="Text"/> under <see cref="SiblingNames"/> — the second of two
+/// equal warnings reads "…, warning 2".
+/// </summary>
+internal sealed class SiblingText(string text)
+{
+    /// <summary>For an authored ItemsSource:
+    /// <c>Converter={x:Static local:SiblingText.Rows}</c>.</summary>
+    public static IValueConverter Rows { get; } = new RowsConverter();
+
+    public string Text { get; } = text;
+
+    internal static SiblingText[] Wrap(IEnumerable<string> texts) => [.. texts.Select(text => new SiblingText(text))];
+
+    /// <summary>What a row shows with no template, and what a name that
+    /// fell back to the item would read: the text, never this type's
+    /// name.</summary>
+    public override string ToString() => Text;
+
+    private sealed class RowsConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+            value is IEnumerable<string> texts ? Wrap(texts) : value;
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+            throw new NotSupportedException();
+    }
+}
