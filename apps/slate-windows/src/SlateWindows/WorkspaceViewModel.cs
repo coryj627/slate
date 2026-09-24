@@ -190,14 +190,6 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         $"{System.IO.Path.GetFileName(Path)} editor";
     public string Path => Item.Path;
 
-    /// <summary>W7-7 PR 3 (#1246, R-4; the spec review, round 21): the
-    /// folder a tab's file sits in, vault-relative ("" at the root) — what
-    /// tells two tabs of one title apart (SiblingNames, the tab strip's
-    /// distinguisher).</summary>
-    public string RelativeDirectory =>
-        System.IO.Path.GetDirectoryName(Item.Path.Replace('/', System.IO.Path.DirectorySeparatorChar))
-            ?.Replace(System.IO.Path.DirectorySeparatorChar, '/') ?? string.Empty;
-
     public bool IsMarkdown => Item.Kind == WorkspaceItemKind.Markdown;
 
     /// <summary>The persisted `"reading"` token (schema v1, G17).</summary>
@@ -1327,7 +1319,6 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(Title));
         OnPropertyChanged(nameof(EditorAutomationName));
         OnPropertyChanged(nameof(Path));
-        OnPropertyChanged(nameof(RelativeDirectory));
         OnPropertyChanged(nameof(IsMarkdown));
         OnPropertyChanged(nameof(IsPlaceholder));
         OnPropertyChanged(nameof(KindLabel));

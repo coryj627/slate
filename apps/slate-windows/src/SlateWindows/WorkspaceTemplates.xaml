@@ -607,7 +607,7 @@
                         IsTabStop="{Binding HasItems, RelativeSource={RelativeSource Self}}"
                         ItemTemplate="{StaticResource WorkspaceTabHeaderTemplate}"
                         ContentTemplate="{StaticResource WorkspaceTabContentTemplate}"
-                        AutomationProperties.AutomationId="WorkspaceTabs" local:SiblingNames.NamePath="Title" local:SiblingNames.DistinguisherPath="RelativeDirectory" local:SiblingNames.Noun="tab"
+                        AutomationProperties.AutomationId="WorkspaceTabs" local:SiblingNames.NamePath="Title" local:SiblingNames.DistinguisherPath="Path" local:SiblingNames.Noun="tab"
                         AutomationProperties.Name="Workspace tabs">
                 <TabControl.ContextMenu>
                     <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">

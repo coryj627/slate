@@ -301,7 +301,7 @@ public sealed class ItemContainerNameCensus
                 "each row's controls carry its property's key, unique in a note's frontmatter"),
             ["WorkspaceTabs"] = Sibling(
                 typeof(WorkspaceTabViewModel), nameof(WorkspaceTabViewModel.Title),
-                nameof(WorkspaceTabViewModel.RelativeDirectory), "tab") with
+                nameof(WorkspaceTabViewModel.Path), "tab") with
             {
                 Triggers =
                 [
