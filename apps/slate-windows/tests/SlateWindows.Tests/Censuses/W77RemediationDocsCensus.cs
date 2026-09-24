@@ -141,10 +141,9 @@ public sealed partial class W77RemediationDocsCensus
                 continue;
             }
 
-            int contract = int.Parse(heading.Groups[1].Value);
-            if (ContractLineDefect(line, contract, IssueList(heading.Groups[3].Value)) is { } defect)
+            if (ContractLineDefect(line, heading) is { } defect)
             {
-                defects.Add($"R-{contract} {defect}");
+                defects.Add($"R-{heading.Groups[1].Value} {defect}");
             }
         }
 
@@ -155,20 +154,27 @@ public sealed partial class W77RemediationDocsCensus
     [InlineData("**R-1 — Title (PR 1, #1244).** Body with an extra owner PR 9, #9999.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body naming #9999.")]
     [InlineData("**R-1 — Title (PR 1, #1244).** Body naming #9999x.")]
+    [InlineData("**R-1 — Title (PR 1, #1244).** Body repeating #1244.")]
+    [InlineData("**R-6 — Title (PR 5, #1248).** Body citing #1118x.")]
+    [InlineData("**R-6 — Title (PR 5, #1248).** Body citing #1118².")]
+    [InlineData("**R-6 — Title (PR 5, #1248).** Body citing #1118\U0001D4B3.")]
     public void AnOwnershipStatementAfterTheHeadingIsCaught(string line)
     {
         Match heading = ContractHeading().Match(line);
         Assert.True(heading.Success);
-        Assert.NotNull(ContractLineDefect(line, 1, IssueList(heading.Groups[3].Value)));
+        Assert.NotNull(ContractLineDefect(line, heading));
     }
 
-    [Fact]
-    public void AContractLineCitingOnlyItsAllowedCrossReferenceIsClean()
+    /// <summary>The allow-list is what a body MAY cite (codex round 24): a
+    /// listed reference is optional, never required.</summary>
+    [Theory]
+    [InlineData("**R-6 — Title (PR 5, #1248).** Body citing #1118.")]
+    [InlineData("**R-6 — Title (PR 5, #1248).** Body citing nothing.")]
+    public void AContractLineCitingOnlyItsAllowedCrossReferenceIsClean(string line)
     {
-        const string line = "**R-6 — Title (PR 5, #1248).** Body citing #1118.";
         Match heading = ContractHeading().Match(line);
         Assert.True(heading.Success);
-        Assert.Null(ContractLineDefect(line, 6, IssueList(heading.Groups[3].Value)));
+        Assert.Null(ContractLineDefect(line, heading));
     }
 
     /// <summary>The malformed-heading mutations, kept as parser tests (codex
@@ -178,6 +184,7 @@ public sealed partial class W77RemediationDocsCensus
     [InlineData("**R-1 — Title (PR 1, #1244x).** Body.")]
     [InlineData("**R-1 — Title (PR 1, #1244é).** Body.")]
     [InlineData("**R-1 — Title (PR 1, #1244²).** Body.")]
+    [InlineData("**R-1 — Title (PR 1, #1244\U0001D4B3).** Body.")]
     [InlineData("**R-1 — Title #1299 (PR 1, #1244).** Body.")]
     [InlineData("**R-1 — Title (PR 1, #1244; see #1299).** Body.")]
     [InlineData("**R-1 – Title (PR 1, #1244).** Body.")]
@@ -194,20 +201,51 @@ public sealed partial class W77RemediationDocsCensus
     [InlineData("## 2. PR 1 · #1244x #1244 — title", new[] { 1244 })]
     [InlineData("## 2. PR 1 · #1244é — title", new[] { 1244 })]
     [InlineData("## 2. PR 1 · #1244² — title", new[] { 1244 })]
+    [InlineData("## 2. PR 1 · #1244\U0001D4B3 — title", new[] { 1244 })]
     [InlineData("## 2. PR 1 · #1244 + #1244 — title", new[] { 1244 })]
     [InlineData("### PR 1 — #1244 #1244x announcements", new[] { 1244 })]
     [InlineData("### PR 0 — docs #9999 (this document)", new int[0])]
     public void AHeadingWhoseIssuesDriftIsCaught(string heading, int[] expected) =>
         Assert.False(IssueTokens(heading).SequenceEqual(expected));
 
+    /// <summary>A token glued to a letter, digit or number character on
+    /// either side is not a citation of the contract it resembles (codex
+    /// round 24), so replacing a section's citations with such forms leaves
+    /// the contract uncited and the owning-section fact fails.</summary>
+    [Theory]
+    [InlineData("see AR-6 here")]
+    [InlineData("see TR-6 here")]
+    [InlineData("see R-6x here")]
+    [InlineData("see _R-6 here")]
+    [InlineData("see R-6é here")]
+    [InlineData("see éR-6 here")]
+    [InlineData("see R-6² here")]
+    [InlineData("see R-6\U0001D4B3 here")]
+    [InlineData("see \U0001D4B3R-6 here")]
+    public void ATokenGluedToAnIdentifierIsNotACitation(string text) =>
+        Assert.Empty(ContractCitation().Matches(text));
+
+    [Theory]
+    [InlineData("see R-6 here")]
+    [InlineData("(R-6)")]
+    [InlineData("R-6, R-7")]
+    [InlineData("R-6.")]
+    [InlineData("R-6’s rule")]
+    public void AWellBoundedTokenIsACitation(string text) =>
+        Assert.Equal("6", ContractCitation().Matches(text)[0].Groups[1].Value);
+
     [Fact]
     public void ACleanHeadingYieldsExactlyItsIssues() =>
         Assert.Equal(new[] { 1245, 1250 }, IssueTokens("## 3. PR 2 · #1245 + #1250 — Files sidebar"));
 
-    /// <summary>What a contract line names beyond its owner: a count of
-    /// `PR n` tokens other than one, or an issue outside the owner clause
-    /// that the allow-list does not name. Null when the line is clean.</summary>
-    private static string? ContractLineDefect(string line, int contract, int[] ownerIssues)
+    /// <summary>
+    /// What a contract line names beyond its owner: a count of `PR n` tokens
+    /// other than one, a malformed issue token anywhere outside the owner
+    /// clause, or a well-formed one the allow-list does not name. Only the
+    /// owner clause's own span is exempt — the same issue repeated in the
+    /// body is outside it (codex round 24). Null when the line is clean.
+    /// </summary>
+    private static string? ContractLineDefect(string line, Match heading)
     {
         int prTokens = PrToken().Matches(line).Count;
         if (prTokens != 1)
@@ -215,16 +253,24 @@ public sealed partial class W77RemediationDocsCensus
             return $"names {prTokens} PRs";
         }
 
-        int[] extra = AnyIssueToken().Matches(line)
+        Group owner = heading.Groups[3];
+        string outside = string.Concat(line.AsSpan(0, owner.Index), line.AsSpan(owner.Index + owner.Length));
+        if (MalformedIssueToken().Match(outside) is { Success: true } malformed)
+        {
+            return $"carries the malformed issue token `{malformed.Value}`";
+        }
+
+        int contract = int.Parse(heading.Groups[1].Value);
+        int[] allowed = AllowedCrossReferences.GetValueOrDefault(contract, []);
+        int[] unexpected = IssueToken().Matches(outside)
             .Select(m => int.Parse(m.Groups[1].Value))
-            .Where(issue => !ownerIssues.Contains(issue))
+            .Where(issue => !allowed.Contains(issue))
             .Distinct()
             .Order()
             .ToArray();
-        int[] allowed = AllowedCrossReferences.GetValueOrDefault(contract, []);
-        return extra.SequenceEqual(allowed)
+        return unexpected.Length == 0
             ? null
-            : $"names #{string.Join(", #", extra)} outside its owner clause";
+            : $"names #{string.Join(", #", unexpected)} outside its owner clause";
     }
 
     private static int[] IssueList(string ownerList) =>
@@ -455,7 +501,12 @@ public sealed partial class W77RemediationDocsCensus
     [GeneratedRegex(@"^[ \t]{0,3}##[ \t]+\d+\.[ \t]+PR[ \t]+\d+\b", RegexOptions.Multiline)]
     private static partial Regex LoosePrSectionHeading();
 
-    [GeneratedRegex(@"(?<![A-Za-z0-9_])R-(\d+)(?![A-Za-z0-9_])")]
+    // Unicode-aware boundaries on both sides (codex round 24): a letter,
+    // digit, connector, other-number or letter-number character, or a
+    // surrogate (half of a supplementary character) next to `R-n` makes it
+    // a different token — `AR-6`, `TR-6`, `R-6x`, `R-6é`, `éR-6`, `R-6²`
+    // and `R-6` beside a supplementary letter are none of them citations.
+    [GeneratedRegex(@"(?<![\w\p{No}\p{Nl}\p{Cs}])R-(\d+)(?![\w\p{No}\p{Nl}\p{Cs}])")]
     private static partial Regex ContractCitation();
 
     [GeneratedRegex(@"^### PR (\d+) — [^\n]*", RegexOptions.Multiline)]
@@ -473,10 +524,6 @@ public sealed partial class W77RemediationDocsCensus
     // the digits backtracking into a false "malformed" match on `#1244`.
     [GeneratedRegex(@"#\d+(?![\d\s,;:.)]|$)")]
     private static partial Regex MalformedIssueToken();
-
-    // Any `#digits` on a contract line, well formed or not.
-    [GeneratedRegex(@"#(\d+)")]
-    private static partial Regex AnyIssueToken();
 
     // A PR reference: `PR` then a number, not inside a longer word.
     [GeneratedRegex(@"(?<![A-Za-z0-9_])PR \d+")]
