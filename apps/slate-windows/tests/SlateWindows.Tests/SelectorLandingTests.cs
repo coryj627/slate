@@ -209,28 +209,50 @@ public sealed class SelectorLandingTests
         host.AssertNeverFocused(list);
     });
 
-    /// <summary>A leaf's first stop that hands the keys on — a tree to its
-    /// selected item — answers false from its own Focus() though the keys
-    /// are inside it (W7-6 #1240). LandOnStop judges where the keys END UP,
-    /// so the reveal's fallback to the rail does not take them away
-    /// again.</summary>
+    /// <summary>A leaf's first stop that hands the keys on to a control of
+    /// its own answers false from its own Focus() though the keys are inside
+    /// it (W7-6 #1240). LandOnStop judges where the keys END UP, so the
+    /// reveal's fallback to the rail does not take them away again.</summary>
     [Fact]
     public void AStopThatHandsTheKeysOnHasLanded() => RunSta(() =>
+    {
+        var inner = new Button { Content = "Inner" };
+        var stop = new ContentControl { Focusable = true, Content = inner };
+        stop.GotKeyboardFocus += (_, e) =>
+        {
+            if (ReferenceEquals(e.NewFocus, stop))
+            {
+                _ = inner.Focus();
+            }
+        };
+        using HostedWindow host = Host(stop);
+        // The precondition that makes this fact discriminate: the stop's
+        // own Focus() answers false while its control takes the keys.
+        Assert.False(stop.Focus());
+        Assert.Same(inner, Keyboard.FocusedElement);
+        Assert.True(host.Elsewhere.Focus());
+
+        Assert.True(SelectorFocus.LandOnStop(stop));
+
+        Assert.Same(inner, Keyboard.FocusedElement);
+    });
+
+    /// <summary>A leaf's first stop that is a tree lands on a row — with
+    /// nothing selected, the first — never on the bare tree, whose Left and
+    /// Right leave the region (round 23; TreeLandingTests).</summary>
+    [Fact]
+    public void ATreeStopLandsOnItsRow() => RunSta(() =>
     {
         var tree = new TreeView();
         var heading = new TreeViewItem { Header = "Heading" };
         tree.Items.Add(heading);
         using HostedWindow host = Host(tree);
-        heading.IsSelected = true;
-        // The precondition that makes this fact discriminate: the tree's
-        // own Focus() answers false while its item takes the keys.
-        Assert.False(tree.Focus());
-        Assert.Same(heading, Keyboard.FocusedElement);
         Assert.True(host.Elsewhere.Focus());
 
         Assert.True(SelectorFocus.LandOnStop(tree));
 
         Assert.Same(heading, Keyboard.FocusedElement);
+        host.AssertNeverFocused(tree);
     });
 
     /// <summary>A row far down a virtualizing list that was JUST populated:
